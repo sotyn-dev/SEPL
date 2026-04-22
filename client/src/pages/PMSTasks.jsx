@@ -1,135 +1,84 @@
-import { useState, useEffect, useRef } from 'react';
+// PMS Tasks — Project Management tasks created against a Business Book
+// project. Same lifecycle as Delegations but with a project dropdown that
+// auto-captures the CRM name from that project's latest Client PO.
+
+import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMic, FiMicOff, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiClock, FiCalendar } from 'react-icons/fi';
+import { FiPlus, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiCalendar } from 'react-icons/fi';
 
-// Web Speech API — available as SpeechRecognition in Chromium-based browsers
-const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
-
-export default function Delegation() {
-  const { user, isAdmin } = useAuth();
+export default function PMSTasks() {
+  const { user, isAdmin, canCreate } = useAuth();
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
-  const [scope, setScope] = useState('mine'); // mine | given | all
+  const [projects, setProjects] = useState([]);
+  const [scope, setScope] = useState('mine');
   const [statusFilter, setStatusFilter] = useState('');
   const [createModal, setCreateModal] = useState(false);
-  const [submitModal, setSubmitModal] = useState(null); // task being submitted
-  const [rejectModal, setRejectModal] = useState(null); // task being rejected
-  const [extendModal, setExtendModal] = useState(null); // task: assignee requests more time
+  const [submitModal, setSubmitModal] = useState(null);
+  const [rejectModal, setRejectModal] = useState(null);
+  const [extendModal, setExtendModal] = useState(null);
   const [form, setForm] = useState({});
   const [submitForm, setSubmitForm] = useState({ proof_url: '', uploading: false });
   const [rejectReason, setRejectReason] = useState('');
   const [extendForm, setExtendForm] = useState({ requested_due_date: '', reason: '' });
-  // Voice input
-  const [listening, setListening] = useState(false);
-  const recognitionRef = useRef(null);
 
   const load = () => {
     const params = new URLSearchParams({ scope });
     if (statusFilter) params.set('status', statusFilter);
-    api.get(`/delegations?${params.toString()}`).then(r => setTasks(r.data)).catch(() => setTasks([]));
+    api.get(`/pms-tasks?${params.toString()}`).then(r => setTasks(r.data)).catch(() => setTasks([]));
   };
   useEffect(() => {
     load();
     api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
+    api.get('/pms-tasks/projects').then(r => setProjects(r.data || [])).catch(() => setProjects([]));
   }, [scope, statusFilter]);
 
-  // Voice → description. Appends to existing text so user can combine typing + voice.
-  const toggleVoice = () => {
-    if (!SR) {
-      toast.error("Your browser doesn't support voice input. Use Chrome or Edge.");
-      return;
-    }
-    if (listening) {
-      recognitionRef.current?.stop();
-      setListening(false);
-      return;
-    }
-    const rec = new SR();
-    rec.lang = 'en-IN';
-    rec.interimResults = true;
-    rec.continuous = true;
-    let finalBuf = '';
-    rec.onresult = (ev) => {
-      let interim = '';
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const t = ev.results[i][0].transcript;
-        if (ev.results[i].isFinal) finalBuf += t + ' ';
-        else interim += t;
-      }
-      setForm(f => ({ ...f, description: ((f._base || '') + finalBuf + interim).trim() }));
-    };
-    rec.onstart = () => setForm(f => ({ ...f, _base: (f.description ? f.description + ' ' : '') }));
-    rec.onerror = (e) => { toast.error('Voice error: ' + (e.error || 'unknown')); setListening(false); };
-    rec.onend = () => setListening(false);
-    recognitionRef.current = rec;
-    rec.start();
-    setListening(true);
+  const openCreate = () => {
+    setForm({
+      description: '',
+      project_id: '',
+      crm_name: '',         // auto-filled when project picked
+      project_label: '',    // shown read-only next to the picker
+      assigned_to: '',
+      due_date: new Date().toISOString().split('T')[0],
+    });
+    setCreateModal(true);
   };
 
-  const openCreate = () => {
-    setForm({ description: '', assigned_to: '', due_date: new Date().toISOString().split('T')[0], project_name: '' });
-    setCreateModal(true);
+  // When the user picks a project, pull its crm_name + display label from
+  // the cached projects list. No extra API call — the /projects endpoint
+  // already returned everything we need.
+  const onPickProject = (proj) => {
+    if (!proj) {
+      setForm(f => ({ ...f, project_id: '', crm_name: '', project_label: '' }));
+      return;
+    }
+    const label = [proj.project_name, proj.company_name, proj.client_name].filter(Boolean).join(' · ');
+    setForm(f => ({ ...f, project_id: proj.id, crm_name: proj.crm_name || '', project_label: label }));
   };
 
   const save = async (e) => {
     e.preventDefault();
     if (!String(form.description || '').trim()) return toast.error('Description is required');
+    if (!form.project_id) return toast.error('Pick a project');
+    if (!form.assigned_to) return toast.error('Pick an assignee');
     try {
-      await api.post('/delegations', {
+      await api.post('/pms-tasks', {
         description: form.description,
+        project_id: form.project_id,
         assigned_to: form.assigned_to,
         due_date: form.due_date,
-        project_name: form.project_name || null,
       });
-      toast.success('Task assigned');
+      toast.success('PMS task created');
       setCreateModal(false); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed to create'); }
   };
 
-  // Inline edit — save on blur / Enter. Optimistic: update local state, roll
-  // back if the server rejects. Admin / assigner only (backend enforces it
-  // too, but we also render the cell as read-only for other viewers).
-  const saveProject = async (task, newValue) => {
-    const trimmed = (newValue || '').trim();
-    const current = task.project_name || '';
-    if (trimmed === current) return; // no-op
-    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, project_name: trimmed || null } : t));
-    try {
-      await api.patch(`/delegations/${task.id}/project`, { project_name: trimmed });
-    } catch (err) {
-      // Revert on error
-      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, project_name: current || null } : t));
-      toast.error(err.response?.data?.error || 'Failed to update project');
-    }
-  };
-
-  // Extension request / approval (admin)
-  const requestExtension = async (e) => {
-    e.preventDefault();
-    if (!extendForm.requested_due_date) return toast.error('Pick a new date');
-    if (!extendForm.reason.trim()) return toast.error('Reason is required');
-    try {
-      await api.post(`/delegations/${extendModal.id}/request-extension`, extendForm);
-      toast.success('Extension requested — admin will review');
-      setExtendModal(null); setExtendForm({ requested_due_date: '', reason: '' }); load();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
-  const approveExtension = async (task) => {
-    if (!confirm(`Approve extension to ${task.requested_due_date}?`)) return;
-    try { await api.post(`/delegations/${task.id}/approve-extension`); toast.success('Extension approved'); load(); }
-    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
-  const rejectExtension = async (task) => {
-    if (!confirm(`Reject extension request for "${task.title}"?`)) return;
-    try { await api.post(`/delegations/${task.id}/reject-extension`); toast.success('Extension rejected'); load(); }
-    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
-
-  // Upload proof file then submit
+  // Lifecycle handlers (same shape as Delegations)
   const uploadProof = async (file) => {
     const fd = new FormData(); fd.append('file', file);
     setSubmitForm(s => ({ ...s, uploading: true }));
@@ -143,37 +92,50 @@ export default function Delegation() {
     e.preventDefault();
     if (!submitForm.proof_url) return toast.error('Please upload proof first');
     try {
-      await api.post(`/delegations/${submitModal.id}/submit`, { proof_url: submitForm.proof_url });
+      await api.post(`/pms-tasks/${submitModal.id}/submit`, { proof_url: submitForm.proof_url });
       toast.success('Proof submitted — awaiting approval');
       setSubmitModal(null); setSubmitForm({ proof_url: '', uploading: false }); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
-
   const approve = async (task) => {
     if (!confirm(`Approve "${task.title}"?`)) return;
-    try { await api.post(`/delegations/${task.id}/approve`); toast.success('Approved'); load(); }
+    try { await api.post(`/pms-tasks/${task.id}/approve`); toast.success('Approved'); load(); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
   const reject = async (e) => {
     e.preventDefault();
     if (!rejectReason.trim()) return toast.error('Reason is required');
     try {
-      await api.post(`/delegations/${rejectModal.id}/reject`, { reason: rejectReason });
-      toast.success('Rejected — assignee notified');
+      await api.post(`/pms-tasks/${rejectModal.id}/reject`, { reason: rejectReason });
+      toast.success('Rejected');
       setRejectModal(null); setRejectReason(''); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
-
-  const del = async (task) => {
-    if (!confirm(`Delete "${task.title}"?`)) return;
-    try { await api.delete(`/delegations/${task.id}`); toast.success('Deleted'); load(); }
+  const requestExtension = async (e) => {
+    e.preventDefault();
+    if (!extendForm.requested_due_date) return toast.error('Pick a new date');
+    if (!extendForm.reason.trim()) return toast.error('Reason is required');
+    try {
+      await api.post(`/pms-tasks/${extendModal.id}/request-extension`, extendForm);
+      toast.success('Extension requested');
+      setExtendModal(null); setExtendForm({ requested_due_date: '', reason: '' }); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+  const approveExtension = async (task) => {
+    if (!confirm(`Approve extension to ${task.requested_due_date}?`)) return;
+    try { await api.post(`/pms-tasks/${task.id}/approve-extension`); toast.success('Extension approved'); load(); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
-
-  // Strip the legacy bracketed prefix '[TSK-N | project | category | by person]'
-  // that existed in descriptions before we moved those fields into proper DB
-  // columns. Keeps only the real task text the user typed.
-  const cleanDesc = (s) => String(s || '').replace(/^\s*\[[^\]]*\]\s*/, '').trim();
+  const rejectExtension = async (task) => {
+    if (!confirm(`Reject extension request for "${task.title}"?`)) return;
+    try { await api.post(`/pms-tasks/${task.id}/reject-extension`); toast.success('Extension rejected'); load(); }
+    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+  const del = async (task) => {
+    if (!confirm(`Delete "${task.title}"?`)) return;
+    try { await api.delete(`/pms-tasks/${task.id}`); toast.success('Deleted'); load(); }
+    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
 
   const statusBadge = (s) => {
     const map = {
@@ -185,26 +147,27 @@ export default function Delegation() {
     return <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${map[s] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>{s}</span>;
   };
 
+  const projectOptions = projects.map(p => ({
+    ...p,
+    label: `${p.project_name || '(no project name)'}${p.company_name ? ' · ' + p.company_name : ''}${p.client_name ? ' · ' + p.client_name : ''}${p.crm_name ? '  — CRM: ' + p.crm_name : ''}`,
+  }));
+
   return (
     <div className="space-y-4">
-      {/* Header — only admin creates new tasks. Everyone else is a user who receives them. */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
-          <h3 className="text-xl font-bold text-gray-800">Delegations</h3>
-          <p className="text-sm text-gray-500">{isAdmin() ? 'Assign tasks, upload proof, approve or reject' : 'Upload proof for tasks assigned to you'}</p>
+          <h3 className="text-xl font-bold text-gray-800">PMS Tasks</h3>
+          <p className="text-sm text-gray-500">Project Management tasks by CRM — pick a project, CRM auto-fills from the latest Client PO.</p>
         </div>
-        {isAdmin() && (
-          <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center"><FiPlus /> New Task</button>
+        {canCreate('pms_tasks') && (
+          <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center"><FiPlus /> New PMS Task</button>
         )}
       </div>
 
-      {/* Filters. 'Followup' is visible to everyone — read-only cross-team
-          view of all active (non-approved) tasks, for EAs / supervisors who
-          need to chase what's pending. */}
       <div className="flex flex-wrap gap-2 text-sm">
         {[
           { id: 'mine', label: 'Assigned to me' },
-          { id: 'followup', label: 'Followup (all active)' },
+          { id: 'given', label: 'Given by me' },
           ...(isAdmin() ? [{ id: 'all', label: 'All (admin)' }] : []),
         ].map(t => (
           <button key={t.id} onClick={() => setScope(t.id)}
@@ -221,51 +184,44 @@ export default function Delegation() {
         </select>
       </div>
 
-      {/* Table view — Task ID / Description / Project / Assigned To / Completion Date / Upload Proof / Date Extension */}
+      {/* Desktop table */}
       <div className="card p-0 overflow-x-auto hidden md:block">
         <table className="text-sm">
           <thead>
             <tr>
               <th>Task ID</th>
-              <th>Description</th>
               <th>Project</th>
+              <th>CRM</th>
+              <th>Description</th>
               <th>Assigned To</th>
-              <th>Due / Completed</th>
+              <th>Due / Done</th>
               <th>Status</th>
-              <th>Upload Proof</th>
+              <th>Proof</th>
               <th>Extension</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {tasks.length === 0 && <tr><td colSpan="9" className="text-center text-gray-400 py-8">No tasks</td></tr>}
+            {tasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">No PMS tasks</td></tr>}
             {tasks.map(t => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
-              const canEditProject = isAdmin() || isAssigner;
               const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
-                  <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
+                  <td className="font-mono text-xs text-red-700 whitespace-nowrap">PMS-{String(t.id).padStart(4, '0')}</td>
+                  <td className="max-w-[220px]">
+                    <div className="font-medium text-gray-800 text-xs">{t.project_name_live || t.project_name_snapshot || <span className="text-gray-300">—</span>}</div>
+                    <div className="text-[10px] text-gray-500">
+                      {t.lead_no && <span className="font-mono mr-1">{t.lead_no}</span>}
+                      {t.company_name && <span>{t.company_name}</span>}
+                    </div>
+                  </td>
+                  <td className="whitespace-nowrap text-xs">{t.crm_name || <span className="text-gray-300">—</span>}</td>
                   <td className="max-w-md">
-                    <div className="line-clamp-2 text-gray-800 font-medium">{cleanDesc(t.description || t.title)}</div>
+                    <div className="line-clamp-2 text-gray-800">{t.description}</div>
                     {t.status === 'rejected' && t.reject_reason && (
                       <div className="text-[10px] text-red-700 mt-1 flex items-start gap-1"><FiAlertTriangle size={10} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</div>
-                    )}
-                  </td>
-                  <td className="whitespace-nowrap">
-                    {canEditProject ? (
-                      <input
-                        type="text"
-                        defaultValue={t.project_name || ''}
-                        placeholder="— add —"
-                        className="text-xs bg-transparent border border-transparent hover:border-gray-200 focus:border-red-400 focus:bg-white rounded px-1.5 py-0.5 w-32 focus:outline-none"
-                        onBlur={e => saveProject(t, e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { e.target.value = t.project_name || ''; e.target.blur(); } }}
-                        title="Click to edit project"
-                      />
-                    ) : (
-                      <span className="text-xs text-gray-700">{t.project_name || <span className="text-gray-300">—</span>}</span>
                     )}
                   </td>
                   <td className="whitespace-nowrap">{t.assigned_to_name}</td>
@@ -297,8 +253,6 @@ export default function Delegation() {
                       </div>
                     ) : isAssignee && t.status !== 'approved' ? (
                       <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }} className="text-[11px] text-gray-500 hover:text-red-600 flex items-center gap-1"><FiCalendar size={11} /> Request</button>
-                    ) : t.extension_status === 'rejected' ? (
-                      <span className="text-[10px] text-gray-400">Rejected</span>
                     ) : <span className="text-gray-300 text-xs">—</span>}
                   </td>
                   <td>
@@ -319,9 +273,9 @@ export default function Delegation() {
         </table>
       </div>
 
-      {/* MOBILE: compact card layout with the same columns as labeled rows */}
+      {/* Mobile cards */}
       <div className="md:hidden space-y-2">
-        {tasks.length === 0 && <div className="card text-center text-gray-400 py-8">No tasks</div>}
+        {tasks.length === 0 && <div className="card text-center text-gray-400 py-8">No PMS tasks</div>}
         {tasks.map(t => {
           const isAssignee = t.assigned_to === user?.id;
           const isAssigner = t.assigned_by === user?.id;
@@ -329,16 +283,15 @@ export default function Delegation() {
           return (
             <div key={t.id} className={`card p-3 ${t.status === 'rejected' ? 'border-l-4 border-red-500' : t.status === 'submitted' ? 'border-l-4 border-blue-500' : ''}`}>
               <div className="flex justify-between items-start gap-2 mb-2">
-                <span className="font-mono text-xs text-red-700">TSK-{String(t.id).padStart(4, '0')}</span>
+                <span className="font-mono text-xs text-red-700">PMS-{String(t.id).padStart(4, '0')}</span>
                 {statusBadge(t.status)}
               </div>
-              <p className="text-sm text-gray-800 font-medium mb-2 line-clamp-3">{cleanDesc(t.description || t.title)}</p>
+              <p className="text-sm text-gray-800 font-medium mb-2 line-clamp-3">{t.description}</p>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-gray-600 mb-2">
+                <div className="col-span-2"><span className="text-gray-400">Project:</span> <b>{t.project_name_live || t.project_name_snapshot || '—'}</b></div>
+                {t.crm_name && <div className="col-span-2"><span className="text-gray-400">CRM:</span> <b>{t.crm_name}</b></div>}
                 <div><span className="text-gray-400">Assigned to:</span> <b>{t.assigned_to_name}</b></div>
                 <div><span className="text-gray-400">By:</span> {t.assigned_by_name}</div>
-                {t.project_name && (
-                  <div className="col-span-2"><span className="text-gray-400">Project:</span> <b>{t.project_name}</b></div>
-                )}
                 {completedDate ? (
                   <div className="col-span-2"><span className="text-gray-400">Completed:</span> <b className="text-emerald-700">{completedDate}</b></div>
                 ) : t.due_date && (
@@ -347,9 +300,6 @@ export default function Delegation() {
               </div>
               {t.status === 'rejected' && t.reject_reason && (
                 <div className="bg-red-50 border border-red-200 rounded px-2 py-1 text-[11px] text-red-700 mb-2 flex items-start gap-1"><FiAlertTriangle size={11} className="mt-0.5" /> {t.reject_reason}</div>
-              )}
-              {t.extension_status === 'pending' && t.requested_due_date && (
-                <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1 text-[11px] text-amber-800 mb-2 flex items-start gap-1"><FiCalendar size={11} className="mt-0.5" /> Extension → {t.requested_due_date}</div>
               )}
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
@@ -365,12 +315,6 @@ export default function Delegation() {
                     <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="btn btn-danger text-[11px] px-2 py-1 flex items-center gap-1"><FiX size={11} /> Reject</button>
                   </>
                 )}
-                {isAdmin() && t.extension_status === 'pending' && (
-                  <>
-                    <button onClick={() => approveExtension(t)} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiCheck size={11} /> Ext ✓</button>
-                    <button onClick={() => rejectExtension(t)} className="btn btn-danger text-[11px] px-2 py-1 flex items-center gap-1"><FiX size={11} /> Ext ✗</button>
-                  </>
-                )}
                 {(isAssigner || isAdmin()) && <button onClick={() => del(t)} className="p-1.5 text-gray-400 hover:text-red-600 ml-auto"><FiTrash2 size={13} /></button>}
               </div>
             </div>
@@ -379,37 +323,46 @@ export default function Delegation() {
       </div>
 
       {/* Create Modal */}
-      <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="Assign New Task">
+      <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="New PMS Task" wide>
         <form onSubmit={save} className="space-y-3">
           <div>
-            <label className="label flex items-center justify-between">
-              <span>Task Description * {listening && <span className="ml-2 text-[10px] text-red-600 animate-pulse">● Listening…</span>}</span>
-              <button type="button" onClick={toggleVoice} className={`text-[11px] px-2 py-1 rounded-full flex items-center gap-1 ${listening ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                {listening ? <><FiMicOff size={12} /> Stop</> : <><FiMic size={12} /> Voice</>}
-              </button>
-            </label>
-            <textarea className="input" rows="4" required value={form.description || ''} onChange={e => setForm({ ...form, description: e.target.value, _base: undefined })} placeholder="Type or speak the task details…" />
-            {!SR && <p className="text-[10px] text-amber-600 mt-0.5">Voice input needs Chrome or Edge browser.</p>}
+            <label className="label">Project *</label>
+            <SearchableSelect
+              options={projectOptions}
+              value={form.project_id || null}
+              valueKey="id" displayKey="label"
+              placeholder="Search project by name, company or client…"
+              onChange={(p) => onPickProject(p)}
+            />
+            {form.crm_name && (
+              <p className="text-[11px] text-emerald-700 mt-1 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+                CRM auto-picked from the latest Client PO for this project: <b>{form.crm_name}</b>
+              </p>
+            )}
+            {form.project_id && !form.crm_name && (
+              <p className="text-[11px] text-amber-700 mt-1 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                No Client PO with a CRM name exists for this project yet — the task will be created without a CRM tag.
+              </p>
+            )}
           </div>
           <div>
-            <label className="label">Assign To *</label>
-            <SearchableSelect
-              options={users.map(u => ({ ...u, label: `${u.name}${u.username ? ' (@' + u.username + ')' : ''}` }))}
-              value={form.assigned_to || null}
-              valueKey="id" displayKey="label"
-              placeholder="Search user by name or username…"
-              onChange={(u) => setForm({ ...form, assigned_to: u?.id || '' })}
-            />
+            <label className="label">Task Description *</label>
+            <textarea className="input" rows="4" required value={form.description || ''} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What needs to be done?" />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="label">Due Date</label>
-              <input className="input" type="date" value={form.due_date || ''} onChange={e => setForm({ ...form, due_date: e.target.value })} />
+              <label className="label">Assign To *</label>
+              <SearchableSelect
+                options={users.map(u => ({ ...u, label: `${u.name}${u.username ? ' (@' + u.username + ')' : ''}` }))}
+                value={form.assigned_to || null}
+                valueKey="id" displayKey="label"
+                placeholder="Search user…"
+                onChange={(u) => setForm({ ...form, assigned_to: u?.id || '' })}
+              />
             </div>
             <div>
-              <label className="label">Project Name <span className="text-gray-400 font-normal">(optional)</span></label>
-              <input className="input" type="text" value={form.project_name || ''} onChange={e => setForm({ ...form, project_name: e.target.value })} placeholder="e.g. ONGC Mehsana" />
-              <p className="text-[10px] text-gray-400 mt-0.5">Free text — you can edit this later from the list.</p>
+              <label className="label">Due Date</label>
+              <input className="input" type="date" value={form.due_date || ''} onChange={e => setForm({ ...form, due_date: e.target.value })} />
             </div>
           </div>
           <div className="flex justify-end gap-2">
@@ -420,7 +373,7 @@ export default function Delegation() {
       </Modal>
 
       {/* Submit Proof Modal */}
-      <Modal isOpen={!!submitModal} onClose={() => setSubmitModal(null)} title={submitModal ? `Submit proof — ${cleanDesc(submitModal.description || submitModal.title).slice(0, 60)}` : 'Submit proof'}>
+      <Modal isOpen={!!submitModal} onClose={() => setSubmitModal(null)} title={submitModal ? `Submit proof — PMS-${String(submitModal.id).padStart(4,'0')}` : 'Submit proof'}>
         <form onSubmit={submitProof} className="space-y-3">
           {submitModal?.status === 'rejected' && submitModal.reject_reason && (
             <div className="bg-red-50 border border-red-200 rounded p-2 text-xs text-red-700">
@@ -444,11 +397,11 @@ export default function Delegation() {
       </Modal>
 
       {/* Reject Modal */}
-      <Modal isOpen={!!rejectModal} onClose={() => setRejectModal(null)} title={rejectModal ? `Reject — ${cleanDesc(rejectModal.description || rejectModal.title).slice(0, 60)}` : 'Reject'}>
+      <Modal isOpen={!!rejectModal} onClose={() => setRejectModal(null)} title="Reject task">
         <form onSubmit={reject} className="space-y-3">
           <div>
-            <label className="label">Reason for rejection *</label>
-            <textarea className="input" rows="3" value={rejectReason} onChange={e => setRejectReason(e.target.value)} required placeholder="Explain what needs to change so the assignee can fix and resubmit" />
+            <label className="label">Reason *</label>
+            <textarea className="input" rows="3" value={rejectReason} onChange={e => setRejectReason(e.target.value)} required placeholder="Explain what needs to change" />
           </div>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => setRejectModal(null)} className="btn btn-secondary">Cancel</button>
@@ -457,10 +410,10 @@ export default function Delegation() {
         </form>
       </Modal>
 
-      {/* Request Extension Modal (assignee) — routed to admin for approval */}
+      {/* Extension Modal */}
       <Modal isOpen={!!extendModal} onClose={() => setExtendModal(null)} title="Request Due-Date Extension">
         <form onSubmit={requestExtension} className="space-y-3">
-          <p className="text-xs text-gray-500">Ask admin for more time on this task. They will see your request and approve or reject it.</p>
+          <p className="text-xs text-gray-500">Ask admin for more time. They'll approve or reject.</p>
           <div>
             <label className="label">New requested date *</label>
             <input className="input" type="date" required min={extendModal?.due_date || undefined}

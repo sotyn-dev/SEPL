@@ -25,6 +25,7 @@ import Collections from './pages/Collections';
 import IndentFMS from './pages/IndentFMS';
 import DPR from './pages/DPR';
 import Delegation from './pages/Delegation';
+import PMSTasks from './pages/PMSTasks';
 import UserManagement from './pages/admin/UserManagement';
 import RolesPermissions from './pages/admin/RolesPermissions';
 
@@ -71,6 +72,7 @@ export default function App() {
         <Route path="indent-fms" element={<ModuleRoute module="indent_fms"><IndentFMS /></ModuleRoute>} />
         <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
         <Route path="delegations" element={<ModuleRoute module="delegations"><Delegation /></ModuleRoute>} />
+        <Route path="pms-tasks" element={<ModuleRoute module="pms_tasks"><PMSTasks /></ModuleRoute>} />
         {/* Other Modules */}
         <Route path="leads" element={<ModuleRoute module="leads"><Leads /></ModuleRoute>} />
         <Route path="quotations" element={<ModuleRoute module="quotations"><Quotations /></ModuleRoute>} />

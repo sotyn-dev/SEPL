@@ -5,8 +5,12 @@ const router = express.Router();
 router.use(authMiddleware);
 
 // List delegations. By default, a user sees tasks assigned TO them and tasks
-// they have assigned. Admins see everything. Query params: ?scope=mine|given|all
+// they have assigned. Admins see everything. Query params: ?scope=mine|given|all|followup
 // and ?status=pending|submitted|approved|rejected.
+//
+// scope=followup → ALL active tasks across users (not-yet-approved), so an EA
+// or supervisor can chase what's pending across the team. Read-only view —
+// action buttons still gate on assigner/assignee like every other scope.
 router.get('/', (req, res) => {
   const db = getDb();
   const isAdmin = req.user.role === 'admin';
@@ -17,6 +21,9 @@ router.get('/', (req, res) => {
   const params = [];
   if (isAdmin && scope === 'all') {
     // no filter
+  } else if (scope === 'followup') {
+    // Everyone's active (non-approved) tasks, for follow-up purposes.
+    where.push("d.status != 'approved'");
   } else if (scope === 'given') {
     where.push('d.assigned_by = ?'); params.push(uid);
   } else if (scope === 'mine') {
@@ -45,19 +52,37 @@ router.get('/', (req, res) => {
 // Create a new delegation. Admin-only — regular users are recipients, not creators.
 // Title is derived from the first line of the description (first 80 chars)
 // since the UI no longer asks for it separately.
+// project_name is optional — free text so admin can tag tasks with a project
+// without depending on any master list.
 router.post('/', (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can create tasks' });
-  const { title, description, assigned_to, due_date } = req.body;
+  const { title, description, assigned_to, due_date, project_name } = req.body;
   const desc = String(description || '').trim();
   if (!desc) return res.status(400).json({ error: 'Description is required' });
   if (!assigned_to) return res.status(400).json({ error: 'Assignee is required' });
   const derivedTitle = (title && title.trim()) || desc.split(/\r?\n/)[0].slice(0, 80).trim() || 'Task';
+  const project = project_name && String(project_name).trim() ? String(project_name).trim() : null;
   const db = getDb();
   const r = db.prepare(
-    `INSERT INTO delegations (title, description, assigned_by, assigned_to, due_date)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(derivedTitle, desc, req.user.id, assigned_to, due_date || null);
+    `INSERT INTO delegations (title, description, assigned_by, assigned_to, due_date, project_name)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(derivedTitle, desc, req.user.id, assigned_to, due_date || null, project);
   res.status(201).json({ id: r.lastInsertRowid });
+});
+
+// Inline edit of project_name on an existing task. Admin or the assigner only,
+// so random users can't retag someone else's tasks. Empty string clears it.
+router.patch('/:id/project', (req, res) => {
+  const db = getDb();
+  const d = db.prepare('SELECT assigned_by FROM delegations WHERE id=?').get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Task not found' });
+  if (d.assigned_by !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the assigner or an admin can edit the project' });
+  }
+  const raw = req.body?.project_name;
+  const value = raw && String(raw).trim() ? String(raw).trim() : null;
+  db.prepare('UPDATE delegations SET project_name=? WHERE id=?').run(value, req.params.id);
+  res.json({ message: 'Project updated', project_name: value });
 });
 
 // Assignee requests a due-date extension. Admin (not the assigner) approves.

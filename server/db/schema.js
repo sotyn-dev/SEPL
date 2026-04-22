@@ -1153,6 +1153,37 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- PMS Tasks — Project Management tasks created by CRM against a specific
+    -- Business Book project. Same lifecycle as delegations (pending → submitted
+    -- → approved/rejected) but each task is tied to a BB project_id so the
+    -- project name + auto-captured CRM name stay authoritative. project_id is
+    -- a soft reference to business_book.id so we can show project details even
+    -- if the BB row is later edited.
+    CREATE TABLE IF NOT EXISTS pms_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT,
+      project_id INTEGER REFERENCES business_book(id),
+      project_name_snapshot TEXT,   -- captured at create time for history
+      crm_name TEXT,                -- captured from the latest Client PO at create time
+      assigned_by INTEGER REFERENCES users(id),
+      assigned_to INTEGER REFERENCES users(id),
+      due_date DATE,
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending','submitted','approved','rejected')),
+      proof_url TEXT,
+      submitted_at DATETIME,
+      reviewed_at DATETIME,
+      reviewer_id INTEGER REFERENCES users(id),
+      reject_reason TEXT,
+      -- Date-extension request fields (same pattern as delegations)
+      requested_due_date DATE,
+      extension_reason TEXT,
+      extension_status TEXT,
+      extension_reviewed_at DATETIME,
+      extension_reviewed_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Checklist completions — one row per (checklist, user, date). Used to
     -- show the daily checklist widget on dashboard and track whether the user
     -- uploaded proof today. Unique per-day so users can't double-complete.
@@ -1207,6 +1238,10 @@ function initializeDatabase() {
     ['vendor_pos', 'po_date DATE'],
     ['vendor_pos', 'file_path TEXT'],
     ['vendor_pos', 'remarks TEXT'],
+    // Delegations — optional project tag the admin can set while creating a
+    // task or edit later from the list. Free-text so it doesn't depend on
+    // any master list; keeps it flexible for mam's quick day-to-day tasks.
+    ['delegations', 'project_name TEXT'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}
@@ -1258,7 +1293,7 @@ function initializeDatabase() {
 
   const ALL_MODULES = [
     'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement','cashflow','collections','payment_required','attendance','indent_fms','dpr',
-    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations'
+    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks'
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
