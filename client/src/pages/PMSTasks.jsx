@@ -189,6 +189,7 @@ export default function PMSTasks() {
         <table className="text-sm">
           <thead>
             <tr>
+              <th className="w-12 text-center">S.No.</th>
               <th>Task ID</th>
               <th>Project</th>
               <th>CRM</th>
@@ -202,13 +203,14 @@ export default function PMSTasks() {
             </tr>
           </thead>
           <tbody>
-            {tasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">No PMS tasks</td></tr>}
-            {tasks.map(t => {
+            {tasks.length === 0 && <tr><td colSpan="11" className="text-center text-gray-400 py-8">No PMS tasks</td></tr>}
+            {tasks.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
               const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
+                  <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">PMS-{String(t.id).padStart(4, '0')}</td>
                   <td className="max-w-[220px]">
                     <div className="font-medium text-gray-800 text-xs">{t.project_name_live || t.project_name_snapshot || <span className="text-gray-300">—</span>}</div>
@@ -276,14 +278,17 @@ export default function PMSTasks() {
       {/* Mobile cards */}
       <div className="md:hidden space-y-2">
         {tasks.length === 0 && <div className="card text-center text-gray-400 py-8">No PMS tasks</div>}
-        {tasks.map(t => {
+        {tasks.map((t, idx) => {
           const isAssignee = t.assigned_to === user?.id;
           const isAssigner = t.assigned_by === user?.id;
           const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
           return (
             <div key={t.id} className={`card p-3 ${t.status === 'rejected' ? 'border-l-4 border-red-500' : t.status === 'submitted' ? 'border-l-4 border-blue-500' : ''}`}>
               <div className="flex justify-between items-start gap-2 mb-2">
-                <span className="font-mono text-xs text-red-700">PMS-{String(t.id).padStart(4, '0')}</span>
+                <span className="flex items-center gap-2">
+                  <span className="text-[10px] text-gray-400 font-semibold">#{idx + 1}</span>
+                  <span className="font-mono text-xs text-red-700">PMS-{String(t.id).padStart(4, '0')}</span>
+                </span>
                 {statusBadge(t.status)}
               </div>
               <p className="text-sm text-gray-800 font-medium mb-2 line-clamp-3">{t.description}</p>

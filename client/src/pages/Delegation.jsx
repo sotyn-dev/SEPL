@@ -221,11 +221,12 @@ export default function Delegation() {
         </select>
       </div>
 
-      {/* Table view — Task ID / Description / Project / Assigned To / Completion Date / Upload Proof / Date Extension */}
+      {/* Table view — Serial / Task ID / Description / Project / Assigned To / Completion Date / Upload Proof / Date Extension */}
       <div className="card p-0 overflow-x-auto hidden md:block">
         <table className="text-sm">
           <thead>
             <tr>
+              <th className="w-12 text-center">S.No.</th>
               <th>Task ID</th>
               <th>Description</th>
               <th>Project</th>
@@ -238,14 +239,15 @@ export default function Delegation() {
             </tr>
           </thead>
           <tbody>
-            {tasks.length === 0 && <tr><td colSpan="9" className="text-center text-gray-400 py-8">No tasks</td></tr>}
-            {tasks.map(t => {
+            {tasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">No tasks</td></tr>}
+            {tasks.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
               const canEditProject = isAdmin() || isAssigner;
               const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
+                  <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
                   <td className="max-w-md">
                     <div className="line-clamp-2 text-gray-800 font-medium">{cleanDesc(t.description || t.title)}</div>
@@ -322,14 +324,17 @@ export default function Delegation() {
       {/* MOBILE: compact card layout with the same columns as labeled rows */}
       <div className="md:hidden space-y-2">
         {tasks.length === 0 && <div className="card text-center text-gray-400 py-8">No tasks</div>}
-        {tasks.map(t => {
+        {tasks.map((t, idx) => {
           const isAssignee = t.assigned_to === user?.id;
           const isAssigner = t.assigned_by === user?.id;
           const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
           return (
             <div key={t.id} className={`card p-3 ${t.status === 'rejected' ? 'border-l-4 border-red-500' : t.status === 'submitted' ? 'border-l-4 border-blue-500' : ''}`}>
               <div className="flex justify-between items-start gap-2 mb-2">
-                <span className="font-mono text-xs text-red-700">TSK-{String(t.id).padStart(4, '0')}</span>
+                <span className="flex items-center gap-2">
+                  <span className="text-[10px] text-gray-400 font-semibold">#{idx + 1}</span>
+                  <span className="font-mono text-xs text-red-700">TSK-{String(t.id).padStart(4, '0')}</span>
+                </span>
                 {statusBadge(t.status)}
               </div>
               <p className="text-sm text-gray-800 font-medium mb-2 line-clamp-3">{cleanDesc(t.description || t.title)}</p>
