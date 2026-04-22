@@ -282,9 +282,23 @@ export default function Procurement() {
   // Patch a single field on an item's rate row and save to server. Keeps the
   // UI snappy by updating local state optimistically.
   const updateItemRate = async (indentItemId, patch) => {
-    setItemRates(prev => prev.map(r => r.indent_item_id === indentItemId ? { ...r, ...patch } : r));
+    // Optimistically merge the patch, then derive rate_status locally the same
+    // way the backend does (quoted once any vendor has rate > 0, else pending).
+    // Without this, the badge stays "pending" and the Finalize button stays
+    // disabled until a full page reload.
+    setItemRates(prev => prev.map(r => {
+      if (r.indent_item_id !== indentItemId) return r;
+      const merged = { ...r, ...patch };
+      const anyRate = [merged.vendor1_rate, merged.vendor2_rate, merged.vendor3_rate].some(v => Number(v) > 0);
+      if (merged.rate_status !== 'finalized') merged.rate_status = anyRate ? 'quoted' : 'pending';
+      return merged;
+    }));
     try {
-      await api.post('/procurement/item-rates', { indent_item_id: indentItemId, ...patch });
+      const { data } = await api.post('/procurement/item-rates', { indent_item_id: indentItemId, ...patch });
+      // Capture rate_id on the first save so Finalize can target the right row.
+      if (data?.id) {
+        setItemRates(prev => prev.map(r => r.indent_item_id === indentItemId && !r.rate_id ? { ...r, rate_id: data.id } : r));
+      }
     } catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
   };
   const openFinalize = (row) => {
@@ -390,7 +404,7 @@ export default function Procurement() {
 
           {/* Desktop table */}
           <div className="card p-0 overflow-x-auto hidden lg:block">
-            <table className="text-xs">
+            <table className="text-xs min-w-[1500px]">
               <thead>
                 <tr className="bg-gray-50">
                   <th className="px-2 py-2 text-left" rowSpan="2">Indent</th>
@@ -425,16 +439,16 @@ export default function Procurement() {
                         <Fragment key={n}>
                           <td className="px-1 py-1">
                             <input
-                              className="input text-[11px] px-1 py-0.5 w-28"
-                              placeholder="Vendor"
+                              className="input text-[11px] px-2 py-1 w-40 min-w-[10rem]"
+                              placeholder="Vendor name"
                               list="vendor-options"
                               value={r[`vendor${n}_name`] || ''}
                               onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_name`]: e.target.value })}
                             />
                           </td>
-                          <td className="px-1 py-1"><input className="input text-[11px] px-1 py-0.5 w-20 text-right" type="number" placeholder="0" value={r[`vendor${n}_rate`] || ''} onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_rate`]: +e.target.value })} /></td>
+                          <td className="px-1 py-1"><input className="input text-[11px] px-2 py-1 w-24 min-w-[6rem] text-right" type="number" placeholder="0" value={r[`vendor${n}_rate`] || ''} onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_rate`]: +e.target.value })} /></td>
                           <td className="px-1 py-1">
-                            <select className="select text-[11px] px-1 py-0.5 w-24" value={r[`vendor${n}_terms`] || ''} onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_terms`]: e.target.value })}>
+                            <select className="select text-[11px] px-2 py-1 w-28 min-w-[7rem]" value={r[`vendor${n}_terms`] || ''} onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_terms`]: e.target.value })}>
                               <option value="">—</option>
                               <option value="Advance">Advance</option>
                               <option value="Credit">Credit</option>
