@@ -503,8 +503,11 @@ export default function Procurement() {
                   {[1,2,3].map(n => (
                     <div key={n} className="border rounded p-2 bg-gray-50">
                       <div className="text-[10px] font-bold text-gray-500 uppercase mb-1">Vendor {n}</div>
-                      <div className="grid grid-cols-3 gap-2">
-                        <input className="input text-xs" placeholder="Name" list="vendor-options" value={r[`vendor${n}_name`] || ''} onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_name`]: e.target.value })} />
+                      {/* Mobile layout: full-width Name on top, Rate + Terms
+                          share the row below. This way long vendor names like
+                          "ADITYA" aren't clipped inside a 1/3 grid column. */}
+                      <input className="input text-xs w-full mb-2" placeholder="Vendor name" list="vendor-options" value={r[`vendor${n}_name`] || ''} onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_name`]: e.target.value })} />
+                      <div className="grid grid-cols-2 gap-2">
                         <input className="input text-xs" type="number" placeholder="Rate" value={r[`vendor${n}_rate`] || ''} onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_rate`]: +e.target.value })} />
                         <select className="select text-xs" value={r[`vendor${n}_terms`] || ''} onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_terms`]: e.target.value })}>
                           <option value="">— Terms —</option>
