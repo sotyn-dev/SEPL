@@ -2,10 +2,19 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
+const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
+
+// Shared upload directory (served statically by server/index.js at /uploads).
+// Used by both the Tally PO upload and the BOQ bulk upload lower in this file.
+const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+// Multer for Vendor PO file uploads (PDF / images / Excel), up to 10 MB.
+const vendorPoUpload = multer({ dest: uploadDir, limits: { fileSize: 10 * 1024 * 1024 } });
 
 // Same lenient Excel-BOQ parser the Orders upload uses — kept in sync here
 // so we can fall back to the raw file when po_items is empty.
@@ -520,6 +529,7 @@ router.get('/indents/:id', (req, res) => {
 });
 
 // Vendor PO
+// GET returns the extra upload fields (po_date, file_path, remarks) too.
 router.get('/vendor-po', (req, res) => {
   res.json(getDb().prepare(`SELECT vp.*, v.name as vendor_name FROM vendor_pos vp
     LEFT JOIN vendors v ON vp.vendor_id=v.id ORDER BY vp.created_at DESC`).all());
@@ -567,35 +577,93 @@ router.get('/pending-po-items', (req, res) => {
   res.json(rows);
 });
 
-// Create a Vendor PO from a list of indent items. Each item contributes a
-// row to vendor_po_items with its chosen rate + terms + optional credit days.
-router.post('/vendor-po', (req, res) => {
+// Upload a Vendor PO that was created in Tally.
+//
+// This is a multipart/form-data endpoint — the client sends metadata fields
+// plus an optional file (PDF / image / xlsx). Items linking back to indent
+// lines are optional and come in as a JSON-stringified `items` field.
+//
+// Why a JSON string for items? multer parses the multipart body into
+// req.body where each field is a string. Passing a nested array requires
+// encoding it as JSON on the client and decoding here.
+router.post('/vendor-po', vendorPoUpload.single('file'), (req, res) => {
   const db = getDb();
-  const { indent_id, vendor_id, advance_required, items } = req.body;
+  const b = req.body || {};
+  const vendor_id = +b.vendor_id;
+  const indent_id = b.indent_id ? +b.indent_id : null;
   if (!vendor_id) return res.status(400).json({ error: 'Vendor is required' });
-  const lines = Array.isArray(items) ? items.filter(i => i.indent_item_id && i.quantity > 0 && i.rate > 0) : [];
-  if (lines.length === 0) return res.status(400).json({ error: 'Pick at least one item with qty and rate' });
 
-  const count = db.prepare('SELECT COUNT(*) as c FROM vendor_pos').get().c;
-  const poNum = `VPO-${String(count + 1).padStart(4, '0')}`;
-  const totalAmount = lines.reduce((s, i) => s + (i.quantity * i.rate), 0);
+  // Parse optional line items (JSON string in multipart form)
+  let items = [];
+  if (b.items) {
+    try { items = JSON.parse(b.items); } catch (e) { return res.status(400).json({ error: 'items must be valid JSON' }); }
+  }
+  const lines = Array.isArray(items) ? items.filter(i => i.indent_item_id && +i.quantity > 0 && +i.rate > 0) : [];
 
-  const tx = db.transaction(() => {
-    const r = db.prepare('INSERT INTO vendor_pos (indent_id,vendor_id,po_number,total_amount,advance_required) VALUES (?,?,?,?,?)')
-      .run(indent_id || null, vendor_id, poNum, Math.round(totalAmount * 100) / 100, advance_required ? 1 : 0);
-    const vpoId = r.lastInsertRowid;
-    const insItem = db.prepare(
-      `INSERT INTO vendor_po_items (vendor_po_id, indent_item_id, quantity, rate, amount, terms, credit_days)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    );
-    for (const i of lines) {
-      insItem.run(vpoId, i.indent_item_id, i.quantity, i.rate, i.quantity * i.rate, i.terms || null, +i.credit_days || 0);
+  // Use the PO number from Tally if provided; else auto-number with the usual
+  // VPO-#### pattern so nothing breaks for uploads that lack a Tally ref.
+  let poNum = (b.po_number || '').trim();
+  if (!poNum) {
+    const count = db.prepare('SELECT COUNT(*) as c FROM vendor_pos').get().c;
+    poNum = `VPO-${String(count + 1).padStart(4, '0')}`;
+  }
+
+  // Total: prefer what the user typed (matches the Tally printout). Fall back
+  // to the computed sum of line items if blank.
+  const typedTotal = Number(b.total_amount);
+  const computedTotal = lines.reduce((s, i) => s + (+i.quantity * +i.rate), 0);
+  const totalAmount = Number.isFinite(typedTotal) && typedTotal > 0 ? typedTotal : computedTotal;
+
+  // Move uploaded file to a readable name so downloads show the original
+  // filename, and save /uploads/<name> as the file_path.
+  let filePath = null;
+  if (req.file) {
+    try {
+      const safeName = (req.file.originalname || 'vendor-po').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const newName = `${Date.now()}-${safeName}`;
+      const newPath = path.join(path.dirname(req.file.path), newName);
+      fs.renameSync(req.file.path, newPath);
+      filePath = `/uploads/${newName}`;
+    } catch (e) {
+      filePath = `/uploads/${req.file.filename}`;
     }
-    if (indent_id) db.prepare('UPDATE indents SET status=? WHERE id=?').run('po_sent', indent_id);
-    return vpoId;
-  });
-  const vpoId = tx();
-  res.status(201).json({ id: vpoId, po_number: poNum, total_amount: totalAmount, lines: lines.length });
+  }
+
+  const po_date = b.po_date || null;
+  const remarks = b.remarks || null;
+
+  try {
+    const tx = db.transaction(() => {
+      const r = db.prepare(
+        `INSERT INTO vendor_pos
+           (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?)`
+      ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks);
+      const vpoId = r.lastInsertRowid;
+
+      // Only write line items if the uploader chose to link indent lines.
+      // Terms + credit_days are deliberately null — PO terms now live on the
+      // uploaded Tally PO itself.
+      const insItem = db.prepare(
+        `INSERT INTO vendor_po_items (vendor_po_id, indent_item_id, quantity, rate, amount, terms, credit_days)
+         VALUES (?, ?, ?, ?, ?, NULL, 0)`
+      );
+      for (const i of lines) {
+        insItem.run(vpoId, i.indent_item_id, +i.quantity, +i.rate, +i.quantity * +i.rate);
+      }
+      if (indent_id) db.prepare('UPDATE indents SET status=? WHERE id=?').run('po_sent', indent_id);
+      return vpoId;
+    });
+    const vpoId = tx();
+    res.status(201).json({ id: vpoId, po_number: poNum, total_amount: totalAmount, lines: lines.length, file_path: filePath });
+  } catch (err) {
+    // Clean up orphaned upload if the DB insert failed (e.g. unique-constraint on po_number)
+    if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
+    if (String(err.message || '').includes('UNIQUE')) {
+      return res.status(409).json({ error: `PO Number "${poNum}" already exists` });
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.put('/vendor-po/:id', (req, res) => {
@@ -797,9 +865,8 @@ router.post('/admin/wipe-indents-pos', (req, res) => {
 // can start indenting immediately without bouncing to Orders. Replaces
 // existing po_items for that business_book and saves the file link to the
 // PO's boq_file_link.
-const multer = require('multer');
-const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+// BOQ bulk upload (Raise Indent tab). Reuses the shared uploadDir defined
+// at the top of this file — no need to re-require multer.
 const bulkUpload = multer({ dest: uploadDir, limits: { fileSize: 10 * 1024 * 1024 } });
 
 // Fetch items from the BOQ that's ALREADY attached somewhere (PO file link,

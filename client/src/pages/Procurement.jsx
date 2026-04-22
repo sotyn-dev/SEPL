@@ -181,12 +181,20 @@ export default function Procurement() {
     load();
   };
 
-  // Open the Create Vendor PO modal. If an indent is pre-selected (from the
-  // Pending section), its items auto-load with finalized rates pre-filled.
-  // Terms + Credit Days are PO-level — set once for the whole PO, applied
-  // to every checked item on save.
+  // Open the Upload Vendor PO modal. If an indent is pre-selected (from the
+  // Pending section), its items auto-load with finalized rates pre-filled so
+  // the uploader can tick which indent lines the Tally PO covers.
+  // Terms + Credit Days live on the uploaded Tally PO itself — not in the ERP.
   const openCreateVendorPo = (indentId = '') => {
-    setForm({ indent_id: indentId || '', vendor_id: '', advance_required: false, terms: '', credit_days: 0 });
+    setForm({
+      indent_id: indentId || '',
+      vendor_id: '',
+      po_number: '',
+      po_date: new Date().toISOString().slice(0, 10), // default to today
+      total_amount: '',
+      remarks: '',
+      po_file: null,
+    });
     setIndentItemsForPo([]);
     setPoItemSelection({});
     if (indentId) pickIndentForPo(indentId);
@@ -210,18 +218,20 @@ export default function Procurement() {
         };
       }
       setPoItemSelection(sel);
-      // Pre-fill vendor + terms + credit days from the finalized items if they agree
+      // Pre-fill vendor from the finalized items if they all agree. Terms +
+      // credit days live on the Tally PO now, so no need to pre-fill them.
       const vendorNames = [...new Set(items.filter(i => i.final_vendor_name).map(i => i.final_vendor_name))];
-      const termsSet = [...new Set(items.filter(i => i.final_terms).map(i => i.final_terms))];
-      const daysSet = [...new Set(items.filter(i => i.final_credit_days).map(i => i.final_credit_days))];
+      const finalisedSum = items
+        .filter(i => i.rate_status === 'finalized' && i.in_po_count === 0)
+        .reduce((s, i) => s + ((+i.quantity || 0) * (+i.final_rate || 0)), 0);
       setForm(f => {
         const next = { ...f };
         if (vendorNames.length === 1) {
           const match = vendors.find(v => v.name?.toLowerCase() === vendorNames[0].toLowerCase());
           if (match) next.vendor_id = match.id;
         }
-        if (termsSet.length === 1) next.terms = termsSet[0];
-        if (daysSet.length === 1) next.credit_days = daysSet[0];
+        // Pre-fill the total if all checked lines have finalized rates
+        if (!next.total_amount && finalisedSum > 0) next.total_amount = Math.round(finalisedSum * 100) / 100;
         return next;
       });
     } catch { toast.error('Failed to load indent items'); }
@@ -231,26 +241,33 @@ export default function Procurement() {
   };
   const poTotal = Object.values(poItemSelection).reduce((s, r) => s + (r.checked ? (+r.quantity || 0) * (+r.rate || 0) : 0), 0);
 
+  // Upload a Tally Vendor PO. The backend endpoint is multipart/form-data —
+  // metadata fields + an optional file + a JSON-encoded items array for the
+  // indent line linking (so "Pending for PO" still works).
   const saveVendorPo = async (e) => {
     e.preventDefault();
     if (!form.vendor_id) return toast.error('Pick a vendor');
-    // Terms + Credit Days are PO-level; stamp them onto every checked item.
-    const poTerms = form.terms || null;
-    const poCreditDays = form.terms === 'Credit' ? (+form.credit_days || 0) : 0;
+    if (!form.po_number || !String(form.po_number).trim()) return toast.error('Enter the PO Number from Tally');
+
     const items = Object.entries(poItemSelection)
       .filter(([, v]) => v.checked && +v.quantity > 0 && +v.rate > 0)
-      .map(([iiId, v]) => ({ indent_item_id: +iiId, quantity: +v.quantity, rate: +v.rate, terms: poTerms, credit_days: poCreditDays }));
-    if (items.length === 0) return toast.error('Check at least one item with qty and rate');
+      .map(([iiId, v]) => ({ indent_item_id: +iiId, quantity: +v.quantity, rate: +v.rate }));
+
+    const fd = new FormData();
+    fd.append('po_number', String(form.po_number).trim());
+    if (form.po_date) fd.append('po_date', form.po_date);
+    fd.append('vendor_id', form.vendor_id);
+    if (form.indent_id) fd.append('indent_id', form.indent_id);
+    if (form.total_amount) fd.append('total_amount', form.total_amount);
+    if (form.remarks) fd.append('remarks', form.remarks);
+    if (items.length) fd.append('items', JSON.stringify(items));
+    if (form.po_file) fd.append('file', form.po_file);
+
     try {
-      const r = await api.post('/procurement/vendor-po', {
-        indent_id: form.indent_id || null,
-        vendor_id: form.vendor_id,
-        advance_required: !!form.advance_required,
-        items,
-      });
-      toast.success(`Vendor PO ${r.data.po_number} created (${r.data.lines} items, Rs ${r.data.total_amount.toLocaleString()})`);
+      const r = await api.post('/procurement/vendor-po', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success(`Vendor PO ${r.data.po_number} uploaded (Rs ${r.data.total_amount.toLocaleString()}${r.data.lines ? `, ${r.data.lines} linked items` : ''})`);
       setModal(false); load();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
   };
 
   const savePurchaseBill = async (e) => {
@@ -532,7 +549,7 @@ export default function Procurement() {
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="font-semibold">Vendor Purchase Orders</h3>
-            <button onClick={() => openCreateVendorPo('')} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Vendor PO</button>
+            <button onClick={() => openCreateVendorPo('')} className="btn btn-primary flex items-center gap-2"><FiPlus /> Upload Vendor PO</button>
           </div>
 
           {/* Pending for PO — finalized items that haven't been covered by any Vendor PO yet */}
@@ -575,7 +592,7 @@ export default function Procurement() {
                             <span className={`badge ${p.rate_status === 'finalized' ? 'badge-green' : 'badge-yellow'}`}>{p.rate_status || 'pending'}</span>
                           </td>
                           <td className="px-2 py-1.5">
-                            <button onClick={() => openCreateVendorPo(p.indent_id)} className="btn btn-primary text-[10px] px-2 py-1">Create PO</button>
+                            <button onClick={() => openCreateVendorPo(p.indent_id)} className="btn btn-primary text-[10px] px-2 py-1">Upload PO</button>
                           </td>
                         </tr>
                       );
@@ -587,12 +604,19 @@ export default function Procurement() {
           )}
 
           <div className="card p-0 overflow-x-auto"><table>
-            <thead><tr><th>PO Number</th><th>Vendor</th><th>Amount</th><th>Advance</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>PO Number</th><th>PO Date</th><th>Vendor</th><th>Amount</th><th>File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {vendorPos.map(v => (
                 <tr key={v.id}>
-                  <td className="font-medium">{v.po_number}</td><td>{v.vendor_name}</td><td>Rs {v.total_amount?.toLocaleString()}</td>
-                  <td>{v.advance_required ? (v.advance_paid ? 'Paid' : 'Required') : 'N/A'}</td>
+                  <td className="font-medium">{v.po_number}</td>
+                  <td>{v.po_date || <span className="text-gray-300">—</span>}</td>
+                  <td>{v.vendor_name}</td>
+                  <td>Rs {v.total_amount?.toLocaleString()}</td>
+                  <td>
+                    {v.file_path
+                      ? <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View PO</a>
+                      : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
                   <td><StatusBadge status={v.status} /></td>
                   <td>{canDelete('procurement') && <button onClick={async () => {
                     if (!confirm(`Delete vendor PO "${v.po_number}"?`)) return;
@@ -601,7 +625,7 @@ export default function Procurement() {
                   }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}</td>
                 </tr>
               ))}
-              {vendorPos.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No vendor POs yet</td></tr>}
+              {vendorPos.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No vendor POs yet — click "Upload Vendor PO"</td></tr>}
             </tbody>
           </table></div>
         </>
@@ -806,46 +830,69 @@ export default function Procurement() {
         </form>
       </Modal>
 
-      {/* Vendor PO Modal */}
-      <Modal isOpen={modal === 'vendorpo'} onClose={() => setModal(false)} title="Create Vendor PO" wide>
+      {/* Vendor PO Upload Modal — mam creates the PO in Tally and uploads
+          the file here. Terms / credit days / advance live on the uploaded
+          Tally PO itself, so the ERP only captures metadata + the file. */}
+      <Modal isOpen={modal === 'vendorpo'} onClose={() => setModal(false)} title="Upload Vendor PO (from Tally)" wide>
         <form onSubmit={saveVendorPo} className="space-y-4">
+          <p className="text-[11px] text-gray-500 bg-blue-50 border border-blue-100 rounded px-3 py-2">
+            Upload the PO PDF/file you created in Tally. Optionally link it to an indent so the "Pending for PO" list clears.
+          </p>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="label">Indent *</label>
-              <select className="select" value={form.indent_id} onChange={e => pickIndentForPo(e.target.value)} required>
-                <option value="">Select indent</option>
-                {indents.map(i => <option key={i.id} value={i.id}>{i.indent_number} — {i.site_name}</option>)}
-              </select>
+              <label className="label">PO Number (from Tally) *</label>
+              <input className="input" placeholder="e.g. VPO/2026/0017" value={form.po_number || ''} onChange={e => setForm({...form, po_number: e.target.value})} required />
+            </div>
+            <div>
+              <label className="label">PO Date *</label>
+              <input className="input" type="date" value={form.po_date || ''} onChange={e => setForm({...form, po_date: e.target.value})} required />
             </div>
             <div>
               <label className="label">Vendor *</label>
-              <select className="select" value={form.vendor_id} onChange={e => setForm({...form, vendor_id: +e.target.value})} required>
+              <select className="select" value={form.vendor_id || ''} onChange={e => setForm({...form, vendor_id: +e.target.value})} required>
                 <option value="">Select vendor</option>
                 {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
               </select>
               <p className="text-[10px] text-gray-400 mt-0.5">Auto-picked from finalized rates if all items agree.</p>
             </div>
             <div>
-              <label className="label">Payment Terms</label>
-              <select className="select" value={form.terms || ''} onChange={e => setForm({ ...form, terms: e.target.value, credit_days: e.target.value === 'Credit' ? (form.credit_days || 0) : 0 })}>
-                <option value="">— Select —</option>
-                <option value="Advance">Advance</option>
-                <option value="Credit">Credit</option>
-              </select>
-              <p className="text-[10px] text-gray-400 mt-0.5">Applies to the whole PO (all items below).</p>
+              <label className="label">PO Total Amount *</label>
+              <input className="input" type="number" step="0.01" min="0" placeholder="0" value={form.total_amount || ''} onChange={e => setForm({...form, total_amount: e.target.value})} required />
+              <p className="text-[10px] text-gray-400 mt-0.5">As per the Tally PO.</p>
             </div>
             <div>
-              <label className="label">Credit Days {form.terms !== 'Credit' && <span className="text-gray-400 font-normal">(only if Credit)</span>}</label>
-              <input className="input" type="number" min="0" value={form.credit_days || 0} onChange={e => setForm({ ...form, credit_days: +e.target.value })} disabled={form.terms !== 'Credit'} />
+              <label className="label">Link to Indent <span className="text-gray-400 font-normal">(optional)</span></label>
+              <select className="select" value={form.indent_id || ''} onChange={e => pickIndentForPo(e.target.value)}>
+                <option value="">— No indent link —</option>
+                {indents.map(i => <option key={i.id} value={i.id}>{i.indent_number} — {i.site_name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">PO File <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, max 10 MB)</span></label>
+              <input
+                className="input"
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls"
+                onChange={e => setForm({...form, po_file: e.target.files?.[0] || null})}
+              />
+              {form.po_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.po_file.name}</p>}
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label">Remarks <span className="text-gray-400 font-normal">(optional)</span></label>
+              <input className="input" placeholder="Any note about this PO" value={form.remarks || ''} onChange={e => setForm({...form, remarks: e.target.value})} />
             </div>
           </div>
 
-          {/* Item grid — checkbox, rate, terms, credit days per row */}
+          {/* Optional item linking — when an indent is picked, the uploader
+              can tick which indent lines the Tally PO covers so the "Pending
+              for PO" list clears. Terms / credit days aren't collected here
+              because they live on the uploaded Tally PO itself. */}
           {form.indent_id && (
             <div className="border rounded-lg overflow-hidden">
               <div className="bg-gray-50 px-3 py-2 border-b text-xs font-semibold text-gray-600 uppercase flex items-center justify-between">
-                <span>Items from this Indent</span>
-                <span className="text-[10px] text-gray-500 normal-case">Tick items you want in this PO</span>
+                <span>Items from this Indent <span className="text-[10px] text-gray-400 normal-case">(optional)</span></span>
+                <span className="text-[10px] text-gray-500 normal-case">Tick items covered by this Tally PO</span>
               </div>
               {indentItemsForPo.length === 0 ? (
                 <div className="p-4 text-center text-sm text-gray-400">Loading items…</div>
@@ -857,9 +904,8 @@ export default function Procurement() {
                         <th className="px-2 py-1.5"></th>
                         <th className="px-2 py-1.5 text-left">Item</th>
                         <th className="px-2 py-1.5">Qty</th>
+                        <th className="px-2 py-1.5">Unit</th>
                         <th className="px-2 py-1.5">Rate</th>
-                        <th className="px-2 py-1.5">Terms</th>
-                        <th className="px-2 py-1.5">Credit Days</th>
                         <th className="px-2 py-1.5">Amount</th>
                       </tr>
                     </thead>
@@ -868,6 +914,7 @@ export default function Procurement() {
                         const s = poItemSelection[it.indent_item_id] || {};
                         const inPo = it.in_po_count > 0;
                         const amount = (s.checked ? (+s.quantity || 0) * (+s.rate || 0) : 0);
+                        const unit = it.unit || it.uom || '';
                         return (
                           <tr key={it.indent_item_id} className={`border-b ${inPo ? 'bg-gray-100 text-gray-400' : (s.checked ? 'bg-red-50/40' : '')}`}>
                             <td className="px-2 py-1.5 text-center">
@@ -880,24 +927,15 @@ export default function Procurement() {
                               {inPo && <div className="text-[10px] text-gray-500 italic">Already in a Vendor PO</div>}
                             </td>
                             <td className="px-1 py-1"><input className="input text-[11px] px-1 py-0.5 w-16 text-right" type="number" disabled={inPo} value={s.quantity ?? it.quantity ?? 0} onChange={e => togglePoItem(it.indent_item_id, { quantity: +e.target.value })} /></td>
+                            <td className="px-2 py-1.5 text-center text-gray-600">{unit || <span className="text-gray-300">—</span>}</td>
                             <td className="px-1 py-1"><input className="input text-[11px] px-1 py-0.5 w-20 text-right" type="number" disabled={inPo} value={s.rate ?? 0} onChange={e => togglePoItem(it.indent_item_id, { rate: +e.target.value })} /></td>
-                            <td className="px-1 py-1">
-                              <select className="select text-[11px] px-1 py-0.5 w-24" disabled={inPo} value={s.terms || ''} onChange={e => togglePoItem(it.indent_item_id, { terms: e.target.value })}>
-                                <option value="">—</option>
-                                <option value="Advance">Advance</option>
-                                <option value="Credit">Credit</option>
-                              </select>
-                            </td>
-                            <td className="px-1 py-1">
-                              <input className="input text-[11px] px-1 py-0.5 w-16 text-right" type="number" disabled={inPo || s.terms !== 'Credit'} value={s.credit_days ?? 0} onChange={e => togglePoItem(it.indent_item_id, { credit_days: +e.target.value })} />
-                            </td>
                             <td className="px-2 py-1.5 text-right font-semibold">{amount ? `Rs ${amount.toLocaleString()}` : <span className="text-gray-300">—</span>}</td>
                           </tr>
                         );
                       })}
                     </tbody>
                     <tfoot className="bg-gray-50">
-                      <tr><td colSpan="6" className="px-2 py-2 text-right font-bold">PO Total:</td>
+                      <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">PO Total:</td>
                           <td className="px-2 py-2 text-right font-bold text-red-700">Rs {poTotal.toLocaleString()}</td></tr>
                     </tfoot>
                   </table>
@@ -906,10 +944,9 @@ export default function Procurement() {
             </div>
           )}
 
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!form.advance_required} onChange={e => setForm({...form, advance_required: e.target.checked})} /> Advance Required</label>
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
             <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">Create Vendor PO</button>
+            <button type="submit" className="btn btn-primary">Upload Vendor PO</button>
           </div>
         </form>
       </Modal>

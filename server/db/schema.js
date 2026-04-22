@@ -1200,6 +1200,13 @@ function initializeDatabase() {
     ['indent_items', 'item_type TEXT'],
     // Links this indent line back to the site BOQ row it was picked from
     ['indent_items', 'po_item_id INTEGER REFERENCES po_items(id)'],
+    // Vendor POs are now uploaded from Tally rather than built inside the ERP.
+    // po_date  — from the Tally PO (not the ERP creation timestamp)
+    // file_path — relative URL under /uploads to the uploaded PO file (PDF/image/xlsx)
+    // remarks   — free-text note from the uploader
+    ['vendor_pos', 'po_date DATE'],
+    ['vendor_pos', 'file_path TEXT'],
+    ['vendor_pos', 'remarks TEXT'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}
