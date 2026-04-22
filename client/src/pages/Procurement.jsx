@@ -404,7 +404,7 @@ export default function Procurement() {
 
           {/* Desktop table */}
           <div className="card p-0 overflow-x-auto hidden lg:block">
-            <table className="text-xs min-w-[1500px]">
+            <table className="text-xs" style={{ minWidth: '1600px' }}>
               <thead>
                 <tr className="bg-gray-50">
                   <th className="px-2 py-2 text-left" rowSpan="2">Indent</th>
@@ -437,18 +437,33 @@ export default function Procurement() {
                       <td className="px-2 py-2 text-center font-semibold whitespace-nowrap">{r.qty} {r.unit}</td>
                       {[1,2,3].map(n => (
                         <Fragment key={n}>
-                          <td className="px-1 py-1">
+                          <td className="px-1 py-1" style={{ minWidth: '190px' }}>
                             <input
-                              className="input text-[11px] px-2 py-1 w-40 min-w-[10rem]"
+                              className="input text-[11px] px-2 py-1"
+                              style={{ width: '180px', minWidth: '180px' }}
                               placeholder="Vendor name"
                               list="vendor-options"
                               value={r[`vendor${n}_name`] || ''}
                               onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_name`]: e.target.value })}
                             />
                           </td>
-                          <td className="px-1 py-1"><input className="input text-[11px] px-2 py-1 w-24 min-w-[6rem] text-right" type="number" placeholder="0" value={r[`vendor${n}_rate`] || ''} onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_rate`]: +e.target.value })} /></td>
-                          <td className="px-1 py-1">
-                            <select className="select text-[11px] px-2 py-1 w-28 min-w-[7rem]" value={r[`vendor${n}_terms`] || ''} onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_terms`]: e.target.value })}>
+                          <td className="px-1 py-1" style={{ minWidth: '120px' }}>
+                            <input
+                              className="input text-[11px] px-2 py-1 text-right"
+                              style={{ width: '110px', minWidth: '110px' }}
+                              type="number"
+                              placeholder="0"
+                              value={r[`vendor${n}_rate`] || ''}
+                              onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_rate`]: +e.target.value })}
+                            />
+                          </td>
+                          <td className="px-1 py-1" style={{ minWidth: '140px' }}>
+                            <select
+                              className="select text-[11px] px-2 py-1"
+                              style={{ width: '130px', minWidth: '130px' }}
+                              value={r[`vendor${n}_terms`] || ''}
+                              onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_terms`]: e.target.value })}
+                            >
                               <option value="">—</option>
                               <option value="Advance">Advance</option>
                               <option value="Credit">Credit</option>
