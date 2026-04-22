@@ -15,7 +15,7 @@ export default function PMSTasks() {
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [projects, setProjects] = useState([]);
-  const [scope, setScope] = useState('mine');
+  const [scope, setScope] = useState('followup');
   const [statusFilter, setStatusFilter] = useState('');
   const [createModal, setCreateModal] = useState(false);
   const [submitModal, setSubmitModal] = useState(null);
@@ -164,10 +164,14 @@ export default function PMSTasks() {
         )}
       </div>
 
+      {/* Followup shows every active (non-approved) task across users — the
+          same pattern mam uses in Delegations. Admin keeps the "All" tab to
+          also see historical approved tasks; status dropdown works with
+          both. Per-user "Assigned to me" / "Given by me" scopes dropped —
+          users can filter by their own name or use the status dropdown. */}
       <div className="flex flex-wrap gap-2 text-sm">
         {[
-          { id: 'mine', label: 'Assigned to me' },
-          { id: 'given', label: 'Given by me' },
+          { id: 'followup', label: 'Followup (all active)' },
           ...(isAdmin() ? [{ id: 'all', label: 'All (admin)' }] : []),
         ].map(t => (
           <button key={t.id} onClick={() => setScope(t.id)}

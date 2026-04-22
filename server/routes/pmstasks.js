@@ -70,6 +70,10 @@ router.get('/', (req, res) => {
   const params = [];
   if (isAdmin && scope === 'all') {
     // no filter
+  } else if (scope === 'followup') {
+    // Everyone's tasks, defaulting to active (non-approved). Status dropdown
+    // can still override to show approved-only across everyone.
+    if (!status) where.push("p.status != 'approved'");
   } else if (scope === 'given') {
     where.push('p.assigned_by = ?'); params.push(uid);
   } else if (scope === 'mine') {

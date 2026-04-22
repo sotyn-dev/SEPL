@@ -631,14 +631,15 @@ router.post('/vendor-po', vendorPoUpload.single('file'), (req, res) => {
 
   const po_date = b.po_date || null;
   const remarks = b.remarks || null;
+  const expected_receipt_date = b.expected_receipt_date || null;
 
   try {
     const tx = db.transaction(() => {
       const r = db.prepare(
         `INSERT INTO vendor_pos
-           (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?)`
-      ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks);
+           (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks, expected_receipt_date)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`
+      ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks, expected_receipt_date);
       const vpoId = r.lastInsertRowid;
 
       // Only write line items if the uploader chose to link indent lines.

@@ -1235,9 +1235,12 @@ function initializeDatabase() {
     // po_date  — from the Tally PO (not the ERP creation timestamp)
     // file_path — relative URL under /uploads to the uploaded PO file (PDF/image/xlsx)
     // remarks   — free-text note from the uploader
+    // expected_receipt_date — date by which goods are expected from the vendor;
+    //   used by mam to chase follow-ups and trigger the purchase-bill upload.
     ['vendor_pos', 'po_date DATE'],
     ['vendor_pos', 'file_path TEXT'],
     ['vendor_pos', 'remarks TEXT'],
+    ['vendor_pos', 'expected_receipt_date DATE'],
     // Delegations — optional project tag the admin can set while creating a
     // task or edit later from the list. Free-text so it doesn't depend on
     // any master list; keeps it flexible for mam's quick day-to-day tasks.

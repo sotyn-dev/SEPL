@@ -191,6 +191,7 @@ export default function Procurement() {
       vendor_id: '',
       po_number: '',
       po_date: new Date().toISOString().slice(0, 10), // default to today
+      expected_receipt_date: '',
       total_amount: '',
       remarks: '',
       po_file: null,
@@ -256,6 +257,7 @@ export default function Procurement() {
     const fd = new FormData();
     fd.append('po_number', String(form.po_number).trim());
     if (form.po_date) fd.append('po_date', form.po_date);
+    if (form.expected_receipt_date) fd.append('expected_receipt_date', form.expected_receipt_date);
     fd.append('vendor_id', form.vendor_id);
     if (form.indent_id) fd.append('indent_id', form.indent_id);
     if (form.total_amount) fd.append('total_amount', form.total_amount);
@@ -860,6 +862,11 @@ export default function Procurement() {
               <label className="label">PO Total Amount *</label>
               <input className="input" type="number" step="0.01" min="0" placeholder="0" value={form.total_amount || ''} onChange={e => setForm({...form, total_amount: e.target.value})} required />
               <p className="text-[10px] text-gray-400 mt-0.5">As per the Tally PO.</p>
+            </div>
+            <div>
+              <label className="label">Expected Receipt Date <span className="text-gray-400 font-normal">(when goods are due from vendor)</span></label>
+              <input className="input" type="date" value={form.expected_receipt_date || ''} onChange={e => setForm({...form, expected_receipt_date: e.target.value})} />
+              <p className="text-[10px] text-gray-400 mt-0.5">Used to chase vendor follow-ups and trigger the Purchase Bill upload.</p>
             </div>
             <div>
               <label className="label">Link to Indent <span className="text-gray-400 font-normal">(optional)</span></label>
