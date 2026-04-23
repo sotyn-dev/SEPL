@@ -21,20 +21,33 @@ export default function HelpTicket() {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState('tickets');
   const [tickets, setTickets] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [modal, setModal] = useState(null);
-  const [form, setForm] = useState({ subject: '', description: '', category: 'bug', priority: 'medium', module: '' });
+  const [form, setForm] = useState({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '' });
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [adminResponse, setAdminResponse] = useState('');
+  const [reassign, setReassign] = useState('');
 
   const isAdmin = user?.role === 'admin';
 
   const load = () => { api.get('/support').then(r => setTickets(r.data)).catch(() => {}); };
-  useEffect(() => { if (open) load(); }, [open]);
+  useEffect(() => {
+    if (open) {
+      load();
+      // Active employees for the Assign To dropdown
+      api.get('/auth/users').then(r => setEmployees((r.data || []).filter(u => u.active !== 0))).catch(() => setEmployees([]));
+    }
+  }, [open]);
 
   const submit = async (e) => {
     e.preventDefault();
-    try { const res = await api.post('/support', form); toast.success(`Ticket ${res.data.ticket_no} created`); setModal(null); setForm({ subject: '', description: '', category: 'bug', priority: 'medium', module: '' }); load(); }
-    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    try {
+      const res = await api.post('/support', form);
+      toast.success(`Ticket ${res.data.ticket_no} created${form.assigned_to ? ' — assigned' : ''}`);
+      setModal(null);
+      setForm({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '' });
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   const updateTicket = async (id, update) => {
@@ -80,12 +93,15 @@ export default function HelpTicket() {
                 <button onClick={() => setModal('new')} className="w-full btn btn-primary text-xs py-2 flex items-center justify-center gap-1"><FiPlus size={12}/> Raise New Ticket</button>
                 {tickets.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No tickets yet</p>}
                 {tickets.map(t => (
-                  <div key={t.id} onClick={() => { setSelectedTicket(t); setAdminResponse(t.admin_response || ''); setModal('view'); }} className="p-2.5 border rounded-lg hover:bg-red-50/40 cursor-pointer text-xs">
+                  <div key={t.id} onClick={() => { setSelectedTicket(t); setAdminResponse(t.admin_response || ''); setReassign(t.assigned_to || ''); setModal('view'); }} className="p-2.5 border rounded-lg hover:bg-red-50/40 cursor-pointer text-xs">
                     <div className="flex justify-between items-start">
                       <div className="flex-1 min-w-0">
                         <p className="font-bold text-red-600">{t.ticket_no}</p>
                         <p className="font-medium truncate">{t.subject}</p>
                         {isAdmin && <p className="text-[10px] text-gray-400">by {t.user_name}</p>}
+                        {t.assigned_to_name && (
+                          <p className="text-[10px] text-indigo-600 font-semibold">→ {t.assigned_to_name}{t.assigned_to === user?.id && <span className="text-emerald-600"> (you)</span>}</p>
+                        )}
                       </div>
                       <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${statusColors[t.status]}`}>{t.status}</span>
                     </div>
@@ -123,6 +139,15 @@ export default function HelpTicket() {
             <div><label className="label">Category</label><select className="select" value={form.category} onChange={e => setForm({...form, category: e.target.value})}><option value="bug">Bug / Issue</option><option value="feature_request">Feature Request</option><option value="how_to">How To / Question</option><option value="data_issue">Data Issue</option><option value="other">Other</option></select></div>
             <div><label className="label">Priority</label><select className="select" value={form.priority} onChange={e => setForm({...form, priority: e.target.value})}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select></div>
             <div className="col-span-2"><label className="label">Which Module?</label><input className="input" value={form.module} onChange={e => setForm({...form, module: e.target.value})} placeholder="e.g. Payment Required, DPR, Attendance..." /></div>
+            <div className="col-span-2">
+              <label className="label">Assign To <span className="text-gray-400 font-normal">(optional — employee sees it on their dashboard)</span></label>
+              <select className="select" value={form.assigned_to} onChange={e => setForm({ ...form, assigned_to: e.target.value })}>
+                <option value="">— Unassigned —</option>
+                {employees.map(u => (
+                  <option key={u.id} value={u.id}>{u.name}{u.username ? ` (@${u.username})` : ''}{u.department ? ` — ${u.department}` : ''}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div><label className="label">Description *</label><textarea className="input" rows="4" value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Describe your issue or request in detail..." required /></div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Submit Ticket</button></div>
@@ -151,11 +176,33 @@ export default function HelpTicket() {
                 <p className="text-sm whitespace-pre-wrap">{selectedTicket.admin_response}</p>
               </div>
             )}
+            {/* Assignee (non-admin) can move to in_progress + leave a response */}
+            {!isAdmin && selectedTicket.assigned_to === user?.id && selectedTicket.status !== 'closed' && selectedTicket.status !== 'resolved' && (
+              <div className="border-t pt-4 space-y-3">
+                <h5 className="font-bold text-sm">Your response (you're assigned to this ticket)</h5>
+                <textarea className="input" rows="3" placeholder="Update the user about what you've done..." value={adminResponse} onChange={e => setAdminResponse(e.target.value)} />
+                <button onClick={() => updateTicket(selectedTicket.id, { status: 'in_progress', admin_response: adminResponse })} className="btn btn-secondary text-xs">Mark In Progress & Save Response</button>
+                <p className="text-[10px] text-gray-400">Only admin can finally mark this Resolved or Closed.</p>
+              </div>
+            )}
+
             {isAdmin && selectedTicket.status !== 'closed' && (
               <div className="border-t pt-4 space-y-3">
                 <h5 className="font-bold text-sm">Admin Actions</h5>
+                <div>
+                  <label className="label text-[11px]">Reassign to</label>
+                  <div className="flex gap-2">
+                    <select className="select text-xs" value={reassign} onChange={e => setReassign(e.target.value)}>
+                      <option value="">— Unassigned —</option>
+                      {employees.map(u => (
+                        <option key={u.id} value={u.id}>{u.name}{u.username ? ` (@${u.username})` : ''}</option>
+                      ))}
+                    </select>
+                    <button type="button" onClick={() => updateTicket(selectedTicket.id, { assigned_to: reassign ? +reassign : null })} className="btn btn-secondary text-xs whitespace-nowrap">Save Assignee</button>
+                  </div>
+                </div>
                 <textarea className="input" rows="3" placeholder="Your response to the user..." value={adminResponse} onChange={e => setAdminResponse(e.target.value)} />
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button onClick={() => updateTicket(selectedTicket.id, { status: 'in_progress', admin_response: adminResponse })} className="btn btn-secondary text-xs">Mark In Progress</button>
                   <button onClick={() => updateTicket(selectedTicket.id, { status: 'resolved', admin_response: adminResponse })} className="btn btn-success text-xs">Resolve</button>
                   <button onClick={() => updateTicket(selectedTicket.id, { status: 'closed', admin_response: adminResponse })} className="btn btn-danger text-xs">Close</button>

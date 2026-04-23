@@ -3,18 +3,21 @@ import { Link } from 'react-router-dom';
 import api from '../api';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
-import { FiTarget, FiShoppingCart, FiTool, FiAlertCircle, FiUsers, FiCheckSquare, FiUpload, FiClock, FiAlertTriangle, FiExternalLink, FiCalendar } from 'react-icons/fi';
+import { FiTarget, FiShoppingCart, FiTool, FiAlertCircle, FiUsers, FiCheckSquare, FiUpload, FiClock, FiAlertTriangle, FiExternalLink, FiCalendar, FiHelpCircle } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [myTasks, setMyTasks] = useState([]);
   const [todayChecklists, setTodayChecklists] = useState([]);
+  const [myTickets, setMyTickets] = useState({ active: 0, recent: [] });
   const [uploadingFor, setUploadingFor] = useState(null); // id of the checklist/task currently uploading
 
   const loadPersonal = () => {
     api.get('/delegations?scope=mine').then(r => setMyTasks(r.data)).catch(() => setMyTasks([]));
     api.get('/hr/checklists/my-today').then(r => setTodayChecklists(r.data)).catch(() => setTodayChecklists([]));
+    // Support tickets assigned to me — open + in_progress ones
+    api.get('/support/mine').then(r => setMyTickets(r.data || { active: 0, recent: [] })).catch(() => setMyTickets({ active: 0, recent: [] }));
   };
 
   useEffect(() => {
@@ -85,6 +88,42 @@ export default function Dashboard() {
           </Link>
         ))}
       </div>
+
+      {/* Support tickets assigned to me — only shows when there are active ones,
+          otherwise stays hidden to keep the dashboard clean. Clicking a ticket
+          doesn't navigate (tickets live inside the floating help widget) but
+          mam's people see the list + priority + who raised it at a glance. */}
+      {myTickets.active > 0 && (
+        <div className="card border-l-4 border-indigo-400 bg-indigo-50/30">
+          <div className="flex justify-between items-center mb-2">
+            <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+              <FiHelpCircle className="text-indigo-600" />
+              Support Tickets Assigned to You
+              <span className="text-xs font-normal text-indigo-600">({myTickets.active} active)</span>
+            </h3>
+            <span className="text-[11px] text-gray-400">Open the Help (?) button bottom-right to respond</span>
+          </div>
+          <div className="space-y-1.5">
+            {myTickets.recent.map(t => {
+              const pColor = t.priority === 'urgent' || t.priority === 'high' ? 'text-red-700 bg-red-100' : t.priority === 'medium' ? 'text-amber-700 bg-amber-100' : 'text-gray-600 bg-gray-100';
+              return (
+                <div key={t.id} className="bg-white border rounded-lg px-3 py-2 flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-[11px] font-bold text-red-600">{t.ticket_no}</span>
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${pColor}`}>{t.priority.toUpperCase()}</span>
+                      {t.module && <span className="text-[10px] bg-red-50 text-red-700 px-1.5 py-0.5 rounded">{t.module}</span>}
+                    </div>
+                    <p className="text-sm font-medium text-gray-800 line-clamp-1 mt-0.5">{t.subject}</p>
+                    <p className="text-[11px] text-gray-500">Raised by {t.user_name}</p>
+                  </div>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold whitespace-nowrap ${t.status === 'in_progress' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{t.status}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* My Tasks & Today's Checklists — always visible so users know where
           to upload proof even when nothing is pending. */}

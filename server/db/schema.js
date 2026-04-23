@@ -1257,6 +1257,9 @@ function initializeDatabase() {
     // — critical for mam because without this the client sometimes denies
     // receiving material and SEPL takes the loss.
     ['delivery_notes', 'receipt_file_path TEXT'],
+    // Support tickets — who is the ticket assigned to? When set, that user
+    // sees the ticket on their dashboard and can respond / work on it.
+    ['support_tickets', 'assigned_to INTEGER REFERENCES users(id)'],
     // Delegations — optional project tag the admin can set while creating a
     // task or edit later from the list. Free-text so it doesn't depend on
     // any master list; keeps it flexible for mam's quick day-to-day tasks.
