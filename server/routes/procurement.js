@@ -592,6 +592,7 @@ router.post('/vendor-po', vendorPoUpload.single('file'), (req, res) => {
   const vendor_id = +b.vendor_id;
   const indent_id = b.indent_id ? +b.indent_id : null;
   if (!vendor_id) return res.status(400).json({ error: 'Vendor is required' });
+  if (!req.file) return res.status(400).json({ error: 'PO file is required — upload the Tally PO' });
 
   // Parse optional line items (JSON string in multipart form)
   let items = [];
@@ -695,6 +696,7 @@ router.get('/purchase-bills', (req, res) => {
 // is attached it still works — mam sometimes captures a bill without a scan.
 router.post('/purchase-bills', vendorPoUpload.single('file'), (req, res) => {
   const b = req.body || {};
+  if (!req.file) return res.status(400).json({ error: 'Bill file is required — upload the vendor bill' });
   const vendor_po_id = b.vendor_po_id ? +b.vendor_po_id : null;
   const vendor_id = b.vendor_id ? +b.vendor_id : null;
   const bill_number = b.bill_number || null;
@@ -757,13 +759,17 @@ router.get('/delivery-notes', (req, res) => {
 // (sales_bill | challan) so the list can show the right label.
 router.post('/delivery-notes', vendorPoUpload.single('file'), (req, res) => {
   const b = req.body || {};
+  if (!req.file) return res.status(400).json({ error: 'Dispatch file is required — upload the Sales Bill / Challan' });
   const vendor_po_id = b.vendor_po_id ? +b.vendor_po_id : null;
   const delivery_date = b.delivery_date || null;
   const notes = b.notes || null;
   const document_type = b.document_type || null;     // 'sales_bill' or 'challan'
   const document_number = b.document_number || null;
-  if (document_type && !['sales_bill', 'challan'].includes(document_type)) {
-    return res.status(400).json({ error: 'document_type must be sales_bill or challan' });
+  if (!document_type || !['sales_bill', 'challan'].includes(document_type)) {
+    return res.status(400).json({ error: 'Dispatch type (Sales Bill or Challan) is required' });
+  }
+  if (!document_number || !document_number.trim()) {
+    return res.status(400).json({ error: 'Document number is required' });
   }
 
   let filePath = null;
@@ -802,6 +808,9 @@ router.patch('/delivery-notes/:id/receive', vendorPoUpload.single('file'), (req,
   const received_at = b.received_at;
   if (!received_by_name || !String(received_by_name).trim()) {
     return res.status(400).json({ error: 'Received-by name is required' });
+  }
+  if (!req.file) {
+    return res.status(400).json({ error: 'Receipt proof photo is required — attach the stamped + signed document' });
   }
   const db = getDb();
   const existing = db.prepare('SELECT id FROM delivery_notes WHERE id=?').get(req.params.id);

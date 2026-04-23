@@ -249,6 +249,7 @@ export default function Procurement() {
     e.preventDefault();
     if (!form.vendor_id) return toast.error('Pick a vendor');
     if (!form.po_number || !String(form.po_number).trim()) return toast.error('Enter the PO Number from Tally');
+    if (!form.po_file) return toast.error('PO file is required — upload the Tally PO');
 
     const items = Object.entries(poItemSelection)
       .filter(([, v]) => v.checked && +v.quantity > 0 && +v.rate > 0)
@@ -274,7 +275,8 @@ export default function Procurement() {
 
   const savePurchaseBill = async (e) => {
     e.preventDefault();
-    // Multipart — carries optional bill_file alongside the metadata, same
+    if (!form.bill_file) return toast.error('Bill file is required — upload the vendor bill');
+    // Multipart — carries the bill_file alongside the metadata, same
     // pattern as the Vendor PO upload.
     const fd = new FormData();
     if (form.vendor_po_id) fd.append('vendor_po_id', form.vendor_po_id);
@@ -294,6 +296,9 @@ export default function Procurement() {
 
   const saveDeliveryNote = async (e) => {
     e.preventDefault();
+    if (!form.document_type) return toast.error('Pick Sales Bill or Challan');
+    if (!form.document_number || !form.document_number.trim()) return toast.error('Document number is required');
+    if (!form.dispatch_file) return toast.error('Dispatch file is required — upload the Sales Bill / Challan');
     // Multipart so we can attach the Sales Bill / Challan scan.
     const fd = new FormData();
     if (form.vendor_po_id) fd.append('vendor_po_id', form.vendor_po_id);
@@ -314,6 +319,7 @@ export default function Procurement() {
   const markReceived = async (e) => {
     e.preventDefault();
     if (!form.received_by_name || !form.received_by_name.trim()) return toast.error('Receiver name is required');
+    if (!form.receipt_file) return toast.error('Receipt proof photo is required — attach the stamped + signed document');
     const fd = new FormData();
     fd.append('received_by_name', form.received_by_name);
     if (form.received_at) fd.append('received_at', form.received_at);
@@ -335,7 +341,7 @@ export default function Procurement() {
     { id: 'rates', label: 'Vendor Rates' },
     { id: 'vendorpo', label: 'Vendor PO' },
     { id: 'bills', label: 'Purchase Bills' },
-    { id: 'delivery', label: 'Dispatch' },
+    { id: 'delivery', label: 'Dispatch & Receiving' },
   ];
 
   // --- Vendor Rates (Step 1 + 2) helpers ---
@@ -882,7 +888,7 @@ export default function Procurement() {
 
           {/* ===== Main dispatch list ===== */}
           <div className="flex justify-between items-center">
-            <h3 className="font-semibold">Dispatch to Site</h3>
+            <h3 className="font-semibold">Dispatch & Receiving</h3>
             <button onClick={() => openAddDispatch()} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Dispatch</button>
           </div>
           <div className="card p-0 overflow-x-auto"><table>
@@ -1122,11 +1128,12 @@ export default function Procurement() {
               </select>
             </div>
             <div>
-              <label className="label">PO File <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, max 10 MB)</span></label>
+              <label className="label">PO File * <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, max 10 MB)</span></label>
               <input
                 className="input"
                 type="file"
                 accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls"
+                required
                 onChange={e => setForm({...form, po_file: e.target.files?.[0] || null})}
               />
               {form.po_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.po_file.name}</p>}
@@ -1221,11 +1228,12 @@ export default function Procurement() {
           </div>
           <div><label className="label">Total</label><input className="input" type="number" value={form.total_amount} readOnly /></div>
           <div>
-            <label className="label">Bill File <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, optional, max 10 MB)</span></label>
+            <label className="label">Bill File * <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, max 10 MB)</span></label>
             <input
               className="input"
               type="file"
               accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls"
+              required
               onChange={e => setForm({ ...form, bill_file: e.target.files?.[0] || null })}
             />
             {form.bill_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.bill_file.name}</p>}
@@ -1275,8 +1283,8 @@ export default function Procurement() {
             </div>
           </div>
           <div>
-            <label className="label">{form.document_type === 'challan' ? 'Challan' : 'Sales Bill'} File <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, max 10 MB)</span></label>
-            <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" onChange={e => setForm({ ...form, dispatch_file: e.target.files?.[0] || null })} />
+            <label className="label">{form.document_type === 'challan' ? 'Challan' : 'Sales Bill'} File * <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, max 10 MB)</span></label>
+            <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" required onChange={e => setForm({ ...form, dispatch_file: e.target.files?.[0] || null })} />
             {form.dispatch_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.dispatch_file.name}</p>}
           </div>
           <div><label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm({...form, notes: e.target.value})} /></div>
@@ -1303,12 +1311,13 @@ export default function Procurement() {
             <p className="text-[10px] text-gray-400 mt-0.5">Defaults to today if left blank.</p>
           </div>
           <div>
-            <label className="label">Receipt Proof <span className="text-red-500 font-normal">(stamped + signed photo — prevents client denial disputes)</span></label>
+            <label className="label">Receipt Proof * <span className="text-red-500 font-normal">(stamped + signed photo — prevents client denial disputes)</span></label>
             <input
               className="input"
               type="file"
               accept=".pdf,.jpg,.jpeg,.png"
               capture="environment"
+              required
               onChange={e => setForm({ ...form, receipt_file: e.target.files?.[0] || null })}
             />
             {form.receipt_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.receipt_file.name}</p>}
