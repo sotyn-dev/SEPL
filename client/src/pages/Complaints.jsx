@@ -18,10 +18,21 @@ const emptyForm = {
   service_report:'', status:'open', priority:'normal'
 };
 
+// Tab-based workflow — same design pattern as Indent to Dispatch.
+// Each tab filters the list by stage so users focus on one workflow step.
+const TABS = [
+  { id: 'all', label: 'All Complaints' },
+  { id: 'register', label: '+ Register New' },
+  { id: 'step1', label: 'Step 1 — Assign' },
+  { id: 'step2', label: 'Step 2 — Resolve' },
+  { id: 'resolved', label: 'Resolved' },
+];
+
 export default function Complaints() {
   const [list, setList] = useState([]);
   const [stats, setStats] = useState({ total:0, open:0, inProgress:0, resolved:0, byCategory:[] });
   const [q, setQ] = useState({ search:'', status:'', category:'' });
+  const [tab, setTab] = useState('all');
   const [showAdd, setShowAdd] = useState(false);
   const [viewing, setViewing] = useState(null);
   const [form, setForm] = useState(emptyForm);
@@ -42,6 +53,7 @@ export default function Complaints() {
     e.preventDefault();
     await api.post('/complaints', form);
     setShowAdd(false);
+    setTab('step1'); // jump to "Step 1 — Assign" tab so CRM can immediately assign the new complaint
     setForm(emptyForm);
     load();
   };
@@ -58,13 +70,25 @@ export default function Complaints() {
     resolved: 'bg-green-100 text-green-700',
   }[s] || 'bg-gray-100 text-gray-700');
 
+  // Tab-based filter — subset of the full list for each tab
+  const visibleList = (() => {
+    if (tab === 'step1') return list.filter(c => c.status === 'open' && !c.step1_assigned_to);
+    if (tab === 'step2') return list.filter(c => (c.status === 'open' || c.status === 'in_progress') && c.step1_assigned_to && !c.service_report);
+    if (tab === 'resolved') return list.filter(c => c.status === 'resolved' || c.status === 'closed');
+    return list;
+  })();
+  const tabCount = (id) => {
+    if (id === 'step1') return list.filter(c => c.status === 'open' && !c.step1_assigned_to).length;
+    if (id === 'step2') return list.filter(c => (c.status === 'open' || c.status === 'in_progress') && c.step1_assigned_to && !c.service_report).length;
+    if (id === 'resolved') return list.filter(c => c.status === 'resolved' || c.status === 'closed').length;
+    if (id === 'all') return list.length;
+    return null;
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center flex-wrap gap-2">
         <h1 className="text-xl font-bold text-gray-800">Complaint Register</h1>
-        <button onClick={() => setShowAdd(true)} className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm">
-          <FiPlus /> New Complaint
-        </button>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -74,6 +98,21 @@ export default function Complaints() {
         <StatCard icon={<FiCheckCircle />} label="Resolved" value={stats.resolved} color="green" />
       </div>
 
+      {/* Tabs — same design as Indent to Dispatch. Each tab is a workflow
+          stage; count badge shows how many rows that tab contains. */}
+      <div className="flex flex-wrap gap-2">
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => { setTab(t.id); if (t.id === 'register') setShowAdd(true); }}
+            className={`px-4 py-2 rounded-lg font-semibold text-sm border transition-all ${tab === t.id && t.id !== 'register' ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
+            {t.label}
+            {tabCount(t.id) !== null && <span className={`ml-2 text-xs ${tab === t.id && t.id !== 'register' ? 'opacity-90' : 'text-gray-400'}`}>({tabCount(t.id)})</span>}
+          </button>
+        ))}
+      </div>
+
+      {/* Search / status / category — shown on every tab except the register
+          tab (which opens the create modal directly). */}
+      {tab !== 'register' && (
       <div className="bg-white rounded-xl p-3 flex flex-wrap gap-2 border">
         <div className="relative flex-1 min-w-[200px]">
           <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -81,17 +120,39 @@ export default function Complaints() {
             onChange={e => setQ({ ...q, search: e.target.value })}
             className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm" />
         </div>
-        <select value={q.status} onChange={e => setQ({ ...q, status: e.target.value })} className="border rounded-lg px-3 py-2 text-sm">
-          <option value="">All Statuses</option>
-          <option value="open">Open</option>
-          <option value="in_progress">In Progress</option>
-          <option value="resolved">Resolved</option>
-        </select>
-        <select value={q.category} onChange={e => setQ({ ...q, category: e.target.value })} className="border rounded-lg px-3 py-2 text-sm">
-          <option value="">All Categories</option>
-          <option>Service</option><option>Product</option><option>Installation</option><option>Billing</option><option>Other</option>
-        </select>
+        {tab === 'all' && (
+          <>
+            <select value={q.status} onChange={e => setQ({ ...q, status: e.target.value })} className="border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Statuses</option>
+              <option value="open">Open</option>
+              <option value="in_progress">In Progress</option>
+              <option value="resolved">Resolved</option>
+            </select>
+            <select value={q.category} onChange={e => setQ({ ...q, category: e.target.value })} className="border rounded-lg px-3 py-2 text-sm">
+              <option value="">All Categories</option>
+              {CATEGORY_OPTIONS.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </>
+        )}
       </div>
+      )}
+
+      {/* Per-tab intro banner explaining what this stage means */}
+      {tab === 'step1' && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+          <b>Step 1 — Assign:</b> CRM assigns these complaints to the right technical team (LV / Electrical / Fire Fighting etc.) within 1 day. Click a row to open and set the assignee + planned date.
+        </div>
+      )}
+      {tab === 'step2' && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800">
+          <b>Step 2 — Resolve:</b> Assigned person visits / calls the client, resolves the issue, and uploads a service report within 3 days. Click a row to open and submit resolution.
+        </div>
+      )}
+      {tab === 'resolved' && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-800">
+          <b>Resolved:</b> Complaints that have been fully closed with a service report.
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border overflow-x-auto">
         <table className="w-full text-sm">
@@ -109,7 +170,7 @@ export default function Complaints() {
             </tr>
           </thead>
           <tbody>
-            {list.map(c => (
+            {visibleList.map(c => (
               <tr key={c.id} className="border-t hover:bg-slate-50">
                 <td className="px-3 py-2 font-mono text-xs">{c.complaint_number}</td>
                 <td className="px-3 py-2">{c.client_name}<div className="text-xs text-gray-500">{c.company_name}</div></td>
@@ -124,13 +185,18 @@ export default function Complaints() {
                 </td>
               </tr>
             ))}
-            {list.length === 0 && <tr><td colSpan="9" className="text-center text-gray-400 py-8">No complaints found.</td></tr>}
+            {visibleList.length === 0 && <tr><td colSpan="9" className="text-center text-gray-400 py-8">
+              {tab === 'step1' ? 'No complaints waiting for assignment — all set!'
+                : tab === 'step2' ? 'No complaints in resolution — team is caught up.'
+                : tab === 'resolved' ? 'No resolved complaints yet.'
+                : 'No complaints found.'}
+            </td></tr>}
           </tbody>
         </table>
       </div>
 
       {showAdd && (
-        <Modal onClose={() => setShowAdd(false)} title="Complaint Register Form">
+        <Modal onClose={() => { setShowAdd(false); setTab('all'); }} title="Complaint Register Form">
           <form onSubmit={create} className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Field label="Client Name *"><input required value={form.client_name} onChange={e=>setForm({...form, client_name:e.target.value})} className="inp" /></Field>
             <Field label="Company Name *"><input required value={form.company_name} onChange={e=>setForm({...form, company_name:e.target.value})} className="inp" /></Field>
@@ -170,7 +236,7 @@ export default function Complaints() {
               <Field label="Remarks"><textarea rows="2" value={form.remarks} onChange={e=>setForm({...form, remarks:e.target.value})} className="inp" placeholder="Any additional notes" /></Field>
             </div>
             <div className="md:col-span-2 flex justify-end gap-2">
-              <button type="button" onClick={()=>setShowAdd(false)} className="px-4 py-2 border rounded-lg text-sm">Cancel</button>
+              <button type="button" onClick={()=>{ setShowAdd(false); setTab('all'); }} className="px-4 py-2 border rounded-lg text-sm">Cancel</button>
               <button className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm">Register Complaint</button>
             </div>
           </form>
