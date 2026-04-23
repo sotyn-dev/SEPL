@@ -3,10 +3,12 @@ import { Link } from 'react-router-dom';
 import api from '../api';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
+import { useAuth } from '../context/AuthContext';
 import { FiTarget, FiShoppingCart, FiTool, FiAlertCircle, FiUsers, FiCheckSquare, FiUpload, FiClock, FiAlertTriangle, FiExternalLink, FiCalendar, FiHelpCircle } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 
 export default function Dashboard() {
+  const { isAdmin } = useAuth();
   const [stats, setStats] = useState(null);
   const [myTasks, setMyTasks] = useState([]);
   const [todayChecklists, setTodayChecklists] = useState([]);
@@ -19,8 +21,13 @@ export default function Dashboard() {
     api.get('/hr/checklists/my-today').then(r => setTodayChecklists(r.data)).catch(() => setTodayChecklists([]));
     // Support tickets assigned to me — open + in_progress ones
     api.get('/support/mine').then(r => setMyTickets(r.data || { active: 0, recent: [] })).catch(() => setMyTickets({ active: 0, recent: [] }));
-    // Current month's attendance summary for the dashboard card
-    api.get('/attendance/my-month').then(r => setMyAttendance(r.data)).catch(() => setMyAttendance(null));
+    // Current month's attendance summary — only relevant for regular users
+    // who actually punch in/out. Admin doesn't personally punch attendance
+    // (they monitor everyone's), so skip the API call to avoid the noisy
+    // "18 absent" figure that mam flagged.
+    if (!isAdmin()) {
+      api.get('/attendance/my-month').then(r => setMyAttendance(r.data)).catch(() => setMyAttendance(null));
+    }
   };
 
   useEffect(() => {
@@ -92,10 +99,11 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* This Month's Attendance — always visible so every user sees their
-          month at a glance the moment they land on the dashboard. Shows a
-          mini calendar-style grid + summary stats + link to full page. */}
-      {myAttendance && (() => {
+      {/* This Month's Attendance — hidden for admin (they don't personally
+          punch in/out; they monitor everyone via the Attendance page). Only
+          regular users see this card so the "absent" count reflects actual
+          missed punches. */}
+      {!isAdmin() && myAttendance && (() => {
         const { days, summary, month } = myAttendance;
         const [yr, mo] = month.split('-');
         const monthLabel = new Date(+yr, +mo - 1, 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
