@@ -986,11 +986,11 @@ export default function Procurement() {
           ) : (
             <>
               {/* Desktop column headers — hidden on mobile, where each row is a stacked card */}
-              <div className="hidden md:grid gap-2 text-[10px] font-bold text-gray-500 uppercase px-1" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr)) auto' }}>
+              <div className="hidden md:grid gap-2 text-[10px] font-bold text-gray-500 uppercase px-1" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr)) auto' }}>
                 <div className="col-span-5">BOQ Item (from Client PO)</div>
-                <div className="col-span-5">Sub-Item (Item Master)</div>
+                <div className="col-span-4">Sub-Item (Item Master)</div>
                 <div className="col-span-2">Make</div>
-                <div>Qty</div>
+                <div className="col-span-3">Qty</div>
                 <div>Unit</div>
                 <div></div>
               </div>
@@ -1026,7 +1026,10 @@ export default function Procurement() {
                     />
                   );
                   const makeInput = <input className="input text-sm" placeholder="Make" value={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />;
-                  const qtyInput = <input className="input text-sm" type="number" min="0" placeholder="Qty" value={item.quantity} onChange={e => { const n = [...indentItems]; n[i].quantity = +e.target.value; setIndentItems(n); }} />;
+                  // QTY — bumped to a bigger, bolder number so the critical
+                  // value is instantly readable / editable. right-aligned
+                  // since it's numeric.
+                  const qtyInput = <input className="input text-base font-bold text-right" type="number" min="0" placeholder="Qty" value={item.quantity} onChange={e => { const n = [...indentItems]; n[i].quantity = +e.target.value; setIndentItems(n); }} />;
                   const unitInput = <input className="input text-sm" placeholder="Unit" value={item.unit} onChange={e => { const n = [...indentItems]; n[i].unit = e.target.value; setIndentItems(n); }} />;
                   // TYPE is auto-derived from the Item Master sub-item's `type`
                   // field (PO / FOC / RGP). Read-only so mam's people can't
@@ -1060,8 +1063,11 @@ export default function Procurement() {
                           <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Sub-Item <span className="text-gray-400 font-normal normal-case">(Item Master)</span></label>
                           {masterPicker}
                         </div>
-                        <div className="grid grid-cols-3 gap-2">
-                          <div>
+                        {/* Mobile QTY/Unit/Type — Qty gets 2 columns so the
+                            number is easy to tap + read; Unit + Type share
+                            the remaining column split 50/50. */}
+                        <div className="grid grid-cols-4 gap-2">
+                          <div className="col-span-2">
                             <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Qty</label>
                             {qtyInput}
                           </div>
@@ -1080,20 +1086,22 @@ export default function Procurement() {
                         </div>
                       </div>
 
-                      {/* DESKTOP: wide grid row — BOQ picker + sub-item picker + make/qty/unit */}
+                      {/* DESKTOP: wide grid row — BOQ picker + sub-item picker
+                          + make + QTY (big) + unit. 15-column grid gives QTY
+                          3 columns so the number is easy to read/edit. */}
                       <div className="hidden md:block">
-                        <div className="grid gap-2 items-start" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr)) auto' }}>
+                        <div className="grid gap-2 items-start" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr)) auto' }}>
                           <div className="col-span-5">
                             {boqPicker}
                             {item.boq_qty ? <p className="text-[10px] text-gray-400 mt-0.5">BOQ {item.boq_qty}{item.remaining_qty !== null && item.remaining_qty !== undefined ? ` · Rem ${item.remaining_qty}` : ''}</p> : null}
                           </div>
-                          <div className="col-span-5">{masterPicker}</div>
+                          <div className="col-span-4">{masterPicker}</div>
                           <div className="col-span-2">{makeInput}</div>
-                          <div>{qtyInput}</div>
+                          <div className="col-span-3">{qtyInput}</div>
                           <div>{unitInput}</div>
                           {removeBtn}
                         </div>
-                        {/* Type row below — fits the 'from BOQ' hint; shown full-width under the grid */}
+                        {/* Type row below — auto-picked from sub-item */}
                         <div className="mt-1 flex items-center gap-2">
                           <span className="text-[10px] font-bold text-gray-500 uppercase">Type:</span>
                           <div className="w-24">{typeBox}</div>
