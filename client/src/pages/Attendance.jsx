@@ -253,14 +253,15 @@ export default function Attendance() {
 
             {location && <p className="text-xs text-gray-500 flex items-center gap-1"><FiMapPin size={12} /> {address || `${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`}</p>}
 
-            {/* Manual Punch Buttons (still available as fallback) */}
+            {/* Punch Buttons — "Manual" prefix dropped since auto-punch is
+                disabled; these are now THE punch in/out actions. */}
             {!myToday ? (
               <button onClick={handlePunchIn} disabled={loading || !photo} className="btn btn-success w-full py-3 text-sm font-bold disabled:opacity-50">
-                {loading ? 'Getting Location…' : 'Manual PUNCH IN'}
+                {loading ? 'Getting Location…' : 'PUNCH IN'}
               </button>
             ) : !myToday.punch_out_time ? (
               <button onClick={handlePunchOut} disabled={loading || !photo} className="btn btn-danger w-full py-3 text-sm font-bold disabled:opacity-50">
-                {loading ? 'Getting Location…' : 'Manual PUNCH OUT'}
+                {loading ? 'Getting Location…' : 'PUNCH OUT'}
               </button>
             ) : (
               <p className="text-center text-emerald-600 font-bold py-2">Today's attendance completed</p>

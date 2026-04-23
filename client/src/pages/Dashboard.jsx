@@ -11,6 +11,7 @@ export default function Dashboard() {
   const [myTasks, setMyTasks] = useState([]);
   const [todayChecklists, setTodayChecklists] = useState([]);
   const [myTickets, setMyTickets] = useState({ active: 0, recent: [] });
+  const [myAttendance, setMyAttendance] = useState(null);
   const [uploadingFor, setUploadingFor] = useState(null); // id of the checklist/task currently uploading
 
   const loadPersonal = () => {
@@ -18,6 +19,8 @@ export default function Dashboard() {
     api.get('/hr/checklists/my-today').then(r => setTodayChecklists(r.data)).catch(() => setTodayChecklists([]));
     // Support tickets assigned to me — open + in_progress ones
     api.get('/support/mine').then(r => setMyTickets(r.data || { active: 0, recent: [] })).catch(() => setMyTickets({ active: 0, recent: [] }));
+    // Current month's attendance summary for the dashboard card
+    api.get('/attendance/my-month').then(r => setMyAttendance(r.data)).catch(() => setMyAttendance(null));
   };
 
   useEffect(() => {
@@ -88,6 +91,63 @@ export default function Dashboard() {
           </Link>
         ))}
       </div>
+
+      {/* This Month's Attendance — always visible so every user sees their
+          month at a glance the moment they land on the dashboard. Shows a
+          mini calendar-style grid + summary stats + link to full page. */}
+      {myAttendance && (() => {
+        const { days, summary, month } = myAttendance;
+        const [yr, mo] = month.split('-');
+        const monthLabel = new Date(+yr, +mo - 1, 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+        // Status → style for the day cells
+        const cellStyle = (s) => {
+          if (s === 'present') return 'bg-emerald-100 text-emerald-800';
+          if (s === 'late') return 'bg-amber-100 text-amber-800';
+          if (s === 'half_day') return 'bg-amber-50 text-amber-700 border border-amber-300';
+          if (s === 'short_day') return 'bg-orange-100 text-orange-800';
+          if (s === 'on_leave') return 'bg-blue-100 text-blue-700';
+          if (s === 'absent') return 'bg-red-100 text-red-700';
+          if (s === 'weekend') return 'bg-gray-100 text-gray-400';
+          if (s === 'future') return 'bg-white text-gray-300 border border-gray-100';
+          return 'bg-white text-gray-400';
+        };
+        // Prepend blank cells to align first day with its weekday column
+        const firstDow = days.length ? days[0].dow : 0;
+        const leadingBlanks = Array.from({ length: firstDow }, (_, i) => <div key={'b' + i} />);
+        return (
+          <div className="card">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
+              <h3 className="font-semibold text-gray-800 flex items-center gap-2"><FiCheckSquare className="text-red-600" /> My Attendance — {monthLabel}</h3>
+              <Link to="/attendance" className="text-xs text-red-600 hover:underline">Open Attendance →</Link>
+            </div>
+            {/* Summary strip */}
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3 text-center text-xs">
+              <div className="bg-emerald-50 rounded p-2"><div className="font-bold text-emerald-700 text-lg">{summary.present}</div><div className="text-emerald-600">Present</div></div>
+              <div className="bg-amber-50 rounded p-2"><div className="font-bold text-amber-700 text-lg">{summary.late}</div><div className="text-amber-600">Late</div></div>
+              <div className="bg-orange-50 rounded p-2"><div className="font-bold text-orange-700 text-lg">{summary.half_day + summary.short_day}</div><div className="text-orange-600">Half/Short</div></div>
+              <div className="bg-blue-50 rounded p-2"><div className="font-bold text-blue-700 text-lg">{summary.on_leave}</div><div className="text-blue-600">On Leave</div></div>
+              <div className="bg-red-50 rounded p-2"><div className="font-bold text-red-700 text-lg">{summary.absent}</div><div className="text-red-600">Absent</div></div>
+              <div className="bg-gray-50 rounded p-2"><div className="font-bold text-gray-700 text-lg">{summary.total_hours}</div><div className="text-gray-600">Total Hrs</div></div>
+            </div>
+            {/* Mini calendar — Sun..Sat header then 7-col day grid */}
+            <div className="grid grid-cols-7 gap-1 text-center">
+              {['S','M','T','W','T','F','S'].map((d, i) => (
+                <div key={'h' + i} className="text-[10px] font-bold text-gray-400 uppercase py-1">{d}</div>
+              ))}
+              {leadingBlanks}
+              {days.map(d => (
+                <div key={d.date} title={`${d.date} · ${d.status.replace('_', ' ')}`}
+                  className={`text-[11px] font-semibold rounded py-1.5 ${cellStyle(d.status)}`}>
+                  {d.day}
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] text-gray-400 mt-2 text-center">
+              Hover a date to see its status. Green = Present · Amber = Late · Blue = Leave · Red = Absent · Grey = Weekend / Future
+            </p>
+          </div>
+        );
+      })()}
 
       {/* Support tickets assigned to me — only shows when there are active ones,
           otherwise stays hidden to keep the dashboard clean. Clicking a ticket

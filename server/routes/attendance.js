@@ -79,12 +79,56 @@ router.get('/my-month', (req, res) => {
     days.push({ date: dateStr, day: d, dow, status });
   }
 
+  // Current-week summary (Mon-Sun of the week containing today). If the user
+  // is viewing a different month via ?month=, still compute the week relative
+  // to today so the "this week" section always reflects reality.
+  const weekStart = new Date(); // today
+  // Start week on Monday: shift back to most recent Monday
+  const dow = weekStart.getDay(); // 0 Sun..6 Sat
+  const shift = (dow === 0 ? 6 : dow - 1); // days since Monday
+  weekStart.setDate(weekStart.getDate() - shift);
+  weekStart.setHours(0, 0, 0, 0);
+  const weekStartStr = weekStart.toISOString().slice(0, 10);
+  const weekEndDate = new Date(weekStart);
+  weekEndDate.setDate(weekEndDate.getDate() + 6);
+  const weekEndStr = weekEndDate.toISOString().slice(0, 10);
+
+  const weekAttendance = db.prepare(
+    'SELECT date, status, total_hours FROM attendance WHERE user_id=? AND date BETWEEN ? AND ?'
+  ).all(req.user.id, weekStartStr, weekEndStr);
+  const weekLeaves = db.prepare(
+    `SELECT from_date, to_date FROM leave_requests
+     WHERE user_id=? AND status='approved' AND NOT (to_date < ? OR from_date > ?)`
+  ).all(req.user.id, weekStartStr, weekEndStr);
+  const weekSummary = { present: 0, late: 0, half_day: 0, short_day: 0, absent: 0, on_leave: 0, weekend: 0, future: 0, total_hours: 0 };
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(weekStart); d.setDate(d.getDate() + i);
+    const ds = d.toISOString().slice(0, 10);
+    const dObj = new Date(ds);
+    const isWeekend = d.getDay() === 0;
+    const att = weekAttendance.find(a => a.date === ds);
+    const leave = weekLeaves.find(l => ds >= l.from_date && ds <= l.to_date);
+    let status;
+    if (att) { status = att.status; weekSummary.total_hours += +att.total_hours || 0; }
+    else if (leave) status = 'on_leave';
+    else if (isWeekend) status = 'weekend';
+    else if (dObj > todayObj) status = 'future';
+    else status = 'absent';
+    if (weekSummary[status] !== undefined) weekSummary[status]++;
+  }
+  weekSummary.total_hours = Math.round(weekSummary.total_hours * 100) / 100;
+
   res.json({
     month: `${year}-${pad(month)}`,
     days,
     summary: {
       ...byStatus,
       total_hours: Math.round(totalHours * 100) / 100,
+    },
+    week: {
+      start: weekStartStr,
+      end: weekEndStr,
+      summary: weekSummary,
     },
     leaves,
   });
