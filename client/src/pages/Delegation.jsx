@@ -294,15 +294,21 @@ export default function Delegation() {
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
                   <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
-                  <td className="max-w-md">
-                    <div className="line-clamp-2 text-gray-800 font-medium">{cleanDesc(t.description || t.title)}</div>
+                  <td className="align-top" style={{ minWidth: '220px', maxWidth: '420px' }}>
+                    {/* Description cell — responsive max width and full
+                        wrapping (no line-clamp). On phones the column caps
+                        at ~220px; on laptops it expands up to 420px so long
+                        tasks stay readable without forcing horizontal scroll. */}
+                    <div className="text-gray-800 font-medium whitespace-normal break-words leading-snug">
+                      {cleanDesc(t.description || t.title)}
+                    </div>
                     {t.attachment_url && (
                       <a href={t.attachment_url} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline flex items-center gap-1 mt-1">
                         <FiExternalLink size={10} /> View attachment
                       </a>
                     )}
                     {t.status === 'rejected' && t.reject_reason && (
-                      <div className="text-[10px] text-red-700 mt-1 flex items-start gap-1"><FiAlertTriangle size={10} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</div>
+                      <div className="text-[10px] text-red-700 mt-1 flex items-start gap-1 whitespace-normal break-words"><FiAlertTriangle size={10} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</div>
                     )}
                   </td>
                   <td className="whitespace-nowrap">
