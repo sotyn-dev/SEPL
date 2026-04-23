@@ -792,24 +792,49 @@ router.post('/delivery-notes', vendorPoUpload.single('file'), (req, res) => {
   }
 });
 
-// Mark a dispatch as "Received by <name> on <date>". Stamps received_at with
-// the provided date (or now) and flips status to 'received'.
-router.patch('/delivery-notes/:id/receive', (req, res) => {
-  const { received_by_name, received_at } = req.body || {};
+// Mark a dispatch as "Received by <name> on <date>" and attach the stamped +
+// signed receipt photo as proof. Mam flagged this as business-critical: without
+// the signed proof, clients sometimes deny receipt and SEPL eats the loss.
+// Multipart so the receipt photo can ride along with the metadata.
+router.patch('/delivery-notes/:id/receive', vendorPoUpload.single('file'), (req, res) => {
+  const b = req.body || {};
+  const received_by_name = b.received_by_name;
+  const received_at = b.received_at;
   if (!received_by_name || !String(received_by_name).trim()) {
     return res.status(400).json({ error: 'Received-by name is required' });
   }
   const db = getDb();
   const existing = db.prepare('SELECT id FROM delivery_notes WHERE id=?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Dispatch not found' });
-  db.prepare(
-    `UPDATE delivery_notes
-       SET received_by_name = ?,
-           received_at = COALESCE(?, CURRENT_TIMESTAMP),
-           status = 'received'
-     WHERE id = ?`
-  ).run(String(received_by_name).trim(), received_at || null, req.params.id);
-  res.json({ message: 'Marked as received' });
+
+  // Rename + persist the uploaded receipt photo under /uploads
+  let receiptPath = null;
+  if (req.file) {
+    try {
+      const safeName = (req.file.originalname || 'receipt').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const newName = `${Date.now()}-${safeName}`;
+      const newPath = path.join(path.dirname(req.file.path), newName);
+      fs.renameSync(req.file.path, newPath);
+      receiptPath = `/uploads/${newName}`;
+    } catch (e) {
+      receiptPath = `/uploads/${req.file.filename}`;
+    }
+  }
+
+  try {
+    db.prepare(
+      `UPDATE delivery_notes
+         SET received_by_name = ?,
+             received_at = COALESCE(?, CURRENT_TIMESTAMP),
+             receipt_file_path = COALESCE(?, receipt_file_path),
+             status = 'received'
+       WHERE id = ?`
+    ).run(String(received_by_name).trim(), received_at || null, receiptPath, req.params.id);
+    res.json({ message: 'Marked as received', receipt_file_path: receiptPath });
+  } catch (err) {
+    if (receiptPath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(receiptPath))); } catch (e) {} }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.put('/delivery-notes/:id', (req, res) => {

@@ -1253,6 +1253,10 @@ function initializeDatabase() {
     ['delivery_notes', 'file_path TEXT'],
     ['delivery_notes', 'received_by_name TEXT'],        // free text (site engineer / customer rep)
     ['delivery_notes', 'received_at DATETIME'],
+    // Proof of receipt (stamped + signed photo of the sales bill / challan)
+    // — critical for mam because without this the client sometimes denies
+    // receiving material and SEPL takes the loss.
+    ['delivery_notes', 'receipt_file_path TEXT'],
     // Delegations — optional project tag the admin can set while creating a
     // task or edit later from the list. Free-text so it doesn't depend on
     // any master list; keeps it flexible for mam's quick day-to-day tasks.

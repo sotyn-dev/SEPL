@@ -309,14 +309,18 @@ export default function Procurement() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
-  // Mark a dispatch row as "Received by <name> on <date>".
+  // Mark a dispatch row as "Received by <name> on <date>" + attach the
+  // stamped/signed receipt photo. Multipart so the file rides along.
   const markReceived = async (e) => {
     e.preventDefault();
     if (!form.received_by_name || !form.received_by_name.trim()) return toast.error('Receiver name is required');
+    const fd = new FormData();
+    fd.append('received_by_name', form.received_by_name);
+    if (form.received_at) fd.append('received_at', form.received_at);
+    if (form.receipt_file) fd.append('file', form.receipt_file);
     try {
-      await api.patch(`/procurement/delivery-notes/${form.receive_id}/receive`, {
-        received_by_name: form.received_by_name,
-        received_at: form.received_at || null,
+      await api.patch(`/procurement/delivery-notes/${form.receive_id}/receive`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
       });
       toast.success('Marked as received');
       setModal(false); load();
@@ -882,7 +886,7 @@ export default function Procurement() {
             <button onClick={() => openAddDispatch()} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Dispatch</button>
           </div>
           <div className="card p-0 overflow-x-auto"><table>
-            <thead><tr><th>ID</th><th>Type</th><th>Doc No</th><th>PO</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>ID</th><th>Type</th><th>Doc No</th><th>PO</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {deliveryNotes.map(d => (
                 <tr key={d.id}>
@@ -902,6 +906,13 @@ export default function Procurement() {
                   </td>
                   <td>{d.received_by_name || <span className="text-gray-300 text-xs">—</span>}</td>
                   <td className="text-xs">{d.received_at ? new Date(d.received_at).toLocaleDateString() : <span className="text-gray-300">—</span>}</td>
+                  <td>
+                    {d.receipt_file_path
+                      ? <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-800 underline text-xs font-semibold">Signed ✓</a>
+                      : d.received_by_name
+                        ? <span className="text-amber-600 text-[11px]">No photo</span>
+                        : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
                   <td><StatusBadge status={d.status} /></td>
                   <td className="whitespace-nowrap">
                     {!d.received_by_name && (
@@ -915,7 +926,7 @@ export default function Procurement() {
                   </td>
                 </tr>
               ))}
-              {deliveryNotes.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
+              {deliveryNotes.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
             </tbody>
           </table></div>
         </>
@@ -1273,7 +1284,10 @@ export default function Procurement() {
         </form>
       </Modal>
 
-      {/* Mark Received Modal — captures who received the dispatch at the site */}
+      {/* Mark Received Modal — captures who received the dispatch AND the
+          client's stamped + signed receipt photo as proof of delivery. This
+          receipt is critical for mam because without it clients sometimes
+          deny receiving the material and SEPL has to absorb the loss. */}
       <Modal isOpen={modal === 'receive'} onClose={() => setModal(false)} title="Mark Received">
         <form onSubmit={markReceived} className="space-y-3">
           <div className="bg-indigo-50 border border-indigo-200 rounded px-3 py-2 text-xs text-indigo-700">
@@ -1287,6 +1301,18 @@ export default function Procurement() {
             <label className="label">Received On</label>
             <input className="input" type="date" value={form.received_at || ''} onChange={e => setForm({...form, received_at: e.target.value})} />
             <p className="text-[10px] text-gray-400 mt-0.5">Defaults to today if left blank.</p>
+          </div>
+          <div>
+            <label className="label">Receipt Proof <span className="text-red-500 font-normal">(stamped + signed photo — prevents client denial disputes)</span></label>
+            <input
+              className="input"
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png"
+              capture="environment"
+              onChange={e => setForm({ ...form, receipt_file: e.target.files?.[0] || null })}
+            />
+            {form.receipt_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.receipt_file.name}</p>}
+            <p className="text-[10px] text-gray-400 mt-0.5">On mobile, tapping this opens the camera directly — take the photo of the stamped sales bill / challan.</p>
           </div>
           <div className="flex justify-end gap-3">
             <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
