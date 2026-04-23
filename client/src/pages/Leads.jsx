@@ -169,8 +169,27 @@ export default function Leads() {
       {tab === 'list' && (<>
         <div className="relative"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16}/><input className="input pl-10" placeholder="Search client, company, lead no, phone..." value={search} onChange={e=>setSearch(e.target.value)}/></div>
         <div className="card p-0 overflow-x-auto"><table className="text-xs">
-          <thead><tr><th className="px-3 py-2">Lead No</th><th className="px-3 py-2">Client</th><th className="px-3 py-2">Company</th><th className="px-3 py-2">Category</th><th className="px-3 py-2">Location</th><th className="px-3 py-2">SC</th><th className="px-3 py-2">Stage</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Actions</th></tr></thead>
-          <tbody>{leads.map(l => (<tr key={l.id} className="border-b hover:bg-red-50/40 cursor-pointer" onClick={()=>viewLead(l)}>
+          <thead><tr><th className="px-3 py-2">Lead No</th><th className="px-3 py-2">Client</th><th className="px-3 py-2">Company</th><th className="px-3 py-2">Category</th><th className="px-3 py-2">Location</th><th className="px-3 py-2">SC</th><th className="px-3 py-2">Stage</th><th className="px-3 py-2">SLA</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Actions</th></tr></thead>
+          <tbody>{leads.map(l => {
+            // SLA chip: shows "due in Xh" / "overdue by Xd" / "—" based on
+            // sla_minutes_left from the backend. Overdue rows get a red chip
+            // so mam's team can spot them instantly in the list.
+            let slaChip = <span className="text-gray-300 text-[10px]">—</span>;
+            if (l.sla_minutes_left !== null && l.sla_minutes_left !== undefined) {
+              const m = l.sla_minutes_left;
+              if (m < 0) {
+                const abs = -m;
+                const label = abs < 60 ? `${abs}m` : abs < 1440 ? `${Math.round(abs/60)}h` : `${Math.round(abs/1440)}d`;
+                slaChip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">OVERDUE {label}</span>;
+              } else if (m < 60) {
+                slaChip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200">{m}m left</span>;
+              } else if (m < 1440) {
+                slaChip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">{Math.round(m/60)}h left</span>;
+              } else {
+                slaChip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">{Math.round(m/1440)}d left</span>;
+              }
+            }
+            return (<tr key={l.id} className="border-b hover:bg-red-50/40 cursor-pointer" onClick={()=>viewLead(l)}>
             <td className="px-3 py-2.5 font-bold text-red-600">{l.lead_no}</td>
             <td className="px-3 py-2.5"><div className="font-semibold">{l.client_name}</div></td>
             <td className="px-3 py-2.5 text-gray-600">{l.company_name||'-'}</td>
@@ -178,6 +197,7 @@ export default function Leads() {
             <td className="px-3 py-2.5 text-gray-500">{l.district||l.address||'-'}</td>
             <td className="px-3 py-2.5">{l.assigned_sc||'-'}</td>
             <td className="px-3 py-2.5"><span className="text-[9px] px-2 py-1 rounded-full font-bold text-white" style={{backgroundColor:STAGE_COLORS[l.current_stage]||'#888'}}>{STAGE_LABELS[l.current_stage]||l.current_stage}</span></td>
+            <td className="px-3 py-2.5">{slaChip}</td>
             <td className="px-3 py-2.5 text-[10px] text-gray-400">{l.created_at?.split('T')[0]}</td>
             <td className="px-3 py-2.5" onClick={e=>e.stopPropagation()}>
               <div className="flex gap-1">
@@ -186,7 +206,8 @@ export default function Leads() {
                 {canDelete('leads')&&<button onClick={async()=>{if(!confirm('Delete?'))return;await api.delete(`/sales-funnel/${l.id}`);toast.success('Deleted');load();}} className="p-1 text-red-600 hover:bg-red-50 rounded"><FiTrash2 size={14}/></button>}
               </div>
             </td>
-          </tr>))}{leads.length===0&&<tr><td colSpan="9" className="text-center py-8 text-gray-400">No leads</td></tr>}</tbody>
+          </tr>);
+          })}{leads.length===0&&<tr><td colSpan="10" className="text-center py-8 text-gray-400">No leads</td></tr>}</tbody>
         </table></div>
       </>)}
 

@@ -1260,6 +1260,27 @@ function initializeDatabase() {
     // Support tickets — who is the ticket assigned to? When set, that user
     // sees the ticket on their dashboard and can respond / work on it.
     ['support_tickets', 'assigned_to INTEGER REFERENCES users(id)'],
+    // --- Sales Funnel phase-A columns (mam's spec 2026-04-23) ---
+    ['sales_funnel', 'first_call_status TEXT'],          // 'interested' | 'not_interested'
+    ['sales_funnel', 'first_call_at DATETIME'],          // when the first call was made
+    ['sales_funnel', 'first_call_remarks TEXT'],
+    ['sales_funnel', 'meeting_recording_url TEXT'],      // phone / VC recording
+    ['sales_funnel', 'meeting_location_lat REAL'],       // live location at meeting
+    ['sales_funnel', 'meeting_location_lng REAL'],
+    ['sales_funnel', 'f2f_status TEXT'],                 // 'done' | 'no_show' | 'rescheduled'
+    ['sales_funnel', 'f2f_date DATETIME'],
+    ['sales_funnel', 'revised_boq_file_link TEXT'],
+    ['sales_funnel', 'lead_type TEXT'],                  // customer/lead type
+    ['sales_funnel', 'city TEXT'],                       // separate from district
+    // SLA tracking — stamp the timestamp when the lead entered its current
+    // stage, so overdue detection knows the clock start. SLAs are:
+    //   new_lead -> qualified: 1 hour
+    //   qualified -> meeting_assigned: 4 hours
+    //   meeting_assigned -> f2f: variable (T-X)
+    //   f2f -> mom: 1 day
+    //   mom -> quotation: variable (T-X)
+    //   quotation -> won/lost: 60 days
+    ['sales_funnel', 'stage_entered_at DATETIME'],
     // Delegations — optional project tag the admin can set while creating a
     // task or edit later from the list. Free-text so it doesn't depend on
     // any master list; keeps it flexible for mam's quick day-to-day tasks.

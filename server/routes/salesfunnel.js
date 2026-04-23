@@ -4,17 +4,41 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
+// Sales Funnel stages + their SLAs (per mam's spec 2026-04-23).
+// `sla_hours` is how long the lead can sit in this stage before it's overdue.
+// null means "no fixed SLA" (T-X) — shown as "—" in the UI, no overdue flag.
 const STAGES = [
-  { key: 'new_lead', label: 'New Lead', color: 'blue', who: 'SC' },
-  { key: 'qualified', label: 'Qualified', color: 'indigo', who: 'SC' },
-  { key: 'meeting_assigned', label: 'Meeting Assigned', color: 'purple', who: 'SC' },
-  { key: 'mom_uploaded', label: 'MOM Uploaded', color: 'violet', who: 'ASM' },
-  { key: 'drawing_uploaded', label: 'Drawing Uploaded', color: 'amber', who: 'ASM' },
-  { key: 'boq_created', label: 'BOQ Created', color: 'orange', who: 'Designer' },
-  { key: 'quotation_sent', label: 'Quotation Sent', color: 'cyan', who: 'SC' },
-  { key: 'won', label: 'Won', color: 'emerald', who: 'SC' },
-  { key: 'lost', label: 'Lost', color: 'red', who: 'SC' },
+  { key: 'new_lead', label: 'New Lead', color: 'blue', who: 'SC', sla_hours: 1 },
+  { key: 'qualified', label: 'First Call Done', color: 'indigo', who: 'Ritti', sla_hours: 4 },
+  { key: 'meeting_assigned', label: 'Meeting Scheduled', color: 'purple', who: 'Ritti', sla_hours: null },
+  { key: 'mom_uploaded', label: 'MOM + Drawings', color: 'violet', who: 'Ritti', sla_hours: 24 },
+  { key: 'drawing_uploaded', label: 'Drawings Uploaded', color: 'amber', who: 'ASM', sla_hours: null },
+  { key: 'boq_created', label: 'BOQ Ready', color: 'orange', who: 'Designer', sla_hours: null },
+  { key: 'quotation_sent', label: 'Proposal Sent', color: 'cyan', who: 'Estimation Team', sla_hours: 24 * 60 },
+  { key: 'won', label: 'Won', color: 'emerald', who: 'ASM', sla_hours: null },
+  { key: 'lost', label: 'Lost', color: 'red', who: 'ASM', sla_hours: null },
 ];
+
+// Helper: add SLA info (due_at, is_overdue, minutes_remaining) to each lead row.
+// Called by GET handlers so the client can render "due in 45 min / overdue" chips.
+const withSla = (rows) => {
+  const now = Date.now();
+  return rows.map(r => {
+    const stage = STAGES.find(s => s.key === r.current_stage);
+    if (!stage || !stage.sla_hours || !r.stage_entered_at) {
+      return { ...r, sla_due_at: null, sla_minutes_left: null, sla_overdue: false };
+    }
+    const enteredMs = new Date(r.stage_entered_at).getTime();
+    const dueMs = enteredMs + stage.sla_hours * 3600 * 1000;
+    const minutesLeft = Math.round((dueMs - now) / 60000);
+    return {
+      ...r,
+      sla_due_at: new Date(dueMs).toISOString(),
+      sla_minutes_left: minutesLeft,
+      sla_overdue: minutesLeft < 0,
+    };
+  });
+};
 
 // GET all with filters
 router.get('/', requirePermission('leads', 'view'), (req, res) => {
@@ -29,7 +53,7 @@ router.get('/', requirePermission('leads', 'view'), (req, res) => {
     params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
   sql += ' ORDER BY created_at DESC';
-  res.json(getDb().prepare(sql).all(...params));
+  res.json(withSla(getDb().prepare(sql).all(...params)));
 });
 
 // GET stages info
@@ -55,14 +79,15 @@ router.get('/dashboard', requirePermission('leads', 'view'), (req, res) => {
   res.json({ total: total.c, byStage: bystage, won, lost, thisMonth: thisMonth.c, byCategory, bySC, recent, stages: STAGES, todayFollowups, overdueFollowups });
 });
 
-// GET single
+// GET single (with SLA info)
 router.get('/:id', requirePermission('leads', 'view'), (req, res) => {
   const lead = getDb().prepare('SELECT * FROM sales_funnel WHERE id=?').get(req.params.id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
-  res.json(lead);
+  res.json(withSla([lead])[0]);
 });
 
-// POST create new lead (Stage 1: New Lead) — SC
+// POST create new lead (Stage 0: New Lead Enter) — auto-stamps stage_entered_at
+// so the 1-hour SLA for first-call starts ticking immediately.
 router.post('/', requirePermission('leads', 'create'), (req, res) => {
   const b = req.body;
   if (!b.client_name) return res.status(400).json({ error: 'Client name required' });
@@ -70,18 +95,30 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
   const { nextSequence } = require('../db/nextSequence');
   const leadNo = nextSequence(db, 'sales_funnel', 'lead_no', 'SEPL', { startFrom: 9000, pad: 4 });
 
-  const r = db.prepare(`INSERT INTO sales_funnel (lead_no, client_name, company_name, phone, email, category, address, district, state, source, assigned_sc, assigned_asm, remarks, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    leadNo, b.client_name, b.company_name, b.phone, b.email, b.category, b.address, b.district, b.state, b.source, b.assigned_sc, b.assigned_asm, b.remarks, req.user.id
+  const r = db.prepare(`INSERT INTO sales_funnel
+    (lead_no, client_name, company_name, phone, email, category, lead_type, city,
+     address, district, state, source, assigned_sc, assigned_asm, remarks, created_by,
+     current_stage, stage_entered_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new_lead', CURRENT_TIMESTAMP)`).run(
+    leadNo, b.client_name, b.company_name, b.phone, b.email, b.category, b.lead_type || null, b.city || null,
+    b.address, b.district, b.state, b.source, b.assigned_sc, b.assigned_asm, b.remarks, req.user.id
   );
   res.status(201).json({ id: r.lastInsertRowid, lead_no: leadNo });
 });
 
-// PUT update lead details
+// PUT update lead details (now also accepts lead_type + city)
 router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
   const b = req.body;
-  getDb().prepare(`UPDATE sales_funnel SET client_name=?, company_name=?, phone=?, email=?, category=?, address=?, district=?, state=?, source=?, assigned_sc=?, assigned_asm=?, remarks=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-    .run(b.client_name, b.company_name, b.phone, b.email, b.category, b.address, b.district, b.state, b.source, b.assigned_sc, b.assigned_asm, b.remarks, req.params.id);
+  getDb().prepare(
+    `UPDATE sales_funnel SET client_name=?, company_name=?, phone=?, email=?,
+       category=?, lead_type=?, city=?, address=?, district=?, state=?, source=?,
+       assigned_sc=?, assigned_asm=?, remarks=?, updated_at=CURRENT_TIMESTAMP
+     WHERE id=?`
+  ).run(
+    b.client_name, b.company_name, b.phone, b.email,
+    b.category, b.lead_type || null, b.city || null, b.address, b.district, b.state, b.source,
+    b.assigned_sc, b.assigned_asm, b.remarks, req.params.id
+  );
   res.json({ message: 'Updated' });
 });
 
@@ -97,50 +134,99 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
   let params = [];
 
   switch (stage) {
+    // First Call Interested → advances to 'qualified'. Captures the new
+    // first_call_status field (interested/not_interested) from mam's spec.
     case 'qualified':
-      sql = 'UPDATE sales_funnel SET current_stage=?, is_qualified=1, qualified_by=?, qualified_date=CURRENT_TIMESTAMP, qualified_remarks=?, updated_at=CURRENT_TIMESTAMP WHERE id=?';
-      params = ['qualified', b.qualified_by || req.user.name, b.qualified_remarks, req.params.id];
+      sql = `UPDATE sales_funnel SET
+        current_stage=?, is_qualified=1, qualified_by=?, qualified_date=CURRENT_TIMESTAMP,
+        qualified_remarks=?, first_call_status=?, first_call_at=CURRENT_TIMESTAMP,
+        first_call_remarks=?, stage_entered_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = ['qualified', b.qualified_by || req.user.name, b.qualified_remarks,
+        b.first_call_status || 'interested', b.first_call_remarks || b.qualified_remarks || null,
+        req.params.id];
       break;
 
+    // First Call Not Interested → lead goes to 'lost' immediately.
     case 'not_qualified':
-      sql = 'UPDATE sales_funnel SET current_stage=?, is_qualified=0, qualified_by=?, qualified_date=CURRENT_TIMESTAMP, qualified_remarks=?, updated_at=CURRENT_TIMESTAMP WHERE id=?';
-      params = ['lost', b.qualified_by || req.user.name, b.qualified_remarks || 'Not qualified', req.params.id];
+      sql = `UPDATE sales_funnel SET
+        current_stage=?, is_qualified=0, qualified_by=?, qualified_date=CURRENT_TIMESTAMP,
+        qualified_remarks=?, first_call_status='not_interested', first_call_at=CURRENT_TIMESTAMP,
+        first_call_remarks=?, stage_entered_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = ['lost', b.qualified_by || req.user.name, b.qualified_remarks || 'Not qualified',
+        b.first_call_remarks || b.qualified_remarks || null, req.params.id];
       break;
 
+    // Meeting Scheduled — now also captures recording URL + live location
     case 'meeting_assigned':
       if (!b.meeting_date) return res.status(400).json({ error: 'Meeting date required' });
-      sql = 'UPDATE sales_funnel SET current_stage=?, meeting_date=?, meeting_location=?, meeting_assigned_to=?, meeting_status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?';
-      params = ['meeting_assigned', b.meeting_date, b.meeting_location, b.meeting_assigned_to, 'scheduled', req.params.id];
+      sql = `UPDATE sales_funnel SET
+        current_stage=?, meeting_date=?, meeting_location=?, meeting_assigned_to=?, meeting_status=?,
+        meeting_recording_url=?, meeting_location_lat=?, meeting_location_lng=?,
+        stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = ['meeting_assigned', b.meeting_date, b.meeting_location, b.meeting_assigned_to, 'scheduled',
+        b.meeting_recording_url || null, b.meeting_location_lat || null, b.meeting_location_lng || null,
+        req.params.id];
+      break;
+
+    // Face-to-Face outcome — new intermediate step before MOM
+    case 'f2f_done':
+      sql = `UPDATE sales_funnel SET
+        current_stage='meeting_assigned', f2f_status=?, f2f_date=CURRENT_TIMESTAMP,
+        stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = [b.f2f_status || 'done', req.params.id];
       break;
 
     case 'mom_uploaded':
       if (!b.mom_notes) return res.status(400).json({ error: 'MOM notes required' });
-      sql = 'UPDATE sales_funnel SET current_stage=?, mom_notes=?, mom_file_link=?, mom_filled_by=?, mom_date=CURRENT_TIMESTAMP, meeting_status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?';
-      params = ['mom_uploaded', b.mom_notes, b.mom_file_link, b.mom_filled_by || req.user.name, 'completed', req.params.id];
+      sql = `UPDATE sales_funnel SET
+        current_stage=?, mom_notes=?, mom_file_link=?, mom_filled_by=?, mom_date=CURRENT_TIMESTAMP,
+        meeting_status=?, stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = ['mom_uploaded', b.mom_notes, b.mom_file_link, b.mom_filled_by || req.user.name,
+        'completed', req.params.id];
       break;
 
     case 'drawing_uploaded':
-      sql = 'UPDATE sales_funnel SET current_stage=?, drawing_file1=?, drawing_file2=?, drawing_file3=?, drawing_uploaded_by=?, drawing_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?';
-      params = ['drawing_uploaded', b.drawing_file1, b.drawing_file2, b.drawing_file3, b.drawing_uploaded_by || req.user.name, req.params.id];
+      sql = `UPDATE sales_funnel SET
+        current_stage=?, drawing_file1=?, drawing_file2=?, drawing_file3=?, drawing_uploaded_by=?,
+        drawing_date=CURRENT_TIMESTAMP, stage_entered_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = ['drawing_uploaded', b.drawing_file1, b.drawing_file2, b.drawing_file3,
+        b.drawing_uploaded_by || req.user.name, req.params.id];
       break;
 
+    // BOQ stage now also captures Revised BOQ if one has been re-worked after
+    // client feedback (mam's spec: "BOQ / Revised BOQ" columns side-by-side).
     case 'boq_created':
-      sql = 'UPDATE sales_funnel SET current_stage=?, boq_file_link=?, boq_created_by=?, boq_amount=?, boq_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?';
-      params = ['boq_created', b.boq_file_link, b.boq_created_by || req.user.name, b.boq_amount || 0, req.params.id];
+      sql = `UPDATE sales_funnel SET
+        current_stage=?, boq_file_link=?, revised_boq_file_link=?,
+        boq_created_by=?, boq_amount=?, boq_date=CURRENT_TIMESTAMP,
+        stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = ['boq_created', b.boq_file_link, b.revised_boq_file_link || null,
+        b.boq_created_by || req.user.name, b.boq_amount || 0, req.params.id];
       break;
 
     case 'quotation_sent':
-      sql = 'UPDATE sales_funnel SET current_stage=?, quotation_number=?, quotation_file_link=?, quotation_amount=?, quotation_sent_by=?, quotation_sent_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?';
-      params = ['quotation_sent', b.quotation_number, b.quotation_file_link, b.quotation_amount || 0, b.quotation_sent_by || req.user.name, req.params.id];
+      sql = `UPDATE sales_funnel SET
+        current_stage=?, quotation_number=?, quotation_file_link=?, quotation_amount=?,
+        quotation_sent_by=?, quotation_sent_date=CURRENT_TIMESTAMP,
+        stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = ['quotation_sent', b.quotation_number, b.quotation_file_link, b.quotation_amount || 0,
+        b.quotation_sent_by || req.user.name, req.params.id];
       break;
 
     case 'won':
-      sql = 'UPDATE sales_funnel SET current_stage=?, result=?, result_remarks=?, result_date=CURRENT_TIMESTAMP, won_amount=?, updated_at=CURRENT_TIMESTAMP WHERE id=?';
+      sql = `UPDATE sales_funnel SET
+        current_stage=?, result=?, result_remarks=?, result_date=CURRENT_TIMESTAMP,
+        won_amount=?, stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = ['won', 'won', b.result_remarks, b.won_amount || 0, req.params.id];
       break;
 
     case 'lost':
-      sql = 'UPDATE sales_funnel SET current_stage=?, result=?, result_remarks=?, result_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?';
+      sql = `UPDATE sales_funnel SET
+        current_stage=?, result=?, result_remarks=?, result_date=CURRENT_TIMESTAMP,
+        stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = ['lost', 'lost', b.result_remarks, req.params.id];
       break;
 
