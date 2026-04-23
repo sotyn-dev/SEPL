@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -160,7 +161,16 @@ export default function Checklists() {
             {form.frequency !== 'daily' && (
               <div><label className="label">Time of Day <span className="text-gray-400 font-normal">(optional)</span></label><input className="input" type="time" value={form.due_time || ''} onChange={e => setForm({...form, due_time: e.target.value})} /></div>
             )}
-            <div><label className="label">Assigned To *</label><select className="select" required value={form.assigned_to || ''} onChange={e => setForm({...form, assigned_to: e.target.value})}><option value="">Select a user…</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
+            <div>
+              <label className="label">Assigned To *</label>
+              <SearchableSelect
+                options={users.map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') }))}
+                value={form.assigned_to || null}
+                valueKey="id" displayKey="label"
+                placeholder="Search user by name…"
+                onChange={(u) => setForm({ ...form, assigned_to: u?.id || '' })}
+              />
+            </div>
             {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['pending','in_progress','completed','overdue'].map(s => <option key={s} value={s}>{s.replace(/_/g,' ')}</option>)}</select></div>}
           </div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Create'}</button></div>

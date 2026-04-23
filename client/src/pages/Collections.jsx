@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiPhoneCall, FiAlertTriangle, FiRefreshCw, FiTrash2 } from 'react-icons/fi';
@@ -161,7 +162,16 @@ export default function Collections() {
             <div><label className="label">Invoice Date</label><input className="input" type="date" value={form.invoice_date || ''} onChange={e => setForm({...form, invoice_date: e.target.value})} /></div>
             <div><label className="label">Invoice Amount *</label><input className="input" type="number" value={form.invoice_amount || 0} onChange={e => setForm({...form, invoice_amount: +e.target.value})} required /></div>
             <div><label className="label">Due Date</label><input className="input" type="date" value={form.due_date || ''} onChange={e => setForm({...form, due_date: e.target.value})} /></div>
-            <div><label className="label">Owner</label><select className="select" value={form.owner_id || ''} onChange={e => setForm({...form, owner_id: e.target.value})}><option value="">Select</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
+            <div>
+              <label className="label">Owner</label>
+              <SearchableSelect
+                options={users.map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') }))}
+                value={form.owner_id || null}
+                valueKey="id" displayKey="label"
+                placeholder="Search user…"
+                onChange={(u) => setForm({ ...form, owner_id: u?.id || '' })}
+              />
+            </div>
           </div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Add</button></div>
         </form>

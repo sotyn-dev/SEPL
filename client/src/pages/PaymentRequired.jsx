@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -329,16 +330,28 @@ export default function PaymentRequired() {
           <div className="border rounded-lg p-3 bg-gray-50">
             <h4 className="font-semibold text-sm text-gray-700 mb-3">Request Details</h4>
             <div className="grid grid-cols-3 gap-3">
-              <div><label className="label">Employee Name *</label>
-                <select className="select" value={form.employee_name} onChange={e => { const emp = employees.find(x => x.name === e.target.value); F('employee_name', e.target.value); if (emp) { F('department', emp.department); F('contact_number', emp.phone); } }} required>
-                  <option value="">Select Employee</option>
-                  {employees.map(e => <option key={e.id} value={e.name}>{e.name} {e.department ? `(${e.department})` : ''}</option>)}
-                </select>
+              <div>
+                <label className="label">Employee Name *</label>
+                <SearchableSelect
+                  options={employees.map(e => ({ ...e, label: e.name + (e.department ? ' (' + e.department + ')' : '') }))}
+                  value={form.employee_name || null}
+                  valueKey="name" displayKey="label"
+                  placeholder="Search employee…"
+                  onChange={(emp) => {
+                    F('employee_name', emp?.name || '');
+                    if (emp) { F('department', emp.department || ''); F('contact_number', emp.phone || ''); }
+                  }}
+                />
               </div>
-              <div><label className="label">Site Name *</label>
-                <select className="select" value={form.site_id} onChange={e => { const site = sites.find(s => s.id === +e.target.value); F('site_id', e.target.value); F('site_name', site?.name || ''); }}>
-                  <option value="">Select Site</option>{sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
+              <div>
+                <label className="label">Site Name *</label>
+                <SearchableSelect
+                  options={sites}
+                  value={form.site_id || null}
+                  valueKey="id" displayKey="name"
+                  placeholder="Search site…"
+                  onChange={(site) => { F('site_id', site?.id || ''); F('site_name', site?.name || ''); }}
+                />
               </div>
               <div><label className="label">Department</label><input className="input" value={form.department} onChange={e => F('department', e.target.value)} /></div>
               <div><label className="label">Contact Number</label><input className="input" value={form.contact_number} onChange={e => F('contact_number', e.target.value)} /></div>

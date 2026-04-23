@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiTruck } from 'react-icons/fi';
@@ -213,14 +214,29 @@ export default function Vendors() {
             {[1,2,3].map(n => (
               <div key={n} className="space-y-2 p-3 bg-gray-50 rounded-lg">
                 <h4 className="font-semibold text-sm">Vendor {n}</h4>
-                <select className="select" value={form[`vendor${n}_id`] || ''} onChange={e => setForm({...form, [`vendor${n}_id`]: e.target.value})}><option value="">Select</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select>
+                <SearchableSelect
+                  options={vendors}
+                  value={form[`vendor${n}_id`] || null}
+                  valueKey="id" displayKey="name"
+                  placeholder="Search vendor…"
+                  onChange={(v) => setForm({ ...form, [`vendor${n}_id`]: v?.id || '' })}
+                />
                 <input className="input" type="number" placeholder="Rate" value={form[`vendor${n}_rate`] || 0} onChange={e => setForm({...form, [`vendor${n}_rate`]: +e.target.value})} />
               </div>
             ))}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div><label className="label">Final Rate</label><input className="input" type="number" value={form.final_rate || 0} onChange={e => setForm({...form, final_rate: +e.target.value})} /></div>
-            <div><label className="label">Selected Vendor</label><select className="select" value={form.selected_vendor_id || ''} onChange={e => setForm({...form, selected_vendor_id: e.target.value})}><option value="">Select</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></div>
+            <div>
+              <label className="label">Selected Vendor</label>
+              <SearchableSelect
+                options={vendors}
+                value={form.selected_vendor_id || null}
+                valueKey="id" displayKey="name"
+                placeholder="Search vendor…"
+                onChange={(v) => setForm({ ...form, selected_vendor_id: v?.id || '' })}
+              />
+            </div>
           </div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>

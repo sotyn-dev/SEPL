@@ -387,10 +387,15 @@ export default function DPR() {
               </div>
               <div><label className="label">Date *</label><input className="input" type="date" value={form.report_date || ''} onChange={e => setForm({ ...form, report_date: e.target.value })} required /></div>
               {isAdmin() ? (
-                <div><label className="label">Engineer Name</label>
-                  <select className="select" value={form.engineer_id || ''} onChange={e => setForm({ ...form, engineer_id: e.target.value })}>
-                    <option value="">Select</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                  </select>
+                <div>
+                  <label className="label">Engineer Name</label>
+                  <SearchableSelect
+                    options={users.map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') }))}
+                    value={form.engineer_id || null}
+                    valueKey="id" displayKey="label"
+                    placeholder="Search engineer…"
+                    onChange={(u) => setForm({ ...form, engineer_id: u?.id || '' })}
+                  />
                 </div>
               ) : (
                 <div><label className="label">Engineer Name</label><div className="input bg-gray-100 text-gray-700">{user?.name}</div></div>

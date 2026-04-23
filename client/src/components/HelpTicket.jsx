@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from './Modal';
+import SearchableSelect from './SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiHelpCircle, FiBook, FiX, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle } from 'react-icons/fi';
@@ -141,12 +142,13 @@ export default function HelpTicket() {
             <div className="col-span-2"><label className="label">Which Module?</label><input className="input" value={form.module} onChange={e => setForm({...form, module: e.target.value})} placeholder="e.g. Payment Required, DPR, Attendance..." /></div>
             <div className="col-span-2">
               <label className="label">Assign To <span className="text-gray-400 font-normal">(optional — employee sees it on their dashboard)</span></label>
-              <select className="select" value={form.assigned_to} onChange={e => setForm({ ...form, assigned_to: e.target.value })}>
-                <option value="">— Unassigned —</option>
-                {employees.map(u => (
-                  <option key={u.id} value={u.id}>{u.name}{u.username ? ` (@${u.username})` : ''}{u.department ? ` — ${u.department}` : ''}</option>
-                ))}
-              </select>
+              <SearchableSelect
+                options={employees.map(u => ({ ...u, label: `${u.name}${u.username ? ' (@' + u.username + ')' : ''}${u.department ? ' — ' + u.department : ''}` }))}
+                value={form.assigned_to || null}
+                valueKey="id" displayKey="label"
+                placeholder="— Unassigned — type to search by name"
+                onChange={(u) => setForm({ ...form, assigned_to: u?.id || '' })}
+              />
             </div>
           </div>
           <div><label className="label">Description *</label><textarea className="input" rows="4" value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Describe your issue or request in detail..." required /></div>
@@ -192,12 +194,15 @@ export default function HelpTicket() {
                 <div>
                   <label className="label text-[11px]">Reassign to</label>
                   <div className="flex gap-2">
-                    <select className="select text-xs" value={reassign} onChange={e => setReassign(e.target.value)}>
-                      <option value="">— Unassigned —</option>
-                      {employees.map(u => (
-                        <option key={u.id} value={u.id}>{u.name}{u.username ? ` (@${u.username})` : ''}</option>
-                      ))}
-                    </select>
+                    <div className="flex-1">
+                      <SearchableSelect
+                        options={employees.map(u => ({ ...u, label: `${u.name}${u.username ? ' (@' + u.username + ')' : ''}` }))}
+                        value={reassign || null}
+                        valueKey="id" displayKey="label"
+                        placeholder="— Unassigned — search employee"
+                        onChange={(u) => setReassign(u?.id || '')}
+                      />
+                    </div>
                     <button type="button" onClick={() => updateTicket(selectedTicket.id, { assigned_to: reassign ? +reassign : null })} className="btn btn-secondary text-xs whitespace-nowrap">Save Assignee</button>
                   </div>
                 </div>

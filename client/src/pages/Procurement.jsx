@@ -1219,7 +1219,16 @@ export default function Procurement() {
               Linked to Vendor PO <b>{form.vendor_po_number}</b>. The bill will automatically clear this PO from the follow-up list.
             </div>
           )}
-          <div><label className="label">Vendor *</label><select className="select" value={form.vendor_id} onChange={e => setForm({...form, vendor_id: e.target.value})} required><option value="">Select</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></div>
+          <div>
+            <label className="label">Vendor *</label>
+            <SearchableSelect
+              options={vendors}
+              value={form.vendor_id || null}
+              valueKey="id" displayKey="name"
+              placeholder="Search vendor…"
+              onChange={(v) => setForm({ ...form, vendor_id: v?.id || '' })}
+            />
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div><label className="label">Bill Number</label><input className="input" value={form.bill_number} onChange={e => setForm({...form, bill_number: e.target.value})} /></div>
             <div><label className="label">Bill Date</label><input className="input" type="date" value={form.bill_date} onChange={e => setForm({...form, bill_date: e.target.value})} /></div>
@@ -1270,7 +1279,16 @@ export default function Procurement() {
             </div>
           </div>
           {!form.vendor_po_number && (
-            <div><label className="label">Vendor PO</label><select className="select" value={form.vendor_po_id || ''} onChange={e => setForm({...form, vendor_po_id: e.target.value})}><option value="">— Not linked to any PO —</option>{vendorPos.map(v => <option key={v.id} value={v.id}>{v.po_number} - {v.vendor_name}</option>)}</select></div>
+            <div>
+              <label className="label">Vendor PO</label>
+              <SearchableSelect
+                options={vendorPos.map(v => ({ ...v, label: v.po_number + ' — ' + (v.vendor_name || '') }))}
+                value={form.vendor_po_id || null}
+                valueKey="id" displayKey="label"
+                placeholder="— Not linked — search PO…"
+                onChange={(v) => setForm({ ...form, vendor_po_id: v?.id || '' })}
+              />
+            </div>
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>

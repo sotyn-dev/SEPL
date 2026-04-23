@@ -232,10 +232,15 @@ export default function Delegation() {
             only show on the "All" scope. */}
         {scope === 'all' && (
           <>
-            <select className="select text-sm max-w-[200px]" value={assigneeFilter} onChange={e => setAssigneeFilter(e.target.value)}>
-              <option value="">All assignees</option>
-              {users.map(u => <option key={u.id} value={u.id}>{u.name}{u.username ? ` (@${u.username})` : ''}</option>)}
-            </select>
+            <div className="w-[220px]">
+              <SearchableSelect
+                options={users.map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') }))}
+                value={assigneeFilter || null}
+                valueKey="id" displayKey="label"
+                placeholder="All assignees — search…"
+                onChange={(u) => setAssigneeFilter(u?.id || '')}
+              />
+            </div>
             <div className="flex items-center gap-1 text-xs text-gray-500">
               <span>From</span>
               <input type="date" className="input py-1 text-xs w-36" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
