@@ -2,9 +2,17 @@ import { useEffect, useState } from 'react';
 import api from '../api';
 import { FiPlus, FiEye, FiSearch, FiAlertCircle, FiClock, FiCheckCircle, FiList } from 'react-icons/fi';
 
+// Matches mam's "Complaint Register Form 24-25" Google Form. Categories are
+// the SEPL service lines; Customer Type is Old Site / Running Site (not
+// New/Existing); Complaint Type is Paid / Free. State + Remarks are new.
+const CATEGORY_OPTIONS = ['Fire Fighting', 'Electrical', 'Low Voltage', 'HVAC', 'MEPF', 'Solar', 'Plumbing', 'Other'];
+const CUSTOMER_TYPES = ['Old Site', 'Running Site'];
+const COMPLAINT_TYPES = ['Paid', 'Free'];
+
 const emptyForm = {
-  client_name:'', company_name:'', mobile_number:'', category:'', problem_detail:'',
-  customer_type:'New', complaint_type:'Normal', emp_name:'',
+  client_name:'', company_name:'', mobile_number:'', category:'', state:'',
+  problem_detail:'', customer_type:'Running Site', complaint_type:'Free',
+  emp_name:'', remarks:'',
   step1_planned_date:'', step1_actual_date:'', step1_assigned_to:'',
   step2_planned_date:'', step2_actual_date:'', step2_assigned_to:'',
   service_report:'', status:'open', priority:'normal'
@@ -122,29 +130,48 @@ export default function Complaints() {
       </div>
 
       {showAdd && (
-        <Modal onClose={() => setShowAdd(false)} title="New Complaint">
+        <Modal onClose={() => setShowAdd(false)} title="Complaint Register Form">
           <form onSubmit={create} className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Field label="Client Name *"><input required value={form.client_name} onChange={e=>setForm({...form, client_name:e.target.value})} className="inp" /></Field>
-            <Field label="Company"><input value={form.company_name} onChange={e=>setForm({...form, company_name:e.target.value})} className="inp" /></Field>
-            <Field label="Mobile *"><input required value={form.mobile_number} onChange={e=>setForm({...form, mobile_number:e.target.value})} className="inp" /></Field>
-            <Field label="Category">
-              <select value={form.category} onChange={e=>setForm({...form, category:e.target.value})} className="inp">
-                <option value="">Select</option><option>Service</option><option>Product</option><option>Installation</option><option>Billing</option><option>Other</option>
+            <Field label="Company Name *"><input required value={form.company_name} onChange={e=>setForm({...form, company_name:e.target.value})} className="inp" /></Field>
+            <Field label="Mobile Number *"><input required value={form.mobile_number} onChange={e=>setForm({...form, mobile_number:e.target.value})} className="inp" /></Field>
+            <Field label="Category *">
+              <select required value={form.category} onChange={e=>setForm({...form, category:e.target.value})} className="inp">
+                <option value="">Select</option>
+                {CATEGORY_OPTIONS.map(c => <option key={c}>{c}</option>)}
               </select>
             </Field>
-            <Field label="Customer Type">
-              <select value={form.customer_type} onChange={e=>setForm({...form, customer_type:e.target.value})} className="inp"><option>New</option><option>Existing</option></select>
+            <Field label="State *"><input required value={form.state} onChange={e=>setForm({...form, state:e.target.value})} className="inp" placeholder="e.g. Maharashtra" /></Field>
+            <Field label="EMP Name"><input value={form.emp_name} onChange={e=>setForm({...form, emp_name:e.target.value})} className="inp" placeholder="Who received the complaint" /></Field>
+            <Field label="Complaint Type *">
+              <div className="flex gap-2">
+                {COMPLAINT_TYPES.map(t => (
+                  <label key={t} className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 border rounded text-sm cursor-pointer ${form.complaint_type===t?'border-red-500 bg-red-50 text-red-700 font-bold':'border-gray-200 hover:bg-gray-50'}`}>
+                    <input type="radio" name="complaint_type" value={t} checked={form.complaint_type===t} onChange={()=>setForm({...form, complaint_type:t})} />
+                    {t}
+                  </label>
+                ))}
+              </div>
             </Field>
-            <Field label="Complaint Type">
-              <select value={form.complaint_type} onChange={e=>setForm({...form, complaint_type:e.target.value})} className="inp"><option>Urgent</option><option>Normal</option><option>Low</option></select>
+            <Field label="Customer Type *">
+              <div className="flex gap-2">
+                {CUSTOMER_TYPES.map(t => (
+                  <label key={t} className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 border rounded text-sm cursor-pointer ${form.customer_type===t?'border-red-500 bg-red-50 text-red-700 font-bold':'border-gray-200 hover:bg-gray-50'}`}>
+                    <input type="radio" name="customer_type" value={t} checked={form.customer_type===t} onChange={()=>setForm({...form, customer_type:t})} />
+                    {t}
+                  </label>
+                ))}
+              </div>
             </Field>
-            <Field label="EMP Name"><input value={form.emp_name} onChange={e=>setForm({...form, emp_name:e.target.value})} className="inp" /></Field>
             <div className="md:col-span-2">
-              <Field label="Problem Detail *"><textarea required rows="3" value={form.problem_detail} onChange={e=>setForm({...form, problem_detail:e.target.value})} className="inp" /></Field>
+              <Field label="Problem Detail *"><textarea required rows="3" value={form.problem_detail} onChange={e=>setForm({...form, problem_detail:e.target.value})} className="inp" placeholder="Describe the issue in detail" /></Field>
+            </div>
+            <div className="md:col-span-2">
+              <Field label="Remarks"><textarea rows="2" value={form.remarks} onChange={e=>setForm({...form, remarks:e.target.value})} className="inp" placeholder="Any additional notes" /></Field>
             </div>
             <div className="md:col-span-2 flex justify-end gap-2">
               <button type="button" onClick={()=>setShowAdd(false)} className="px-4 py-2 border rounded-lg text-sm">Cancel</button>
-              <button className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm">Create</button>
+              <button className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm">Register Complaint</button>
             </div>
           </form>
         </Modal>

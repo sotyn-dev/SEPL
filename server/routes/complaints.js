@@ -15,8 +15,14 @@ router.post('/public', (req, res) => {
 
   const { nextSequence } = require('../db/nextSequence');
   const cn = nextSequence(db, 'complaints', 'complaint_number', 'CMP-', { startFrom: 1000, pad: 5 });
-  const r = db.prepare(`INSERT INTO complaints (complaint_number, client_name, company_name, mobile_number, category, problem_detail, customer_type, complaint_type, emp_name, description, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(cn, b.client_name, b.company_name, b.mobile_number, b.category, b.problem_detail, b.customer_type, b.complaint_type, b.emp_name, b.problem_detail, 'open');
+  const r = db.prepare(
+    `INSERT INTO complaints
+      (complaint_number, client_name, company_name, mobile_number, category, state,
+       problem_detail, customer_type, complaint_type, emp_name, remarks, description, status)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).run(cn, b.client_name, b.company_name, b.mobile_number, b.category, b.state || null,
+    b.problem_detail, b.customer_type, b.complaint_type, b.emp_name, b.remarks || null,
+    b.problem_detail, 'open');
   res.status(201).json({ id: r.lastInsertRowid, complaint_number: cn, message: 'Complaint registered. Our team will contact you soon.' });
 });
 
@@ -56,8 +62,15 @@ router.post('/', requirePermission('complaints', 'create'), (req, res) => {
   const db = getDb();
   const { nextSequence } = require('../db/nextSequence');
   const cn = nextSequence(db, 'complaints', 'complaint_number', 'CMP-', { startFrom: 1000, pad: 5 });
-  const r = db.prepare(`INSERT INTO complaints (complaint_number, client_name, company_name, mobile_number, category, problem_detail, customer_type, complaint_type, emp_name, step1_planned_date, step1_assigned_to, description, status, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(cn, b.client_name, b.company_name, b.mobile_number, b.category, b.problem_detail, b.customer_type, b.complaint_type, b.emp_name, b.step1_planned_date, b.step1_assigned_to, b.problem_detail, 'open', req.user.id);
+  const r = db.prepare(
+    `INSERT INTO complaints
+      (complaint_number, client_name, company_name, mobile_number, category, state,
+       problem_detail, customer_type, complaint_type, emp_name, remarks,
+       step1_planned_date, step1_assigned_to, description, status, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).run(cn, b.client_name, b.company_name, b.mobile_number, b.category, b.state || null,
+    b.problem_detail, b.customer_type, b.complaint_type, b.emp_name, b.remarks || null,
+    b.step1_planned_date, b.step1_assigned_to, b.problem_detail, 'open', req.user.id);
   res.status(201).json({ id: r.lastInsertRowid, complaint_number: cn });
 });
 

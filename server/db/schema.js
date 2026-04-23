@@ -1294,6 +1294,11 @@ function initializeDatabase() {
     ['sales_funnel', 'meeting_format TEXT'],                // Phone / VC / In-Person
     ['sales_funnel', 'meeting_scheduled_by TEXT'],          // who scheduled the meeting
     ['sales_funnel', 'meeting_time_spent_min INTEGER'],     // minutes spent in the meeting
+    // Complaints — mam's Google Form (2026-04-23) adds State and Remarks.
+    // Complaint Type = Paid / Free (changed from Urgent/Normal/Low)
+    // Customer Type = Old Site / Running Site (changed from New/Existing)
+    ['complaints', 'state TEXT'],
+    ['complaints', 'remarks TEXT'],
     // Delegations — optional project tag the admin can set while creating a
     // task or edit later from the list. Free-text so it doesn't depend on
     // any master list; keeps it flexible for mam's quick day-to-day tasks.
