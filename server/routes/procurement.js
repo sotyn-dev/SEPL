@@ -90,11 +90,12 @@ router.post('/vendors', (req, res) => {
   const b = req.body;
   if (!b.name) return res.status(400).json({ error: 'Vendor name required' });
   const db = getDb();
-  // Auto-generate vendor code if empty
+  // Auto-generate vendor code if empty. Uses nextSequence so deletes don't
+  // cause UNIQUE-constraint collisions.
   let code = b.vendor_code;
   if (!code) {
-    const count = db.prepare('SELECT COUNT(*) as c FROM vendors').get().c;
-    code = `SEVC${String(count + 2000).padStart(4, '0')}`;
+    const { nextSequence } = require('../db/nextSequence');
+    code = nextSequence(db, 'vendors', 'vendor_code', 'SEVC', { startFrom: 1999, pad: 4 });
   }
   const r = db.prepare('INSERT OR IGNORE INTO vendors (vendor_code,name,firm_name,contact_person,phone,email,district,state,address,category,deals_in,authorized_dealer,type,turnover,team_size,payment_terms,credit_days,gst_number,source,category_wise,sub_category,existing_vendor) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
     .run(code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state, b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size, b.payment_terms, b.credit_days, b.gst_number, b.source, b.category_wise, b.sub_category, b.existing_vendor);
@@ -428,8 +429,8 @@ router.post('/indents', (req, res) => {
   if (!items || items.length === 0 || !items.some(i => i.item_master_id || (i.description && i.description.trim()))) {
     return res.status(400).json({ error: 'At least one item is required' });
   }
-  const count = db.prepare('SELECT COUNT(*) as c FROM indents').get().c;
-  const indentNum = `IND-${String(count + 1).padStart(4, '0')}`;
+  const { nextSequence } = require('../db/nextSequence');
+  const indentNum = nextSequence(db, 'indents', 'indent_number', 'IND-', { startFrom: 0, pad: 4 });
   // Resolve planning_id from business_book_id if one exists (for downstream
   // vendor-PO / GRN flows that key off planning rows).
   let resolvedPlanningId = planning_id || null;
@@ -605,8 +606,8 @@ router.post('/vendor-po', vendorPoUpload.single('file'), (req, res) => {
   // VPO-#### pattern so nothing breaks for uploads that lack a Tally ref.
   let poNum = (b.po_number || '').trim();
   if (!poNum) {
-    const count = db.prepare('SELECT COUNT(*) as c FROM vendor_pos').get().c;
-    poNum = `VPO-${String(count + 1).padStart(4, '0')}`;
+    const { nextSequence } = require('../db/nextSequence');
+    poNum = nextSequence(db, 'vendor_pos', 'po_number', 'VPO-', { startFrom: 0, pad: 4 });
   }
 
   // Total: prefer what the user typed (matches the Tally printout). Fall back
@@ -866,8 +867,8 @@ router.get('/sales-bills', (req, res) => {
 router.post('/sales-bills', (req, res) => {
   const db = getDb();
   const { po_id, bill_date, amount, gst_amount, total_amount } = req.body;
-  const count = db.prepare('SELECT COUNT(*) as c FROM sales_bills').get().c;
-  const billNum = `SB-${String(count + 1).padStart(4, '0')}`;
+  const { nextSequence } = require('../db/nextSequence');
+  const billNum = nextSequence(db, 'sales_bills', 'bill_number', 'SB-', { startFrom: 0, pad: 4 });
   const r = db.prepare('INSERT INTO sales_bills (po_id,bill_number,bill_date,amount,gst_amount,total_amount) VALUES (?,?,?,?,?,?)')
     .run(po_id, billNum, bill_date, amount, gst_amount, total_amount);
   res.status(201).json({ id: r.lastInsertRowid, bill_number: billNum });

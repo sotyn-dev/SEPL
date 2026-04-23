@@ -39,8 +39,8 @@ router.get('/', (req, res) => {
 router.post('/', (req, res) => {
   const { lead_id, boq_id, total_amount, discount, final_amount, valid_until, notes } = req.body;
   const db = getDb();
-  const count = db.prepare('SELECT COUNT(*) as c FROM quotations').get().c;
-  const qNum = `QTN-${String(count + 1).padStart(4, '0')}`;
+  const { nextSequence } = require('../db/nextSequence');
+  const qNum = nextSequence(db, 'quotations', 'quotation_number', 'QTN-', { startFrom: 0, pad: 4 });
   const r = db.prepare(
     'INSERT INTO quotations (lead_id, boq_id, quotation_number, total_amount, discount, final_amount, valid_until, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?)'
   ).run(lead_id, boq_id, qNum, total_amount, discount || 0, final_amount, valid_until, notes, req.user.id);

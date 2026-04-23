@@ -13,8 +13,8 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const upload = multer({ dest: uploadDir, limits: { fileSize: 10 * 1024 * 1024 } });
 
 function generateCustomerCode(db) {
-  const count = db.prepare('SELECT COUNT(*) as c FROM customers').get().c;
-  return `CUST-${String(count + 1001).padStart(5, '0')}`;
+  const { nextSequence } = require('../db/nextSequence');
+  return nextSequence(db, 'customers', 'customer_code', 'CUST-', { startFrom: 1000, pad: 5 });
 }
 
 // GET list with search

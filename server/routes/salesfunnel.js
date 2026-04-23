@@ -67,8 +67,8 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
   const b = req.body;
   if (!b.client_name) return res.status(400).json({ error: 'Client name required' });
   const db = getDb();
-  const count = db.prepare('SELECT COUNT(*) as c FROM sales_funnel').get().c;
-  const leadNo = `SEPL${String(count + 9000).padStart(4, '0')}`;
+  const { nextSequence } = require('../db/nextSequence');
+  const leadNo = nextSequence(db, 'sales_funnel', 'lead_no', 'SEPL', { startFrom: 9000, pad: 4 });
 
   const r = db.prepare(`INSERT INTO sales_funnel (lead_no, client_name, company_name, phone, email, category, address, district, state, source, assigned_sc, assigned_asm, remarks, created_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(

@@ -81,8 +81,8 @@ router.post('/tracker/:indent_id/stage', (req, res) => {
 router.post('/grn', (req, res) => {
   const db = getDb();
   const { vendor_po_id, indent_id, grn_date, items, notes } = req.body;
-  const count = db.prepare('SELECT COUNT(*) as c FROM grn').get().c;
-  const grnNum = `GRN-${String(count + 1).padStart(4, '0')}`;
+  const { nextSequence } = require('../db/nextSequence');
+  const grnNum = nextSequence(db, 'grn', 'grn_number', 'GRN-', { startFrom: 0, pad: 4 });
 
   const r = db.prepare('INSERT INTO grn (vendor_po_id, indent_id, grn_number, grn_date, received_by, notes) VALUES (?,?,?,?,?,?)')
     .run(vendor_po_id, indent_id, grnNum, grn_date, req.user.id, notes);

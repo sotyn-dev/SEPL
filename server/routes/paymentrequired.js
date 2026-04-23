@@ -143,8 +143,9 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
     }
   }
   const db = getDb();
-  const count = db.prepare('SELECT COUNT(*) as c FROM payment_requests').get().c;
-  const requestNo = `PR-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+  const { nextSequence } = require('../db/nextSequence');
+  const yr = new Date().getFullYear();
+  const requestNo = nextSequence(db, 'payment_requests', 'request_number', `PR-${yr}-`, { startFrom: 0, pad: 4 });
 
   // Ensure extra columns exist
   try { db.exec('ALTER TABLE payment_requests ADD COLUMN ticket_upload TEXT'); } catch(e) {}

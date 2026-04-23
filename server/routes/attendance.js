@@ -20,6 +20,76 @@ router.get('/my-today', (req, res) => {
   res.json(record || null);
 });
 
+// GET current month's attendance for the logged-in user — used by the
+// dashboard card so employees can see their month at a glance. Optional
+// query param ?month=YYYY-MM lets them view a different month.
+router.get('/my-month', (req, res) => {
+  const db = getDb();
+  const now = new Date();
+  const monthParam = (req.query.month || '').match(/^\d{4}-\d{2}$/) ? req.query.month : null;
+  const year = monthParam ? parseInt(monthParam.slice(0, 4), 10) : now.getFullYear();
+  const month = monthParam ? parseInt(monthParam.slice(5, 7), 10) : now.getMonth() + 1;
+  const pad = n => String(n).padStart(2, '0');
+  const monthStart = `${year}-${pad(month)}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const monthEnd = `${year}-${pad(month)}-${pad(lastDay)}`;
+
+  // Pull attendance + leave records for this user, this month
+  const attendance = db.prepare(
+    'SELECT date, status, punch_in_time, punch_out_time, total_hours FROM attendance WHERE user_id=? AND date BETWEEN ? AND ? ORDER BY date'
+  ).all(req.user.id, monthStart, monthEnd);
+
+  const leaves = db.prepare(
+    `SELECT leave_type, from_date, to_date, status
+     FROM leave_requests
+     WHERE user_id=? AND status='approved'
+       AND NOT (to_date < ? OR from_date > ?)`
+  ).all(req.user.id, monthStart, monthEnd);
+
+  // Build a per-day map of status. Key = YYYY-MM-DD.
+  // Order of precedence: attendance row wins; else leave; else (past weekdays) absent; future = blank.
+  const today = new Date().toISOString().slice(0, 10);
+  const todayObj = new Date(today);
+  const days = [];
+  const byStatus = { present: 0, late: 0, half_day: 0, short_day: 0, absent: 0, on_leave: 0, weekend: 0, future: 0 };
+  let totalHours = 0;
+
+  for (let d = 1; d <= lastDay; d++) {
+    const dateStr = `${year}-${pad(month)}-${pad(d)}`;
+    const dObj = new Date(dateStr);
+    const dow = dObj.getDay(); // 0=Sun 6=Sat
+    const isWeekend = dow === 0;
+    const att = attendance.find(a => a.date === dateStr);
+    // Is this day inside any approved leave range?
+    const onLeave = leaves.find(l => dateStr >= l.from_date && dateStr <= l.to_date);
+    let status;
+    if (att) {
+      status = att.status;
+      totalHours += +att.total_hours || 0;
+    } else if (onLeave) {
+      status = 'on_leave';
+    } else if (isWeekend) {
+      status = 'weekend';
+    } else if (dObj > todayObj) {
+      status = 'future';
+    } else {
+      status = 'absent';
+    }
+    if (byStatus[status] !== undefined) byStatus[status]++;
+    days.push({ date: dateStr, day: d, dow, status });
+  }
+
+  res.json({
+    month: `${year}-${pad(month)}`,
+    days,
+    summary: {
+      ...byStatus,
+      total_hours: Math.round(totalHours * 100) / 100,
+    },
+    leaves,
+  });
+});
+
 // GET attendance list (admin view) with filters
 router.get('/', requirePermission('attendance', 'view'), (req, res) => {
   const { date, user_id, status, date_from, date_to } = req.query;

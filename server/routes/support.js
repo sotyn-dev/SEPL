@@ -66,8 +66,8 @@ router.post('/', (req, res) => {
   const { subject, description, category, priority, attachment_link, module, assigned_to } = req.body;
   if (!subject || !description) return res.status(400).json({ error: 'Subject and description required' });
   const db = getDb();
-  const count = db.prepare('SELECT COUNT(*) as c FROM support_tickets').get().c;
-  const ticketNo = `TK-${String(count + 1001).padStart(5, '0')}`;
+  const { nextSequence } = require('../db/nextSequence');
+  const ticketNo = nextSequence(db, 'support_tickets', 'ticket_no', 'TK-', { startFrom: 1000, pad: 5 });
   const r = db.prepare(
     'INSERT INTO support_tickets (ticket_no, user_id, subject, description, category, priority, attachment_link, module, assigned_to) VALUES (?,?,?,?,?,?,?,?,?)'
   ).run(ticketNo, req.user.id, subject, description, category || 'bug', priority || 'medium', attachment_link, module, assigned_to ? +assigned_to : null);

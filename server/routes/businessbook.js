@@ -79,9 +79,10 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
 
   try {
 
-  // Auto-generate Lead No
-  const count = db.prepare('SELECT COUNT(*) as c FROM business_book').get().c;
-  const leadNo = `SEPL${String(count + 20001).padStart(5, '0')}`;
+  // Auto-generate Lead No. Uses nextSequence so deletes don't cause
+  // UNIQUE-constraint collisions on the next insert.
+  const { nextSequence } = require('../db/nextSequence');
+  const leadNo = nextSequence(db, 'business_book', 'lead_no', 'SEPL', { startFrom: 20000, pad: 5 });
   const balanceAmount = (b.po_amount || 0) - (b.advance_received || 0);
 
   const r = db.prepare(`INSERT INTO business_book (

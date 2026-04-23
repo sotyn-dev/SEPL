@@ -122,8 +122,8 @@ router.get('/complaints', (req, res) => {
 router.post('/complaints', (req, res) => {
   const db = getDb();
   const { installation_id, po_id, description, priority, assigned_to } = req.body;
-  const count = db.prepare('SELECT COUNT(*) as c FROM complaints').get().c;
-  const cNum = `CMP-${String(count + 1).padStart(4, '0')}`;
+  const { nextSequence } = require('../db/nextSequence');
+  const cNum = nextSequence(db, 'complaints', 'complaint_number', 'CMP-', { startFrom: 0, pad: 4 });
   const r = db.prepare('INSERT INTO complaints (installation_id,po_id,complaint_number,description,priority,assigned_to,created_by) VALUES (?,?,?,?,?,?,?)')
     .run(installation_id, po_id, cNum, description, priority, assigned_to, req.user.id);
   res.status(201).json({ id: r.lastInsertRowid, complaint_number: cNum });
@@ -150,8 +150,8 @@ router.get('/handover', (req, res) => {
 router.post('/handover', (req, res) => {
   const db = getDb();
   const { installation_id, po_id, handover_date, client_signatory, company_signatory, notes } = req.body;
-  const count = db.prepare('SELECT COUNT(*) as c FROM handover_certificates').get().c;
-  const certNum = `HC-${String(count + 1).padStart(4, '0')}`;
+  const { nextSequence } = require('../db/nextSequence');
+  const certNum = nextSequence(db, 'handover_certificates', 'certificate_number', 'HC-', { startFrom: 0, pad: 4 });
   const r = db.prepare('INSERT INTO handover_certificates (installation_id,po_id,certificate_number,handover_date,client_signatory,company_signatory,notes) VALUES (?,?,?,?,?,?,?)')
     .run(installation_id, po_id, certNum, handover_date, client_signatory, company_signatory, notes);
   res.status(201).json({ id: r.lastInsertRowid, certificate_number: certNum });

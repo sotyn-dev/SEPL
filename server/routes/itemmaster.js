@@ -45,12 +45,13 @@ router.post('/', requirePermission('item_master', 'create'), (req, res) => {
   const { item_code, department, item_name, specification, size, uom, gst, type, make, model_number, current_price, catalogue_link, photo_link } = req.body;
   if (!item_name) return res.status(400).json({ error: 'Item name required' });
 
-  // Auto-generate item_code if not provided
+  // Auto-generate item_code if not provided. Uses nextSequence so deletes
+  // don't cause UNIQUE-constraint collisions.
   let code = item_code;
   if (!code) {
+    const { nextSequence } = require('../db/nextSequence');
     const dept = (department || 'GEN').toUpperCase().substring(0, 3);
-    const count = getDb().prepare('SELECT COUNT(*) as c FROM item_master WHERE department=?').get(department || '').c;
-    code = `${dept}${String(count + 1).padStart(4, '0')}`;
+    code = nextSequence(getDb(), 'item_master', 'item_code', dept, { startFrom: 0, pad: 4 });
   }
 
   const r = getDb().prepare(

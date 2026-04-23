@@ -13,8 +13,8 @@ router.post('/public', (req, res) => {
   const newCols = ['client_name TEXT','company_name TEXT','mobile_number TEXT','category TEXT','problem_detail TEXT','customer_type TEXT','complaint_type TEXT','emp_name TEXT','step1_planned_date DATE','step1_actual_date DATE','step1_time_delay INTEGER','step1_assigned_to TEXT','step2_planned_date DATE','step2_actual_date DATE','step2_time_delay INTEGER','step2_assigned_to TEXT','service_report TEXT','updated_at DATETIME'];
   newCols.forEach(col => { try { db.exec(`ALTER TABLE complaints ADD COLUMN ${col}`); } catch(e){} });
 
-  const count = db.prepare('SELECT COUNT(*) as c FROM complaints').get().c;
-  const cn = `CMP-${String(count + 1001).padStart(5, '0')}`;
+  const { nextSequence } = require('../db/nextSequence');
+  const cn = nextSequence(db, 'complaints', 'complaint_number', 'CMP-', { startFrom: 1000, pad: 5 });
   const r = db.prepare(`INSERT INTO complaints (complaint_number, client_name, company_name, mobile_number, category, problem_detail, customer_type, complaint_type, emp_name, description, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
     .run(cn, b.client_name, b.company_name, b.mobile_number, b.category, b.problem_detail, b.customer_type, b.complaint_type, b.emp_name, b.problem_detail, 'open');
   res.status(201).json({ id: r.lastInsertRowid, complaint_number: cn, message: 'Complaint registered. Our team will contact you soon.' });
@@ -54,8 +54,8 @@ router.get('/:id', requirePermission('complaints', 'view'), (req, res) => {
 router.post('/', requirePermission('complaints', 'create'), (req, res) => {
   const b = req.body;
   const db = getDb();
-  const count = db.prepare('SELECT COUNT(*) as c FROM complaints').get().c;
-  const cn = `CMP-${String(count + 1001).padStart(5, '0')}`;
+  const { nextSequence } = require('../db/nextSequence');
+  const cn = nextSequence(db, 'complaints', 'complaint_number', 'CMP-', { startFrom: 1000, pad: 5 });
   const r = db.prepare(`INSERT INTO complaints (complaint_number, client_name, company_name, mobile_number, category, problem_detail, customer_type, complaint_type, emp_name, step1_planned_date, step1_assigned_to, description, status, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(cn, b.client_name, b.company_name, b.mobile_number, b.category, b.problem_detail, b.customer_type, b.complaint_type, b.emp_name, b.step1_planned_date, b.step1_assigned_to, b.problem_detail, 'open', req.user.id);
   res.status(201).json({ id: r.lastInsertRowid, complaint_number: cn });
