@@ -1028,11 +1028,12 @@ export default function Procurement() {
                   const makeInput = <input className="input text-sm" placeholder="Make" value={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />;
                   const qtyInput = <input className="input text-sm" type="number" min="0" placeholder="Qty" value={item.quantity} onChange={e => { const n = [...indentItems]; n[i].quantity = +e.target.value; setIndentItems(n); }} />;
                   const unitInput = <input className="input text-sm" placeholder="Unit" value={item.unit} onChange={e => { const n = [...indentItems]; n[i].unit = e.target.value; setIndentItems(n); }} />;
+                  // TYPE is auto-derived from the Item Master sub-item's `type`
+                  // field (PO / FOC / RGP). Read-only so mam's people can't
+                  // accidentally override the Item Master's classification.
                   const typeBox = (
-                    <div className={`text-center text-[11px] font-bold uppercase px-2 py-1.5 rounded-lg border ${typeClass}`}>
-                      <select className="bg-transparent w-full outline-none text-[11px]" value={item.item_type || ''} onChange={e => { const n = [...indentItems]; n[i].item_type = e.target.value; setIndentItems(n); }}>
-                        <option value="">—</option><option value="PO">PO</option><option value="FOC">FOC</option><option value="RGP">RGP</option>
-                      </select>
+                    <div className={`text-center text-[11px] font-bold uppercase px-2 py-1.5 rounded-lg border ${typeClass}`} title="Auto-picked from Item Master sub-item">
+                      {item.item_type || <span className="text-gray-400 normal-case font-normal">— pick sub-item —</span>}
                     </div>
                   );
                   const removeBtn = (
