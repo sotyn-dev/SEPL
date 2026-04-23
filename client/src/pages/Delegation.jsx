@@ -10,11 +10,18 @@ import { FiPlus, FiMic, FiMicOff, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLi
 const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 
 export default function Delegation() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, canApprove } = useAuth();
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
-  const [scope, setScope] = useState('mine'); // mine | given | all
+  // EA = anyone with approve permission on delegations (mam grants this to
+  // her assistant). Admin also counts. Both see "All" tab + can upload proof
+  // for anyone.
+  const isEA = isAdmin() || canApprove('delegations');
+  const [scope, setScope] = useState(isEA ? 'all' : 'mine'); // mine | given | all
   const [statusFilter, setStatusFilter] = useState('');
+  const [assigneeFilter, setAssigneeFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [createModal, setCreateModal] = useState(false);
   const [submitModal, setSubmitModal] = useState(null); // task being submitted
   const [rejectModal, setRejectModal] = useState(null); // task being rejected
@@ -30,12 +37,15 @@ export default function Delegation() {
   const load = () => {
     const params = new URLSearchParams({ scope });
     if (statusFilter) params.set('status', statusFilter);
+    if (assigneeFilter) params.set('assignee_id', assigneeFilter);
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
     api.get(`/delegations?${params.toString()}`).then(r => setTasks(r.data)).catch(() => setTasks([]));
   };
   useEffect(() => {
     load();
     api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
-  }, [scope, statusFilter]);
+  }, [scope, statusFilter, assigneeFilter, dateFrom, dateTo]);
 
   // Voice → description. Appends to existing text so user can combine typing + voice.
   const toggleVoice = () => {
@@ -198,14 +208,13 @@ export default function Delegation() {
         )}
       </div>
 
-      {/* Filters. 'Followup' is visible to everyone — read-only cross-team
-          view of all active (non-approved) tasks, for EAs / supervisors who
-          need to chase what's pending. */}
-      <div className="flex flex-wrap gap-2 text-sm">
+      {/* Filters — scope tabs, status, name (assignee), date from/to. The
+          "All" tab shows for admin and EA (anyone with can_approve on
+          delegations). Regular users only see their own tasks. */}
+      <div className="flex flex-wrap gap-2 text-sm items-center">
         {[
           { id: 'mine', label: 'Assigned to me' },
-          { id: 'followup', label: 'Followup (all active)' },
-          ...(isAdmin() ? [{ id: 'all', label: 'All (admin)' }] : []),
+          ...(isEA ? [{ id: 'all', label: 'All tasks' }] : []),
         ].map(t => (
           <button key={t.id} onClick={() => setScope(t.id)}
             className={`px-3 py-1.5 rounded-lg font-medium border ${scope === t.id ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
@@ -219,6 +228,25 @@ export default function Delegation() {
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
         </select>
+        {/* Name + Date filters — only useful when looking across users, so
+            only show on the "All" scope. */}
+        {scope === 'all' && (
+          <>
+            <select className="select text-sm max-w-[200px]" value={assigneeFilter} onChange={e => setAssigneeFilter(e.target.value)}>
+              <option value="">All assignees</option>
+              {users.map(u => <option key={u.id} value={u.id}>{u.name}{u.username ? ` (@${u.username})` : ''}</option>)}
+            </select>
+            <div className="flex items-center gap-1 text-xs text-gray-500">
+              <span>From</span>
+              <input type="date" className="input py-1 text-xs w-36" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+              <span>To</span>
+              <input type="date" className="input py-1 text-xs w-36" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+              {(dateFrom || dateTo || assigneeFilter) && (
+                <button onClick={() => { setAssigneeFilter(''); setDateFrom(''); setDateTo(''); }} className="text-[11px] text-red-600 hover:underline ml-1">Clear</button>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Table view — Serial / Task ID / Description / Project / Assigned To / Completion Date / Upload Proof / Date Extension */}
@@ -282,7 +310,7 @@ export default function Delegation() {
                   <td>
                     {t.proof_url
                       ? <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View</a>
-                      : isAssignee && (t.status === 'pending' || t.status === 'rejected')
+                      : (isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected')
                         ? <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiUpload size={11} /> Upload</button>
                         : <span className="text-gray-400 text-xs">—</span>}
                   </td>
@@ -305,7 +333,7 @@ export default function Delegation() {
                   </td>
                   <td>
                     <div className="flex gap-1">
-                      {isAssigner && t.status === 'submitted' && (
+                      {isAdmin() && t.status === 'submitted' && (
                         <>
                           <button onClick={() => approve(t)} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
                           <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="text-[10px] text-red-600 font-bold hover:underline">Reject</button>
@@ -358,13 +386,13 @@ export default function Delegation() {
               )}
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
-                {isAssignee && (t.status === 'pending' || t.status === 'rejected') && (
+                {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
                   <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiUpload size={11} /> Upload Proof</button>
                 )}
                 {isAssignee && t.status !== 'approved' && t.extension_status !== 'pending' && (
                   <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }} className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiCalendar size={11} /> Extension</button>
                 )}
-                {isAssigner && t.status === 'submitted' && (
+                {isAdmin() && t.status === 'submitted' && (
                   <>
                     <button onClick={() => approve(t)} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiCheck size={11} /> Approve</button>
                     <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="btn btn-danger text-[11px] px-2 py-1 flex items-center gap-1"><FiX size={11} /> Reject</button>

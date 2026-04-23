@@ -4,26 +4,34 @@ const { authMiddleware } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
-// List delegations. By default, a user sees tasks assigned TO them and tasks
-// they have assigned. Admins see everything. Query params: ?scope=mine|given|all|followup
-// and ?status=pending|submitted|approved|rejected.
-//
-// scope=followup → ALL active tasks across users (not-yet-approved), so an EA
-// or supervisor can chase what's pending across the team. Read-only view —
-// action buttons still gate on assigner/assignee like every other scope.
+// Is this user an EA / supervisor? Treated as having the can_approve flag on
+// the delegations module — mam grants this to whoever's her assistant, and
+// they get (a) the "All" tab across every user's tasks and (b) the ability
+// to upload proof on anyone's behalf.
+const isEA = (uid) => {
+  const db = getDb();
+  const row = db.prepare(
+    `SELECT MAX(rp.can_approve) as allowed
+     FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+     WHERE ur.user_id = ? AND rp.module = 'delegations'`
+  ).get(uid);
+  return !!row?.allowed;
+};
+
+// List delegations. By default, a user sees tasks assigned TO them. Admin
+// and EA (can_approve on delegations) see everything via scope=all.
+// Query params: ?scope=mine|given|all, ?status, ?assignee_id, ?date_from, ?date_to
 router.get('/', (req, res) => {
   const db = getDb();
   const isAdmin = req.user.role === 'admin';
   const uid = req.user.id;
-  const { scope = 'mine', status } = req.query;
+  const canSeeAll = isAdmin || isEA(uid);
+  const { scope = 'mine', status, assignee_id, date_from, date_to } = req.query;
 
   const where = [];
   const params = [];
-  if (isAdmin && scope === 'all') {
-    // no filter
-  } else if (scope === 'followup') {
-    // Everyone's active (non-approved) tasks, for follow-up purposes.
-    where.push("d.status != 'approved'");
+  if (canSeeAll && scope === 'all') {
+    // no user filter — admin / EA sees everything
   } else if (scope === 'given') {
     where.push('d.assigned_by = ?'); params.push(uid);
   } else if (scope === 'mine') {
@@ -32,6 +40,12 @@ router.get('/', (req, res) => {
     where.push('(d.assigned_to = ? OR d.assigned_by = ?)'); params.push(uid, uid);
   }
   if (status) { where.push('d.status = ?'); params.push(status); }
+  // Name filter — admin/EA filter by assignee_id from the dropdown
+  if (assignee_id) { where.push('d.assigned_to = ?'); params.push(+assignee_id); }
+  // Date range filters — inclusive on both ends. Uses due_date since that's
+  // what mam typically cares about when chasing follow-ups.
+  if (date_from) { where.push('d.due_date >= ?'); params.push(date_from); }
+  if (date_to) { where.push('d.due_date <= ?'); params.push(date_to); }
 
   const sql = `SELECT d.*,
       au.name as assigned_by_name,
@@ -137,14 +151,17 @@ router.post('/:id/reject-extension', (req, res) => {
   res.json({ message: 'Extension rejected' });
 });
 
-// Assignee submits proof. Moves status from pending/rejected → submitted.
+// Submit proof. Originally assignee-only; now admin and EA can submit on
+// behalf of the assignee too — mam asked for this so her EA can upload
+// proof for team members who send photos/PDFs over WhatsApp.
 router.post('/:id/submit', (req, res) => {
   const { proof_url } = req.body;
   const db = getDb();
   const d = db.prepare('SELECT * FROM delegations WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Task not found' });
-  if (d.assigned_to !== req.user.id && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Only the assignee can submit proof' });
+  const canSubmit = d.assigned_to === req.user.id || req.user.role === 'admin' || isEA(req.user.id);
+  if (!canSubmit) {
+    return res.status(403).json({ error: 'Only the assignee, admin or EA can submit proof' });
   }
   if (!proof_url) return res.status(400).json({ error: 'Proof file is required' });
   db.prepare(
@@ -153,14 +170,13 @@ router.post('/:id/submit', (req, res) => {
   res.json({ message: 'Proof submitted, awaiting approval' });
 });
 
-// Assigner (or admin) approves a submitted task.
+// Approve / reject — admin-only. Per mam's flow: anyone can upload proof
+// (assignee or EA), but only admin checks + approves/rejects the task.
 router.post('/:id/approve', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admin can approve tasks' });
   const db = getDb();
   const d = db.prepare('SELECT * FROM delegations WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Task not found' });
-  if (d.assigned_by !== req.user.id && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Only the assigner can approve' });
-  }
   if (d.status !== 'submitted') return res.status(400).json({ error: 'Task is not awaiting approval' });
   db.prepare(
     `UPDATE delegations SET status='approved', reviewed_at=CURRENT_TIMESTAMP, reviewer_id=? WHERE id=?`
@@ -168,17 +184,13 @@ router.post('/:id/approve', (req, res) => {
   res.json({ message: 'Task approved' });
 });
 
-// Assigner (or admin) rejects with a reason. Task returns to the assignee's
-// dashboard as "pending with reject reason" so they can redo and resubmit.
 router.post('/:id/reject', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admin can reject tasks' });
   const { reason } = req.body;
   if (!reason || !reason.trim()) return res.status(400).json({ error: 'Rejection reason is required' });
   const db = getDb();
   const d = db.prepare('SELECT * FROM delegations WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Task not found' });
-  if (d.assigned_by !== req.user.id && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Only the assigner can reject' });
-  }
   db.prepare(
     `UPDATE delegations SET status='rejected', reject_reason=?, reviewed_at=CURRENT_TIMESTAMP, reviewer_id=? WHERE id=?`
   ).run(reason.trim(), req.user.id, req.params.id);
