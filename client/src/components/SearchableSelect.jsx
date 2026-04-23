@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 
-export default function SearchableSelect({ options, value, onChange, placeholder = 'Search...', displayKey = 'label', valueKey = 'value' }) {
+export default function SearchableSelect({ options, value, onChange, placeholder = 'Search...', displayKey = 'label', valueKey = 'value', buttonClassName = 'input text-left text-sm w-full truncate flex items-center justify-between gap-1 cursor-pointer' }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const ref = useRef(null);
@@ -26,8 +26,8 @@ export default function SearchableSelect({ options, value, onChange, placeholder
   return (
     <div ref={ref} className="relative">
       <button type="button" onClick={() => { setOpen(!open); setSearch(''); }}
-        className="input text-left text-sm w-full truncate flex items-center justify-between gap-1 cursor-pointer">
-        <span className={selected ? 'text-gray-900' : 'text-gray-400'}>
+        className={buttonClassName}>
+        <span className={`truncate ${selected ? 'text-gray-900' : 'text-gray-400'}`}>
           {selected ? selected[displayKey] : placeholder}
         </span>
         <svg className="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
