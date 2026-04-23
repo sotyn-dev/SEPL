@@ -28,6 +28,7 @@ import Delegation from './pages/Delegation';
 import PMSTasks from './pages/PMSTasks';
 import UserManagement from './pages/admin/UserManagement';
 import RolesPermissions from './pages/admin/RolesPermissions';
+import DatabaseBackups from './pages/admin/DatabaseBackups';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -92,6 +93,7 @@ export default function App() {
         {/* Admin Routes */}
         <Route path="admin/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
         <Route path="admin/roles" element={<AdminRoute><RolesPermissions /></AdminRoute>} />
+        <Route path="admin/backups" element={<AdminRoute><DatabaseBackups /></AdminRoute>} />
       </Route>
     </Routes>
   );

@@ -31,6 +31,19 @@ const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 // Initialize DB
 initializeDatabase();
 
+// Nightly DB backup scheduler — runs at 02:00 local time every day and
+// keeps the last 30 backups. Backups go to ~/erp-backups on the VPS (or
+// ../backups on Windows). Admin can also list / download / trigger manually
+// via /api/admin/backups/*. Skip in dev via ERP_DISABLE_BACKUP_SCHEDULER=1.
+if (!process.env.ERP_DISABLE_BACKUP_SCHEDULER) {
+  try {
+    const { scheduleNightly } = require('./scripts/backup-db');
+    scheduleNightly();
+  } catch (e) {
+    console.warn('[backup] Scheduler not started:', e.message);
+  }
+}
+
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/dashboard', require('./routes/dashboard'));
@@ -50,6 +63,7 @@ app.use('/api/complaints', require('./routes/complaints'));
 app.use('/api/hr', require('./routes/hr'));
 app.use('/api/delegations', require('./routes/delegations'));
 app.use('/api/pms-tasks', require('./routes/pmstasks'));
+app.use('/api/admin/backups', require('./routes/backups'));
 
 // 4 Critical Systems
 app.use('/api/cashflow', require('./routes/cashflow'));
