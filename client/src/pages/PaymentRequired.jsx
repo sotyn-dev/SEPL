@@ -64,7 +64,14 @@ export default function PaymentRequired() {
     api.get('/payment-required/stats').then(r => setStats(r.data)).catch(() => {});
   }, [search, filters]);
 
-  useEffect(() => { load(); api.get('/dpr/sites').then(r => setSites(r.data)).catch(() => {}); api.get('/hr/employees').then(r => setEmployees(r.data)).catch(() => {}); }, [load]);
+  useEffect(() => {
+    load();
+    // ?all=1 → any employee raising a payment request can pick from ALL
+    // sites (not just ones they're assigned to as a site engineer). Matches
+    // mam's ask on 2026-04-23.
+    api.get('/dpr/sites?all=1').then(r => setSites(r.data)).catch(() => {});
+    api.get('/hr/employees').then(r => setEmployees(r.data)).catch(() => {});
+  }, [load]);
 
   const handleSave = async (e) => {
     e.preventDefault();

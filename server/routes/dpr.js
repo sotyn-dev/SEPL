@@ -12,6 +12,10 @@ router.get('/sites', (req, res) => {
   const db = getDb();
   const isAdmin = req.user.role === 'admin';
   const uid = req.user.id;
+  // ?all=1 → skip the user-scoping filter. Used by modules like Payment
+  // Required where every employee should see every site (not just the ones
+  // assigned to them as a site engineer).
+  const all = req.query.all === '1' || req.query.all === 'true';
 
   let sql = `SELECT MIN(s.id) as id, s.name, s.address, s.client_name, s.po_id, s.business_book_id,
     s.site_engineer_id, s.supervisor, s.status, u.name as engineer_name, bb.lead_no,
@@ -21,7 +25,7 @@ router.get('/sites', (req, res) => {
     LEFT JOIN business_book bb ON s.business_book_id=bb.id`;
   const params = [];
 
-  if (!isAdmin) {
+  if (!isAdmin && !all) {
     sql += ` WHERE (s.site_engineer_id = ? OR EXISTS (
       SELECT 1 FROM purchase_orders po
       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
