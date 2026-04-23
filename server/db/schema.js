@@ -1264,6 +1264,9 @@ function initializeDatabase() {
     // task or edit later from the list. Free-text so it doesn't depend on
     // any master list; keeps it flexible for mam's quick day-to-day tasks.
     ['delegations', 'project_name TEXT'],
+    // Optional attachment (brief / drawing / photo / doc) the creator can
+    // attach when assigning the task. Stored as a /uploads/<name> URL.
+    ['delegations', 'attachment_url TEXT'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}

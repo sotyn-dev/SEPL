@@ -70,17 +70,18 @@ router.get('/', (req, res) => {
 // without depending on any master list.
 router.post('/', (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can create tasks' });
-  const { title, description, assigned_to, due_date, project_name } = req.body;
+  const { title, description, assigned_to, due_date, project_name, attachment_url } = req.body;
   const desc = String(description || '').trim();
   if (!desc) return res.status(400).json({ error: 'Description is required' });
   if (!assigned_to) return res.status(400).json({ error: 'Assignee is required' });
   const derivedTitle = (title && title.trim()) || desc.split(/\r?\n/)[0].slice(0, 80).trim() || 'Task';
   const project = project_name && String(project_name).trim() ? String(project_name).trim() : null;
+  const attachment = attachment_url && String(attachment_url).trim() ? String(attachment_url).trim() : null;
   const db = getDb();
   const r = db.prepare(
-    `INSERT INTO delegations (title, description, assigned_by, assigned_to, due_date, project_name)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(derivedTitle, desc, req.user.id, assigned_to, due_date || null, project);
+    `INSERT INTO delegations (title, description, assigned_by, assigned_to, due_date, project_name, attachment_url)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(derivedTitle, desc, req.user.id, assigned_to, due_date || null, project, attachment);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 

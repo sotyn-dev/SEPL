@@ -81,7 +81,7 @@ export default function Delegation() {
   };
 
   const openCreate = () => {
-    setForm({ description: '', assigned_to: '', due_date: new Date().toISOString().split('T')[0], project_name: '' });
+    setForm({ description: '', assigned_to: '', due_date: new Date().toISOString().split('T')[0], project_name: '', attachment_file: null });
     setCreateModal(true);
   };
 
@@ -89,11 +89,20 @@ export default function Delegation() {
     e.preventDefault();
     if (!String(form.description || '').trim()) return toast.error('Description is required');
     try {
+      // Optional attachment — upload first (if picked) to get a stable /uploads URL,
+      // then send that URL with the task create. Keeps the task endpoint simple (JSON).
+      let attachmentUrl = null;
+      if (form.attachment_file) {
+        const fd = new FormData(); fd.append('file', form.attachment_file);
+        const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        attachmentUrl = up.data.url;
+      }
       await api.post('/delegations', {
         description: form.description,
         assigned_to: form.assigned_to,
         due_date: form.due_date,
         project_name: form.project_name || null,
+        attachment_url: attachmentUrl,
       });
       toast.success('Task assigned');
       setCreateModal(false); load();
@@ -284,6 +293,11 @@ export default function Delegation() {
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
                   <td className="max-w-md">
                     <div className="line-clamp-2 text-gray-800 font-medium">{cleanDesc(t.description || t.title)}</div>
+                    {t.attachment_url && (
+                      <a href={t.attachment_url} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline flex items-center gap-1 mt-1">
+                        <FiExternalLink size={10} /> View attachment
+                      </a>
+                    )}
                     {t.status === 'rejected' && t.reject_reason && (
                       <div className="text-[10px] text-red-700 mt-1 flex items-start gap-1"><FiAlertTriangle size={10} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</div>
                     )}
@@ -354,12 +368,15 @@ export default function Delegation() {
         </table>
       </div>
 
-      {/* MOBILE: compact card layout with the same columns as labeled rows */}
+      {/* MOBILE: compact card layout — mirrors the desktop table's columns
+          (S.No, Task ID, Description, Project [inline-editable], Assigned To,
+          Due/Completed, Status, Upload Proof, Extension, Actions). */}
       <div className="md:hidden space-y-2">
         {tasks.length === 0 && <div className="card text-center text-gray-400 py-8">No tasks</div>}
         {tasks.map((t, idx) => {
           const isAssignee = t.assigned_to === user?.id;
           const isAssigner = t.assigned_by === user?.id;
+          const canEditProject = isAdmin() || isAssigner;
           const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
           return (
             <div key={t.id} className={`card p-3 ${t.status === 'rejected' ? 'border-l-4 border-red-500' : t.status === 'submitted' ? 'border-l-4 border-blue-500' : ''}`}>
@@ -371,12 +388,33 @@ export default function Delegation() {
                 {statusBadge(t.status)}
               </div>
               <p className="text-sm text-gray-800 font-medium mb-2 line-clamp-3">{cleanDesc(t.description || t.title)}</p>
+              {t.attachment_url && (
+                <a href={t.attachment_url} target="_blank" rel="noreferrer" className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 mb-2">
+                  <FiExternalLink size={11} /> View attachment
+                </a>
+              )}
+
+              {/* Project — always shown, inline-editable for admin/assigner,
+                  read-only for others. Matches the desktop table column. */}
+              <div className="mb-2 text-[11px] text-gray-600">
+                <span className="text-gray-400">Project: </span>
+                {canEditProject ? (
+                  <input
+                    type="text"
+                    defaultValue={t.project_name || ''}
+                    placeholder="— add —"
+                    className="bg-transparent border border-transparent hover:border-gray-200 focus:border-red-400 focus:bg-white rounded px-1 py-0.5 text-[11px] font-semibold focus:outline-none w-[70%]"
+                    onBlur={e => saveProject(t, e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { e.target.value = t.project_name || ''; e.target.blur(); } }}
+                  />
+                ) : (
+                  <b>{t.project_name || <span className="text-gray-300">—</span>}</b>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-gray-600 mb-2">
                 <div><span className="text-gray-400">Assigned to:</span> <b>{t.assigned_to_name}</b></div>
                 <div><span className="text-gray-400">By:</span> {t.assigned_by_name}</div>
-                {t.project_name && (
-                  <div className="col-span-2"><span className="text-gray-400">Project:</span> <b>{t.project_name}</b></div>
-                )}
                 {completedDate ? (
                   <div className="col-span-2"><span className="text-gray-400">Completed:</span> <b className="text-emerald-700">{completedDate}</b></div>
                 ) : t.due_date && (
@@ -449,6 +487,16 @@ export default function Delegation() {
               <input className="input" type="text" value={form.project_name || ''} onChange={e => setForm({ ...form, project_name: e.target.value })} placeholder="e.g. ONGC Mehsana" />
               <p className="text-[10px] text-gray-400 mt-0.5">Free text — you can edit this later from the list.</p>
             </div>
+          </div>
+          <div>
+            <label className="label">Attachment <span className="text-gray-400 font-normal">(optional — e.g. brief, drawing, photo)</span></label>
+            <input
+              className="input"
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+              onChange={e => setForm({ ...form, attachment_file: e.target.files?.[0] || null })}
+            />
+            {form.attachment_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.attachment_file.name}</p>}
           </div>
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => setCreateModal(false)} className="btn btn-secondary">Cancel</button>
