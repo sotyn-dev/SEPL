@@ -644,8 +644,96 @@ export default function Procurement() {
         </>
       )}
 
-      {tab === 'bills' && (
+      {tab === 'bills' && (() => {
+        // POs that don't have a bill yet — sorted by Expected Receipt Date
+        // so the purchase team chases the oldest first. Uses client-side
+        // filtering off the already-loaded vendorPos + purchaseBills.
+        const billedPoIds = new Set(purchaseBills.map(b => b.vendor_po_id).filter(Boolean));
+        const today = new Date().toISOString().slice(0, 10);
+        const pendingPos = vendorPos
+          .filter(po => !billedPoIds.has(po.id))
+          .sort((a, b) => {
+            const ax = a.expected_receipt_date || '9999-12-31';
+            const bx = b.expected_receipt_date || '9999-12-31';
+            return ax.localeCompare(bx);
+          });
+        const daysDiff = (d) => {
+          if (!d) return null;
+          const dt = new Date(d); const tdt = new Date(today);
+          return Math.round((dt - tdt) / 86400000);
+        };
+        const openUploadBill = (po) => {
+          setForm({
+            vendor_po_id: po.id,
+            vendor_po_number: po.po_number,
+            vendor_id: po.vendor_id,
+            bill_number: '',
+            bill_date: today,
+            amount: 0,
+            gst_amount: 0,
+            total_amount: 0,
+          });
+          setModal('bill');
+        };
+        return (
         <>
+          {/* ===== Follow-up section ===== */}
+          {pendingPos.length > 0 && (
+            <div className="card p-3 bg-amber-50 border border-amber-200">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+                <h4 className="font-semibold text-amber-800 text-sm">
+                  Follow-up: POs awaiting Purchase Bill
+                  <span className="text-xs font-normal text-amber-600 ml-2">({pendingPos.length} PO{pendingPos.length === 1 ? '' : 's'})</span>
+                </h4>
+                <span className="text-[11px] text-amber-700">Sorted by Expected Receipt Date — chase the oldest first</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="text-xs">
+                  <thead><tr className="bg-amber-100/50">
+                    <th className="px-2 py-1 text-left">PO Number</th>
+                    <th className="px-2 py-1 text-left">Vendor</th>
+                    <th className="px-2 py-1">PO Date</th>
+                    <th className="px-2 py-1">Expected Receipt</th>
+                    <th className="px-2 py-1">Status</th>
+                    <th className="px-2 py-1 text-right">Amount</th>
+                    <th className="px-2 py-1">File</th>
+                    <th className="px-2 py-1"></th>
+                  </tr></thead>
+                  <tbody>
+                    {pendingPos.map(po => {
+                      const d = daysDiff(po.expected_receipt_date);
+                      let chip;
+                      if (!po.expected_receipt_date) chip = <span className="text-gray-400">— no date —</span>;
+                      else if (d < 0) chip = <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">OVERDUE by {-d}d</span>;
+                      else if (d === 0) chip = <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300">DUE TODAY</span>;
+                      else if (d <= 3) chip = <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 border border-orange-200">in {d}d</span>;
+                      else chip = <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">in {d}d</span>;
+                      return (
+                        <tr key={po.id} className="border-b border-amber-100">
+                          <td className="px-2 py-1.5 font-semibold text-red-700 whitespace-nowrap">{po.po_number}</td>
+                          <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
+                          <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
+                          <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
+                          <td className="px-2 py-1.5 text-center">{chip}</td>
+                          <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">Rs {po.total_amount?.toLocaleString()}</td>
+                          <td className="px-2 py-1.5 text-center">
+                            {po.file_path
+                              ? <a href={po.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-[11px]">View PO</a>
+                              : <span className="text-gray-300 text-[11px]">—</span>}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <button onClick={() => openUploadBill(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap">Upload Bill</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ===== Existing bills table ===== */}
           <div className="flex justify-between items-center">
             <h3 className="font-semibold">Purchase Bills</h3>
             <button onClick={() => { setForm({ vendor_id: '', bill_number: '', bill_date: '', amount: 0, gst_amount: 0, total_amount: 0 }); setModal('bill'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Bill</button>
@@ -670,7 +758,8 @@ export default function Procurement() {
             </tbody>
           </table></div>
         </>
-      )}
+        );
+      })()}
 
       {tab === 'delivery' && (
         <>
@@ -970,8 +1059,13 @@ export default function Procurement() {
       </Modal>
 
       {/* Purchase Bill Modal */}
-      <Modal isOpen={modal === 'bill'} onClose={() => setModal(false)} title="Add Purchase Bill">
+      <Modal isOpen={modal === 'bill'} onClose={() => setModal(false)} title={form.vendor_po_number ? `Upload Bill for ${form.vendor_po_number}` : 'Add Purchase Bill'}>
         <form onSubmit={savePurchaseBill} className="space-y-4">
+          {form.vendor_po_number && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-xs text-emerald-700">
+              Linked to Vendor PO <b>{form.vendor_po_number}</b>. The bill will automatically clear this PO from the follow-up list.
+            </div>
+          )}
           <div><label className="label">Vendor *</label><select className="select" value={form.vendor_id} onChange={e => setForm({...form, vendor_id: e.target.value})} required><option value="">Select</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div><label className="label">Bill Number</label><input className="input" value={form.bill_number} onChange={e => setForm({...form, bill_number: e.target.value})} /></div>
