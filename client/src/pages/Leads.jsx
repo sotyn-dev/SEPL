@@ -273,10 +273,99 @@ export default function Leads() {
                 <input className="input" placeholder="Assign To (ASM)" value={stageForm.meeting_assigned_to||''} onChange={e=>setStageForm({...stageForm,meeting_assigned_to:e.target.value})}/>
                 <button onClick={()=>advanceStage(viewData.id,'meeting_assigned',stageForm)} className="btn btn-primary w-full">Assign Meeting</button>
               </div>)}
-              {viewData.current_stage==='meeting_assigned'&&(<div className="space-y-2">
-                <textarea className="input" rows="3" placeholder="Meeting notes / MOM..." value={stageForm.mom_notes||''} onChange={e=>setStageForm({...stageForm,mom_notes:e.target.value})}/>
-                <input type="file" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{stageForm.mom_file_link=await uploadFile(f);toast.success('Uploaded');}catch{toast.error('Failed');}}} className="text-xs"/>
-                <button onClick={()=>advanceStage(viewData.id,'mom_uploaded',stageForm)} disabled={!stageForm.mom_notes} className="btn btn-primary w-full disabled:opacity-50">Submit MOM</button>
+              {/* Fill MOM — matches mam's Google Form layout (2026-04-23).
+                  Customer Category + Customer Type are radios (not read-only)
+                  so the field engineer can correct / confirm them at the site.
+                  They also update the lead record itself. */}
+              {viewData.current_stage==='meeting_assigned'&&(<div className="space-y-3">
+                {/* Customer Category — radio buttons matching the Google Form */}
+                <div>
+                  <label className="label text-[10px]">Customer Category *</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1">
+                    {['Fire Fighting','Electrical','Low Voltage','HVAC','MEPF','Solar','Plumbing','Other'].map(cat => (
+                      <label key={cat} className={`flex items-center gap-1.5 px-2 py-1.5 border rounded text-xs cursor-pointer ${(stageForm.category||viewData.category)===cat ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-200 hover:bg-gray-50'}`}>
+                        <input type="radio" name="customer_category" value={cat} checked={(stageForm.category||viewData.category)===cat} onChange={()=>setStageForm({...stageForm,category:cat})} />
+                        {cat}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Customer Type — Existing / New */}
+                <div>
+                  <label className="label text-[10px]">Customer Type *</label>
+                  <div className="flex gap-2">
+                    {['Existing','New'].map(t => (
+                      <label key={t} className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 border rounded text-xs cursor-pointer ${(stageForm.lead_type||viewData.lead_type)===t ? 'border-red-500 bg-red-50 text-red-700 font-bold' : 'border-gray-200 hover:bg-gray-50'}`}>
+                        <input type="radio" name="customer_type" value={t} checked={(stageForm.lead_type||viewData.lead_type)===t} onChange={()=>setStageForm({...stageForm,lead_type:t})} />
+                        {t}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Meeting Location context (editable) */}
+                <div>
+                  <label className="label text-[10px]">Meeting Location</label>
+                  <input className="input" value={stageForm.meeting_location ?? (viewData.meeting_location||'')} onChange={e=>setStageForm({...stageForm,meeting_location:e.target.value})} placeholder="Site / office / online"/>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="label text-[10px]">Purpose of Meeting *</label>
+                    <input className="input" value={stageForm.meeting_purpose||''} onChange={e=>setStageForm({...stageForm,meeting_purpose:e.target.value})} placeholder="e.g. site survey / requirement gathering" required/>
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Meeting Format</label>
+                    <select className="select" value={stageForm.meeting_format||''} onChange={e=>setStageForm({...stageForm,meeting_format:e.target.value})}>
+                      <option value="">— Select —</option>
+                      <option value="in_person">In-Person</option>
+                      <option value="phone">Phone</option>
+                      <option value="video_call">Video Call</option>
+                      <option value="email">Email</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Meeting Scheduled By</label>
+                    <input className="input" value={stageForm.meeting_scheduled_by||''} onChange={e=>setStageForm({...stageForm,meeting_scheduled_by:e.target.value})} placeholder="Name of scheduler"/>
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Time Spent (minutes)</label>
+                    <input className="input" type="number" min="0" value={stageForm.meeting_time_spent_min||''} onChange={e=>setStageForm({...stageForm,meeting_time_spent_min:+e.target.value})} placeholder="e.g. 45"/>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="label text-[10px]">Pain Points</label>
+                  <textarea className="input" rows="2" value={stageForm.pain_points||''} onChange={e=>setStageForm({...stageForm,pain_points:e.target.value})} placeholder="Client's current challenges / issues"/>
+                </div>
+                <div>
+                  <label className="label text-[10px]">Requirements</label>
+                  <textarea className="input" rows="2" value={stageForm.requirements||''} onChange={e=>setStageForm({...stageForm,requirements:e.target.value})} placeholder="What client needs — scope / quantities / standards"/>
+                </div>
+                <div>
+                  <label className="label text-[10px]">M.O.M. (Minutes of Meeting) *</label>
+                  <textarea className="input" rows="3" value={stageForm.mom_notes||''} onChange={e=>setStageForm({...stageForm,mom_notes:e.target.value})} placeholder="What was discussed / agreed" required/>
+                </div>
+                <div>
+                  <label className="label text-[10px]">Action Planned</label>
+                  <textarea className="input" rows="2" value={stageForm.action_planned||''} onChange={e=>setStageForm({...stageForm,action_planned:e.target.value})} placeholder="Next steps — who does what by when"/>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="label text-[10px]">Timestamp Photo <span className="text-gray-400 font-normal">(selfie at site with date stamp)</span></label>
+                    <input type="file" accept="image/*" capture="environment" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{const url=await uploadFile(f);setStageForm(s=>({...s,meeting_timestamp_photo_url:url}));toast.success('Photo uploaded');}catch{toast.error('Failed');}}} className="text-xs"/>
+                    {stageForm.meeting_timestamp_photo_url && <p className="text-[10px] text-emerald-600 mt-0.5">✓ Photo attached</p>}
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">MOM File <span className="text-gray-400 font-normal">(optional PDF/doc)</span></label>
+                    <input type="file" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{const url=await uploadFile(f);setStageForm(s=>({...s,mom_file_link:url}));toast.success('MOM file uploaded');}catch{toast.error('Failed');}}} className="text-xs"/>
+                    {stageForm.mom_file_link && <p className="text-[10px] text-emerald-600 mt-0.5">✓ File attached</p>}
+                  </div>
+                </div>
+
+                <button onClick={()=>advanceStage(viewData.id,'mom_uploaded',stageForm)} disabled={!stageForm.mom_notes||!stageForm.meeting_purpose} className="btn btn-primary w-full disabled:opacity-50">Submit MOM</button>
               </div>)}
               {viewData.current_stage==='mom_uploaded'&&(<div className="space-y-2">
                 {[1,2,3].map(n=>(<div key={n} className="flex items-center gap-2"><span className="text-xs w-16">Drawing {n}:</span><input type="file" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{const url=await uploadFile(f);setStageForm(s=>({...s,[`drawing_file${n}`]:url}));toast.success(`Drawing ${n}`);}catch{toast.error('Failed');}}} className="text-xs flex-1"/>{stageForm[`drawing_file${n}`]&&<span className="text-emerald-600 text-xs">OK</span>}</div>))}

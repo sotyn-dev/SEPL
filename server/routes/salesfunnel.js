@@ -178,13 +178,39 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
       params = [b.f2f_status || 'done', req.params.id];
       break;
 
+    // Fill MOM — captures all 12 fields from mam's Google-Form layout:
+    //   Customer Category (radio) → updates sales_funnel.category
+    //   Customer Type (radio)     → updates sales_funnel.lead_type
+    //   Meeting Location          → updates sales_funnel.meeting_location
+    //   Purpose / Pain Points / Requirements / M.O.M. / Action Planned
+    //   Meeting Format / Scheduled By / Time Spent / Timestamp Photo / MOM file
+    // Category/Type/Location use COALESCE so existing values aren't wiped when
+    // the field engineer leaves them blank on the form.
     case 'mom_uploaded':
       if (!b.mom_notes) return res.status(400).json({ error: 'MOM notes required' });
       sql = `UPDATE sales_funnel SET
         current_stage=?, mom_notes=?, mom_file_link=?, mom_filled_by=?, mom_date=CURRENT_TIMESTAMP,
-        meeting_status=?, stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+        meeting_status=?,
+        category=COALESCE(?, category),
+        lead_type=COALESCE(?, lead_type),
+        meeting_location=COALESCE(?, meeting_location),
+        meeting_purpose=?, meeting_timestamp_photo_url=?, pain_points=?, requirements=?,
+        action_planned=?, meeting_format=?, meeting_scheduled_by=?, meeting_time_spent_min=?,
+        stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = ['mom_uploaded', b.mom_notes, b.mom_file_link, b.mom_filled_by || req.user.name,
-        'completed', req.params.id];
+        'completed',
+        b.category || null,
+        b.lead_type || null,
+        b.meeting_location || null,
+        b.meeting_purpose || null,
+        b.meeting_timestamp_photo_url || null,
+        b.pain_points || null,
+        b.requirements || null,
+        b.action_planned || null,
+        b.meeting_format || null,
+        b.meeting_scheduled_by || null,
+        b.meeting_time_spent_min ? +b.meeting_time_spent_min : null,
+        req.params.id];
       break;
 
     case 'drawing_uploaded':
