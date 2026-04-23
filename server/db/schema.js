@@ -1241,6 +1241,8 @@ function initializeDatabase() {
     ['vendor_pos', 'file_path TEXT'],
     ['vendor_pos', 'remarks TEXT'],
     ['vendor_pos', 'expected_receipt_date DATE'],
+    // Purchase Bills also get an uploaded file (the bill PDF / image / excel)
+    ['purchase_bills', 'file_path TEXT'],
     // Delegations — optional project tag the admin can set while creating a
     // task or edit later from the list. Free-text so it doesn't depend on
     // any master list; keeps it flexible for mam's quick day-to-day tasks.

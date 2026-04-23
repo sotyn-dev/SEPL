@@ -274,9 +274,22 @@ export default function Procurement() {
 
   const savePurchaseBill = async (e) => {
     e.preventDefault();
-    await api.post('/procurement/purchase-bills', form);
-    toast.success('Purchase bill added');
-    setModal(false); load();
+    // Multipart — carries optional bill_file alongside the metadata, same
+    // pattern as the Vendor PO upload.
+    const fd = new FormData();
+    if (form.vendor_po_id) fd.append('vendor_po_id', form.vendor_po_id);
+    if (form.vendor_id) fd.append('vendor_id', form.vendor_id);
+    if (form.bill_number) fd.append('bill_number', form.bill_number);
+    if (form.bill_date) fd.append('bill_date', form.bill_date);
+    fd.append('amount', form.amount || 0);
+    fd.append('gst_amount', form.gst_amount || 0);
+    fd.append('total_amount', form.total_amount || 0);
+    if (form.bill_file) fd.append('file', form.bill_file);
+    try {
+      await api.post('/procurement/purchase-bills', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success('Purchase bill added');
+      setModal(false); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   const saveDeliveryNote = async (e) => {
@@ -739,13 +752,18 @@ export default function Procurement() {
             <button onClick={() => { setForm({ vendor_id: '', bill_number: '', bill_date: '', amount: 0, gst_amount: 0, total_amount: 0 }); setModal('bill'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Bill</button>
           </div>
           <div className="card p-0 overflow-x-auto"><table>
-            <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>Payment</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
               {purchaseBills.map(b => (
                 <tr key={b.id}>
                   <td className="font-medium">{b.bill_number}</td><td>{b.vendor_name}</td><td>{b.bill_date}</td>
                   <td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td>
                   <td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td>
+                  <td>
+                    {b.file_path
+                      ? <a href={b.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View Bill</a>
+                      : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
                   <td><StatusBadge status={b.payment_status} /></td>
                   <td>{canDelete('procurement') && <button onClick={async () => {
                     if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
@@ -754,7 +772,7 @@ export default function Procurement() {
                   }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}</td>
                 </tr>
               ))}
-              {purchaseBills.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No bills yet</td></tr>}
+              {purchaseBills.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No bills yet</td></tr>}
             </tbody>
           </table></div>
         </>
@@ -1074,6 +1092,16 @@ export default function Procurement() {
             <div><label className="label">GST Amount</label><input className="input" type="number" value={form.gst_amount} onChange={e => setForm({...form, gst_amount: +e.target.value, total_amount: (form.amount || 0) + +e.target.value})} /></div>
           </div>
           <div><label className="label">Total</label><input className="input" type="number" value={form.total_amount} readOnly /></div>
+          <div>
+            <label className="label">Bill File <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, optional, max 10 MB)</span></label>
+            <input
+              className="input"
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls"
+              onChange={e => setForm({ ...form, bill_file: e.target.files?.[0] || null })}
+            />
+            {form.bill_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.bill_file.name}</p>}
+          </div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>
       </Modal>

@@ -690,11 +690,44 @@ router.get('/purchase-bills', (req, res) => {
     LEFT JOIN vendors v ON pb.vendor_id=v.id ORDER BY pb.created_at DESC`).all());
 });
 
-router.post('/purchase-bills', (req, res) => {
-  const { vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount } = req.body;
-  const r = getDb().prepare('INSERT INTO purchase_bills (vendor_po_id,vendor_id,bill_number,bill_date,amount,gst_amount,total_amount) VALUES (?,?,?,?,?,?,?)')
-    .run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount);
-  res.status(201).json({ id: r.lastInsertRowid });
+// Purchase bill creation supports an optional file upload (PDF / image / xlsx)
+// via multipart/form-data, the same pattern as Vendor PO upload. If no file
+// is attached it still works — mam sometimes captures a bill without a scan.
+router.post('/purchase-bills', vendorPoUpload.single('file'), (req, res) => {
+  const b = req.body || {};
+  const vendor_po_id = b.vendor_po_id ? +b.vendor_po_id : null;
+  const vendor_id = b.vendor_id ? +b.vendor_id : null;
+  const bill_number = b.bill_number || null;
+  const bill_date = b.bill_date || null;
+  const amount = +b.amount || 0;
+  const gst_amount = +b.gst_amount || 0;
+  const total_amount = +b.total_amount || 0;
+
+  // Rename uploaded file to "<timestamp>-<original>" so the /uploads link
+  // shows the real filename, same convention as Vendor PO upload.
+  let filePath = null;
+  if (req.file) {
+    try {
+      const safeName = (req.file.originalname || 'purchase-bill').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const newName = `${Date.now()}-${safeName}`;
+      const newPath = path.join(path.dirname(req.file.path), newName);
+      fs.renameSync(req.file.path, newPath);
+      filePath = `/uploads/${newName}`;
+    } catch (e) {
+      filePath = `/uploads/${req.file.filename}`;
+    }
+  }
+
+  try {
+    const r = getDb().prepare(
+      `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, filePath);
+    res.status(201).json({ id: r.lastInsertRowid, file_path: filePath });
+  } catch (err) {
+    if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.delete('/purchase-bills/:id', (req, res) => {
