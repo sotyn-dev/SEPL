@@ -977,21 +977,21 @@ export default function Procurement() {
           </div>
 
           <h4 className="font-semibold text-sm">
-            Items <span className="text-gray-400 font-normal">(pick from Item Master — "item wise sheet")</span>
+            Items <span className="text-gray-400 font-normal">(BOQ item from Client PO → then sub-item from Item Master)</span>
           </h4>
           {!form.site_name ? (
             <div className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center text-sm text-gray-500 bg-gray-50">
-              Pick a site above, then add items from the Item Master.
+              Pick a site above — its BOQ items (from the uploaded Client PO) will load here.
             </div>
           ) : (
             <>
               {/* Desktop column headers — hidden on mobile, where each row is a stacked card */}
-              <div className="hidden md:grid gap-2 text-[10px] font-bold text-gray-500 uppercase px-1" style={{ gridTemplateColumns: 'repeat(12, minmax(0, 1fr)) auto' }}>
-                <div className="col-span-6">Item (Item Master)</div>
+              <div className="hidden md:grid gap-2 text-[10px] font-bold text-gray-500 uppercase px-1" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr)) auto' }}>
+                <div className="col-span-5">BOQ Item (from Client PO)</div>
+                <div className="col-span-5">Sub-Item (Item Master)</div>
                 <div className="col-span-2">Make</div>
                 <div>Qty</div>
                 <div>Unit</div>
-                <div className="col-span-2">Type</div>
                 <div></div>
               </div>
               <div className="space-y-3 md:space-y-2">
@@ -1002,11 +1002,26 @@ export default function Procurement() {
                     : t === 'PO' ? 'bg-red-50 text-red-700 border-red-200'
                     : 'bg-gray-50 text-gray-500 border-gray-200';
 
+                  // BOQ picker — comes from the Client PO for the selected
+                  // site. Mam's requested flow: first pick a BOQ line, then a
+                  // sub-item from Item Master.
+                  const boqPicker = (
+                    <SearchableSelect
+                      options={boqItems.map(b => ({
+                        id: b.id,
+                        label: `${b.description || '(no desc)'}${b.boq_qty ? ' · Qty ' + b.boq_qty : ''}${b.item_type ? ' · ' + b.item_type : ''}`,
+                        ...b,
+                      }))}
+                      value={item.po_item_id || null} valueKey="id" displayKey="label"
+                      placeholder={boqItems.length ? 'Search BOQ item from Client PO…' : 'No BOQ items for this site'}
+                      onChange={(b) => pickBoqItem(i, b)}
+                    />
+                  );
                   const masterPicker = (
                     <SearchableSelect
                       options={masterItems.map(m => ({ id: m.id, label: `[${m.item_code}] ${m.display_name || m.item_name}${m.type ? ' · ' + m.type : ''}`, ...m }))}
                       value={item.item_master_id || null} valueKey="id" displayKey="label"
-                      placeholder="Search Item Master…"
+                      placeholder="Search sub-item from Item Master…"
                       onChange={(m) => pickMasterItem(i, m)}
                     />
                   );
@@ -1028,14 +1043,20 @@ export default function Procurement() {
 
                   return (
                     <div key={i}>
-                      {/* MOBILE: stacked card */}
+                      {/* MOBILE: stacked card — BOQ Item first, then sub-item,
+                          then Make, Qty/Unit/Type. */}
                       <div className="md:hidden border rounded-lg p-2.5 bg-white space-y-2 relative">
                         <div className="flex justify-between items-center">
                           <span className="text-[10px] font-bold text-gray-400 uppercase">Row {i + 1}</span>
                           {indentItems.length > 1 && removeBtn}
                         </div>
                         <div>
-                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Item (Item Master)</label>
+                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">BOQ Item <span className="text-gray-400 font-normal normal-case">(from Client PO)</span></label>
+                          {boqPicker}
+                          {item.boq_qty ? <p className="text-[10px] text-gray-400 mt-0.5">BOQ Qty: {item.boq_qty}{item.remaining_qty !== null && item.remaining_qty !== undefined ? ` · Remaining: ${item.remaining_qty}` : ''}</p> : null}
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Sub-Item <span className="text-gray-400 font-normal normal-case">(Item Master)</span></label>
                           {masterPicker}
                         </div>
                         <div className="grid grid-cols-3 gap-2">
@@ -1058,15 +1079,23 @@ export default function Procurement() {
                         </div>
                       </div>
 
-                      {/* DESKTOP: wide grid row */}
+                      {/* DESKTOP: wide grid row — BOQ picker + sub-item picker + make/qty/unit */}
                       <div className="hidden md:block">
-                        <div className="grid gap-2 items-center" style={{ gridTemplateColumns: 'repeat(12, minmax(0, 1fr)) auto' }}>
-                          <div className="col-span-6">{masterPicker}</div>
+                        <div className="grid gap-2 items-start" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr)) auto' }}>
+                          <div className="col-span-5">
+                            {boqPicker}
+                            {item.boq_qty ? <p className="text-[10px] text-gray-400 mt-0.5">BOQ {item.boq_qty}{item.remaining_qty !== null && item.remaining_qty !== undefined ? ` · Rem ${item.remaining_qty}` : ''}</p> : null}
+                          </div>
+                          <div className="col-span-5">{masterPicker}</div>
                           <div className="col-span-2">{makeInput}</div>
-                          {qtyInput}
-                          {unitInput}
-                          <div className="col-span-2">{typeBox}</div>
+                          <div>{qtyInput}</div>
+                          <div>{unitInput}</div>
                           {removeBtn}
+                        </div>
+                        {/* Type row below — fits the 'from BOQ' hint; shown full-width under the grid */}
+                        <div className="mt-1 flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-gray-500 uppercase">Type:</span>
+                          <div className="w-24">{typeBox}</div>
                         </div>
                       </div>
                     </div>
