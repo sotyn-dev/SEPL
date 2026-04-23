@@ -263,9 +263,12 @@ export default function Delegation() {
         )}
       </div>
 
-      {/* Table view — Serial / Task ID / Description / Project / Assigned To / Completion Date / Upload Proof / Date Extension */}
-      <div className="card p-0 overflow-x-auto hidden md:block">
-        <table className="text-sm">
+      {/* Table view — Serial / Task ID / Description / Project / Assigned To /
+          Due / Status / Upload Proof / Extension / Actions.
+          Shown on ALL screen sizes per mam's request (2026-04-23). On phones
+          the parent scrolls horizontally so every column stays accessible. */}
+      <div className="card p-0 overflow-x-auto">
+        <table className="text-sm min-w-[1100px]">
           <thead>
             <tr>
               <th className="w-12 text-center">S.No.</th>
@@ -368,10 +371,12 @@ export default function Delegation() {
         </table>
       </div>
 
-      {/* MOBILE: compact card layout — mirrors the desktop table's columns
-          (S.No, Task ID, Description, Project [inline-editable], Assigned To,
-          Due/Completed, Status, Upload Proof, Extension, Actions). */}
-      <div className="md:hidden space-y-2">
+      {/* Mobile-only card layout REMOVED — per mam's request, the desktop
+          table is used on all screens now (horizontal scroll on phones).
+          Kept the block below as `hidden` to avoid a rebase conflict if we
+          ever want to restore it; adjust the `hidden` class below to
+          `md:hidden space-y-2` to bring it back. */}
+      <div className="hidden">
         {tasks.length === 0 && <div className="card text-center text-gray-400 py-8">No tasks</div>}
         {tasks.map((t, idx) => {
           const isAssignee = t.assigned_to === user?.id;
