@@ -4,9 +4,16 @@ const fs = require('fs');
 const XLSX = require('xlsx');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
+
+// Gate the high-trust procurement actions (Vendor Rates entry, Vendor PO
+// upload, Purchase Bill, Dispatch) behind procurement.approve permission.
+// Site engineers with only procurement.create can still raise indents —
+// they just can't touch vendor-facing or financial steps. This matches
+// mam's requirement (2026-04-23): site can create indent, nothing else.
+const needsApprove = requirePermission('procurement', 'approve');
 
 // Shared upload directory (served statically by server/index.js at /uploads).
 // Used by both the Tally PO upload and the BOQ bulk upload lower in this file.
@@ -587,7 +594,7 @@ router.get('/pending-po-items', (req, res) => {
 // Why a JSON string for items? multer parses the multipart body into
 // req.body where each field is a string. Passing a nested array requires
 // encoding it as JSON on the client and decoding here.
-router.post('/vendor-po', vendorPoUpload.single('file'), (req, res) => {
+router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res) => {
   const db = getDb();
   const b = req.body || {};
   const vendor_id = +b.vendor_id;
@@ -695,7 +702,7 @@ router.get('/purchase-bills', (req, res) => {
 // Purchase bill creation supports an optional file upload (PDF / image / xlsx)
 // via multipart/form-data, the same pattern as Vendor PO upload. If no file
 // is attached it still works — mam sometimes captures a bill without a scan.
-router.post('/purchase-bills', vendorPoUpload.single('file'), (req, res) => {
+router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req, res) => {
   const b = req.body || {};
   if (!req.file) return res.status(400).json({ error: 'Bill file is required — upload the vendor bill' });
   const vendor_po_id = b.vendor_po_id ? +b.vendor_po_id : null;
@@ -758,7 +765,7 @@ router.get('/delivery-notes', (req, res) => {
 // Create a dispatch entry. Multipart/form-data so we can carry the
 // sales-bill/challan PDF as an optional upload. Document type is required
 // (sales_bill | challan) so the list can show the right label.
-router.post('/delivery-notes', vendorPoUpload.single('file'), (req, res) => {
+router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req, res) => {
   const b = req.body || {};
   if (!req.file) return res.status(400).json({ error: 'Dispatch file is required — upload the Sales Bill / Challan' });
   const vendor_po_id = b.vendor_po_id ? +b.vendor_po_id : null;
@@ -803,7 +810,7 @@ router.post('/delivery-notes', vendorPoUpload.single('file'), (req, res) => {
 // signed receipt photo as proof. Mam flagged this as business-critical: without
 // the signed proof, clients sometimes deny receipt and SEPL eats the loss.
 // Multipart so the receipt photo can ride along with the metadata.
-router.patch('/delivery-notes/:id/receive', vendorPoUpload.single('file'), (req, res) => {
+router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single('file'), (req, res) => {
   const b = req.body || {};
   const received_by_name = b.received_by_name;
   const received_at = b.received_at;
@@ -915,7 +922,7 @@ router.get('/item-rates', (req, res) => {
 
 // Upsert a rate row for an indent item. Any of the 3 vendors (or the
 // finalization fields) may be updated in one call.
-router.post('/item-rates', (req, res) => {
+router.post('/item-rates', needsApprove, (req, res) => {
   const db = getDb();
   const b = req.body || {};
   const iiId = parseInt(b.indent_item_id, 10);
@@ -950,7 +957,7 @@ router.post('/item-rates', (req, res) => {
 // Finalize — admin / approver picks one of the three vendors (or enters a
 // custom final rate). After this, downstream steps (Vendor PO, Bill) use
 // the final_* columns.
-router.post('/item-rates/:id/finalize', (req, res) => {
+router.post('/item-rates/:id/finalize', needsApprove, (req, res) => {
   const db = getDb();
   const b = req.body || {};
   const { final_rate, final_vendor_name, final_terms, final_credit_days } = b;

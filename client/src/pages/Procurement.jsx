@@ -10,7 +10,13 @@ import { FiPlus, FiCheck, FiX, FiTrash2, FiExternalLink } from 'react-icons/fi';
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false };
 
 export default function Procurement() {
-  const { canDelete, user } = useAuth();
+  const { canDelete, canCreate, canApprove, user, isAdmin } = useAuth();
+  // Site-engineer-style users see only "Raise Indent" — they don't enter
+  // vendor rates, upload Vendor POs, Purchase Bills, or Dispatch. Those
+  // tabs are gated by canApprove('procurement'), which admin grants to
+  // the purchase team / admin role only. Matches mam's request (2026-04-23).
+  const canPurchaseOps = isAdmin() || canApprove('procurement');
+  const canRaiseIndent = isAdmin() || canCreate('procurement');
   const [tab, setTab] = useState('indents');
   const [indents, setIndents] = useState([]);
   const [vendorPos, setVendorPos] = useState([]);
@@ -336,13 +342,17 @@ export default function Procurement() {
   // Order matches the flow: raise an indent first, purchase team collects
   // 3 vendor quotes + finalizes per item, then turns it into a vendor PO,
   // books the purchase bill, and finally the goods are dispatched to site.
-  const tabs = [
-    { id: 'indents', label: 'Raise Indent' },
-    { id: 'rates', label: 'Vendor Rates' },
-    { id: 'vendorpo', label: 'Vendor PO' },
-    { id: 'bills', label: 'Purchase Bills' },
-    { id: 'delivery', label: 'Dispatch & Receiving' },
+  // Tabs are filtered below by the user's permissions — site engineers
+  // with only `procurement.create` see just "Raise Indent"; purchase team
+  // with `procurement.approve` see everything.
+  const allTabs = [
+    { id: 'indents', label: 'Raise Indent', show: canRaiseIndent },
+    { id: 'rates', label: 'Vendor Rates', show: canPurchaseOps },
+    { id: 'vendorpo', label: 'Vendor PO', show: canPurchaseOps },
+    { id: 'bills', label: 'Purchase Bills', show: canPurchaseOps },
+    { id: 'delivery', label: 'Dispatch & Receiving', show: canPurchaseOps },
   ];
+  const tabs = allTabs.filter(t => t.show);
 
   // --- Vendor Rates (Step 1 + 2) helpers ---
   // Patch a single field on an item's rate row and save to server. Keeps the
