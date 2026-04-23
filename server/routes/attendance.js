@@ -318,11 +318,15 @@ function runAutoPunchCheck() {
   }
 }
 
-// Kick off the cron once per Node process. Skip during tests.
-if (process.env.NODE_ENV !== 'test') {
-  setInterval(() => {
-    try { runAutoPunchCheck(); } catch (e) { console.error('[auto-punch] tick error:', e.message); }
-  }, 60 * 1000);
-}
+// Auto-punch disabled per mam's request (2026-04-23) — every punch must be
+// manual + selfie-backed so there's clear accountability. The runAutoPunchCheck
+// function above is kept as a reference in case the behaviour is ever wanted
+// back; simply re-enable the setInterval below to bring it back.
+//
+// if (process.env.NODE_ENV !== 'test') {
+//   setInterval(() => {
+//     try { runAutoPunchCheck(); } catch (e) { console.error('[auto-punch] tick error:', e.message); }
+//   }, 60 * 1000);
+// }
 
 module.exports = router;

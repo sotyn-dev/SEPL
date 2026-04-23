@@ -205,7 +205,9 @@ export default function Attendance() {
             <div className="card p-4 bg-amber-50 text-center"><p className="text-amber-700 font-medium"><FiAlertTriangle className="inline mr-1" /> Not punched in today</p></div>
           )}
 
-          {/* Auto-punch status card — prominent, updates every 30s */}
+          {/* Location status card — shows whether the user is inside a geofence.
+              Used purely as visual confirmation now (auto-punch disabled per
+              mam's request — every punch must be manual + selfie-backed). */}
           <div className={`card p-4 border-l-4 ${insideSite ? 'border-emerald-500 bg-emerald-50' : 'border-amber-500 bg-amber-50'}`}>
             <div className="flex items-center gap-2 mb-1">
               <FiMapPin size={16} className={insideSite ? 'text-emerald-600' : 'text-amber-600'} />
@@ -215,20 +217,20 @@ export default function Attendance() {
                   : 'Outside all geofences'}
               </span>
             </div>
-            {!myToday && insideSite && <p className="text-xs text-emerald-700">⏱ Auto punch-in will fire within 5 min of continuous presence — no action needed.</p>}
-            {!myToday && !insideSite && <p className="text-xs text-amber-700">Move to a site geofence and auto punch-in will fire, or use manual punch below.</p>}
+            {!myToday && insideSite && <p className="text-xs text-emerald-700">You're inside the office — click Punch In below with a selfie to mark attendance.</p>}
+            {!myToday && !insideSite && <p className="text-xs text-amber-700">You're outside all geofences. Move inside an office/site to punch in.</p>}
             {myToday && !myToday.punch_out_time && (
               <p className="text-xs text-emerald-700">
-                ✓ {myToday.auto_punched_in ? 'Auto punched in' : 'Punched in'} at {myToday.punch_in_time ? new Date(myToday.punch_in_time).toLocaleTimeString() : '—'}.
-                {!insideSite && ' Outside geofence — auto punch-out will fire in 5 min.'}
+                ✓ Punched in at {myToday.punch_in_time ? new Date(myToday.punch_in_time).toLocaleTimeString() : '—'}.
+                {!insideSite && ' Don\'t forget to Punch Out when your day is done.'}
               </p>
             )}
             {myToday?.punch_out_time && <p className="text-xs text-gray-600">Today's attendance completed.</p>}
           </div>
 
-          {/* Camera + Manual Punch (shown as fallback — auto will fire if inside geofence) */}
+          {/* Camera + Manual Punch */}
           <div className="card p-4 space-y-3">
-            <p className="text-[11px] text-gray-500 text-center">Manual punch (optional — only if auto-punch hasn't fired or you need a selfie record)</p>
+            <p className="text-[11px] text-gray-500 text-center">Take a selfie and punch in / out</p>
             {cameraOpen ? (
               <div className="text-center">
                 <video ref={videoRef} autoPlay playsInline className="rounded-lg mx-auto w-full max-w-[320px]" />
@@ -537,11 +539,54 @@ export default function Attendance() {
 
       {/* Leave Modal */}
       <Modal isOpen={modal === 'leave'} onClose={() => setModal(null)} title="Apply for Leave">
-        <form onSubmit={async (e) => { e.preventDefault(); try { await api.post('/attendance/leave', form); toast.success('Leave applied'); setModal(null); load(); } catch (err) { toast.error(err.response?.data?.error || 'Failed'); } }} className="space-y-4">
+        <form onSubmit={async (e) => {
+          e.preventDefault();
+          // Guard — common reason this form fails: To Date < From Date. Catch
+          // it client-side so mam sees a clear message instead of a backend 500.
+          if (form.leave_type !== 'short_leave' && form.from_date && form.to_date && form.to_date < form.from_date) {
+            toast.error('To Date cannot be earlier than From Date');
+            return;
+          }
+          try { await api.post('/attendance/leave', form); toast.success('Leave applied'); setModal(null); load(); }
+          catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+        }} className="space-y-4">
           <div><label className="label">Leave Type</label><select className="select" value={form.leave_type} onChange={e => setForm({ ...form, leave_type: e.target.value })}><option value="casual">Casual Leave</option><option value="sick">Sick Leave</option><option value="earned">Earned Leave</option><option value="half_day">Half Day</option><option value="short_leave">Short Leave (max 4hrs/month)</option><option value="comp_off">Comp Off</option></select></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">From Date *</label><input className="input" type="date" value={form.from_date} onChange={e => setForm({ ...form, from_date: e.target.value })} required /></div>
-            {form.leave_type !== 'short_leave' && <div><label className="label">To Date *</label><input className="input" type="date" value={form.to_date} onChange={e => setForm({ ...form, to_date: e.target.value })} required /></div>}
+            <div>
+              <label className="label">From Date *</label>
+              <input
+                className="input"
+                type="date"
+                value={form.from_date}
+                onChange={e => {
+                  const v = e.target.value;
+                  // Auto-align To Date if it would become invalid — so picking
+                  // a new "from" doesn't silently leave an out-of-range "to".
+                  setForm(f => ({
+                    ...f,
+                    from_date: v,
+                    to_date: (!f.to_date || f.to_date < v) ? v : f.to_date,
+                  }));
+                }}
+                required
+              />
+            </div>
+            {form.leave_type !== 'short_leave' && (
+              <div>
+                <label className="label">To Date *</label>
+                <input
+                  className="input"
+                  type="date"
+                  value={form.to_date}
+                  min={form.from_date || undefined}
+                  onChange={e => setForm({ ...form, to_date: e.target.value })}
+                  required
+                />
+                {form.from_date && form.to_date && form.to_date < form.from_date && (
+                  <p className="text-[11px] text-red-600 mt-0.5">To Date must be on or after From Date</p>
+                )}
+              </div>
+            )}
           </div>
           {form.leave_type === 'short_leave' && (
             <div className="grid grid-cols-2 gap-3 bg-amber-50 p-3 rounded">
