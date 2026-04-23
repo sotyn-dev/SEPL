@@ -1281,6 +1281,19 @@ function initializeDatabase() {
     //   mom -> quotation: variable (T-X)
     //   quotation -> won/lost: 60 days
     ['sales_funnel', 'stage_entered_at DATETIME'],
+    // --- MOM form fields (mam's spec 2026-04-23) — a richer MOM capture:
+    //   Customer Category / Type → already on the lead (category, lead_type)
+    //   M.O.M. (notes)           → already on the lead (mom_notes)
+    //   Meeting Location         → already on the lead
+    // Below adds the remaining fields:
+    ['sales_funnel', 'meeting_purpose TEXT'],               // Purpose Of Meeting
+    ['sales_funnel', 'meeting_timestamp_photo_url TEXT'],   // Timestamp Photo (with GPS overlay)
+    ['sales_funnel', 'pain_points TEXT'],                   // Pain Points
+    ['sales_funnel', 'requirements TEXT'],                  // Requirements
+    ['sales_funnel', 'action_planned TEXT'],                // Action Planned (next step)
+    ['sales_funnel', 'meeting_format TEXT'],                // Phone / VC / In-Person
+    ['sales_funnel', 'meeting_scheduled_by TEXT'],          // who scheduled the meeting
+    ['sales_funnel', 'meeting_time_spent_min INTEGER'],     // minutes spent in the meeting
     // Delegations — optional project tag the admin can set while creating a
     // task or edit later from the list. Free-text so it doesn't depend on
     // any master list; keeps it flexible for mam's quick day-to-day tasks.

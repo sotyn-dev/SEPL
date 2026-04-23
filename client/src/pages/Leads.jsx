@@ -24,6 +24,10 @@ export default function Leads() {
   const [form, setForm] = useState({});
   const [viewData, setViewData] = useState(null);
   const [stageForm, setStageForm] = useState({});
+  // Which stage's "Next Action" form is currently visible. Defaults to the
+  // lead's current_stage. Clicking any pipeline pill sets this, so admin can
+  // jump backwards (to correct) or forwards (to skip optional steps).
+  const [viewStage, setViewStage] = useState(null);
   const [followups, setFollowups] = useState([]);
   const [fuForm, setFuForm] = useState({ followup_date: '', followup_time: '', type: 'call', notes: '' });
 
@@ -54,7 +58,7 @@ export default function Leads() {
   };
 
   const uploadFile = async (file) => { const fd = new FormData(); fd.append('file', file); const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); return r.data.url; };
-  const viewLead = (l) => { setViewData(l); setStageForm({}); setModal('view'); api.get(`/sales-funnel/${l.id}/followups`).then(r=>setFollowups(r.data)).catch(()=>setFollowups([])); };
+  const viewLead = (l) => { setViewData(l); setStageForm({}); setViewStage(null); setModal('view'); api.get(`/sales-funnel/${l.id}/followups`).then(r=>setFollowups(r.data)).catch(()=>setFollowups([])); };
 
   const addFollowup = async () => {
     if (!fuForm.followup_date) return toast.error('Date required');
@@ -212,13 +216,38 @@ export default function Leads() {
       </>)}
 
       {/* View + Stage Actions */}
-      <Modal isOpen={modal==='view'} onClose={()=>{setModal(null);setViewData(null);}} title={`${viewData?.lead_no} - ${viewData?.client_name}`} wide>
+      <Modal isOpen={modal==='view'} onClose={()=>{setModal(null);setViewData(null);setViewStage(null);}} title={`${viewData?.lead_no} - ${viewData?.client_name}`} wide>
         {viewData && (<div className="space-y-4 max-h-[70vh] overflow-y-auto">
+          {/* Pipeline pills — all clickable. Clicking one sets `viewStage`
+              so the "Next Action" form for that stage is shown. Admin can
+              use this to jump back (correct a past step) or skip forward
+              (for optional stages like Drawings). The lead's own
+              `current_stage` doesn't change until the form is submitted. */}
           <div className="flex gap-1 overflow-x-auto pb-2">{STAGES.filter(s=>s!=='lost').map((key,idx)=>{
             const keys=STAGES.filter(s=>s!=='lost'); const si=keys.indexOf(viewData.current_stage); const ti=keys.indexOf(key);
             const done=ti<=si; const cur=viewData.current_stage===key;
-            return(<div key={key} className="flex items-center"><div className={`px-2 py-1 rounded text-[9px] font-bold min-w-[50px] text-center ${cur?'text-white':''}  ${done?'text-white':''}`} style={{backgroundColor:cur||done?STAGE_COLORS[key]:'#e5e7eb',color:cur||done?'white':'#9ca3af'}}>{STAGE_LABELS[key]}</div>{idx<keys.length-1&&<FiChevronRight size={10} className="text-gray-300 mx-0.5"/>}</div>);
+            const selected=(viewStage||viewData.current_stage)===key;
+            return(<div key={key} className="flex items-center">
+              <button
+                type="button"
+                onClick={()=>{setViewStage(key);setStageForm({});}}
+                className={`px-2 py-1 rounded text-[9px] font-bold min-w-[50px] text-center transition-all hover:scale-105 ${selected?'ring-2 ring-offset-1 ring-red-500':''}`}
+                style={{backgroundColor:cur||done?STAGE_COLORS[key]:'#e5e7eb',color:cur||done?'white':'#9ca3af'}}
+                title={selected ? 'Currently viewing this stage' : `Click to view ${STAGE_LABELS[key]} form`}
+              >{STAGE_LABELS[key]}</button>
+              {idx<keys.length-1&&<FiChevronRight size={10} className="text-gray-300 mx-0.5"/>}
+            </div>);
           })}</div>
+          {viewStage && viewStage !== viewData.current_stage && (
+            <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 flex items-center justify-between">
+              <span>
+                {STAGES.indexOf(viewStage) < STAGES.indexOf(viewData.current_stage)
+                  ? <>You're viewing a <b>past stage</b> — submitting will set the lead back to this stage (to correct data).</>
+                  : <>You're <b>skipping ahead</b> from {STAGE_LABELS[viewData.current_stage]} to {STAGE_LABELS[viewStage]} — some intermediate steps won't be filled.</>}
+              </span>
+              <button onClick={()=>{setViewStage(null);setStageForm({});}} className="text-amber-700 hover:underline font-bold">Back to current</button>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-sm">
             <div><span className="text-gray-400 text-[10px]">Client</span><br/><strong>{viewData.client_name}</strong></div>
             <div><span className="text-gray-400 text-[10px]">Company</span><br/>{viewData.company_name||'-'}</div>
@@ -260,14 +289,24 @@ export default function Leads() {
             ))}</div>}
           </div>
 
-          {viewData.current_stage!=='won'&&viewData.current_stage!=='lost'&&(
-            <div className="border-2 rounded-xl p-4 space-y-3" style={{borderColor:STAGE_COLORS[viewData.current_stage],backgroundColor:STAGE_COLORS[viewData.current_stage]+'10'}}>
-              <h5 className="font-bold" style={{color:STAGE_COLORS[viewData.current_stage]}}>Next Action</h5>
-              {viewData.current_stage==='new_lead'&&(<div className="space-y-2">
+          {(() => {
+            // Effective stage for the "Next Action" panel — clicking a pill
+            // above sets viewStage, so the user can jump to any stage's form.
+            const activeStage = viewStage || viewData.current_stage;
+            if (activeStage === 'won' || activeStage === 'lost') return null;
+            return (
+            <div className="border-2 rounded-xl p-4 space-y-3" style={{borderColor:STAGE_COLORS[activeStage],backgroundColor:STAGE_COLORS[activeStage]+'10'}}>
+              <h5 className="font-bold flex items-center justify-between" style={{color:STAGE_COLORS[activeStage]}}>
+                <span>{STAGE_LABELS[activeStage]} — Action</span>
+                {viewStage && viewStage !== viewData.current_stage && (
+                  <span className="text-[10px] font-normal text-gray-500">Lead is currently at: <b>{STAGE_LABELS[viewData.current_stage]}</b></span>
+                )}
+              </h5>
+              {activeStage==='new_lead'&&(<div className="space-y-2">
                 <textarea className="input" rows="2" placeholder="Remarks..." value={stageForm.qualified_remarks||''} onChange={e=>setStageForm({...stageForm,qualified_remarks:e.target.value})}/>
                 <div className="flex gap-2"><button onClick={()=>advanceStage(viewData.id,'qualified',stageForm)} className="btn btn-success flex-1"><FiCheck className="inline mr-1"/>Qualified</button><button onClick={()=>advanceStage(viewData.id,'not_qualified',stageForm)} className="btn btn-danger flex-1"><FiX className="inline mr-1"/>Not Qualified</button></div>
               </div>)}
-              {viewData.current_stage==='qualified'&&(<div className="space-y-2">
+              {activeStage==='qualified'&&(<div className="space-y-2">
                 <input className="input" type="datetime-local" value={stageForm.meeting_date||''} onChange={e=>setStageForm({...stageForm,meeting_date:e.target.value})}/>
                 <input className="input" placeholder="Location" value={stageForm.meeting_location||''} onChange={e=>setStageForm({...stageForm,meeting_location:e.target.value})}/>
                 <input className="input" placeholder="Assign To (ASM)" value={stageForm.meeting_assigned_to||''} onChange={e=>setStageForm({...stageForm,meeting_assigned_to:e.target.value})}/>
@@ -277,7 +316,7 @@ export default function Leads() {
                   Customer Category + Customer Type are radios (not read-only)
                   so the field engineer can correct / confirm them at the site.
                   They also update the lead record itself. */}
-              {viewData.current_stage==='meeting_assigned'&&(<div className="space-y-3">
+              {activeStage==='meeting_assigned'&&(<div className="space-y-3">
                 {/* Customer Category — radio buttons matching the Google Form */}
                 <div>
                   <label className="label text-[10px]">Customer Category *</label>
@@ -367,28 +406,29 @@ export default function Leads() {
 
                 <button onClick={()=>advanceStage(viewData.id,'mom_uploaded',stageForm)} disabled={!stageForm.mom_notes||!stageForm.meeting_purpose} className="btn btn-primary w-full disabled:opacity-50">Submit MOM</button>
               </div>)}
-              {viewData.current_stage==='mom_uploaded'&&(<div className="space-y-2">
+              {activeStage==='mom_uploaded'&&(<div className="space-y-2">
                 {[1,2,3].map(n=>(<div key={n} className="flex items-center gap-2"><span className="text-xs w-16">Drawing {n}:</span><input type="file" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{const url=await uploadFile(f);setStageForm(s=>({...s,[`drawing_file${n}`]:url}));toast.success(`Drawing ${n}`);}catch{toast.error('Failed');}}} className="text-xs flex-1"/>{stageForm[`drawing_file${n}`]&&<span className="text-emerald-600 text-xs">OK</span>}</div>))}
                 <button onClick={()=>advanceStage(viewData.id,'drawing_uploaded',stageForm)} disabled={!stageForm.drawing_file1} className="btn btn-primary w-full disabled:opacity-50">Submit Drawings</button>
               </div>)}
-              {viewData.current_stage==='drawing_uploaded'&&(<div className="space-y-2">
+              {activeStage==='drawing_uploaded'&&(<div className="space-y-2">
                 <input type="file" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{stageForm.boq_file_link=await uploadFile(f);toast.success('BOQ uploaded');}catch{toast.error('Failed');}}} className="text-xs"/>
                 <input className="input" type="number" placeholder="BOQ Amount" value={stageForm.boq_amount||''} onChange={e=>setStageForm({...stageForm,boq_amount:+e.target.value})}/>
                 <button onClick={()=>advanceStage(viewData.id,'boq_created',stageForm)} className="btn btn-primary w-full">Submit BOQ</button>
               </div>)}
-              {viewData.current_stage==='boq_created'&&(<div className="space-y-2">
+              {activeStage==='boq_created'&&(<div className="space-y-2">
                 <input className="input" placeholder="Quotation Number" value={stageForm.quotation_number||''} onChange={e=>setStageForm({...stageForm,quotation_number:e.target.value})}/>
                 <input className="input" type="number" placeholder="Amount" value={stageForm.quotation_amount||''} onChange={e=>setStageForm({...stageForm,quotation_amount:+e.target.value})}/>
                 <input type="file" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{stageForm.quotation_file_link=await uploadFile(f);toast.success('Uploaded');}catch{toast.error('Failed');}}} className="text-xs"/>
                 <button onClick={()=>advanceStage(viewData.id,'quotation_sent',stageForm)} className="btn btn-primary w-full">Send Quotation</button>
               </div>)}
-              {viewData.current_stage==='quotation_sent'&&(<div className="space-y-2">
+              {activeStage==='quotation_sent'&&(<div className="space-y-2">
                 <textarea className="input" rows="2" placeholder="Remarks..." value={stageForm.result_remarks||''} onChange={e=>setStageForm({...stageForm,result_remarks:e.target.value})}/>
                 <input className="input" type="number" placeholder="Won Amount" value={stageForm.won_amount||''} onChange={e=>setStageForm({...stageForm,won_amount:+e.target.value})}/>
                 <div className="flex gap-2"><button onClick={()=>advanceStage(viewData.id,'won',stageForm)} className="btn btn-success flex-1">WON</button><button onClick={()=>advanceStage(viewData.id,'lost',stageForm)} className="btn btn-danger flex-1">LOST</button></div>
               </div>)}
             </div>
-          )}
+            );
+          })()}
         </div>)}
       </Modal>
 
