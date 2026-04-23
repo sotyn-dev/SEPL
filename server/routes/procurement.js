@@ -735,17 +735,81 @@ router.delete('/purchase-bills/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
-// Delivery Notes
+// Dispatch (delivery_notes) — a dispatch entry is either a Sales Bill
+// (for PO items sold to client) or a Delivery Challan (FOC / RGP items).
+// After dispatch, mam records who received it via the /receive endpoint.
 router.get('/delivery-notes', (req, res) => {
-  res.json(getDb().prepare(`SELECT dn.*, u.name as received_by_name FROM delivery_notes dn
-    LEFT JOIN users u ON dn.received_by=u.id ORDER BY dn.created_at DESC`).all());
+  res.json(getDb().prepare(`
+    SELECT dn.*,
+      u.name as received_by_user_name,
+      vp.po_number as vendor_po_number,
+      v.name as vendor_name
+    FROM delivery_notes dn
+    LEFT JOIN users u ON dn.received_by = u.id
+    LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
+    LEFT JOIN vendors v ON vp.vendor_id = v.id
+    ORDER BY dn.created_at DESC
+  `).all());
 });
 
-router.post('/delivery-notes', (req, res) => {
-  const { vendor_po_id, delivery_date, notes } = req.body;
-  const r = getDb().prepare('INSERT INTO delivery_notes (vendor_po_id,delivery_date,received_by,notes) VALUES (?,?,?,?)')
-    .run(vendor_po_id, delivery_date, req.user.id, notes);
-  res.status(201).json({ id: r.lastInsertRowid });
+// Create a dispatch entry. Multipart/form-data so we can carry the
+// sales-bill/challan PDF as an optional upload. Document type is required
+// (sales_bill | challan) so the list can show the right label.
+router.post('/delivery-notes', vendorPoUpload.single('file'), (req, res) => {
+  const b = req.body || {};
+  const vendor_po_id = b.vendor_po_id ? +b.vendor_po_id : null;
+  const delivery_date = b.delivery_date || null;
+  const notes = b.notes || null;
+  const document_type = b.document_type || null;     // 'sales_bill' or 'challan'
+  const document_number = b.document_number || null;
+  if (document_type && !['sales_bill', 'challan'].includes(document_type)) {
+    return res.status(400).json({ error: 'document_type must be sales_bill or challan' });
+  }
+
+  let filePath = null;
+  if (req.file) {
+    try {
+      const safeName = (req.file.originalname || 'dispatch').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const newName = `${Date.now()}-${safeName}`;
+      const newPath = path.join(path.dirname(req.file.path), newName);
+      fs.renameSync(req.file.path, newPath);
+      filePath = `/uploads/${newName}`;
+    } catch (e) {
+      filePath = `/uploads/${req.file.filename}`;
+    }
+  }
+
+  try {
+    const r = getDb().prepare(
+      `INSERT INTO delivery_notes (vendor_po_id, delivery_date, received_by, notes,
+                                    document_type, document_number, file_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(vendor_po_id, delivery_date, req.user.id, notes, document_type, document_number, filePath);
+    res.status(201).json({ id: r.lastInsertRowid, file_path: filePath });
+  } catch (err) {
+    if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Mark a dispatch as "Received by <name> on <date>". Stamps received_at with
+// the provided date (or now) and flips status to 'received'.
+router.patch('/delivery-notes/:id/receive', (req, res) => {
+  const { received_by_name, received_at } = req.body || {};
+  if (!received_by_name || !String(received_by_name).trim()) {
+    return res.status(400).json({ error: 'Received-by name is required' });
+  }
+  const db = getDb();
+  const existing = db.prepare('SELECT id FROM delivery_notes WHERE id=?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Dispatch not found' });
+  db.prepare(
+    `UPDATE delivery_notes
+       SET received_by_name = ?,
+           received_at = COALESCE(?, CURRENT_TIMESTAMP),
+           status = 'received'
+     WHERE id = ?`
+  ).run(String(received_by_name).trim(), received_at || null, req.params.id);
+  res.json({ message: 'Marked as received' });
 });
 
 router.put('/delivery-notes/:id', (req, res) => {

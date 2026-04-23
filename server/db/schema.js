@@ -1243,6 +1243,16 @@ function initializeDatabase() {
     ['vendor_pos', 'expected_receipt_date DATE'],
     // Purchase Bills also get an uploaded file (the bill PDF / image / excel)
     ['purchase_bills', 'file_path TEXT'],
+    // Dispatch (delivery_notes) — upgraded from a simple "delivery record" to
+    // either a Sales Bill (PO items we sell to client) or a Delivery Challan
+    // (FOC / RGP items). document_type + document_number distinguish them,
+    // file_path stores the scan/PDF, and received_by_name + received_at
+    // capture who actually received the material on the site.
+    ['delivery_notes', 'document_type TEXT'],           // 'sales_bill' | 'challan'
+    ['delivery_notes', 'document_number TEXT'],         // sales-bill / challan number
+    ['delivery_notes', 'file_path TEXT'],
+    ['delivery_notes', 'received_by_name TEXT'],        // free text (site engineer / customer rep)
+    ['delivery_notes', 'received_at DATETIME'],
     // Delegations — optional project tag the admin can set while creating a
     // task or edit later from the list. Free-text so it doesn't depend on
     // any master list; keeps it flexible for mam's quick day-to-day tasks.

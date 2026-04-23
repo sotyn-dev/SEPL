@@ -294,9 +294,33 @@ export default function Procurement() {
 
   const saveDeliveryNote = async (e) => {
     e.preventDefault();
-    await api.post('/procurement/delivery-notes', form);
-    toast.success('Dispatch recorded');
-    setModal(false); load();
+    // Multipart so we can attach the Sales Bill / Challan scan.
+    const fd = new FormData();
+    if (form.vendor_po_id) fd.append('vendor_po_id', form.vendor_po_id);
+    if (form.delivery_date) fd.append('delivery_date', form.delivery_date);
+    if (form.document_type) fd.append('document_type', form.document_type);
+    if (form.document_number) fd.append('document_number', form.document_number);
+    if (form.notes) fd.append('notes', form.notes);
+    if (form.dispatch_file) fd.append('file', form.dispatch_file);
+    try {
+      await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success('Dispatch recorded');
+      setModal(false); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  // Mark a dispatch row as "Received by <name> on <date>".
+  const markReceived = async (e) => {
+    e.preventDefault();
+    if (!form.received_by_name || !form.received_by_name.trim()) return toast.error('Receiver name is required');
+    try {
+      await api.patch(`/procurement/delivery-notes/${form.receive_id}/receive`, {
+        received_by_name: form.received_by_name,
+        received_at: form.received_at || null,
+      });
+      toast.success('Marked as received');
+      setModal(false); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   // Order matches the flow: raise an indent first, purchase team collects
@@ -779,31 +803,124 @@ export default function Procurement() {
         );
       })()}
 
-      {tab === 'delivery' && (
+      {tab === 'delivery' && (() => {
+        // Follow-up: POs that have a Purchase Bill uploaded but no Dispatch
+        // entry yet. These are ready to be dispatched to site.
+        const dispatchedPoIds = new Set(deliveryNotes.map(d => d.vendor_po_id).filter(Boolean));
+        const billedPoIds = new Set(purchaseBills.map(b => b.vendor_po_id).filter(Boolean));
+        const readyToDispatch = vendorPos.filter(po =>
+          billedPoIds.has(po.id) && !dispatchedPoIds.has(po.id)
+        );
+        // Detect item-type hint for each PO (if any indent_item linked is type=PO,
+        // suggest Sales Bill; else suggest Challan). We don't have per-item info
+        // on the client, so the dropdown defaults to Sales Bill and user can switch.
+        const openAddDispatch = (po = null) => {
+          setForm({
+            vendor_po_id: po?.id || '',
+            vendor_po_number: po?.po_number || '',
+            document_type: 'sales_bill',
+            document_number: '',
+            delivery_date: new Date().toISOString().slice(0, 10),
+            notes: '',
+            dispatch_file: null,
+          });
+          setModal('delivery');
+        };
+        const openMarkReceived = (d) => {
+          setForm({
+            receive_id: d.id,
+            receive_doc: `${d.document_type === 'challan' ? 'Challan' : 'Sales Bill'} ${d.document_number || '#' + d.id}`,
+            received_by_name: '',
+            received_at: new Date().toISOString().slice(0, 10),
+          });
+          setModal('receive');
+        };
+        return (
         <>
+          {/* ===== Follow-up: ready to dispatch ===== */}
+          {readyToDispatch.length > 0 && (
+            <div className="card p-3 bg-indigo-50 border border-indigo-200">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+                <h4 className="font-semibold text-indigo-800 text-sm">
+                  Ready to Dispatch
+                  <span className="text-xs font-normal text-indigo-600 ml-2">({readyToDispatch.length} PO{readyToDispatch.length === 1 ? '' : 's'})</span>
+                </h4>
+                <span className="text-[11px] text-indigo-700">POs with Purchase Bill uploaded but no Dispatch yet — Sales Bill for PO items, Challan for FOC/RGP</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="text-xs">
+                  <thead><tr className="bg-indigo-100/50">
+                    <th className="px-2 py-1 text-left">PO Number</th>
+                    <th className="px-2 py-1 text-left">Vendor</th>
+                    <th className="px-2 py-1">PO Date</th>
+                    <th className="px-2 py-1">Expected Receipt</th>
+                    <th className="px-2 py-1 text-right">Amount</th>
+                    <th className="px-2 py-1"></th>
+                  </tr></thead>
+                  <tbody>
+                    {readyToDispatch.map(po => (
+                      <tr key={po.id} className="border-b border-indigo-100">
+                        <td className="px-2 py-1.5 font-semibold text-red-700 whitespace-nowrap">{po.po_number}</td>
+                        <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
+                        <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
+                        <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">Rs {po.total_amount?.toLocaleString()}</td>
+                        <td className="px-2 py-1.5">
+                          <button onClick={() => openAddDispatch(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap">Dispatch</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ===== Main dispatch list ===== */}
           <div className="flex justify-between items-center">
             <h3 className="font-semibold">Dispatch to Site</h3>
-            <button onClick={() => { setForm({ vendor_po_id: '', delivery_date: '', notes: '' }); setModal('delivery'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Dispatch</button>
+            <button onClick={() => openAddDispatch()} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Dispatch</button>
           </div>
           <div className="card p-0 overflow-x-auto"><table>
-            <thead><tr><th>ID</th><th>Date</th><th>Received By</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>ID</th><th>Type</th><th>Doc No</th><th>PO</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {deliveryNotes.map(d => (
                 <tr key={d.id}>
-                  <td>#{d.id}</td><td>{d.delivery_date}</td><td>{d.received_by_name}</td>
+                  <td>#{d.id}</td>
+                  <td>
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                      {d.document_type === 'sales_bill' ? 'SALES BILL' : d.document_type === 'challan' ? 'CHALLAN' : '—'}
+                    </span>
+                  </td>
+                  <td className="font-medium">{d.document_number || <span className="text-gray-300">—</span>}</td>
+                  <td className="text-xs">{d.vendor_po_number || <span className="text-gray-300">—</span>}<div className="text-[10px] text-gray-500">{d.vendor_name || ''}</div></td>
+                  <td>{d.delivery_date}</td>
+                  <td>
+                    {d.file_path
+                      ? <a href={d.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View</a>
+                      : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  <td>{d.received_by_name || <span className="text-gray-300 text-xs">—</span>}</td>
+                  <td className="text-xs">{d.received_at ? new Date(d.received_at).toLocaleDateString() : <span className="text-gray-300">—</span>}</td>
                   <td><StatusBadge status={d.status} /></td>
-                  <td>{canDelete('procurement') && <button onClick={async () => {
-                    if (!confirm(`Delete delivery note #${d.id}?`)) return;
-                    try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); load(); }
-                    catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                  }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}</td>
+                  <td className="whitespace-nowrap">
+                    {!d.received_by_name && (
+                      <button onClick={() => openMarkReceived(d)} className="btn btn-success text-[10px] px-2 py-1 mr-1">Mark Received</button>
+                    )}
+                    {canDelete('procurement') && <button onClick={async () => {
+                      if (!confirm(`Delete dispatch #${d.id}?`)) return;
+                      try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); load(); }
+                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                    }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
+                  </td>
                 </tr>
               ))}
-              {deliveryNotes.length === 0 && <tr><td colSpan="5" className="text-center py-8 text-gray-400">No delivery notes yet</td></tr>}
+              {deliveryNotes.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
             </tbody>
           </table></div>
         </>
-      )}
+        );
+      })()}
 
       {/* Indent Modal */}
       <Modal isOpen={modal === 'indent'} onClose={() => setModal(false)} title="Raise Purchase Indent" wide>
@@ -1106,13 +1223,75 @@ export default function Procurement() {
         </form>
       </Modal>
 
-      {/* Delivery / Dispatch Modal */}
-      <Modal isOpen={modal === 'delivery'} onClose={() => setModal(false)} title="Record Dispatch to Site">
+      {/* Delivery / Dispatch Modal — Sales Bill or Delivery Challan with file upload */}
+      <Modal isOpen={modal === 'delivery'} onClose={() => setModal(false)} title={form.vendor_po_number ? `Dispatch for ${form.vendor_po_number}` : 'Record Dispatch to Site'}>
         <form onSubmit={saveDeliveryNote} className="space-y-4">
-          <div><label className="label">Vendor PO</label><select className="select" value={form.vendor_po_id} onChange={e => setForm({...form, vendor_po_id: e.target.value})}><option value="">Select</option>{vendorPos.map(v => <option key={v.id} value={v.id}>{v.po_number} - {v.vendor_name}</option>)}</select></div>
-          <div><label className="label">Delivery Date</label><input className="input" type="date" value={form.delivery_date} onChange={e => setForm({...form, delivery_date: e.target.value})} /></div>
-          <div><label className="label">Notes</label><textarea className="input" rows="3" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} /></div>
-          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
+          {form.vendor_po_number && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-xs text-emerald-700">
+              Linked to Vendor PO <b>{form.vendor_po_number}</b>. Once this dispatch is recorded, the PO moves off the "Ready to Dispatch" list.
+            </div>
+          )}
+          <div>
+            <label className="label">Dispatch Type *</label>
+            <div className="flex gap-2">
+              <label className={`flex-1 border rounded-lg px-3 py-2 cursor-pointer flex items-center gap-2 ${form.document_type === 'sales_bill' ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
+                <input type="radio" name="doc_type" value="sales_bill" checked={form.document_type === 'sales_bill'} onChange={() => setForm({...form, document_type: 'sales_bill'})} />
+                <div>
+                  <div className="text-sm font-semibold">Sales Bill</div>
+                  <div className="text-[10px] text-gray-500">For PO items we sell to the client</div>
+                </div>
+              </label>
+              <label className={`flex-1 border rounded-lg px-3 py-2 cursor-pointer flex items-center gap-2 ${form.document_type === 'challan' ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
+                <input type="radio" name="doc_type" value="challan" checked={form.document_type === 'challan'} onChange={() => setForm({...form, document_type: 'challan'})} />
+                <div>
+                  <div className="text-sm font-semibold">Delivery Challan</div>
+                  <div className="text-[10px] text-gray-500">For FOC / RGP items (not billable)</div>
+                </div>
+              </label>
+            </div>
+          </div>
+          {!form.vendor_po_number && (
+            <div><label className="label">Vendor PO</label><select className="select" value={form.vendor_po_id || ''} onChange={e => setForm({...form, vendor_po_id: e.target.value})}><option value="">— Not linked to any PO —</option>{vendorPos.map(v => <option key={v.id} value={v.id}>{v.po_number} - {v.vendor_name}</option>)}</select></div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="label">{form.document_type === 'challan' ? 'Challan' : 'Sales Bill'} Number *</label>
+              <input className="input" value={form.document_number || ''} onChange={e => setForm({...form, document_number: e.target.value})} required placeholder="e.g. SB/2026/042" />
+            </div>
+            <div>
+              <label className="label">Dispatch Date</label>
+              <input className="input" type="date" value={form.delivery_date || ''} onChange={e => setForm({...form, delivery_date: e.target.value})} />
+            </div>
+          </div>
+          <div>
+            <label className="label">{form.document_type === 'challan' ? 'Challan' : 'Sales Bill'} File <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, max 10 MB)</span></label>
+            <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" onChange={e => setForm({ ...form, dispatch_file: e.target.files?.[0] || null })} />
+            {form.dispatch_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.dispatch_file.name}</p>}
+          </div>
+          <div><label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm({...form, notes: e.target.value})} /></div>
+          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save Dispatch</button></div>
+        </form>
+      </Modal>
+
+      {/* Mark Received Modal — captures who received the dispatch at the site */}
+      <Modal isOpen={modal === 'receive'} onClose={() => setModal(false)} title="Mark Received">
+        <form onSubmit={markReceived} className="space-y-3">
+          <div className="bg-indigo-50 border border-indigo-200 rounded px-3 py-2 text-xs text-indigo-700">
+            Recording receipt for <b>{form.receive_doc}</b>.
+          </div>
+          <div>
+            <label className="label">Received By (name) *</label>
+            <input className="input" placeholder="e.g. Site engineer / customer rep name" value={form.received_by_name || ''} onChange={e => setForm({...form, received_by_name: e.target.value})} required />
+          </div>
+          <div>
+            <label className="label">Received On</label>
+            <input className="input" type="date" value={form.received_at || ''} onChange={e => setForm({...form, received_at: e.target.value})} />
+            <p className="text-[10px] text-gray-400 mt-0.5">Defaults to today if left blank.</p>
+          </div>
+          <div className="flex justify-end gap-3">
+            <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
+            <button type="submit" className="btn btn-primary">Mark as Received</button>
+          </div>
         </form>
       </Modal>
 
