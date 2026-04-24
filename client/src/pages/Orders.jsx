@@ -22,6 +22,10 @@ export default function Orders() {
   const [siteEngineers, setSiteEngineers] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [editingPO, setEditingPO] = useState(null);
+  // Sticky error banner inside the PO modal — so the exact server error is
+  // visible on-screen (mam can screenshot it) instead of disappearing in a
+  // 4-second toast. Cleared whenever the modal opens or save retries.
+  const [poError, setPoError] = useState(null);
 
   const load = () => {
     api.get('/orders/po').then(r => setPos(r.data));
@@ -80,22 +84,45 @@ export default function Orders() {
 
   const savePo = async (e) => {
     e.preventDefault();
+    setPoError(null);
     const engIds = form.site_engineer_ids || [];
-    if (!engIds.length) { toast.error('At least one Site Engineer is required'); return; }
-    if (!form.crm_name) { toast.error('CRM is required'); return; }
+    if (!engIds.length) { setPoError('At least one Site Engineer is required'); toast.error('At least one Site Engineer is required'); return; }
+    if (!form.crm_name) { setPoError('CRM is required'); toast.error('CRM is required'); return; }
+    let stage = 'start';
     try {
       if (editingPO) {
+        stage = 'PUT /orders/po/:id (metadata)';
         await api.put(`/orders/po/${editingPO.id}`, { ...form });
-        await api.post(`/orders/po/${editingPO.id}/items`, { items: poItems.filter(item => item.description && item.description.trim()) });
+        stage = 'POST /orders/po/:id/items (line items)';
+        const itemsPayload = poItems.filter(item => item.description && item.description.trim());
+        await api.post(`/orders/po/${editingPO.id}/items`, { items: itemsPayload });
         toast.success('PO updated');
       } else {
+        stage = 'POST /orders/po (create)';
         await api.post('/orders/po', { ...form, items: poItems.filter(item => item.description && item.description.trim()) });
         toast.success('PO created');
       }
       setModal(false); setEditingPO(null);
       setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
       load();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    } catch (err) {
+      // Show the real server response right in the modal so mam can read /
+      // screenshot exactly what failed. Also dump full context so we can
+      // trace which of the 2 requests (metadata vs items) crashed.
+      const status = err.response?.status;
+      const serverErr = err.response?.data?.error;
+      const failures = err.response?.data?.failures;
+      const parts = [];
+      parts.push(`Stage: ${stage}`);
+      if (status) parts.push(`HTTP ${status}`);
+      if (serverErr) parts.push(`Server: ${serverErr}`);
+      if (failures && failures.length) parts.push(`Row failures:\n• ${failures.join('\n• ')}`);
+      if (!serverErr && !failures) parts.push(`Raw: ${err.message}`);
+      const fullMsg = parts.join('\n');
+      setPoError(fullMsg);
+      toast.error(serverErr || err.message || 'Failed', { duration: 6000 });
+      console.error('[savePo] failed at', stage, err);
+    }
   };
 
   const savePlanning = async (e) => {
@@ -197,8 +224,21 @@ export default function Orders() {
       )}
 
       {/* Add PO Modal */}
-      <Modal isOpen={modal === 'po'} onClose={() => { setModal(false); setEditingPO(null); }} title={editingPO ? `Edit PO - ${editingPO.po_number}` : 'Upload Client Purchase Order'} wide>
+      <Modal isOpen={modal === 'po'} onClose={() => { setModal(false); setEditingPO(null); setPoError(null); }} title={editingPO ? `Edit PO - ${editingPO.po_number}` : 'Upload Client Purchase Order'} wide>
         <form onSubmit={savePo} className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+
+          {/* Sticky error banner — shows the exact server error when Update
+              fails, with which stage (metadata vs items) it broke at. Helps
+              mam screenshot + share the error instead of hunting in DevTools. */}
+          {poError && (
+            <div className="bg-red-50 border-2 border-red-300 rounded-lg p-3 text-xs text-red-800 whitespace-pre-wrap">
+              <div className="flex justify-between items-start gap-2 mb-1">
+                <b>Save failed — details:</b>
+                <button type="button" onClick={() => setPoError(null)} className="text-red-500 hover:text-red-700 font-bold">×</button>
+              </div>
+              {poError}
+            </div>
+          )}
 
           {/* 1. Business Book Entry */}
           <div className="border rounded-lg p-3 bg-gray-50">
