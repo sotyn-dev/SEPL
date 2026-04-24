@@ -243,40 +243,109 @@ export default function Complaints() {
         </Modal>
       )}
 
-      {viewing && (
+      {viewing && (() => {
+        // Step 1 is "done" once CRM has assigned AND stamped the actual date.
+        // Until then, Step 2 stays locked — you can't resolve a complaint
+        // that hasn't even been assigned to a technician yet.
+        const step1Done = !!(viewing.step1_assigned_to && viewing.step1_actual_date);
+        const step2Done = !!(viewing.step2_actual_date && viewing.service_report);
+        return (
         <Modal onClose={() => setViewing(null)} title={`Complaint ${viewing.complaint_number}`}>
           <div className="space-y-5">
-            <Section title="Step 1 – Complaint Register">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <Field label="Client"><input value={viewing.client_name||''} onChange={e=>setViewing({...viewing, client_name:e.target.value})} className="inp" /></Field>
-                <Field label="Company"><input value={viewing.company_name||''} onChange={e=>setViewing({...viewing, company_name:e.target.value})} className="inp" /></Field>
-                <Field label="Mobile"><input value={viewing.mobile_number||''} onChange={e=>setViewing({...viewing, mobile_number:e.target.value})} className="inp" /></Field>
-                <Field label="Category"><input value={viewing.category||''} onChange={e=>setViewing({...viewing, category:e.target.value})} className="inp" /></Field>
-                <Field label="Customer Type"><input value={viewing.customer_type||''} onChange={e=>setViewing({...viewing, customer_type:e.target.value})} className="inp" /></Field>
-                <Field label="Complaint Type"><input value={viewing.complaint_type||''} onChange={e=>setViewing({...viewing, complaint_type:e.target.value})} className="inp" /></Field>
-                <Field label="EMP Name"><input value={viewing.emp_name||''} onChange={e=>setViewing({...viewing, emp_name:e.target.value})} className="inp" /></Field>
-                <Field label="Assigned To"><input value={viewing.step1_assigned_to||''} onChange={e=>setViewing({...viewing, step1_assigned_to:e.target.value})} className="inp" /></Field>
-                <Field label="Planned Date"><input type="date" value={viewing.step1_planned_date||''} onChange={e=>setViewing({...viewing, step1_planned_date:e.target.value})} className="inp" /></Field>
-                <Field label="Actual Date"><input type="date" value={viewing.step1_actual_date||''} onChange={e=>setViewing({...viewing, step1_actual_date:e.target.value})} className="inp" /></Field>
-                <Field label="Time Delay (auto)"><input disabled value={`${viewing.step1_time_delay ?? 0} day(s)`} className="inp bg-slate-50" /></Field>
-                <div className="md:col-span-2"><Field label="Problem Detail"><textarea rows="2" value={viewing.problem_detail||''} onChange={e=>setViewing({...viewing, problem_detail:e.target.value})} className="inp" /></Field></div>
+            {/* Registration details — read-only context (captured at create time) */}
+            <Section title="Complaint Details">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                <div><span className="text-gray-400">Client:</span> <b>{viewing.client_name}</b></div>
+                <div><span className="text-gray-400">Company:</span> <b>{viewing.company_name||'-'}</b></div>
+                <div><span className="text-gray-400">Mobile:</span> {viewing.mobile_number}</div>
+                <div><span className="text-gray-400">Category:</span> {viewing.category}</div>
+                <div><span className="text-gray-400">State:</span> {viewing.state||'-'}</div>
+                <div><span className="text-gray-400">Customer Type:</span> {viewing.customer_type}</div>
+                <div><span className="text-gray-400">Complaint Type:</span> {viewing.complaint_type}</div>
+                <div><span className="text-gray-400">EMP Name:</span> {viewing.emp_name||'-'}</div>
+                <div className="md:col-span-2"><span className="text-gray-400">Problem:</span> <span className="whitespace-pre-wrap">{viewing.problem_detail}</span></div>
+                {viewing.remarks && <div className="md:col-span-2"><span className="text-gray-400">Remarks:</span> <span className="whitespace-pre-wrap">{viewing.remarks}</span></div>}
               </div>
             </Section>
 
-            <Section title="Step 2 – Complaint Resolved">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <Field label="Planned Date"><input type="date" value={viewing.step2_planned_date||''} onChange={e=>setViewing({...viewing, step2_planned_date:e.target.value})} className="inp" /></Field>
-                <Field label="Actual Date"><input type="date" value={viewing.step2_actual_date||''} onChange={e=>setViewing({...viewing, step2_actual_date:e.target.value})} className="inp" /></Field>
-                <Field label="Time Delay (auto)"><input disabled value={`${viewing.step2_time_delay ?? 0} day(s)`} className="inp bg-slate-50" /></Field>
-                <Field label="Assigned To"><input value={viewing.step2_assigned_to||''} onChange={e=>setViewing({...viewing, step2_assigned_to:e.target.value})} className="inp" /></Field>
-                <Field label="Status">
-                  <select value={viewing.status||'open'} onChange={e=>setViewing({...viewing, status:e.target.value})} className="inp">
-                    <option value="open">Open</option><option value="in_progress">In Progress</option><option value="resolved">Resolved</option>
-                  </select>
-                </Field>
-                <div className="md:col-span-2"><Field label="Service Report"><textarea rows="3" value={viewing.service_report||''} onChange={e=>setViewing({...viewing, service_report:e.target.value})} className="inp" /></Field></div>
+            {/* STEP 1 — Assign to team */}
+            <div className={`border-2 rounded-xl p-4 ${step1Done ? 'border-emerald-200 bg-emerald-50/30' : 'border-amber-300 bg-amber-50/30'}`}>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-bold text-sm flex items-center gap-2">
+                  <span className={`w-6 h-6 rounded-full flex items-center justify-center text-white text-xs ${step1Done ? 'bg-emerald-500' : 'bg-amber-500'}`}>1</span>
+                  Step 1 — Assign to Team
+                </h4>
+                {step1Done && <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">DONE</span>}
               </div>
-            </Section>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Field label="Assigned To (name / team) *">
+                  <input value={viewing.step1_assigned_to||''} onChange={e=>setViewing({...viewing, step1_assigned_to:e.target.value})} className="inp" placeholder="e.g. LV Team / Himank / Gagan" />
+                </Field>
+                <Field label="Planned Date">
+                  <input type="date" value={viewing.step1_planned_date||''} onChange={e=>setViewing({...viewing, step1_planned_date:e.target.value})} className="inp" />
+                </Field>
+                <Field label="Actual Assignment Date *">
+                  <input type="date" value={viewing.step1_actual_date||''} onChange={e=>setViewing({...viewing, step1_actual_date:e.target.value})} className="inp" />
+                </Field>
+                <Field label="Time Delay (auto)">
+                  <input disabled value={`${viewing.step1_time_delay ?? 0} day(s)`} className="inp bg-slate-50" />
+                </Field>
+              </div>
+              {!step1Done && (
+                <p className="text-[11px] text-amber-700 mt-2">
+                  ⚠️ Fill <b>Assigned To</b> and <b>Actual Date</b> to complete Step 1 — then Step 2 will unlock.
+                </p>
+              )}
+            </div>
+
+            {/* STEP 2 — Resolution (unlocks only after Step 1 is done) */}
+            {step1Done ? (
+              <div className={`border-2 rounded-xl p-4 ${step2Done ? 'border-emerald-200 bg-emerald-50/30' : 'border-blue-300 bg-blue-50/30'}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-bold text-sm flex items-center gap-2">
+                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-white text-xs ${step2Done ? 'bg-emerald-500' : 'bg-blue-500'}`}>2</span>
+                    Step 2 — Resolution
+                  </h4>
+                  {step2Done && <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">RESOLVED</span>}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <Field label="Assigned To (resolver)">
+                    <input value={viewing.step2_assigned_to||''} onChange={e=>setViewing({...viewing, step2_assigned_to:e.target.value})} className="inp" placeholder="Technician / engineer name" />
+                  </Field>
+                  <Field label="Planned Date">
+                    <input type="date" value={viewing.step2_planned_date||''} onChange={e=>setViewing({...viewing, step2_planned_date:e.target.value})} className="inp" />
+                  </Field>
+                  <Field label="Actual Resolution Date">
+                    <input type="date" value={viewing.step2_actual_date||''} onChange={e=>setViewing({...viewing, step2_actual_date:e.target.value})} className="inp" />
+                  </Field>
+                  <Field label="Time Delay (auto)">
+                    <input disabled value={`${viewing.step2_time_delay ?? 0} day(s)`} className="inp bg-slate-50" />
+                  </Field>
+                  <Field label="Status">
+                    <select value={viewing.status||'open'} onChange={e=>setViewing({...viewing, status:e.target.value})} className="inp">
+                      <option value="open">Open</option>
+                      <option value="in_progress">In Progress</option>
+                      <option value="resolved">Resolved</option>
+                      <option value="closed">Closed</option>
+                    </select>
+                  </Field>
+                  <div className="md:col-span-2">
+                    <Field label="Service Report *">
+                      <textarea rows="3" value={viewing.service_report||''} onChange={e=>setViewing({...viewing, service_report:e.target.value})} className="inp" placeholder="What was done to resolve the complaint" />
+                    </Field>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="border-2 border-dashed border-gray-200 rounded-xl p-4 bg-gray-50 text-center">
+                <div className="flex items-center justify-center gap-2 mb-1">
+                  <span className="w-6 h-6 rounded-full flex items-center justify-center bg-gray-300 text-white text-xs">2</span>
+                  <h4 className="font-bold text-sm text-gray-400">Step 2 — Resolution</h4>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-gray-200 text-gray-500">LOCKED</span>
+                </div>
+                <p className="text-xs text-gray-500">Complete Step 1 above first — once the complaint is assigned, this section will unlock for the resolver.</p>
+              </div>
+            )}
 
             <div className="flex justify-end gap-2">
               <button onClick={() => setViewing(null)} className="px-4 py-2 border rounded-lg text-sm">Close</button>
@@ -284,7 +353,8 @@ export default function Complaints() {
             </div>
           </div>
         </Modal>
-      )}
+        );
+      })()}
 
       <style>{`.inp{width:100%;border:1px solid #e5e7eb;border-radius:0.5rem;padding:0.5rem 0.75rem;font-size:0.875rem}`}</style>
     </div>
