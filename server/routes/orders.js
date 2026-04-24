@@ -109,24 +109,46 @@ router.put('/po/:id', (req, res) => {
   if (!crm_name) return res.status(400).json({ error: 'CRM is required' });
   const primaryEng = engIds[0];
   const engCsv = engIds.join(',');
-  // Coerce status — if the client sends an empty string or an invalid value,
-  // fall through to existing value via the COALESCE(null, status) pattern
-  // so the CHECK constraint on status doesn't blow up the whole update.
+
+  // Numeric coercion — total_amount, advance_amount, pt_* are REAL in the DB.
+  // The frontend may send "", "30", "50.5", "30%", " 25 " etc. Convert once
+  // here so a single bad value doesn't crash the whole UPDATE. Invalid →
+  // `null` (keeps existing via COALESCE) for the required fields, 0 for pt_*.
+  const num = (v, fallback = null) => {
+    if (v === null || v === undefined || v === '') return fallback;
+    const cleaned = String(v).replace(/[^0-9.-]/g, ''); // strip %, spaces, text
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
+  // Status: if client sends blank / invalid, keep existing via COALESCE(null)
   const VALID_STATUSES = ['received', 'booked', 'planning', 'in_progress', 'completed'];
   const safeStatus = (status && VALID_STATUSES.includes(status)) ? status : null;
+
+  // po_number / po_date are required non-null in the schema — if the form sent
+  // empty strings, keep existing values via COALESCE.
+  const safePoNumber = po_number && String(po_number).trim() ? String(po_number).trim() : null;
+  const safePoDate = po_date && String(po_date).trim() ? po_date : null;
+
   try {
-    getDb().prepare(`UPDATE purchase_orders SET po_number=COALESCE(?,po_number), po_date=COALESCE(?,po_date),
+    getDb().prepare(`UPDATE purchase_orders SET
+      po_number=COALESCE(?,po_number), po_date=COALESCE(?,po_date),
       total_amount=COALESCE(?,total_amount), advance_amount=COALESCE(?,advance_amount),
-      po_copy_link=?, boq_file_link=?, pt_advance=?, pt_delivery=?, pt_installation=?, pt_commissioning=?, pt_retention=?,
+      po_copy_link=?, boq_file_link=?,
+      pt_advance=?, pt_delivery=?, pt_installation=?, pt_commissioning=?, pt_retention=?,
       site_engineer_id=?, site_engineer_ids=?, crm_name=?,
       status=COALESCE(?,status) WHERE id=?`)
-      .run(po_number, po_date, total_amount, advance_amount, po_copy_link || null, boq_file_link || null,
-        pt_advance || 0, pt_delivery || 0, pt_installation || 0, pt_commissioning || 0, pt_retention || 0,
+      .run(
+        safePoNumber, safePoDate,
+        num(total_amount), num(advance_amount),
+        po_copy_link || null, boq_file_link || null,
+        num(pt_advance, 0), num(pt_delivery, 0), num(pt_installation, 0), num(pt_commissioning, 0), num(pt_retention, 0),
         primaryEng, engCsv, crm_name,
-        safeStatus, req.params.id);
+        safeStatus, req.params.id
+      );
     res.json({ message: 'Updated' });
   } catch (err) {
-    console.error('[PO update] failed:', err.message);
+    console.error('[PO update] failed:', err.message, req.body);
     res.status(500).json({ error: 'Update failed: ' + err.message });
   }
 });
