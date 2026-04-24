@@ -3,20 +3,24 @@ import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 import { FiUser, FiLock, FiEye, FiEyeOff } from 'react-icons/fi';
 
-// SEPL brand logo — loaded from mam's Google Drive via the /thumbnail
-// endpoint (the /view link returns HTML, not image bytes, so it won't
-// render in <img>). The Drive file MUST be shared as "Anyone with the link"
-// for this to load outside mam's Google account.
-//
-// If Drive ever fails (rate-limit / private), the <img onError> on the
-// login page falls back to a tiny inline SVG shield so the page never
-// shows a broken image.
-const DRIVE_LOGO = 'https://drive.google.com/thumbnail?id=12N5DAhk27MBMdG28z_FE9rkbFZf1amVu&sz=w400';
-const FALLBACK_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="white"><path d="M24 4l16 6v12c0 10-7 17-16 22C15 39 8 32 8 22V10l16-6z"/></svg>'
+// SEPL brand logo — inline SVG, no network dependency. Renders the SEPL
+// shield with "SEPL" letters in white on the brand red. Works offline, no
+// third-party hosting, no hotlinking issues. To swap in the real PNG logo
+// later, save it to client/src/assets/sepl-logo.png and import it instead.
+const SEPL_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+    <defs>
+      <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#dc2626"/>
+        <stop offset="100%" stop-color="#991b1b"/>
+      </linearGradient>
+    </defs>
+    <path d="M50 8 L85 20 v26 c0 20-14 34-35 42 C29 80 15 66 15 46 V20 L50 8 z"
+          fill="url(#g)" stroke="#7f1d1d" stroke-width="1.5"/>
+    <text x="50" y="56" text-anchor="middle" font-family="Arial, Helvetica, sans-serif"
+          font-weight="bold" font-size="22" fill="white" letter-spacing="1">SEPL</text>
+  </svg>`
 );
-// Public symbol kept for backward compatibility — points at the Drive URL.
-const SEPL_LOGO = DRIVE_LOGO;
 
 export default function Login() {
   // Prefill the username if "Remember me" was ticked on a previous login.
@@ -50,12 +54,11 @@ export default function Login() {
       <div className="bg-white/95 backdrop-blur-sm rounded-3xl shadow-2xl p-8 w-full max-w-md mx-4 relative z-10">
         {/* Logo — now the actual SEPL brand logo (not a generic shield icon) */}
         <div className="text-center mb-8">
-          <div className="w-20 h-20 mx-auto mb-4 rounded-2xl overflow-hidden shadow-lg shadow-red-500/30 bg-gradient-to-br from-red-600 to-red-700 flex items-center justify-center">
+          <div className="w-20 h-20 mx-auto mb-4 rounded-2xl overflow-hidden shadow-lg shadow-red-500/30 flex items-center justify-center">
             <img
               src={SEPL_LOGO}
               alt="SEPL logo"
               className="w-full h-full object-contain"
-              onError={(e) => { if (e.currentTarget.src !== FALLBACK_LOGO) e.currentTarget.src = FALLBACK_LOGO; }}
             />
           </div>
           <h1 className="text-2xl font-extrabold text-gray-800 tracking-tight">SEPL ERP</h1>
