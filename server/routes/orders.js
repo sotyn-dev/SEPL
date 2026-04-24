@@ -109,16 +109,26 @@ router.put('/po/:id', (req, res) => {
   if (!crm_name) return res.status(400).json({ error: 'CRM is required' });
   const primaryEng = engIds[0];
   const engCsv = engIds.join(',');
-  getDb().prepare(`UPDATE purchase_orders SET po_number=COALESCE(?,po_number), po_date=COALESCE(?,po_date),
-    total_amount=COALESCE(?,total_amount), advance_amount=COALESCE(?,advance_amount),
-    po_copy_link=?, boq_file_link=?, pt_advance=?, pt_delivery=?, pt_installation=?, pt_commissioning=?, pt_retention=?,
-    site_engineer_id=?, site_engineer_ids=?, crm_name=?,
-    status=COALESCE(?,status) WHERE id=?`)
-    .run(po_number, po_date, total_amount, advance_amount, po_copy_link || null, boq_file_link || null,
-      pt_advance || 0, pt_delivery || 0, pt_installation || 0, pt_commissioning || 0, pt_retention || 0,
-      primaryEng, engCsv, crm_name,
-      status, req.params.id);
-  res.json({ message: 'Updated' });
+  // Coerce status — if the client sends an empty string or an invalid value,
+  // fall through to existing value via the COALESCE(null, status) pattern
+  // so the CHECK constraint on status doesn't blow up the whole update.
+  const VALID_STATUSES = ['received', 'booked', 'planning', 'in_progress', 'completed'];
+  const safeStatus = (status && VALID_STATUSES.includes(status)) ? status : null;
+  try {
+    getDb().prepare(`UPDATE purchase_orders SET po_number=COALESCE(?,po_number), po_date=COALESCE(?,po_date),
+      total_amount=COALESCE(?,total_amount), advance_amount=COALESCE(?,advance_amount),
+      po_copy_link=?, boq_file_link=?, pt_advance=?, pt_delivery=?, pt_installation=?, pt_commissioning=?, pt_retention=?,
+      site_engineer_id=?, site_engineer_ids=?, crm_name=?,
+      status=COALESCE(?,status) WHERE id=?`)
+      .run(po_number, po_date, total_amount, advance_amount, po_copy_link || null, boq_file_link || null,
+        pt_advance || 0, pt_delivery || 0, pt_installation || 0, pt_commissioning || 0, pt_retention || 0,
+        primaryEng, engCsv, crm_name,
+        safeStatus, req.params.id);
+    res.json({ message: 'Updated' });
+  } catch (err) {
+    console.error('[PO update] failed:', err.message);
+    res.status(500).json({ error: 'Update failed: ' + err.message });
+  }
 });
 
 router.delete('/po/:id', (req, res) => {
@@ -197,20 +207,54 @@ router.post('/po/:id/items', (req, res) => {
   const { items } = req.body;
   const db = getDb();
   const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
+  if (!po) return res.status(404).json({ error: 'PO not found' });
   const bbId = po?.business_book_id || null;
 
-  // Clear old items for this business_book
+  // Clear old items for this business_book so the update is a true replace.
   if (bbId) db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(bbId);
 
   const insert = db.prepare('INSERT INTO po_items (business_book_id, item_master_id, description, quantity, unit, rate, amount, hsn_code) VALUES (?,?,?,?,?,?,?,?)');
   let count = 0;
-  for (const item of (items || [])) {
-    if (item.description && item.description.trim()) {
-      insert.run(bbId, item.item_master_id || null, item.description.trim(), item.quantity || 0, item.unit || 'nos', item.rate || 0, item.amount || 0, item.hsn_code || '');
-      count++;
+  const errors = [];
+  // Coerce numerics safely — empty strings, null, NaN all become 0 so a
+  // single bad row doesn't fail the whole 39-item save.
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  try {
+    // Wrap all inserts in a single transaction for atomicity + speed.
+    const runInserts = db.transaction(() => {
+      for (let idx = 0; idx < (items || []).length; idx++) {
+        const item = items[idx];
+        if (!item || !item.description || !item.description.trim()) continue;
+        try {
+          insert.run(
+            bbId,
+            item.item_master_id || null,
+            item.description.trim(),
+            num(item.quantity),
+            item.unit || 'nos',
+            num(item.rate),
+            num(item.amount),
+            item.hsn_code || ''
+          );
+          count++;
+        } catch (rowErr) {
+          errors.push(`Row ${idx + 1}: ${rowErr.message}`);
+        }
+      }
+    });
+    runInserts();
+    if (errors.length) {
+      return res.status(400).json({ error: `Saved ${count} items; ${errors.length} failed`, failures: errors });
     }
+    res.json({ message: 'Items saved', count });
+  } catch (err) {
+    console.error('[PO items save] failed:', err.message);
+    res.status(500).json({ error: 'Items save failed: ' + err.message });
   }
-  res.json({ message: 'Items saved', count });
 });
 
 // Get PO items by business_book_id directly
