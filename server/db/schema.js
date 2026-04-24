@@ -1157,7 +1157,7 @@ function initializeDatabase() {
     -- DELETE) taken against the API. Populated automatically by the
     -- auditMiddleware so admins can answer "who changed what, when?".
     --
-    -- `before` / `after` are optional JSON snapshots captured by routes that
+    -- before / after are optional JSON snapshots captured by routes that
     -- call the logAuditEvent() helper manually (e.g. when they have the
     -- pre-image of the row). Bulk-auto entries leave those as null.
     CREATE TABLE IF NOT EXISTS audit_log (
