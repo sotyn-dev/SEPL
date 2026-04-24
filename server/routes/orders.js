@@ -274,10 +274,28 @@ router.post('/po/:id/items', (req, res) => {
   const db = getDb();
   const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
   if (!po) return res.status(404).json({ error: 'PO not found' });
-  const bbId = po?.business_book_id || null;
+
+  // Guard against stale FK references: if the PO points at a business_book
+  // row that's been deleted, using that id would blow up with FOREIGN KEY
+  // constraint failed. Validate first; if dangling, save items with
+  // business_book_id = NULL (item_master_id too).
+  let bbId = po?.business_book_id || null;
+  if (bbId) {
+    const bbExists = db.prepare('SELECT 1 FROM business_book WHERE id=?').get(bbId);
+    if (!bbExists) {
+      console.warn(`[PO items save] PO ${req.params.id} references missing business_book ${bbId}; saving items without BB link`);
+      // Also null out the stale reference on the PO itself so future saves don't hit this
+      try { db.prepare('UPDATE purchase_orders SET business_book_id=NULL WHERE id=?').run(req.params.id); } catch (e) {}
+      bbId = null;
+    }
+  }
 
   // Clear old items for this business_book so the update is a true replace.
   if (bbId) db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(bbId);
+
+  // Build set of valid item_master ids up-front so we can skip dangling
+  // references without individual queries per row.
+  const validMasterIds = new Set(db.prepare('SELECT id FROM item_master').all().map(r => r.id));
 
   const insert = db.prepare('INSERT INTO po_items (business_book_id, item_master_id, description, quantity, unit, rate, amount, hsn_code) VALUES (?,?,?,?,?,?,?,?)');
   let count = 0;
@@ -296,9 +314,15 @@ router.post('/po/:id/items', (req, res) => {
         const item = items[idx];
         if (!item || !item.description || !item.description.trim()) continue;
         try {
+          // item_master_id: accept only integer ids that actually exist in
+          // item_master. Empty string / non-int / unknown id → NULL (so FK
+          // doesn't blow up).
+          const rawMid = item.item_master_id;
+          const midNum = parseInt(rawMid, 10);
+          const safeMasterId = Number.isFinite(midNum) && validMasterIds.has(midNum) ? midNum : null;
           insert.run(
             bbId,
-            item.item_master_id || null,
+            safeMasterId,
             item.description.trim(),
             num(item.quantity),
             item.unit || 'nos',
