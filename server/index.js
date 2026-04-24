@@ -102,7 +102,23 @@ if (fs2.existsSync(clientBuild)) {
   app.get('/', (req, res) => res.json({ status: 'API running', message: 'Frontend not built. Run: npm run build' }));
 }
 
-// Handle uncaught errors
+// Global Express error handler — MUST be after all routes. Ensures every
+// crash in a route handler (including synchronous throws from better-sqlite3)
+// returns a JSON body with the real error, instead of HTML or a blank 500.
+// Without this, the client sees only "Request failed with status code 500"
+// and has no way to know what actually broke.
+app.use((err, req, res, next) => {
+  console.error('[express-error]', req.method, req.originalUrl, '-', err.message);
+  console.error(err.stack);
+  if (res.headersSent) return next(err);
+  res.status(500).json({
+    error: err.message || 'Internal server error',
+    path: req.originalUrl,
+    method: req.method,
+  });
+});
+
+// Handle uncaught errors (last-resort crash safety)
 process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT ERROR:', err.message);
   console.error(err.stack);

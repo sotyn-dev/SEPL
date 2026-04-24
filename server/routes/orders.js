@@ -269,6 +269,7 @@ router.get('/po/:id/items', (req, res) => {
 });
 
 router.post('/po/:id/items', (req, res) => {
+ try {
   const { items } = req.body;
   const db = getDb();
   const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
@@ -317,9 +318,14 @@ router.post('/po/:id/items', (req, res) => {
     }
     res.json({ message: 'Items saved', count });
   } catch (err) {
-    console.error('[PO items save] failed:', err.message);
+    console.error('[PO items save] transaction failed:', err.message);
     res.status(500).json({ error: 'Items save failed: ' + err.message });
   }
+ } catch (outerErr) {
+  // Outer catch for errors in db.prepare / db.get setup before the transaction
+  console.error('[PO items save] outer failure:', outerErr.message, '\nbody:', JSON.stringify(req.body).slice(0, 2000));
+  res.status(500).json({ error: 'Items save failed (setup): ' + outerErr.message });
+ }
 });
 
 // Get PO items by business_book_id directly
