@@ -291,7 +291,34 @@ router.post('/po/:id/items', (req, res) => {
   }
 
   // Clear old items for this business_book so the update is a true replace.
-  if (bbId) db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(bbId);
+  // IMPORTANT: indent_items.po_item_id has a foreign key REFERENCE to
+  // po_items(id). If any indents already reference these po_items (because
+  // mam already raised indents from this PO), a plain DELETE hits FOREIGN
+  // KEY constraint failed. Null out those references first so the delete
+  // can proceed. The indent still exists, it just loses its back-link to
+  // the specific po_items row (indent keeps its own qty/desc).
+  if (bbId) {
+    try {
+      db.prepare(
+        `UPDATE indent_items SET po_item_id=NULL
+         WHERE po_item_id IN (SELECT id FROM po_items WHERE business_book_id=?)`
+      ).run(bbId);
+    } catch (e) {
+      console.warn('[PO items save] could not null indent_items.po_item_id:', e.message);
+    }
+    // Also null po_item_id on dpr_installation / dpr_material which also
+    // reference po_items(id) (from the schema). Wrapped in try/catch so
+    // missing tables don't kill the whole update.
+    for (const depTable of ['dpr_installation', 'dpr_material']) {
+      try {
+        db.prepare(
+          `UPDATE ${depTable} SET po_item_id=NULL
+           WHERE po_item_id IN (SELECT id FROM po_items WHERE business_book_id=?)`
+        ).run(bbId);
+      } catch (e) { /* table might not exist in older DBs */ }
+    }
+    db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(bbId);
+  }
 
   // Build set of valid item_master ids up-front so we can skip dangling
   // references without individual queries per row.
