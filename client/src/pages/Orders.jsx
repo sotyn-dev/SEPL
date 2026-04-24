@@ -151,8 +151,22 @@ export default function Orders() {
                       <button onClick={() => handleEditPO(p)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded" title="Edit"><FiEdit2 size={15} /></button>
                       {canDelete('orders') && <button onClick={async () => {
                         if (!confirm(`Delete PO "${p.po_number}"?`)) return;
-                        try { await api.delete(`/orders/po/${p.id}`); toast.success('Deleted'); load(); }
-                        catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                        try {
+                          await api.delete(`/orders/po/${p.id}`);
+                          toast.success('Deleted'); load();
+                        } catch (err) {
+                          // Per mam's decision (2026-04-23): if the PO is
+                          // linked to Vendor POs / Bills / Installations,
+                          // delete stays blocked — use Edit to fix bad data
+                          // instead. Force-delete backend endpoint still
+                          // exists but is no longer exposed here.
+                          const data = err.response?.data || {};
+                          if (err.response?.status === 409 && data.canForce) {
+                            toast.error(`${data.error} — use Edit to fix the PO instead of deleting.`, { duration: 6000 });
+                          } else {
+                            toast.error(data.error || 'Delete failed');
+                          }
+                        }
                       }} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete"><FiTrash2 size={15} /></button>}
                     </div>
                   </td>

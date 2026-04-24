@@ -134,6 +134,10 @@ router.put('/po/:id', (req, res) => {
 router.delete('/po/:id', (req, res) => {
   const db = getDb();
   const id = req.params.id;
+  // ?force=1 cascades down through the entire procurement chain so admin
+  // can wipe a bad-data PO and re-add. Regular delete (no flag) stays safe
+  // — blocks if anything downstream references the PO.
+  const force = req.query.force === '1' || req.query.force === 'true';
   try {
     const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(id);
     if (!po) return res.status(404).json({ error: 'PO not found' });
@@ -162,25 +166,64 @@ router.delete('/po/:id', (req, res) => {
     const salesBillCount = db.prepare('SELECT COUNT(*) as c FROM sales_bills WHERE po_id=?').get(id).c;
     const installCount = db.prepare('SELECT COUNT(*) as c FROM installations WHERE po_id=?').get(id).c;
 
-    if (vendorPoCount > 0 || billCount > 0 || salesBillCount > 0 || installCount > 0) {
+    // Regular delete — block if any dependent record exists. Response
+    // includes `canForce: true` so the client can offer a "Force Delete"
+    // button if the user wants to wipe everything.
+    if (!force && (vendorPoCount > 0 || billCount > 0 || salesBillCount > 0 || installCount > 0)) {
       const refs = [];
       if (vendorPoCount) refs.push(`${vendorPoCount} Vendor PO(s)`);
       if (billCount) refs.push(`${billCount} Purchase Bill(s)`);
       if (salesBillCount) refs.push(`${salesBillCount} Sales Bill(s)`);
       if (installCount) refs.push(`${installCount} Installation(s)`);
-      return res.status(409).json({ error: `Cannot delete: referenced by ${refs.join(', ')}` });
+      return res.status(409).json({
+        error: `Cannot delete: referenced by ${refs.join(', ')}`,
+        canForce: true,
+        refs: { vendorPoCount, billCount, salesBillCount, installCount },
+      });
     }
 
-    // Unlink children; keep business_book row intact so the booking survives
+    // Force delete — cascade down the entire chain in a single transaction.
+    if (force) {
+      const cascade = db.transaction(() => {
+        // Gather ids through the chain so we can delete leaves first
+        const planningIds = db.prepare('SELECT id FROM order_planning WHERE po_id=?').all(id).map(r => r.id);
+        const indentIds = planningIds.length
+          ? db.prepare(`SELECT id FROM indents WHERE planning_id IN (${planningIds.map(() => '?').join(',')})`).all(...planningIds).map(r => r.id)
+          : [];
+        const vendorPoIds = indentIds.length
+          ? db.prepare(`SELECT id FROM vendor_pos WHERE indent_id IN (${indentIds.map(() => '?').join(',')})`).all(...indentIds).map(r => r.id)
+          : [];
+
+        // Delete deepest leaves upward
+        if (vendorPoIds.length) {
+          const ph = vendorPoIds.map(() => '?').join(',');
+          db.prepare(`DELETE FROM purchase_bills WHERE vendor_po_id IN (${ph})`).run(...vendorPoIds);
+          db.prepare(`DELETE FROM delivery_notes WHERE vendor_po_id IN (${ph})`).run(...vendorPoIds);
+          db.prepare(`DELETE FROM vendor_po_items WHERE vendor_po_id IN (${ph})`).run(...vendorPoIds);
+          db.prepare(`DELETE FROM vendor_pos WHERE id IN (${ph})`).run(...vendorPoIds);
+        }
+        if (indentIds.length) {
+          const ph = indentIds.map(() => '?').join(',');
+          db.prepare(`DELETE FROM indent_item_rates WHERE indent_item_id IN (SELECT id FROM indent_items WHERE indent_id IN (${ph}))`).run(...indentIds);
+          db.prepare(`DELETE FROM indent_items WHERE indent_id IN (${ph})`).run(...indentIds);
+          db.prepare(`DELETE FROM indents WHERE id IN (${ph})`).run(...indentIds);
+        }
+        db.prepare('DELETE FROM sales_bills WHERE po_id=?').run(id);
+        db.prepare('DELETE FROM installations WHERE po_id=?').run(id);
+        db.prepare('DELETE FROM order_planning WHERE po_id=?').run(id);
+      });
+      cascade();
+    }
+
+    // Unlink lingering children and wipe the PO itself
     if (po.business_book_id) {
       db.prepare('UPDATE business_book SET po_number=NULL, po_date=NULL, po_amount=0 WHERE id=?').run(po.business_book_id);
       db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(po.business_book_id);
     }
     db.prepare('UPDATE sites SET po_id=NULL WHERE po_id=?').run(id);
     db.prepare('UPDATE order_planning SET po_id=NULL WHERE po_id=?').run(id);
-
     db.prepare('DELETE FROM purchase_orders WHERE id=?').run(id);
-    res.json({ message: 'Deleted' });
+    res.json({ message: force ? 'Force-deleted (all dependents removed)' : 'Deleted' });
   } catch (err) {
     console.error('PO delete error:', err);
     res.status(500).json({ error: 'Delete failed: ' + err.message });
