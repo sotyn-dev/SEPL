@@ -29,6 +29,7 @@ import PMSTasks from './pages/PMSTasks';
 import UserManagement from './pages/admin/UserManagement';
 import RolesPermissions from './pages/admin/RolesPermissions';
 import DatabaseBackups from './pages/admin/DatabaseBackups';
+import AuditLog from './pages/admin/AuditLog';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -94,6 +95,7 @@ export default function App() {
         <Route path="admin/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
         <Route path="admin/roles" element={<AdminRoute><RolesPermissions /></AdminRoute>} />
         <Route path="admin/backups" element={<AdminRoute><DatabaseBackups /></AdminRoute>} />
+        <Route path="admin/audit" element={<AdminRoute><AuditLog /></AdminRoute>} />
       </Route>
     </Routes>
   );

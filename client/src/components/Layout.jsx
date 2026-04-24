@@ -43,6 +43,7 @@ const adminItems = [
   { path: '/admin/users', label: 'User Management', icon: FiSettings, module: 'users' },
   { path: '/admin/roles', label: 'Roles & Permissions', icon: FiShield, module: 'users' },
   { path: '/admin/backups', label: 'Database Backups', icon: FiPackage, module: 'users' },
+  { path: '/admin/audit', label: 'Audit Log', icon: FiShield, module: 'users' },
 ];
 
 export default function Layout() {

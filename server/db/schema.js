@@ -1153,6 +1153,37 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Audit log — records every mutating action (POST / PUT / PATCH /
+    -- DELETE) taken against the API. Populated automatically by the
+    -- auditMiddleware so admins can answer "who changed what, when?".
+    --
+    -- `before` / `after` are optional JSON snapshots captured by routes that
+    -- call the logAuditEvent() helper manually (e.g. when they have the
+    -- pre-image of the row). Bulk-auto entries leave those as null.
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      user_id INTEGER REFERENCES users(id),
+      user_name TEXT,
+      user_role TEXT,
+      action TEXT,                 -- 'CREATE' | 'UPDATE' | 'DELETE' | 'LOGIN' | ... (free-form, default derived from HTTP method)
+      entity_type TEXT,            -- e.g. 'purchase_order' | 'complaint' | 'user'
+      entity_id TEXT,              -- string so we can handle numeric + natural keys
+      entity_label TEXT,           -- human-friendly label (optional)
+      method TEXT,                 -- HTTP method
+      path TEXT,                   -- request path (without query)
+      query TEXT,                  -- JSON-encoded query string
+      body_summary TEXT,           -- compact JSON summary of request body (secrets stripped)
+      status_code INTEGER,
+      ip TEXT,
+      user_agent TEXT,
+      before_json TEXT,            -- optional pre-image
+      after_json TEXT              -- optional post-image
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id, at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);
+
     -- PMS Tasks — Project Management tasks created by CRM against a specific
     -- Business Book project. Same lifecycle as delegations (pending → submitted
     -- → approved/rejected) but each task is tied to a BB project_id so the

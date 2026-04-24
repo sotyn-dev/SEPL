@@ -44,8 +44,16 @@ if (!process.env.ERP_DISABLE_BACKUP_SCHEDULER) {
   }
 }
 
+// Audit middleware — runs before the routes so every mutating request
+// (POST/PUT/PATCH/DELETE) is logged on response finish. Reads req.user set
+// by authMiddleware inside each router. Fire-and-forget so it can't slow
+// down or break real requests.
+const { auditMiddleware } = require('./middleware/audit');
+app.use(auditMiddleware);
+
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/admin/audit', require('./routes/audit'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/sales-funnel', require('./routes/salesfunnel'));

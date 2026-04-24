@@ -10,17 +10,31 @@ router.post('/login', (req, res) => {
   // username OR an email — we match against both columns.
   const { username, email, password } = req.body;
   const identifier = (username || email || '').trim();
+  const { logAuditEvent } = require('../middleware/audit');
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim() || null;
+  const ua = req.headers['user-agent'] || null;
   if (!identifier || !password) return res.status(400).json({ error: 'Username/email and password required' });
   const db = getDb();
   const user = db.prepare(
     'SELECT * FROM users WHERE (LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)) AND active = 1'
   ).get(identifier, identifier);
   if (!user || !bcrypt.compareSync(password, user.password)) {
+    // Log failed login attempts so admin can spot brute-force patterns.
+    logAuditEvent({
+      action: 'LOGIN_FAIL', entity_type: 'auth', entity_label: identifier,
+      method: 'POST', path: '/api/auth/login', status_code: 401, ip, user_agent: ua,
+    });
     return res.status(401).json({ error: 'Invalid credentials' });
   }
   const token = generateToken(user);
   const permissions = getUserPermissions(user.id);
   const userRoles = db.prepare(`SELECT r.name FROM roles r JOIN user_roles ur ON r.id=ur.role_id WHERE ur.user_id=?`).all(user.id);
+  // Successful login — record user + ip + UA for session tracking.
+  logAuditEvent({
+    user: { id: user.id, name: user.name, role: user.role },
+    action: 'LOGIN', entity_type: 'auth', entity_id: user.id, entity_label: user.name,
+    method: 'POST', path: '/api/auth/login', status_code: 200, ip, user_agent: ua,
+  });
   res.json({
     token,
     user: { id: user.id, name: user.name, email: user.email, username: user.username, role: user.role, department: user.department, phone: user.phone },
