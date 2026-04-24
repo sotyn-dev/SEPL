@@ -72,56 +72,62 @@ function entityIdFromPath(p) {
 }
 
 function auditMiddleware(req, res, next) {
-  // Only log mutating methods
-  if (!METHOD_TO_ACTION[req.method]) return next();
-  // Skip noisy / high-frequency paths
-  if (SKIP_PATH_PREFIXES.some(p => req.originalUrl.startsWith(p))) return next();
+  // Bulletproof: ANY exception inside here must NOT crash the request.
+  // The audit log is an observability nice-to-have, never a critical path.
+  try {
+    // Opt-out flag in case audit starts causing issues in prod
+    if (process.env.ERP_DISABLE_AUDIT === '1') return next();
+    if (!req || !res || !req.method) return next();
+    if (!METHOD_TO_ACTION[req.method]) return next();
+    if (SKIP_PATH_PREFIXES.some(p => (req.originalUrl || '').startsWith(p))) return next();
 
-  // Capture what we can right now (before the response happens)
-  const startedAt = Date.now();
-  const pathOnly = req.originalUrl.split('?')[0];
+    const pathOnly = (req.originalUrl || '').split('?')[0];
 
-  res.on('finish', () => {
-    // Don't log if the request wasn't authenticated — that just means an
-    // anonymous hit on a public endpoint (e.g. /api/auth/login failure).
-    // We still log successful logins via a manual call from the login route.
-    try {
-      const db = getDb();
-      const user = req.user || {};
-      db.prepare(
-        `INSERT INTO audit_log
-          (user_id, user_name, user_role, action, entity_type, entity_id,
-           method, path, query, body_summary, status_code, ip, user_agent)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(
-        user.id || null,
-        user.name || null,
-        user.role || null,
-        METHOD_TO_ACTION[req.method] || req.method,
-        entityTypeFromPath(pathOnly),
-        entityIdFromPath(pathOnly),
-        req.method,
-        pathOnly,
-        req.query && Object.keys(req.query).length ? JSON.stringify(req.query) : null,
-        summariseBody(req.body),
-        res.statusCode,
-        (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim() || null,
-        (req.headers['user-agent'] || '').toString().slice(0, 200) || null,
-      );
-    } catch (e) {
-      // Never let audit failures break the actual request flow
-      console.error('[audit] insert failed:', e.message);
-    }
-  });
+    res.on('finish', () => {
+      try {
+        const db = getDb();
+        if (!db) return;
+        const user = req.user || {};
+        const safe = (v) => (v === undefined ? null : v);
+        db.prepare(
+          `INSERT INTO audit_log
+            (user_id, user_name, user_role, action, entity_type, entity_id,
+             method, path, query, body_summary, status_code, ip, user_agent)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          safe(user.id) || null,
+          safe(user.name) || null,
+          safe(user.role) || null,
+          safe(METHOD_TO_ACTION[req.method] || req.method),
+          safe(entityTypeFromPath(pathOnly)),
+          safe(entityIdFromPath(pathOnly)),
+          safe(req.method),
+          safe(pathOnly),
+          req.query && Object.keys(req.query || {}).length ? JSON.stringify(req.query) : null,
+          safe(summariseBody(req.body)),
+          safe(res.statusCode) || null,
+          (req.headers?.['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim() || null,
+          (req.headers?.['user-agent'] || '').toString().slice(0, 200) || null,
+        );
+      } catch (e) {
+        // Never let audit failures affect the real request flow
+        console.error('[audit] insert failed:', e.message);
+      }
+    });
+  } catch (outerErr) {
+    console.error('[audit] middleware outer failure:', outerErr.message);
+  }
   next();
 }
 
 // Manual call for routes that want to log richer info (labels, before/after
 // snapshots, custom actions like 'APPROVE' / 'REJECT' / 'LOGIN_FAIL' etc.).
-function logAuditEvent({
-  user, action, entity_type, entity_id, entity_label,
-  before, after, method, path, query, body, status_code, ip, user_agent,
-}) {
+function logAuditEvent(opts) {
+  if (process.env.ERP_DISABLE_AUDIT === '1') return;
+  const {
+    user, action, entity_type, entity_id, entity_label,
+    before, after, method, path, query, body, status_code, ip, user_agent,
+  } = opts || {};
   try {
     getDb().prepare(
       `INSERT INTO audit_log
