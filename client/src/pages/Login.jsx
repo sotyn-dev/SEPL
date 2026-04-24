@@ -3,10 +3,20 @@ import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 import { FiUser, FiLock, FiEye, FiEyeOff } from 'react-icons/fi';
 
-// SEPL brand logo — embedded as a base64 data URL so it works without any
-// build config changes and survives all deploys. Keep this file in sync if
-// the logo ever changes.
-const SEPL_LOGO = 'data:image/png;base64,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';
+// SEPL brand logo — loaded from mam's Google Drive via the /thumbnail
+// endpoint (the /view link returns HTML, not image bytes, so it won't
+// render in <img>). The Drive file MUST be shared as "Anyone with the link"
+// for this to load outside mam's Google account.
+//
+// If Drive ever fails (rate-limit / private), the <img onError> on the
+// login page falls back to a tiny inline SVG shield so the page never
+// shows a broken image.
+const DRIVE_LOGO = 'https://drive.google.com/thumbnail?id=12N5DAhk27MBMdG28z_FE9rkbFZf1amVu&sz=w400';
+const FALLBACK_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="white"><path d="M24 4l16 6v12c0 10-7 17-16 22C15 39 8 32 8 22V10l16-6z"/></svg>'
+);
+// Public symbol kept for backward compatibility — points at the Drive URL.
+const SEPL_LOGO = DRIVE_LOGO;
 
 export default function Login() {
   // Prefill the username if "Remember me" was ticked on a previous login.
@@ -40,8 +50,13 @@ export default function Login() {
       <div className="bg-white/95 backdrop-blur-sm rounded-3xl shadow-2xl p-8 w-full max-w-md mx-4 relative z-10">
         {/* Logo — now the actual SEPL brand logo (not a generic shield icon) */}
         <div className="text-center mb-8">
-          <div className="w-20 h-20 mx-auto mb-4 rounded-2xl overflow-hidden shadow-lg shadow-red-500/30 bg-white flex items-center justify-center">
-            <img src={SEPL_LOGO} alt="SEPL logo" className="w-full h-full object-contain" />
+          <div className="w-20 h-20 mx-auto mb-4 rounded-2xl overflow-hidden shadow-lg shadow-red-500/30 bg-gradient-to-br from-red-600 to-red-700 flex items-center justify-center">
+            <img
+              src={SEPL_LOGO}
+              alt="SEPL logo"
+              className="w-full h-full object-contain"
+              onError={(e) => { if (e.currentTarget.src !== FALLBACK_LOGO) e.currentTarget.src = FALLBACK_LOGO; }}
+            />
           </div>
           <h1 className="text-2xl font-extrabold text-gray-800 tracking-tight">SEPL ERP</h1>
           <p className="text-gray-400 text-sm mt-1">Secured Engineers Pvt Ltd</p>
