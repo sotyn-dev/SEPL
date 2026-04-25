@@ -47,7 +47,13 @@ router.post('/login', (req, res) => {
   });
   res.json({
     token,
-    user: { id: user.id, name: user.name, email: user.email, username: user.username, role: user.role, department: user.department, phone: user.phone },
+    user: {
+      id: user.id, name: user.name, email: user.email, username: user.username,
+      role: user.role, department: user.department, phone: user.phone,
+      // Frontend uses this to force a "set recovery code" modal on first
+      // login, guaranteeing every user can self-recover later.
+      has_recovery_code: !!user.recovery_code_hash,
+    },
     permissions,
     userRoles: userRoles.map(r => r.name)
   });
@@ -81,10 +87,13 @@ router.post('/register', authMiddleware, adminOnly, (req, res) => {
 
 router.get('/me', authMiddleware, (req, res) => {
   const db = getDb();
-  const user = db.prepare('SELECT id, name, email, username, role, department, phone FROM users WHERE id = ?').get(req.user.id);
+  const user = db.prepare('SELECT id, name, email, username, role, department, phone, recovery_code_hash FROM users WHERE id = ?').get(req.user.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const has_recovery_code = !!user.recovery_code_hash;
+  delete user.recovery_code_hash;
   const permissions = getUserPermissions(req.user.id);
   const userRoles = db.prepare(`SELECT r.name FROM roles r JOIN user_roles ur ON r.id=ur.role_id WHERE ur.user_id=?`).all(req.user.id);
-  res.json({ ...user, permissions, userRoles: userRoles.map(r => r.name) });
+  res.json({ ...user, has_recovery_code, permissions, userRoles: userRoles.map(r => r.name) });
 });
 
 router.get('/users', authMiddleware, (req, res) => {
@@ -189,15 +198,26 @@ router.post('/forgot-password', (req, res) => {
     });
     return res.status(status).json({ error: 'Username or recovery code is incorrect, or no recovery code is set for this account' });
   };
-  if (!user || !user.recovery_code_hash) return fail('no_user_or_code');
-  if (!bcrypt.compareSync(code, user.recovery_code_hash)) return fail('bad_code');
+  if (!user) return fail('no_user');
+  // Two paths to reset:
+  //   1. The user's own recovery code (set via /auth/recovery-code)
+  //   2. The owner-only emergency code (data/RECOVERY.txt) — works for ANY
+  //      user, lets mam unlock employees who never set their own code.
+  const personalOk = user.recovery_code_hash && bcrypt.compareSync(code, user.recovery_code_hash);
+  let emergencyOk = false;
+  if (!personalOk) {
+    const row = db.prepare("SELECT value FROM app_settings WHERE key='emergency_reset_hash'").get();
+    if (row && row.value && bcrypt.compareSync(code, row.value)) emergencyOk = true;
+  }
+  if (!personalOk && !emergencyOk) return fail('bad_code');
   // Reset both password and active flag — a forgot-password flow with a
   // valid recovery code should also un-disable an accidentally deactivated
   // account, otherwise the user would still be locked out after the reset.
   db.prepare('UPDATE users SET password=?, active=1 WHERE id=?').run(bcrypt.hashSync(newPwd, 10), user.id);
   logAuditEvent({
-    user: { id: user.id, name: user.name, role: 'self' },
-    action: 'FORGOT_PASSWORD_OK', entity_type: 'auth', entity_id: user.id, entity_label: user.name,
+    user: { id: user.id, name: user.name, role: emergencyOk ? 'emergency' : 'self' },
+    action: emergencyOk ? 'FORGOT_PASSWORD_OK_EMERGENCY' : 'FORGOT_PASSWORD_OK',
+    entity_type: 'auth', entity_id: user.id, entity_label: user.name,
     method: 'POST', path: '/api/auth/forgot-password', status_code: 200, ip, user_agent: ua,
   });
   res.json({ message: 'Password reset successfully. You can now sign in with your new password.' });

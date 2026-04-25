@@ -15,7 +15,11 @@ export function AuthProvider({ children }) {
       api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       api.get('/auth/me')
         .then(r => {
-          setUser({ id: r.data.id, name: r.data.name, email: r.data.email, username: r.data.username, role: r.data.role, department: r.data.department, phone: r.data.phone });
+          setUser({
+            id: r.data.id, name: r.data.name, email: r.data.email, username: r.data.username,
+            role: r.data.role, department: r.data.department, phone: r.data.phone,
+            has_recovery_code: !!r.data.has_recovery_code,
+          });
           setPermissions(r.data.permissions || {});
           setUserRoles(r.data.userRoles || []);
         })
@@ -63,11 +67,16 @@ export function AuthProvider({ children }) {
   const canApprove = (module) => can(module, 'approve');
   const isAdmin = () => user?.role === 'admin';
 
+  // Called after the user successfully saves a recovery code so the
+  // force-set modal stops appearing without a full /auth/me refetch.
+  const markRecoveryCodeSet = () => setUser(u => u ? { ...u, has_recovery_code: true } : u);
+
   return (
     <AuthContext.Provider value={{
       user, token, permissions, userRoles,
       login, logout, loading,
-      can, canView, canCreate, canEdit, canDelete, canApprove, isAdmin
+      can, canView, canCreate, canEdit, canDelete, canApprove, isAdmin,
+      markRecoveryCodeSet,
     }}>
       {children}
     </AuthContext.Provider>

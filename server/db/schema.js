@@ -1184,6 +1184,14 @@ function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id, at DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);
 
+    -- Generic singleton key/value bag for app-level state that doesn't
+    -- belong on a domain table (emergency reset hash, feature flags, etc).
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- PMS Tasks — Project Management tasks created by CRM against a specific
     -- Business Book project. Same lifecycle as delegations (pending → submitted
     -- → approved/rejected) but each task is tied to a BB project_id so the
@@ -1530,6 +1538,60 @@ function initializeDatabase() {
       db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)').run(br.lastInsertRowid, adminRole.id);
     }
     console.log(`[seed] Created backup admin — username: backup-admin, password: ${backupPwd}`);
+  }
+
+  // Owner-only emergency reset code — last-resort master key for the company
+  // owner. Generated ONCE on the first server start, written in plaintext to
+  // data/RECOVERY.txt (gitignored, only on the VPS), and stored as a bcrypt
+  // hash in app_settings. Mam should copy it from RECOVERY.txt into a safe
+  // place (diary / password manager) immediately after deploy. With this
+  // code + a username, /auth/emergency-reset can reset ANY user's password
+  // — so total lockout is impossible as long as mam keeps the code.
+  try {
+    const fs = require('fs');
+    const existingHash = db.prepare("SELECT value FROM app_settings WHERE key='emergency_reset_hash'").get();
+    if (!existingHash) {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+      const code = Array.from({ length: 16 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+      const hash = bcrypt.hashSync(code, 10);
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('emergency_reset_hash', ?)").run(hash);
+      const recoveryPath = path.join(__dirname, '..', '..', 'data', 'RECOVERY.txt');
+      const banner = [
+        '================================================================',
+        '  SEPL ERP - OWNER EMERGENCY RECOVERY CODE',
+        '================================================================',
+        '',
+        `  CODE: ${code}`,
+        '',
+        '  WHAT THIS IS:',
+        '  Last-resort master key. Used with the "Forgot password?" link',
+        '  on the login page (it works as a recovery code for ANY user)',
+        '  or via the /api/auth/emergency-reset endpoint.',
+        '',
+        '  WHAT TO DO RIGHT NOW:',
+        '  1. Copy the CODE line above into your diary / password manager.',
+        `  2. Delete this file from the server  (rm ${recoveryPath})`,
+        '     so anyone with VPS access can\'t see it.',
+        '  3. Keep the code SECRET. Anyone with this code can reset any',
+        '     user\'s password.',
+        '',
+        '  IF YOU LOSE THIS CODE:',
+        '  Run: node server/scripts/regenerate-emergency-code.js',
+        '  (overwrites the old code, writes a new RECOVERY.txt)',
+        '',
+        '================================================================',
+        '',
+      ].join('\n');
+      try {
+        fs.writeFileSync(recoveryPath, banner, { encoding: 'utf-8' });
+        console.log(`[seed] Wrote owner emergency recovery code to ${recoveryPath}`);
+        console.log(`[seed] !! IMPORTANT — open that file, save the code, then delete it !!`);
+      } catch (e) {
+        console.error('[seed] Could not write RECOVERY.txt — code is in the DB but you need to regenerate it. Error:', e.message);
+      }
+    }
+  } catch (e) {
+    console.error('[seed] Emergency recovery setup failed:', e.message);
   }
 
   // Seed Item Master FIRST (needed for PO items in Business Book seed)
