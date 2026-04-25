@@ -52,6 +52,8 @@ export default function Layout() {
   const [pwdModal, setPwdModal] = useState(false);
   const [pwdForm, setPwdForm] = useState({ current_password: '', new_password: '', confirm: '' });
   const [pwdSaving, setPwdSaving] = useState(false);
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [recoverySaving, setRecoverySaving] = useState(false);
   const location = useLocation();
   const { user, logout, canView, isAdmin, userRoles } = useAuth();
 
@@ -69,6 +71,20 @@ export default function Layout() {
       toast.error(err.response?.data?.error || 'Failed to change password');
     }
     setPwdSaving(false);
+  };
+
+  const saveRecoveryCode = async (e) => {
+    e.preventDefault();
+    if (!recoveryCode || recoveryCode.length < 4) { toast.error('Recovery code must be at least 4 characters'); return; }
+    setRecoverySaving(true);
+    try {
+      const r = await api.post('/auth/recovery-code', { recovery_code: recoveryCode });
+      toast.success(r.data?.message || 'Recovery code saved');
+      setRecoveryCode('');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save recovery code');
+    }
+    setRecoverySaving(false);
   };
 
   useEffect(() => {
@@ -152,9 +168,12 @@ export default function Layout() {
         </div>
       </aside>
 
-      {/* Change Password Modal */}
-      <Modal isOpen={pwdModal} onClose={() => setPwdModal(false)} title="Change Password">
+      {/* Change Password Modal — also lets the user set a personal recovery
+          code so they can self-recover via "Forgot password?" on the login
+          page without needing the developer / SSH access. */}
+      <Modal isOpen={pwdModal} onClose={() => setPwdModal(false)} title="Account Security">
         <form onSubmit={changePassword} className="space-y-4">
+          <h4 className="text-sm font-semibold text-gray-700 -mb-1">Change Password</h4>
           <div>
             <label className="label">Current Password</label>
             <input className="input" type="password" autoComplete="current-password" value={pwdForm.current_password} onChange={e => setPwdForm({ ...pwdForm, current_password: e.target.value })} required />
@@ -168,8 +187,38 @@ export default function Layout() {
             <input className="input" type="password" autoComplete="new-password" value={pwdForm.confirm} onChange={e => setPwdForm({ ...pwdForm, confirm: e.target.value })} required />
           </div>
           <div className="flex justify-end gap-3">
-            <button type="button" onClick={() => setPwdModal(false)} className="btn btn-secondary">Cancel</button>
+            <button type="button" onClick={() => setPwdModal(false)} className="btn btn-secondary">Close</button>
             <button type="submit" disabled={pwdSaving} className="btn btn-primary">{pwdSaving ? 'Saving...' : 'Change Password'}</button>
+          </div>
+        </form>
+
+        <div className="border-t my-5"></div>
+
+        <form onSubmit={saveRecoveryCode} className="space-y-3">
+          <div>
+            <h4 className="text-sm font-semibold text-gray-700 mb-1 flex items-center gap-2">
+              <FiKey size={14} className="text-red-600" /> Recovery Code
+            </h4>
+            <p className="text-[11px] text-gray-500 leading-relaxed">
+              Set a personal code (a phrase only you know — e.g. <em>"my-school-1995"</em>) so you can reset your password yourself from the
+              <span className="font-medium"> "Forgot password?"</span> link on the login page. Without this, only an admin can unlock you.
+            </p>
+          </div>
+          <div>
+            <label className="label">New Recovery Code</label>
+            <input
+              className="input"
+              type="text"
+              value={recoveryCode}
+              onChange={e => setRecoveryCode(e.target.value)}
+              placeholder="Minimum 4 characters — keep it private"
+              minLength={4}
+            />
+          </div>
+          <div className="flex justify-end">
+            <button type="submit" disabled={recoverySaving || !recoveryCode} className="btn btn-primary">
+              {recoverySaving ? 'Saving...' : 'Save Recovery Code'}
+            </button>
           </div>
         </form>
       </Modal>

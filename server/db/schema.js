@@ -1239,6 +1239,10 @@ function initializeDatabase() {
     ['attendance', 'auto_punched_in INTEGER DEFAULT 0'],
     ['attendance', 'auto_punched_out INTEGER DEFAULT 0'],
     ['users', 'username TEXT'],
+    // Self-service password recovery — user sets a personal recovery code
+    // (stored as bcrypt hash) which they can later use along with their
+    // username to reset their password from the login page. No SMTP needed.
+    ['users', 'recovery_code_hash TEXT'],
     // Delegations — due-date extension request (assignee asks admin for more time)
     ['delegations', 'requested_due_date DATE'],
     ['delegations', 'extension_reason TEXT'],
@@ -1510,6 +1514,22 @@ function initializeDatabase() {
   } else {
     // Backfill username for the pre-existing admin row if empty
     try { db.prepare("UPDATE users SET username='admin' WHERE email='admin@erp.com' AND (username IS NULL OR username='')").run(); } catch (e) {}
+  }
+
+  // Seed a SECOND admin so a single forgotten password doesn't lock the
+  // company out. If mam loses access to 'admin', she can sign in as
+  // 'backup-admin' and reset the primary admin's password from User
+  // Management — no SSH / developer required.
+  const backupExists = db.prepare('SELECT id FROM users WHERE username = ?').get('backup-admin');
+  if (!backupExists) {
+    const backupPwd = 'sepl-backup-2026';
+    const bhash = bcrypt.hashSync(backupPwd, 10);
+    const br = db.prepare('INSERT INTO users (name, email, username, password, role, department) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('Backup Admin', 'backup-admin@erp.com', 'backup-admin', bhash, 'admin', 'Management');
+    if (adminRole) {
+      db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)').run(br.lastInsertRowid, adminRole.id);
+    }
+    console.log(`[seed] Created backup admin — username: backup-admin, password: ${backupPwd}`);
   }
 
   // Seed Item Master FIRST (needed for PO items in Business Book seed)

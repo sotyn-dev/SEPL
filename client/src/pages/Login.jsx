@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import api from '../api';
 import toast from 'react-hot-toast';
-import { FiUser, FiLock, FiEye, FiEyeOff } from 'react-icons/fi';
+import { FiUser, FiLock, FiEye, FiEyeOff, FiKey, FiX } from 'react-icons/fi';
 
 // SEPL brand logo — inline SVG, no network dependency. Renders the SEPL
 // shield with "SEPL" letters in white on the brand red. Works offline, no
@@ -28,7 +29,25 @@ export default function Login() {
   const [form, setForm] = useState({ identifier: savedIdentifier, password: '' });
   const [remember, setRemember] = useState(!!savedIdentifier);
   const [showPassword, setShowPassword] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotForm, setForgotForm] = useState({ username: '', recovery_code: '', new_password: '' });
+  const [forgotSaving, setForgotSaving] = useState(false);
   const { login } = useAuth();
+
+  const submitForgot = async (e) => {
+    e.preventDefault();
+    setForgotSaving(true);
+    try {
+      const r = await api.post('/auth/forgot-password', forgotForm);
+      toast.success(r.data?.message || 'Password reset');
+      setForgotOpen(false);
+      setForgotForm({ username: '', recovery_code: '', new_password: '' });
+      setForm(f => ({ ...f, identifier: forgotForm.username, password: '' }));
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Reset failed');
+    }
+    setForgotSaving(false);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -114,8 +133,89 @@ export default function Login() {
           <button type="submit" className="btn btn-primary w-full py-3.5 text-base rounded-xl">Sign In</button>
         </form>
 
-        <p className="mt-6 text-center text-[11px] text-gray-400">Contact your admin for login credentials</p>
+        <div className="mt-4 text-center">
+          <button
+            type="button"
+            onClick={() => { setForgotForm({ username: form.identifier || '', recovery_code: '', new_password: '' }); setForgotOpen(true); }}
+            className="text-xs text-red-700 hover:text-red-800 hover:underline font-medium inline-flex items-center gap-1"
+          >
+            <FiKey size={12} /> Forgot password?
+          </button>
+        </div>
+
+        <p className="mt-3 text-center text-[11px] text-gray-400">Contact your admin if you don't have a recovery code yet</p>
       </div>
+
+      {/* Forgot password modal — uses the user's personal recovery code (set
+          earlier from the sidebar) so they can reset without SSH or admin
+          intervention. Generic error from server, no username enumeration. */}
+      {forgotOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60" onClick={() => !forgotSaving && setForgotOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 relative" onClick={e => e.stopPropagation()}>
+            <button
+              onClick={() => !forgotSaving && setForgotOpen(false)}
+              className="absolute top-3 right-3 text-gray-400 hover:text-gray-700 p-1"
+              type="button"
+              aria-label="Close"
+            >
+              <FiX size={18} />
+            </button>
+            <div className="flex items-center gap-3 mb-1">
+              <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center text-red-600"><FiKey size={18} /></div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-800">Reset your password</h2>
+                <p className="text-[11px] text-gray-500">Use the recovery code you set previously from "Change Password".</p>
+              </div>
+            </div>
+
+            <form onSubmit={submitForgot} className="space-y-4 mt-4">
+              <div>
+                <label className="label">Username or Email</label>
+                <input
+                  className="input"
+                  value={forgotForm.username}
+                  onChange={e => setForgotForm(f => ({ ...f, username: e.target.value }))}
+                  required
+                  autoFocus
+                  placeholder="e.g. admin"
+                />
+              </div>
+              <div>
+                <label className="label">Recovery Code</label>
+                <input
+                  className="input"
+                  type="text"
+                  value={forgotForm.recovery_code}
+                  onChange={e => setForgotForm(f => ({ ...f, recovery_code: e.target.value }))}
+                  required
+                  placeholder="The personal code you set earlier"
+                />
+              </div>
+              <div>
+                <label className="label">New Password</label>
+                <input
+                  className="input"
+                  type="text"
+                  value={forgotForm.new_password}
+                  onChange={e => setForgotForm(f => ({ ...f, new_password: e.target.value }))}
+                  required
+                  minLength={4}
+                  placeholder="Minimum 4 characters"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={() => setForgotOpen(false)} disabled={forgotSaving} className="btn btn-secondary">Cancel</button>
+                <button type="submit" disabled={forgotSaving} className="btn btn-primary">
+                  {forgotSaving ? 'Resetting...' : 'Reset Password'}
+                </button>
+              </div>
+              <p className="text-[11px] text-gray-500 text-center pt-1">
+                Don't have a recovery code? Ask the admin to reset your password from User Management.
+              </p>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Elegant footer: creator + company, centered at bottom */}
       <div className="fixed bottom-5 left-0 right-0 flex justify-center px-4 z-10 pointer-events-none">

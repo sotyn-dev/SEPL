@@ -31,6 +31,7 @@ const ALL_MODULES = [
   { key: 'employees', label: 'Employees' },
   { key: 'expenses', label: 'Expenses' },
   { key: 'indent_fms', label: 'Indent FMS (legacy)' },
+  { key: 'pms_tasks', label: 'PMS Tasks' },
   { key: 'users', label: 'User Management' },
 ];
 

@@ -403,6 +403,21 @@ router.get('/indents', (req, res) => {
      ORDER BY i.created_at DESC`
   ).all();
 
+  // Pull every indent_item in one query and group client-side so the
+  // listing can show what was raised without a per-row API call.
+  const allItems = db.prepare(
+    `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity,
+            ii.unit, ii.item_type, im.item_name as master_name
+     FROM indent_items ii
+     LEFT JOIN item_master im ON ii.item_master_id = im.id
+     ORDER BY ii.id`
+  ).all();
+  const itemsByIndent = new Map();
+  for (const it of allItems) {
+    if (!itemsByIndent.has(it.indent_id)) itemsByIndent.set(it.indent_id, []);
+    itemsByIndent.get(it.indent_id).push(it);
+  }
+
   // One BOQ-link lookup per unique site_name — cached in the loop so we
   // don't hit the DB once per indent when many share the same site.
   const boqCache = new Map();
@@ -427,7 +442,11 @@ router.get('/indents', (req, res) => {
     return link;
   };
 
-  res.json(indents.map(i => ({ ...i, boq_file_link: findBoq(i.site_name || i.client_name) })));
+  res.json(indents.map(i => ({
+    ...i,
+    boq_file_link: findBoq(i.site_name || i.client_name),
+    items: itemsByIndent.get(i.id) || [],
+  })));
 });
 
 router.post('/indents', (req, res) => {

@@ -15,9 +15,19 @@ router.post('/login', (req, res) => {
   const ua = req.headers['user-agent'] || null;
   if (!identifier || !password) return res.status(400).json({ error: 'Username/email and password required' });
   const db = getDb();
+  // Look up regardless of `active` so we can return a distinct message when
+  // the account is disabled vs. when the password is wrong — otherwise mam
+  // can't tell why she's locked out.
   const user = db.prepare(
-    'SELECT * FROM users WHERE (LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)) AND active = 1'
+    'SELECT * FROM users WHERE (LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?))'
   ).get(identifier, identifier);
+  if (user && user.active === 0) {
+    logAuditEvent({
+      action: 'LOGIN_FAIL', entity_type: 'auth', entity_label: identifier,
+      method: 'POST', path: '/api/auth/login', status_code: 403, ip, user_agent: ua,
+    });
+    return res.status(403).json({ error: 'Your account is disabled. Please contact admin.' });
+  }
   if (!user || !bcrypt.compareSync(password, user.password)) {
     // Log failed login attempts so admin can spot brute-force patterns.
     logAuditEvent({
@@ -142,6 +152,55 @@ router.post('/change-password', authMiddleware, (req, res) => {
   }
   db.prepare('UPDATE users SET password=? WHERE id=?').run(bcrypt.hashSync(new_password, 10), req.user.id);
   res.json({ message: 'Password changed successfully' });
+});
+
+// Self-service: set / update a personal recovery code. The user picks any
+// memorable code (e.g. a phrase) — stored as a bcrypt hash so even DB
+// access can't reveal it. Used by /forgot-password to reset without admin.
+router.post('/recovery-code', authMiddleware, (req, res) => {
+  const { recovery_code } = req.body || {};
+  const code = String(recovery_code || '').trim();
+  if (code.length < 4) return res.status(400).json({ error: 'Recovery code must be at least 4 characters' });
+  const db = getDb();
+  db.prepare('UPDATE users SET recovery_code_hash=? WHERE id=?').run(bcrypt.hashSync(code, 10), req.user.id);
+  res.json({ message: 'Recovery code saved. Keep it private — anyone with this code + your username can reset your password.' });
+});
+
+// Forgot password — no auth. Caller proves identity via the personal
+// recovery code they previously set. Generic error messages so we don't
+// reveal which usernames exist or which have a code configured.
+router.post('/forgot-password', (req, res) => {
+  const { logAuditEvent } = require('../middleware/audit');
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim() || null;
+  const ua = req.headers['user-agent'] || null;
+  const { username, recovery_code, new_password } = req.body || {};
+  const identifier = String(username || '').trim();
+  const code = String(recovery_code || '').trim();
+  const newPwd = String(new_password || '').trim();
+  if (!identifier || !code || !newPwd) return res.status(400).json({ error: 'Username, recovery code and new password are all required' });
+  if (newPwd.length < 4) return res.status(400).json({ error: 'New password must be at least 4 characters' });
+  const db = getDb();
+  const user = db.prepare('SELECT id, name, recovery_code_hash, active FROM users WHERE LOWER(username)=LOWER(?) OR LOWER(email)=LOWER(?)').get(identifier, identifier);
+  const fail = (reason, status = 400) => {
+    logAuditEvent({
+      action: 'FORGOT_PASSWORD_FAIL', entity_type: 'auth', entity_label: identifier,
+      method: 'POST', path: '/api/auth/forgot-password', status_code: status, ip, user_agent: ua,
+      body: { reason },
+    });
+    return res.status(status).json({ error: 'Username or recovery code is incorrect, or no recovery code is set for this account' });
+  };
+  if (!user || !user.recovery_code_hash) return fail('no_user_or_code');
+  if (!bcrypt.compareSync(code, user.recovery_code_hash)) return fail('bad_code');
+  // Reset both password and active flag — a forgot-password flow with a
+  // valid recovery code should also un-disable an accidentally deactivated
+  // account, otherwise the user would still be locked out after the reset.
+  db.prepare('UPDATE users SET password=?, active=1 WHERE id=?').run(bcrypt.hashSync(newPwd, 10), user.id);
+  logAuditEvent({
+    user: { id: user.id, name: user.name, role: 'self' },
+    action: 'FORGOT_PASSWORD_OK', entity_type: 'auth', entity_id: user.id, entity_label: user.name,
+    method: 'POST', path: '/api/auth/forgot-password', status_code: 200, ip, user_agent: ua,
+  });
+  res.json({ message: 'Password reset successfully. You can now sign in with your new password.' });
 });
 
 // Admin reset password — set a new password for any user and return it once.

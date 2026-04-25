@@ -5,7 +5,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiCheck, FiX, FiTrash2, FiExternalLink } from 'react-icons/fi';
+import { FiPlus, FiCheck, FiX, FiTrash2, FiExternalLink, FiChevronDown, FiChevronRight } from 'react-icons/fi';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false };
 
@@ -41,6 +41,12 @@ export default function Procurement() {
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
   const [indentItems, setIndentItems] = useState([{ ...EMPTY_ITEM }]);
+  const [expandedIndents, setExpandedIndents] = useState(() => new Set());
+  const toggleIndentRow = (id) => setExpandedIndents(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const load = () => {
     api.get('/procurement/indents').then(r => setIndents(r.data));
@@ -418,14 +424,34 @@ export default function Procurement() {
             <button onClick={() => { setForm({ notes: '', site_name: '', raised_by_name: user?.name || '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Raise Indent</button>
           </div>
           <div className="card p-0 overflow-x-auto"><table>
-            <thead><tr><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th>BOQ</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th>Items</th><th>BOQ</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-              {indents.map(i => (
-                <tr key={i.id}>
+              {indents.map(i => {
+                const items = i.items || [];
+                const expanded = expandedIndents.has(i.id);
+                return (
+                <Fragment key={i.id}>
+                <tr>
+                  <td className="text-center">
+                    {items.length > 0 && (
+                      <button onClick={() => toggleIndentRow(i.id)} className="p-1 text-gray-400 hover:text-red-600" title={expanded ? 'Hide items' : 'Show items'}>
+                        {expanded ? <FiChevronDown size={14} /> : <FiChevronRight size={14} />}
+                      </button>
+                    )}
+                  </td>
                   <td className="font-medium">{i.indent_number}</td>
                   <td className="text-xs text-gray-600">{i.created_at ? new Date(i.created_at).toLocaleString() : (i.indent_date || '—')}</td>
                   <td>{i.site_name || i.client_name || <span className="text-gray-400">—</span>}</td>
                   <td>{i.raised_by_name || i.created_by_name}</td>
+                  <td>
+                    {items.length === 0
+                      ? <span className="text-gray-400 text-xs">—</span>
+                      : (
+                        <button onClick={() => toggleIndentRow(i.id)} className="text-xs text-red-600 hover:underline">
+                          {items.length} item{items.length === 1 ? '' : 's'}
+                        </button>
+                      )}
+                  </td>
                   <td>
                     {i.boq_file_link
                       ? <a href={i.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 hover:underline flex items-center gap-1 text-xs"><FiExternalLink size={12} /> View</a>
@@ -449,8 +475,42 @@ export default function Procurement() {
                     </div>
                   </td>
                 </tr>
-              ))}
-              {indents.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No indents yet</td></tr>}
+                {expanded && items.length > 0 && (
+                  <tr className="bg-gray-50">
+                    <td></td>
+                    <td colSpan="8" className="p-3">
+                      <div className="text-xs font-semibold text-gray-600 mb-2">BoQ items raised in {i.indent_number}</div>
+                      <table className="text-xs w-full">
+                        <thead>
+                          <tr className="text-gray-500 border-b">
+                            <th className="text-left py-1 pr-3 w-10">#</th>
+                            <th className="text-left py-1 pr-3">Description</th>
+                            <th className="text-left py-1 pr-3">Make</th>
+                            <th className="text-right py-1 pr-3 w-20">Qty</th>
+                            <th className="text-left py-1 pr-3 w-16">Unit</th>
+                            <th className="text-left py-1 pr-3 w-16">Type</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {items.map((it, idx) => (
+                            <tr key={it.id} className="border-b border-gray-100 last:border-0">
+                              <td className="py-1 pr-3 text-gray-500">{idx + 1}</td>
+                              <td className="py-1 pr-3">{it.description || it.master_name || <span className="text-gray-400">—</span>}</td>
+                              <td className="py-1 pr-3">{it.make || <span className="text-gray-400">—</span>}</td>
+                              <td className="py-1 pr-3 text-right">{it.quantity}</td>
+                              <td className="py-1 pr-3">{it.unit || '—'}</td>
+                              <td className="py-1 pr-3">{it.item_type || <span className="text-gray-400">—</span>}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+              );
+              })}
+              {indents.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No indents yet</td></tr>}
             </tbody>
           </table></div>
         </>

@@ -61,8 +61,9 @@ function getUserPermissions(userId) {
   if (user?.role === 'admin') {
     // Admin gets everything
     const modules = [
-      'dashboard','leads','quotations','orders','vendors','procurement',
-      'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations'
+      'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement',
+      'cashflow','collections','payment_required','attendance','indent_fms','dpr',
+      'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks'
     ];
     const perms = {};
     for (const m of modules) {
