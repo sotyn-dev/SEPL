@@ -35,10 +35,12 @@ const SKIP_KEYS = new Set([
   'page', 'limit', 'offset',
 ]);
 
-function countWordsInString(s) {
+// Counts CHARACTERS (letters/digits/punctuation/spaces) in a string —
+// per mam's spec ("monika -> 6"). Same junk-filter as the word counter:
+// skip pure numbers / URLs / file paths / dates / hex IDs so technical
+// values don't inflate the score.
+function countCharsInString(s) {
   if (typeof s !== 'string') return 0;
-  // Skip values that look like an id, url, file path, ISO date, or a single
-  // technical token — none of these are "words mam's team typed".
   const t = s.trim();
   if (!t) return 0;
   if (t === '[REDACTED]') return 0;
@@ -47,40 +49,39 @@ function countWordsInString(s) {
   if (/^\/?[A-Za-z]:?[\\\/]/.test(t)) return 0;                 // file path
   if (/^\d{4}-\d{2}-\d{2}/.test(t)) return 0;                   // ISO date / datetime
   if (/^[a-f0-9-]{8,}$/i.test(t) && !/\s/.test(t)) return 0;    // hex / uuid-ish
-  // Word = whitespace-split chunk with at least one letter or digit
-  return t.split(/\s+/).filter(w => /[\p{L}\p{N}]/u.test(w)).length;
+  return t.length;                                              // every typed character
 }
 
-function countWordsRecursive(value, parentKey) {
+function countCharsRecursive(value, parentKey) {
   if (value == null) return 0;
   if (typeof value === 'string') {
     if (parentKey && SKIP_KEYS.has(String(parentKey).toLowerCase())) return 0;
-    return countWordsInString(value);
+    return countCharsInString(value);
   }
   if (typeof value === 'number' || typeof value === 'boolean') return 0;
   if (Array.isArray(value)) {
     let n = 0;
-    for (const v of value) n += countWordsRecursive(v, parentKey);
+    for (const v of value) n += countCharsRecursive(v, parentKey);
     return n;
   }
   if (typeof value === 'object') {
     let n = 0;
     for (const [k, v] of Object.entries(value)) {
       if (SKIP_KEYS.has(k.toLowerCase())) continue;
-      n += countWordsRecursive(v, k);
+      n += countCharsRecursive(v, k);
     }
     return n;
   }
   return 0;
 }
 
-function rowWordCount(row) {
-  if (!row.body_summary) return { words: 0, truncated: false };
+function rowCharCount(row) {
+  if (!row.body_summary) return { chars: 0, truncated: false };
   const truncated = row.body_summary.endsWith('…');
   let parsed;
   try { parsed = JSON.parse(truncated ? row.body_summary.slice(0, -1) : row.body_summary); }
-  catch { return { words: 0, truncated }; }
-  return { words: countWordsRecursive(parsed), truncated };
+  catch { return { chars: 0, truncated }; }
+  return { chars: countCharsRecursive(parsed), truncated };
 }
 
 // GET /api/admin/word-count?date=YYYY-MM-DD
@@ -120,34 +121,34 @@ router.get('/', (req, res) => {
   const byUser = new Map();
   const byModule = new Map();
   const byAction = new Map();
-  let totalWords = 0;
+  let totalChars = 0;
   let truncatedCount = 0;
 
   for (const r of rows) {
-    const { words, truncated } = rowWordCount(r);
-    totalWords += words;
+    const { chars, truncated } = rowCharCount(r);
+    totalChars += chars;
     if (truncated) truncatedCount += 1;
 
     const uKey = r.user_id || 0;
-    const u = byUser.get(uKey) || { user_id: r.user_id, user_name: r.user_name || '(unknown)', words: 0, activities: 0 };
-    u.words += words; u.activities += 1; byUser.set(uKey, u);
+    const u = byUser.get(uKey) || { user_id: r.user_id, user_name: r.user_name || '(unknown)', chars: 0, activities: 0 };
+    u.chars += chars; u.activities += 1; byUser.set(uKey, u);
 
     const mod = r.entity_type || '(other)';
-    const m = byModule.get(mod) || { module: mod, words: 0, activities: 0 };
-    m.words += words; m.activities += 1; byModule.set(mod, m);
+    const m = byModule.get(mod) || { module: mod, chars: 0, activities: 0 };
+    m.chars += chars; m.activities += 1; byModule.set(mod, m);
 
-    const a = byAction.get(r.action) || { action: r.action, words: 0, activities: 0 };
-    a.words += words; a.activities += 1; byAction.set(r.action, a);
+    const a = byAction.get(r.action) || { action: r.action, chars: 0, activities: 0 };
+    a.chars += chars; a.activities += 1; byAction.set(r.action, a);
   }
 
-  const byUserArr = [...byUser.values()].sort((a, b) => b.words - a.words);
-  const byModuleArr = [...byModule.values()].sort((a, b) => b.words - a.words);
-  const byActionArr = [...byAction.values()].sort((a, b) => b.words - a.words);
+  const byUserArr = [...byUser.values()].sort((a, b) => b.chars - a.chars);
+  const byModuleArr = [...byModule.values()].sort((a, b) => b.chars - a.chars);
+  const byActionArr = [...byAction.values()].sort((a, b) => b.chars - a.chars);
 
   res.json({
     date_from: dateFrom,
     date_to: dateTo,
-    total_words: totalWords,
+    total_chars: totalChars,
     total_activities: rows.length,
     truncated_activities: truncatedCount,
     by_user: byUserArr,
@@ -182,11 +183,11 @@ router.get('/detail', (req, res) => {
   ).all(...params);
 
   res.json(rows.map(r => {
-    const { words, truncated } = rowWordCount(r);
+    const { chars, truncated } = rowCharCount(r);
     return {
       id: r.id, at: r.at, user_id: r.user_id, user_name: r.user_name,
       action: r.action, module: r.entity_type, entity_label: r.entity_label,
-      path: r.path, words, truncated,
+      path: r.path, chars, truncated,
     };
   }));
 });

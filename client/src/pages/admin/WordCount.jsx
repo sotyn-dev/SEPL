@@ -1,6 +1,6 @@
 // Admin "Daily Activity / Word Count" dashboard.
 //
-// Pick a date (or range), see who typed how many words into the ERP that
+// Pick a date (or range), see how many characters each user typed into the ERP that
 // day, broken down by user, by module, and by action. Powered by
 // /api/admin/word-count which walks the audit_log body_summary.
 //
@@ -111,7 +111,7 @@ export default function WordCount() {
             <FiBarChart2 className="text-red-600" /> Daily Activity
           </h3>
           <p className="text-sm text-gray-500">
-            Pick a date to see the total words entered across the entire ERP that day, with breakdowns by user and module.
+            Pick a date to see the total characters typed across the entire ERP that day (e.g. typing "monika" = 6 characters), with breakdowns by user and module.
           </p>
         </div>
         <button onClick={load} disabled={loading} className="btn btn-secondary flex items-center gap-2">
@@ -139,19 +139,19 @@ export default function WordCount() {
         </div>
       </div>
 
-      {/* Hero card — MD wants "total words for selected date" as the
-          headline number. Make it impossible to miss. */}
+      {/* Hero card — MD wants "total characters for selected date" as
+          the headline number ("monika" = 6). Make it impossible to miss. */}
       {data && (
         <div className="card p-6 bg-gradient-to-br from-red-600 via-red-700 to-red-900 text-white shadow-lg">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <div className="text-[11px] uppercase tracking-widest text-red-100/80 font-semibold">Total Words Entered</div>
+              <div className="text-[11px] uppercase tracking-widest text-red-100/80 font-semibold">Total Characters Entered</div>
               <div className="text-[11px] text-red-100/70 mt-0.5">
                 {dateTo && dateTo !== date ? `${date} → ${dateTo}` : date}
               </div>
             </div>
             <div className="text-5xl sm:text-6xl font-extrabold tracking-tight tabular-nums">
-              {fmtNum(data.total_words)}
+              {fmtNum(data.total_chars)}
             </div>
           </div>
           <div className="grid grid-cols-3 gap-4 mt-5 pt-4 border-t border-white/20">
@@ -195,19 +195,19 @@ export default function WordCount() {
               <thead className="bg-gray-50/60">
                 <tr>
                   <th className="text-left px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">User</th>
-                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">Words</th>
+                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">Characters</th>
                   <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-400 uppercase">Entries</th>
                 </tr>
               </thead>
               <tbody>
-                {(data?.by_user || []).slice().sort((a, b) => b.words - a.words).map(u => (
+                {(data?.by_user || []).slice().sort((a, b) => b.chars - a.chars).map(u => (
                   <tr
                     key={u.user_id || u.user_name}
                     onClick={() => u.user_id && openDrill(u)}
                     className="border-t hover:bg-red-50/40 cursor-pointer"
                   >
                     <td className="px-3 py-2 font-medium text-gray-800">{u.user_name}</td>
-                    <td className="px-3 py-2 text-right font-bold text-red-700 text-base tabular-nums">{fmtNum(u.words)}</td>
+                    <td className="px-3 py-2 text-right font-bold text-red-700 text-base tabular-nums">{fmtNum(u.chars)}</td>
                     <td className="px-3 py-2 text-right text-gray-500 text-xs">{fmtNum(u.activities)}</td>
                   </tr>
                 ))}
@@ -229,15 +229,15 @@ export default function WordCount() {
               <thead className="bg-gray-50/60">
                 <tr>
                   <th className="text-left px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">Module</th>
-                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">Words</th>
+                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">Characters</th>
                   <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-400 uppercase">Entries</th>
                 </tr>
               </thead>
               <tbody>
-                {(data?.by_module || []).slice().sort((a, b) => b.words - a.words).map(m => (
+                {(data?.by_module || []).slice().sort((a, b) => b.chars - a.chars).map(m => (
                   <tr key={m.module} className="border-t hover:bg-gray-50">
                     <td className="px-3 py-2 text-gray-800">{moduleLabel(m.module)}</td>
-                    <td className="px-3 py-2 text-right font-bold text-red-700 text-base tabular-nums">{fmtNum(m.words)}</td>
+                    <td className="px-3 py-2 text-right font-bold text-red-700 text-base tabular-nums">{fmtNum(m.chars)}</td>
                     <td className="px-3 py-2 text-right text-gray-500 text-xs">{fmtNum(m.activities)}</td>
                   </tr>
                 ))}
@@ -258,7 +258,7 @@ export default function WordCount() {
             {data.by_action.map(a => (
               <div key={a.action} className={`px-3 py-1.5 rounded-lg text-xs ${ACTION_COLORS[a.action] || 'bg-gray-100 text-gray-700'}`}>
                 <span className="font-semibold">{a.action}</span>
-                <span className="ml-2">{fmtNum(a.words)} words</span>
+                <span className="ml-2">{fmtNum(a.chars)} characters</span>
                 <span className="ml-1 opacity-60">/ {fmtNum(a.activities)} entries</span>
               </div>
             ))}
@@ -277,7 +277,7 @@ export default function WordCount() {
                 </h3>
                 <p className="text-[11px] text-gray-500 mt-0.5">
                   {dateTo && dateTo !== date ? `${date} to ${dateTo}` : date} ·
-                  <span className="font-semibold text-red-700"> {fmtNum(drillUser.words)} words</span> · {fmtNum(drillUser.activities)} entries
+                  <span className="font-semibold text-red-700"> {fmtNum(drillUser.chars)} characters</span> · {fmtNum(drillUser.activities)} entries
                 </p>
               </div>
               <button onClick={() => setDrillUser(null)} className="p-1 text-gray-400 hover:text-gray-700"><FiX size={18} /></button>
@@ -295,7 +295,7 @@ export default function WordCount() {
                       <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-20">Action</th>
                       <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold">Module</th>
                       <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold">Entry</th>
-                      <th className="text-right px-2 py-2 text-gray-500 uppercase font-semibold w-16">Words</th>
+                      <th className="text-right px-2 py-2 text-gray-500 uppercase font-semibold w-16">Characters</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -311,7 +311,7 @@ export default function WordCount() {
                         <td className="px-2 py-1.5 text-gray-600 truncate max-w-[260px]" title={d.entity_label || d.path}>
                           {d.entity_label || d.path || '—'}
                         </td>
-                        <td className="px-2 py-1.5 text-right font-semibold text-red-700">{fmtNum(d.words)}{d.truncated && <span title="truncated" className="text-amber-500">*</span>}</td>
+                        <td className="px-2 py-1.5 text-right font-semibold text-red-700">{fmtNum(d.chars)}{d.truncated && <span title="truncated" className="text-amber-500">*</span>}</td>
                       </tr>
                     ))}
                   </tbody>
