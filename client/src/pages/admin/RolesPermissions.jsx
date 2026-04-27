@@ -24,6 +24,7 @@ const ALL_MODULES = [
   { key: 'vendors', label: 'Vendors' },
   { key: 'customers', label: 'Customers' },
   { key: 'procurement', label: 'Indent to Dispatch' },
+  { key: 'inventory', label: 'Inventory' },
   { key: 'installation', label: 'Installation' },
   { key: 'billing', label: 'Billing' },
   { key: 'complaints', label: 'Complaints' },

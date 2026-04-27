@@ -1192,6 +1192,65 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- ============================================
+    -- INVENTORY MANAGEMENT
+    -- ============================================
+    -- Multiple physical stores: one Office Store (central) + one Site
+    -- Store per active site. type='office' for the main warehouse,
+    -- type='site_store' for site-attached stores (site_id NOT NULL).
+    CREATE TABLE IF NOT EXISTS warehouses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'office' CHECK(type IN ('office','site_store')),
+      site_id INTEGER REFERENCES sites(id),
+      location TEXT,
+      in_charge TEXT,
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_warehouses_site ON warehouses(site_id);
+
+    -- Live stock = quantity on hand per (item, warehouse) with running
+    -- average rate so we can value the stock without a separate ledger.
+    -- UNIQUE keeps it idempotent — INSERT OR conflict path updates qty.
+    CREATE TABLE IF NOT EXISTS stock_balance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+      item_master_id INTEGER NOT NULL REFERENCES item_master(id),
+      quantity REAL NOT NULL DEFAULT 0,
+      avg_rate REAL DEFAULT 0,
+      reorder_level REAL DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(warehouse_id, item_master_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_stock_warehouse ON stock_balance(warehouse_id);
+    CREATE INDEX IF NOT EXISTS idx_stock_item ON stock_balance(item_master_id);
+
+    -- Append-only journal of every stock change. type IN/OUT/TRANSFER/ADJUST.
+    -- For TRANSFER we write TWO rows — one OUT from from_warehouse_id and one
+    -- IN to to_warehouse_id, paired by the same reference_id so the UI can
+    -- show them as a single movement.
+    CREATE TABLE IF NOT EXISTS stock_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+      item_master_id INTEGER NOT NULL REFERENCES item_master(id),
+      type TEXT NOT NULL CHECK(type IN ('IN','OUT')),
+      quantity REAL NOT NULL,
+      rate REAL DEFAULT 0,
+      total_value REAL DEFAULT 0,
+      reference_type TEXT,        -- e.g. 'GRN','OPENING','TRANSFER','ISSUE','ADJUST','PURCHASE'
+      reference_id TEXT,          -- pairs the two halves of a TRANSFER + links to GRN/Indent rows
+      from_warehouse_id INTEGER REFERENCES warehouses(id),  -- only set on OUT side of a TRANSFER
+      to_warehouse_id INTEGER REFERENCES warehouses(id),    -- only set on IN side of a TRANSFER
+      site_id INTEGER REFERENCES sites(id),                 -- for site-issue movements
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_stock_mvmt_warehouse ON stock_movements(warehouse_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_stock_mvmt_item ON stock_movements(item_master_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_stock_mvmt_ref ON stock_movements(reference_type, reference_id);
+
     -- PMS Tasks — Project Management tasks created by CRM against a specific
     -- Business Book project. Same lifecycle as delegations (pending → submitted
     -- → approved/rejected) but each task is tied to a BB project_id so the
@@ -1400,7 +1459,7 @@ function initializeDatabase() {
 
   const ALL_MODULES = [
     'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement','cashflow','collections','payment_required','attendance','indent_fms','dpr',
-    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks'
+    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory'
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
@@ -1538,6 +1597,33 @@ function initializeDatabase() {
       db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)').run(br.lastInsertRowid, adminRole.id);
     }
     console.log(`[seed] Created backup admin — username: backup-admin, password: ${backupPwd}`);
+  }
+
+  // ============================================
+  // INVENTORY SEED — Office Store + a Site Store per existing site
+  // ============================================
+  // Creates the central Office Store on first run, then ensures every site
+  // in the `sites` table has a matching Site Store. Idempotent: running on
+  // an already-seeded DB just adds stores for any sites added since.
+  try {
+    const officeExists = db.prepare("SELECT id FROM warehouses WHERE type='office'").get();
+    if (!officeExists) {
+      db.prepare("INSERT INTO warehouses (name, type, location, in_charge) VALUES ('Office Store','office','Head Office',?)")
+        .run('Admin');
+      console.log('[seed] Created Office Store warehouse');
+    }
+    // One site_store per site, named "<site_name> Store", linked by site_id.
+    const sitesNeedingStores = db.prepare(`
+      SELECT s.id, s.name FROM sites s
+       WHERE NOT EXISTS (SELECT 1 FROM warehouses w WHERE w.site_id = s.id)
+    `).all();
+    if (sitesNeedingStores.length > 0) {
+      const ins = db.prepare("INSERT INTO warehouses (name, type, site_id, location) VALUES (?, 'site_store', ?, ?)");
+      for (const s of sitesNeedingStores) ins.run(`${s.name} Store`, s.id, s.name);
+      console.log(`[seed] Auto-created ${sitesNeedingStores.length} site_store warehouses`);
+    }
+  } catch (e) {
+    console.error('[seed] Inventory warehouse seed failed:', e.message);
   }
 
   // Owner-only emergency reset code — last-resort master key for the company

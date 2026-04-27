@@ -1,0 +1,610 @@
+// Inventory Management — Phase 1
+//
+// Tabs:
+//   Stock      : current quantity per item per warehouse, with search
+//   Receive    : record a stock IN (vendor delivery / opening balance / adjust)
+//   Issue      : record a stock OUT — to a site (consumption) OR to another warehouse (transfer)
+//   Movements  : full append-only journal with filters
+//   Warehouses : manage office store + per-site stores
+
+import { useState, useEffect, useMemo } from 'react';
+import api from '../api';
+import toast from 'react-hot-toast';
+import Modal from '../components/Modal';
+import SearchableSelect from '../components/SearchableSelect';
+import { useAuth } from '../context/AuthContext';
+import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin } from 'react-icons/fi';
+
+const fmtNum = (n) => (n == null ? '0' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 }));
+const fmtMoney = (n) => '₹ ' + fmtNum(n);
+
+export default function Inventory() {
+  const { canCreate, canEdit, isAdmin } = useAuth();
+  const [tab, setTab] = useState('stock');
+  const [warehouses, setWarehouses] = useState([]);
+  const [sites, setSites] = useState([]);
+  const [items, setItems] = useState([]);          // item_master dropdown source
+  const [stock, setStock] = useState([]);
+  const [summary, setSummary] = useState([]);
+  const [movements, setMovements] = useState([]);
+
+  // Filters
+  const [stockFilter, setStockFilter] = useState({ warehouse_id: '', search: '', low_only: false });
+  const [mvmtFilter, setMvmtFilter] = useState({ warehouse_id: '', type: '', date_from: '', date_to: '' });
+
+  const loadCommon = async () => {
+    try {
+      const [w, s, im] = await Promise.all([
+        api.get('/inventory/warehouses'),
+        api.get('/dpr/sites?all=1').catch(() => ({ data: [] })),
+        api.get('/item-master/dropdown').catch(() => ({ data: [] })),
+      ]);
+      setWarehouses(w.data || []);
+      setSites(s.data || []);
+      setItems((im.data || []).map(i => ({ ...i, label: `${i.item_code || ''} ${i.item_name}`.trim() })));
+    } catch (err) { /* keep silent */ }
+  };
+
+  const loadSummary = async () => {
+    try { const r = await api.get('/inventory/summary'); setSummary(r.data || []); } catch {}
+  };
+
+  const loadStock = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (stockFilter.warehouse_id) params.set('warehouse_id', stockFilter.warehouse_id);
+      if (stockFilter.search) params.set('search', stockFilter.search);
+      if (stockFilter.low_only) params.set('low_only', '1');
+      const r = await api.get('/inventory/stock?' + params.toString());
+      setStock(r.data || []);
+    } catch (err) { toast.error('Failed to load stock'); }
+  };
+
+  const loadMovements = async () => {
+    try {
+      const params = new URLSearchParams();
+      Object.entries(mvmtFilter).forEach(([k, v]) => { if (v) params.set(k, v); });
+      const r = await api.get('/inventory/movements?' + params.toString());
+      setMovements(r.data || []);
+    } catch (err) { toast.error('Failed to load movements'); }
+  };
+
+  useEffect(() => { loadCommon(); loadSummary(); }, []);
+  useEffect(() => { if (tab === 'stock') loadStock(); /* eslint-disable-next-line */ }, [tab, stockFilter]);
+  useEffect(() => { if (tab === 'movements') loadMovements(); /* eslint-disable-next-line */ }, [tab, mvmtFilter]);
+
+  // Aggregate for header cards
+  const totals = useMemo(() => {
+    const valueByWh = summary.reduce((s, w) => s + (+w.total_value || 0), 0);
+    const lowCount = summary.reduce((s, w) => s + (+w.low_stock_items || 0), 0);
+    const distinctItems = summary.reduce((s, w) => s + (+w.items_in_stock || 0), 0);
+    return { valueByWh, lowCount, distinctItems };
+  }, [summary]);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+        <div>
+          <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+            <FiPackage className="text-red-600" /> Inventory
+          </h3>
+          <p className="text-sm text-gray-500">
+            Stock per warehouse · receive material in · issue to site or transfer between stores · full movement history.
+          </p>
+        </div>
+        <button onClick={() => { loadSummary(); if (tab === 'stock') loadStock(); if (tab === 'movements') loadMovements(); }}
+          className="btn btn-secondary flex items-center gap-2"><FiRefreshCw size={14} /> Refresh</button>
+      </div>
+
+      {/* Top summary cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+        <div className="card p-4 border-l-4 border-red-500">
+          <div className="text-[10px] uppercase text-gray-500 font-semibold">Warehouses</div>
+          <div className="text-2xl font-bold mt-1">{warehouses.filter(w => w.active).length}</div>
+          <div className="text-[10px] text-gray-400">{warehouses.filter(w => w.type === 'office').length} office · {warehouses.filter(w => w.type === 'site_store').length} site</div>
+        </div>
+        <div className="card p-4 border-l-4 border-emerald-500">
+          <div className="text-[10px] uppercase text-gray-500 font-semibold">Distinct Items in Stock</div>
+          <div className="text-2xl font-bold mt-1">{fmtNum(totals.distinctItems)}</div>
+          <div className="text-[10px] text-gray-400">across all warehouses</div>
+        </div>
+        <div className="card p-4 border-l-4 border-blue-500">
+          <div className="text-[10px] uppercase text-gray-500 font-semibold">Total Stock Value</div>
+          <div className="text-2xl font-bold mt-1">{fmtMoney(totals.valueByWh)}</div>
+          <div className="text-[10px] text-gray-400">moving avg basis</div>
+        </div>
+        <div className="card p-4 border-l-4 border-amber-500">
+          <div className="text-[10px] uppercase text-gray-500 font-semibold">Below Reorder Level</div>
+          <div className="text-2xl font-bold mt-1 text-amber-700">{fmtNum(totals.lowCount)}</div>
+          <div className="text-[10px] text-gray-400">items need restocking</div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-2 flex-wrap">
+        {[
+          ['stock', 'Stock'],
+          ['receive', 'Receive (IN)', canCreate('inventory')],
+          ['issue', 'Issue / Transfer (OUT)', canCreate('inventory')],
+          ['movements', 'Movements'],
+          ['warehouses', 'Warehouses'],
+        ].filter(([, , cond]) => cond === undefined || cond).map(([id, label]) => (
+          <button key={id} onClick={() => setTab(id)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium border ${tab === id ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'stock' && <StockTab stock={stock} warehouses={warehouses} filter={stockFilter} setFilter={setStockFilter} />}
+      {tab === 'receive' && <ReceiveTab warehouses={warehouses} items={items} reload={() => { loadStock(); loadSummary(); }} />}
+      {tab === 'issue' && <IssueTab warehouses={warehouses} sites={sites} items={items} reload={() => { loadStock(); loadSummary(); }} />}
+      {tab === 'movements' && <MovementsTab movements={movements} warehouses={warehouses} filter={mvmtFilter} setFilter={setMvmtFilter} />}
+      {tab === 'warehouses' && <WarehousesTab warehouses={warehouses} sites={sites} reload={loadCommon} canEdit={canEdit('inventory') || isAdmin()} canCreate={canCreate('inventory') || isAdmin()} />}
+    </div>
+  );
+}
+
+// ---------- STOCK TAB ----------
+function StockTab({ stock, warehouses, filter, setFilter }) {
+  // Group by warehouse for clearer presentation
+  const grouped = useMemo(() => {
+    const map = new Map();
+    for (const r of stock) {
+      const k = r.warehouse_id;
+      if (!map.has(k)) map.set(k, { warehouse_id: k, warehouse_name: r.warehouse_name, type: r.warehouse_type, rows: [] });
+      map.get(k).rows.push(r);
+    }
+    return [...map.values()];
+  }, [stock]);
+
+  return (
+    <>
+      <div className="card p-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+        <div>
+          <label className="label">Warehouse</label>
+          <select className="select" value={filter.warehouse_id} onChange={e => setFilter(f => ({ ...f, warehouse_id: e.target.value }))}>
+            <option value="">All warehouses</option>
+            {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Search Item</label>
+          <div className="relative">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+            <input className="input pl-9" placeholder="name / code / spec" value={filter.search} onChange={e => setFilter(f => ({ ...f, search: e.target.value }))} />
+          </div>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-amber-700">
+          <input type="checkbox" className="w-4 h-4 rounded" checked={filter.low_only} onChange={e => setFilter(f => ({ ...f, low_only: e.target.checked }))} />
+          Show only items below reorder level
+        </label>
+      </div>
+
+      {grouped.length === 0 && (
+        <div className="card p-6 text-center text-gray-400 text-sm">
+          No stock yet. Use the <span className="font-semibold">Receive</span> tab to record an opening balance or first delivery.
+        </div>
+      )}
+
+      {grouped.map(g => (
+        <div key={g.warehouse_id} className="card p-0 overflow-hidden">
+          <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
+            <h4 className="font-semibold text-gray-700 flex items-center gap-2">
+              {g.type === 'office' ? <FiHome size={14} className="text-red-600" /> : <FiMapPin size={14} className="text-red-600" />}
+              {g.warehouse_name}
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{g.type === 'office' ? 'Office' : 'Site'}</span>
+            </h4>
+            <span className="text-[11px] text-gray-400">{g.rows.length} items</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="text-sm w-full">
+              <thead className="bg-gray-50/60">
+                <tr>
+                  <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Code</th>
+                  <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Item</th>
+                  <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">UOM</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Quantity</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Avg Rate</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Value</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Reorder</th>
+                </tr>
+              </thead>
+              <tbody>
+                {g.rows.map(r => {
+                  const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
+                  return (
+                    <tr key={r.id} className={`border-t ${low ? 'bg-amber-50/40' : 'hover:bg-gray-50'}`}>
+                      <td className="px-3 py-2 text-gray-500 font-mono text-[11px]">{r.item_code || '—'}</td>
+                      <td className="px-3 py-2 text-gray-800">{r.item_name}{r.specification && <span className="block text-[10px] text-gray-400">{r.specification}</span>}</td>
+                      <td className="px-3 py-2 text-gray-600">{r.uom || '—'}</td>
+                      <td className={`px-3 py-2 text-right font-bold tabular-nums ${low ? 'text-amber-700' : 'text-gray-800'}`}>
+                        {fmtNum(r.quantity)} {low && <FiAlertTriangle className="inline ml-1 text-amber-500" size={12} />}
+                      </td>
+                      <td className="px-3 py-2 text-right text-gray-600 tabular-nums">{fmtMoney(r.avg_rate)}</td>
+                      <td className="px-3 py-2 text-right text-gray-700 tabular-nums">{fmtMoney(r.quantity * r.avg_rate)}</td>
+                      <td className="px-3 py-2 text-right text-gray-500 tabular-nums">{r.reorder_level > 0 ? fmtNum(r.reorder_level) : '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+// ---------- RECEIVE TAB ----------
+function ReceiveTab({ warehouses, items, reload }) {
+  const [form, setForm] = useState({ warehouse_id: '', reference_type: 'PURCHASE', reference_id: '', notes: '' });
+  const [lines, setLines] = useState([{ item_master_id: '', quantity: '', rate: '' }]);
+  const [saving, setSaving] = useState(false);
+
+  const addLine = () => setLines(l => [...l, { item_master_id: '', quantity: '', rate: '' }]);
+  const rmLine = (i) => setLines(l => l.filter((_, idx) => idx !== i));
+  const setLine = (i, k, v) => setLines(l => l.map((x, idx) => idx === i ? { ...x, [k]: v } : x));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!form.warehouse_id) return toast.error('Pick a warehouse');
+    const valid = lines.filter(l => l.item_master_id && +l.quantity > 0);
+    if (valid.length === 0) return toast.error('Add at least one item with quantity');
+    setSaving(true);
+    try {
+      await api.post('/inventory/receive', { ...form, items: valid });
+      toast.success(`Received ${valid.length} item(s)`);
+      setLines([{ item_master_id: '', quantity: '', rate: '' }]);
+      setForm(f => ({ ...f, reference_id: '', notes: '' }));
+      reload();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    }
+    setSaving(false);
+  };
+
+  return (
+    <form onSubmit={submit} className="card p-4 space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div>
+          <label className="label">Warehouse *</label>
+          <select className="select" value={form.warehouse_id} onChange={e => setForm(f => ({ ...f, warehouse_id: e.target.value }))} required>
+            <option value="">Select…</option>
+            {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Reference Type</label>
+          <select className="select" value={form.reference_type} onChange={e => setForm(f => ({ ...f, reference_type: e.target.value }))}>
+            <option value="PURCHASE">Purchase / Vendor delivery</option>
+            <option value="GRN">GRN (Goods Receipt Note)</option>
+            <option value="OPENING">Opening Balance</option>
+            <option value="ADJUST">Adjustment (Stock found)</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">Reference No (PO / GRN / Bill)</label>
+          <input className="input" value={form.reference_id} onChange={e => setForm(f => ({ ...f, reference_id: e.target.value }))} placeholder="optional" />
+        </div>
+      </div>
+
+      <div>
+        <div className="flex justify-between items-center mb-2">
+          <h4 className="font-semibold text-sm text-gray-700">Items</h4>
+          <button type="button" onClick={addLine} className="btn btn-secondary text-xs flex items-center gap-1"><FiPlus size={12} /> Add Line</button>
+        </div>
+        <div className="space-y-2">
+          {lines.map((l, i) => (
+            <div key={i} className="grid grid-cols-12 gap-2 items-start">
+              <div className="col-span-6">
+                <SearchableSelect
+                  options={items}
+                  value={l.item_master_id || null}
+                  valueKey="id" displayKey="label"
+                  placeholder="Search item by name / code…"
+                  onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
+                />
+              </div>
+              <input className="input col-span-2" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
+              <input className="input col-span-3" type="number" step="any" min="0" placeholder="Rate ₹ (optional)" value={l.rate} onChange={e => setLine(i, 'rate', e.target.value)} />
+              <button type="button" onClick={() => rmLine(i)} className="text-gray-400 hover:text-red-600 col-span-1 self-center justify-self-center" title="Remove"><FiTrash2 size={14} /></button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <label className="label">Notes</label>
+        <input className="input" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Vendor name, delivery details, etc." />
+      </div>
+
+      <div className="flex justify-end">
+        <button type="submit" disabled={saving} className="btn btn-primary flex items-center gap-2">
+          <FiArrowDown size={14} /> {saving ? 'Saving…' : 'Receive Stock'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ---------- ISSUE TAB ----------
+function IssueTab({ warehouses, sites, items, reload }) {
+  const [form, setForm] = useState({ from_warehouse_id: '', destination_type: 'site', destination_id: '', notes: '', reference_id: '' });
+  const [lines, setLines] = useState([{ item_master_id: '', quantity: '' }]);
+  const [saving, setSaving] = useState(false);
+
+  const addLine = () => setLines(l => [...l, { item_master_id: '', quantity: '' }]);
+  const rmLine = (i) => setLines(l => l.filter((_, idx) => idx !== i));
+  const setLine = (i, k, v) => setLines(l => l.map((x, idx) => idx === i ? { ...x, [k]: v } : x));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!form.from_warehouse_id) return toast.error('Pick a source warehouse');
+    if (!form.destination_id) return toast.error('Pick a destination');
+    const valid = lines.filter(l => l.item_master_id && +l.quantity > 0);
+    if (valid.length === 0) return toast.error('Add at least one item');
+    setSaving(true);
+    try {
+      await api.post('/inventory/issue', { ...form, items: valid });
+      toast.success(form.destination_type === 'warehouse' ? 'Stock transferred' : 'Stock issued to site');
+      setLines([{ item_master_id: '', quantity: '' }]);
+      setForm(f => ({ ...f, reference_id: '', notes: '' }));
+      reload();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    }
+    setSaving(false);
+  };
+
+  // Filter destination warehouses to NOT include the source
+  const destWarehouses = warehouses.filter(w => w.id !== +form.from_warehouse_id);
+
+  return (
+    <form onSubmit={submit} className="card p-4 space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div>
+          <label className="label">From Warehouse *</label>
+          <select className="select" value={form.from_warehouse_id} onChange={e => setForm(f => ({ ...f, from_warehouse_id: e.target.value }))} required>
+            <option value="">Select source…</option>
+            {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Destination Type *</label>
+          <select className="select" value={form.destination_type} onChange={e => setForm(f => ({ ...f, destination_type: e.target.value, destination_id: '' }))}>
+            <option value="site">Site (consumption)</option>
+            <option value="warehouse">Another Warehouse (transfer)</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">{form.destination_type === 'site' ? 'Destination Site *' : 'Destination Warehouse *'}</label>
+          <select className="select" value={form.destination_id} onChange={e => setForm(f => ({ ...f, destination_id: e.target.value }))} required>
+            <option value="">Select…</option>
+            {form.destination_type === 'site'
+              ? sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)
+              : destWarehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <div className="flex justify-between items-center mb-2">
+          <h4 className="font-semibold text-sm text-gray-700">Items</h4>
+          <button type="button" onClick={addLine} className="btn btn-secondary text-xs flex items-center gap-1"><FiPlus size={12} /> Add Line</button>
+        </div>
+        <div className="space-y-2">
+          {lines.map((l, i) => (
+            <div key={i} className="grid grid-cols-12 gap-2 items-start">
+              <div className="col-span-9">
+                <SearchableSelect
+                  options={items}
+                  value={l.item_master_id || null}
+                  valueKey="id" displayKey="label"
+                  placeholder="Search item by name / code…"
+                  onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
+                />
+              </div>
+              <input className="input col-span-2" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
+              <button type="button" onClick={() => rmLine(i)} className="text-gray-400 hover:text-red-600 col-span-1 self-center justify-self-center" title="Remove"><FiTrash2 size={14} /></button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className="label">Reference No (Indent / Challan)</label>
+          <input className="input" value={form.reference_id} onChange={e => setForm(f => ({ ...f, reference_id: e.target.value }))} placeholder="optional" />
+        </div>
+        <div>
+          <label className="label">Notes</label>
+          <input className="input" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Issued by / received by / purpose" />
+        </div>
+      </div>
+
+      <div className="flex justify-end">
+        <button type="submit" disabled={saving} className="btn btn-primary flex items-center gap-2">
+          <FiArrowUp size={14} /> {saving ? 'Saving…' : (form.destination_type === 'warehouse' ? 'Transfer Stock' : 'Issue to Site')}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ---------- MOVEMENTS TAB ----------
+function MovementsTab({ movements, warehouses, filter, setFilter }) {
+  return (
+    <>
+      <div className="card p-4 grid grid-cols-1 sm:grid-cols-5 gap-3">
+        <div>
+          <label className="label">Warehouse</label>
+          <select className="select" value={filter.warehouse_id} onChange={e => setFilter(f => ({ ...f, warehouse_id: e.target.value }))}>
+            <option value="">All</option>
+            {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Type</label>
+          <select className="select" value={filter.type} onChange={e => setFilter(f => ({ ...f, type: e.target.value }))}>
+            <option value="">All</option>
+            <option value="IN">IN</option>
+            <option value="OUT">OUT</option>
+          </select>
+        </div>
+        <div>
+          <label className="label">From Date</label>
+          <input type="date" className="input" value={filter.date_from} onChange={e => setFilter(f => ({ ...f, date_from: e.target.value }))} />
+        </div>
+        <div>
+          <label className="label">To Date</label>
+          <input type="date" className="input" value={filter.date_to} onChange={e => setFilter(f => ({ ...f, date_to: e.target.value }))} />
+        </div>
+        <div className="self-end text-xs text-gray-500">{movements.length} movements</div>
+      </div>
+
+      <div className="card p-0 overflow-x-auto">
+        <table className="text-sm w-full">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">When</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Type</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Item</th>
+              <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Qty</th>
+              <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Rate</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Reference / Destination</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">By</th>
+            </tr>
+          </thead>
+          <tbody>
+            {movements.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400 text-sm">No movements yet</td></tr>}
+            {movements.map(m => (
+              <tr key={m.id} className="border-t hover:bg-gray-50">
+                <td className="px-3 py-1.5 text-[11px] text-gray-500 font-mono whitespace-nowrap">{new Date(m.created_at).toLocaleString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
+                <td className="px-3 py-1.5">
+                  <span className={`px-2 py-0.5 text-[10px] rounded ${m.type === 'IN' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                    {m.type}{m.reference_type === 'TRANSFER' ? ' · XFER' : ''}
+                  </span>
+                </td>
+                <td className="px-3 py-1.5 text-gray-700">{m.warehouse_name}</td>
+                <td className="px-3 py-1.5">
+                  <div className="text-gray-800">{m.item_name}</div>
+                  {m.item_code && <div className="text-[10px] text-gray-400 font-mono">{m.item_code}</div>}
+                </td>
+                <td className="px-3 py-1.5 text-right font-semibold tabular-nums">{fmtNum(m.quantity)} <span className="text-[10px] text-gray-400">{m.uom}</span></td>
+                <td className="px-3 py-1.5 text-right text-gray-600 tabular-nums">{m.rate ? fmtMoney(m.rate) : '—'}</td>
+                <td className="px-3 py-1.5 text-[11px] text-gray-600">
+                  {m.reference_type && <span className="font-medium">{m.reference_type}</span>}
+                  {m.reference_id && <span className="ml-1 text-gray-400">#{m.reference_id}</span>}
+                  {m.to_warehouse_name && <div className="text-gray-500">→ {m.to_warehouse_name}</div>}
+                  {m.from_warehouse_name && <div className="text-gray-500">← {m.from_warehouse_name}</div>}
+                  {m.site_name && <div className="text-gray-500">site: {m.site_name}</div>}
+                  {m.notes && <div className="text-gray-400 italic truncate max-w-[220px]" title={m.notes}>{m.notes}</div>}
+                </td>
+                <td className="px-3 py-1.5 text-[11px] text-gray-500">{m.created_by_name || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+// ---------- WAREHOUSES TAB ----------
+function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
+  const [modal, setModal] = useState(null); // { id?, name, type, site_id, location, in_charge }
+  const open = (w) => setModal(w || { name: '', type: 'office', site_id: '', location: '', in_charge: '' });
+  const save = async (e) => {
+    e.preventDefault();
+    try {
+      if (modal.id) {
+        await api.put(`/inventory/warehouses/${modal.id}`, modal);
+      } else {
+        await api.post('/inventory/warehouses', modal);
+      }
+      toast.success('Saved');
+      setModal(null);
+      reload();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    }
+  };
+
+  return (
+    <>
+      <div className="flex justify-end">
+        {canCreate && <button onClick={() => open()} className="btn btn-primary flex items-center gap-2"><FiPlus size={14} /> Add Warehouse</button>}
+      </div>
+      <div className="card p-0 overflow-x-auto">
+        <table className="text-sm w-full">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Name</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Type</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Site</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Location</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">In Charge</th>
+              <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Items</th>
+              <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Value</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {warehouses.map(w => (
+              <tr key={w.id} className="border-t hover:bg-gray-50">
+                <td className="px-3 py-2 font-medium text-gray-800">{w.name}</td>
+                <td className="px-3 py-2"><span className={`px-2 py-0.5 text-[10px] rounded ${w.type === 'office' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>{w.type === 'office' ? 'Office' : 'Site'}</span></td>
+                <td className="px-3 py-2 text-gray-600">{w.site_name || '—'}</td>
+                <td className="px-3 py-2 text-gray-600">{w.location || '—'}</td>
+                <td className="px-3 py-2 text-gray-600">{w.in_charge || '—'}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{fmtNum(w.item_count)}</td>
+                <td className="px-3 py-2 text-right text-gray-700 tabular-nums">{fmtMoney(w.total_value)}</td>
+                <td className="px-3 py-2"><span className={`text-[10px] px-2 py-0.5 rounded ${w.active ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-500'}`}>{w.active ? 'Active' : 'Inactive'}</span></td>
+                <td className="px-3 py-2 text-right">{canEdit && <button onClick={() => open(w)} className="p-1 text-gray-400 hover:text-red-600" title="Edit"><FiEdit2 size={14} /></button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <Modal isOpen={!!modal} onClose={() => setModal(null)} title={modal?.id ? 'Edit Warehouse' : 'Add Warehouse'}>
+        {modal && (
+          <form onSubmit={save} className="space-y-3">
+            <div><label className="label">Name *</label><input className="input" required value={modal.name} onChange={e => setModal({ ...modal, name: e.target.value })} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Type</label>
+                <select className="select" value={modal.type} onChange={e => setModal({ ...modal, type: e.target.value })} disabled={!!modal.id}>
+                  <option value="office">Office Store</option>
+                  <option value="site_store">Site Store</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Linked Site {modal.type === 'site_store' && '*'}</label>
+                <select className="select" value={modal.site_id || ''} onChange={e => setModal({ ...modal, site_id: e.target.value })} disabled={modal.type !== 'site_store'}>
+                  <option value="">—</option>
+                  {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div><label className="label">Location</label><input className="input" value={modal.location || ''} onChange={e => setModal({ ...modal, location: e.target.value })} placeholder="Building / address" /></div>
+            <div><label className="label">In Charge</label><input className="input" value={modal.in_charge || ''} onChange={e => setModal({ ...modal, in_charge: e.target.value })} placeholder="Store keeper name" /></div>
+            {modal.id && (
+              <label className="flex items-center gap-2 text-sm text-gray-600">
+                <input type="checkbox" className="w-4 h-4" checked={!!modal.active} onChange={e => setModal({ ...modal, active: e.target.checked ? 1 : 0 })} />
+                Active
+              </label>
+            )}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button>
+              <button type="submit" className="btn btn-primary">Save</button>
+            </div>
+          </form>
+        )}
+      </Modal>
+    </>
+  );
+}

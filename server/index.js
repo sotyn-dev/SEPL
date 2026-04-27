@@ -74,6 +74,7 @@ app.use('/api/pms-tasks', require('./routes/pmstasks'));
 app.use('/api/admin/backups', require('./routes/backups'));
 app.use('/api/admin/word-count', require('./routes/wordcount'));
 app.use('/api/admin/locations', require('./routes/locations'));
+app.use('/api/inventory', require('./routes/inventory'));
 
 // 4 Critical Systems
 app.use('/api/cashflow', require('./routes/cashflow'));
