@@ -145,7 +145,9 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
   const db = getDb();
   const { nextSequence } = require('../db/nextSequence');
   const yr = new Date().getFullYear();
-  const requestNo = nextSequence(db, 'payment_requests', 'request_number', `PR-${yr}-`, { startFrom: 0, pad: 4 });
+  // Schema column is `request_no` (NOT request_number) — earlier mismatch
+  // crashed the create with "no such column: request_number" on the live VPS.
+  const requestNo = nextSequence(db, 'payment_requests', 'request_no', `PR-${yr}-`, { startFrom: 0, pad: 4 });
 
   // Ensure extra columns exist
   try { db.exec('ALTER TABLE payment_requests ADD COLUMN ticket_upload TEXT'); } catch(e) {}
