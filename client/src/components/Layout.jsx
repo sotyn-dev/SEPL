@@ -9,7 +9,7 @@ import {
   FiHome, FiUsers, FiTarget, FiFileText, FiShoppingCart,
   FiTruck, FiTool, FiAlertCircle, FiUserPlus,
   FiCheckSquare, FiMenu, FiX, FiLogOut, FiPackage, FiClipboard,
-  FiSettings, FiShield, FiTrendingUp, FiCreditCard, FiLayers, FiBarChart2, FiBook, FiGrid, FiKey
+  FiSettings, FiShield, FiTrendingUp, FiCreditCard, FiLayers, FiBarChart2, FiBook, FiGrid, FiKey, FiMapPin
 } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 
@@ -43,6 +43,7 @@ const adminItems = [
   { path: '/admin/users', label: 'User Management', icon: FiSettings, module: 'users' },
   { path: '/admin/roles', label: 'Roles & Permissions', icon: FiShield, module: 'users' },
   { path: '/admin/word-count', label: 'Daily Activity', icon: FiBarChart2, module: 'users' },
+  { path: '/admin/locations', label: 'Location Tracking', icon: FiMapPin, module: 'users' },
   { path: '/admin/backups', label: 'Database Backups', icon: FiPackage, module: 'users' },
   { path: '/admin/audit', label: 'Audit Log', icon: FiShield, module: 'users' },
 ];

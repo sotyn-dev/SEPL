@@ -1,0 +1,304 @@
+// Admin "Location Tracking" — two views:
+//
+//   LIVE     : every user's most recent GPS ping (last 30 min by default)
+//              with a "View on Map" button (opens Google Maps).
+//   TIMELINE : pick employee + date, see every ping that day with the
+//              distance-from-previous and a BEFORE / DURING / AFTER tag
+//              based on punch-in / punch-out times — answers mam's
+//              "where did they go between in and out".
+
+import { useState, useEffect } from 'react';
+import api from '../../api';
+import toast from 'react-hot-toast';
+import { FiMapPin, FiRefreshCw, FiUser, FiCalendar, FiClock, FiNavigation, FiExternalLink, FiAlertCircle } from 'react-icons/fi';
+
+const todayIso = () => new Date().toISOString().slice(0, 10);
+const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—';
+const fmtDist = (m) => m == null ? '—' : (m < 1000 ? `${m} m` : `${(m / 1000).toFixed(2)} km`);
+const mapsUrl = (lat, lng) => `https://www.google.com/maps?q=${lat},${lng}`;
+
+const PHASE_PILL = {
+  before: 'bg-gray-100 text-gray-600',
+  during: 'bg-emerald-100 text-emerald-700 font-semibold',
+  after: 'bg-amber-100 text-amber-700',
+};
+const PHASE_LABEL = { before: 'before in', during: 'during work', after: 'after out' };
+
+export default function Locations() {
+  const [tab, setTab] = useState('live');
+
+  // ===== Live tab =====
+  const [live, setLive] = useState(null);
+  const [staleMin, setStaleMin] = useState(30);
+  const [liveLoading, setLiveLoading] = useState(false);
+
+  const loadLive = async () => {
+    setLiveLoading(true);
+    try {
+      const r = await api.get('/admin/locations/live', { params: { stale_minutes: staleMin } });
+      setLive(r.data);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load');
+    }
+    setLiveLoading(false);
+  };
+  useEffect(() => { if (tab === 'live') loadLive(); /* eslint-disable-next-line */ }, [tab, staleMin]);
+
+  // Auto-refresh live tab every 60s while open
+  useEffect(() => {
+    if (tab !== 'live') return;
+    const id = setInterval(loadLive, 60 * 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line
+  }, [tab, staleMin]);
+
+  // ===== Timeline tab =====
+  const [users, setUsers] = useState([]);
+  const [timelineUserId, setTimelineUserId] = useState('');
+  const [timelineDate, setTimelineDate] = useState(todayIso());
+  const [timeline, setTimeline] = useState(null);
+  const [tlLoading, setTlLoading] = useState(false);
+
+  useEffect(() => {
+    if (tab !== 'timeline') return;
+    api.get('/admin/locations/users').then(r => setUsers(r.data || [])).catch(() => setUsers([]));
+  }, [tab]);
+
+  const loadTimeline = async () => {
+    if (!timelineUserId) return;
+    setTlLoading(true);
+    try {
+      const r = await api.get('/admin/locations/timeline', { params: { user_id: timelineUserId, date: timelineDate } });
+      setTimeline(r.data);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load');
+      setTimeline(null);
+    }
+    setTlLoading(false);
+  };
+  useEffect(() => { if (tab === 'timeline' && timelineUserId) loadTimeline(); /* eslint-disable-next-line */ }, [timelineUserId, timelineDate]);
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+          <FiMapPin className="text-red-600" /> Location Tracking
+        </h3>
+        <p className="text-sm text-gray-500">
+          GPS pings sent every 30 seconds while an employee has the Attendance page open.
+          Use Live for "where is everyone right now", Timeline for "where did one person go between punch-in and punch-out".
+        </p>
+      </div>
+
+      <div className="flex gap-2 flex-wrap">
+        {['live', 'timeline'].map(t => (
+          <button key={t} onClick={() => setTab(t)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium border ${tab === t ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>
+            {t === 'live' ? 'Live (now)' : 'Timeline (by user / date)'}
+          </button>
+        ))}
+      </div>
+
+      {/* ============ LIVE TAB ============ */}
+      {tab === 'live' && (
+        <>
+          <div className="card p-4 flex flex-col sm:flex-row gap-3 sm:items-end justify-between">
+            <div>
+              <label className="label">Show pings from the last…</label>
+              <select className="select w-48" value={staleMin} onChange={e => setStaleMin(parseInt(e.target.value, 10))}>
+                <option value="5">5 minutes</option>
+                <option value="15">15 minutes</option>
+                <option value="30">30 minutes</option>
+                <option value="60">1 hour</option>
+                <option value="180">3 hours</option>
+                <option value="720">12 hours</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-3">
+              {live && (
+                <span className="text-xs text-gray-500">
+                  As of {new Date(live.as_of).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · auto-refresh every 60s
+                </span>
+              )}
+              <button onClick={loadLive} disabled={liveLoading} className="btn btn-secondary flex items-center gap-2">
+                <FiRefreshCw className={liveLoading ? 'animate-spin' : ''} size={14} /> Refresh
+              </button>
+            </div>
+          </div>
+
+          {live && live.users.length === 0 && (
+            <div className="card p-6 text-center text-gray-400 text-sm">
+              No active GPS pings in the last {staleMin} minutes. Employees only ping while they have the Attendance page open in their browser.
+            </div>
+          )}
+
+          {live && live.users.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {live.users.map(u => {
+                const inSite = u.site_name && u.site_name !== 'Outside';
+                return (
+                  <div key={u.user_id}
+                    className={`card p-4 border-l-4 ${inSite ? 'border-emerald-500' : 'border-amber-500'}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-semibold text-gray-800">{u.user_name}</div>
+                        <div className="text-[11px] text-gray-500">{u.department || u.role}</div>
+                      </div>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${inSite ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                        {inSite ? u.site_name : 'Outside any site'}
+                      </span>
+                    </div>
+                    <div className="mt-3 text-xs text-gray-600 leading-relaxed">
+                      <div className="flex items-start gap-1.5">
+                        <FiMapPin size={11} className="mt-0.5 text-red-500 flex-shrink-0" />
+                        <span className="break-words">{u.address || `${u.latitude.toFixed(5)}, ${u.longitude.toFixed(5)}`}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-1 text-gray-500">
+                        <FiClock size={11} />
+                        <span>{fmtTime(u.time)} · {u.minutes_ago === 0 ? 'just now' : `${u.minutes_ago} min ago`}</span>
+                      </div>
+                    </div>
+                    <a
+                      href={mapsUrl(u.latitude, u.longitude)}
+                      target="_blank" rel="noreferrer"
+                      className="mt-3 inline-flex items-center gap-1 text-xs text-red-600 hover:underline font-medium"
+                    >
+                      <FiExternalLink size={12} /> View on Google Maps
+                    </a>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ============ TIMELINE TAB ============ */}
+      {tab === 'timeline' && (
+        <>
+          <div className="card p-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+            <div>
+              <label className="label flex items-center gap-1"><FiUser size={12} /> Employee</label>
+              <select className="select" value={timelineUserId} onChange={e => setTimelineUserId(e.target.value)}>
+                <option value="">Pick an employee…</option>
+                {users.map(u => <option key={u.id} value={u.id}>{u.name}{u.department ? ' — ' + u.department : ''}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label flex items-center gap-1"><FiCalendar size={12} /> Date</label>
+              <input type="date" className="input" value={timelineDate} onChange={e => setTimelineDate(e.target.value)} />
+            </div>
+            <button onClick={loadTimeline} disabled={!timelineUserId || tlLoading} className="btn btn-primary flex items-center gap-2 justify-center">
+              <FiRefreshCw className={tlLoading ? 'animate-spin' : ''} size={14} /> Load Timeline
+            </button>
+          </div>
+
+          {!timelineUserId && (
+            <div className="card p-6 text-center text-gray-400 text-sm">
+              Pick an employee above to see their GPS movement on the selected date.
+            </div>
+          )}
+
+          {timeline && (
+            <>
+              {/* Summary card with punch in / out + total distance */}
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <div className="card p-4 bg-emerald-50 border-l-4 border-emerald-500">
+                  <div className="text-[10px] text-gray-500 uppercase font-semibold">Punch In</div>
+                  <div className="text-lg font-bold text-gray-800 mt-1">{fmtTime(timeline.attendance.punch_in_time)}</div>
+                  <div className="text-[10px] text-gray-500 truncate" title={timeline.attendance.punch_in_address}>
+                    {timeline.attendance.punch_in_address || '—'}
+                  </div>
+                </div>
+                <div className="card p-4 bg-red-50 border-l-4 border-red-500">
+                  <div className="text-[10px] text-gray-500 uppercase font-semibold">Punch Out</div>
+                  <div className="text-lg font-bold text-gray-800 mt-1">{fmtTime(timeline.attendance.punch_out_time)}</div>
+                  <div className="text-[10px] text-gray-500 truncate" title={timeline.attendance.punch_out_address}>
+                    {timeline.attendance.punch_out_address || '—'}
+                  </div>
+                </div>
+                <div className="card p-4 bg-blue-50 border-l-4 border-blue-500">
+                  <div className="text-[10px] text-gray-500 uppercase font-semibold">Hours Worked</div>
+                  <div className="text-lg font-bold text-gray-800 mt-1">{timeline.attendance.total_hours || '—'}</div>
+                  <div className="text-[10px] text-gray-500">{timeline.attendance.status || '—'}</div>
+                </div>
+                <div className="card p-4 bg-purple-50 border-l-4 border-purple-500">
+                  <div className="text-[10px] text-gray-500 uppercase font-semibold">Total Distance Moved</div>
+                  <div className="text-lg font-bold text-gray-800 mt-1">{fmtDist(timeline.total_distance_m)}</div>
+                  <div className="text-[10px] text-gray-500">{timeline.ping_count} GPS pings</div>
+                </div>
+              </div>
+
+              {!timeline.attendance.punch_in_time && timeline.pings.length > 0 && (
+                <div className="card p-3 bg-amber-50 border-l-4 border-amber-400 flex items-start gap-2 text-xs text-amber-900">
+                  <FiAlertCircle className="mt-0.5 flex-shrink-0" />
+                  <div>This employee has GPS pings but didn't punch in on {timeline.date}. The "during work" tag won't apply.</div>
+                </div>
+              )}
+
+              {timeline.pings.length === 0 && (
+                <div className="card p-6 text-center text-gray-400 text-sm">
+                  No GPS pings recorded for this employee on {timeline.date}.
+                </div>
+              )}
+
+              {timeline.pings.length > 0 && (
+                <div className="card p-0 overflow-hidden">
+                  <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
+                    <h4 className="font-semibold text-gray-700 flex items-center gap-2">
+                      <FiNavigation size={14} className="text-red-600" /> Movement Timeline ({timeline.pings.length} pings)
+                    </h4>
+                    <span className="text-[11px] text-gray-400">green = during work hours · grey = before in · amber = after out</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="text-xs w-full">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-16">Time</th>
+                          <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-24">Phase</th>
+                          <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-24">Site</th>
+                          <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold">Address / Coordinates</th>
+                          <th className="text-right px-2 py-2 text-gray-500 uppercase font-semibold w-24">Moved</th>
+                          <th className="text-right px-2 py-2 text-gray-500 uppercase font-semibold w-24">Map</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {timeline.pings.map((p, i) => (
+                          <tr key={p.id} className="border-t hover:bg-gray-50">
+                            <td className="px-2 py-1.5 font-mono text-[11px]">{fmtTime(p.time)}</td>
+                            <td className="px-2 py-1.5">
+                              <span className={`px-2 py-0.5 rounded text-[10px] ${PHASE_PILL[p.phase] || 'bg-gray-100 text-gray-600'}`}>
+                                {PHASE_LABEL[p.phase] || p.phase}
+                              </span>
+                            </td>
+                            <td className="px-2 py-1.5 text-gray-700">
+                              {p.site_name && p.site_name !== 'Outside'
+                                ? <span className="text-emerald-700 font-medium">{p.site_name}</span>
+                                : <span className="text-amber-700">Outside</span>}
+                            </td>
+                            <td className="px-2 py-1.5 text-gray-600 max-w-[260px] truncate" title={p.address}>
+                              {p.address || `${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}`}
+                            </td>
+                            <td className="px-2 py-1.5 text-right text-gray-500">
+                              {i === 0 ? '—' : fmtDist(p.dist_from_prev_m)}
+                            </td>
+                            <td className="px-2 py-1.5 text-right">
+                              <a href={mapsUrl(p.latitude, p.longitude)} target="_blank" rel="noreferrer"
+                                className="text-red-600 hover:underline inline-flex items-center gap-1">
+                                <FiExternalLink size={10} /> Open
+                              </a>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
