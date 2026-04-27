@@ -71,25 +71,33 @@ function entityIdFromPath(p) {
   return null;
 }
 
+// DEBUG flag — when ERP_AUDIT_DEBUG=1 is set in env, the middleware
+// logs every step (entry, skip-path, schedule-finish, insert-ok / fail)
+// so we can see exactly why audit isn't capturing on a given server.
+// Logs are loud — turn off when issue is fixed.
+const AUDIT_DEBUG = process.env.ERP_AUDIT_DEBUG === '1';
+const dbg = (...args) => { if (AUDIT_DEBUG) console.log('[audit-debug]', ...args); };
+
 function auditMiddleware(req, res, next) {
   // Bulletproof: ANY exception inside here must NOT crash the request.
   // The audit log is an observability nice-to-have, never a critical path.
   try {
     // Opt-out flag in case audit starts causing issues in prod
-    if (process.env.ERP_DISABLE_AUDIT === '1') return next();
-    if (!req || !res || !req.method) return next();
-    if (!METHOD_TO_ACTION[req.method]) return next();
-    if (SKIP_PATH_PREFIXES.some(p => (req.originalUrl || '').startsWith(p))) return next();
+    if (process.env.ERP_DISABLE_AUDIT === '1') { dbg('skip ENV flag'); return next(); }
+    if (!req || !res || !req.method) { dbg('skip no req/res'); return next(); }
+    if (!METHOD_TO_ACTION[req.method]) { dbg('skip method', req.method, req.originalUrl); return next(); }
+    if (SKIP_PATH_PREFIXES.some(p => (req.originalUrl || '').startsWith(p))) { dbg('skip path', req.originalUrl); return next(); }
 
     const pathOnly = (req.originalUrl || '').split('?')[0];
+    dbg('scheduled', req.method, pathOnly);
 
     res.on('finish', () => {
       try {
         const db = getDb();
-        if (!db) return;
+        if (!db) { dbg('no db'); return; }
         const user = req.user || {};
         const safe = (v) => (v === undefined ? null : v);
-        db.prepare(
+        const result = db.prepare(
           `INSERT INTO audit_log
             (user_id, user_name, user_role, action, entity_type, entity_id,
              method, path, query, body_summary, status_code, ip, user_agent)
@@ -109,9 +117,10 @@ function auditMiddleware(req, res, next) {
           (req.headers?.['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim() || null,
           (req.headers?.['user-agent'] || '').toString().slice(0, 200) || null,
         );
+        dbg('insert OK rowid=', result.lastInsertRowid, req.method, pathOnly, 'user=', user.id);
       } catch (e) {
         // Never let audit failures affect the real request flow
-        console.error('[audit] insert failed:', e.message);
+        console.error('[audit] insert failed:', e.message, 'path=', pathOnly);
       }
     });
   } catch (outerErr) {
