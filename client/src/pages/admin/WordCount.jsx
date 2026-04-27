@@ -19,6 +19,39 @@ const ACTION_COLORS = {
   DELETE: 'bg-red-100 text-red-700',
 };
 
+// Friendly module labels — keep in sync with the sidebar in Layout.jsx so
+// mam recognises each row at a glance ("BOQ & Quotations" instead of
+// "quotations", "DPR" instead of "dpr", etc.). Anything not in the map
+// falls back to the raw entity_type with hyphens/underscores prettified.
+const MODULE_LABELS = {
+  dpr: 'DPR',
+  quotations: 'BOQ & Quotations',
+  'business-book': 'Business Book',
+  'item-master': 'Item Master',
+  'pms-tasks': 'PMS Tasks',
+  'payment-required': 'Payment Required',
+  'indent-fms': 'Indent FMS',
+  procurement: 'Indent to Dispatch',
+  complaints: 'Complaints',
+  leads: 'Leads / CRM',
+  vendors: 'Vendors',
+  customers: 'Customers',
+  orders: 'Orders & Planning',
+  installation: 'Installation',
+  billing: 'Billing',
+  hr: 'HR & Hiring',
+  employees: 'Employees',
+  expenses: 'Expenses',
+  attendance: 'Attendance',
+  collections: 'Collection Engine',
+  cashflow: 'Cash Flow',
+  delegations: 'Delegations',
+  checklists: 'Checklists',
+  auth: 'Login / Account',
+  admin: 'Admin Settings',
+};
+const moduleLabel = (m) => MODULE_LABELS[m] || String(m || '—').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
 export default function WordCount() {
   const [date, setDate] = useState(todayIso());
   const [dateTo, setDateTo] = useState('');
