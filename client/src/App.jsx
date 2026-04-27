@@ -30,6 +30,7 @@ import UserManagement from './pages/admin/UserManagement';
 import RolesPermissions from './pages/admin/RolesPermissions';
 import DatabaseBackups from './pages/admin/DatabaseBackups';
 import AuditLog from './pages/admin/AuditLog';
+import WordCount from './pages/admin/WordCount';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -96,6 +97,7 @@ export default function App() {
         <Route path="admin/roles" element={<AdminRoute><RolesPermissions /></AdminRoute>} />
         <Route path="admin/backups" element={<AdminRoute><DatabaseBackups /></AdminRoute>} />
         <Route path="admin/audit" element={<AdminRoute><AuditLog /></AdminRoute>} />
+        <Route path="admin/word-count" element={<AdminRoute><WordCount /></AdminRoute>} />
       </Route>
     </Routes>
   );

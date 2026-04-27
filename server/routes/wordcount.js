@@ -1,0 +1,194 @@
+// Admin-only "Daily Activity / Word Count" report.
+//
+// What it does: for a given date (or date range), walks every audit_log
+// row in that window, parses body_summary as JSON, and counts the words
+// inside every string value. Aggregates by user + by module so mam can
+// see at a glance who typed how much and where.
+//
+// Counts ALL mutating activities — CREATE, UPDATE, DELETE — per mam's
+// instruction "all activities".
+//
+// Caveats:
+//  - body_summary is truncated at 2000 chars by the audit middleware, so
+//    very large submissions undercount. We add an `is_truncated` per row.
+//  - Skips obvious non-content fields (ids, dates, urls, secrets).
+
+const express = require('express');
+const { getDb } = require('../db/schema');
+const { authMiddleware, adminOnly } = require('../middleware/auth');
+
+const router = express.Router();
+router.use(authMiddleware);
+router.use(adminOnly);
+
+// Field names we don't want to count — they're identifiers / metadata,
+// not content the user "typed in".
+const SKIP_KEYS = new Set([
+  'id', 'user_id', 'created_by', 'updated_by', 'approved_by', 'reviewed_by',
+  'role_id', 'role_ids', 'permission_id',
+  'created_at', 'updated_at', 'date', 'due_date', 'indent_date',
+  'token', 'password', 'current_password', 'new_password', 'recovery_code',
+  'file_path', 'attachment_url', 'boq_file_link', 'proof_url', 'photo_url',
+  'rate', 'amount', 'quantity', 'qty', 'price', 'gst',
+  'latitude', 'longitude', 'radius_meters',
+  'active', 'is_foc', 'is_tool', 'manual',
+  'page', 'limit', 'offset',
+]);
+
+function countWordsInString(s) {
+  if (typeof s !== 'string') return 0;
+  // Skip values that look like an id, url, file path, ISO date, or a single
+  // technical token — none of these are "words mam's team typed".
+  const t = s.trim();
+  if (!t) return 0;
+  if (t === '[REDACTED]') return 0;
+  if (/^\d+(\.\d+)?$/.test(t)) return 0;                       // pure number
+  if (/^https?:\/\//i.test(t)) return 0;                        // url
+  if (/^\/?[A-Za-z]:?[\\\/]/.test(t)) return 0;                 // file path
+  if (/^\d{4}-\d{2}-\d{2}/.test(t)) return 0;                   // ISO date / datetime
+  if (/^[a-f0-9-]{8,}$/i.test(t) && !/\s/.test(t)) return 0;    // hex / uuid-ish
+  // Word = whitespace-split chunk with at least one letter or digit
+  return t.split(/\s+/).filter(w => /[\p{L}\p{N}]/u.test(w)).length;
+}
+
+function countWordsRecursive(value, parentKey) {
+  if (value == null) return 0;
+  if (typeof value === 'string') {
+    if (parentKey && SKIP_KEYS.has(String(parentKey).toLowerCase())) return 0;
+    return countWordsInString(value);
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return 0;
+  if (Array.isArray(value)) {
+    let n = 0;
+    for (const v of value) n += countWordsRecursive(v, parentKey);
+    return n;
+  }
+  if (typeof value === 'object') {
+    let n = 0;
+    for (const [k, v] of Object.entries(value)) {
+      if (SKIP_KEYS.has(k.toLowerCase())) continue;
+      n += countWordsRecursive(v, k);
+    }
+    return n;
+  }
+  return 0;
+}
+
+function rowWordCount(row) {
+  if (!row.body_summary) return { words: 0, truncated: false };
+  const truncated = row.body_summary.endsWith('…');
+  let parsed;
+  try { parsed = JSON.parse(truncated ? row.body_summary.slice(0, -1) : row.body_summary); }
+  catch { return { words: 0, truncated }; }
+  return { words: countWordsRecursive(parsed), truncated };
+}
+
+// GET /api/admin/word-count?date=YYYY-MM-DD
+//      &date_from=YYYY-MM-DD &date_to=YYYY-MM-DD  (alt to single date)
+//      &user_id=N (optional filter)
+//
+// Returns aggregates suitable for the dashboard:
+//   total_words, total_activities, truncated_activities,
+//   by_user:   [{ user_id, user_name, words, activities }]
+//   by_module: [{ module, words, activities }]
+//   by_action: [{ action, words, activities }]
+router.get('/', (req, res) => {
+  const db = getDb();
+  const { date, user_id } = req.query;
+  let dateFrom = req.query.date_from;
+  let dateTo = req.query.date_to;
+  if (date) { dateFrom = date; dateTo = date; }
+  if (!dateFrom) {
+    // Default to today (server's local date)
+    const d = new Date();
+    const iso = d.toISOString().slice(0, 10);
+    dateFrom = iso; dateTo = iso;
+  }
+  if (!dateTo) dateTo = dateFrom;
+
+  const where = ['at >= ?', 'at <= ?', "action IN ('CREATE','UPDATE','DELETE')"];
+  const params = [dateFrom + ' 00:00:00', dateTo + ' 23:59:59'];
+  if (user_id) { where.push('user_id = ?'); params.push(+user_id); }
+
+  const rows = db.prepare(
+    `SELECT id, user_id, user_name, action, entity_type, body_summary
+       FROM audit_log
+      WHERE ${where.join(' AND ')}
+      ORDER BY at DESC`
+  ).all(...params);
+
+  const byUser = new Map();
+  const byModule = new Map();
+  const byAction = new Map();
+  let totalWords = 0;
+  let truncatedCount = 0;
+
+  for (const r of rows) {
+    const { words, truncated } = rowWordCount(r);
+    totalWords += words;
+    if (truncated) truncatedCount += 1;
+
+    const uKey = r.user_id || 0;
+    const u = byUser.get(uKey) || { user_id: r.user_id, user_name: r.user_name || '(unknown)', words: 0, activities: 0 };
+    u.words += words; u.activities += 1; byUser.set(uKey, u);
+
+    const mod = r.entity_type || '(other)';
+    const m = byModule.get(mod) || { module: mod, words: 0, activities: 0 };
+    m.words += words; m.activities += 1; byModule.set(mod, m);
+
+    const a = byAction.get(r.action) || { action: r.action, words: 0, activities: 0 };
+    a.words += words; a.activities += 1; byAction.set(r.action, a);
+  }
+
+  const byUserArr = [...byUser.values()].sort((a, b) => b.words - a.words);
+  const byModuleArr = [...byModule.values()].sort((a, b) => b.words - a.words);
+  const byActionArr = [...byAction.values()].sort((a, b) => b.words - a.words);
+
+  res.json({
+    date_from: dateFrom,
+    date_to: dateTo,
+    total_words: totalWords,
+    total_activities: rows.length,
+    truncated_activities: truncatedCount,
+    by_user: byUserArr,
+    by_module: byModuleArr,
+    by_action: byActionArr,
+  });
+});
+
+// GET /api/admin/word-count/detail?date=...&user_id=...
+// Per-record breakdown so admin can see *what* a user wrote on that day.
+router.get('/detail', (req, res) => {
+  const db = getDb();
+  const { date, user_id } = req.query;
+  let dateFrom = req.query.date_from || date;
+  let dateTo = req.query.date_to || date;
+  if (!dateFrom) {
+    const iso = new Date().toISOString().slice(0, 10);
+    dateFrom = iso; dateTo = iso;
+  }
+  if (!dateTo) dateTo = dateFrom;
+
+  const where = ['at >= ?', 'at <= ?', "action IN ('CREATE','UPDATE','DELETE')"];
+  const params = [dateFrom + ' 00:00:00', dateTo + ' 23:59:59'];
+  if (user_id) { where.push('user_id = ?'); params.push(+user_id); }
+
+  const rows = db.prepare(
+    `SELECT id, at, user_id, user_name, action, entity_type, entity_label, path, body_summary
+       FROM audit_log
+      WHERE ${where.join(' AND ')}
+      ORDER BY at DESC
+      LIMIT 1000`
+  ).all(...params);
+
+  res.json(rows.map(r => {
+    const { words, truncated } = rowWordCount(r);
+    return {
+      id: r.id, at: r.at, user_id: r.user_id, user_name: r.user_name,
+      action: r.action, module: r.entity_type, entity_label: r.entity_label,
+      path: r.path, words, truncated,
+    };
+  }));
+});
+
+module.exports = router;
