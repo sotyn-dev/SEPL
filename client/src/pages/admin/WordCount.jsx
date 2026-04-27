@@ -111,8 +111,7 @@ export default function WordCount() {
             <FiBarChart2 className="text-red-600" /> Daily Activity
           </h3>
           <p className="text-sm text-gray-500">
-            How many entries each user made on the selected date — across all create / update / delete actions.
-            Word count shown alongside as a measure of how much was typed.
+            Pick a date to see the total words entered across the entire ERP that day, with breakdowns by user and module.
           </p>
         </div>
         <button onClick={load} disabled={loading} className="btn btn-secondary flex items-center gap-2">
@@ -140,30 +139,34 @@ export default function WordCount() {
         </div>
       </div>
 
-      {/* Top-line cards — entry count is the primary metric (mam's
-          ask: "count data entry per selected date"). Word count
-          shown beneath as a secondary depth-of-typing indicator. */}
+      {/* Hero card — MD wants "total words for selected date" as the
+          headline number. Make it impossible to miss. */}
       {data && (
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-          <div className="card p-4 bg-gradient-to-br from-red-50 to-white border-l-4 border-red-500">
-            <div className="text-xs text-gray-500 uppercase font-semibold">Total Entries</div>
-            <div className="text-3xl font-bold text-gray-800 mt-1">{fmtNum(data.total_activities)}</div>
-            <div className="text-[11px] text-gray-400 mt-1">creates + updates + deletes</div>
+        <div className="card p-6 bg-gradient-to-br from-red-600 via-red-700 to-red-900 text-white shadow-lg">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-red-100/80 font-semibold">Total Words Entered</div>
+              <div className="text-[11px] text-red-100/70 mt-0.5">
+                {dateTo && dateTo !== date ? `${date} → ${dateTo}` : date}
+              </div>
+            </div>
+            <div className="text-5xl sm:text-6xl font-extrabold tracking-tight tabular-nums">
+              {fmtNum(data.total_words)}
+            </div>
           </div>
-          <div className="card p-4 bg-gradient-to-br from-emerald-50 to-white border-l-4 border-emerald-500">
-            <div className="text-xs text-gray-500 uppercase font-semibold">Active Users</div>
-            <div className="text-3xl font-bold text-gray-800 mt-1">{data.by_user.filter(u => u.activities > 0).length}</div>
-            <div className="text-[11px] text-gray-400 mt-1">people who entered data</div>
-          </div>
-          <div className="card p-4 bg-gradient-to-br from-blue-50 to-white border-l-4 border-blue-500">
-            <div className="text-xs text-gray-500 uppercase font-semibold">Modules Touched</div>
-            <div className="text-3xl font-bold text-gray-800 mt-1">{data.by_module.length}</div>
-            <div className="text-[11px] text-gray-400 mt-1">parts of the ERP used</div>
-          </div>
-          <div className="card p-4 bg-gradient-to-br from-amber-50 to-white border-l-4 border-amber-500">
-            <div className="text-xs text-gray-500 uppercase font-semibold">Total Words Typed</div>
-            <div className="text-3xl font-bold text-gray-800 mt-1">{fmtNum(data.total_words)}</div>
-            <div className="text-[11px] text-gray-400 mt-1">across all entries</div>
+          <div className="grid grid-cols-3 gap-4 mt-5 pt-4 border-t border-white/20">
+            <div>
+              <div className="text-[10px] uppercase text-red-100/70 font-semibold">Entries</div>
+              <div className="text-xl font-bold mt-0.5">{fmtNum(data.total_activities)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-red-100/70 font-semibold">Active Users</div>
+              <div className="text-xl font-bold mt-0.5">{data.by_user.filter(u => u.activities > 0).length}</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-red-100/70 font-semibold">Modules Used</div>
+              <div className="text-xl font-bold mt-0.5">{data.by_module.length}</div>
+            </div>
           </div>
         </div>
       )}
@@ -192,20 +195,20 @@ export default function WordCount() {
               <thead className="bg-gray-50/60">
                 <tr>
                   <th className="text-left px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">User</th>
-                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">Entries</th>
-                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-400 uppercase">Words</th>
+                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">Words</th>
+                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-400 uppercase">Entries</th>
                 </tr>
               </thead>
               <tbody>
-                {(data?.by_user || []).slice().sort((a, b) => b.activities - a.activities).map(u => (
+                {(data?.by_user || []).slice().sort((a, b) => b.words - a.words).map(u => (
                   <tr
                     key={u.user_id || u.user_name}
                     onClick={() => u.user_id && openDrill(u)}
                     className="border-t hover:bg-red-50/40 cursor-pointer"
                   >
                     <td className="px-3 py-2 font-medium text-gray-800">{u.user_name}</td>
-                    <td className="px-3 py-2 text-right font-bold text-red-700 text-base">{fmtNum(u.activities)}</td>
-                    <td className="px-3 py-2 text-right text-gray-500 text-xs">{fmtNum(u.words)}</td>
+                    <td className="px-3 py-2 text-right font-bold text-red-700 text-base tabular-nums">{fmtNum(u.words)}</td>
+                    <td className="px-3 py-2 text-right text-gray-500 text-xs">{fmtNum(u.activities)}</td>
                   </tr>
                 ))}
                 {data && data.by_user.length === 0 && (
@@ -226,16 +229,16 @@ export default function WordCount() {
               <thead className="bg-gray-50/60">
                 <tr>
                   <th className="text-left px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">Module</th>
-                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">Entries</th>
-                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-400 uppercase">Words</th>
+                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase">Words</th>
+                  <th className="text-right px-3 py-2 text-[11px] font-semibold text-gray-400 uppercase">Entries</th>
                 </tr>
               </thead>
               <tbody>
-                {(data?.by_module || []).slice().sort((a, b) => b.activities - a.activities).map(m => (
+                {(data?.by_module || []).slice().sort((a, b) => b.words - a.words).map(m => (
                   <tr key={m.module} className="border-t hover:bg-gray-50">
                     <td className="px-3 py-2 text-gray-800">{moduleLabel(m.module)}</td>
-                    <td className="px-3 py-2 text-right font-bold text-red-700 text-base">{fmtNum(m.activities)}</td>
-                    <td className="px-3 py-2 text-right text-gray-500 text-xs">{fmtNum(m.words)}</td>
+                    <td className="px-3 py-2 text-right font-bold text-red-700 text-base tabular-nums">{fmtNum(m.words)}</td>
+                    <td className="px-3 py-2 text-right text-gray-500 text-xs">{fmtNum(m.activities)}</td>
                   </tr>
                 ))}
                 {data && data.by_module.length === 0 && (
@@ -255,8 +258,8 @@ export default function WordCount() {
             {data.by_action.map(a => (
               <div key={a.action} className={`px-3 py-1.5 rounded-lg text-xs ${ACTION_COLORS[a.action] || 'bg-gray-100 text-gray-700'}`}>
                 <span className="font-semibold">{a.action}</span>
-                <span className="ml-2">{fmtNum(a.activities)} entries</span>
-                <span className="ml-1 opacity-60">/ {fmtNum(a.words)} words</span>
+                <span className="ml-2">{fmtNum(a.words)} words</span>
+                <span className="ml-1 opacity-60">/ {fmtNum(a.activities)} entries</span>
               </div>
             ))}
           </div>
@@ -274,7 +277,7 @@ export default function WordCount() {
                 </h3>
                 <p className="text-[11px] text-gray-500 mt-0.5">
                   {dateTo && dateTo !== date ? `${date} to ${dateTo}` : date} ·
-                  <span className="font-semibold text-red-700"> {fmtNum(drillUser.activities)} entries</span> · {fmtNum(drillUser.words)} words
+                  <span className="font-semibold text-red-700"> {fmtNum(drillUser.words)} words</span> · {fmtNum(drillUser.activities)} entries
                 </p>
               </div>
               <button onClick={() => setDrillUser(null)} className="p-1 text-gray-400 hover:text-gray-700"><FiX size={18} /></button>
