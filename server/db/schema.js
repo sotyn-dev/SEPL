@@ -1600,11 +1600,11 @@ function initializeDatabase() {
   }
 
   // ============================================
-  // INVENTORY SEED — Office Store + a Site Store per existing site
+  // INVENTORY SEED — Office Store + ONE Site Store per UNIQUE site name
   // ============================================
-  // Creates the central Office Store on first run, then ensures every site
-  // in the `sites` table has a matching Site Store. Idempotent: running on
-  // an already-seeded DB just adds stores for any sites added since.
+  // The `sites` table has duplicates (one row per PO referring to the same
+  // customer), so we dedupe by name. Only ONE warehouse per unique site
+  // name, linked to the OLDEST site_id with that name.
   try {
     const officeExists = db.prepare("SELECT id FROM warehouses WHERE type='office'").get();
     if (!officeExists) {
@@ -1612,15 +1612,66 @@ function initializeDatabase() {
         .run('Admin');
       console.log('[seed] Created Office Store warehouse');
     }
-    // One site_store per site, named "<site_name> Store", linked by site_id.
+
+    // STEP 1 — clean up duplicate site_store warehouses created by the
+    // earlier seed. For each duplicate name, keep the lowest id and merge
+    // stock_balance + redirect stock_movements onto it before deleting.
+    try {
+      const dupes = db.prepare(`
+        SELECT name, MIN(id) as keep_id, GROUP_CONCAT(id) as all_ids, COUNT(*) as c
+          FROM warehouses
+         WHERE type = 'site_store'
+         GROUP BY name
+        HAVING c > 1
+      `).all();
+      let mergedTotal = 0;
+      for (const d of dupes) {
+        const removeIds = d.all_ids.split(',').map(s => +s).filter(i => i !== d.keep_id);
+        for (const rid of removeIds) {
+          // Merge stock_balance: sum quantities, weighted-average rate
+          const sourceBalances = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id=?').all(rid);
+          for (const sb of sourceBalances) {
+            const target = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id=? AND item_master_id=?')
+              .get(d.keep_id, sb.item_master_id);
+            if (target) {
+              const totalQty = (+target.quantity || 0) + (+sb.quantity || 0);
+              const totalVal = ((+target.quantity || 0) * (+target.avg_rate || 0)) + ((+sb.quantity || 0) * (+sb.avg_rate || 0));
+              const newAvg = totalQty > 0 ? totalVal / totalQty : 0;
+              db.prepare('UPDATE stock_balance SET quantity=?, avg_rate=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+                .run(totalQty, newAvg, target.id);
+              db.prepare('DELETE FROM stock_balance WHERE id=?').run(sb.id);
+            } else {
+              db.prepare('UPDATE stock_balance SET warehouse_id=? WHERE id=?').run(d.keep_id, sb.id);
+            }
+          }
+          // Redirect any movements pointing at the duplicate warehouse
+          db.prepare('UPDATE stock_movements SET warehouse_id=? WHERE warehouse_id=?').run(d.keep_id, rid);
+          db.prepare('UPDATE stock_movements SET from_warehouse_id=? WHERE from_warehouse_id=?').run(d.keep_id, rid);
+          db.prepare('UPDATE stock_movements SET to_warehouse_id=? WHERE to_warehouse_id=?').run(d.keep_id, rid);
+          db.prepare('DELETE FROM warehouses WHERE id=?').run(rid);
+          mergedTotal += 1;
+        }
+      }
+      if (mergedTotal > 0) console.log(`[seed] Merged ${mergedTotal} duplicate site_store warehouse(s)`);
+    } catch (e) {
+      console.error('[seed] dedupe failed:', e.message);
+    }
+
+    // STEP 2 — create stores for any UNIQUE site names that don't have one yet.
+    // GROUP BY name + MIN(id) so duplicates collapse to a single row.
     const sitesNeedingStores = db.prepare(`
-      SELECT s.id, s.name FROM sites s
-       WHERE NOT EXISTS (SELECT 1 FROM warehouses w WHERE w.site_id = s.id)
+      SELECT MIN(s.id) as id, s.name FROM sites s
+       WHERE s.name IS NOT NULL AND s.name <> ''
+         AND NOT EXISTS (
+           SELECT 1 FROM warehouses w
+            WHERE w.type='site_store' AND w.name = s.name || ' Store'
+         )
+       GROUP BY s.name
     `).all();
     if (sitesNeedingStores.length > 0) {
       const ins = db.prepare("INSERT INTO warehouses (name, type, site_id, location) VALUES (?, 'site_store', ?, ?)");
       for (const s of sitesNeedingStores) ins.run(`${s.name} Store`, s.id, s.name);
-      console.log(`[seed] Auto-created ${sitesNeedingStores.length} site_store warehouses`);
+      console.log(`[seed] Auto-created ${sitesNeedingStores.length} site_store warehouse(s)`);
     }
   } catch (e) {
     console.error('[seed] Inventory warehouse seed failed:', e.message);
