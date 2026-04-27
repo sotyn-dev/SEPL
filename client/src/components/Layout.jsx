@@ -90,6 +90,58 @@ export default function Layout() {
     if (isMobile) setSidebarOpen(false);
   }, [location.pathname, isMobile]);
 
+  // GLOBAL LOCATION TRACKING — was Attendance-page-only before, but mam's
+  // team often closes that tab and just uses Leads / Procurement / etc.
+  // Running it from the Layout means as long as ANY ERP page is open in
+  // the browser (or installed PWA), GPS pings every 30 seconds. Each ping
+  // also acts as a heartbeat for backend auto-punch.
+  // Limitations: a fully-closed browser cannot ping. For 24/7 tracking
+  // even when the app is closed, we'd need a native Android wrapper.
+  useEffect(() => {
+    if (!user) return;                    // not logged in -> no tracking
+    if (!navigator.geolocation) return;   // no GPS support
+    let cancelled = false;
+    let wakeLock = null;
+
+    const trackLocation = () => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          if (cancelled) return;
+          api.post('/attendance/track-location', {
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            address: '',
+          }).catch(() => {});
+        },
+        () => {},                              // permission denied / timeout — silent
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+      );
+    };
+
+    // Best-effort wake lock so phone screen / tab doesn't fully suspend
+    // mid-day; not all browsers support this — silently ignore if missing.
+    const requestWakeLock = async () => {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (e) { /* ignore */ }
+    };
+    requestWakeLock();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') requestWakeLock();
+    });
+
+    trackLocation();
+    const interval = setInterval(trackLocation, 30 * 1000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      if (wakeLock && wakeLock.release) wakeLock.release().catch(() => {});
+    };
+  }, [user?.id]);
+
   const visibleMenu = menuItems.filter(item => canView(item.module));
 
   return (
