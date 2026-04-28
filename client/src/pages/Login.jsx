@@ -46,12 +46,16 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-red-900 via-red-800 to-red-950 relative overflow-hidden">
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-red-900 via-red-800 to-red-950 relative overflow-hidden">
       {/* Background decoration */}
-      <div className="absolute top-0 left-0 w-96 h-96 bg-red-500/15 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2" />
-      <div className="absolute bottom-0 right-0 w-96 h-96 bg-white/10 rounded-full blur-3xl translate-x-1/2 translate-y-1/2" />
+      <div className="absolute top-0 left-0 w-96 h-96 bg-red-500/15 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2 pointer-events-none" />
+      <div className="absolute bottom-0 right-0 w-96 h-96 bg-white/10 rounded-full blur-3xl translate-x-1/2 translate-y-1/2 pointer-events-none" />
 
-      <div className="bg-white/95 backdrop-blur-sm rounded-3xl shadow-2xl p-8 w-full max-w-md mx-4 relative z-10">
+      {/* Card area — flex-1 fills the gap above the footer so the card
+          vertically centers in whatever space is available WITHOUT
+          overlapping the footer below it. */}
+      <div className="flex-1 flex items-center justify-center px-4 py-6 relative z-10">
+      <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md">
         {/* Logo — now the actual SEPL brand logo (not a generic shield icon) */}
         <div className="text-center mb-8">
           <div className="w-20 h-20 mx-auto mb-4 rounded-2xl overflow-hidden shadow-lg shadow-red-500/30 flex items-center justify-center">
@@ -116,26 +120,27 @@ export default function Login() {
 
         <p className="mt-6 text-center text-[11px] text-gray-400">Contact your admin for login credentials</p>
       </div>
-
-      {/* Elegant footer: creator + company, centered at bottom */}
-      <div className="fixed bottom-5 left-0 right-0 flex justify-center px-4 z-10 pointer-events-none">
-        <div className="pointer-events-auto text-center select-none">
-          <p className="text-[11px] uppercase tracking-[0.35em] text-white/40 mb-1.5">
-            Crafted with <span className="text-pink-400">&hearts;</span> by
-          </p>
-          <p className="text-base font-bold bg-gradient-to-r from-red-200 via-white to-red-200 bg-clip-text text-transparent drop-shadow-sm">
-            Secured Engineers Pvt Ltd
-          </p>
-          <div className="mt-2 flex items-center justify-center gap-2">
-            <span className="h-px w-8 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
-            <p className="text-[10px] font-semibold tracking-widest text-white/60 uppercase">
-              Monika Devi
-            </p>
-            <span className="h-px w-8 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
-          </div>
-          <p className="text-[9px] text-white/30 mt-1">&copy; {new Date().getFullYear()} &middot; All rights reserved</p>
-        </div>
       </div>
+
+      {/* Footer — sits in the document flow at the bottom of the
+          gradient. Uses py-6 so it's always visible without ever
+          overlapping the card above. */}
+      <footer className="relative z-10 py-6 px-4 text-center select-none">
+        <p className="text-[11px] uppercase tracking-[0.35em] text-white/40 mb-1.5">
+          Crafted with <span className="text-pink-400">&hearts;</span> by
+        </p>
+        <p className="text-base font-bold bg-gradient-to-r from-red-200 via-white to-red-200 bg-clip-text text-transparent drop-shadow-sm">
+          Secured Engineers Pvt Ltd
+        </p>
+        <div className="mt-2 flex items-center justify-center gap-2">
+          <span className="h-px w-8 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
+          <p className="text-[10px] font-semibold tracking-widest text-white/60 uppercase">
+            Monika Devi
+          </p>
+          <span className="h-px w-8 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
+        </div>
+        <p className="text-[9px] text-white/30 mt-1">&copy; {new Date().getFullYear()} &middot; All rights reserved</p>
+      </footer>
     </div>
   );
 }
