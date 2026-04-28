@@ -31,7 +31,25 @@
       "Bash(curl -vL \"https://docs.google.com/spreadsheets/d/1D5AxYmX9UbgKrcRex-d0idnlP3IwDF2Lf808jkypspM/export?format=csv&gid=1907709257\")",
       "WebFetch(domain:doc-10-3g-sheets.googleusercontent.com)",
       "Bash(node -e \"const fs=require\\('fs'\\); const x=require\\('./node_modules/xlsx'\\); const wb=x.read\\(fs.readFileSync\\('data/customers-import.csv'\\),{type:'buffer'}\\); const rows=x.utils.sheet_to_json\\(wb.Sheets[wb.SheetNames[0]],{header:1,raw:false,defval:''}\\); const headers=rows[0]; const col9=new Set\\(\\); const col3=new Set\\(\\); for\\(let i=1;i<rows.length;i++\\){ if\\(rows[i][8]\\) col9.add\\(String\\(rows[i][8]\\).trim\\(\\)\\); if\\(rows[i][2]\\) col3.add\\(String\\(rows[i][2]\\).trim\\(\\)\\); } console.log\\('col3 \\(category\\) sample:', [...col3].slice\\(0,20\\)\\); console.log\\('col9 \\(CATEGORY\\) sample:', [...col9].slice\\(0,20\\)\\); console.log\\('total rows:', rows.length-1\\);\")",
-      "Bash(node -e \"const icons = require\\('react-icons/lu'\\); console.log\\('LuIndianRupee:', typeof icons.LuIndianRupee\\); console.log\\('LuCircleIndianRupee:', typeof icons.LuCircleIndianRupee\\);\")"
+      "Bash(node -e \"const icons = require\\('react-icons/lu'\\); console.log\\('LuIndianRupee:', typeof icons.LuIndianRupee\\); console.log\\('LuCircleIndianRupee:', typeof icons.LuCircleIndianRupee\\);\")",
+      "Bash(xargs grep *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5173/)",
+      "Bash(node -e ' *)",
+      "Bash(curl -s -X POST http://localhost:5000/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@admin.com\",\"password\":\"admin123\"}')",
+      "Bash(node server/scripts/reset-admin-password.js)",
+      "Bash(curl -s -X POST http://localhost:5000/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin\",\"password\":\"admin123\"}')",
+      "Bash(curl -s -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MSwiZW1haWwiOiJhZG1pbkBlcnAuY29tIiwicm9sZSI6ImFkbWluIiwibmFtZSI6IkFkbWluIiwiaWF0IjoxNzc3MTA4ODYwLCJleHAiOjE3NzcxOTUyNjB9.YhH06wMyKnnXBLz7XY4h6j7GwCDN27spdxmqhg0K4yQ' http://localhost:5000/api/procurement/indents)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('pms_tasks perm:', d.get\\('permissions',{}\\).get\\('pms_tasks'\\)\\)\")",
+      "Bash(node -e \"let d=''; process.stdin.on\\('data',c=>d+=c\\); process.stdin.on\\('end',\\(\\)=>{ const j=JSON.parse\\(d\\); console.log\\('pms_tasks perm:', j.permissions.pms_tasks\\); }\\)\")",
+      "Bash(curl -s -X POST http://localhost:5000/api/procurement/indents -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MSwiZW1haWwiOiJhZG1pbkBlcnAuY29tIiwicm9sZSI6ImFkbWluIiwibmFtZSI6IkFkbWluIiwiaWF0IjoxNzc3MTA4ODYwLCJleHAiOjE3NzcxOTUyNjB9.YhH06wMyKnnXBLz7XY4h6j7GwCDN27spdxmqhg0K4yQ' -H 'Content-Type: application/json' -d '{\"site_name\":\"Test Site\",\"raised_by_name\":\"Admin\",\"notes\":\"test\",\"items\":[{\"description\":\"Cement bag 50kg\",\"make\":\"UltraTech\",\"quantity\":10,\"unit\":\"bag\",\"item_type\":\"PO\"},{\"description\":\"Steel rod 12mm\",\"make\":\"Tata\",\"quantity\":50,\"unit\":\"kg\",\"item_type\":\"PO\"}]}')",
+      "Bash(curl -s -X POST http://localhost:5000/api/auth/login -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"admin123\"}')",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(node --check server/scripts/backfill-audit.js)",
+      "Bash(node server/scripts/backfill-audit.js)",
+      "Bash(node --check server/db/schema.js)",
+      "Bash(xargs ls *)"
     ]
   }
 }

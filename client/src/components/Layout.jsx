@@ -31,7 +31,6 @@ const menuItems = [
   { path: '/customers', label: 'Customers', icon: FiUsers, module: 'customers' },
   { path: '/procurement', label: 'Indent to Dispatch', icon: FiPackage, module: 'procurement' },
   { path: '/inventory', label: 'Inventory', icon: FiPackage, module: 'inventory' },
-  { path: '/rate-radar', label: 'Rate Radar', icon: FiTrendingUp, module: 'procurement' },
   { path: '/installation', label: 'Installation', icon: FiTool, module: 'installation' },
   { path: '/billing', label: 'Billing', icon: FiClipboard, module: 'billing' },
   { path: '/complaints', label: 'Complaints', icon: FiAlertCircle, module: 'complaints' },

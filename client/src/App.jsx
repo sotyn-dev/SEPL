@@ -28,7 +28,6 @@ import Delegation from './pages/Delegation';
 import PMSTasks from './pages/PMSTasks';
 import Inventory from './pages/Inventory';
 import HelpTickets from './pages/HelpTickets';
-import RateRadar from './pages/RateRadar';
 import VendorPOPrint from './pages/VendorPOPrint';
 import UserManagement from './pages/admin/UserManagement';
 import RolesPermissions from './pages/admin/RolesPermissions';
@@ -95,7 +94,6 @@ export default function App() {
         <Route path="customers" element={<ModuleRoute module="customers"><Customers /></ModuleRoute>} />
         <Route path="procurement" element={<ModuleRoute module="procurement"><Procurement /></ModuleRoute>} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
-        <Route path="rate-radar" element={<ModuleRoute module="procurement"><RateRadar /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />
         <Route path="installation" element={<ModuleRoute module="installation"><Installation /></ModuleRoute>} />
         <Route path="billing" element={<ModuleRoute module="billing"><Billing /></ModuleRoute>} />

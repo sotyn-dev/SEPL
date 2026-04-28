@@ -75,7 +75,6 @@ app.use('/api/admin/backups', require('./routes/backups'));
 app.use('/api/admin/word-count', require('./routes/wordcount'));
 app.use('/api/admin/locations', require('./routes/locations'));
 app.use('/api/inventory', require('./routes/inventory'));
-app.use('/api/rate-radar', require('./routes/rateradar'));
 
 // 4 Critical Systems
 app.use('/api/cashflow', require('./routes/cashflow'));

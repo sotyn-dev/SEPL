@@ -9,8 +9,8 @@
     },
     {
       "name": "frontend",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["--prefix", "client", "vite", "--port", "5173"],
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "client", "run", "dev", "--", "--port", "5173"],
       "port": 5173
     }
   ]
