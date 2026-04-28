@@ -76,6 +76,75 @@ router.get('/', (req, res) => {
   res.json(rows);
 });
 
+// MD Dashboard — one row per site with money + activity in the same view.
+// Correlates each receivable with:
+//   - pms_tasks_count : how many CRM tasks were raised for the site
+//                       (chasing payment / coordination)
+//   - location_pings_7d : how many GPS pings happened for the linked site
+//                         in the last 7 days (proxy for "is anyone visiting
+//                         the client / site to chase payment")
+//   - last_follow_up   : most recent collection_follow_up date for this row
+//                       (proxy for Aanchal's actual chasing)
+//   - oldest_ageing    : ageing days of the oldest unpaid invoice for the
+//                       site (so MD instantly sees the worst offender)
+// Sorted by outstanding DESC so MD's eye lands on biggest unpaid first.
+router.get('/md-dashboard', (req, res) => {
+  const db = getDb();
+  const since7 = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const rows = db.prepare(`
+    SELECT
+      COALESCE(r.site_name, r.client_name) as site_name,
+      r.site_id,
+      MIN(r.crm_name)                       as crm_name,
+      MIN(u.name)                           as owner_name,
+      COUNT(r.id)                           as invoice_count,
+      COALESCE(SUM(r.invoice_amount),0)     as target,
+      COALESCE(SUM(r.received_amount),0)    as received,
+      COALESCE(SUM(r.outstanding_amount),0) as outstanding,
+      MAX(r.ageing_days)                    as oldest_ageing,
+      MAX(r.next_planned_date)              as next_planned_date,
+      MAX(r.last_discussion)                as last_discussion,
+      (SELECT COUNT(*) FROM pms_tasks p
+         WHERE (r.site_id IS NOT NULL AND p.project_id = r.site_id)
+            OR (r.site_name IS NOT NULL AND r.site_name <> ''
+                AND (p.project_name_snapshot = r.site_name
+                     OR p.project_name_snapshot LIKE '%' || r.site_name || '%'))
+      )                                     as pms_tasks_count,
+      (SELECT COUNT(*) FROM location_tracking lt
+         WHERE lt.time >= ?
+           AND lt.site_name IS NOT NULL AND lt.site_name <> 'Outside'
+           AND lt.site_name = COALESCE(r.site_name, r.client_name)
+      )                                     as location_pings_7d,
+      (SELECT MAX(cf.follow_up_date) FROM collection_follow_ups cf
+         WHERE cf.receivable_id = r.id
+      )                                     as last_follow_up
+    FROM receivables r
+    LEFT JOIN users u ON u.id = r.owner_id
+    GROUP BY COALESCE(r.site_name, r.client_name)
+    ORDER BY outstanding DESC
+  `).all(since7);
+
+  // Top-line totals
+  const totals = rows.reduce((s, r) => ({
+    sites: s.sites + 1,
+    target: s.target + (+r.target || 0),
+    received: s.received + (+r.received || 0),
+    outstanding: s.outstanding + (+r.outstanding || 0),
+    pms_tasks: s.pms_tasks + (+r.pms_tasks_count || 0),
+    location_pings_7d: s.location_pings_7d + (+r.location_pings_7d || 0),
+  }), { sites: 0, target: 0, received: 0, outstanding: 0, pms_tasks: 0, location_pings_7d: 0 });
+  totals.collection_pct = totals.target > 0 ? +(100 * totals.received / totals.target).toFixed(2) : 0;
+
+  // Flag rows where outstanding is significant AND there's NO recent
+  // activity — these are the "silent overdue" sites MD should grill.
+  const flagged = rows.filter(r =>
+    +r.outstanding > 0 && +r.oldest_ageing > 30 &&
+    +r.pms_tasks_count === 0 && +r.location_pings_7d === 0
+  );
+
+  res.json({ totals, sites: rows, silent_overdue_count: flagged.length });
+});
+
 // Helper for the Edit modal — list of UNIQUE site names from sites +
 // business_book, with their latest CRM and total invoice value pulled
 // from the most recent Client PO. Used as the dropdown source for

@@ -34,6 +34,7 @@ import DatabaseBackups from './pages/admin/DatabaseBackups';
 import AuditLog from './pages/admin/AuditLog';
 import WordCount from './pages/admin/WordCount';
 import Locations from './pages/admin/Locations';
+import CollectionsMD from './pages/admin/CollectionsMD';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -104,6 +105,7 @@ export default function App() {
         <Route path="admin/audit" element={<AdminRoute><AuditLog /></AdminRoute>} />
         <Route path="admin/word-count" element={<AdminRoute><WordCount /></AdminRoute>} />
         <Route path="admin/locations" element={<AdminRoute><Locations /></AdminRoute>} />
+        <Route path="admin/collections-md" element={<AdminRoute><CollectionsMD /></AdminRoute>} />
       </Route>
     </Routes>
   );

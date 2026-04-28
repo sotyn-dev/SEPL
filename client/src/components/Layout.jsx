@@ -47,6 +47,7 @@ const adminItems = [
   { path: '/admin/roles', label: 'Roles & Permissions', icon: FiShield, module: 'users' },
   { path: '/admin/word-count', label: 'Daily Activity', icon: FiBarChart2, module: 'users' },
   { path: '/admin/locations', label: 'Location Tracking', icon: FiMapPin, module: 'users' },
+  { path: '/admin/collections-md', label: 'MD Collections', icon: FiTrendingUp, module: 'users' },
   { path: '/admin/backups', label: 'Database Backups', icon: FiPackage, module: 'users' },
   { path: '/admin/audit', label: 'Audit Log', icon: FiShield, module: 'users' },
 ];
