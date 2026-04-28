@@ -242,6 +242,11 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit }) {
               <tbody>
                 {g.rows.map(r => {
                   const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
+                  // effective_rate: server falls back to item_master.current_price
+                  // when no movements have set an avg yet. rate_source = 'master'
+                  // tells us to badge it so mam knows it's from the catalog.
+                  const eff = +r.effective_rate || 0;
+                  const value = +r.value || (eff * (+r.quantity || 0));
                   return (
                     <tr key={r.id} className={`border-t ${low ? 'bg-amber-50/40' : 'hover:bg-gray-50'}`}>
                       <td className="px-3 py-2 text-gray-500 font-mono text-[11px]">{r.item_code || '—'}</td>
@@ -250,8 +255,16 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit }) {
                       <td className={`px-3 py-2 text-right font-bold tabular-nums ${low ? 'text-amber-700' : 'text-gray-800'}`}>
                         {fmtNum(r.quantity)} {low && <FiAlertTriangle className="inline ml-1 text-amber-500" size={12} />}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-600 tabular-nums">{fmtMoney(r.avg_rate)}</td>
-                      <td className="px-3 py-2 text-right text-gray-700 tabular-nums">{fmtMoney(r.quantity * r.avg_rate)}</td>
+                      <td className="px-3 py-2 text-right text-gray-600 tabular-nums">
+                        {fmtMoney(eff)}
+                        {r.rate_source === 'master' && eff > 0 && (
+                          <div className="text-[9px] text-gray-400 italic">from master</div>
+                        )}
+                        {r.rate_source === 'none' && (
+                          <div className="text-[9px] text-gray-300 italic">no rate set</div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right text-gray-700 tabular-nums font-semibold">{fmtMoney(value)}</td>
                       <td className="px-3 py-2 text-right text-gray-500 tabular-nums">
                         {editing && editing.warehouse_id === r.warehouse_id && editing.item_master_id === r.item_master_id ? (
                           <input

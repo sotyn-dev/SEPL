@@ -32,7 +32,11 @@ router.get('/warehouses', requirePermission('inventory', 'view'), (req, res) => 
   const rows = db.prepare(
     `SELECT w.*, s.name as site_name,
             (SELECT COUNT(*) FROM stock_balance sb WHERE sb.warehouse_id = w.id AND sb.quantity > 0) as item_count,
-            (SELECT COALESCE(SUM(sb.quantity * sb.avg_rate), 0) FROM stock_balance sb WHERE sb.warehouse_id = w.id) as total_value
+            (SELECT COALESCE(SUM(sb.quantity * (CASE WHEN sb.avg_rate > 0 THEN sb.avg_rate
+                                                      ELSE COALESCE(im.current_price, 0) END)), 0)
+               FROM stock_balance sb
+               LEFT JOIN item_master im ON im.id = sb.item_master_id
+              WHERE sb.warehouse_id = w.id) as total_value
        FROM warehouses w
        LEFT JOIN sites s ON s.id = w.site_id
       ORDER BY w.type='office' DESC, w.name`
@@ -82,25 +86,39 @@ router.get('/stock', requirePermission('inventory', 'view'), (req, res) => {
   const rows = db.prepare(
     `SELECT sb.id, sb.warehouse_id, sb.item_master_id, sb.quantity, sb.avg_rate, sb.reorder_level, sb.updated_at,
             w.name as warehouse_name, w.type as warehouse_type,
-            im.item_code, im.item_name, im.specification, im.size, im.uom, im.make
+            im.item_code, im.item_name, im.specification, im.size, im.uom, im.make,
+            im.current_price as master_price
        FROM stock_balance sb
        JOIN warehouses w ON w.id = sb.warehouse_id
        JOIN item_master im ON im.id = sb.item_master_id
       WHERE ${where.join(' AND ')}
       ORDER BY w.type='office' DESC, w.name, im.item_name`
   ).all(...params);
-  res.json(rows);
+  // Effective rate: avg_rate from movements if > 0, otherwise the
+  // Item Master current_price so the Value column always reflects
+  // something meaningful even when opening stock was entered with
+  // no rate. Tag rate_source so the UI can show "from master" hint.
+  res.json(rows.map(r => {
+    const eff = (+r.avg_rate > 0) ? +r.avg_rate : (+r.master_price || 0);
+    const src = (+r.avg_rate > 0) ? 'movements' : (+r.master_price > 0 ? 'master' : 'none');
+    return { ...r, effective_rate: eff, rate_source: src, value: +(eff * (+r.quantity || 0)).toFixed(2) };
+  }));
 });
 
 router.get('/summary', requirePermission('inventory', 'view'), (req, res) => {
   const db = getDb();
+  // Total value uses moving-avg rate where available, else falls back
+  // to item_master.current_price — same logic as /stock so the dashboard
+  // and the table are consistent.
   const rows = db.prepare(
     `SELECT w.id, w.name, w.type, w.site_id,
             COUNT(CASE WHEN sb.quantity > 0 THEN 1 END) as items_in_stock,
-            COALESCE(SUM(sb.quantity * sb.avg_rate), 0) as total_value,
+            COALESCE(SUM(sb.quantity * (CASE WHEN sb.avg_rate > 0 THEN sb.avg_rate
+                                              ELSE COALESCE(im.current_price, 0) END)), 0) as total_value,
             COUNT(CASE WHEN sb.reorder_level > 0 AND sb.quantity <= sb.reorder_level THEN 1 END) as low_stock_items
        FROM warehouses w
        LEFT JOIN stock_balance sb ON sb.warehouse_id = w.id
+       LEFT JOIN item_master im ON im.id = sb.item_master_id
       WHERE w.active = 1
       GROUP BY w.id
       ORDER BY w.type='office' DESC, w.name`
