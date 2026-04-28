@@ -278,23 +278,43 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit }) {
 // ---------- RECEIVE TAB ----------
 function ReceiveTab({ warehouses, items, reload }) {
   const [form, setForm] = useState({ warehouse_id: '', reference_type: 'PURCHASE', reference_id: '', notes: '' });
-  const [lines, setLines] = useState([{ item_master_id: '', quantity: '', rate: '' }]);
+  const [lines, setLines] = useState([{ item_master_id: '', quantity: '', rate: '', photo_url: '', uploading: false }]);
   const [saving, setSaving] = useState(false);
 
-  const addLine = () => setLines(l => [...l, { item_master_id: '', quantity: '', rate: '' }]);
+  const addLine = () => setLines(l => [...l, { item_master_id: '', quantity: '', rate: '', photo_url: '', uploading: false }]);
   const rmLine = (i) => setLines(l => l.filter((_, idx) => idx !== i));
   const setLine = (i, k, v) => setLines(l => l.map((x, idx) => idx === i ? { ...x, [k]: v } : x));
+
+  // Upload a per-line photo (optional). Used mostly for OPENING balance
+  // entries where mam wants visual proof of what's actually at a site.
+  const uploadPhoto = async (i, file) => {
+    if (!file) return;
+    setLine(i, 'uploading', true);
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setLine(i, 'photo_url', r.data.url);
+      setLine(i, 'uploading', false);
+    } catch {
+      toast.error('Photo upload failed');
+      setLine(i, 'uploading', false);
+    }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
     if (!form.warehouse_id) return toast.error('Pick a warehouse');
     const valid = lines.filter(l => l.item_master_id && +l.quantity > 0);
     if (valid.length === 0) return toast.error('Add at least one item with quantity');
+    if (lines.some(l => l.uploading)) return toast.error('Wait for photo uploads to finish');
     setSaving(true);
     try {
-      await api.post('/inventory/receive', { ...form, items: valid });
+      await api.post('/inventory/receive', {
+        ...form,
+        items: valid.map(l => ({ item_master_id: l.item_master_id, quantity: l.quantity, rate: l.rate, photo_url: l.photo_url || null })),
+      });
       toast.success(`Received ${valid.length} item(s)`);
-      setLines([{ item_master_id: '', quantity: '', rate: '' }]);
+      setLines([{ item_master_id: '', quantity: '', rate: '', photo_url: '', uploading: false }]);
       setForm(f => ({ ...f, reference_id: '', notes: '' }));
       reload();
     } catch (err) {
@@ -333,21 +353,44 @@ function ReceiveTab({ warehouses, items, reload }) {
           <h4 className="font-semibold text-sm text-gray-700">Items</h4>
           <button type="button" onClick={addLine} className="btn btn-secondary text-xs flex items-center gap-1"><FiPlus size={12} /> Add Line</button>
         </div>
-        <div className="space-y-2">
+        <div className="space-y-3">
           {lines.map((l, i) => (
-            <div key={i} className="grid grid-cols-12 gap-2 items-start">
-              <div className="col-span-6">
-                <SearchableSelect
-                  options={items}
-                  value={l.item_master_id || null}
-                  valueKey="id" displayKey="label"
-                  placeholder="Search item by name / code…"
-                  onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
-                />
+            <div key={i} className="border rounded-lg p-2 space-y-2 bg-gray-50/40">
+              <div className="grid grid-cols-12 gap-2 items-start">
+                <div className="col-span-6">
+                  <SearchableSelect
+                    options={items}
+                    value={l.item_master_id || null}
+                    valueKey="id" displayKey="label"
+                    placeholder="Search item by name / code…"
+                    onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
+                  />
+                </div>
+                <input className="input col-span-2" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
+                <input className="input col-span-3" type="number" step="any" min="0" placeholder="Rate ₹ (optional)" value={l.rate} onChange={e => setLine(i, 'rate', e.target.value)} />
+                <button type="button" onClick={() => rmLine(i)} className="text-gray-400 hover:text-red-600 col-span-1 self-center justify-self-center" title="Remove"><FiTrash2 size={14} /></button>
               </div>
-              <input className="input col-span-2" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
-              <input className="input col-span-3" type="number" step="any" min="0" placeholder="Rate ₹ (optional)" value={l.rate} onChange={e => setLine(i, 'rate', e.target.value)} />
-              <button type="button" onClick={() => rmLine(i)} className="text-gray-400 hover:text-red-600 col-span-1 self-center justify-self-center" title="Remove"><FiTrash2 size={14} /></button>
+              {/* Optional photo per line — useful for opening balance proof */}
+              <div className="grid grid-cols-12 gap-2 items-center pl-1">
+                <label className="col-span-3 text-[11px] text-gray-500 flex items-center gap-1">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                  Photo (optional)
+                </label>
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  capture="environment"
+                  disabled={l.uploading}
+                  onChange={e => uploadPhoto(i, e.target.files?.[0])}
+                  className="col-span-7 text-[11px] text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100"
+                />
+                <div className="col-span-2">
+                  {l.uploading && <span className="text-[10px] text-amber-600">uploading…</span>}
+                  {l.photo_url && !l.uploading && (
+                    <a href={l.photo_url} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline">✓ photo attached</a>
+                  )}
+                </div>
+              </div>
             </div>
           ))}
         </div>
@@ -540,6 +583,11 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
                   {m.from_warehouse_name && <div className="text-gray-500">← {m.from_warehouse_name}</div>}
                   {m.site_name && <div className="text-gray-500">site: {m.site_name}</div>}
                   {m.notes && <div className="text-gray-400 italic truncate max-w-[220px]" title={m.notes}>{m.notes}</div>}
+                  {m.photo_url && (
+                    <a href={m.photo_url} target="_blank" rel="noreferrer" className="inline-block mt-1">
+                      <img src={m.photo_url} alt="proof" className="w-14 h-14 object-cover rounded border hover:scale-150 transition-transform" />
+                    </a>
+                  )}
                 </td>
                 <td className="px-3 py-1.5 text-[11px] text-gray-500">{m.created_by_name || '—'}</td>
               </tr>

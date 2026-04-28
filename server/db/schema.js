@@ -1317,6 +1317,11 @@ function initializeDatabase() {
     // linked vendor_po_items auto-land in this warehouse. nullable —
     // existing receives without a warehouse just behave like before.
     ['delivery_notes', 'warehouse_id INTEGER REFERENCES warehouses(id)'],
+    // Optional photo per stock movement — useful for opening-balance
+    // entries at site stores so mam has visual proof of what's actually
+    // there. Photo is never required; rendered as a thumbnail in the
+    // movements list when set.
+    ['stock_movements', 'photo_url TEXT'],
     // Self-service password recovery — user sets a personal recovery code
     // (stored as bcrypt hash) which they can later use along with their
     // username to reset their password from the login page. No SMTP needed.
