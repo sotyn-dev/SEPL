@@ -36,9 +36,34 @@ export default function Collections() {
 
   const createReceivable = async (e) => {
     e.preventDefault();
-    await api.post('/collections', form);
-    toast.success('Receivable added');
-    setModal(false); load();
+    if (!form.site_name && !form.client_name) return toast.error('Pick a site / enter client name');
+    if (!(+form.invoice_amount > 0)) return toast.error('Target amount must be greater than 0');
+    try {
+      await api.post('/collections', form);
+      toast.success('Receivable added');
+      setModal(false);
+      setForm({});
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    }
+  };
+
+  // Same site-pick → CRM autofill helper as openEdit, but for the Add form.
+  const onPickAddSite = (siteOpt) => {
+    if (!siteOpt) {
+      setForm(f => ({ ...f, site_name: '', site_id: '', client_name: '', crm_name: '' }));
+      return;
+    }
+    setForm(f => ({
+      ...f,
+      site_name: siteOpt.name,
+      site_id: siteOpt.id,
+      client_name: siteOpt.name, // keep legacy column populated for old reports
+      crm_name: siteOpt.crm_name || f.crm_name,
+      invoice_amount: (f.invoice_amount && +f.invoice_amount > 0) ? f.invoice_amount : (siteOpt.latest_po_value || 0),
+      invoice_number: f.invoice_number || siteOpt.latest_po_number || '',
+    }));
   };
 
   const addFollowUp = async (e) => {
@@ -422,28 +447,84 @@ export default function Collections() {
         )}
       </Modal>
 
-      {/* Add Receivable Modal */}
-      <Modal isOpen={modal} onClose={() => setModal(false)} title="Add Receivable">
+      {/* Add Receivable Modal — v2 layout (matches Edit modal): pick site
+          first, CRM auto-fills, target/dates/follow-up captured together. */}
+      <Modal isOpen={modal} onClose={() => { setModal(false); setForm({}); }} title="Add Receivable" wide>
         <form onSubmit={createReceivable} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div><label className="label">Client Name *</label><input className="input" value={form.client_name || ''} onChange={e => setForm({...form, client_name: e.target.value})} required /></div>
-            <div><label className="label">Project Name</label><input className="input" value={form.project_name || ''} onChange={e => setForm({...form, project_name: e.target.value})} /></div>
-            <div><label className="label">Invoice Number</label><input className="input" value={form.invoice_number || ''} onChange={e => setForm({...form, invoice_number: e.target.value})} /></div>
-            <div><label className="label">Invoice Date</label><input className="input" type="date" value={form.invoice_date || ''} onChange={e => setForm({...form, invoice_date: e.target.value})} /></div>
-            <div><label className="label">Invoice Amount *</label><input className="input" type="number" value={form.invoice_amount || 0} onChange={e => setForm({...form, invoice_amount: +e.target.value})} required /></div>
-            <div><label className="label">Due Date</label><input className="input" type="date" value={form.due_date || ''} onChange={e => setForm({...form, due_date: e.target.value})} /></div>
-            <div>
-              <label className="label">Owner</label>
-              <SearchableSelect
-                options={users.map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') }))}
-                value={form.owner_id || null}
-                valueKey="id" displayKey="label"
-                placeholder="Search user…"
-                onChange={(u) => setForm({ ...form, owner_id: u?.id || '' })}
-              />
+          {/* SITE + CRM */}
+          <div className="card p-3 bg-gray-50/60">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Site Name <span className="text-red-500">*</span></label>
+                <SearchableSelect
+                  options={sites.map(s => ({ ...s, label: s.name }))}
+                  value={form.site_name || null}
+                  valueKey="name" displayKey="label"
+                  placeholder="Pick site (unique from your sites/POs)"
+                  onChange={onPickAddSite}
+                />
+                <p className="text-[10px] text-gray-400 mt-0.5">Auto-fills CRM + suggests target from the latest PO of this site.</p>
+              </div>
+              <div>
+                <label className="label">CRM Name <span className="text-[10px] text-gray-400 font-normal">(auto from PO)</span></label>
+                <input className="input" value={form.crm_name || ''} onChange={e => setForm({...form, crm_name: e.target.value})} placeholder="Auto-fills when site picked" />
+              </div>
             </div>
           </div>
-          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Add</button></div>
+
+          {/* MONEY */}
+          <div className="card p-3">
+            <h5 className="text-xs font-semibold text-gray-500 uppercase mb-2">Payment</h5>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="label">Target Payment <span className="text-red-500">*</span></label>
+                <input className="input text-right tabular-nums" type="number" step="any" min="0" value={form.invoice_amount || 0} onChange={e => setForm({...form, invoice_amount: +e.target.value})} required />
+                <p className="text-[10px] text-gray-400 mt-0.5">From your PDF / latest PO.</p>
+              </div>
+              <div>
+                <label className="label">Invoice Number</label>
+                <input className="input" value={form.invoice_number || ''} onChange={e => setForm({...form, invoice_number: e.target.value})} />
+              </div>
+              <div>
+                <label className="label">Invoice Date</label>
+                <input className="input" type="date" value={form.invoice_date || ''} onChange={e => setForm({...form, invoice_date: e.target.value})} />
+              </div>
+              <div>
+                <label className="label">Due Date</label>
+                <input className="input" type="date" value={form.due_date || ''} onChange={e => setForm({...form, due_date: e.target.value})} />
+              </div>
+            </div>
+          </div>
+
+          {/* CRM FOLLOW-UP */}
+          <div className="card p-3 bg-amber-50/40 border-l-4 border-amber-400">
+            <h5 className="text-xs font-semibold text-amber-900 uppercase mb-2">CRM Follow-up <span className="text-gray-400 font-normal normal-case">(optional)</span></h5>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Next Planned Date <span className="text-[10px] text-gray-400 font-normal">(when payment expected)</span></label>
+                <input className="input" type="date" value={form.next_planned_date || ''} onChange={e => setForm({...form, next_planned_date: e.target.value})} />
+              </div>
+              <div>
+                <label className="label">Owner (Aanchal / collection person)</label>
+                <SearchableSelect
+                  options={users.map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') }))}
+                  value={form.owner_id || null}
+                  valueKey="id" displayKey="label"
+                  placeholder="Search user…"
+                  onChange={(u) => setForm({ ...form, owner_id: u?.id || '' })}
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="label">Last Discussion with Client</label>
+                <textarea className="input" rows="2" value={form.last_discussion || ''} onChange={e => setForm({...form, last_discussion: e.target.value})} placeholder="What did the client say? When will they pay?" />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-3 pt-1">
+            <button type="button" onClick={() => { setModal(false); setForm({}); }} className="btn btn-secondary">Cancel</button>
+            <button type="submit" className="btn btn-primary">Add Receivable</button>
+          </div>
         </form>
       </Modal>
 
