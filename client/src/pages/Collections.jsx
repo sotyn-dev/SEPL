@@ -75,6 +75,8 @@ export default function Collections() {
 
   const recordCollection = async (e) => {
     e.preventDefault();
+    const amt = +form.amount;
+    if (!amt || amt <= 0) { toast.error('Enter a valid amount greater than 0'); return; }
     await api.post(`/collections/${selectedId}/collect`, form);
     toast.success('Collection recorded & linked to Cash Flow!');
     setCollectModal(false); load();
@@ -551,7 +553,7 @@ export default function Collections() {
             <div><label className="label">Response / Notes</label><textarea className="input" rows="2" value={form.response || ''} onChange={e => setForm({...form, response: e.target.value})} /></div>
             <div className="grid grid-cols-2 gap-4">
               <div><label className="label">Promised Date</label><input className="input" type="date" value={form.promised_date || ''} onChange={e => setForm({...form, promised_date: e.target.value})} /></div>
-              <div><label className="label">Promised Amount</label><input className="input" type="number" value={form.promised_amount || 0} onChange={e => setForm({...form, promised_amount: +e.target.value})} /></div>
+              <div><label className="label">Promised Amount</label><input className="input" type="number" min="0" step="0.01" value={form.promised_amount ?? ''} onChange={e => setForm({...form, promised_amount: e.target.value === '' ? '' : +e.target.value})} placeholder="Enter amount" /></div>
             </div>
             <div className="flex justify-end gap-3"><button type="button" onClick={() => setFollowUpModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Record Follow-up</button></div>
           </form>
@@ -563,7 +565,7 @@ export default function Collections() {
         <form onSubmit={recordCollection} className="space-y-4">
           <p className="text-xs text-red-600 bg-red-50 p-2 rounded">This collection will auto-link to Cash Flow System as an inflow entry.</p>
           <div className="grid grid-cols-2 gap-4">
-            <div><label className="label">Amount *</label><input className="input" type="number" value={form.amount || 0} onChange={e => setForm({...form, amount: +e.target.value})} required /></div>
+            <div><label className="label">Amount *</label><input className="input" type="number" min="0" step="0.01" value={form.amount ?? ''} onChange={e => setForm({...form, amount: e.target.value === '' ? '' : +e.target.value})} placeholder="Enter amount" required /></div>
             <div><label className="label">Date</label><input className="input" type="date" value={form.collection_date || ''} onChange={e => setForm({...form, collection_date: e.target.value})} /></div>
             <div><label className="label">Payment Mode</label><select className="select" value={form.payment_mode || ''} onChange={e => setForm({...form, payment_mode: e.target.value})}><option value="">Select</option><option value="Cash">Cash</option><option value="Bank Transfer">Bank Transfer</option><option value="UPI">UPI</option><option value="Cheque">Cheque</option><option value="NEFT">NEFT</option><option value="RTGS">RTGS</option></select></div>
             <div><label className="label">Transaction Ref</label><input className="input" value={form.transaction_ref || ''} onChange={e => setForm({...form, transaction_ref: e.target.value})} /></div>
