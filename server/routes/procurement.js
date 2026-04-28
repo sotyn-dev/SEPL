@@ -573,6 +573,44 @@ router.get('/vendor-po', (req, res) => {
     LEFT JOIN vendors v ON vp.vendor_id=v.id ORDER BY vp.created_at DESC`).all());
 });
 
+// Full Vendor PO payload for the print/share page — includes vendor
+// contact details, indent info, and every line item with item_master
+// fields (code, description, spec, make, uom). Used by /vendor-po/:id/print
+// in the client to render a print-friendly PO that mam can save as PDF
+// or share to vendor.
+router.get('/vendor-po/:id/print', (req, res) => {
+  const db = getDb();
+  const po = db.prepare(`
+    SELECT vp.*, v.name as vendor_name, v.firm_name, v.contact_person,
+           v.phone as vendor_phone, v.email as vendor_email,
+           v.gst_number, v.address as vendor_address,
+           v.district, v.state, v.payment_terms as vendor_payment_terms,
+           i.indent_number, i.site_name, i.raised_by_name,
+           u.name as created_by_name
+      FROM vendor_pos vp
+      LEFT JOIN vendors v ON vp.vendor_id = v.id
+      LEFT JOIN indents i ON vp.indent_id = i.id
+      LEFT JOIN users u ON vp.created_by = u.id
+     WHERE vp.id = ?
+  `).get(req.params.id);
+  if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
+
+  const items = db.prepare(`
+    SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.terms, vpi.credit_days,
+           ii.description, ii.make as ii_make, ii.unit,
+           im.item_code, im.item_name as master_name, im.specification, im.size, im.uom, im.make as im_make,
+           poi.description as boq_description
+      FROM vendor_po_items vpi
+      LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+      LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+     WHERE vpi.vendor_po_id = ?
+     ORDER BY vpi.id
+  `).all(req.params.id);
+
+  res.json({ po, items });
+});
+
 // Items of a given indent, with finalized rate info and whether each item is
 // already covered by a Vendor PO. Used to populate the item-checkbox grid in
 // the Create Vendor PO modal.

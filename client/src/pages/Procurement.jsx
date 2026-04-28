@@ -5,7 +5,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiCheck, FiX, FiTrash2, FiExternalLink, FiChevronDown, FiChevronRight } from 'react-icons/fi';
+import { FiPlus, FiCheck, FiX, FiTrash2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle } from 'react-icons/fi';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false };
 
@@ -723,7 +723,7 @@ export default function Procurement() {
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="font-semibold">Vendor Purchase Orders</h3>
-            <button onClick={() => openCreateVendorPo('')} className="btn btn-primary flex items-center gap-2"><FiPlus /> Upload Vendor PO</button>
+            <button onClick={() => openCreateVendorPo('')} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Vendor PO</button>
           </div>
 
           {/* Pending for PO — finalized items that haven't been covered by any Vendor PO yet */}
@@ -766,7 +766,7 @@ export default function Procurement() {
                             <span className={`badge ${p.rate_status === 'finalized' ? 'badge-green' : 'badge-yellow'}`}>{p.rate_status || 'pending'}</span>
                           </td>
                           <td className="px-2 py-1.5">
-                            <button onClick={() => openCreateVendorPo(p.indent_id)} className="btn btn-primary text-[10px] px-2 py-1">Upload PO</button>
+                            <button onClick={() => openCreateVendorPo(p.indent_id)} className="btn btn-primary text-[10px] px-2 py-1">Create PO</button>
                           </td>
                         </tr>
                       );
@@ -787,9 +787,12 @@ export default function Procurement() {
                   <td>{v.vendor_name}</td>
                   <td>Rs {v.total_amount?.toLocaleString()}</td>
                   <td>
-                    {v.file_path
-                      ? <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View PO</a>
-                      : <span className="text-gray-300 text-xs">—</span>}
+                    <div className="flex flex-col gap-1">
+                      <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-xs flex items-center gap-1">
+                        <FiPrinter size={11} /> View / Print
+                      </a>
+                      {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-[10px]">attached PDF</a>}
+                    </div>
                   </td>
                   <td><StatusBadge status={v.status} /></td>
                   <td>{canDelete('procurement') && <button onClick={async () => {
@@ -799,7 +802,7 @@ export default function Procurement() {
                   }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}</td>
                 </tr>
               ))}
-              {vendorPos.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No vendor POs yet — click "Upload Vendor PO"</td></tr>}
+              {vendorPos.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No vendor POs yet — click "Create Vendor PO"</td></tr>}
             </tbody>
           </table></div>
         </>
@@ -1239,7 +1242,7 @@ export default function Procurement() {
       {/* Vendor PO Upload Modal — mam creates the PO in Tally and uploads
           the file here. Terms / credit days / advance live on the uploaded
           Tally PO itself, so the ERP only captures metadata + the file. */}
-      <Modal isOpen={modal === 'vendorpo'} onClose={() => setModal(false)} title="Upload Vendor PO (from Tally)" wide>
+      <Modal isOpen={modal === 'vendorpo'} onClose={() => setModal(false)} title="Create Vendor PO" wide>
         <form onSubmit={saveVendorPo} className="space-y-4">
           <p className="text-[11px] text-gray-500 bg-blue-50 border border-blue-100 rounded px-3 py-2">
             Upload the PO PDF/file you created in Tally. Optionally link it to an indent so the "Pending for PO" list clears.
@@ -1358,7 +1361,7 @@ export default function Procurement() {
 
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
             <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">Upload Vendor PO</button>
+            <button type="submit" className="btn btn-primary">Create Vendor PO</button>
           </div>
         </form>
       </Modal>
