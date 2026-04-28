@@ -41,7 +41,15 @@ export default function Inventory() {
       ]);
       setWarehouses(w.data || []);
       setSites(s.data || []);
-      setItems((im.data || []).map(i => ({ ...i, label: `${i.item_code || ''} ${i.item_name}`.trim() })));
+      // Build a richer label so the search matches by name, code, spec
+      // AND department all at once. SearchableSelect does substring match
+      // on the label, so packing more text into it = better discoverability
+      // when mam searches "cement" / "civil" / "300NB" / etc.
+      setItems((im.data || []).map(i => ({
+        ...i,
+        label: [i.item_code, i.item_name, i.specification, i.size, i.department && '·' + i.department]
+          .filter(Boolean).join(' '),
+      })));
     } catch (err) { /* keep silent */ }
   };
 
@@ -316,6 +324,19 @@ function OpeningRowEntry({ warehouses, items, reload }) {
   const [rows, setRows] = useState([newRow()]);
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  // Department pre-filter so mam can narrow the 3,100-item catalog
+  // before searching. e.g. pick "CIVIL" -> dropdown only shows
+  // Cement, Hume Pipe, masonry chamber, Excavation, ... etc.
+  const [deptFilter, setDeptFilter] = useState('');
+  const departments = useMemo(() => {
+    const set = new Set();
+    for (const i of items) if (i.department) set.add(i.department);
+    return [...set].sort();
+  }, [items]);
+  const filteredItems = useMemo(() => {
+    if (!deptFilter) return items;
+    return items.filter(i => i.department === deptFilter);
+  }, [items, deptFilter]);
 
   const addRow = () => setRows(r => [...r, newRow()]);
   const rmRow = (i) => setRows(r => r.length === 1 ? [newRow()] : r.filter((_, idx) => idx !== i));
@@ -376,6 +397,40 @@ function OpeningRowEntry({ warehouses, items, reload }) {
         Add one row per (warehouse × item). Pick the site, search the item, type the quantity, optionally snap a photo. Use this for old / existing stock BEFORE going live.
       </div>
 
+      {/* Department pre-filter — narrows the item dropdown from 3,000+
+          to just CIVIL / FF / Electrical / etc. so mam can find items
+          much faster. Applies to every row in this entry session. */}
+      <div className="card p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide mr-1">Filter items by department:</span>
+          <button
+            type="button"
+            onClick={() => setDeptFilter('')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${deptFilter === '' ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+          >
+            All ({items.length})
+          </button>
+          {departments.map(d => {
+            const count = items.filter(i => i.department === d).length;
+            return (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setDeptFilter(d)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${deptFilter === d ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+              >
+                {d} <span className="opacity-70 ml-0.5">({count})</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-[11px] text-gray-400 mt-2">
+          {deptFilter
+            ? <>Showing only <span className="font-semibold text-red-700">{deptFilter}</span> items in the search dropdowns below.</>
+            : <>Showing all items. Pick a department to narrow the dropdown.</>}
+        </p>
+      </div>
+
       {/* Card-per-row layout — old table broke when the item-search
           dropdown opened (it covered the qty / rate / photo columns).
           Cards give each row enough room for the dropdown to expand
@@ -409,18 +464,22 @@ function OpeningRowEntry({ warehouses, items, reload }) {
                   </select>
                 </div>
                 <div>
-                  <label className="label">Item <span className="text-red-500">*</span></label>
+                  <label className="label">
+                    Item <span className="text-red-500">*</span>
+                    {deptFilter && <span className="ml-2 text-[10px] text-gray-400 normal-case font-normal">— filtered to {deptFilter} ({filteredItems.length})</span>}
+                  </label>
                   <SearchableSelect
-                    options={items}
+                    options={filteredItems}
                     value={r.item_master_id || null}
                     valueKey="id" displayKey="label"
-                    placeholder="Search by name or code…"
+                    placeholder={`Search ${deptFilter ? deptFilter + ' ' : ''}items by name / code / spec…`}
                     onChange={(opt) => setField(i, 'item_master_id', opt?.id || '')}
                   />
                   {it && (
                     <p className="text-[11px] text-gray-500 mt-1">
                       {it.specification && <span>{it.specification} · </span>}
                       UOM: {it.uom || '—'}{it.make ? ' · Make: ' + it.make : ''}
+                      {it.department && <span> · Dept: {it.department}</span>}
                     </p>
                   )}
                 </div>
