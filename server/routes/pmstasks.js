@@ -140,6 +140,50 @@ router.post('/', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, crm_name: proj.crm_name, project_name: proj.project_name });
 });
 
+// Edit a PMS task — admin or the original assigner only. Allowed in any
+// status; status / proof / reject_reason are NOT touched here. Partial
+// update — only fields the caller sent are modified.
+router.put('/:id', (req, res) => {
+  const db = getDb();
+  const t = db.prepare('SELECT assigned_by FROM pms_tasks WHERE id=?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: 'Task not found' });
+  if (t.assigned_by !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the assigner or an admin can edit this task' });
+  }
+  const b = req.body || {};
+  const desc = b.description != null ? String(b.description).trim() : null;
+  if (b.description != null && !desc) return res.status(400).json({ error: 'Description cannot be empty' });
+  const assignedTo = b.assigned_to != null ? +b.assigned_to : null;
+  const dueDate = b.due_date != null ? (b.due_date || null) : undefined;
+  const title = desc ? (desc.split(/\r?\n/)[0].slice(0, 80).trim() || 'PMS Task') : null;
+
+  const sets = []; const params = [];
+  if (desc != null) { sets.push('description=?', 'title=?'); params.push(desc, title); }
+  if (assignedTo) { sets.push('assigned_to=?'); params.push(assignedTo); }
+  if (dueDate !== undefined) { sets.push('due_date=?'); params.push(dueDate); }
+
+  // Optionally allow re-targeting the project (if business book changed)
+  if (b.project_id) {
+    const proj = db.prepare(`
+      SELECT bb.id, COALESCE(s.name, bb.project_name) AS project_name,
+        (SELECT po.crm_name FROM purchase_orders po
+           WHERE po.business_book_id = bb.id AND po.crm_name IS NOT NULL AND po.crm_name != ''
+           ORDER BY po.created_at DESC LIMIT 1) AS crm_name
+      FROM business_book bb
+      LEFT JOIN sites s ON s.business_book_id = bb.id
+      WHERE bb.id = ?
+    `).get(b.project_id);
+    if (proj) {
+      sets.push('project_id=?', 'project_name_snapshot=?', 'crm_name=?');
+      params.push(proj.id, proj.project_name, proj.crm_name);
+    }
+  }
+  if (sets.length === 0) return res.status(400).json({ error: 'No fields to update' });
+  params.push(req.params.id);
+  db.prepare(`UPDATE pms_tasks SET ${sets.join(', ')} WHERE id=?`).run(...params);
+  res.json({ message: 'Task updated' });
+});
+
 // --- Lifecycle: same as delegations ---
 
 router.post('/:id/submit', (req, res) => {

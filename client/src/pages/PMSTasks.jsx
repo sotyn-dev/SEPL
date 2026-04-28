@@ -15,9 +15,15 @@ export default function PMSTasks() {
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [projects, setProjects] = useState([]);
-  const [scope, setScope] = useState('followup');
+  // Default to 'mine' — each user lands on THEIR OWN tasks so they can
+  // upload proof on their own work without seeing everyone else's.
+  // Admins / leads can switch to Followup or All from the tabs.
+  const [scope, setScope] = useState('mine');
   const [statusFilter, setStatusFilter] = useState('');
   const [createModal, setCreateModal] = useState(false);
+  const [editModal, setEditModal] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [editSaving, setEditSaving] = useState(false);
   const [submitModal, setSubmitModal] = useState(null);
   const [rejectModal, setRejectModal] = useState(null);
   const [extendModal, setExtendModal] = useState(null);
@@ -137,6 +143,29 @@ export default function PMSTasks() {
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  const openEdit = (task) => {
+    setEditForm({
+      description: task.description || '',
+      assigned_to: task.assigned_to || '',
+      due_date: task.due_date || '',
+      project_id: task.project_id || '',
+    });
+    setEditModal(task);
+  };
+  const saveEdit = async (e) => {
+    e.preventDefault();
+    if (!editForm.description || !editForm.description.trim()) return toast.error('Description is required');
+    setEditSaving(true);
+    try {
+      await api.put(`/pms-tasks/${editModal.id}`, editForm);
+      toast.success('Task updated');
+      setEditModal(null); setEditForm({}); load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update');
+    }
+    setEditSaving(false);
+  };
+
   const statusBadge = (s) => {
     const map = {
       pending: 'bg-amber-100 text-amber-800 border-amber-200',
@@ -164,13 +193,14 @@ export default function PMSTasks() {
         )}
       </div>
 
-      {/* Followup shows every active (non-approved) task across users — the
-          same pattern mam uses in Delegations. Admin keeps the "All" tab to
-          also see historical approved tasks; status dropdown works with
-          both. Per-user "Assigned to me" / "Given by me" scopes dropped —
-          users can filter by their own name or use the status dropdown. */}
+      {/* Each user sees THEIR OWN tasks by default so they can focus on
+          uploading proof for what they're responsible for. Followup shows
+          every active task across the team; Given by me lists what the
+          current user assigned to others; All is admin-only. */}
       <div className="flex flex-wrap gap-2 text-sm">
         {[
+          { id: 'mine',     label: 'My Tasks (assigned to me)' },
+          { id: 'given',    label: 'Given by me' },
           { id: 'followup', label: 'Followup (all active)' },
           ...(isAdmin() ? [{ id: 'all', label: 'All (admin)' }] : []),
         ].map(t => (
@@ -196,7 +226,7 @@ export default function PMSTasks() {
               <th className="w-12 text-center">S.No.</th>
               <th>Task ID</th>
               <th>Project</th>
-              <th>CRM</th>
+              <th>Created By <span className="text-[9px] text-gray-400 font-normal normal-case">(CRM below)</span></th>
               <th>Description</th>
               <th>Assigned To</th>
               <th>Due / Done</th>
@@ -223,9 +253,19 @@ export default function PMSTasks() {
                       {t.company_name && <span>{t.company_name}</span>}
                     </div>
                   </td>
-                  <td className="whitespace-nowrap text-xs">{t.crm_name || <span className="text-gray-300">—</span>}</td>
-                  <td className="max-w-md">
-                    <div className="line-clamp-2 text-gray-800">{t.description}</div>
+                  <td className="text-xs">
+                    {/* Created By = the person who raised the task. CRM name
+                        from the linked Client PO shown as a faded subtitle
+                        for context. */}
+                    <div className="font-medium text-gray-800">
+                      {t.assigned_by_name || <span className="text-gray-300">—</span>}
+                    </div>
+                    {t.crm_name && <div className="text-[10px] text-gray-400">CRM: {t.crm_name}</div>}
+                  </td>
+                  <td className="max-w-md min-w-[240px]">
+                    {/* Wrap properly across all viewports — no more line-clamp,
+                        long descriptions break onto multiple lines. */}
+                    <div className="text-gray-800 whitespace-pre-wrap break-words text-sm">{t.description}</div>
                     {t.status === 'rejected' && t.reject_reason && (
                       <div className="text-[10px] text-red-700 mt-1 flex items-start gap-1"><FiAlertTriangle size={10} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</div>
                     )}
@@ -274,14 +314,19 @@ export default function PMSTasks() {
                     ) : <span className="text-gray-300 text-xs">—</span>}
                   </td>
                   <td>
-                    <div className="flex gap-1">
+                    <div className="flex gap-1 items-center">
                       {isAssigner && t.status === 'submitted' && (
                         <>
                           <button onClick={() => approve(t)} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
                           <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="text-[10px] text-red-600 font-bold hover:underline">Reject</button>
                         </>
                       )}
-                      {(isAssigner || isAdmin()) && <button onClick={() => del(t)} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={12} /></button>}
+                      {(isAssigner || isAdmin()) && (
+                        <button onClick={() => openEdit(t)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit task">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+                        </button>
+                      )}
+                      {(isAssigner || isAdmin()) && <button onClick={() => del(t)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={12} /></button>}
                     </div>
                   </td>
                 </tr>
@@ -307,7 +352,7 @@ export default function PMSTasks() {
                 </span>
                 {statusBadge(t.status)}
               </div>
-              <p className="text-sm text-gray-800 font-medium mb-2 line-clamp-3">{t.description}</p>
+              <p className="text-sm text-gray-800 font-medium mb-2 whitespace-pre-wrap break-words">{t.description}</p>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-gray-600 mb-2">
                 <div className="col-span-2"><span className="text-gray-400">Project:</span> <b>{t.project_name_live || t.project_name_snapshot || '—'}</b></div>
                 {t.crm_name && <div className="col-span-2"><span className="text-gray-400">CRM:</span> <b>{t.crm_name}</b></div>}
@@ -337,6 +382,12 @@ export default function PMSTasks() {
                     <button onClick={() => approve(t)} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiCheck size={11} /> Approve</button>
                     <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="btn btn-danger text-[11px] px-2 py-1 flex items-center gap-1"><FiX size={11} /> Reject</button>
                   </>
+                )}
+                {(isAssigner || isAdmin()) && (
+                  <button onClick={() => openEdit(t)} className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1" title="Edit task">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+                    Edit
+                  </button>
                 )}
                 {(isAssigner || isAdmin()) && <button onClick={() => del(t)} className="p-1.5 text-gray-400 hover:text-red-600 ml-auto"><FiTrash2 size={13} /></button>}
               </div>
@@ -393,6 +444,44 @@ export default function PMSTasks() {
             <button type="submit" className="btn btn-primary">Assign Task</button>
           </div>
         </form>
+      </Modal>
+
+      {/* Edit Task Modal — admin / assigner only */}
+      <Modal isOpen={!!editModal} onClose={() => { setEditModal(null); setEditForm({}); }} title={editModal ? `Edit task — PMS-${String(editModal.id).padStart(4,'0')}` : 'Edit task'}>
+        {editModal && (
+          <form onSubmit={saveEdit} className="space-y-3">
+            <div>
+              <label className="label">Description *</label>
+              <textarea
+                className="input"
+                rows="4"
+                value={editForm.description || ''}
+                onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))}
+                required
+              />
+            </div>
+            <div>
+              <label className="label">Assigned To *</label>
+              <select className="select" value={editForm.assigned_to || ''} onChange={e => setEditForm(f => ({ ...f, assigned_to: e.target.value }))}>
+                <option value="">—</option>
+                {users.map(u => <option key={u.id} value={u.id}>{u.name}{u.department ? ` (${u.department})` : ''}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Due Date</label>
+              <input type="date" className="input" value={editForm.due_date || ''} onChange={e => setEditForm(f => ({ ...f, due_date: e.target.value }))} />
+            </div>
+            {editModal.status === 'rejected' && (
+              <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800">
+                Editing a rejected task does NOT auto-resubmit it. The assignee can re-upload proof from the table to retry.
+              </div>
+            )}
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={() => { setEditModal(null); setEditForm({}); }} className="btn btn-secondary">Cancel</button>
+              <button type="submit" disabled={editSaving} className="btn btn-primary">{editSaving ? 'Saving…' : 'Save Changes'}</button>
+            </div>
+          </form>
+        )}
       </Modal>
 
       {/* Submit Proof Modal */}
