@@ -11,8 +11,12 @@ export default function Collections() {
   const { canDelete } = useAuth();
   const [receivables, setReceivables] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [targetSummary, setTargetSummary] = useState(null);
   const [users, setUsers] = useState([]);
   const [modal, setModal] = useState(false);
+  const [editModal, setEditModal] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [editSaving, setEditSaving] = useState(false);
   const [followUpModal, setFollowUpModal] = useState(false);
   const [collectModal, setCollectModal] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -23,6 +27,7 @@ export default function Collections() {
   const load = () => {
     api.get('/collections', { params: filter ? { status: filter } : {} }).then(r => setReceivables(r.data));
     api.get('/collections/summary').then(r => setSummary(r.data));
+    api.get('/collections/target-summary').then(r => setTargetSummary(r.data)).catch(() => setTargetSummary(null));
     api.get('/auth/users').then(r => setUsers(r.data));
   };
   useEffect(() => { load(); }, [filter]);
@@ -52,6 +57,33 @@ export default function Collections() {
     await api.post('/collections/refresh-ageing');
     toast.success('Ageing refreshed');
     load();
+  };
+
+  const openEdit = (r) => {
+    setEditForm({
+      client_name: r.client_name || '',
+      project_name: r.project_name || '',
+      invoice_number: r.invoice_number || '',
+      invoice_date: r.invoice_date || '',
+      invoice_amount: r.invoice_amount || 0,
+      due_date: r.due_date || '',
+      owner_id: r.owner_id || '',
+    });
+    setEditModal(r);
+  };
+  const saveEdit = async (e) => {
+    e.preventDefault();
+    if (!editForm.client_name || !editForm.client_name.trim()) return toast.error('Client name required');
+    if (!(+editForm.invoice_amount > 0)) return toast.error('Invoice amount must be greater than 0');
+    setEditSaving(true);
+    try {
+      await api.put(`/collections/${editModal.id}`, editForm);
+      toast.success('Receivable updated');
+      setEditModal(null); setEditForm({}); load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update');
+    }
+    setEditSaving(false);
   };
 
   const openFollowUps = async (id) => {
@@ -99,6 +131,71 @@ export default function Collections() {
         <button onClick={() => { setForm({ client_name: '', project_name: '', invoice_number: '', invoice_date: '', invoice_amount: 0, due_date: '', owner_id: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Receivable</button>
       </div>
 
+      {/* Payment Target vs Received (with Ageing) — top-line numbers
+          plus a per-bucket breakdown so mam can see where collection is
+          lagging. */}
+      {targetSummary && (
+        <div className="card p-0 overflow-hidden">
+          <div className="px-4 py-3 border-b bg-gradient-to-r from-red-50 to-white">
+            <h4 className="font-semibold text-gray-700">Payment Target vs Received <span className="text-xs text-gray-400 font-normal">(with ageing)</span></h4>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 p-4">
+            <div className="card p-3 border-l-4 border-blue-500">
+              <div className="text-[10px] uppercase text-gray-500 font-semibold">Target (Total Invoiced)</div>
+              <div className="text-2xl font-bold text-gray-800 mt-0.5">Rs {(targetSummary.overall.target / 100000).toFixed(2)}L</div>
+              <div className="text-[10px] text-gray-400">{targetSummary.overall.count} invoices</div>
+            </div>
+            <div className="card p-3 border-l-4 border-emerald-500">
+              <div className="text-[10px] uppercase text-gray-500 font-semibold">Received</div>
+              <div className="text-2xl font-bold text-emerald-700 mt-0.5">Rs {(targetSummary.overall.received / 100000).toFixed(2)}L</div>
+              <div className="text-[10px] text-gray-400">cleared so far</div>
+            </div>
+            <div className="card p-3 border-l-4 border-red-500">
+              <div className="text-[10px] uppercase text-gray-500 font-semibold">Outstanding</div>
+              <div className="text-2xl font-bold text-red-700 mt-0.5">Rs {(targetSummary.overall.outstanding / 100000).toFixed(2)}L</div>
+              <div className="text-[10px] text-gray-400">still to collect</div>
+            </div>
+            <div className="card p-3 border-l-4 border-amber-500">
+              <div className="text-[10px] uppercase text-gray-500 font-semibold">Collection %</div>
+              <div className="text-2xl font-bold text-amber-700 mt-0.5">{targetSummary.overall.collection_pct}%</div>
+              <div className="text-[10px] text-gray-400">received vs target</div>
+            </div>
+          </div>
+          {targetSummary.by_bucket.length > 0 && (
+            <div className="overflow-x-auto border-t">
+              <table className="text-sm w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Ageing Bucket</th>
+                    <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Invoices</th>
+                    <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Target</th>
+                    <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Received</th>
+                    <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Outstanding</th>
+                    <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Collection %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {targetSummary.by_bucket.map(b => (
+                    <tr key={b.ageing_bucket} className={`border-t ${b.ageing_bucket === '90+' ? 'bg-red-50/40' : b.ageing_bucket === '60-90' ? 'bg-amber-50/30' : ''}`}>
+                      <td className="px-3 py-2 font-medium text-gray-800">
+                        <span className={`px-2 py-0.5 rounded text-[11px] ${b.ageing_bucket === '0-30' ? 'bg-emerald-100 text-emerald-800' : b.ageing_bucket === '30-60' ? 'bg-blue-100 text-blue-800' : b.ageing_bucket === '60-90' ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'}`}>
+                          {b.ageing_bucket} days
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right text-gray-600 tabular-nums">{b.count}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">Rs {(b.target / 100000).toFixed(2)}L</td>
+                      <td className="px-3 py-2 text-right text-emerald-700 tabular-nums">Rs {(b.received / 100000).toFixed(2)}L</td>
+                      <td className="px-3 py-2 text-right text-red-700 font-semibold tabular-nums">Rs {(b.outstanding / 100000).toFixed(2)}L</td>
+                      <td className="px-3 py-2 text-right font-semibold tabular-nums">{b.collection_pct}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Top Clients */}
       {summary.topClients.length > 0 && (
         <div className="card">
@@ -135,6 +232,7 @@ export default function Collections() {
                   <td className="text-xs">{r.owner_name}</td>
                   <td>
                     <div className="flex gap-1">
+                      <button onClick={() => openEdit(r)} className="p-1 hover:bg-blue-50 rounded text-blue-600" title="Edit"><FiEdit2 size={14} /></button>
                       <button onClick={() => openFollowUps(r.id)} className="p-1 hover:bg-red-50 rounded text-red-600" title="Follow-up"><FiPhoneCall size={14} /></button>
                       <button onClick={() => { setSelectedId(r.id); setForm({ amount: 0, collection_date: new Date().toISOString().split('T')[0], payment_mode: '', transaction_ref: '', notes: '' }); setCollectModal(true); }} className="p-1 hover:bg-emerald-50 rounded text-emerald-600" title="Record Collection"><LuIndianRupee size={14} /></button>
                       {canDelete('collections') && <button onClick={async () => {
@@ -151,6 +249,36 @@ export default function Collections() {
           </table>
         </div>
       </div>
+
+      {/* Edit Receivable Modal */}
+      <Modal isOpen={!!editModal} onClose={() => { setEditModal(null); setEditForm({}); }} title={editModal ? `Edit Receivable — ${editModal.invoice_number || editModal.client_name}` : 'Edit Receivable'}>
+        {editModal && (
+          <form onSubmit={saveEdit} className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2"><label className="label">Client Name *</label><input className="input" required value={editForm.client_name || ''} onChange={e => setEditForm(f => ({ ...f, client_name: e.target.value }))} /></div>
+              <div className="col-span-2"><label className="label">Project Name</label><input className="input" value={editForm.project_name || ''} onChange={e => setEditForm(f => ({ ...f, project_name: e.target.value }))} /></div>
+              <div><label className="label">Invoice Number</label><input className="input" value={editForm.invoice_number || ''} onChange={e => setEditForm(f => ({ ...f, invoice_number: e.target.value }))} /></div>
+              <div><label className="label">Invoice Date</label><input className="input" type="date" value={editForm.invoice_date || ''} onChange={e => setEditForm(f => ({ ...f, invoice_date: e.target.value }))} /></div>
+              <div><label className="label">Invoice Amount * <span className="text-[10px] text-gray-400 font-normal">(Target)</span></label><input className="input" type="number" step="any" min="0" value={editForm.invoice_amount || 0} onChange={e => setEditForm(f => ({ ...f, invoice_amount: +e.target.value }))} required /></div>
+              <div><label className="label">Due Date</label><input className="input" type="date" value={editForm.due_date || ''} onChange={e => setEditForm(f => ({ ...f, due_date: e.target.value }))} /></div>
+              <div className="col-span-2">
+                <label className="label">Owner</label>
+                <select className="select" value={editForm.owner_id || ''} onChange={e => setEditForm(f => ({ ...f, owner_id: e.target.value }))}>
+                  <option value="">—</option>
+                  {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800">
+              Already received: <span className="font-semibold">Rs {(editModal.received_amount || 0).toLocaleString()}</span>. Editing the invoice amount or due date will recompute outstanding + ageing automatically.
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={() => { setEditModal(null); setEditForm({}); }} className="btn btn-secondary">Cancel</button>
+              <button type="submit" disabled={editSaving} className="btn btn-primary">{editSaving ? 'Saving…' : 'Save Changes'}</button>
+            </div>
+          </form>
+        )}
+      </Modal>
 
       {/* Add Receivable Modal */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title="Add Receivable">

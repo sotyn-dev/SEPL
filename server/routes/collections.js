@@ -65,12 +65,92 @@ router.post('/', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-// Update receivable
+// Update receivable. Two modes:
+//   - Quick: pass any of follow_up_status / follow_up_date / follow_up_notes /
+//     escalation_level / owner_id (the original signature)
+//   - Full edit: also accepts client_name / project_name / invoice_number /
+//     invoice_date / invoice_amount / due_date. When invoice_amount or
+//     due_date change, ageing days/bucket and status colour are recomputed.
 router.put('/:id', (req, res) => {
-  const { follow_up_status, follow_up_date, follow_up_notes, escalation_level, owner_id } = req.body;
-  getDb().prepare('UPDATE receivables SET follow_up_status=?, follow_up_date=?, follow_up_notes=?, escalation_level=?, owner_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
-    .run(follow_up_status, follow_up_date, follow_up_notes, escalation_level || 0, owner_id, req.params.id);
+  const db = getDb();
+  const cur = db.prepare('SELECT * FROM receivables WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+
+  // Build a partial UPDATE — only touch the fields the caller actually sent
+  const sets = []; const params = [];
+  const set = (k, v) => { sets.push(`${k}=?`); params.push(v); };
+
+  if (b.client_name !== undefined)       set('client_name', b.client_name);
+  if (b.project_name !== undefined)      set('project_name', b.project_name);
+  if (b.invoice_number !== undefined)    set('invoice_number', b.invoice_number);
+  if (b.invoice_date !== undefined)      set('invoice_date', b.invoice_date || null);
+  if (b.due_date !== undefined)          set('due_date', b.due_date || null);
+  if (b.owner_id !== undefined)          set('owner_id', b.owner_id || null);
+  if (b.follow_up_status !== undefined)  set('follow_up_status', b.follow_up_status);
+  if (b.follow_up_date !== undefined)    set('follow_up_date', b.follow_up_date || null);
+  if (b.follow_up_notes !== undefined)   set('follow_up_notes', b.follow_up_notes);
+  if (b.escalation_level !== undefined)  set('escalation_level', +b.escalation_level || 0);
+
+  if (b.invoice_amount !== undefined) {
+    const amt = +b.invoice_amount;
+    const recv = +cur.received_amount || 0;
+    set('invoice_amount', amt);
+    set('outstanding_amount', Math.max(0, amt - recv));
+  }
+
+  // Recompute ageing if due_date or invoice_amount changed
+  if (b.due_date !== undefined || b.invoice_amount !== undefined) {
+    const dueDate = b.due_date !== undefined ? (b.due_date || cur.due_date) : cur.due_date;
+    const amt = b.invoice_amount !== undefined ? +b.invoice_amount : +cur.invoice_amount;
+    const { days, bucket } = calculateAgeing(dueDate);
+    set('ageing_days', days);
+    set('ageing_bucket', bucket);
+    set('status', getStatusColor(amt, days));
+  }
+
+  if (sets.length === 0) return res.status(400).json({ error: 'No fields to update' });
+  sets.push('updated_at=CURRENT_TIMESTAMP');
+  params.push(req.params.id);
+  db.prepare(`UPDATE receivables SET ${sets.join(', ')} WHERE id=?`).run(...params);
   res.json({ message: 'Updated' });
+});
+
+// Target vs Received summary, broken down by ageing bucket. Used by the
+// "Payment Target vs Received (with Ageing)" panel mam asked for.
+//   target           = SUM(invoice_amount)
+//   received         = SUM(received_amount)
+//   outstanding      = SUM(outstanding_amount)
+//   collection_pct   = received / target * 100
+//   by_bucket        = same metrics per ageing_bucket
+router.get('/target-summary', (req, res) => {
+  const db = getDb();
+  const overall = db.prepare(`
+    SELECT COUNT(*)                      as count,
+           COALESCE(SUM(invoice_amount),0)     as target,
+           COALESCE(SUM(received_amount),0)    as received,
+           COALESCE(SUM(outstanding_amount),0) as outstanding
+      FROM receivables
+  `).get();
+  overall.collection_pct = overall.target > 0 ? +(100 * overall.received / overall.target).toFixed(2) : 0;
+
+  const byBucket = db.prepare(`
+    SELECT ageing_bucket,
+           COUNT(*)                              as count,
+           COALESCE(SUM(invoice_amount),0)       as target,
+           COALESCE(SUM(received_amount),0)      as received,
+           COALESCE(SUM(outstanding_amount),0)   as outstanding
+      FROM receivables
+     GROUP BY ageing_bucket
+     ORDER BY CASE ageing_bucket
+       WHEN '0-30' THEN 0 WHEN '30-60' THEN 1
+       WHEN '60-90' THEN 2 WHEN '90+'   THEN 3 ELSE 4 END
+  `).all().map(r => ({
+    ...r,
+    collection_pct: r.target > 0 ? +(100 * r.received / r.target).toFixed(2) : 0,
+  }));
+
+  res.json({ overall, by_bucket: byBucket });
 });
 
 // Delete receivable (blocks if any collection received)
