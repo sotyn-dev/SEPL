@@ -455,16 +455,24 @@ router.post('/indents', (req, res) => {
   if (!items || items.length === 0) {
     return res.status(400).json({ error: 'At least one item is required' });
   }
-  // mam: BOTH BOQ Item (po_item_id) AND Sub-Item (item_master_id) must
-  // be picked for every line. po_item_id can be a real db id (integer
-  // string) or a fallback like 'fallback-Sheet2-3' from the Excel parser.
+  // Per-row validation. Two valid modes:
+  //   1) BOQ-linked: BOTH po_item_id AND item_master_id are picked
+  //      (the normal flow when the site has a Client PO BOQ uploaded)
+  //   2) Manual:     it.manual === true OR it.description is non-empty
+  //      (the fallback when the site has no BOQ yet or mam wants
+  //       to enter a free-text item — same flow as the old code)
+  // Quantity must always be > 0.
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     const hasBoq = !!it.po_item_id;
     const hasSub = !!it.item_master_id;
-    if (!hasBoq) return res.status(400).json({ error: `Row ${i + 1}: BOQ Item (from Client PO) is required` });
-    if (!hasSub) return res.status(400).json({ error: `Row ${i + 1}: Sub-Item (from Item Master) is required` });
-    if (!(+it.quantity > 0)) return res.status(400).json({ error: `Row ${i + 1}: Quantity must be greater than 0` });
+    const isManual = it.manual === true || !!String(it.description || '').trim();
+    const qtyOk = +it.quantity > 0;
+    if (!qtyOk) return res.status(400).json({ error: `Row ${i + 1}: Quantity must be greater than 0` });
+    if (isManual) continue;                              // manual entry — skip BOQ/sub checks
+    if (hasBoq && hasSub) continue;                      // BOQ-linked entry — both present, OK
+    if (!hasBoq) return res.status(400).json({ error: `Row ${i + 1}: pick a BOQ Item (or type a description for manual entry)` });
+    if (!hasSub) return res.status(400).json({ error: `Row ${i + 1}: pick a Sub-Item (Item Master)` });
   }
   const { nextSequence } = require('../db/nextSequence');
   const indentNum = nextSequence(db, 'indents', 'indent_number', 'IND-', { startFrom: 0, pad: 4 });
