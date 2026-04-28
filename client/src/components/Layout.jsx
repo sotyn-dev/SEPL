@@ -9,7 +9,7 @@ import {
   FiHome, FiUsers, FiTarget, FiFileText, FiShoppingCart,
   FiTruck, FiTool, FiAlertCircle, FiUserPlus,
   FiCheckSquare, FiMenu, FiX, FiLogOut, FiPackage, FiClipboard,
-  FiSettings, FiShield, FiTrendingUp, FiCreditCard, FiLayers, FiBarChart2, FiBook, FiGrid, FiKey, FiMapPin
+  FiSettings, FiShield, FiTrendingUp, FiCreditCard, FiLayers, FiBarChart2, FiBook, FiGrid, FiKey, FiMapPin, FiHelpCircle
 } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 
@@ -38,6 +38,8 @@ const menuItems = [
   { path: '/employees', label: 'Employees', icon: FiUsers, module: 'employees' },
   { path: '/expenses', label: 'Expenses', icon: LuIndianRupee, module: 'expenses' },
   { path: '/checklists', label: 'Checklists', icon: FiCheckSquare, module: 'checklists' },
+  // Help Tickets is open to everyone — module=null bypasses canView gate.
+  { path: '/help-tickets', label: 'Help Tickets', icon: FiHelpCircle, module: null },
 ];
 
 const adminItems = [
@@ -143,7 +145,8 @@ export default function Layout() {
     };
   }, [user?.id]);
 
-  const visibleMenu = menuItems.filter(item => canView(item.module));
+  // module === null means "always visible" (e.g. Help Tickets — open to everyone)
+  const visibleMenu = menuItems.filter(item => item.module == null || canView(item.module));
 
   return (
     <div className="flex h-screen overflow-hidden">

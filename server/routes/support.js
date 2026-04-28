@@ -4,14 +4,30 @@ const { authMiddleware } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
-// GET tickets. Admin sees everything. A non-admin user sees:
-//   (a) tickets they raised themselves (user_id)
-//   (b) tickets assigned to them (assigned_to) — these show on dashboard too
-// Also joins the assignee name so the UI can display "Assigned to Ravi"
+// GET tickets. Admin can see all by default; non-admin only sees tickets
+// they raised or were assigned to. Optional ?scope=mine|given|all changes
+// the slice:
+//   mine  -> assigned_to = current user (default for non-admins on the page)
+//   given -> user_id = current user (raised by me)
+//   all   -> everything (admin only)
 router.get('/', (req, res) => {
   const db = getDb();
   const user = db.prepare('SELECT role FROM users WHERE id=?').get(req.user.id);
   const isAdmin = user?.role === 'admin';
+  const scope = String(req.query.scope || '').toLowerCase();
+  const status = req.query.status;
+  const where = [];
+  const params = [];
+  if (scope === 'mine') { where.push('t.assigned_to = ?'); params.push(req.user.id); }
+  else if (scope === 'given') { where.push('t.user_id = ?'); params.push(req.user.id); }
+  else if (scope === 'all' && !isAdmin) {
+    // non-admins can't see everything; fall back to OR of mine+given
+    where.push('(t.user_id = ? OR t.assigned_to = ?)'); params.push(req.user.id, req.user.id);
+  } else if (!scope && !isAdmin) {
+    where.push('(t.user_id = ? OR t.assigned_to = ?)'); params.push(req.user.id, req.user.id);
+  }
+  if (status) { where.push('t.status = ?'); params.push(status); }
+
   let sql = `SELECT t.*,
       u.name as user_name,
       r.name as resolved_by_name,
@@ -20,11 +36,7 @@ router.get('/', (req, res) => {
     LEFT JOIN users u ON t.user_id = u.id
     LEFT JOIN users r ON t.resolved_by = r.id
     LEFT JOIN users a ON t.assigned_to = a.id`;
-  const params = [];
-  if (!isAdmin) {
-    sql += ' WHERE t.user_id = ? OR t.assigned_to = ?';
-    params.push(req.user.id, req.user.id);
-  }
+  if (where.length) sql += ' WHERE ' + where.join(' AND ');
   sql += ' ORDER BY t.created_at DESC';
   res.json(db.prepare(sql).all(...params));
 });
@@ -74,9 +86,13 @@ router.post('/', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, ticket_no: ticketNo });
 });
 
-// PUT update ticket. Admin can change status/priority/response/assignee.
-// The assignee (non-admin) can also set 'in_progress' and add a response so
-// they can work on the ticket from their dashboard. Only admin can resolve/close.
+// PUT update ticket. Permission rules (mam's spec):
+//   - Admin     -> can do anything (status, priority, response, assignee)
+//   - Raiser    (user_id == current user) -> can resolve/close their own
+//                ticket (they decide when their issue is fixed). Cannot
+//                reassign — that stays admin-only.
+//   - Assignee  (assigned_to == current user) -> can mark in_progress and
+//                add a response; CANNOT close (only the raiser/admin can).
 router.put('/:id', (req, res) => {
   const { status, admin_response, priority, assigned_to } = req.body;
   const db = getDb();
@@ -85,11 +101,17 @@ router.put('/:id', (req, res) => {
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
   const isAdmin = user?.role === 'admin';
   const isAssignee = ticket.assigned_to === req.user.id;
+  const isRaiser = ticket.user_id === req.user.id;
+  const closing = (status === 'resolved' || status === 'closed');
 
   if (!isAdmin) {
-    if (status === 'resolved' || status === 'closed') return res.status(403).json({ error: 'Only admin can resolve or close a ticket' });
+    if (closing && !isRaiser) {
+      return res.status(403).json({ error: 'Only the person who raised this ticket (or admin) can close it' });
+    }
     if (assigned_to !== undefined) return res.status(403).json({ error: 'Only admin can reassign a ticket' });
-    if (!isAssignee) return res.status(403).json({ error: 'Only the assignee or admin can update this ticket' });
+    if (!isAssignee && !isRaiser) {
+      return res.status(403).json({ error: 'Only the assignee, raiser, or admin can update this ticket' });
+    }
   }
 
   const resolvedBy = (status === 'resolved' || status === 'closed') ? req.user.id : null;
