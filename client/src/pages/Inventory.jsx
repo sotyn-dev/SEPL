@@ -376,64 +376,98 @@ function OpeningRowEntry({ warehouses, items, reload }) {
         Add one row per (warehouse × item). Pick the site, search the item, type the quantity, optionally snap a photo. Use this for old / existing stock BEFORE going live.
       </div>
 
-      <div className="card p-0 overflow-hidden">
-        <div className="px-3 py-2 border-b bg-gray-50 flex items-center justify-between">
-          <h4 className="font-semibold text-gray-700 text-sm">Opening Stock Rows</h4>
-          <button type="button" onClick={addRow} className="btn btn-secondary text-xs flex items-center gap-1"><FiPlus size={12} /> Add Row</button>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="text-sm w-full">
-            <thead className="bg-gray-50/60">
-              <tr>
-                <th className="text-left px-2 py-2 text-[10px] uppercase font-semibold text-gray-500 w-8">#</th>
-                <th className="text-left px-2 py-2 text-[10px] uppercase font-semibold text-gray-500">Site / Warehouse *</th>
-                <th className="text-left px-2 py-2 text-[10px] uppercase font-semibold text-gray-500">Item *</th>
-                <th className="text-right px-2 py-2 text-[10px] uppercase font-semibold text-gray-500 w-24">Qty *</th>
-                <th className="text-right px-2 py-2 text-[10px] uppercase font-semibold text-gray-500 w-24">Rate ₹</th>
-                <th className="text-left px-2 py-2 text-[10px] uppercase font-semibold text-gray-500 w-56">Photo (optional)</th>
-                <th className="w-8"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i} className="border-t align-top">
-                  <td className="px-2 py-2 text-gray-400 text-xs">{i + 1}</td>
-                  <td className="px-2 py-1.5">
-                    <select className="select text-sm" value={r.warehouse_id} onChange={e => setField(i, 'warehouse_id', e.target.value)} required>
-                      <option value="">Pick site / warehouse…</option>
-                      {activeWarehouses.map(w => (
-                        <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="px-2 py-1.5 min-w-[220px]">
-                    <SearchableSelect
-                      options={items}
-                      value={r.item_master_id || null}
-                      valueKey="id" displayKey="label"
-                      placeholder="Search item by name / code…"
-                      onChange={(it) => setField(i, 'item_master_id', it?.id || '')}
-                    />
-                  </td>
-                  <td className="px-2 py-1.5"><input className="input text-right tabular-nums text-sm" type="number" step="any" min="0" placeholder="0" value={r.quantity} onChange={e => setField(i, 'quantity', e.target.value)} /></td>
-                  <td className="px-2 py-1.5"><input className="input text-right tabular-nums text-sm" type="number" step="any" min="0" placeholder="optional" value={r.rate} onChange={e => setField(i, 'rate', e.target.value)} /></td>
-                  <td className="px-2 py-1.5">
+      {/* Card-per-row layout — old table broke when the item-search
+          dropdown opened (it covered the qty / rate / photo columns).
+          Cards give each row enough room for the dropdown to expand
+          and stay fully visible on mobile. */}
+      <div className="space-y-3">
+        {rows.map((r, i) => {
+          const wh = activeWarehouses.find(w => w.id === +r.warehouse_id);
+          const it = items.find(o => o.id === +r.item_master_id);
+          const ready = r.warehouse_id && r.item_master_id && +r.quantity > 0;
+          return (
+            <div key={i} className={`card p-4 border-l-4 ${ready ? 'border-emerald-500' : 'border-gray-200'}`}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-xs font-semibold text-gray-500">
+                  Row #{i + 1}
+                  {ready && <span className="ml-2 text-[10px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">ready</span>}
+                </div>
+                <button type="button" onClick={() => rmRow(i)} className="p-1 text-gray-400 hover:text-red-600" title="Remove row">
+                  <FiTrash2 size={14} />
+                </button>
+              </div>
+
+              {/* Site + Item — one per line so the dropdowns have full width */}
+              <div className="space-y-3">
+                <div>
+                  <label className="label">Site / Warehouse <span className="text-red-500">*</span></label>
+                  <select className="select" value={r.warehouse_id} onChange={e => setField(i, 'warehouse_id', e.target.value)} required>
+                    <option value="">Pick site / warehouse…</option>
+                    {activeWarehouses.map(w => (
+                      <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Item <span className="text-red-500">*</span></label>
+                  <SearchableSelect
+                    options={items}
+                    value={r.item_master_id || null}
+                    valueKey="id" displayKey="label"
+                    placeholder="Search by name or code…"
+                    onChange={(opt) => setField(i, 'item_master_id', opt?.id || '')}
+                  />
+                  {it && (
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      {it.specification && <span>{it.specification} · </span>}
+                      UOM: {it.uom || '—'}{it.make ? ' · Make: ' + it.make : ''}
+                    </p>
+                  )}
+                </div>
+
+                {/* Qty + Rate + Photo on one row */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="label">Quantity <span className="text-red-500">*</span></label>
+                    <input className="input text-right tabular-nums" type="number" step="any" min="0" placeholder="0" value={r.quantity} onChange={e => setField(i, 'quantity', e.target.value)} />
+                    {it?.uom && <p className="text-[11px] text-gray-400 mt-0.5">in {it.uom}</p>}
+                  </div>
+                  <div>
+                    <label className="label">Rate ₹ <span className="text-gray-400 font-normal">(optional)</span></label>
+                    <input className="input text-right tabular-nums" type="number" step="any" min="0" placeholder="optional" value={r.rate} onChange={e => setField(i, 'rate', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label">Photo <span className="text-gray-400 font-normal">(optional)</span></label>
                     <div className="flex items-center gap-2">
-                      <input type="file" accept="image/*,.pdf" capture="environment" disabled={r.uploading}
+                      <input
+                        type="file"
+                        accept="image/*,.pdf"
+                        capture="environment"
+                        disabled={r.uploading}
                         onChange={e => uploadPhoto(i, e.target.files?.[0])}
-                        className="text-[10px] text-gray-500 file:mr-1 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100" />
-                      {r.uploading && <span className="text-[10px] text-amber-600">…</span>}
-                      {r.photo_url && !r.uploading && <a href={r.photo_url} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline">✓</a>}
+                        className="block w-full text-xs text-gray-500 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100"
+                      />
                     </div>
-                  </td>
-                  <td className="px-2 py-2 text-right">
-                    <button type="button" onClick={() => rmRow(i)} className="text-gray-400 hover:text-red-600" title="Remove row"><FiTrash2 size={13} /></button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    {r.uploading && <p className="text-[11px] text-amber-600 mt-0.5">uploading…</p>}
+                    {r.photo_url && !r.uploading && (
+                      <a href={r.photo_url} target="_blank" rel="noreferrer" className="text-[11px] text-emerald-700 hover:underline mt-0.5 inline-block">✓ photo attached</a>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Add row button — separate card so it never collides with the
+            search dropdown of the row above */}
+        <button
+          type="button"
+          onClick={addRow}
+          className="w-full card p-4 border-2 border-dashed border-gray-300 hover:border-red-400 hover:bg-red-50/30 text-gray-500 hover:text-red-600 flex items-center justify-center gap-2 text-sm font-medium transition-colors"
+        >
+          <FiPlus size={14} /> Add another row
+        </button>
       </div>
 
       <div>
