@@ -163,6 +163,21 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit }) {
   // Inline edit: click a "Reorder" cell to set the threshold per (item × warehouse).
   // Saves on blur / Enter; Esc cancels. Optimistic UI with rollback on error.
   const [editing, setEditing] = useState(null); // { warehouse_id, item_master_id, value }
+  // Same inline-edit pattern but for the Item Master current_price — lets
+  // mam fix missing master prices straight from the Stock view.
+  const [pricing, setPricing] = useState(null); // { item_master_id, value }
+  const savePrice = async () => {
+    if (!pricing) return;
+    const val = +pricing.value || 0;
+    try {
+      await api.patch(`/item-master/${pricing.item_master_id}/price`, { current_price: val });
+      toast.success(`Master price set to Rs ${val}`);
+      setPricing(null);
+      reload();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    }
+  };
   const saveReorder = async () => {
     if (!editing) return;
     const val = +editing.value || 0;
@@ -256,12 +271,31 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit }) {
                         {fmtNum(r.quantity)} {low && <FiAlertTriangle className="inline ml-1 text-amber-500" size={12} />}
                       </td>
                       <td className="px-3 py-2 text-right text-gray-600 tabular-nums">
-                        {fmtMoney(eff)}
-                        {r.rate_source === 'master' && eff > 0 && (
-                          <div className="text-[9px] text-gray-400 italic">from master</div>
-                        )}
-                        {r.rate_source === 'none' && (
-                          <div className="text-[9px] text-gray-300 italic">no rate set</div>
+                        {pricing && pricing.item_master_id === r.item_master_id ? (
+                          <input
+                            type="number" step="any" min="0" autoFocus
+                            className="input text-right text-xs py-1 w-24"
+                            value={pricing.value}
+                            onChange={e => setPricing({ ...pricing, value: e.target.value })}
+                            onBlur={savePrice}
+                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); savePrice(); } if (e.key === 'Escape') setPricing(null); }}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={!canEdit}
+                            onClick={() => canEdit && setPricing({ item_master_id: r.item_master_id, value: +r.master_price || '' })}
+                            className={`text-right tabular-nums ${canEdit ? 'hover:text-red-600 cursor-pointer' : 'cursor-default'}`}
+                            title={canEdit ? 'Click to set Item Master price' : ''}
+                          >
+                            {fmtMoney(eff)}
+                            {r.rate_source === 'master' && eff > 0 && (
+                              <div className="text-[9px] text-gray-400 italic">from master</div>
+                            )}
+                            {r.rate_source === 'none' && (
+                              <div className="text-[9px] text-amber-600 italic">click to set</div>
+                            )}
+                          </button>
                         )}
                       </td>
                       <td className="px-3 py-2 text-right text-gray-700 tabular-nums font-semibold">{fmtMoney(value)}</td>

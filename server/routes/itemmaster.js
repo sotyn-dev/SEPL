@@ -40,6 +40,18 @@ router.get('/:id', requirePermission('item_master', 'view'), (req, res) => {
   res.json(item);
 });
 
+// Inline price update — used by the Inventory Stock tab so mam can set
+// the Item Master current_price directly when reviewing stock without
+// navigating to Item Master. Admin or anyone with item_master.edit.
+router.patch('/:id/price', requirePermission('item_master', 'edit'), (req, res) => {
+  const price = +req.body?.current_price;
+  if (!(price >= 0)) return res.status(400).json({ error: 'Price must be a positive number' });
+  const r = getDb().prepare('UPDATE item_master SET current_price=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+    .run(price, req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Item not found' });
+  res.json({ message: 'Price updated', current_price: price });
+});
+
 // POST create
 router.post('/', requirePermission('item_master', 'create'), (req, res) => {
   const { item_code, department, item_name, specification, size, uom, gst, type, make, model_number, current_price, catalogue_link, photo_link } = req.body;
