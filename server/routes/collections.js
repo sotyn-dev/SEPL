@@ -178,48 +178,49 @@ router.get('/md-dashboard', (req, res) => {
   res.json({ totals, sites: rows, silent_overdue_count: flagged.length });
 });
 
-// Helper for the Edit/Add modal — UNIQUE site/project/company names
-// straight from the Business Book master (per mam: "site/project/
-// company name all unique from master business book"). Each row
-// carries the latest PO's crm_name + total_amount + po_number so the
-// form can auto-fill CRM and suggest the target payment.
-//
-// "Display name" preference: project_name first (closest to a site),
-// then company_name, then client_name. We dedupe by that display name
-// so mam never sees the same site twice in the dropdown.
+// Helper for the Edit/Add modal — UNIQUE PROJECT NAMES from the
+// Business Book master. mam: "in collection eng site name is project
+// name". So the dropdown lists distinct business_book.project_name
+// values (CONSERN PHARMA appears once even though 3 BB rows reference
+// it across different POs). Latest PO of any BB row sharing that
+// project name is used to auto-fill CRM + suggest target payment.
 router.get('/sites', (req, res) => {
   const db = getDb();
+  // Pull distinct project_name with one canonical BB row (lowest id).
+  // Total PO value across ALL BB rows for the same project is summed
+  // so the suggested target reflects the project's cumulative invoicing.
   const rows = db.prepare(`
-    SELECT bb.id as business_book_id,
-           bb.lead_no,
-           COALESCE(NULLIF(bb.project_name,''), NULLIF(bb.company_name,''), bb.client_name) as name,
-           bb.project_name, bb.company_name, bb.client_name,
+    SELECT MIN(bb.id)            as business_book_id,
+           bb.project_name        as name,
+           GROUP_CONCAT(DISTINCT bb.client_name)  as client_names,
+           GROUP_CONCAT(DISTINCT bb.company_name) as company_names,
+           MIN(bb.lead_no)        as lead_no,
            (SELECT po.crm_name FROM purchase_orders po
-              WHERE po.business_book_id = bb.id
-                AND po.crm_name IS NOT NULL AND po.crm_name <> ''
-              ORDER BY po.created_at DESC LIMIT 1) as crm_name,
-           (SELECT po.total_amount FROM purchase_orders po
-              WHERE po.business_book_id = bb.id
-                AND po.total_amount IS NOT NULL
-              ORDER BY po.created_at DESC LIMIT 1) as latest_po_value,
+              JOIN business_book bb2 ON bb2.id = po.business_book_id
+             WHERE bb2.project_name = bb.project_name
+               AND po.crm_name IS NOT NULL AND po.crm_name <> ''
+             ORDER BY po.created_at DESC LIMIT 1) as crm_name,
+           (SELECT COALESCE(SUM(po.total_amount), 0) FROM purchase_orders po
+              JOIN business_book bb2 ON bb2.id = po.business_book_id
+             WHERE bb2.project_name = bb.project_name) as latest_po_value,
            (SELECT po.po_number FROM purchase_orders po
-              WHERE po.business_book_id = bb.id
-              ORDER BY po.created_at DESC LIMIT 1) as latest_po_number
+              JOIN business_book bb2 ON bb2.id = po.business_book_id
+             WHERE bb2.project_name = bb.project_name
+             ORDER BY po.created_at DESC LIMIT 1) as latest_po_number
       FROM business_book bb
-     WHERE bb.id IN (
-       SELECT MIN(id) FROM business_book
-        WHERE COALESCE(NULLIF(project_name,''), NULLIF(company_name,''), client_name) IS NOT NULL
-        GROUP BY COALESCE(NULLIF(project_name,''), NULLIF(company_name,''), client_name)
-     )
-     ORDER BY name
+     WHERE bb.project_name IS NOT NULL AND TRIM(bb.project_name) <> ''
+     GROUP BY bb.project_name
+     ORDER BY bb.project_name
   `).all();
-  // Build a richer label so the SearchableSelect can match by company OR
-  // project OR client at once.
+
+  // Label: "<project> · <client>" — short, clear, searchable
   const list = rows.map(r => ({
     ...r,
     id: r.business_book_id,
-    label: [r.name, r.company_name && r.company_name !== r.name ? '· ' + r.company_name : '', r.lead_no ? '· ' + r.lead_no : '']
-      .filter(Boolean).join(' '),
+    project_name: r.name,
+    client_name: (r.client_names || '').split(',')[0] || null,
+    company_name: (r.company_names || '').split(',')[0] || null,
+    label: r.name + ((r.client_names) ? ' · ' + (r.client_names.split(',')[0]) : ''),
   }));
   res.json(list);
 });
