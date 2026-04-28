@@ -1041,7 +1041,7 @@ function initializeDatabase() {
       site_id INTEGER REFERENCES sites(id),
       site_name TEXT,
       total_hours REAL DEFAULT 0,
-      status TEXT DEFAULT 'present' CHECK(status IN ('present','half_day','absent','late','leave','holiday')),
+      status TEXT DEFAULT 'present' CHECK(status IN ('present','half_day','short_day','absent','late','leave','holiday')),
       remarks TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -1465,6 +1465,32 @@ function initializeDatabase() {
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (e2) {}
   }
+
+  // Relax attendance.status CHECK to allow 'short_day' (4-8 hours worked).
+  // The punch-out code sets status='short_day' but the original CHECK
+  // constraint omitted it, so existing DBs hit "CHECK constraint failed"
+  // when an employee punched out with less than 8 hours. Same rebuild
+  // pattern as payment_requests above; runs exactly once.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='attendance'").get();
+    if (row && !/short_day/.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+attendance/i, 'CREATE TABLE attendance_new')
+        .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
+                 "CHECK(status IN ('present','half_day','short_day','absent','late','leave','holiday'))");
+      db.exec(newSql);
+      db.exec('INSERT INTO attendance_new SELECT * FROM attendance');
+      db.exec('DROP TABLE attendance');
+      db.exec('ALTER TABLE attendance_new RENAME TO attendance');
+      db.exec('COMMIT');
+      console.log('[migration] attendance.status CHECK relaxed to allow short_day');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] attendance CHECK relax failed:', e.message);
+  }
+
   for (const [table, col] of migrations) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
