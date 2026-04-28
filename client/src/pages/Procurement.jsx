@@ -558,7 +558,8 @@ export default function Procurement() {
               <thead>
                 <tr className="bg-gray-50">
                   <th className="px-2 py-2 text-left" rowSpan="2">Indent</th>
-                  <th className="px-2 py-2 text-left" rowSpan="2">Item</th>
+                  <th className="px-2 py-2 text-left" rowSpan="2">BOQ Item<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(from Client PO)</span></th>
+                  <th className="px-2 py-2 text-left" rowSpan="2">Sub-Item<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(Item Master)</span></th>
                   <th className="px-2 py-2" rowSpan="2">Qty</th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 1</th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 2</th>
@@ -579,17 +580,19 @@ export default function Procurement() {
                   return (
                     <tr key={r.indent_item_id} className="border-b hover:bg-red-50/30">
                       <td className="px-2 py-2 whitespace-nowrap"><div className="font-medium text-red-700">{r.indent_number}</div><div className="text-[10px] text-gray-400">{r.site_name}</div></td>
-                      <td className="px-2 py-2 min-w-[280px]">
-                        {/* BOQ parent (sub-category) — shown as a small grey
-                            header so the purchase team knows which Client PO
-                            line this sub-item belongs to. */}
-                        {r.boq_description && (
-                          <div className="text-[10px] text-gray-500 italic line-clamp-2 mb-0.5" title={r.boq_description}>
-                            BOQ: {r.boq_description}
-                          </div>
-                        )}
+                      {/* TWO separate columns matching the indent form layout:
+                          BOQ Item (from Client PO) | Sub-Item (Item Master) */}
+                      <td className="px-2 py-2 align-top" style={{ width: '240px', minWidth: '240px', maxWidth: '240px' }}>
+                        {r.boq_description
+                          ? <div className="text-[11px] text-gray-700 line-clamp-3" title={r.boq_description}>{r.boq_description}</div>
+                          : <span className="text-gray-300">—</span>}
+                        {r.boq_qty && <div className="text-[10px] text-gray-400 mt-0.5">BOQ qty: {r.boq_qty}</div>}
+                      </td>
+                      <td className="px-2 py-2 align-top" style={{ width: '220px', minWidth: '220px', maxWidth: '220px' }}>
                         {r.item_code && <div className="text-[10px] font-mono text-gray-500">[{r.item_code}]</div>}
-                        <div className="whitespace-normal leading-snug font-medium">{[r.master_name || r.description, r.specification, r.size].filter(Boolean).join(' / ')}</div>
+                        <div className="text-[11px] leading-snug font-medium">
+                          {[r.master_name || r.description, r.specification, r.size].filter(Boolean).join(' / ') || <span className="text-gray-300">—</span>}
+                        </div>
                         {r.make && <div className="text-[10px] text-gray-400 mt-0.5">Make: {r.make}</div>}
                       </td>
                       <td className="px-2 py-2 text-center font-semibold whitespace-nowrap">{r.qty} {r.unit}</td>
@@ -659,7 +662,7 @@ export default function Procurement() {
                     </tr>
                   );
                 })}
-                {itemRates.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No indent items yet — raise an indent first.</td></tr>}
+                {itemRates.length === 0 && <tr><td colSpan="15" className="text-center py-8 text-gray-400">No indent items yet — raise an indent first.</td></tr>}
               </tbody>
             </table>
           </div>
