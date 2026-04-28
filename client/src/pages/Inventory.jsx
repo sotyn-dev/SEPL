@@ -13,7 +13,8 @@ import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import { useAuth } from '../context/AuthContext';
-import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin, FiBarChart2, FiCheck } from 'react-icons/fi';
+import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin, FiBarChart2, FiCheck, FiCamera } from 'react-icons/fi';
+import BarcodeScanner from '../components/BarcodeScanner';
 
 const fmtNum = (n) => (n == null ? '0' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 }));
 const fmtMoney = (n) => '₹ ' + fmtNum(n);
@@ -761,6 +762,26 @@ function ReceiveTab({ warehouses, items, reload }) {
   const [form, setForm] = useState({ warehouse_id: '', reference_type: 'PURCHASE', reference_id: '', notes: '' });
   const [lines, setLines] = useState([{ item_master_id: '', quantity: '', rate: '', photo_url: '', uploading: false }]);
   const [saving, setSaving] = useState(false);
+  const [scanFor, setScanFor] = useState(null);  // index of the line we're scanning for
+
+  // Helper: when a barcode is scanned, look up an item by item_code
+  // (case-insensitive, also matches numeric IDs) and set it on the line.
+  const onScanResult = (text) => {
+    const code = String(text || '').trim();
+    if (!code) return;
+    const match = items.find(it =>
+      (it.item_code && it.item_code.toUpperCase() === code.toUpperCase())
+      || String(it.id) === code
+    );
+    if (!match) {
+      toast.error(`No item with code "${code}" in master`);
+    } else {
+      const i = scanFor;
+      setLines(l => l.map((x, idx) => idx === i ? { ...x, item_master_id: match.id } : x));
+      toast.success(`Scanned: ${match.item_code} · ${match.item_name}`);
+    }
+    setScanFor(null);
+  };
 
   const addLine = () => setLines(l => [...l, { item_master_id: '', quantity: '', rate: '', photo_url: '', uploading: false }]);
   const rmLine = (i) => setLines(l => l.filter((_, idx) => idx !== i));
@@ -838,7 +859,7 @@ function ReceiveTab({ warehouses, items, reload }) {
           {lines.map((l, i) => (
             <div key={i} className="border rounded-lg p-2 space-y-2 bg-gray-50/40">
               <div className="grid grid-cols-12 gap-2 items-start">
-                <div className="col-span-6">
+                <div className="col-span-5">
                   <SearchableSelect
                     options={items}
                     value={l.item_master_id || null}
@@ -847,6 +868,9 @@ function ReceiveTab({ warehouses, items, reload }) {
                     onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
                   />
                 </div>
+                <button type="button" onClick={() => setScanFor(i)} className="col-span-1 btn btn-secondary text-xs flex items-center justify-center gap-1" title="Scan barcode to pick item">
+                  <FiCamera size={14} />
+                </button>
                 <input className="input col-span-2" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
                 <input className="input col-span-3" type="number" step="any" min="0" placeholder="Rate ₹ (optional)" value={l.rate} onChange={e => setLine(i, 'rate', e.target.value)} />
                 <button type="button" onClick={() => rmLine(i)} className="text-gray-400 hover:text-red-600 col-span-1 self-center justify-self-center" title="Remove"><FiTrash2 size={14} /></button>
@@ -887,6 +911,8 @@ function ReceiveTab({ warehouses, items, reload }) {
           <FiArrowDown size={14} /> {saving ? 'Saving…' : 'Receive Stock'}
         </button>
       </div>
+
+      <BarcodeScanner open={scanFor != null} onClose={() => setScanFor(null)} onScan={onScanResult} />
     </form>
   );
 }
@@ -896,10 +922,27 @@ function IssueTab({ warehouses, sites, items, reload }) {
   const [form, setForm] = useState({ from_warehouse_id: '', destination_type: 'site', destination_id: '', notes: '', reference_id: '' });
   const [lines, setLines] = useState([{ item_master_id: '', quantity: '' }]);
   const [saving, setSaving] = useState(false);
+  const [scanFor, setScanFor] = useState(null);
 
   const addLine = () => setLines(l => [...l, { item_master_id: '', quantity: '' }]);
   const rmLine = (i) => setLines(l => l.filter((_, idx) => idx !== i));
   const setLine = (i, k, v) => setLines(l => l.map((x, idx) => idx === i ? { ...x, [k]: v } : x));
+
+  const onScanResult = (text) => {
+    const code = String(text || '').trim();
+    if (!code) return;
+    const match = items.find(it =>
+      (it.item_code && it.item_code.toUpperCase() === code.toUpperCase())
+      || String(it.id) === code
+    );
+    if (!match) toast.error(`No item with code "${code}" in master`);
+    else {
+      const i = scanFor;
+      setLines(l => l.map((x, idx) => idx === i ? { ...x, item_master_id: match.id } : x));
+      toast.success(`Scanned: ${match.item_code} · ${match.item_name}`);
+    }
+    setScanFor(null);
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -959,7 +1002,7 @@ function IssueTab({ warehouses, sites, items, reload }) {
         <div className="space-y-2">
           {lines.map((l, i) => (
             <div key={i} className="grid grid-cols-12 gap-2 items-start">
-              <div className="col-span-9">
+              <div className="col-span-8">
                 <SearchableSelect
                   options={items}
                   value={l.item_master_id || null}
@@ -968,6 +1011,9 @@ function IssueTab({ warehouses, sites, items, reload }) {
                   onChange={(it) => setLine(i, 'item_master_id', it?.id || '')}
                 />
               </div>
+              <button type="button" onClick={() => setScanFor(i)} className="col-span-1 btn btn-secondary text-xs flex items-center justify-center" title="Scan barcode">
+                <FiCamera size={14} />
+              </button>
               <input className="input col-span-2" type="number" step="any" min="0" placeholder="Qty" value={l.quantity} onChange={e => setLine(i, 'quantity', e.target.value)} />
               <button type="button" onClick={() => rmLine(i)} className="text-gray-400 hover:text-red-600 col-span-1 self-center justify-self-center" title="Remove"><FiTrash2 size={14} /></button>
             </div>
@@ -991,6 +1037,8 @@ function IssueTab({ warehouses, sites, items, reload }) {
           <FiArrowUp size={14} /> {saving ? 'Saving…' : (form.destination_type === 'warehouse' ? 'Transfer Stock' : 'Issue to Site')}
         </button>
       </div>
+
+      <BarcodeScanner open={scanFor != null} onClose={() => setScanFor(null)} onScan={onScanResult} />
     </form>
   );
 }

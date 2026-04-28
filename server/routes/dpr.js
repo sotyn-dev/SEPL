@@ -266,7 +266,7 @@ router.post('/', (req, res) => {
   const { site_id, report_date, weather, overall_status, shift, contractor_name, contractor_manpower, mb_sheet_no,
     floor_zone, system_type, safety_toolbox_talk, safety_ppe_compliance, safety_incidents,
     next_day_plan, hindrances, remarks, grand_total_a, grand_total_b, profit_loss,
-    work_items, manpower, machinery } = req.body;
+    work_items, manpower, machinery, materials } = req.body;
 
   if (!site_id || !report_date) return res.status(400).json({ error: 'Site and date required' });
   const db = getDb();
@@ -312,7 +312,61 @@ router.post('/', (req, res) => {
     if (mc.equipment) insertMach.run(dprId, mc.equipment, mc.quantity || 1, mc.hours_used || 0, mc.condition || 'working', mc.remarks);
   }
 
-  res.status(201).json({ id: dprId, message: 'DPR submitted' });
+  // Materials consumed today — write to dpr_material AND auto-OUT from
+  // the site's site_store warehouse so inventory stays in sync. Each
+  // material can be supplied by item_master_id (preferred — links to
+  // catalog) OR plain material_name (free-text). consumed_today drives
+  // the stock decrement.
+  const insertMat = db.prepare(
+    `INSERT INTO dpr_material (dpr_id, po_item_id, item_master_id, material_name, unit, boq_qty,
+       consumed_today, cumulative_consumed, balance_qty, remarks)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
+  );
+  let stockOuts = 0;
+  // Resolve the site's site_store warehouse once (auto-OUT FROM here)
+  const siteStore = db.prepare(
+    `SELECT id FROM warehouses WHERE site_id = ? AND type = 'site_store' AND active = 1 LIMIT 1`
+  ).get(site_id);
+  for (const m of (materials || [])) {
+    const consumed = +m.consumed_today || 0;
+    const matName = m.material_name || '';
+    if (!matName && !m.item_master_id && !m.po_item_id) continue;
+    const validPoItemId = m.po_item_id ? (db.prepare('SELECT id FROM po_items WHERE id=?').get(m.po_item_id) ? m.po_item_id : null) : null;
+    insertMat.run(
+      dprId, validPoItemId, m.item_master_id || null, matName, m.unit || 'nos',
+      +m.boq_qty || 0, consumed, +m.cumulative_consumed || consumed,
+      +m.balance_qty || 0, m.remarks || null,
+    );
+    // Auto-OUT only if we know the item AND a site store exists AND qty > 0
+    if (consumed > 0 && m.item_master_id && siteStore?.id) {
+      try {
+        const cur = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id=? AND item_master_id=?').get(siteStore.id, m.item_master_id);
+        const prevQty = cur ? +cur.quantity : 0;
+        if (prevQty >= consumed) {
+          const rate = cur ? +cur.avg_rate : 0;
+          db.prepare('UPDATE stock_balance SET quantity=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+            .run(prevQty - consumed, cur.id);
+          db.prepare(
+            `INSERT INTO stock_movements
+              (warehouse_id, item_master_id, type, quantity, rate, total_value,
+               reference_type, reference_id, site_id, notes, created_by)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+          ).run(siteStore.id, m.item_master_id, 'OUT', consumed, rate, consumed * rate,
+                'DPR_CONSUMPTION', `DPR-${dprId}`, site_id,
+                `Consumed in DPR #${dprId} on ${report_date}`, req.user.id);
+          stockOuts += 1;
+        } else {
+          // Insufficient stock — log but don't fail the DPR submission.
+          // mam can manually adjust or do a stock-in to reconcile.
+          console.warn(`[dpr] Skipped auto-OUT for item ${m.item_master_id}: have ${prevQty}, need ${consumed}`);
+        }
+      } catch (e) {
+        console.error('[dpr] auto-OUT failed:', e.message);
+      }
+    }
+  }
+
+  res.status(201).json({ id: dprId, message: 'DPR submitted', stock_outs: stockOuts });
   } catch (err) {
     console.error('DPR submit error:', err.message);
     res.status(500).json({ error: err.message || 'Failed to submit DPR' });

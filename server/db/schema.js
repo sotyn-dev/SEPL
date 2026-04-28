@@ -1334,6 +1334,9 @@ function initializeDatabase() {
     ['receivables', 'crm_name TEXT'],
     ['receivables', 'next_planned_date DATE'],
     ['receivables', 'last_discussion TEXT'],
+    // DPR consumption now optionally links to the item_master so the
+    // auto-OUT to inventory can decrement the right SKU's stock.
+    ['dpr_material', 'item_master_id INTEGER REFERENCES item_master(id)'],
     // Self-service password recovery — user sets a personal recovery code
     // (stored as bcrypt hash) which they can later use along with their
     // username to reset their password from the login page. No SMTP needed.
