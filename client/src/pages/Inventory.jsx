@@ -124,6 +124,7 @@ export default function Inventory() {
       <div className="flex gap-2 flex-wrap">
         {[
           ['stock', 'Stock'],
+          ['opening', 'Opening Stock (item-wise)', canCreate('inventory')],
           ['receive', 'Receive (IN)', canCreate('inventory')],
           ['issue', 'Issue / Transfer (OUT)', canCreate('inventory')],
           ['movements', 'Movements'],
@@ -138,6 +139,7 @@ export default function Inventory() {
       </div>
 
       {tab === 'stock' && <StockTab stock={stock} warehouses={warehouses} filter={stockFilter} setFilter={setStockFilter} reload={loadStock} canEdit={canEdit('inventory') || isAdmin()} />}
+      {tab === 'opening' && <OpeningStockTab warehouses={warehouses} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'receive' && <ReceiveTab warehouses={warehouses} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'issue' && <IssueTab warehouses={warehouses} sites={sites} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'movements' && <MovementsTab movements={movements} warehouses={warehouses} filter={mvmtFilter} setFilter={setMvmtFilter} />}
@@ -272,6 +274,222 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit }) {
         </div>
       ))}
     </>
+  );
+}
+
+// ---------- OPENING STOCK (item-wise) TAB ----------
+// mam's brief: enter old / pre-system stock by ITEM, with all warehouses
+// in one screen. Pick an item once -> a row per active warehouse with
+// qty / rate / optional photo. One save creates one IN movement per
+// warehouse where qty > 0. Reference type defaults to OPENING so the
+// movements are tagged distinctly from regular purchase receives.
+function OpeningStockTab({ warehouses, items, reload }) {
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [notes, setNotes] = useState('');
+  // Per-warehouse rows. Keyed by warehouse_id.
+  const [whRows, setWhRows] = useState({});  // { [wh_id]: { quantity, rate, photo_url, uploading } }
+  const [saving, setSaving] = useState(false);
+
+  // Reset rows when the selected item changes
+  useEffect(() => {
+    if (!selectedItem) { setWhRows({}); return; }
+    const next = {};
+    for (const w of warehouses) {
+      if (w.active === 0) continue;
+      next[w.id] = { quantity: '', rate: '', photo_url: '', uploading: false };
+    }
+    setWhRows(next);
+  }, [selectedItem?.id, warehouses.length]);
+
+  const setRow = (whId, key, val) => setWhRows(r => ({ ...r, [whId]: { ...(r[whId] || {}), [key]: val } }));
+
+  const uploadPhoto = async (whId, file) => {
+    if (!file) return;
+    setRow(whId, 'uploading', true);
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setRow(whId, 'photo_url', r.data.url);
+      setRow(whId, 'uploading', false);
+    } catch {
+      toast.error('Photo upload failed');
+      setRow(whId, 'uploading', false);
+    }
+  };
+
+  const totalQty = useMemo(
+    () => Object.values(whRows).reduce((s, r) => s + (+(r.quantity) || 0), 0),
+    [whRows]
+  );
+  const filledCount = useMemo(
+    () => Object.values(whRows).filter(r => +r.quantity > 0).length,
+    [whRows]
+  );
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!selectedItem?.id) return toast.error('Pick an item first');
+    const valid = Object.entries(whRows).filter(([, r]) => +r.quantity > 0);
+    if (valid.length === 0) return toast.error('Enter quantity for at least one warehouse');
+    if (Object.values(whRows).some(r => r.uploading)) return toast.error('Wait for photo uploads to finish');
+    setSaving(true);
+    try {
+      // One receive call per warehouse — keeps the existing endpoint simple
+      // and the audit log per-warehouse for clarity. Run sequentially so
+      // errors on one don't block the rest from being attempted.
+      let okCount = 0;
+      for (const [whId, r] of valid) {
+        try {
+          await api.post('/inventory/receive', {
+            warehouse_id: +whId,
+            reference_type: 'OPENING',
+            notes: notes || `Opening balance — ${selectedItem.item_name || selectedItem.label}`,
+            items: [{
+              item_master_id: selectedItem.id,
+              quantity: +r.quantity,
+              rate: +(r.rate || 0),
+              photo_url: r.photo_url || null,
+            }],
+          });
+          okCount += 1;
+        } catch (err) {
+          console.error('opening receive failed for wh', whId, err.response?.data?.error);
+        }
+      }
+      toast.success(`Saved opening stock for ${selectedItem.item_name || selectedItem.label} in ${okCount} warehouse(s)`);
+      // Reset for next item
+      setSelectedItem(null);
+      setNotes('');
+      setWhRows({});
+      reload();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    }
+    setSaving(false);
+  };
+
+  const officeWh = warehouses.filter(w => w.active && w.type === 'office');
+  const siteWh = warehouses.filter(w => w.active && w.type === 'site_store');
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      <div className="card p-4 bg-amber-50/50 border-l-4 border-amber-400">
+        <p className="text-sm text-amber-900">
+          <span className="font-semibold">For old / existing stock at all warehouses.</span>
+          Pick one item, then enter how much of that item is currently sitting at each warehouse. Save once — every warehouse with a quantity gets a separate IN movement tagged "OPENING". Use this BEFORE going live so the system knows your real starting balances.
+        </p>
+      </div>
+
+      {/* Item picker */}
+      <div className="card p-4">
+        <label className="label">Pick the item *</label>
+        <SearchableSelect
+          options={items}
+          value={selectedItem?.id || null}
+          valueKey="id" displayKey="label"
+          placeholder="Search by name or code…"
+          onChange={(it) => setSelectedItem(it || null)}
+        />
+        {selectedItem && (
+          <div className="mt-2 text-[11px] text-gray-500">
+            <span className="font-medium text-gray-700">{selectedItem.item_name}</span>
+            {selectedItem.specification && <span> · {selectedItem.specification}</span>}
+            {selectedItem.uom && <span> · UOM: {selectedItem.uom}</span>}
+            {selectedItem.make && <span> · Make: {selectedItem.make}</span>}
+          </div>
+        )}
+      </div>
+
+      {selectedItem && (
+        <>
+          {/* Warehouses grid */}
+          <div className="card p-0 overflow-hidden">
+            <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
+              <h4 className="font-semibold text-gray-700 text-sm">Quantity per warehouse</h4>
+              <span className="text-[11px] text-gray-500">{filledCount} warehouse(s) · total {fmtNum(totalQty)} {selectedItem.uom || 'units'}</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="text-sm w-full">
+                <thead className="bg-gray-50/60">
+                  <tr>
+                    <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
+                    <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500 w-32">Quantity</th>
+                    <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500 w-32">Rate ₹</th>
+                    <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500 w-64">Photo (optional)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {/* Office stores first */}
+                  {officeWh.map(w => {
+                    const r = whRows[w.id] || {};
+                    return (
+                      <tr key={w.id} className="border-t hover:bg-red-50/30">
+                        <td className="px-3 py-2">
+                          <div className="font-medium text-gray-800">{w.name}</div>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700">Office</span>
+                        </td>
+                        <td className="px-2 py-1.5"><input className="input text-right tabular-nums" type="number" step="any" min="0" placeholder="0" value={r.quantity || ''} onChange={e => setRow(w.id, 'quantity', e.target.value)} /></td>
+                        <td className="px-2 py-1.5"><input className="input text-right tabular-nums" type="number" step="any" min="0" placeholder="optional" value={r.rate || ''} onChange={e => setRow(w.id, 'rate', e.target.value)} /></td>
+                        <td className="px-2 py-1.5">
+                          <div className="flex items-center gap-2">
+                            <input type="file" accept="image/*,.pdf" capture="environment" disabled={r.uploading}
+                              onChange={e => uploadPhoto(w.id, e.target.files?.[0])}
+                              className="text-[10px] text-gray-500 file:mr-1 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100" />
+                            {r.uploading && <span className="text-[10px] text-amber-600">…</span>}
+                            {r.photo_url && !r.uploading && <a href={r.photo_url} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline">✓</a>}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {/* Site stores */}
+                  {siteWh.map(w => {
+                    const r = whRows[w.id] || {};
+                    return (
+                      <tr key={w.id} className="border-t hover:bg-blue-50/30">
+                        <td className="px-3 py-2">
+                          <div className="font-medium text-gray-800">{w.name}</div>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">Site</span>
+                        </td>
+                        <td className="px-2 py-1.5"><input className="input text-right tabular-nums" type="number" step="any" min="0" placeholder="0" value={r.quantity || ''} onChange={e => setRow(w.id, 'quantity', e.target.value)} /></td>
+                        <td className="px-2 py-1.5"><input className="input text-right tabular-nums" type="number" step="any" min="0" placeholder="optional" value={r.rate || ''} onChange={e => setRow(w.id, 'rate', e.target.value)} /></td>
+                        <td className="px-2 py-1.5">
+                          <div className="flex items-center gap-2">
+                            <input type="file" accept="image/*,.pdf" capture="environment" disabled={r.uploading}
+                              onChange={e => uploadPhoto(w.id, e.target.files?.[0])}
+                              className="text-[10px] text-gray-500 file:mr-1 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100" />
+                            {r.uploading && <span className="text-[10px] text-amber-600">…</span>}
+                            {r.photo_url && !r.uploading && <a href={r.photo_url} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline">✓</a>}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <label className="label">Notes (applies to all warehouses)</label>
+            <input className="input" value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. Site audit Apr 28, 2026 verified by Rajat" />
+          </div>
+
+          <div className="flex justify-end gap-3">
+            <button type="button" onClick={() => { setSelectedItem(null); setWhRows({}); setNotes(''); }} className="btn btn-secondary">Reset</button>
+            <button type="submit" disabled={saving || filledCount === 0} className="btn btn-primary flex items-center gap-2">
+              <FiArrowDown size={14} /> {saving ? 'Saving…' : `Save Opening Stock (${filledCount} warehouse${filledCount === 1 ? '' : 's'})`}
+            </button>
+          </div>
+        </>
+      )}
+
+      {!selectedItem && (
+        <div className="card p-6 text-center text-gray-400 text-sm">
+          ↑ Pick an item above to enter its opening stock across all warehouses.
+        </div>
+      )}
+    </form>
   );
 }
 
