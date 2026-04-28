@@ -40,6 +40,7 @@ export default function Procurement() {
   const [employees, setEmployees] = useState([]); // for "Raised By" dropdown
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
+  const [warehouses, setWarehouses] = useState([]);  // for Mark Received auto-IN
   const [indentItems, setIndentItems] = useState([{ ...EMPTY_ITEM }]);
   const [expandedIndents, setExpandedIndents] = useState(() => new Set());
   const toggleIndentRow = (id) => setExpandedIndents(prev => {
@@ -62,6 +63,9 @@ export default function Procurement() {
       setSites(r.data || []);
     }).catch(() => setSites([]));
     api.get('/hr/employees').then(r => setEmployees((r.data || []).filter(e => !e.status || e.status === 'active'))).catch(() => setEmployees([]));
+    // Warehouses fuel the optional auto-IN dropdown on the Mark Received modal.
+    // Silent on 403 — non-inventory users still see the original receive form.
+    api.get('/inventory/warehouses').then(r => setWarehouses(r.data || [])).catch(() => setWarehouses([]));
   };
   useEffect(() => { load(); }, []);
 
@@ -336,11 +340,16 @@ export default function Procurement() {
     fd.append('received_by_name', form.received_by_name);
     if (form.received_at) fd.append('received_at', form.received_at);
     if (form.receipt_file) fd.append('file', form.receipt_file);
+    // Optional inventory hook — when mam picks a warehouse, the linked
+    // vendor PO's items auto-land as stock IN at that warehouse on the
+    // server side. Skipped silently if no warehouse selected.
+    if (form.warehouse_id) fd.append('warehouse_id', form.warehouse_id);
     try {
-      await api.patch(`/procurement/delivery-notes/${form.receive_id}/receive`, fd, {
+      const r = await api.patch(`/procurement/delivery-notes/${form.receive_id}/receive`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      toast.success('Marked as received');
+      const ins = r.data?.stock_ins || 0;
+      toast.success(ins > 0 ? `Marked as received · ${ins} item${ins === 1 ? '' : 's'} added to stock` : 'Marked as received');
       setModal(false); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
@@ -1449,6 +1458,20 @@ export default function Procurement() {
             {form.receipt_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.receipt_file.name}</p>}
             <p className="text-[10px] text-gray-400 mt-0.5">On mobile, tapping this opens the camera directly — take the photo of the stamped sales bill / challan.</p>
           </div>
+          {/* Optional inventory link — pick a warehouse to auto-add the
+              vendor PO's items as stock. Leave blank to skip. */}
+          {warehouses.length > 0 && (
+            <div>
+              <label className="label">Add to Inventory at Warehouse <span className="text-gray-400 font-normal">(optional)</span></label>
+              <select className="select" value={form.warehouse_id || ''} onChange={e => setForm({ ...form, warehouse_id: e.target.value })}>
+                <option value="">— don't add to stock (manual entry later) —</option>
+                {warehouses.filter(w => w.active).map(w => (
+                  <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}</option>
+                ))}
+              </select>
+              <p className="text-[10px] text-gray-400 mt-0.5">If selected, every item from this vendor PO automatically lands in that warehouse with the PO rate. Skip if you'll record stock manually in Inventory.</p>
+            </div>
+          )}
           <div className="flex justify-end gap-3">
             <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
             <button type="submit" className="btn btn-primary">Mark as Received</button>

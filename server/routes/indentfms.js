@@ -78,18 +78,24 @@ router.post('/tracker/:indent_id/stage', (req, res) => {
 });
 
 // GRN - Create
+// Optional inventory hook: if `warehouse_id` is provided AND a line has
+// `item_master_id`, the accepted_qty automatically lands in that warehouse
+// as a stock IN movement (reference_type='GRN'). Idempotent — re-creating
+// the same GRN won't double-add stock because a fresh grn_id means a
+// fresh reference_id; but if the request itself has duplicate items they
+// each create one movement row (correct behaviour).
 router.post('/grn', (req, res) => {
   const db = getDb();
-  const { vendor_po_id, indent_id, grn_date, items, notes } = req.body;
+  const { vendor_po_id, indent_id, grn_date, items, notes, warehouse_id } = req.body;
   const { nextSequence } = require('../db/nextSequence');
   const grnNum = nextSequence(db, 'grn', 'grn_number', 'GRN-', { startFrom: 0, pad: 4 });
 
-  const r = db.prepare('INSERT INTO grn (vendor_po_id, indent_id, grn_number, grn_date, received_by, notes) VALUES (?,?,?,?,?,?)')
-    .run(vendor_po_id, indent_id, grnNum, grn_date, req.user.id, notes);
+  const r = db.prepare('INSERT INTO grn (vendor_po_id, indent_id, grn_number, grn_date, received_by, notes, warehouse_id) VALUES (?,?,?,?,?,?,?)')
+    .run(vendor_po_id, indent_id, grnNum, grn_date, req.user.id, notes, warehouse_id || null);
 
-  const insertItem = db.prepare('INSERT INTO grn_items (grn_id, description, ordered_qty, received_qty, accepted_qty, rejected_qty, unit, rate, amount, remarks) VALUES (?,?,?,?,?,?,?,?,?,?)');
+  const insertItem = db.prepare('INSERT INTO grn_items (grn_id, description, ordered_qty, received_qty, accepted_qty, rejected_qty, unit, rate, amount, remarks, item_master_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
   for (const i of (items || [])) {
-    insertItem.run(r.lastInsertRowid, i.description, i.ordered_qty, i.received_qty, i.accepted_qty || i.received_qty, i.rejected_qty || 0, i.unit, i.rate, (i.accepted_qty || i.received_qty) * i.rate, i.remarks);
+    insertItem.run(r.lastInsertRowid, i.description, i.ordered_qty, i.received_qty, i.accepted_qty || i.received_qty, i.rejected_qty || 0, i.unit, i.rate, (i.accepted_qty || i.received_qty) * i.rate, i.remarks, i.item_master_id || null);
   }
 
   // Auto-track stage
@@ -98,7 +104,45 @@ router.post('/grn', (req, res) => {
       .run(indent_id, 'grn_done', req.user.id, `GRN ${grnNum} created`);
   }
 
-  res.status(201).json({ id: r.lastInsertRowid, grn_number: grnNum });
+  // INVENTORY AUTO-IN — only when warehouse + item_master_id are linked.
+  // Wraps in its own try so even if inventory is misconfigured, the GRN
+  // still saves successfully (inventory automation is best-effort, never
+  // critical to the main procurement flow).
+  let stockIns = 0;
+  if (warehouse_id) {
+    try {
+      const inv = require('./inventory');
+      // Inline the apply logic here rather than going via HTTP
+      const apply = (wh, itemId, qty, rate) => {
+        const cur = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id=? AND item_master_id=?').get(wh, itemId);
+        const prevQty = cur ? +cur.quantity : 0;
+        const prevRate = cur ? +cur.avg_rate : 0;
+        const newQty = prevQty + qty;
+        const newRate = newQty > 0 ? ((prevQty * prevRate) + (qty * rate)) / newQty : 0;
+        if (cur) db.prepare('UPDATE stock_balance SET quantity=?, avg_rate=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(newQty, newRate, cur.id);
+        else db.prepare('INSERT INTO stock_balance (warehouse_id, item_master_id, quantity, avg_rate) VALUES (?,?,?,?)').run(wh, itemId, newQty, newRate);
+        db.prepare(
+          `INSERT INTO stock_movements
+            (warehouse_id, item_master_id, type, quantity, rate, total_value,
+             reference_type, reference_id, notes, created_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?)`
+        ).run(wh, itemId, 'IN', qty, rate, qty * rate, 'GRN', grnNum, `Auto-IN from GRN ${grnNum}`, req.user.id);
+      };
+      const tx = db.transaction(() => {
+        for (const i of (items || [])) {
+          const qty = +(i.accepted_qty || i.received_qty || 0);
+          if (!i.item_master_id || qty <= 0) continue;
+          apply(+warehouse_id, +i.item_master_id, qty, +(i.rate || 0));
+          stockIns += 1;
+        }
+      });
+      tx();
+    } catch (e) {
+      console.error('[grn] auto-IN failed (GRN saved anyway):', e.message);
+    }
+  }
+
+  res.status(201).json({ id: r.lastInsertRowid, grn_number: grnNum, stock_ins: stockIns });
 });
 
 // GRN - List

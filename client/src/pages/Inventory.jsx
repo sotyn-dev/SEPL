@@ -13,7 +13,7 @@ import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import { useAuth } from '../context/AuthContext';
-import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin } from 'react-icons/fi';
+import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin, FiBarChart2, FiCheck } from 'react-icons/fi';
 
 const fmtNum = (n) => (n == null ? '0' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 }));
 const fmtMoney = (n) => '₹ ' + fmtNum(n);
@@ -127,6 +127,7 @@ export default function Inventory() {
           ['receive', 'Receive (IN)', canCreate('inventory')],
           ['issue', 'Issue / Transfer (OUT)', canCreate('inventory')],
           ['movements', 'Movements'],
+          ['reports', 'Reports & Valuation'],
           ['warehouses', 'Warehouses'],
         ].filter(([, , cond]) => cond === undefined || cond).map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
@@ -136,17 +137,34 @@ export default function Inventory() {
         ))}
       </div>
 
-      {tab === 'stock' && <StockTab stock={stock} warehouses={warehouses} filter={stockFilter} setFilter={setStockFilter} />}
+      {tab === 'stock' && <StockTab stock={stock} warehouses={warehouses} filter={stockFilter} setFilter={setStockFilter} reload={loadStock} canEdit={canEdit('inventory') || isAdmin()} />}
       {tab === 'receive' && <ReceiveTab warehouses={warehouses} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'issue' && <IssueTab warehouses={warehouses} sites={sites} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'movements' && <MovementsTab movements={movements} warehouses={warehouses} filter={mvmtFilter} setFilter={setMvmtFilter} />}
+      {tab === 'reports' && <ReportsTab summary={summary} warehouses={warehouses} />}
       {tab === 'warehouses' && <WarehousesTab warehouses={warehouses} sites={sites} reload={loadCommon} canEdit={canEdit('inventory') || isAdmin()} canCreate={canCreate('inventory') || isAdmin()} />}
     </div>
   );
 }
 
 // ---------- STOCK TAB ----------
-function StockTab({ stock, warehouses, filter, setFilter }) {
+function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit }) {
+  // Inline edit: click a "Reorder" cell to set the threshold per (item × warehouse).
+  // Saves on blur / Enter; Esc cancels. Optimistic UI with rollback on error.
+  const [editing, setEditing] = useState(null); // { warehouse_id, item_master_id, value }
+  const saveReorder = async () => {
+    if (!editing) return;
+    const val = +editing.value || 0;
+    try {
+      await api.put(`/inventory/reorder/${editing.warehouse_id}/${editing.item_master_id}`, { reorder_level: val });
+      toast.success(`Reorder level set to ${val}`);
+      setEditing(null);
+      reload();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    }
+  };
+
   // Group by warehouse for clearer presentation
   const grouped = useMemo(() => {
     const map = new Map();
@@ -223,7 +241,28 @@ function StockTab({ stock, warehouses, filter, setFilter }) {
                       </td>
                       <td className="px-3 py-2 text-right text-gray-600 tabular-nums">{fmtMoney(r.avg_rate)}</td>
                       <td className="px-3 py-2 text-right text-gray-700 tabular-nums">{fmtMoney(r.quantity * r.avg_rate)}</td>
-                      <td className="px-3 py-2 text-right text-gray-500 tabular-nums">{r.reorder_level > 0 ? fmtNum(r.reorder_level) : '—'}</td>
+                      <td className="px-3 py-2 text-right text-gray-500 tabular-nums">
+                        {editing && editing.warehouse_id === r.warehouse_id && editing.item_master_id === r.item_master_id ? (
+                          <input
+                            type="number" step="any" min="0"
+                            className="input text-right text-xs py-1 w-24"
+                            value={editing.value}
+                            onChange={e => setEditing({ ...editing, value: e.target.value })}
+                            onBlur={saveReorder}
+                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveReorder(); } if (e.key === 'Escape') setEditing(null); }}
+                            autoFocus
+                          />
+                        ) : (
+                          <button
+                            disabled={!canEdit}
+                            onClick={() => canEdit && setEditing({ warehouse_id: r.warehouse_id, item_master_id: r.item_master_id, value: r.reorder_level || '' })}
+                            className={`text-right ${canEdit ? 'hover:text-red-600 cursor-pointer' : 'cursor-default'}`}
+                            title={canEdit ? 'Click to set reorder level' : ''}
+                          >
+                            {r.reorder_level > 0 ? fmtNum(r.reorder_level) : '—'}
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -507,6 +546,129 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
             ))}
           </tbody>
         </table>
+      </div>
+    </>
+  );
+}
+
+// ---------- REPORTS & VALUATION TAB ----------
+// Per-warehouse roll-up + low-stock list. Lightweight — both feeds come
+// from /summary and /low-stock so no extra DB load on every visit.
+function ReportsTab({ summary, warehouses }) {
+  const [lowStock, setLowStock] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    api.get('/inventory/low-stock')
+      .then(r => setLowStock(r.data || []))
+      .catch(() => setLowStock([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const grandTotal = useMemo(() => summary.reduce((s, w) => s + (+w.total_value || 0), 0), [summary]);
+  const grandItems = useMemo(() => summary.reduce((s, w) => s + (+w.items_in_stock || 0), 0), [summary]);
+
+  return (
+    <>
+      {/* Hero: total stock value across all warehouses */}
+      <div className="card p-6 bg-gradient-to-br from-red-600 via-red-700 to-red-900 text-white shadow-lg">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-red-100/80 font-semibold">Total Stock Value (All Warehouses)</div>
+            <div className="text-[11px] text-red-100/70 mt-0.5">Moving-average basis · {fmtNum(grandItems)} items in stock</div>
+          </div>
+          <div className="text-4xl sm:text-5xl font-extrabold tracking-tight tabular-nums">
+            {fmtMoney(grandTotal)}
+          </div>
+        </div>
+      </div>
+
+      {/* Per-warehouse breakdown */}
+      <div className="card p-0 overflow-hidden">
+        <div className="px-4 py-3 border-b bg-gray-50">
+          <h4 className="font-semibold text-gray-700 flex items-center gap-2"><FiBarChart2 size={14} className="text-red-600" /> Stock Value by Warehouse</h4>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="text-sm w-full">
+            <thead className="bg-gray-50/60">
+              <tr>
+                <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
+                <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Type</th>
+                <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Items in Stock</th>
+                <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Total Value</th>
+                <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Low Stock Items</th>
+                <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">% of Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.length === 0 && (
+                <tr><td colSpan="6" className="text-center py-8 text-gray-400 text-sm">No warehouses</td></tr>
+              )}
+              {summary.map(w => {
+                const pct = grandTotal > 0 ? ((+w.total_value / grandTotal) * 100) : 0;
+                return (
+                  <tr key={w.id} className="border-t hover:bg-gray-50">
+                    <td className="px-3 py-2 font-medium text-gray-800">{w.name}</td>
+                    <td className="px-3 py-2"><span className={`px-2 py-0.5 text-[10px] rounded ${w.type === 'office' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>{w.type === 'office' ? 'Office' : 'Site'}</span></td>
+                    <td className="px-3 py-2 text-right text-gray-700 tabular-nums">{fmtNum(w.items_in_stock)}</td>
+                    <td className="px-3 py-2 text-right font-bold text-red-700 tabular-nums">{fmtMoney(w.total_value)}</td>
+                    <td className="px-3 py-2 text-right">
+                      {w.low_stock_items > 0
+                        ? <span className="text-amber-700 font-semibold">{w.low_stock_items}</span>
+                        : <span className="text-gray-400">0</span>}
+                    </td>
+                    <td className="px-3 py-2 text-right text-gray-500 tabular-nums">{pct.toFixed(1)}%</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Low-stock alerts */}
+      <div className="card p-0 overflow-hidden">
+        <div className="px-4 py-3 border-b bg-amber-50/60 flex items-center justify-between">
+          <h4 className="font-semibold text-amber-800 flex items-center gap-2">
+            <FiAlertTriangle size={14} className="text-amber-600" /> Low Stock Alerts
+          </h4>
+          <span className="text-[11px] text-amber-700">items at or below their reorder level</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="text-sm w-full">
+            <thead className="bg-gray-50/60">
+              <tr>
+                <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Warehouse</th>
+                <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Item</th>
+                <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Current</th>
+                <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Reorder Level</th>
+                <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Shortfall</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && <tr><td colSpan="5" className="text-center py-6 text-gray-400 text-sm">Loading…</td></tr>}
+              {!loading && lowStock.length === 0 && (
+                <tr><td colSpan="5" className="text-center py-8 text-emerald-600 text-sm">All items well-stocked. No alerts. ✓</td></tr>
+              )}
+              {!loading && lowStock.map(r => {
+                const short = +r.reorder_level - +r.quantity;
+                return (
+                  <tr key={r.id} className="border-t bg-amber-50/30 hover:bg-amber-50">
+                    <td className="px-3 py-2 text-gray-700">{r.warehouse_name}</td>
+                    <td className="px-3 py-2">
+                      <div className="text-gray-800">{r.item_name}</div>
+                      {r.item_code && <div className="text-[10px] text-gray-400 font-mono">{r.item_code}</div>}
+                    </td>
+                    <td className="px-3 py-2 text-right font-bold text-amber-700 tabular-nums">{fmtNum(r.quantity)} <span className="text-[10px] text-gray-400">{r.uom}</span></td>
+                    <td className="px-3 py-2 text-right text-gray-600 tabular-nums">{fmtNum(r.reorder_level)}</td>
+                    <td className="px-3 py-2 text-right text-red-700 font-semibold tabular-nums">{short > 0 ? `-${fmtNum(short)}` : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </>
   );

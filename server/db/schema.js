@@ -1306,6 +1306,17 @@ function initializeDatabase() {
     ['attendance', 'auto_punched_in INTEGER DEFAULT 0'],
     ['attendance', 'auto_punched_out INTEGER DEFAULT 0'],
     ['users', 'username TEXT'],
+    // Inventory link on GRN — when goods are received we now auto-IN
+    // them into a chosen warehouse. Both columns are nullable so old
+    // GRNs without the link still work; only filled-in ones trigger
+    // the stock movement.
+    ['grn', 'warehouse_id INTEGER REFERENCES warehouses(id)'],
+    ['grn_items', 'item_master_id INTEGER REFERENCES item_master(id)'],
+    // Same auto-IN hook on the modern Procurement → Dispatch & Receiving
+    // flow: when mam marks a delivery_note as Received, items from the
+    // linked vendor_po_items auto-land in this warehouse. nullable —
+    // existing receives without a warehouse just behave like before.
+    ['delivery_notes', 'warehouse_id INTEGER REFERENCES warehouses(id)'],
     // Self-service password recovery — user sets a personal recovery code
     // (stored as bcrypt hash) which they can later use along with their
     // username to reset their password from the login page. No SMTP needed.

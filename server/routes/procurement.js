@@ -857,16 +857,72 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
     }
   }
 
+  // Optional inventory hook — if mam picked a warehouse_id, the items
+  // from the linked vendor_po auto-land as stock IN. Skipped silently if
+  // no warehouse selected (legacy behavior).
+  const warehouseId = b.warehouse_id ? +b.warehouse_id : null;
+
   try {
     db.prepare(
       `UPDATE delivery_notes
          SET received_by_name = ?,
              received_at = COALESCE(?, CURRENT_TIMESTAMP),
              receipt_file_path = COALESCE(?, receipt_file_path),
-             status = 'received'
+             status = 'received',
+             warehouse_id = COALESCE(?, warehouse_id)
        WHERE id = ?`
-    ).run(String(received_by_name).trim(), received_at || null, receiptPath, req.params.id);
-    res.json({ message: 'Marked as received', receipt_file_path: receiptPath });
+    ).run(String(received_by_name).trim(), received_at || null, receiptPath, warehouseId, req.params.id);
+
+    // INVENTORY AUTO-IN — best effort; never blocks the receipt save.
+    let stockIns = 0;
+    if (warehouseId) {
+      try {
+        // Pull the line items via vendor_po → vendor_po_items → indent_items
+        const dn = db.prepare('SELECT vendor_po_id FROM delivery_notes WHERE id=?').get(req.params.id);
+        if (dn?.vendor_po_id) {
+          const items = db.prepare(
+            `SELECT vpi.quantity, vpi.rate, ii.item_master_id, ii.description
+               FROM vendor_po_items vpi
+               LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
+              WHERE vpi.vendor_po_id = ?`
+          ).all(dn.vendor_po_id);
+
+          // Idempotency: skip if movements for this delivery_note already exist
+          const refId = `DN-${req.params.id}`;
+          const existingMv = db.prepare(
+            `SELECT 1 FROM stock_movements WHERE reference_type='RECEIVE' AND reference_id=? LIMIT 1`
+          ).get(refId);
+          if (!existingMv) {
+            const tx = db.transaction(() => {
+              for (const i of items) {
+                if (!i.item_master_id || !(+i.quantity > 0)) continue;
+                const cur = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id=? AND item_master_id=?').get(warehouseId, i.item_master_id);
+                const prevQty = cur ? +cur.quantity : 0;
+                const prevRate = cur ? +cur.avg_rate : 0;
+                const qty = +i.quantity;
+                const rate = +(i.rate || 0);
+                const newQty = prevQty + qty;
+                const newAvg = newQty > 0 ? ((prevQty * prevRate) + (qty * rate)) / newQty : 0;
+                if (cur) db.prepare('UPDATE stock_balance SET quantity=?, avg_rate=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(newQty, newAvg, cur.id);
+                else db.prepare('INSERT INTO stock_balance (warehouse_id, item_master_id, quantity, avg_rate) VALUES (?,?,?,?)').run(warehouseId, i.item_master_id, newQty, newAvg);
+                db.prepare(
+                  `INSERT INTO stock_movements
+                    (warehouse_id, item_master_id, type, quantity, rate, total_value,
+                     reference_type, reference_id, notes, created_by)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)`
+                ).run(warehouseId, i.item_master_id, 'IN', qty, rate, qty * rate, 'RECEIVE', refId, `Auto-IN from delivery note #${req.params.id}`, req.user.id);
+                stockIns += 1;
+              }
+            });
+            tx();
+          }
+        }
+      } catch (e) {
+        console.error('[receive] auto-IN failed (receipt saved anyway):', e.message);
+      }
+    }
+
+    res.json({ message: 'Marked as received', receipt_file_path: receiptPath, stock_ins: stockIns });
   } catch (err) {
     if (receiptPath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(receiptPath))); } catch (e) {} }
     res.status(500).json({ error: err.message });
