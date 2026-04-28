@@ -240,11 +240,23 @@ export default function PMSTasks() {
                   </td>
                   <td>{statusBadge(t.status)}</td>
                   <td>
-                    {t.proof_url
-                      ? <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View</a>
-                      : isAssignee && (t.status === 'pending' || t.status === 'rejected')
-                        ? <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiUpload size={11} /> Upload</button>
-                        : <span className="text-gray-400 text-xs">—</span>}
+                    {/* Show View when proof exists, AND show Upload button
+                        on rejected tasks (re-upload) so the task can be
+                        retried. Admin / assigner can also upload on
+                        behalf of the assignee — same rule as Delegations. */}
+                    <div className="flex flex-col gap-1">
+                      {t.proof_url && (
+                        <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View</a>
+                      )}
+                      {(isAssignee || isAssigner || isAdmin()) && (t.status === 'pending' || t.status === 'rejected') && (
+                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit">
+                          <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
+                        </button>
+                      )}
+                      {!t.proof_url && !((isAssignee || isAssigner || isAdmin()) && (t.status === 'pending' || t.status === 'rejected')) && (
+                        <span className="text-gray-400 text-xs">—</span>
+                      )}
+                    </div>
                   </td>
                   <td className="whitespace-nowrap">
                     {t.extension_status === 'pending' && t.requested_due_date ? (
@@ -312,8 +324,10 @@ export default function PMSTasks() {
               )}
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
-                {isAssignee && (t.status === 'pending' || t.status === 'rejected') && (
-                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiUpload size={11} /> Upload Proof</button>
+                {(isAssignee || isAssigner || isAdmin()) && (t.status === 'pending' || t.status === 'rejected') && (
+                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                    <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
+                  </button>
                 )}
                 {isAssignee && t.status !== 'approved' && t.extension_status !== 'pending' && (
                   <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }} className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiCalendar size={11} /> Extension</button>
