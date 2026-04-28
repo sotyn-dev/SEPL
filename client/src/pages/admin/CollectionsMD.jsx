@@ -76,16 +76,26 @@ export default function CollectionsMD() {
       </div>
 
       {/* Activity totals + silent overdue alert */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <div className="card p-4 border-l-4 border-blue-500">
-          <div className="text-[10px] uppercase text-gray-500 font-semibold">CRM Follow-up Tasks</div>
+          <div className="text-[10px] uppercase text-gray-500 font-semibold">CRM Tasks</div>
           <div className="text-2xl font-bold text-gray-800 mt-0.5">{fmtN(data.totals.pms_tasks)}</div>
-          <div className="text-[10px] text-gray-400">PMS tasks raised across all sites</div>
+          <div className="text-[10px] text-gray-400">PMS follow-up tasks raised</div>
         </div>
         <div className="card p-4 border-l-4 border-purple-500">
-          <div className="text-[10px] uppercase text-gray-500 font-semibold">Site Visits (last 7 days)</div>
+          <div className="text-[10px] uppercase text-gray-500 font-semibold">Site Visits 7d</div>
           <div className="text-2xl font-bold text-gray-800 mt-0.5">{fmtN(data.totals.location_pings_7d)}</div>
-          <div className="text-[10px] text-gray-400">GPS pings inside any site geofence</div>
+          <div className="text-[10px] text-gray-400">GPS pings in last 7 days</div>
+        </div>
+        <div className="card p-4 border-l-4 border-orange-500">
+          <div className="text-[10px] uppercase text-gray-500 font-semibold">Indents Raised</div>
+          <div className="text-2xl font-bold text-gray-800 mt-0.5">{fmtN(data.totals.indents_count)}</div>
+          <div className="text-[10px] text-gray-400">{fmtN(data.totals.indents_30d)} in last 30d · procurement load</div>
+        </div>
+        <div className="card p-4 border-l-4 border-teal-500">
+          <div className="text-[10px] uppercase text-gray-500 font-semibold">Materials Sent</div>
+          <div className="text-2xl font-bold text-gray-800 mt-0.5">{fmtL(data.totals.materials_value_sent)}</div>
+          <div className="text-[10px] text-gray-400">Stock issued / delivered to sites</div>
         </div>
         <div
           className={`card p-4 border-l-4 ${data.silent_overdue_count > 0 ? 'border-red-500 cursor-pointer hover:bg-red-50/40' : 'border-emerald-500'}`}
@@ -126,6 +136,9 @@ export default function CollectionsMD() {
               <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Oldest Ageing</th>
               <th className="text-center px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">PMS Tasks</th>
               <th className="text-center px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Site Pings (7d)</th>
+              <th className="text-center px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Indents</th>
+              <th className="text-right px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Materials Sent</th>
+              <th className="text-center px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">DPR (30d)</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Last Follow-up / Discussion</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Next Planned</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Owner</th>
@@ -133,7 +146,7 @@ export default function CollectionsMD() {
           </thead>
           <tbody>
             {sitesShown.length === 0 && (
-              <tr><td colSpan="11" className="text-center py-8 text-gray-400 text-sm">{showOnlySilent ? 'No silent-overdue sites — well done!' : 'No receivables yet'}</td></tr>
+              <tr><td colSpan="14" className="text-center py-8 text-gray-400 text-sm">{showOnlySilent ? 'No silent-overdue sites — well done!' : 'No receivables yet'}</td></tr>
             )}
             {sitesShown.map(s => {
               const silent = isSilent(s);
@@ -171,6 +184,24 @@ export default function CollectionsMD() {
                   <td className="px-3 py-2 text-center">
                     {+s.location_pings_7d > 0
                       ? <span className="px-2 py-0.5 rounded text-[11px] bg-purple-100 text-purple-700 font-semibold">{s.location_pings_7d}</span>
+                      : <span className="text-gray-300 text-xs">0</span>}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {+s.indents_count > 0
+                      ? (
+                        <div>
+                          <span className="px-2 py-0.5 rounded text-[11px] bg-orange-100 text-orange-800 font-semibold">{s.indents_count}</span>
+                          {+s.indents_30d > 0 && <div className="text-[10px] text-orange-600 mt-0.5">{s.indents_30d} in 30d</div>}
+                        </div>
+                      )
+                      : <span className="text-gray-300 text-xs">0</span>}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-teal-700 font-semibold">
+                    {+s.materials_value_sent > 0 ? fmtL(s.materials_value_sent) : <span className="text-gray-300 font-normal">—</span>}
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {+s.dpr_count_30d > 0
+                      ? <span className="px-2 py-0.5 rounded text-[11px] bg-indigo-100 text-indigo-700 font-semibold">{s.dpr_count_30d}</span>
                       : <span className="text-gray-300 text-xs">0</span>}
                   </td>
                   <td className="px-3 py-2 text-xs">

@@ -117,7 +117,36 @@ router.get('/md-dashboard', (req, res) => {
       )                                     as location_pings_7d,
       (SELECT MAX(cf.follow_up_date) FROM collection_follow_ups cf
          WHERE cf.receivable_id = r.id
-      )                                     as last_follow_up
+      )                                     as last_follow_up,
+      -- Indents raised for this site — total + last 30 days separately
+      -- so MD can see fresh procurement activity vs lifetime activity.
+      (SELECT COUNT(*) FROM indents ind
+         WHERE ind.site_name = COALESCE(r.site_name, r.client_name)
+            OR ind.client_name = COALESCE(r.site_name, r.client_name)
+      )                                     as indents_count,
+      (SELECT COUNT(*) FROM indents ind
+         WHERE (ind.site_name = COALESCE(r.site_name, r.client_name)
+                OR ind.client_name = COALESCE(r.site_name, r.client_name))
+           AND ind.created_at >= DATE('now', '-30 days')
+      )                                     as indents_30d,
+      -- Materials value SENT to this site — sums OUT movements whose
+      -- site_id matches, plus IN movements at this site's site_store
+      -- warehouse (i.e. material physically delivered to the site).
+      (SELECT COALESCE(SUM(sm.quantity * sm.rate), 0)
+         FROM stock_movements sm
+        WHERE (sm.site_id = r.site_id AND r.site_id IS NOT NULL)
+           OR sm.warehouse_id IN (
+             SELECT w.id FROM warehouses w
+              WHERE w.type = 'site_store'
+                AND w.name = COALESCE(r.site_name, r.client_name) || ' Store'
+           )
+      )                                     as materials_value_sent,
+      -- DPR entries in the last 30 days for that site
+      (SELECT COUNT(*) FROM dpr d
+         JOIN sites s ON s.id = d.site_id
+        WHERE s.name = COALESCE(r.site_name, r.client_name)
+          AND d.created_at >= DATE('now', '-30 days')
+      )                                     as dpr_count_30d
     FROM receivables r
     LEFT JOIN users u ON u.id = r.owner_id
     GROUP BY COALESCE(r.site_name, r.client_name)
@@ -132,7 +161,11 @@ router.get('/md-dashboard', (req, res) => {
     outstanding: s.outstanding + (+r.outstanding || 0),
     pms_tasks: s.pms_tasks + (+r.pms_tasks_count || 0),
     location_pings_7d: s.location_pings_7d + (+r.location_pings_7d || 0),
-  }), { sites: 0, target: 0, received: 0, outstanding: 0, pms_tasks: 0, location_pings_7d: 0 });
+    indents_count: s.indents_count + (+r.indents_count || 0),
+    indents_30d: s.indents_30d + (+r.indents_30d || 0),
+    materials_value_sent: s.materials_value_sent + (+r.materials_value_sent || 0),
+    dpr_count_30d: s.dpr_count_30d + (+r.dpr_count_30d || 0),
+  }), { sites: 0, target: 0, received: 0, outstanding: 0, pms_tasks: 0, location_pings_7d: 0, indents_count: 0, indents_30d: 0, materials_value_sent: 0, dpr_count_30d: 0 });
   totals.collection_pct = totals.target > 0 ? +(100 * totals.received / totals.target).toFixed(2) : 0;
 
   // Flag rows where outstanding is significant AND there's NO recent
