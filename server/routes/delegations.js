@@ -85,6 +85,40 @@ router.post('/', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
+// Full edit of an existing task — description, assignee, due date, project,
+// attachment. Admin or the original assigner only. Allowed in any status
+// (pending / submitted / approved / rejected) so mam can fix typos or
+// reassign even after submission. Status / proof / reject_reason are NOT
+// touched here — those go through their own endpoints.
+router.put('/:id', (req, res) => {
+  const db = getDb();
+  const d = db.prepare('SELECT assigned_by FROM delegations WHERE id=?').get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Task not found' });
+  if (d.assigned_by !== req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only the assigner or an admin can edit this task' });
+  }
+  const b = req.body || {};
+  const desc = b.description != null ? String(b.description).trim() : null;
+  if (b.description != null && !desc) return res.status(400).json({ error: 'Description cannot be empty' });
+  const assignedTo = b.assigned_to != null ? +b.assigned_to : null;
+  const dueDate = b.due_date != null ? (b.due_date || null) : undefined;
+  const project = b.project_name != null ? (String(b.project_name).trim() || null) : undefined;
+  const attachment = b.attachment_url != null ? (String(b.attachment_url).trim() || null) : undefined;
+  const title = desc ? (desc.split(/\r?\n/)[0].slice(0, 80).trim() || 'Task') : null;
+
+  // Build a partial UPDATE — only touch fields the caller actually sent
+  const sets = []; const params = [];
+  if (desc != null) { sets.push('description=?', 'title=?'); params.push(desc, title); }
+  if (assignedTo) { sets.push('assigned_to=?'); params.push(assignedTo); }
+  if (dueDate !== undefined) { sets.push('due_date=?'); params.push(dueDate); }
+  if (project !== undefined) { sets.push('project_name=?'); params.push(project); }
+  if (attachment !== undefined) { sets.push('attachment_url=?'); params.push(attachment); }
+  if (sets.length === 0) return res.status(400).json({ error: 'No fields to update' });
+  params.push(req.params.id);
+  db.prepare(`UPDATE delegations SET ${sets.join(', ')} WHERE id=?`).run(...params);
+  res.json({ message: 'Task updated' });
+});
+
 // Inline edit of project_name on an existing task. Admin or the assigner only,
 // so random users can't retag someone else's tasks. Empty string clears it.
 router.patch('/:id/project', (req, res) => {

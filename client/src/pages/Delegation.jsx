@@ -23,6 +23,9 @@ export default function Delegation() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [createModal, setCreateModal] = useState(false);
+  const [editModal, setEditModal] = useState(null); // task being edited (admin / assigner)
+  const [editForm, setEditForm] = useState({});
+  const [editSaving, setEditSaving] = useState(false);
   const [submitModal, setSubmitModal] = useState(null); // task being submitted
   const [rejectModal, setRejectModal] = useState(null); // task being rejected
   const [extendModal, setExtendModal] = useState(null); // task: assignee requests more time
@@ -189,6 +192,29 @@ export default function Delegation() {
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  const openEdit = (task) => {
+    setEditForm({
+      description: task.description || '',
+      assigned_to: task.assigned_to || '',
+      due_date: task.due_date || '',
+      project_name: task.project_name || '',
+    });
+    setEditModal(task);
+  };
+  const saveEdit = async (e) => {
+    e.preventDefault();
+    if (!editForm.description || !editForm.description.trim()) return toast.error('Description is required');
+    setEditSaving(true);
+    try {
+      await api.put(`/delegations/${editModal.id}`, editForm);
+      toast.success('Task updated');
+      setEditModal(null); setEditForm({}); load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update');
+    }
+    setEditSaving(false);
+  };
+
   // Strip the legacy bracketed prefix '[TSK-N | project | category | by person]'
   // that existed in descriptions before we moved those fields into proper DB
   // columns. Keeps only the real task text the user typed.
@@ -336,11 +362,22 @@ export default function Delegation() {
                   </td>
                   <td>{statusBadge(t.status)}</td>
                   <td>
-                    {t.proof_url
-                      ? <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View</a>
-                      : (isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected')
-                        ? <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiUpload size={11} /> Upload</button>
-                        : <span className="text-gray-400 text-xs">—</span>}
+                    {/* Show View link if any proof exists, AND show Upload
+                        button alongside it on REJECTED tasks so the assignee
+                        can re-upload a fresh proof to retry the task. */}
+                    <div className="flex flex-col gap-1">
+                      {t.proof_url && (
+                        <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View</a>
+                      )}
+                      {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
+                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit">
+                          <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
+                        </button>
+                      )}
+                      {!t.proof_url && !((isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected')) && (
+                        <span className="text-gray-400 text-xs">—</span>
+                      )}
+                    </div>
                   </td>
                   <td className="whitespace-nowrap">
                     {t.extension_status === 'pending' && t.requested_due_date ? (
@@ -360,14 +397,19 @@ export default function Delegation() {
                     ) : <span className="text-gray-300 text-xs">—</span>}
                   </td>
                   <td>
-                    <div className="flex gap-1">
+                    <div className="flex gap-1 items-center">
                       {isAdmin() && t.status === 'submitted' && (
                         <>
                           <button onClick={() => approve(t)} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
                           <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="text-[10px] text-red-600 font-bold hover:underline">Reject</button>
                         </>
                       )}
-                      {(isAssigner || isAdmin()) && <button onClick={() => del(t)} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={12} /></button>}
+                      {(isAssigner || isAdmin()) && (
+                        <button onClick={() => openEdit(t)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit task">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+                        </button>
+                      )}
+                      {(isAssigner || isAdmin()) && <button onClick={() => del(t)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={12} /></button>}
                     </div>
                   </td>
                 </tr>
@@ -441,7 +483,9 @@ export default function Delegation() {
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
                 {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiUpload size={11} /> Upload Proof</button>
+                  <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                    <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
+                  </button>
                 )}
                 {isAssignee && t.status !== 'approved' && t.extension_status !== 'pending' && (
                   <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }} className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiCalendar size={11} /> Extension</button>
@@ -457,6 +501,12 @@ export default function Delegation() {
                     <button onClick={() => approveExtension(t)} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiCheck size={11} /> Ext ✓</button>
                     <button onClick={() => rejectExtension(t)} className="btn btn-danger text-[11px] px-2 py-1 flex items-center gap-1"><FiX size={11} /> Ext ✗</button>
                   </>
+                )}
+                {(isAssigner || isAdmin()) && (
+                  <button onClick={() => openEdit(t)} className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1" title="Edit task">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+                    Edit
+                  </button>
                 )}
                 {(isAssigner || isAdmin()) && <button onClick={() => del(t)} className="p-1.5 text-gray-400 hover:text-red-600 ml-auto"><FiTrash2 size={13} /></button>}
               </div>
@@ -514,6 +564,50 @@ export default function Delegation() {
             <button type="submit" className="btn btn-primary">Assign Task</button>
           </div>
         </form>
+      </Modal>
+
+      {/* Edit Task Modal — admin / assigner only */}
+      <Modal isOpen={!!editModal} onClose={() => { setEditModal(null); setEditForm({}); }} title={editModal ? `Edit task — ${editModal.title || ''}` : 'Edit task'}>
+        {editModal && (
+          <form onSubmit={saveEdit} className="space-y-3">
+            <div>
+              <label className="label">Description *</label>
+              <textarea
+                className="input"
+                rows="4"
+                value={editForm.description || ''}
+                onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))}
+                required
+              />
+            </div>
+            <div>
+              <label className="label">Assigned To *</label>
+              <select className="select" value={editForm.assigned_to || ''} onChange={e => setEditForm(f => ({ ...f, assigned_to: e.target.value }))}>
+                <option value="">—</option>
+                {users.map(u => <option key={u.id} value={u.id}>{u.name}{u.department ? ` (${u.department})` : ''}</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Due Date</label>
+                <input type="date" className="input" value={editForm.due_date || ''} onChange={e => setEditForm(f => ({ ...f, due_date: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Project (optional)</label>
+                <input className="input" value={editForm.project_name || ''} onChange={e => setEditForm(f => ({ ...f, project_name: e.target.value }))} placeholder="Free text tag" />
+              </div>
+            </div>
+            {editModal.status === 'rejected' && (
+              <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800">
+                Editing a rejected task does NOT auto-resubmit it. The assignee can re-upload proof from the table to retry.
+              </div>
+            )}
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={() => { setEditModal(null); setEditForm({}); }} className="btn btn-secondary">Cancel</button>
+              <button type="submit" disabled={editSaving} className="btn btn-primary">{editSaving ? 'Saving…' : 'Save Changes'}</button>
+            </div>
+          </form>
+        )}
       </Modal>
 
       {/* Submit Proof Modal */}
