@@ -249,19 +249,6 @@ export default function Collections() {
         </div>
       )}
 
-      {/* Top Clients */}
-      {summary.topClients.length > 0 && (
-        <div className="card">
-          <h4 className="font-semibold mb-3">Top Outstanding Clients</h4>
-          <div className="flex flex-wrap gap-3">
-            {summary.topClients.map((c, i) => (
-              <div key={i} className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm">
-                <span className="font-medium">{c.client_name}</span>: <span className="text-red-600 font-bold">Rs {(c.total / 100000).toFixed(2)}L</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Receivables Table */}
       <div className="card p-0 overflow-x-auto">
