@@ -1334,6 +1334,7 @@ function initializeDatabase() {
     ['receivables', 'crm_name TEXT'],
     ['receivables', 'next_planned_date DATE'],
     ['receivables', 'last_discussion TEXT'],
+    ['receivables', 'business_book_id INTEGER REFERENCES business_book(id)'],
     // DPR consumption now optionally links to the item_master so the
     // auto-OUT to inventory can decrement the right SKU's stock.
     ['dpr_material', 'item_master_id INTEGER REFERENCES item_master(id)'],

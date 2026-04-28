@@ -178,39 +178,50 @@ router.get('/md-dashboard', (req, res) => {
   res.json({ totals, sites: rows, silent_overdue_count: flagged.length });
 });
 
-// Helper for the Edit modal — list of UNIQUE site names from sites +
-// business_book, with their latest CRM and total invoice value pulled
-// from the most recent Client PO. Used as the dropdown source for
-// "Site Name" so mam picks from real data instead of typing free text.
+// Helper for the Edit/Add modal — UNIQUE site/project/company names
+// straight from the Business Book master (per mam: "site/project/
+// company name all unique from master business book"). Each row
+// carries the latest PO's crm_name + total_amount + po_number so the
+// form can auto-fill CRM and suggest the target payment.
+//
+// "Display name" preference: project_name first (closest to a site),
+// then company_name, then client_name. We dedupe by that display name
+// so mam never sees the same site twice in the dropdown.
 router.get('/sites', (req, res) => {
   const db = getDb();
-  // Pull unique site names. SQLite can't reference aggregate functions
-  // inside correlated subqueries, so we pick one canonical row per name
-  // (lowest id) via a sub-SELECT first, then run the PO lookups against
-  // that single row. Net result: one row per unique site name with the
-  // most recent PO's CRM + value.
   const rows = db.prepare(`
-    SELECT s.name, s.id, s.business_book_id,
+    SELECT bb.id as business_book_id,
+           bb.lead_no,
+           COALESCE(NULLIF(bb.project_name,''), NULLIF(bb.company_name,''), bb.client_name) as name,
+           bb.project_name, bb.company_name, bb.client_name,
            (SELECT po.crm_name FROM purchase_orders po
-              WHERE po.business_book_id = s.business_book_id
+              WHERE po.business_book_id = bb.id
                 AND po.crm_name IS NOT NULL AND po.crm_name <> ''
               ORDER BY po.created_at DESC LIMIT 1) as crm_name,
            (SELECT po.total_amount FROM purchase_orders po
-              WHERE po.business_book_id = s.business_book_id
+              WHERE po.business_book_id = bb.id
                 AND po.total_amount IS NOT NULL
               ORDER BY po.created_at DESC LIMIT 1) as latest_po_value,
            (SELECT po.po_number FROM purchase_orders po
-              WHERE po.business_book_id = s.business_book_id
+              WHERE po.business_book_id = bb.id
               ORDER BY po.created_at DESC LIMIT 1) as latest_po_number
-      FROM sites s
-     WHERE s.id IN (
-       SELECT MIN(id) FROM sites
-        WHERE name IS NOT NULL AND name <> ''
-        GROUP BY name
+      FROM business_book bb
+     WHERE bb.id IN (
+       SELECT MIN(id) FROM business_book
+        WHERE COALESCE(NULLIF(project_name,''), NULLIF(company_name,''), client_name) IS NOT NULL
+        GROUP BY COALESCE(NULLIF(project_name,''), NULLIF(company_name,''), client_name)
      )
-     ORDER BY s.name
+     ORDER BY name
   `).all();
-  res.json(rows);
+  // Build a richer label so the SearchableSelect can match by company OR
+  // project OR client at once.
+  const list = rows.map(r => ({
+    ...r,
+    id: r.business_book_id,
+    label: [r.name, r.company_name && r.company_name !== r.name ? '· ' + r.company_name : '', r.lead_no ? '· ' + r.lead_no : '']
+      .filter(Boolean).join(' '),
+  }));
+  res.json(list);
 });
 
 // Dashboard summary
