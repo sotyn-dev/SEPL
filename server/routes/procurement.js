@@ -452,8 +452,19 @@ router.get('/indents', (req, res) => {
 router.post('/indents', (req, res) => {
   const db = getDb();
   const { planning_id, items, notes, site_name, raised_by_name, business_book_id } = req.body;
-  if (!items || items.length === 0 || !items.some(i => i.item_master_id || (i.description && i.description.trim()))) {
+  if (!items || items.length === 0) {
     return res.status(400).json({ error: 'At least one item is required' });
+  }
+  // mam: BOTH BOQ Item (po_item_id) AND Sub-Item (item_master_id) must
+  // be picked for every line. po_item_id can be a real db id (integer
+  // string) or a fallback like 'fallback-Sheet2-3' from the Excel parser.
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const hasBoq = !!it.po_item_id;
+    const hasSub = !!it.item_master_id;
+    if (!hasBoq) return res.status(400).json({ error: `Row ${i + 1}: BOQ Item (from Client PO) is required` });
+    if (!hasSub) return res.status(400).json({ error: `Row ${i + 1}: Sub-Item (from Item Master) is required` });
+    if (!(+it.quantity > 0)) return res.status(400).json({ error: `Row ${i + 1}: Quantity must be greater than 0` });
   }
   const { nextSequence } = require('../db/nextSequence');
   const indentNum = nextSequence(db, 'indents', 'indent_number', 'IND-', { startFrom: 0, pad: 4 });
@@ -970,10 +981,14 @@ router.delete('/sales-bills/:id', (req, res) => {
 // indent is submitted/approved.
 router.get('/item-rates', (req, res) => {
   const db = getDb();
+  // Also pull the parent BOQ item (po_items) so the UI can render
+  // "BOQ: <parent description>" as a sub-category above the actual
+  // sub-item — mam wants both visible per row.
   const rows = db.prepare(
     `SELECT ii.id as indent_item_id, ii.description, ii.make, ii.quantity as qty, ii.unit,
-            ii.item_type, ii.item_master_id,
+            ii.item_type, ii.item_master_id, ii.po_item_id,
             im.item_code, im.item_name as master_name, im.specification, im.size, im.uom,
+            poi.description as boq_description, poi.quantity as boq_qty,
             i.indent_number, i.id as indent_id,
             i.site_name, i.raised_by_name, i.status as indent_status,
             bb.lead_no,
@@ -986,6 +1001,7 @@ router.get('/item-rates', (req, res) => {
      FROM indent_items ii
      JOIN indents i ON ii.indent_id = i.id
      LEFT JOIN item_master im ON im.id = ii.item_master_id
+     LEFT JOIN po_items poi ON poi.id = ii.po_item_id
      LEFT JOIN indent_item_rates r ON r.indent_item_id = ii.id
      LEFT JOIN users fu ON fu.id = r.finalized_by
      LEFT JOIN order_planning op ON op.id = i.planning_id

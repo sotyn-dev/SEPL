@@ -25,17 +25,90 @@ function getStatusColor(outstandingAmount, ageingDays) {
   return 'green';
 }
 
-// Get all receivables with filters
+// Get all receivables with filters. Now also returns:
+//   - pms_tasks_count : how many PMS tasks were raised for this site
+//                       (so mam can see at a glance how much CRM
+//                       follow-up activity sits behind a delayed payment)
+//   - payments        : array of individual collection installments
+//                       [{ amount, collection_date, payment_mode, notes }]
+//                       so the table can show "today rec 40, +15 in 10 days"
 router.get('/', (req, res) => {
   const { status, ageing_bucket, client, search } = req.query;
-  let sql = `SELECT r.*, u.name as owner_name FROM receivables r LEFT JOIN users u ON r.owner_id=u.id WHERE 1=1`;
+  let sql = `
+    SELECT r.*,
+           u.name as owner_name,
+           (SELECT COUNT(*) FROM pms_tasks p
+              WHERE p.project_id = r.site_id
+                 OR (r.site_name IS NOT NULL AND r.site_name <> ''
+                     AND (p.project_name_snapshot = r.site_name
+                          OR p.project_name_snapshot LIKE '%' || r.site_name || '%'))
+           ) as pms_tasks_count
+      FROM receivables r
+      LEFT JOIN users u ON r.owner_id = u.id
+     WHERE 1=1`;
   const params = [];
   if (status) { sql += ' AND r.status = ?'; params.push(status); }
   if (ageing_bucket) { sql += ' AND r.ageing_bucket = ?'; params.push(ageing_bucket); }
-  if (client) { sql += ' AND r.client_name LIKE ?'; params.push(`%${client}%`); }
-  if (search) { sql += ' AND (r.client_name LIKE ? OR r.invoice_number LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
+  if (client) { sql += ' AND (r.client_name LIKE ? OR r.site_name LIKE ?)'; params.push(`%${client}%`, `%${client}%`); }
+  if (search) { sql += ' AND (r.client_name LIKE ? OR r.site_name LIKE ? OR r.invoice_number LIKE ?)'; params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
   sql += ' ORDER BY r.status DESC, r.ageing_days DESC';
-  res.json(getDb().prepare(sql).all(...params));
+  const rows = getDb().prepare(sql).all(...params);
+
+  // Pull payment installments per receivable (one query, then group)
+  const ids = rows.map(r => r.id);
+  if (ids.length > 0) {
+    const placeholders = ids.map(() => '?').join(',');
+    const allPayments = getDb().prepare(
+      `SELECT receivable_id, amount, collection_date, payment_mode, transaction_ref, notes
+         FROM collections
+        WHERE receivable_id IN (${placeholders})
+        ORDER BY collection_date DESC, id DESC`
+    ).all(...ids);
+    const byRecv = new Map();
+    for (const p of allPayments) {
+      if (!byRecv.has(p.receivable_id)) byRecv.set(p.receivable_id, []);
+      byRecv.get(p.receivable_id).push(p);
+    }
+    for (const r of rows) r.payments = byRecv.get(r.id) || [];
+  } else {
+    rows.forEach(r => { r.payments = []; });
+  }
+  res.json(rows);
+});
+
+// Helper for the Edit modal — list of UNIQUE site names from sites +
+// business_book, with their latest CRM and total invoice value pulled
+// from the most recent Client PO. Used as the dropdown source for
+// "Site Name" so mam picks from real data instead of typing free text.
+router.get('/sites', (req, res) => {
+  const db = getDb();
+  // Pull unique site names. SQLite can't reference aggregate functions
+  // inside correlated subqueries, so we pick one canonical row per name
+  // (lowest id) via a sub-SELECT first, then run the PO lookups against
+  // that single row. Net result: one row per unique site name with the
+  // most recent PO's CRM + value.
+  const rows = db.prepare(`
+    SELECT s.name, s.id, s.business_book_id,
+           (SELECT po.crm_name FROM purchase_orders po
+              WHERE po.business_book_id = s.business_book_id
+                AND po.crm_name IS NOT NULL AND po.crm_name <> ''
+              ORDER BY po.created_at DESC LIMIT 1) as crm_name,
+           (SELECT po.total_amount FROM purchase_orders po
+              WHERE po.business_book_id = s.business_book_id
+                AND po.total_amount IS NOT NULL
+              ORDER BY po.created_at DESC LIMIT 1) as latest_po_value,
+           (SELECT po.po_number FROM purchase_orders po
+              WHERE po.business_book_id = s.business_book_id
+              ORDER BY po.created_at DESC LIMIT 1) as latest_po_number
+      FROM sites s
+     WHERE s.id IN (
+       SELECT MIN(id) FROM sites
+        WHERE name IS NOT NULL AND name <> ''
+        GROUP BY name
+     )
+     ORDER BY s.name
+  `).all();
+  res.json(rows);
 });
 
 // Dashboard summary
@@ -50,18 +123,37 @@ router.get('/summary', (req, res) => {
   res.json({ totalOutstanding: total.total, byBucket, byStatus, topClients, overdue });
 });
 
-// Create receivable
+// Create receivable. Accepts the original free-text fields AND the new
+// v2 fields (site_id / site_name / crm_name / next_planned_date /
+// last_discussion). client_name is auto-derived from site_name when
+// missing so the existing dashboard still groups things correctly.
 router.post('/', (req, res) => {
-  const { client_name, project_name, po_id, invoice_number, invoice_date, invoice_amount, due_date, owner_id } = req.body;
-  if (!client_name || !invoice_amount) return res.status(400).json({ error: 'Client name and invoice amount required' });
+  const b = req.body || {};
+  const {
+    client_name, project_name, po_id, invoice_number, invoice_date,
+    invoice_amount, due_date, owner_id,
+    site_id, site_name, crm_name, next_planned_date, last_discussion,
+  } = b;
+  const target = +invoice_amount;
+  const finalClient = client_name || site_name;
+  if (!finalClient || !(target > 0)) return res.status(400).json({ error: 'Site/client name and target amount required' });
 
   const { days, bucket } = calculateAgeing(due_date);
-  const statusColor = getStatusColor(invoice_amount, days);
+  const statusColor = getStatusColor(target, days);
 
   const r = getDb().prepare(
-    'INSERT INTO receivables (client_name, project_name, po_id, invoice_number, invoice_date, invoice_amount, outstanding_amount, due_date, ageing_days, ageing_bucket, status, owner_id, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'
-  ).run(client_name, project_name, po_id, invoice_number, invoice_date, invoice_amount, invoice_amount, due_date, days, bucket, statusColor, owner_id, req.user.id);
-
+    `INSERT INTO receivables
+       (client_name, project_name, po_id, invoice_number, invoice_date,
+        invoice_amount, outstanding_amount, due_date, ageing_days, ageing_bucket,
+        status, owner_id, created_by,
+        site_id, site_name, crm_name, next_planned_date, last_discussion)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).run(
+    finalClient, project_name || site_name || null, po_id || null, invoice_number || null, invoice_date || null,
+    target, target, due_date || null, days, bucket,
+    statusColor, owner_id || null, req.user.id,
+    site_id || null, site_name || null, crm_name || null, next_planned_date || null, last_discussion || null,
+  );
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
@@ -91,6 +183,12 @@ router.put('/:id', (req, res) => {
   if (b.follow_up_date !== undefined)    set('follow_up_date', b.follow_up_date || null);
   if (b.follow_up_notes !== undefined)   set('follow_up_notes', b.follow_up_notes);
   if (b.escalation_level !== undefined)  set('escalation_level', +b.escalation_level || 0);
+  // Collection Engine v2 fields
+  if (b.site_id !== undefined)           set('site_id', b.site_id || null);
+  if (b.site_name !== undefined)         set('site_name', b.site_name || null);
+  if (b.crm_name !== undefined)          set('crm_name', b.crm_name || null);
+  if (b.next_planned_date !== undefined) set('next_planned_date', b.next_planned_date || null);
+  if (b.last_discussion !== undefined)   set('last_discussion', b.last_discussion || null);
 
   if (b.invoice_amount !== undefined) {
     const amt = +b.invoice_amount;

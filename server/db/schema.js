@@ -1326,6 +1326,14 @@ function initializeDatabase() {
     // staff get track_location=0 so they don't show in Admin → Location
     // Tracking. Default 1 so existing field staff keep being tracked.
     ['users', 'track_location INTEGER DEFAULT 1'],
+    // Collection Engine v2 — receivable now keyed by SITE (not free-text
+    // client+project), CRM auto-fills from the latest PO of that site,
+    // and Aanchal logs next-planned-date + last-discussion alongside.
+    ['receivables', 'site_id INTEGER REFERENCES sites(id)'],
+    ['receivables', 'site_name TEXT'],
+    ['receivables', 'crm_name TEXT'],
+    ['receivables', 'next_planned_date DATE'],
+    ['receivables', 'last_discussion TEXT'],
     // Self-service password recovery — user sets a personal recovery code
     // (stored as bcrypt hash) which they can later use along with their
     // username to reset their password from the login page. No SMTP needed.

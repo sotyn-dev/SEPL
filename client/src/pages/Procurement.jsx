@@ -164,14 +164,21 @@ export default function Procurement() {
     e.preventDefault();
     if (!form.site_name) return toast.error('Site Name is required');
     if (!form.raised_by_name) return toast.error('Raised By is required');
-    const clean = indentItems.filter(it => it.item_master_id || (it.description && it.description.trim()));
-    if (clean.length === 0) return toast.error('Pick at least one item from Item Master');
+    // Both BOQ Item (po_item_id) AND Sub-Item (item_master_id) are
+    // mandatory per mam's spec — surface the row number on failure
+    // so the user knows which line to fix.
+    for (let i = 0; i < indentItems.length; i++) {
+      const it = indentItems[i];
+      if (!it.po_item_id) return toast.error(`Row ${i + 1}: pick BOQ Item (from Client PO)`);
+      if (!it.item_master_id) return toast.error(`Row ${i + 1}: pick Sub-Item (from Item Master)`);
+      if (!(+it.quantity > 0)) return toast.error(`Row ${i + 1}: Quantity must be greater than 0`);
+    }
     try {
       await api.post('/procurement/indents', {
         site_name: form.site_name,
         raised_by_name: form.raised_by_name,
         notes: form.notes || '',
-        items: clean.map(it => ({ ...it, make: it.make || '' })),
+        items: indentItems.map(it => ({ ...it, make: it.make || '' })),
       });
       toast.success('Indent raised — purchase team will take over');
       setModal(false); load();
@@ -572,7 +579,15 @@ export default function Procurement() {
                   return (
                     <tr key={r.indent_item_id} className="border-b hover:bg-red-50/30">
                       <td className="px-2 py-2 whitespace-nowrap"><div className="font-medium text-red-700">{r.indent_number}</div><div className="text-[10px] text-gray-400">{r.site_name}</div></td>
-                      <td className="px-2 py-2 min-w-[260px]">
+                      <td className="px-2 py-2 min-w-[280px]">
+                        {/* BOQ parent (sub-category) — shown as a small grey
+                            header so the purchase team knows which Client PO
+                            line this sub-item belongs to. */}
+                        {r.boq_description && (
+                          <div className="text-[10px] text-gray-500 italic line-clamp-2 mb-0.5" title={r.boq_description}>
+                            BOQ: {r.boq_description}
+                          </div>
+                        )}
                         {r.item_code && <div className="text-[10px] font-mono text-gray-500">[{r.item_code}]</div>}
                         <div className="whitespace-normal leading-snug font-medium">{[r.master_name || r.description, r.specification, r.size].filter(Boolean).join(' / ')}</div>
                         {r.make && <div className="text-[10px] text-gray-400 mt-0.5">Make: {r.make}</div>}
@@ -604,17 +619,34 @@ export default function Procurement() {
                               onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_rate`]: +e.target.value })}
                             />
                           </td>
-                          <td className="px-1 py-1" style={{ minWidth: '140px' }}>
-                            <select
-                              className="select text-[11px] px-2 py-1"
-                              style={{ width: '130px', minWidth: '130px' }}
-                              value={r[`vendor${n}_terms`] || ''}
-                              onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_terms`]: e.target.value })}
-                            >
-                              <option value="">—</option>
-                              <option value="Advance">Advance</option>
-                              <option value="Credit">Credit</option>
-                            </select>
+                          <td className="px-1 py-1" style={{ minWidth: '180px' }}>
+                            <div className="flex items-center gap-1">
+                              <select
+                                className="select text-[11px] px-2 py-1"
+                                style={{ width: '90px', minWidth: '90px' }}
+                                value={r[`vendor${n}_terms`] || ''}
+                                onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_terms`]: e.target.value })}
+                              >
+                                <option value="">—</option>
+                                <option value="Advance">Advance</option>
+                                <option value="Credit">Credit</option>
+                              </select>
+                              {/* Manual credit days entry — only when Credit
+                                  is selected, otherwise hidden so Advance
+                                  rows stay clean. */}
+                              {r[`vendor${n}_terms`] === 'Credit' && (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  className="input text-[11px] px-1 py-1 text-right"
+                                  style={{ width: '70px' }}
+                                  placeholder="days"
+                                  value={r[`vendor${n}_credit_days`] || ''}
+                                  onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_credit_days`]: +e.target.value || 0 })}
+                                  title="Credit days"
+                                />
+                              )}
+                            </div>
                           </td>
                         </Fragment>
                       ))}
@@ -1066,8 +1098,8 @@ export default function Procurement() {
             <>
               {/* Desktop column headers — hidden on mobile, where each row is a stacked card */}
               <div className="hidden md:grid gap-2 text-[10px] font-bold text-gray-500 uppercase px-1" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr)) auto' }}>
-                <div className="col-span-5">BOQ Item (from Client PO)</div>
-                <div className="col-span-4">Sub-Item (Item Master)</div>
+                <div className="col-span-5">BOQ Item (from Client PO) <span className="text-red-500">*</span></div>
+                <div className="col-span-4">Sub-Item (Item Master) <span className="text-red-500">*</span></div>
                 <div className="col-span-2">Make</div>
                 <div className="col-span-3">Qty</div>
                 <div>Unit</div>

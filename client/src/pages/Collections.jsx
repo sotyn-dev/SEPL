@@ -24,10 +24,12 @@ export default function Collections() {
   const [form, setForm] = useState({});
   const [filter, setFilter] = useState('');
 
+  const [sites, setSites] = useState([]);
   const load = () => {
     api.get('/collections', { params: filter ? { status: filter } : {} }).then(r => setReceivables(r.data));
     api.get('/collections/summary').then(r => setSummary(r.data));
     api.get('/collections/target-summary').then(r => setTargetSummary(r.data)).catch(() => setTargetSummary(null));
+    api.get('/collections/sites').then(r => setSites(r.data || [])).catch(() => setSites([]));
     api.get('/auth/users').then(r => setUsers(r.data));
   };
   useEffect(() => { load(); }, [filter]);
@@ -61,15 +63,39 @@ export default function Collections() {
 
   const openEdit = (r) => {
     setEditForm({
-      client_name: r.client_name || '',
-      project_name: r.project_name || '',
+      site_name: r.site_name || r.client_name || '',
+      site_id: r.site_id || '',
+      crm_name: r.crm_name || '',
+      invoice_amount: r.invoice_amount || 0,    // Target Payment
       invoice_number: r.invoice_number || '',
       invoice_date: r.invoice_date || '',
-      invoice_amount: r.invoice_amount || 0,
       due_date: r.due_date || '',
+      next_planned_date: r.next_planned_date || '',
+      last_discussion: r.last_discussion || '',
       owner_id: r.owner_id || '',
     });
     setEditModal(r);
+  };
+
+  // When mam picks a site, auto-fill CRM + suggest target payment from
+  // the latest PO of that site. She can still override the amount.
+  const onPickSite = (siteOpt) => {
+    if (!siteOpt) {
+      setEditForm(f => ({ ...f, site_name: '', site_id: '', crm_name: '' }));
+      return;
+    }
+    setEditForm(f => ({
+      ...f,
+      site_name: siteOpt.name,
+      site_id: siteOpt.id,
+      crm_name: siteOpt.crm_name || f.crm_name,
+      // Only suggest the PO value if mam hasn't entered an amount yet —
+      // otherwise we don't overwrite her PDF-driven number.
+      invoice_amount: (f.invoice_amount && +f.invoice_amount > 0)
+        ? f.invoice_amount
+        : (siteOpt.latest_po_value || 0),
+      invoice_number: f.invoice_number || siteOpt.latest_po_number || '',
+    }));
   };
   const saveEdit = async (e) => {
     e.preventDefault();
@@ -215,21 +241,46 @@ export default function Collections() {
         <div className="overflow-x-auto">
           <table>
             <thead>
-              <tr><th>Client</th><th>Invoice</th><th>Amount</th><th>Received</th><th>Outstanding</th><th>Due Date</th><th>Ageing</th><th>Status</th><th>Follow-up</th><th>Owner</th><th>Actions</th></tr>
+              <tr>
+                <th>Site / Client</th>
+                <th>CRM</th>
+                <th>Target</th>
+                <th>Received</th>
+                <th>Outstanding</th>
+                <th>Ageing</th>
+                <th>Status</th>
+                <th>Next Planned</th>
+                <th>PMS Tasks</th>
+                <th>Owner</th>
+                <th>Actions</th>
+              </tr>
             </thead>
             <tbody>
               {receivables.map(r => (
                 <tr key={r.id}>
-                  <td className="font-medium">{r.client_name}<br/><span className="text-xs text-gray-400">{r.project_name}</span></td>
-                  <td>{r.invoice_number}</td>
-                  <td>Rs {r.invoice_amount?.toLocaleString()}</td>
-                  <td className="text-emerald-600">Rs {r.received_amount?.toLocaleString()}</td>
-                  <td className="font-bold text-red-600">Rs {r.outstanding_amount?.toLocaleString()}</td>
-                  <td>{r.due_date}</td>
-                  <td><span className={`badge ${r.ageing_days > 60 ? 'badge-red' : r.ageing_days > 30 ? 'badge-yellow' : 'badge-green'}`}>{r.ageing_days}d ({r.ageing_bucket})</span></td>
-                  <td><span className={`px-2 py-1 rounded-full text-xs font-bold border ${statusBg[r.status]}`}>{r.status === 'red' ? '🔴 RED' : r.status === 'yellow' ? '🟡 YELLOW' : '🟢 GREEN'}</span></td>
-                  <td><span className="badge badge-blue text-xs">{r.follow_up_status}</span></td>
-                  <td className="text-xs">{r.owner_name}</td>
+                  <td className="font-medium">
+                    {r.site_name || r.client_name}
+                    {r.invoice_number && <div className="text-[10px] text-gray-400 font-mono">{r.invoice_number}</div>}
+                    {r.last_discussion && <div className="text-[10px] text-amber-700 italic mt-0.5 max-w-[200px] truncate" title={r.last_discussion}>💬 {r.last_discussion}</div>}
+                  </td>
+                  <td className="text-xs">{r.crm_name || <span className="text-gray-300">—</span>}</td>
+                  <td className="font-semibold tabular-nums">Rs {(+r.invoice_amount||0).toLocaleString('en-IN')}</td>
+                  <td className="text-emerald-600 tabular-nums">
+                    Rs {(+r.received_amount||0).toLocaleString('en-IN')}
+                    {r.payments && r.payments.length > 0 && (
+                      <div className="text-[10px] text-gray-400">{r.payments.length} installment{r.payments.length === 1 ? '' : 's'}</div>
+                    )}
+                  </td>
+                  <td className="font-bold text-red-600 tabular-nums">Rs {(+r.outstanding_amount||0).toLocaleString('en-IN')}</td>
+                  <td><span className={`badge ${r.ageing_days > 60 ? 'badge-red' : r.ageing_days > 30 ? 'badge-yellow' : 'badge-green'}`}>{r.ageing_days}d</span></td>
+                  <td><span className={`px-2 py-1 rounded-full text-xs font-bold border ${statusBg[r.status]}`}>{r.status === 'red' ? '🔴' : r.status === 'yellow' ? '🟡' : '🟢'}</span></td>
+                  <td className="text-xs">{r.next_planned_date || <span className="text-gray-300">—</span>}</td>
+                  <td className="text-center">
+                    {r.pms_tasks_count > 0
+                      ? <span className="badge badge-purple text-xs">{r.pms_tasks_count}</span>
+                      : <span className="text-gray-300 text-xs">0</span>}
+                  </td>
+                  <td className="text-xs">{r.owner_name || <span className="text-gray-300">—</span>}</td>
                   <td>
                     <div className="flex gap-1">
                       <button onClick={() => openEdit(r)} className="p-1 hover:bg-blue-50 rounded text-blue-600" title="Edit"><FiEdit2 size={14} /></button>
@@ -250,28 +301,119 @@ export default function Collections() {
         </div>
       </div>
 
-      {/* Edit Receivable Modal */}
-      <Modal isOpen={!!editModal} onClose={() => { setEditModal(null); setEditForm({}); }} title={editModal ? `Edit Receivable — ${editModal.invoice_number || editModal.client_name}` : 'Edit Receivable'}>
+      {/* Edit Receivable Modal — v2 layout per mam's spec:
+          Site Name (unique picker) -> auto-fills CRM + suggests target.
+          Target & Received are explicit. CRM logs next planned date +
+          discussion. Payment installments shown beneath. */}
+      <Modal isOpen={!!editModal} onClose={() => { setEditModal(null); setEditForm({}); }} title={editModal ? `Edit Receivable #${editModal.id}` : 'Edit Receivable'} wide>
         {editModal && (
-          <form onSubmit={saveEdit} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="col-span-2"><label className="label">Client Name *</label><input className="input" required value={editForm.client_name || ''} onChange={e => setEditForm(f => ({ ...f, client_name: e.target.value }))} /></div>
-              <div className="col-span-2"><label className="label">Project Name</label><input className="input" value={editForm.project_name || ''} onChange={e => setEditForm(f => ({ ...f, project_name: e.target.value }))} /></div>
-              <div><label className="label">Invoice Number</label><input className="input" value={editForm.invoice_number || ''} onChange={e => setEditForm(f => ({ ...f, invoice_number: e.target.value }))} /></div>
-              <div><label className="label">Invoice Date</label><input className="input" type="date" value={editForm.invoice_date || ''} onChange={e => setEditForm(f => ({ ...f, invoice_date: e.target.value }))} /></div>
-              <div><label className="label">Invoice Amount * <span className="text-[10px] text-gray-400 font-normal">(Target)</span></label><input className="input" type="number" step="any" min="0" value={editForm.invoice_amount || 0} onChange={e => setEditForm(f => ({ ...f, invoice_amount: +e.target.value }))} required /></div>
-              <div><label className="label">Due Date</label><input className="input" type="date" value={editForm.due_date || ''} onChange={e => setEditForm(f => ({ ...f, due_date: e.target.value }))} /></div>
-              <div className="col-span-2">
-                <label className="label">Owner</label>
-                <select className="select" value={editForm.owner_id || ''} onChange={e => setEditForm(f => ({ ...f, owner_id: e.target.value }))}>
-                  <option value="">—</option>
-                  {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                </select>
+          <form onSubmit={saveEdit} className="space-y-4">
+            {/* SITE + CRM */}
+            <div className="card p-3 bg-gray-50/60">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Site Name <span className="text-red-500">*</span></label>
+                  <SearchableSelect
+                    options={sites.map(s => ({ ...s, label: s.name }))}
+                    value={editForm.site_name || null}
+                    valueKey="name" displayKey="label"
+                    placeholder="Pick site (unique from your sites/POs)"
+                    onChange={onPickSite}
+                  />
+                  <p className="text-[10px] text-gray-400 mt-0.5">Auto-fills CRM + suggests target from the latest PO of this site.</p>
+                </div>
+                <div>
+                  <label className="label">CRM Name <span className="text-[10px] text-gray-400 font-normal">(auto from PO)</span></label>
+                  <input className="input" value={editForm.crm_name || ''} onChange={e => setEditForm(f => ({ ...f, crm_name: e.target.value }))} placeholder="Auto-fills when site picked" />
+                </div>
               </div>
             </div>
-            <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800">
-              Already received: <span className="font-semibold">Rs {(editModal.received_amount || 0).toLocaleString()}</span>. Editing the invoice amount or due date will recompute outstanding + ageing automatically.
+
+            {/* MONEY */}
+            <div className="card p-3">
+              <h5 className="text-xs font-semibold text-gray-500 uppercase mb-2">Payment</h5>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="label">Target Payment <span className="text-red-500">*</span></label>
+                  <input className="input text-right tabular-nums" type="number" step="any" min="0" value={editForm.invoice_amount || 0} onChange={e => setEditForm(f => ({ ...f, invoice_amount: +e.target.value }))} required />
+                  <p className="text-[10px] text-gray-400 mt-0.5">From your PDF / latest PO.</p>
+                </div>
+                <div>
+                  <label className="label">Received So Far <span className="text-[10px] text-gray-400 font-normal">(auto-sum)</span></label>
+                  <input className="input text-right tabular-nums bg-gray-50" type="number" value={editModal.received_amount || 0} disabled />
+                  <p className="text-[10px] text-gray-400 mt-0.5">Use the ₹ button on the row to add an installment.</p>
+                </div>
+                <div>
+                  <label className="label">Outstanding</label>
+                  <div className="input text-right tabular-nums bg-red-50 border-red-200 text-red-700 font-bold">
+                    Rs {Math.max(0, (+editForm.invoice_amount || 0) - (+editModal.received_amount || 0)).toLocaleString('en-IN')}
+                  </div>
+                </div>
+                <div>
+                  <label className="label">Invoice Number</label>
+                  <input className="input" value={editForm.invoice_number || ''} onChange={e => setEditForm(f => ({ ...f, invoice_number: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="label">Invoice Date</label>
+                  <input className="input" type="date" value={editForm.invoice_date || ''} onChange={e => setEditForm(f => ({ ...f, invoice_date: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="label">Due Date</label>
+                  <input className="input" type="date" value={editForm.due_date || ''} onChange={e => setEditForm(f => ({ ...f, due_date: e.target.value }))} />
+                </div>
+              </div>
             </div>
+
+            {/* CRM FOLLOW-UP */}
+            <div className="card p-3 bg-amber-50/40 border-l-4 border-amber-400">
+              <h5 className="text-xs font-semibold text-amber-900 uppercase mb-2">CRM Follow-up</h5>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Next Planned Date <span className="text-[10px] text-gray-400 font-normal">(when payment expected)</span></label>
+                  <input className="input" type="date" value={editForm.next_planned_date || ''} onChange={e => setEditForm(f => ({ ...f, next_planned_date: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="label">Owner (Aanchal / collection person)</label>
+                  <select className="select" value={editForm.owner_id || ''} onChange={e => setEditForm(f => ({ ...f, owner_id: e.target.value }))}>
+                    <option value="">—</option>
+                    {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="label">Last Discussion with Client</label>
+                  <textarea className="input" rows="3" value={editForm.last_discussion || ''} onChange={e => setEditForm(f => ({ ...f, last_discussion: e.target.value }))} placeholder="What did the client say? When will they pay? Any escalation?" />
+                </div>
+              </div>
+            </div>
+
+            {/* PAYMENT INSTALLMENTS HISTORY */}
+            {editModal.payments && editModal.payments.length > 0 && (
+              <div className="card p-3">
+                <h5 className="text-xs font-semibold text-gray-500 uppercase mb-2">Payment History ({editModal.payments.length} installment{editModal.payments.length === 1 ? '' : 's'})</h5>
+                <table className="text-xs w-full">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left px-2 py-1.5 text-gray-500">Date</th>
+                      <th className="text-right px-2 py-1.5 text-gray-500">Amount</th>
+                      <th className="text-left px-2 py-1.5 text-gray-500">Mode</th>
+                      <th className="text-left px-2 py-1.5 text-gray-500">Ref / Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {editModal.payments.map((p, i) => (
+                      <tr key={i} className="border-t">
+                        <td className="px-2 py-1.5 text-gray-700">{p.collection_date}</td>
+                        <td className="px-2 py-1.5 text-right text-emerald-700 font-semibold tabular-nums">Rs {(+p.amount || 0).toLocaleString('en-IN')}</td>
+                        <td className="px-2 py-1.5 text-gray-500">{p.payment_mode || '—'}</td>
+                        <td className="px-2 py-1.5 text-gray-500">{p.transaction_ref || p.notes || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-[10px] text-gray-400 mt-1">Add new installment via the ₹ button on the row (closes this modal first).</p>
+              </div>
+            )}
+
             <div className="flex justify-end gap-2 pt-1">
               <button type="button" onClick={() => { setEditModal(null); setEditForm({}); }} className="btn btn-secondary">Cancel</button>
               <button type="submit" disabled={editSaving} className="btn btn-primary">{editSaving ? 'Saving…' : 'Save Changes'}</button>
