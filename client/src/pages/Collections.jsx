@@ -126,11 +126,14 @@ export default function Collections() {
   };
   const saveEdit = async (e) => {
     e.preventDefault();
-    if (!editForm.client_name || !editForm.client_name.trim()) return toast.error('Client name required');
-    if (!(+editForm.invoice_amount > 0)) return toast.error('Invoice amount must be greater than 0');
+    // v2: site_name (project from BB) is the primary identifier. Keep
+    // client_name in sync so existing reports / search keep working.
+    if (!editForm.site_name || !String(editForm.site_name).trim()) return toast.error('Site name required');
+    if (!(+editForm.invoice_amount > 0)) return toast.error('Target amount must be greater than 0');
     setEditSaving(true);
     try {
-      await api.put(`/collections/${editModal.id}`, editForm);
+      const payload = { ...editForm, client_name: editForm.site_name };
+      await api.put(`/collections/${editModal.id}`, payload);
       toast.success('Receivable updated');
       setEditModal(null); setEditForm({}); load();
     } catch (err) {
