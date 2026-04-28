@@ -99,7 +99,8 @@ router.get('/me', authMiddleware, (req, res) => {
 router.get('/users', authMiddleware, (req, res) => {
   const db = getDb();
   const users = db.prepare(`
-    SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.active, u.created_at,
+    SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.active,
+           COALESCE(u.track_location, 1) as track_location, u.created_at,
     GROUP_CONCAT(r.name) as role_names
     FROM users u
     LEFT JOIN user_roles ur ON u.id = ur.user_id
@@ -107,6 +108,15 @@ router.get('/users', authMiddleware, (req, res) => {
     GROUP BY u.id ORDER BY u.name
   `).all();
   res.json(users);
+});
+
+// Toggle tracking opt-out per user (admin-only). Used by the small switch
+// next to each user in User Management. PATCH so it doesn't disturb the
+// rest of the user record.
+router.patch('/users/:id/track-location', authMiddleware, adminOnly, (req, res) => {
+  const v = req.body?.track_location ? 1 : 0;
+  getDb().prepare('UPDATE users SET track_location=? WHERE id=?').run(v, req.params.id);
+  res.json({ message: v ? 'Tracking enabled for this user' : 'Tracking disabled for this user', track_location: v });
 });
 
 // Update user (admin only)

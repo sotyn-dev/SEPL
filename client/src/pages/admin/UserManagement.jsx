@@ -3,7 +3,7 @@ import api from '../../api';
 import Modal from '../../components/Modal';
 import StatusBadge from '../../components/StatusBadge';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff } from 'react-icons/fi';
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
@@ -64,6 +64,19 @@ export default function UserManagement() {
   const toggleActive = async (user) => {
     await api.put(`/auth/users/${user.id}`, { ...user, active: !user.active, role_ids: undefined });
     toast.success(user.active ? 'User deactivated' : 'User activated');
+  };
+
+  // Per-user opt-out from Admin → Location Tracking. Admins, office staff,
+  // anyone mam doesn't want to see on the live map gets toggled off here.
+  const toggleTrackLocation = async (user) => {
+    const next = user.track_location ? 0 : 1;
+    try {
+      await api.patch(`/auth/users/${user.id}/track-location`, { track_location: next });
+      toast.success(next ? `${user.name} now appears in Location Tracking` : `${user.name} hidden from Location Tracking`);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    }
     load();
   };
 
@@ -159,6 +172,11 @@ export default function UserManagement() {
                     </button>
                     <button onClick={() => toggleActive(u)} className={`p-1.5 rounded ${u.active ? 'hover:bg-red-50 text-red-600' : 'hover:bg-green-50 text-green-600'}`} title={u.active ? 'Deactivate' : 'Activate'}>
                       {u.active ? <FiUserX size={15} /> : <FiUserCheck size={15} />}
+                    </button>
+                    <button onClick={() => toggleTrackLocation(u)}
+                      className={`p-1.5 rounded ${u.track_location ? 'hover:bg-amber-50 text-amber-600' : 'hover:bg-emerald-50 text-emerald-600'}`}
+                      title={u.track_location ? 'Hide from Location Tracking' : 'Show in Location Tracking'}>
+                      {u.track_location ? <FiMapPin size={15} /> : <FiEyeOff size={15} />}
                     </button>
                   </div>
                 </td>

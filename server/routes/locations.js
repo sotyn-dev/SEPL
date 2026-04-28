@@ -40,6 +40,9 @@ router.get('/live', (req, res) => {
 
   // Pick the latest ping per user_id within the staleness window.
   // SQLite-friendly: group by user_id, get max(time), then re-join to get the row.
+  // Skip users opted out via users.track_location=0 (admins + named excludes
+  // configured from User Management). COALESCE so legacy users without the
+  // column still default to "tracked".
   const rows = db.prepare(
     `SELECT lt.user_id, u.name as user_name, u.department, u.role,
             lt.latitude, lt.longitude, lt.address, lt.site_name, lt.time
@@ -51,6 +54,7 @@ router.get('/live', (req, res) => {
           WHERE time >= ?
           GROUP BY user_id
        ) latest ON latest.user_id = lt.user_id AND latest.max_time = lt.time
+      WHERE COALESCE(u.track_location, 1) = 1
       ORDER BY (CASE WHEN lt.site_name IS NULL OR lt.site_name = 'Outside' THEN 1 ELSE 0 END),
                lt.time DESC`
   ).all(sinceIso);
@@ -140,13 +144,14 @@ router.get('/timeline', (req, res) => {
 
 // GET /api/admin/locations/users
 //   helper for the timeline picker — list of every user that has any
-//   location ping ever (so the dropdown only shows tracked users).
+//   location ping ever AND has not opted out (track_location != 0).
 router.get('/users', (req, res) => {
   const db = getDb();
   const rows = db.prepare(
     `SELECT DISTINCT u.id, u.name, u.department
        FROM location_tracking lt
        JOIN users u ON u.id = lt.user_id
+      WHERE COALESCE(u.track_location, 1) = 1
       ORDER BY u.name`
   ).all();
   res.json(rows);

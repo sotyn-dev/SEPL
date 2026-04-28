@@ -1322,6 +1322,10 @@ function initializeDatabase() {
     // there. Photo is never required; rendered as a thumbnail in the
     // movements list when set.
     ['stock_movements', 'photo_url TEXT'],
+    // Per-user opt-out from live location tracking. Admin / office-only
+    // staff get track_location=0 so they don't show in Admin → Location
+    // Tracking. Default 1 so existing field staff keep being tracked.
+    ['users', 'track_location INTEGER DEFAULT 1'],
     // Self-service password recovery — user sets a personal recovery code
     // (stored as bcrypt hash) which they can later use along with their
     // username to reset their password from the login page. No SMTP needed.
@@ -1614,6 +1618,21 @@ function initializeDatabase() {
     }
     console.log(`[seed] Created backup admin — username: backup-admin, password: ${backupPwd}`);
   }
+
+  // ============================================
+  // LOCATION TRACKING OPT-OUT seed (mam's request 2026-04-28)
+  // ============================================
+  // Admins and a hand-picked list of names get track_location=0 so they
+  // don't appear in Admin -> Location Tracking. Idempotent: only sets
+  // the flag where it's still default 1, so re-runs respect any manual
+  // toggle mam later changes via the UI.
+  try {
+    db.prepare(`UPDATE users SET track_location=0 WHERE role='admin' AND track_location=1`).run();
+    const excludedNames = ['Ankur Kaplesh'];
+    for (const n of excludedNames) {
+      db.prepare(`UPDATE users SET track_location=0 WHERE LOWER(name)=LOWER(?) AND track_location=1`).run(n);
+    }
+  } catch (e) { /* track_location column not yet there on first ever boot — silent */ }
 
   // ============================================
   // INVENTORY SEED — Office Store + ONE Site Store per UNIQUE site name
