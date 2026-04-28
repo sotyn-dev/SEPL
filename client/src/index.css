@@ -20,47 +20,54 @@ body {
 ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
-.sidebar-link {
-  @apply flex items-center gap-3 px-4 py-2.5 text-sm rounded-lg transition-all duration-200;
-}
-.sidebar-link:hover {
-  @apply bg-white/10 translate-x-1;
-}
-.sidebar-link.active {
-  @apply bg-white/20 font-semibold shadow-sm;
-}
+/* IMPORTANT — wrap in @layer components so Tailwind utility classes
+   like `pl-10` properly override the px-3.5 baked into .input. Without
+   this layer, .input and .pl-10 had equal specificity and source order
+   decided which won — causing icons to overlap placeholder text in
+   every <input className="input pl-10"> across the ERP. */
+@layer components {
+  .sidebar-link {
+    @apply flex items-center gap-3 px-4 py-2.5 text-sm rounded-lg transition-all duration-200;
+  }
+  .sidebar-link:hover {
+    @apply bg-white/10 translate-x-1;
+  }
+  .sidebar-link.active {
+    @apply bg-white/20 font-semibold shadow-sm;
+  }
 
-.card {
-  @apply bg-white rounded-2xl shadow-sm border border-gray-100/80 p-6 transition-shadow hover:shadow-md;
-}
+  .card {
+    @apply bg-white rounded-2xl shadow-sm border border-gray-100/80 p-6 transition-shadow hover:shadow-md;
+  }
 
-.btn {
-  @apply px-4 py-2 rounded-xl font-semibold text-sm transition-all duration-200 disabled:opacity-50 cursor-pointer shadow-sm;
-}
-.btn:active { @apply scale-95; }
-.btn-primary {
-  @apply bg-gradient-to-r from-red-600 to-red-700 text-white hover:from-red-700 hover:to-red-800 shadow-red-200;
-}
-.btn-success {
-  @apply bg-gradient-to-r from-emerald-500 to-emerald-600 text-white hover:from-emerald-600 hover:to-emerald-700 shadow-emerald-200;
-}
-.btn-danger {
-  @apply bg-gradient-to-r from-red-500 to-red-600 text-white hover:from-red-600 hover:to-red-700 shadow-red-200;
-}
-.btn-secondary {
-  @apply bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 hover:border-gray-300 shadow-none;
-}
+  .btn {
+    @apply px-4 py-2 rounded-xl font-semibold text-sm transition-all duration-200 disabled:opacity-50 cursor-pointer shadow-sm;
+  }
+  .btn:active { @apply scale-95; }
+  .btn-primary {
+    @apply bg-gradient-to-r from-red-600 to-red-700 text-white hover:from-red-700 hover:to-red-800 shadow-red-200;
+  }
+  .btn-success {
+    @apply bg-gradient-to-r from-emerald-500 to-emerald-600 text-white hover:from-emerald-600 hover:to-emerald-700 shadow-emerald-200;
+  }
+  .btn-danger {
+    @apply bg-gradient-to-r from-red-500 to-red-600 text-white hover:from-red-600 hover:to-red-700 shadow-red-200;
+  }
+  .btn-secondary {
+    @apply bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 hover:border-gray-300 shadow-none;
+  }
 
-.input {
-  @apply w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 transition-all bg-white;
-}
+  .input {
+    @apply w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 transition-all bg-white;
+  }
 
-.select {
-  @apply w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 transition-all;
-}
+  .select {
+    @apply w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 transition-all;
+  }
 
-.label {
-  @apply block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5;
+  .label {
+    @apply block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5;
+  }
 }
 
 table {
