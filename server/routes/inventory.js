@@ -329,4 +329,80 @@ router.put('/reorder/:warehouse_id/:item_master_id', requirePermission('inventor
   res.json({ message: 'Reorder level set' });
 });
 
+// ---------- EDIT STOCK ROW (quantity / avg_rate adjustment) ----------
+// Edits the on-hand qty or avg rate for one (warehouse × item).
+// Records an ADJUST movement (IN if qty went up, OUT if down) so the
+// audit trail stays consistent. If only rate changed, updates the
+// avg_rate on stock_balance and writes a zero-qty IN ADJUST entry as
+// a paper trail (rate=newRate, qty=0 is illegal in applyMovement,
+// so we skip the movement when qty is unchanged).
+router.patch('/stock/:id', requirePermission('inventory', 'edit'), (req, res) => {
+  const db = getDb();
+  const id = +req.params.id;
+  const newQty = req.body?.quantity != null ? +req.body.quantity : null;
+  const newRate = req.body?.avg_rate != null ? +req.body.avg_rate : null;
+  const notes = req.body?.notes || 'Manual stock adjustment';
+  if (newQty == null && newRate == null) return res.status(400).json({ error: 'quantity or avg_rate required' });
+  if (newQty != null && newQty < 0) return res.status(400).json({ error: 'Quantity cannot be negative' });
+  if (newRate != null && newRate < 0) return res.status(400).json({ error: 'Rate cannot be negative' });
+
+  const sb = db.prepare('SELECT * FROM stock_balance WHERE id=?').get(id);
+  if (!sb) return res.status(404).json({ error: 'Stock row not found' });
+
+  try {
+    db.transaction(() => {
+      const finalQty = newQty != null ? newQty : +sb.quantity;
+      const finalRate = newRate != null ? newRate : +sb.avg_rate;
+      const delta = finalQty - (+sb.quantity);
+
+      db.prepare('UPDATE stock_balance SET quantity=?, avg_rate=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+        .run(finalQty, finalRate, id);
+
+      // Record a movement only when qty actually changed (CHECK constraint
+      // allows IN/OUT only — zero-qty rows would violate quantity > 0 invariant
+      // we want to maintain in the journal).
+      if (Math.abs(delta) > 1e-9) {
+        const moveType = delta > 0 ? 'IN' : 'OUT';
+        const moveQty = Math.abs(delta);
+        db.prepare(`INSERT INTO stock_movements
+          (warehouse_id, item_master_id, type, quantity, rate, total_value, reference_type, notes, created_by)
+          VALUES (?,?,?,?,?,?,?,?,?)`)
+          .run(sb.warehouse_id, sb.item_master_id, moveType, moveQty, finalRate, moveQty * finalRate,
+               'ADJUST', notes, req.user.id);
+      }
+    })();
+    res.json({ message: 'Stock updated' });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ---------- DELETE STOCK ROW ----------
+// Zero out a stock_balance row and record a final OUT ADJUST movement
+// for the audit trail. The balance row is then physically removed.
+router.delete('/stock/:id', requirePermission('inventory', 'delete'), (req, res) => {
+  const db = getDb();
+  const id = +req.params.id;
+  const sb = db.prepare('SELECT * FROM stock_balance WHERE id=?').get(id);
+  if (!sb) return res.status(404).json({ error: 'Stock row not found' });
+
+  try {
+    db.transaction(() => {
+      // Audit-trail OUT for the full remaining qty (skip if already zero)
+      if (+sb.quantity > 0) {
+        db.prepare(`INSERT INTO stock_movements
+          (warehouse_id, item_master_id, type, quantity, rate, total_value, reference_type, notes, created_by)
+          VALUES (?,?,?,?,?,?,?,?,?)`)
+          .run(sb.warehouse_id, sb.item_master_id, 'OUT', +sb.quantity, +sb.avg_rate,
+               (+sb.quantity) * (+sb.avg_rate), 'ADJUST',
+               req.body?.notes || 'Stock row deleted by user', req.user.id);
+      }
+      db.prepare('DELETE FROM stock_balance WHERE id=?').run(id);
+    })();
+    res.json({ message: 'Stock row deleted' });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 module.exports = router;

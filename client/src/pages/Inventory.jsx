@@ -20,7 +20,7 @@ const fmtNum = (n) => (n == null ? '0' : Number(n).toLocaleString('en-IN', { max
 const fmtMoney = (n) => '₹ ' + fmtNum(n);
 
 export default function Inventory() {
-  const { canCreate, canEdit, isAdmin } = useAuth();
+  const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
   const [tab, setTab] = useState('stock');
   const [warehouses, setWarehouses] = useState([]);
   const [sites, setSites] = useState([]);
@@ -147,7 +147,7 @@ export default function Inventory() {
         ))}
       </div>
 
-      {tab === 'stock' && <StockTab stock={stock} warehouses={warehouses} filter={stockFilter} setFilter={setStockFilter} reload={loadStock} canEdit={canEdit('inventory') || isAdmin()} />}
+      {tab === 'stock' && <StockTab stock={stock} warehouses={warehouses} filter={stockFilter} setFilter={setStockFilter} reload={() => { loadStock(); loadSummary(); }} canEdit={canEdit('inventory') || isAdmin()} canDelete={canDelete('inventory') || isAdmin()} />}
       {tab === 'opening' && <OpeningStockTab warehouses={warehouses} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'receive' && <ReceiveTab warehouses={warehouses} items={items} reload={() => { loadStock(); loadSummary(); }} />}
       {tab === 'issue' && <IssueTab warehouses={warehouses} sites={sites} items={items} reload={() => { loadStock(); loadSummary(); }} />}
@@ -159,13 +159,48 @@ export default function Inventory() {
 }
 
 // ---------- STOCK TAB ----------
-function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit }) {
+function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDelete }) {
   // Inline edit: click a "Reorder" cell to set the threshold per (item × warehouse).
   // Saves on blur / Enter; Esc cancels. Optimistic UI with rollback on error.
   const [editing, setEditing] = useState(null); // { warehouse_id, item_master_id, value }
   // Same inline-edit pattern but for the Item Master current_price — lets
   // mam fix missing master prices straight from the Stock view.
   const [pricing, setPricing] = useState(null); // { item_master_id, value }
+  // Modal state for full-row qty/rate edit (separate from inline reorder edit).
+  const [editRow, setEditRow] = useState(null); // { id, item_name, quantity, avg_rate, notes }
+  const [savingRow, setSavingRow] = useState(false);
+
+  const saveEditRow = async () => {
+    if (!editRow) return;
+    const q = +editRow.quantity;
+    const r = +editRow.avg_rate;
+    if (!(q >= 0)) return toast.error('Quantity must be 0 or more');
+    if (!(r >= 0)) return toast.error('Rate must be 0 or more');
+    setSavingRow(true);
+    try {
+      await api.patch(`/inventory/stock/${editRow.id}`, {
+        quantity: q, avg_rate: r, notes: editRow.notes || null,
+      });
+      toast.success('Stock updated');
+      setEditRow(null);
+      reload();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update');
+    } finally {
+      setSavingRow(false);
+    }
+  };
+
+  const deleteRow = async (row) => {
+    if (!window.confirm(`Delete ${row.item_name} from ${row.warehouse_name}?\nQty ${row.quantity} ${row.uom || ''} will be removed and an audit-trail OUT entry recorded.`)) return;
+    try {
+      await api.delete(`/inventory/stock/${row.id}`);
+      toast.success('Stock row deleted');
+      reload();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete');
+    }
+  };
   const savePrice = async () => {
     if (!pricing) return;
     const val = +pricing.value || 0;
@@ -252,6 +287,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit }) {
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Avg Rate</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Value</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Reorder</th>
+                  {(canEdit || canDelete) && <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -321,6 +357,30 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit }) {
                           </button>
                         )}
                       </td>
+                      {(canEdit || canDelete) && (
+                        <td className="px-3 py-2 text-right whitespace-nowrap">
+                          {canEdit && (
+                            <button
+                              type="button"
+                              onClick={() => setEditRow({ id: r.id, item_name: r.item_name, warehouse_name: r.warehouse_name, uom: r.uom, quantity: r.quantity, avg_rate: r.avg_rate || r.effective_rate || 0, notes: '' })}
+                              className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"
+                              title="Edit qty / rate"
+                            >
+                              <FiEdit2 size={14} />
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button
+                              type="button"
+                              onClick={() => deleteRow(r)}
+                              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded ml-1"
+                              title="Delete stock row"
+                            >
+                              <FiTrash2 size={14} />
+                            </button>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -329,6 +389,50 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit }) {
           </div>
         </div>
       ))}
+
+      {/* Edit qty / rate modal — records an ADJUST IN or OUT movement
+          for the qty delta so the journal stays consistent. */}
+      {editRow && (
+        <Modal isOpen={true} onClose={() => setEditRow(null)} title="Edit Stock Row" maxWidth="max-w-md">
+          <div className="space-y-3 text-sm">
+            <div className="bg-gray-50 rounded p-3 text-xs text-gray-600">
+              <div><span className="font-semibold">Item:</span> {editRow.item_name}</div>
+              <div><span className="font-semibold">Warehouse:</span> {editRow.warehouse_name}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Quantity ({editRow.uom || 'PCS'})</label>
+                <input type="number" step="any" min="0" className="input"
+                  value={editRow.quantity}
+                  onChange={e => setEditRow(r => ({ ...r, quantity: e.target.value }))}
+                  autoFocus />
+              </div>
+              <div>
+                <label className="label">Avg Rate (₹)</label>
+                <input type="number" step="any" min="0" className="input"
+                  value={editRow.avg_rate}
+                  onChange={e => setEditRow(r => ({ ...r, avg_rate: e.target.value }))} />
+              </div>
+            </div>
+            <div>
+              <label className="label">Reason / Notes (optional)</label>
+              <input type="text" className="input"
+                placeholder="e.g. Physical count adjustment, damage, etc."
+                value={editRow.notes}
+                onChange={e => setEditRow(r => ({ ...r, notes: e.target.value }))} />
+            </div>
+            <div className="text-[11px] text-amber-700 bg-amber-50 border-l-2 border-amber-400 px-2 py-1.5 rounded">
+              An ADJUST {(+editRow.quantity > +stock.find(s => s.id === editRow.id)?.quantity) ? 'IN' : 'OUT'} movement will be recorded for the qty difference, keeping the audit trail clean.
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={() => setEditRow(null)} className="btn btn-secondary text-sm">Cancel</button>
+              <button type="button" disabled={savingRow} onClick={saveEditRow} className="btn btn-primary text-sm flex items-center gap-2">
+                <FiCheck size={14} /> {savingRow ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }
