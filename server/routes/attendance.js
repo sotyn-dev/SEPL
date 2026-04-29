@@ -236,7 +236,7 @@ router.post('/punch-out', (req, res) => {
   const punchIn = new Date(record.punch_in_time);
   const punchOut = new Date(now);
   const totalHours = Math.round((punchOut - punchIn) / (1000 * 60 * 60) * 100) / 100;
-  const status = totalHours < 4 ? 'half_day' : (totalHours < 8 ? 'short_day' : record.status);
+  const status = totalHours < 4 ? 'half_day' : record.status;
 
   db.prepare(`UPDATE attendance SET punch_out_time=?, punch_out_lat=?, punch_out_lng=?, punch_out_address=?, punch_out_photo=?, total_hours=?, status=? WHERE id=?`)
     .run(now, latitude, longitude, address, photo, totalHours, status, record.id);
