@@ -276,7 +276,17 @@ export default function Collections() {
               {receivables.map(r => (
                 <tr key={r.id}>
                   <td className="font-medium">
-                    {r.site_name || r.client_name}
+                    {/* Show business_book.project_name first (true site name),
+                        fall back to receivable.site_name, then client_name.
+                        bb_project_name is auto-resolved on the backend by
+                        matching r.client_name / r.site_name against BB. */}
+                    {r.bb_project_name || r.site_name || r.client_name}
+                    {/* Show client_name as a small subtitle when we resolved
+                        a different bb_project_name — keeps the linkage visible
+                        without mam losing the original client label. */}
+                    {r.bb_project_name && r.client_name && r.bb_project_name !== r.client_name && (
+                      <div className="text-[10px] text-gray-400 mt-0.5">{r.client_name}</div>
+                    )}
                     {r.invoice_number && <div className="text-[10px] text-gray-400 font-mono">{r.invoice_number}</div>}
                     {r.last_discussion && <div className="text-[10px] text-amber-700 italic mt-0.5 max-w-[200px] truncate" title={r.last_discussion}>💬 {r.last_discussion}</div>}
                   </td>

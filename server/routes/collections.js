@@ -34,9 +34,23 @@ function getStatusColor(outstandingAmount, ageingDays) {
 //                       so the table can show "today rec 40, +15 in 10 days"
 router.get('/', (req, res) => {
   const { status, ageing_bucket, client, search } = req.query;
+  // bb_project_name: best-effort lookup of the matching business_book.project_name
+  // for this receivable, by matching r.client_name OR r.site_name against either
+  // business_book.client_name or business_book.project_name (case-insensitive +
+  // trimmed). Lets the UI show the actual project / site label even on legacy
+  // receivables that only carry client_name.
   let sql = `
     SELECT r.*,
            u.name as owner_name,
+           (SELECT bb.project_name FROM business_book bb
+              WHERE bb.project_name IS NOT NULL AND TRIM(bb.project_name) <> ''
+                AND (
+                     LOWER(TRIM(bb.client_name))   = LOWER(TRIM(COALESCE(r.client_name,'')))
+                  OR LOWER(TRIM(bb.project_name))  = LOWER(TRIM(COALESCE(r.client_name,'')))
+                  OR LOWER(TRIM(bb.project_name))  = LOWER(TRIM(COALESCE(r.site_name,'')))
+                )
+              ORDER BY bb.id LIMIT 1
+           ) as bb_project_name,
            (SELECT COUNT(*) FROM pms_tasks p
               WHERE p.project_id = r.site_id
                  OR (r.site_name IS NOT NULL AND r.site_name <> ''
