@@ -226,33 +226,27 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
     }
   };
 
-  // Flat list — mam's spec is one row per (site, item) with Site Name as
-  // its own column. The old per-warehouse cards hid the site name in a
-  // header above the table; bringing it inline makes filtering + scanning
-  // a 50-site deployment much easier.
-  const flatStock = useMemo(() => stock.slice(), [stock]);
-
-  // Total value across whatever's currently filtered. Used in the
-  // summary banner — especially useful when mam picks a single site
-  // and wants the bottom-line value of THAT site's stock.
-  const totalValue = useMemo(() => {
-    return flatStock.reduce((sum, r) => {
+  // Group rows by warehouse — each site becomes its own card with header
+  // (site name + that site's total value + item count) and a table of
+  // its items. When mam filters by a site, only that one card shows up.
+  // Each card carries an aggregated total_value computed inline so we
+  // don't need a backend round-trip.
+  const grouped = useMemo(() => {
+    const map = new Map();
+    for (const r of stock) {
+      const k = r.warehouse_id;
+      if (!map.has(k)) map.set(k, { warehouse_id: k, warehouse_name: r.warehouse_name, type: r.warehouse_type, rows: [], total_value: 0 });
       const eff = (+r.avg_rate > 0) ? +r.avg_rate : (+r.master_price || 0);
-      return sum + (eff * (+r.quantity || 0));
-    }, 0);
-  }, [flatStock]);
-
-  // When user has filtered to one warehouse, show its name in the summary
-  // banner; otherwise list the distinct sites count.
-  const filterSummary = useMemo(() => {
-    if (flatStock.length === 0) return null;
-    const sites = new Set(flatStock.map(r => r.warehouse_name));
-    if (filter.warehouse_id) {
-      const wh = warehouses.find(w => w.id === +filter.warehouse_id);
-      return { label: wh?.name || 'Selected site', single: true };
+      const g = map.get(k);
+      g.rows.push(r);
+      g.total_value += eff * (+r.quantity || 0);
     }
-    return { label: `${sites.size} site${sites.size === 1 ? '' : 's'}`, single: false };
-  }, [flatStock, filter.warehouse_id, warehouses]);
+    return [...map.values()];
+  }, [stock]);
+
+  // Grand total across whatever's currently filtered — used for the banner
+  // when mam is browsing all sites at once.
+  const grandTotal = useMemo(() => grouped.reduce((s, g) => s + g.total_value, 0), [grouped]);
 
   return (
     <>
@@ -277,42 +271,48 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
         </label>
       </div>
 
-      {flatStock.length === 0 && (
+      {grouped.length === 0 && (
         <div className="card p-6 text-center text-gray-400 text-sm">
           No stock yet. Use the <span className="font-semibold">Receive</span> tab to record an opening balance or first delivery.
         </div>
       )}
 
-      {/* SUMMARY BANNER — total value of currently-filtered stock.
-          When mam picks a single site, this becomes "Stock value at <site>".
-          Otherwise it shows total across all sites in view. */}
-      {filterSummary && (
+      {/* GRAND TOTAL banner — only shown in "All warehouses" view as a quick
+          glance at total inventory worth across every site. When mam filters
+          to one site, the per-site card header below already shows that
+          single site's total, so the banner becomes redundant and is hidden. */}
+      {grouped.length > 1 && (
         <div className="card p-3 bg-gradient-to-r from-blue-50 to-blue-100 border-l-4 border-blue-500 flex flex-wrap items-center justify-between gap-2">
           <div className="text-sm text-gray-700">
-            {filterSummary.single ? (
-              <>Stock value at <span className="font-semibold text-blue-800">{filterSummary.label}</span></>
-            ) : (
-              <>Total stock value across <span className="font-semibold text-blue-800">{filterSummary.label}</span></>
-            )}
-            <span className="text-gray-400 mx-1">·</span>
-            <span className="text-gray-500">{flatStock.length} row{flatStock.length === 1 ? '' : 's'}</span>
+            Total stock value across <span className="font-semibold text-blue-800">{grouped.length} site{grouped.length === 1 ? '' : 's'}</span>
           </div>
-          <div className="text-xl font-bold text-blue-900 tabular-nums">{fmtMoney(totalValue)}</div>
+          <div className="text-xl font-bold text-blue-900 tabular-nums">{fmtMoney(grandTotal)}</div>
         </div>
       )}
 
-      {/* FLAT TABLE — mam's column order: Code · Site · Item · UOM · Qty ·
-          Condition · Rate · Value · Reorder · Actions. Site name lives
-          inline (not as a section header) so filtering + scanning is
-          easier across many sites. */}
-      {flatStock.length > 0 && (
-        <div className="card p-0 overflow-hidden">
+      {/* PER-SITE CARDS — each card = one site's stock with its own total in
+          the header. Column order inside the table matches mam's spec:
+          Code · Item · UOM · Qty · Condition · Rate · Value · Reorder · Actions
+          (Site Name lives in the card header, no need to repeat per row.) */}
+      {grouped.map(g => (
+        <div key={g.warehouse_id} className="card p-0 overflow-hidden">
+          <div className="px-4 py-3 border-b bg-gradient-to-r from-blue-50 to-blue-100 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="font-semibold text-gray-800 flex items-center gap-2">
+              {g.type === 'office' ? <FiHome size={14} className="text-red-600" /> : <FiMapPin size={14} className="text-red-600" />}
+              {g.warehouse_name}
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-white border border-gray-200 text-gray-600">{g.type === 'office' ? 'Office' : 'Site'}</span>
+              <span className="text-[11px] text-gray-500 font-normal">· {g.rows.length} item{g.rows.length === 1 ? '' : 's'}</span>
+            </h4>
+            <div className="text-right">
+              <div className="text-[10px] text-gray-500 uppercase tracking-wide">Stock value</div>
+              <div className="text-lg font-bold text-blue-900 tabular-nums">{fmtMoney(g.total_value)}</div>
+            </div>
+          </div>
           <div className="overflow-x-auto">
             <table className="text-sm w-full">
               <thead className="bg-gray-50/60">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Code</th>
-                  <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Site Name</th>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Item</th>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">UOM</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Quantity</th>
@@ -324,7 +324,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                 </tr>
               </thead>
               <tbody>
-                {flatStock.map(r => {
+                {g.rows.map(r => {
                   const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
                   const cond = r.latest_condition || '';
                   const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -339,12 +339,6 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                   return (
                     <tr key={r.id} className={`border-t ${low ? 'bg-amber-50/40' : 'hover:bg-gray-50'}`}>
                       <td className="px-3 py-2 text-gray-500 font-mono text-[11px]">{r.item_code || '—'}</td>
-                      <td className="px-3 py-2 text-gray-700 whitespace-nowrap">
-                        <div className="flex items-center gap-1.5">
-                          {r.warehouse_type === 'office' ? <FiHome size={11} className="text-red-500 flex-shrink-0" /> : <FiMapPin size={11} className="text-red-500 flex-shrink-0" />}
-                          <span className="text-[12px]">{r.warehouse_name}</span>
-                        </div>
-                      </td>
                       <td className="px-3 py-2 text-gray-800">{r.item_name}{r.specification && <span className="block text-[10px] text-gray-400">{r.specification}</span>}</td>
                       <td className="px-3 py-2 text-gray-600">{r.uom || '—'}</td>
                       <td className={`px-3 py-2 text-right font-bold tabular-nums ${low ? 'text-amber-700' : 'text-gray-800'}`}>
@@ -439,7 +433,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
             </table>
           </div>
         </div>
-      )}
+      ))}
 
       {/* Edit qty / rate modal — records an ADJUST IN or OUT movement
           for the qty delta so the journal stays consistent. */}
