@@ -378,6 +378,63 @@ export default function Procurement() {
 
   // --- Vendor Rates (Step 1 + 2) helpers ---
   // Patch a single field on an item's rate row and save to server. Keeps the
+  // Merge indent items by (indent_id, item_master_id) so the same sub-item
+  // appearing under multiple BOQs in one indent shows as a SINGLE row with
+  // combined qty. mam's example: CHECK NUT appears under both MS PIPE and
+  // FIRE BUCKET BOQs in IND-0007 — purchase team should fill rate ONCE,
+  // not twice. Free-text manual entries (no item_master_id) keep their own
+  // row since we can't safely merge them.
+  const mergedRates = useMemo(() => {
+    const groups = new Map();
+    for (const r of itemRates) {
+      const groupKey = r.item_master_id
+        ? `${r.indent_id}__M${r.item_master_id}`
+        : `__solo_${r.indent_item_id}`;
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, {
+          ...r,
+          indent_item_ids: [r.indent_item_id],
+          rate_ids: r.rate_id ? [r.rate_id] : [],
+          qty: +r.qty || 0,
+        });
+      } else {
+        const m = groups.get(groupKey);
+        m.indent_item_ids.push(r.indent_item_id);
+        if (r.rate_id) m.rate_ids.push(r.rate_id);
+        m.qty += +r.qty || 0;
+        // Status: 'finalized' wins, else 'quoted', else 'pending'
+        if (r.rate_status === 'finalized') m.rate_status = 'finalized';
+        else if (r.rate_status === 'quoted' && m.rate_status !== 'finalized') m.rate_status = 'quoted';
+        // Vendor data: keep the first non-empty value across the merged rows
+        for (const n of [1, 2, 3]) {
+          if (!m[`vendor${n}_name`] && r[`vendor${n}_name`]) {
+            m[`vendor${n}_name`] = r[`vendor${n}_name`];
+            m[`vendor${n}_rate`] = r[`vendor${n}_rate`];
+            m[`vendor${n}_terms`] = r[`vendor${n}_terms`];
+            m[`vendor${n}_credit_days`] = r[`vendor${n}_credit_days`];
+          }
+        }
+        if (r.final_rate) {
+          m.final_rate = r.final_rate;
+          m.final_vendor_name = r.final_vendor_name;
+          m.final_terms = r.final_terms;
+          m.final_credit_days = r.final_credit_days;
+        }
+      }
+    }
+    return [...groups.values()];
+  }, [itemRates]);
+
+  // Apply a vendor / rate / terms patch to ALL underlying indent_items in
+  // the merged group so the DB stays consistent across the rows that share
+  // the same item_master in the same indent. Awaiting each call keeps the
+  // UI's optimistic update logic intact.
+  const updateMergedRate = async (mergedRow, patch) => {
+    for (const iid of mergedRow.indent_item_ids) {
+      await updateItemRate(iid, patch);
+    }
+  };
+
   // UI snappy by updating local state optimistically.
   const updateItemRate = async (indentItemId, patch) => {
     // Optimistically merge the patch, then derive rate_status locally the same
@@ -418,9 +475,16 @@ export default function Procurement() {
   };
   const submitFinalize = async (e) => {
     e.preventDefault();
-    if (!finalForm.rate_id) return toast.error('Enter a vendor rate first');
+    // A merged row may carry multiple rate_ids (one per underlying indent_item
+    // sharing the same item_master in the same indent). Finalize ALL of them
+    // so the merged display stays consistent — every backing row picks the
+    // same vendor + rate + terms.
+    const rateIds = finalForm.row?.rate_ids?.length ? finalForm.row.rate_ids : [finalForm.rate_id].filter(Boolean);
+    if (!rateIds.length) return toast.error('Enter a vendor rate first');
     try {
-      await api.post(`/procurement/item-rates/${finalForm.rate_id}/finalize`, finalForm);
+      for (const rid of rateIds) {
+        await api.post(`/procurement/item-rates/${rid}/finalize`, finalForm);
+      }
       toast.success('Rate finalized');
       setFinalModal(null); setFinalForm({});
       load();
@@ -546,19 +610,22 @@ export default function Procurement() {
                 <button key={f} onClick={() => setRatesFilter(f)}
                   className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${ratesFilter === f ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
                   {f === 'all' ? 'All' : f[0].toUpperCase() + f.slice(1)}
-                  <span className="ml-1 opacity-80">({itemRates.filter(r => f === 'all' ? true : (r.rate_status || 'pending') === f).length})</span>
+                  <span className="ml-1 opacity-80">({mergedRates.filter(r => f === 'all' ? true : (r.rate_status || 'pending') === f).length})</span>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Desktop table */}
+          {/* Desktop table — BOQ Item column intentionally removed:
+              mam's spec is purchase team enters a vendor rate ONCE per
+              (indent · sub-item), regardless of which BOQ line that
+              sub-item came from. The same CHECK NUT used in two BOQs
+              of one indent is now a SINGLE merged row. */}
           <div className="card p-0 overflow-x-auto hidden lg:block">
-            <table className="text-xs" style={{ minWidth: '1600px' }}>
+            <table className="text-xs" style={{ minWidth: '1400px' }}>
               <thead>
                 <tr className="bg-gray-50">
                   <th className="px-2 py-2 text-left" rowSpan="2">Indent</th>
-                  <th className="px-2 py-2 text-left" rowSpan="2">BOQ Item<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(from Client PO)</span></th>
                   <th className="px-2 py-2 text-left" rowSpan="2">Sub-Item<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(Item Master)</span></th>
                   <th className="px-2 py-2" rowSpan="2">Qty</th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 1</th>
@@ -574,26 +641,21 @@ export default function Procurement() {
                 </tr>
               </thead>
               <tbody>
-                {itemRates.filter(r => ratesFilter === 'all' ? true : (r.rate_status || 'pending') === ratesFilter).map(r => {
+                {mergedRates.filter(r => ratesFilter === 'all' ? true : (r.rate_status || 'pending') === ratesFilter).map(r => {
                   const stat = r.rate_status || 'pending';
                   const statColor = stat === 'finalized' ? 'bg-emerald-100 text-emerald-700' : stat === 'quoted' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700';
                   return (
-                    <tr key={r.indent_item_id} className="border-b hover:bg-red-50/30">
+                    <tr key={r.indent_item_ids.join('-')} className="border-b hover:bg-red-50/30">
                       <td className="px-2 py-2 whitespace-nowrap"><div className="font-medium text-red-700">{r.indent_number}</div><div className="text-[10px] text-gray-400">{r.site_name}</div></td>
-                      {/* TWO separate columns matching the indent form layout:
-                          BOQ Item (from Client PO) | Sub-Item (Item Master) */}
-                      <td className="px-2 py-2 align-top" style={{ width: '240px', minWidth: '240px', maxWidth: '240px' }}>
-                        {r.boq_description
-                          ? <div className="text-[11px] text-gray-700 line-clamp-3" title={r.boq_description}>{r.boq_description}</div>
-                          : <span className="text-gray-300">—</span>}
-                        {r.boq_qty && <div className="text-[10px] text-gray-400 mt-0.5">BOQ qty: {r.boq_qty}</div>}
-                      </td>
-                      <td className="px-2 py-2 align-top" style={{ width: '220px', minWidth: '220px', maxWidth: '220px' }}>
+                      <td className="px-2 py-2 align-top" style={{ width: '260px', minWidth: '260px', maxWidth: '260px' }}>
                         {r.item_code && <div className="text-[10px] font-mono text-gray-500">[{r.item_code}]</div>}
                         <div className="text-[11px] leading-snug font-medium">
                           {[r.master_name || r.description, r.specification, r.size].filter(Boolean).join(' / ') || <span className="text-gray-300">—</span>}
                         </div>
                         {r.make && <div className="text-[10px] text-gray-400 mt-0.5">Make: {r.make}</div>}
+                        {r.indent_item_ids.length > 1 && (
+                          <div className="text-[9px] text-gray-400 mt-0.5 italic">merged from {r.indent_item_ids.length} BOQ rows</div>
+                        )}
                       </td>
                       <td className="px-2 py-2 text-center font-semibold whitespace-nowrap">{r.qty} {r.unit}</td>
                       {[1,2,3].map(n => (
@@ -609,7 +671,7 @@ export default function Procurement() {
                               valueKey="name" displayKey="name"
                               placeholder="Pick vendor"
                               buttonClassName="text-[11px] px-2 py-1 w-full border border-gray-200 rounded-md bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-red-400 text-left flex items-center justify-between gap-1 cursor-pointer"
-                              onChange={(v) => updateItemRate(r.indent_item_id, { [`vendor${n}_name`]: v?.name || '' })}
+                              onChange={(v) => updateMergedRate(r, { [`vendor${n}_name`]: v?.name || '' })}
                             />
                           </td>
                           <td className="px-1 py-1" style={{ minWidth: '120px' }}>
@@ -619,7 +681,7 @@ export default function Procurement() {
                               type="number"
                               placeholder="0"
                               value={r[`vendor${n}_rate`] || ''}
-                              onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_rate`]: +e.target.value })}
+                              onChange={e => updateMergedRate(r, { [`vendor${n}_rate`]: +e.target.value })}
                             />
                           </td>
                           <td className="px-1 py-1" style={{ minWidth: '180px' }}>
@@ -628,7 +690,7 @@ export default function Procurement() {
                                 className="select text-[11px] px-2 py-1"
                                 style={{ width: '90px', minWidth: '90px' }}
                                 value={r[`vendor${n}_terms`] || ''}
-                                onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_terms`]: e.target.value })}
+                                onChange={e => updateMergedRate(r, { [`vendor${n}_terms`]: e.target.value })}
                               >
                                 <option value="">—</option>
                                 <option value="Advance">Advance</option>
@@ -645,7 +707,7 @@ export default function Procurement() {
                                   style={{ width: '70px' }}
                                   placeholder="days"
                                   value={r[`vendor${n}_credit_days`] || ''}
-                                  onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_credit_days`]: +e.target.value || 0 })}
+                                  onChange={e => updateMergedRate(r, { [`vendor${n}_credit_days`]: +e.target.value || 0 })}
                                   title="Credit days"
                                 />
                               )}
@@ -662,23 +724,28 @@ export default function Procurement() {
                     </tr>
                   );
                 })}
-                {itemRates.length === 0 && <tr><td colSpan="15" className="text-center py-8 text-gray-400">No indent items yet — raise an indent first.</td></tr>}
+                {mergedRates.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No indent items yet — raise an indent first.</td></tr>}
               </tbody>
             </table>
           </div>
 
-          {/* Mobile card layout */}
+          {/* Mobile card layout — uses the same merged-by-(indent · sub-item)
+              data so the same item across multiple BOQs collapses to ONE
+              card with the combined qty. */}
           <div className="lg:hidden space-y-2">
-            {itemRates.filter(r => ratesFilter === 'all' ? true : (r.rate_status || 'pending') === ratesFilter).map(r => {
+            {mergedRates.filter(r => ratesFilter === 'all' ? true : (r.rate_status || 'pending') === ratesFilter).map(r => {
               const stat = r.rate_status || 'pending';
               return (
-                <div key={r.indent_item_id} className="card p-3 space-y-2">
+                <div key={r.indent_item_ids.join('-')} className="card p-3 space-y-2">
                   <div className="flex justify-between items-start">
                     <div>
                       <div className="font-medium text-red-700 text-xs">{r.indent_number}</div>
                       {r.item_code && <div className="text-[10px] font-mono text-gray-500">[{r.item_code}]</div>}
                       <div className="text-sm font-medium line-clamp-2">{[r.master_name || r.description, r.specification, r.size].filter(Boolean).join(' / ')}</div>
                       <div className="text-[10px] text-gray-400">{r.site_name} · {r.qty} {r.unit}{r.make ? ` · ${r.make}` : ''}</div>
+                      {r.indent_item_ids.length > 1 && (
+                        <div className="text-[9px] text-gray-400 italic mt-0.5">merged from {r.indent_item_ids.length} BOQ rows</div>
+                      )}
                     </div>
                     <span className={`badge ${stat === 'finalized' ? 'badge-green' : stat === 'quoted' ? 'badge-blue' : 'badge-yellow'}`}>{stat}</span>
                   </div>
@@ -695,12 +762,12 @@ export default function Procurement() {
                           valueKey="name" displayKey="name"
                           placeholder="Pick vendor from master"
                           buttonClassName="input text-xs w-full text-left flex items-center justify-between gap-1 cursor-pointer"
-                          onChange={(v) => updateItemRate(r.indent_item_id, { [`vendor${n}_name`]: v?.name || '' })}
+                          onChange={(v) => updateMergedRate(r, { [`vendor${n}_name`]: v?.name || '' })}
                         />
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <input className="input text-xs" type="number" placeholder="Rate" value={r[`vendor${n}_rate`] || ''} onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_rate`]: +e.target.value })} />
-                        <select className="select text-xs" value={r[`vendor${n}_terms`] || ''} onChange={e => updateItemRate(r.indent_item_id, { [`vendor${n}_terms`]: e.target.value })}>
+                        <input className="input text-xs" type="number" placeholder="Rate" value={r[`vendor${n}_rate`] || ''} onChange={e => updateMergedRate(r, { [`vendor${n}_rate`]: +e.target.value })} />
+                        <select className="select text-xs" value={r[`vendor${n}_terms`] || ''} onChange={e => updateMergedRate(r, { [`vendor${n}_terms`]: e.target.value })}>
                           <option value="">— Terms —</option>
                           <option value="Advance">Advance</option>
                           <option value="Credit">Credit</option>
@@ -714,7 +781,7 @@ export default function Procurement() {
                 </div>
               );
             })}
-            {itemRates.length === 0 && <div className="card text-center py-8 text-gray-400">No indent items yet.</div>}
+            {mergedRates.length === 0 && <div className="card text-center py-8 text-gray-400">No indent items yet.</div>}
           </div>
         </>
       )}
