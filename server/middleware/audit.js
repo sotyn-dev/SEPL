@@ -34,6 +34,11 @@ const SKIP_PATH_PREFIXES = [
   '/api/upload',              // covered by the target POST that stores the url
   '/api/auth/me',
   '/api/auth/my-permissions',
+  // /api/auth/login is logged BY THE LOGIN ROUTE itself (with proper user
+  // attribution on success + LOGIN_FAIL on failure). If we let the auto-audit
+  // middleware also log it, we get duplicate rows where the auto one says
+  // "(unknown)" because req.user isn't set yet — confusing in Daily Activity.
+  '/api/auth/login',
 ];
 
 function summariseBody(body) {
