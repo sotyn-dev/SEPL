@@ -226,16 +226,33 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
     }
   };
 
-  // Group by warehouse for clearer presentation
-  const grouped = useMemo(() => {
-    const map = new Map();
-    for (const r of stock) {
-      const k = r.warehouse_id;
-      if (!map.has(k)) map.set(k, { warehouse_id: k, warehouse_name: r.warehouse_name, type: r.warehouse_type, rows: [] });
-      map.get(k).rows.push(r);
+  // Flat list — mam's spec is one row per (site, item) with Site Name as
+  // its own column. The old per-warehouse cards hid the site name in a
+  // header above the table; bringing it inline makes filtering + scanning
+  // a 50-site deployment much easier.
+  const flatStock = useMemo(() => stock.slice(), [stock]);
+
+  // Total value across whatever's currently filtered. Used in the
+  // summary banner — especially useful when mam picks a single site
+  // and wants the bottom-line value of THAT site's stock.
+  const totalValue = useMemo(() => {
+    return flatStock.reduce((sum, r) => {
+      const eff = (+r.avg_rate > 0) ? +r.avg_rate : (+r.master_price || 0);
+      return sum + (eff * (+r.quantity || 0));
+    }, 0);
+  }, [flatStock]);
+
+  // When user has filtered to one warehouse, show its name in the summary
+  // banner; otherwise list the distinct sites count.
+  const filterSummary = useMemo(() => {
+    if (flatStock.length === 0) return null;
+    const sites = new Set(flatStock.map(r => r.warehouse_name));
+    if (filter.warehouse_id) {
+      const wh = warehouses.find(w => w.id === +filter.warehouse_id);
+      return { label: wh?.name || 'Selected site', single: true };
     }
-    return [...map.values()];
-  }, [stock]);
+    return { label: `${sites.size} site${sites.size === 1 ? '' : 's'}`, single: false };
+  }, [flatStock, filter.warehouse_id, warehouses]);
 
   return (
     <>
@@ -260,39 +277,60 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
         </label>
       </div>
 
-      {grouped.length === 0 && (
+      {flatStock.length === 0 && (
         <div className="card p-6 text-center text-gray-400 text-sm">
           No stock yet. Use the <span className="font-semibold">Receive</span> tab to record an opening balance or first delivery.
         </div>
       )}
 
-      {grouped.map(g => (
-        <div key={g.warehouse_id} className="card p-0 overflow-hidden">
-          <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
-            <h4 className="font-semibold text-gray-700 flex items-center gap-2">
-              {g.type === 'office' ? <FiHome size={14} className="text-red-600" /> : <FiMapPin size={14} className="text-red-600" />}
-              {g.warehouse_name}
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{g.type === 'office' ? 'Office' : 'Site'}</span>
-            </h4>
-            <span className="text-[11px] text-gray-400">{g.rows.length} items</span>
+      {/* SUMMARY BANNER — total value of currently-filtered stock.
+          When mam picks a single site, this becomes "Stock value at <site>".
+          Otherwise it shows total across all sites in view. */}
+      {filterSummary && (
+        <div className="card p-3 bg-gradient-to-r from-blue-50 to-blue-100 border-l-4 border-blue-500 flex flex-wrap items-center justify-between gap-2">
+          <div className="text-sm text-gray-700">
+            {filterSummary.single ? (
+              <>Stock value at <span className="font-semibold text-blue-800">{filterSummary.label}</span></>
+            ) : (
+              <>Total stock value across <span className="font-semibold text-blue-800">{filterSummary.label}</span></>
+            )}
+            <span className="text-gray-400 mx-1">·</span>
+            <span className="text-gray-500">{flatStock.length} row{flatStock.length === 1 ? '' : 's'}</span>
           </div>
+          <div className="text-xl font-bold text-blue-900 tabular-nums">{fmtMoney(totalValue)}</div>
+        </div>
+      )}
+
+      {/* FLAT TABLE — mam's column order: Code · Site · Item · UOM · Qty ·
+          Condition · Rate · Value · Reorder · Actions. Site name lives
+          inline (not as a section header) so filtering + scanning is
+          easier across many sites. */}
+      {flatStock.length > 0 && (
+        <div className="card p-0 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="text-sm w-full">
               <thead className="bg-gray-50/60">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Code</th>
+                  <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Site Name</th>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Item</th>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">UOM</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Quantity</th>
-                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Avg Rate</th>
+                  <th className="text-center px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Condition</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Rate</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Value</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Reorder</th>
                   {(canEdit || canDelete) && <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Actions</th>}
                 </tr>
               </thead>
               <tbody>
-                {g.rows.map(r => {
+                {flatStock.map(r => {
                   const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
+                  const cond = r.latest_condition || '';
+                  const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : cond === 'Used' ? 'bg-amber-50 text-amber-700 border-amber-200'
+                    : cond === 'Scrap' ? 'bg-red-50 text-red-700 border-red-200'
+                    : 'bg-gray-50 text-gray-400 border-gray-200';
                   // effective_rate: server falls back to item_master.current_price
                   // when no movements have set an avg yet. rate_source = 'master'
                   // tells us to badge it so mam knows it's from the catalog.
@@ -301,10 +339,23 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                   return (
                     <tr key={r.id} className={`border-t ${low ? 'bg-amber-50/40' : 'hover:bg-gray-50'}`}>
                       <td className="px-3 py-2 text-gray-500 font-mono text-[11px]">{r.item_code || '—'}</td>
+                      <td className="px-3 py-2 text-gray-700 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          {r.warehouse_type === 'office' ? <FiHome size={11} className="text-red-500 flex-shrink-0" /> : <FiMapPin size={11} className="text-red-500 flex-shrink-0" />}
+                          <span className="text-[12px]">{r.warehouse_name}</span>
+                        </div>
+                      </td>
                       <td className="px-3 py-2 text-gray-800">{r.item_name}{r.specification && <span className="block text-[10px] text-gray-400">{r.specification}</span>}</td>
                       <td className="px-3 py-2 text-gray-600">{r.uom || '—'}</td>
                       <td className={`px-3 py-2 text-right font-bold tabular-nums ${low ? 'text-amber-700' : 'text-gray-800'}`}>
                         {fmtNum(r.quantity)} {low && <FiAlertTriangle className="inline ml-1 text-amber-500" size={12} />}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {cond ? (
+                          <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${condClass}`}>{cond}</span>
+                        ) : (
+                          <span className="text-[10px] text-gray-300 italic">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-right text-gray-600 tabular-nums">
                         {pricing && pricing.item_master_id === r.item_master_id ? (
@@ -388,7 +439,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
             </table>
           </div>
         </div>
-      ))}
+      )}
 
       {/* Edit qty / rate modal — records an ADJUST IN or OUT movement
           for the qty delta so the journal stays consistent. */}

@@ -86,8 +86,17 @@ router.get('/stock', requirePermission('inventory', 'view'), (req, res) => {
   const rows = db.prepare(
     `SELECT sb.id, sb.warehouse_id, sb.item_master_id, sb.quantity, sb.avg_rate, sb.reorder_level, sb.updated_at,
             w.name as warehouse_name, w.type as warehouse_type,
-            im.item_code, im.item_name, im.specification, im.size, im.uom, im.make,
-            im.current_price as master_price
+            im.item_code, im.item_name, im.specification, im.size, im.uom, im.make, im.type as item_type,
+            im.current_price as master_price,
+            -- Latest condition (Used / Unused / Scrap) recorded for this (warehouse,
+            -- item) pair on its most recent IN movement. NULL for stock that was
+            -- entered before the condition field existed.
+            (SELECT sm.item_condition FROM stock_movements sm
+              WHERE sm.warehouse_id = sb.warehouse_id
+                AND sm.item_master_id = sb.item_master_id
+                AND sm.type = 'IN'
+                AND sm.item_condition IS NOT NULL
+              ORDER BY sm.created_at DESC LIMIT 1) AS latest_condition
        FROM stock_balance sb
        JOIN warehouses w ON w.id = sb.warehouse_id
        JOIN item_master im ON im.id = sb.item_master_id
