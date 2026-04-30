@@ -180,7 +180,7 @@ export default function Procurement() {
         notes: form.notes || '',
         items: indentItems.map(it => ({ ...it, make: it.make || '' })),
       });
-      toast.success('Indent raised — purchase team will take over');
+      toast.success('Indent submitted — awaiting approval');
       setModal(false); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
@@ -1313,7 +1313,7 @@ export default function Procurement() {
           <div><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm({...form, notes: e.target.value})} placeholder="Any remarks for Purchase…" /></div>
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
             <button type="button" onClick={() => setModal(false)} className="btn btn-secondary w-full sm:w-auto">Cancel</button>
-            <button type="submit" className="btn btn-primary w-full sm:w-auto">Create Indent</button>
+            <button type="submit" className="btn btn-primary w-full sm:w-auto">Submit Indent</button>
           </div>
         </form>
       </Modal>

@@ -483,10 +483,23 @@ router.post('/indents', (req, res) => {
     const plan = db.prepare('SELECT id FROM order_planning WHERE business_book_id=? ORDER BY id DESC LIMIT 1').get(business_book_id);
     if (plan) resolvedPlanningId = plan.id;
   }
+  // status='submitted' (not 'draft') — mam's flow: every Raise Purchase Indent
+  // submission goes straight to the approval queue, no draft state in between.
+  // Approver then either Approves (→ 'approved') or Rejects (→ 'rejected') from
+  // the indent list.
   const r = db.prepare(
-    `INSERT INTO indents (planning_id, indent_number, notes, site_name, raised_by_name, client_name, created_by)
-     VALUES (?,?,?,?,?,?,?)`
-  ).run(resolvedPlanningId, indentNum, notes || '', site_name || '', raised_by_name || '', site_name || '', req.user.id);
+    `INSERT INTO indents (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by)
+     VALUES (?,?,?,?,?,?,?,?)`
+  ).run(resolvedPlanningId, indentNum, 'submitted', notes || '', site_name || '', raised_by_name || '', site_name || '', req.user.id);
+
+  // Seed the indent_tracker with the approval_pending stage so the IndentFMS
+  // pipeline view immediately reflects "this indent is waiting for approval".
+  // The 'indent_raised' stage is implicit (any indent without a tracker entry
+  // is considered at that stage), so we jump straight to approval_pending.
+  try {
+    db.prepare('INSERT INTO indent_tracker (indent_id, stage, updated_by, notes) VALUES (?,?,?,?)')
+      .run(r.lastInsertRowid, 'approval_pending', req.user.id, 'Awaiting approval');
+  } catch (e) { /* tracker is best-effort; never block indent creation */ }
 
   // Pull description/unit/type from item_master on the server so the
   // classification flags (PO / FOC / RGP) are authoritative and can't be
