@@ -1102,133 +1102,208 @@ export default function Procurement() {
             </div>
           ) : (
             <>
-              {/* Desktop column headers — hidden on mobile, where each row is a stacked card */}
-              <div className="hidden md:grid gap-2 text-[10px] font-bold text-gray-500 uppercase px-1" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr)) auto' }}>
-                <div className="col-span-5">BOQ Item (from Client PO) <span className="text-red-500">*</span></div>
-                <div className="col-span-4">Sub-Item (Item Master) <span className="text-red-500">*</span></div>
-                <div className="col-span-2">Make</div>
-                <div className="col-span-3">Qty</div>
-                <div>Unit</div>
-                <div></div>
-              </div>
-              <div className="space-y-3 md:space-y-2">
-                {indentItems.map((item, i) => {
-                  const t = String(item.item_type || '').toUpperCase();
-                  const typeClass = t === 'FOC' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : t === 'RGP' ? 'bg-amber-50 text-amber-700 border-amber-200'
-                    : t === 'PO' ? 'bg-red-50 text-red-700 border-red-200'
-                    : 'bg-gray-50 text-gray-500 border-gray-200';
+              {/* SUMMARY CHIPS — show BOQ count, sub-items count, Chargeable / FOC / POs expected.
+                  Hidden until at least one row has a BOQ picked, otherwise the chips would all be 0. */}
+              {(() => {
+                const filled = indentItems.filter(it => it.po_item_id);
+                if (filled.length === 0) return null;
+                const boqCount = new Set(filled.map(it => it.po_item_id)).size;
+                let chargeable = 0, foc = 0;
+                filled.forEach(it => {
+                  const t = String(it.item_type || '').toUpperCase();
+                  if (t === 'FOC') foc++;
+                  else if (t) chargeable++;
+                });
+                // POs expected ≈ unique makes among chargeable rows (one supplier = one PO).
+                const posExpected = new Set(
+                  filled.filter(it => String(it.item_type || '').toUpperCase() !== 'FOC')
+                        .map(it => (it.make || '').trim().toLowerCase())
+                        .filter(Boolean)
+                ).size;
+                const Chip = ({ label, value, color }) => (
+                  <div className={`rounded-lg border ${color} px-2 py-1.5 text-center`}>
+                    <div className="text-lg font-bold leading-none">{value}</div>
+                    <div className="text-[10px] font-medium text-gray-600 mt-0.5 leading-tight">{label}</div>
+                  </div>
+                );
+                return (
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    <Chip label="BOQ items" value={boqCount} color="bg-blue-50 border-blue-200" />
+                    <Chip label="Total sub-items" value={filled.length} color="bg-gray-50 border-gray-200" />
+                    <Chip label="Chargeable" value={chargeable} color="bg-red-50 border-red-200" />
+                    <Chip label="FOC" value={foc} color="bg-emerald-50 border-emerald-200" />
+                    <Chip label="POs expected" value={posExpected || '—'} color="bg-purple-50 border-purple-200" />
+                  </div>
+                );
+              })()}
 
-                  // BOQ picker — comes from the Client PO for the selected
-                  // site. Mam's requested flow: first pick a BOQ line, then a
-                  // sub-item from Item Master.
-                  const boqPicker = (
-                    <SearchableSelect
-                      options={boqItems.map(b => ({
-                        id: b.id,
-                        label: `${b.description || '(no desc)'}${b.boq_qty ? ' · Qty ' + b.boq_qty : ''}${b.item_type ? ' · ' + b.item_type : ''}`,
-                        ...b,
-                      }))}
-                      value={item.po_item_id || null} valueKey="id" displayKey="label"
-                      placeholder={boqItems.length ? 'Search BOQ item from Client PO…' : 'No BOQ items for this site'}
-                      onChange={(b) => pickBoqItem(i, b)}
-                    />
-                  );
-                  const masterPicker = (
-                    <SearchableSelect
-                      options={masterItems.map(m => ({ id: m.id, label: `[${m.item_code}] ${m.display_name || m.item_name}${m.type ? ' · ' + m.type : ''}`, ...m }))}
-                      value={item.item_master_id || null} valueKey="id" displayKey="label"
-                      placeholder="Search sub-item from Item Master…"
-                      onChange={(m) => pickMasterItem(i, m)}
-                    />
-                  );
-                  const makeInput = <input className="input text-sm" placeholder="Make" value={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />;
-                  // QTY — bumped to a bigger, bolder number so the critical
-                  // value is instantly readable / editable. right-aligned
-                  // since it's numeric.
-                  const qtyInput = <input className="input text-base font-bold text-right" type="number" min="0" placeholder="Qty" value={item.quantity} onChange={e => { const n = [...indentItems]; n[i].quantity = +e.target.value; setIndentItems(n); }} />;
-                  const unitInput = <input className="input text-sm" placeholder="Unit" value={item.unit} onChange={e => { const n = [...indentItems]; n[i].unit = e.target.value; setIndentItems(n); }} />;
-                  // TYPE is auto-derived from the Item Master sub-item's `type`
-                  // field (PO / FOC / RGP). Read-only so mam's people can't
-                  // accidentally override the Item Master's classification.
-                  const typeBox = (
-                    <div className={`text-center text-[11px] font-bold uppercase px-2 py-1.5 rounded-lg border ${typeClass}`} title="Auto-picked from Item Master sub-item">
-                      {item.item_type || <span className="text-gray-400 normal-case font-normal">— pick sub-item —</span>}
-                    </div>
-                  );
-                  const removeBtn = (
-                    <button type="button" onClick={() => setIndentItems(indentItems.filter((_, x) => x !== i))} className="p-1 text-gray-300 hover:text-red-600" title="Remove row">
-                      {indentItems.length > 1 && <FiTrash2 size={14} />}
-                    </button>
-                  );
+              {/* GROUP rows by po_item_id so each BOQ is a parent section with its sub-items underneath.
+                  Empty (un-picked) rows form their own placeholder group so the user can pick a BOQ. */}
+              {(() => {
+                const groups = [];
+                const seen = new Map();
+                indentItems.forEach((item, idx) => {
+                  const key = item.po_item_id || `__empty_${idx}`;
+                  if (!seen.has(key)) {
+                    seen.set(key, groups.length);
+                    groups.push({ boq_id: item.po_item_id || '', sample: item, rows: [] });
+                  }
+                  groups[seen.get(key)].rows.push({ item, idx });
+                });
 
-                  return (
-                    <div key={i}>
-                      {/* MOBILE: stacked card — BOQ Item first, then sub-item,
-                          then Make, Qty/Unit/Type. */}
-                      <div className="md:hidden border rounded-lg p-2.5 bg-white space-y-2 relative">
-                        <div className="flex justify-between items-center">
-                          <span className="text-[10px] font-bold text-gray-400 uppercase">Row {i + 1}</span>
-                          {indentItems.length > 1 && removeBtn}
+                return groups.map((group, gi) => (
+                  <div key={gi} className="border rounded-lg overflow-hidden bg-gray-50/40">
+                    {/* BOQ HEADER — picker if not yet picked, otherwise read-only summary */}
+                    <div className={`${group.boq_id ? 'bg-gradient-to-r from-blue-50 to-blue-100' : 'bg-gray-50'} border-b px-3 py-2.5`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          {group.boq_id ? (
+                            <>
+                              <div className="text-[10px] font-bold text-blue-700 uppercase">BOQ Item (from Client PO)</div>
+                              <div className="text-sm font-semibold text-gray-800 truncate" title={group.sample.description}>
+                                {group.sample.description || '(no description)'}
+                              </div>
+                              {(group.sample.boq_qty || group.sample.remaining_qty != null) ? (
+                                <div className="text-[11px] text-gray-600 mt-0.5">
+                                  {group.sample.boq_qty ? <>BOQ Qty: <span className="font-semibold">{group.sample.boq_qty}</span></> : null}
+                                  {group.sample.remaining_qty != null ? <> · Remaining: <span className="font-semibold">{group.sample.remaining_qty}</span></> : null}
+                                  <> · {group.rows.length} sub-item{group.rows.length === 1 ? '' : 's'}</>
+                                </div>
+                              ) : (
+                                <div className="text-[11px] text-gray-500 mt-0.5">{group.rows.length} sub-item{group.rows.length === 1 ? '' : 's'}</div>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <div className="text-[10px] font-bold text-gray-500 uppercase mb-1">BOQ Item — pick first <span className="text-red-500">*</span></div>
+                              <SearchableSelect
+                                options={boqItems.map(b => ({
+                                  id: b.id,
+                                  label: `${b.description || '(no desc)'}${b.boq_qty ? ' · Qty ' + b.boq_qty : ''}${b.item_type ? ' · ' + b.item_type : ''}`,
+                                  ...b,
+                                }))}
+                                value={null} valueKey="id" displayKey="label"
+                                placeholder={boqItems.length ? 'Search BOQ item from Client PO…' : 'No BOQ items for this site'}
+                                onChange={(b) => pickBoqItem(group.rows[0].idx, b)}
+                              />
+                            </>
+                          )}
                         </div>
-                        <div>
-                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">BOQ Item <span className="text-gray-400 font-normal normal-case">(from Client PO)</span></label>
-                          {boqPicker}
-                          {item.boq_qty ? <p className="text-[10px] text-gray-400 mt-0.5">BOQ Qty: {item.boq_qty}{item.remaining_qty !== null && item.remaining_qty !== undefined ? ` · Remaining: ${item.remaining_qty}` : ''}</p> : null}
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Sub-Item <span className="text-gray-400 font-normal normal-case">(Item Master)</span></label>
-                          {masterPicker}
-                        </div>
-                        {/* Mobile QTY/Unit/Type — Qty gets 2 columns so the
-                            number is easy to tap + read; Unit + Type share
-                            the remaining column split 50/50. */}
-                        <div className="grid grid-cols-4 gap-2">
-                          <div className="col-span-2">
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Qty</label>
-                            {qtyInput}
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Unit</label>
-                            {unitInput}
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Type</label>
-                            {typeBox}
-                          </div>
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Make</label>
-                          {makeInput}
-                        </div>
-                      </div>
-
-                      {/* DESKTOP: wide grid row — BOQ picker + sub-item picker
-                          + make + QTY (big) + unit. 15-column grid gives QTY
-                          3 columns so the number is easy to read/edit. */}
-                      <div className="hidden md:block">
-                        <div className="grid gap-2 items-start" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr)) auto' }}>
-                          <div className="col-span-5">
-                            {boqPicker}
-                            {item.boq_qty ? <p className="text-[10px] text-gray-400 mt-0.5">BOQ {item.boq_qty}{item.remaining_qty !== null && item.remaining_qty !== undefined ? ` · Rem ${item.remaining_qty}` : ''}</p> : null}
-                          </div>
-                          <div className="col-span-4">{masterPicker}</div>
-                          <div className="col-span-2">{makeInput}</div>
-                          <div className="col-span-3">{qtyInput}</div>
-                          <div>{unitInput}</div>
-                          {removeBtn}
-                        </div>
-                        {/* Type row below — auto-picked from sub-item */}
-                        <div className="mt-1 flex items-center gap-2">
-                          <span className="text-[10px] font-bold text-gray-500 uppercase">Type:</span>
-                          <div className="w-24">{typeBox}</div>
-                        </div>
+                        {/* Remove the whole BOQ section (and all its sub-items) — only when more than one group exists. */}
+                        {groups.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const idxToRemove = new Set(group.rows.map(r => r.idx));
+                              setIndentItems(indentItems.filter((_, x) => !idxToRemove.has(x)));
+                            }}
+                            className="p-1 text-gray-400 hover:text-red-600 flex-shrink-0"
+                            title="Remove this BOQ section"
+                          >
+                            <FiTrash2 size={16} />
+                          </button>
+                        )}
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-              <button type="button" onClick={() => setIndentItems([...indentItems, { ...EMPTY_ITEM }])} className="btn btn-secondary text-xs">+ Add Item</button>
+
+                    {/* SUB-ITEMS LIST — shown only when a BOQ is picked. Each row picks an Item Master sub-item. */}
+                    {group.boq_id && (
+                      <div className="p-2 space-y-2">
+                        {/* Desktop column headers */}
+                        <div className="hidden md:grid gap-2 text-[10px] font-bold text-gray-500 uppercase px-1" style={{ gridTemplateColumns: 'repeat(13, minmax(0, 1fr)) auto' }}>
+                          <div className="col-span-5">Sub-Item (Item Master) <span className="text-red-500">*</span></div>
+                          <div className="col-span-2">Make</div>
+                          <div className="col-span-2">Type</div>
+                          <div className="col-span-2">Qty</div>
+                          <div className="col-span-2">Unit</div>
+                          <div></div>
+                        </div>
+
+                        {group.rows.map(({ item, idx: i }, subIdx) => {
+                          const t = String(item.item_type || '').toUpperCase();
+                          const typeClass = t === 'FOC' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : t === 'RGP' ? 'bg-amber-50 text-amber-700 border-amber-200'
+                            : t === 'PO' ? 'bg-red-50 text-red-700 border-red-200'
+                            : 'bg-gray-50 text-gray-500 border-gray-200';
+                          const masterPicker = (
+                            <SearchableSelect
+                              options={masterItems.map(m => ({ id: m.id, label: `[${m.item_code}] ${m.display_name || m.item_name}${m.type ? ' · ' + m.type : ''}`, ...m }))}
+                              value={item.item_master_id || null} valueKey="id" displayKey="label"
+                              placeholder="Search sub-item from Item Master…"
+                              onChange={(m) => pickMasterItem(i, m)}
+                            />
+                          );
+                          const makeInput = <input className="input text-sm" placeholder="Make" value={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />;
+                          const qtyInput = <input className="input text-base font-bold text-right" type="number" min="0" placeholder="Qty" value={item.quantity} onChange={e => { const n = [...indentItems]; n[i].quantity = +e.target.value; setIndentItems(n); }} />;
+                          const unitInput = <input className="input text-sm" placeholder="Unit" value={item.unit} onChange={e => { const n = [...indentItems]; n[i].unit = e.target.value; setIndentItems(n); }} />;
+                          const typeBox = (
+                            <div className={`text-center text-[11px] font-bold uppercase px-2 py-1.5 rounded-lg border ${typeClass}`} title="Auto-picked from Item Master sub-item">
+                              {item.item_type || <span className="text-gray-400 normal-case font-normal">—</span>}
+                            </div>
+                          );
+                          // Per-sub-item remove only meaningful when there's more than 1 sub-item in this BOQ;
+                          // to remove the LAST sub-item, the user removes the entire BOQ section via the header trash.
+                          const removeBtn = group.rows.length > 1 ? (
+                            <button type="button" onClick={() => setIndentItems(indentItems.filter((_, x) => x !== i))} className="p-1 text-gray-300 hover:text-red-600" title="Remove sub-item">
+                              <FiTrash2 size={14} />
+                            </button>
+                          ) : <div className="w-5" />;
+
+                          return (
+                            <div key={i}>
+                              {/* MOBILE — stacked card */}
+                              <div className="md:hidden border rounded-lg p-2.5 bg-white space-y-2 relative">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-[10px] font-bold text-gray-400 uppercase">Sub-item {subIdx + 1}</span>
+                                  {removeBtn}
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Sub-Item <span className="text-gray-400 font-normal normal-case">(Item Master)</span></label>
+                                  {masterPicker}
+                                </div>
+                                <div className="grid grid-cols-4 gap-2">
+                                  <div className="col-span-2"><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Qty</label>{qtyInput}</div>
+                                  <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Unit</label>{unitInput}</div>
+                                  <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Type</label>{typeBox}</div>
+                                </div>
+                                <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Make</label>{makeInput}</div>
+                              </div>
+
+                              {/* DESKTOP — single row */}
+                              <div className="hidden md:block">
+                                <div className="grid gap-2 items-center bg-white border rounded-lg p-2" style={{ gridTemplateColumns: 'repeat(13, minmax(0, 1fr)) auto' }}>
+                                  <div className="col-span-5">{masterPicker}</div>
+                                  <div className="col-span-2">{makeInput}</div>
+                                  <div className="col-span-2">{typeBox}</div>
+                                  <div className="col-span-2">{qtyInput}</div>
+                                  <div className="col-span-2">{unitInput}</div>
+                                  {removeBtn}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {/* Add another sub-item under the same BOQ — pre-fills the BOQ link so the user only picks the sub-item. */}
+                        <button
+                          type="button"
+                          onClick={() => setIndentItems([...indentItems, {
+                            ...EMPTY_ITEM,
+                            po_item_id: group.boq_id,
+                            description: group.sample.description,
+                            boq_qty: group.sample.boq_qty,
+                            remaining_qty: group.sample.remaining_qty,
+                            unit: group.sample.unit || 'nos',
+                          }])}
+                          className="text-[11px] text-blue-600 hover:text-blue-800 font-medium px-1 py-1"
+                        >+ Add sub-item to this BOQ</button>
+                      </div>
+                    )}
+                  </div>
+                ));
+              })()}
+
+              <button type="button" onClick={() => setIndentItems([...indentItems, { ...EMPTY_ITEM }])} className="btn btn-secondary text-xs">+ Add another BOQ item</button>
             </>
           )}
           <div><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm({...form, notes: e.target.value})} placeholder="Any remarks for Purchase…" /></div>
