@@ -53,12 +53,12 @@ pm2 start server/index.js --name erp
 pm2 save
 pm2 startup
 
-# Setup Nginx
-echo ">>> Setting up Nginx..."
+# Setup Nginx with domain
+echo ">>> Setting up Nginx for securederp.in..."
 cat > /etc/nginx/sites-available/erp << 'NGINX'
 server {
     listen 80;
-    server_name _;
+    server_name securederp.in www.securederp.in;
 
     client_max_body_size 20M;
 
@@ -79,9 +79,17 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl restart nginx
 systemctl enable nginx
 
+# Install free HTTPS via Let's Encrypt
+echo ">>> Installing HTTPS (Let's Encrypt)..."
+apt install -y certbot python3-certbot-nginx
+certbot --nginx -d securederp.in -d www.securederp.in \
+  --non-interactive --agree-tos -m admin@securederp.in --redirect
+
+# Auto-renewal is set up by certbot package via systemd timer
+
 echo ""
 echo "=========================================="
 echo "  DEPLOYMENT COMPLETE!"
-echo "  Open: http://$(curl -s ifconfig.me)"
+echo "  Open: https://securederp.in"
 echo "  Login: admin@erp.com / admin123"
 echo "=========================================="
