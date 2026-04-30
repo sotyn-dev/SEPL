@@ -230,7 +230,16 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
   // its own column. The old per-warehouse cards hid the site name in a
   // header above the table; bringing it inline makes filtering + scanning
   // a 50-site deployment much easier.
-  const flatStock = useMemo(() => stock.slice(), [stock]);
+  // Defensive client-side filter: even if the server response lags behind
+  // the dropdown change (network glitch, caching, race condition), rows
+  // shown will ALWAYS match the currently-selected warehouse. Without this
+  // mam was seeing CHOUDHERY rows under a CONSERN PHARMA filter when the
+  // stock state was momentarily stale between fetches.
+  const flatStock = useMemo(() => {
+    if (!filter.warehouse_id) return stock;
+    const wid = +filter.warehouse_id;
+    return stock.filter(r => +r.warehouse_id === wid);
+  }, [stock, filter.warehouse_id]);
 
   // Total value across whatever's currently filtered. Used in the
   // summary banner — especially useful when mam picks a single site
@@ -243,13 +252,17 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
   }, [flatStock]);
 
   // When user has filtered to one warehouse, show its name in the summary
-  // banner; otherwise list the distinct sites count.
+  // banner; otherwise list the distinct sites count. Prefer the warehouse
+  // name found on the row data itself (guaranteed in sync with the DB) over
+  // the stale `warehouses` prop, so the banner and the rows can never show
+  // contradictory site names.
   const filterSummary = useMemo(() => {
     if (flatStock.length === 0) return null;
     const sites = new Set(flatStock.map(r => r.warehouse_name));
     if (filter.warehouse_id) {
-      const wh = warehouses.find(w => w.id === +filter.warehouse_id);
-      return { label: wh?.name || 'Selected site', single: true };
+      const fromRows = flatStock[0]?.warehouse_name;
+      const fromList = warehouses.find(w => w.id === +filter.warehouse_id)?.name;
+      return { label: fromRows || fromList || 'Selected site', single: true };
     }
     return { label: `${sites.size} site${sites.size === 1 ? '' : 's'}`, single: false };
   }, [flatStock, filter.warehouse_id, warehouses]);
