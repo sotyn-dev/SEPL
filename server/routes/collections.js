@@ -200,47 +200,41 @@ router.get('/md-dashboard', (req, res) => {
 // project name is used to auto-fill CRM + suggest target payment.
 router.get('/sites', (req, res) => {
   const db = getDb();
-  // Pull every Business Book entry as a pickable site, grouped by a single
-  // "name" key — falling back to client_name when project_name is empty so
-  // legacy BB rows with only a client (e.g. V-GUARD INDUSTRIES) still show up.
-  // The label exposed to the UI also concatenates client_name + project_name
-  // so the dropdown's text search hits both fields.
+  // mam's spec: the Site Name dropdown is EVERY non-empty project_name from
+  // Business Book — that's the single source of truth. Each project_name
+  // appears once (DISTINCT). Latest PO value + crm_name are pulled per
+  // project for auto-fill convenience.
   const rows = db.prepare(`
     SELECT MIN(bb.id)            as business_book_id,
-           COALESCE(NULLIF(TRIM(bb.project_name),''), TRIM(bb.client_name)) as name,
-           MAX(bb.project_name)   as project_name,
+           bb.project_name        as name,
+           bb.project_name        as project_name,
            GROUP_CONCAT(DISTINCT bb.client_name)  as client_names,
            GROUP_CONCAT(DISTINCT bb.company_name) as company_names,
            MIN(bb.lead_no)        as lead_no,
            (SELECT po.crm_name FROM purchase_orders po
               JOIN business_book bb2 ON bb2.id = po.business_book_id
-             WHERE COALESCE(NULLIF(TRIM(bb2.project_name),''), TRIM(bb2.client_name))
-                 = COALESCE(NULLIF(TRIM(bb.project_name),''), TRIM(bb.client_name))
+             WHERE TRIM(bb2.project_name) = TRIM(bb.project_name)
                AND po.crm_name IS NOT NULL AND po.crm_name <> ''
              ORDER BY po.created_at DESC LIMIT 1) as crm_name,
            (SELECT COALESCE(SUM(po.total_amount), 0) FROM purchase_orders po
               JOIN business_book bb2 ON bb2.id = po.business_book_id
-             WHERE COALESCE(NULLIF(TRIM(bb2.project_name),''), TRIM(bb2.client_name))
-                 = COALESCE(NULLIF(TRIM(bb.project_name),''), TRIM(bb.client_name))) as latest_po_value,
+             WHERE TRIM(bb2.project_name) = TRIM(bb.project_name)) as latest_po_value,
            (SELECT po.po_number FROM purchase_orders po
               JOIN business_book bb2 ON bb2.id = po.business_book_id
-             WHERE COALESCE(NULLIF(TRIM(bb2.project_name),''), TRIM(bb2.client_name))
-                 = COALESCE(NULLIF(TRIM(bb.project_name),''), TRIM(bb.client_name))
+             WHERE TRIM(bb2.project_name) = TRIM(bb.project_name)
              ORDER BY po.created_at DESC LIMIT 1) as latest_po_number
       FROM business_book bb
-     WHERE (bb.project_name IS NOT NULL AND TRIM(bb.project_name) <> '')
-        OR (bb.client_name  IS NOT NULL AND TRIM(bb.client_name)  <> '')
-     GROUP BY COALESCE(NULLIF(TRIM(bb.project_name),''), TRIM(bb.client_name))
-     ORDER BY name
+     WHERE bb.project_name IS NOT NULL AND TRIM(bb.project_name) <> ''
+     GROUP BY TRIM(bb.project_name)
+     ORDER BY bb.project_name
   `).all();
 
-  // Label includes both name + every distinct client name attached to it,
-  // so the dropdown's text search ("v-guard", "consern", etc.) hits whichever
-  // field the user types — even when the BB row only has client_name set.
+  // Label = project_name + client_names (first one) so mam can search by
+  // either ("Pune Tower", "Hagerstone", etc.) and still pick the right site.
   const list = rows.map(r => ({
     ...r,
     id: r.business_book_id,
-    project_name: r.project_name || r.name,
+    project_name: r.project_name,
     client_name: (r.client_names || '').split(',')[0] || null,
     company_name: (r.company_names || '').split(',')[0] || null,
     label: [r.name, r.client_names].filter(Boolean).join(' · '),
