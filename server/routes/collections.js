@@ -292,13 +292,29 @@ router.put('/:id', (req, res) => {
   if (b.invoice_number !== undefined)    set('invoice_number', b.invoice_number);
   if (b.invoice_date !== undefined)      set('invoice_date', b.invoice_date || null);
   if (b.due_date !== undefined)          set('due_date', b.due_date || null);
-  if (b.owner_id !== undefined)          set('owner_id', b.owner_id || null);
+
+  // Defensive FK validators — these columns reference users(id) / sites(id),
+  // but the receivable rows may carry stale references to sites/users that
+  // were since deleted (data drift). Without this guard, every Edit Save
+  // triggers SQLite "FOREIGN KEY constraint failed" because the row's old
+  // value re-enters the UPDATE. We coerce unknown ids to NULL so the save
+  // always succeeds — the field stays empty until the user picks a fresh value.
+  const userExists = (id) => {
+    const v = +id; if (!Number.isFinite(v) || v <= 0) return false;
+    return !!db.prepare('SELECT 1 FROM users WHERE id=?').get(v);
+  };
+  const siteExists = (id) => {
+    const v = +id; if (!Number.isFinite(v) || v <= 0) return false;
+    return !!db.prepare('SELECT 1 FROM sites WHERE id=?').get(v);
+  };
+
+  if (b.owner_id !== undefined)          set('owner_id', userExists(b.owner_id) ? +b.owner_id : null);
   if (b.follow_up_status !== undefined)  set('follow_up_status', b.follow_up_status);
   if (b.follow_up_date !== undefined)    set('follow_up_date', b.follow_up_date || null);
   if (b.follow_up_notes !== undefined)   set('follow_up_notes', b.follow_up_notes);
   if (b.escalation_level !== undefined)  set('escalation_level', +b.escalation_level || 0);
   // Collection Engine v2 fields
-  if (b.site_id !== undefined)           set('site_id', b.site_id || null);
+  if (b.site_id !== undefined)           set('site_id', siteExists(b.site_id) ? +b.site_id : null);
   if (b.site_name !== undefined)         set('site_name', b.site_name || null);
   if (b.crm_name !== undefined)          set('crm_name', b.crm_name || null);
   if (b.next_planned_date !== undefined) set('next_planned_date', b.next_planned_date || null);
