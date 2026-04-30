@@ -689,7 +689,9 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   const vendor_id = +b.vendor_id;
   const indent_id = b.indent_id ? +b.indent_id : null;
   if (!vendor_id) return res.status(400).json({ error: 'Vendor is required' });
-  if (!req.file) return res.status(400).json({ error: 'PO file is required — upload the Tally PO' });
+  // PO file is now OPTIONAL — mam's flow: the PO is created in the ERP itself,
+  // there's no Tally PDF to upload anymore. Users can still attach a file
+  // (e.g. a signed scan once printed) but it's no longer required.
 
   // Parse optional line items (JSON string in multipart form)
   let items = [];
@@ -698,13 +700,13 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   }
   const lines = Array.isArray(items) ? items.filter(i => i.indent_item_id && +i.quantity > 0 && +i.rate > 0) : [];
 
-  // Use the PO number from Tally if provided; else auto-number with the usual
-  // VPO-#### pattern so nothing breaks for uploads that lack a Tally ref.
-  let poNum = (b.po_number || '').trim();
-  if (!poNum) {
-    const { nextSequence } = require('../db/nextSequence');
-    poNum = nextSequence(db, 'vendor_pos', 'po_number', 'VPO-', { startFrom: 0, pad: 4 });
-  }
+  // PO number is always auto-generated with a year-stamped pattern
+  // VPO/YYYY/#### (e.g. VPO/2026/0001) — mam's "professional behaviour"
+  // requirement. Any po_number sent by the client is ignored so we have
+  // a single authoritative numbering source.
+  const { nextSequence } = require('../db/nextSequence');
+  const yr = new Date().getFullYear();
+  const poNum = nextSequence(db, 'vendor_pos', 'po_number', `VPO/${yr}/`, { startFrom: 0, pad: 4 });
 
   // Total: prefer what the user typed (matches the Tally printout). Fall back
   // to the computed sum of line items if blank.

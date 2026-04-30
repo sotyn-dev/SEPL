@@ -271,15 +271,15 @@ export default function Procurement() {
   const saveVendorPo = async (e) => {
     e.preventDefault();
     if (!form.vendor_id) return toast.error('Pick a vendor');
-    if (!form.po_number || !String(form.po_number).trim()) return toast.error('Enter the PO Number from Tally');
-    if (!form.po_file) return toast.error('PO file is required — upload the Tally PO');
+    // PO Number is now auto-generated server-side (VPO/YYYY/####) — no
+    // manual entry. PO file is also optional; mam's flow is to create
+    // the PO inside the ERP, not upload a Tally PDF.
 
     const items = Object.entries(poItemSelection)
       .filter(([, v]) => v.checked && +v.quantity > 0 && +v.rate > 0)
       .map(([iiId, v]) => ({ indent_item_id: +iiId, quantity: +v.quantity, rate: +v.rate }));
 
     const fd = new FormData();
-    fd.append('po_number', String(form.po_number).trim());
     if (form.po_date) fd.append('po_date', form.po_date);
     if (form.expected_receipt_date) fd.append('expected_receipt_date', form.expected_receipt_date);
     fd.append('vendor_id', form.vendor_id);
@@ -1385,19 +1385,26 @@ export default function Procurement() {
         </form>
       </Modal>
 
-      {/* Vendor PO Upload Modal — mam creates the PO in Tally and uploads
-          the file here. Terms / credit days / advance live on the uploaded
-          Tally PO itself, so the ERP only captures metadata + the file. */}
+      {/* Vendor PO Modal — PO is created INSIDE the ERP. PO number is
+          auto-generated (VPO/YYYY/####) on save. File upload is optional
+          (e.g. if mam later wants to attach a signed scan). */}
       <Modal isOpen={modal === 'vendorpo'} onClose={() => setModal(false)} title="Create Vendor PO" wide>
         <form onSubmit={saveVendorPo} className="space-y-4">
           <p className="text-[11px] text-gray-500 bg-blue-50 border border-blue-100 rounded px-3 py-2">
-            Upload the PO PDF/file you created in Tally. Optionally link it to an indent so the "Pending for PO" list clears.
+            Fill the details below — the PO number will be auto-generated as <b>VPO/{new Date().getFullYear()}/####</b> on save. Link to an indent so the "Pending for PO" list clears.
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="label">PO Number (from Tally) *</label>
-              <input className="input" placeholder="e.g. VPO/2026/0017" value={form.po_number || ''} onChange={e => setForm({...form, po_number: e.target.value})} required />
+              <label className="label">PO Number <span className="text-gray-400 font-normal">(auto-generated)</span></label>
+              <input
+                className="input bg-gray-50 text-gray-700 cursor-not-allowed"
+                placeholder={`VPO/${new Date().getFullYear()}/####`}
+                value={`Auto-generated when you click "Create Vendor PO"`}
+                readOnly
+                title="PO numbers are issued by the system in VPO/YYYY/#### format — no manual entry needed."
+              />
+              <p className="text-[10px] text-gray-400 mt-0.5">Format: VPO/{new Date().getFullYear()}/0001 — assigned automatically on save.</p>
             </div>
             <div>
               <label className="label">PO Date *</label>
@@ -1412,9 +1419,9 @@ export default function Procurement() {
               <p className="text-[10px] text-gray-400 mt-0.5">Auto-picked from finalized rates if all items agree.</p>
             </div>
             <div>
-              <label className="label">PO Total Amount *</label>
-              <input className="input" type="number" step="0.01" min="0" placeholder="0" value={form.total_amount || ''} onChange={e => setForm({...form, total_amount: e.target.value})} required />
-              <p className="text-[10px] text-gray-400 mt-0.5">As per the Tally PO.</p>
+              <label className="label">PO Total Amount <span className="text-gray-400 font-normal">(auto-computed from items)</span></label>
+              <input className="input" type="number" step="0.01" min="0" placeholder="0" value={form.total_amount || ''} onChange={e => setForm({...form, total_amount: e.target.value})} />
+              <p className="text-[10px] text-gray-400 mt-0.5">Leave blank to use SUM(qty × rate) of the linked indent items.</p>
             </div>
             <div>
               <label className="label">Expected Receipt Date <span className="text-gray-400 font-normal">(when goods are due from vendor)</span></label>
@@ -1429,15 +1436,16 @@ export default function Procurement() {
               </select>
             </div>
             <div>
-              <label className="label">PO File * <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, max 10 MB)</span></label>
+              <label className="label">PO File <span className="text-gray-400 font-normal">(optional · PDF / JPG / PNG / XLSX, max 10 MB)</span></label>
               <input
                 className="input"
                 type="file"
                 accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls"
-                required
                 onChange={e => setForm({...form, po_file: e.target.files?.[0] || null})}
               />
-              {form.po_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.po_file.name}</p>}
+              {form.po_file
+                ? <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.po_file.name}</p>
+                : <p className="text-[10px] text-gray-400 mt-0.5">No file needed — PO is generated by ERP. Attach a signed scan only if required.</p>}
             </div>
             <div className="sm:col-span-2">
               <label className="label">Remarks <span className="text-gray-400 font-normal">(optional)</span></label>
