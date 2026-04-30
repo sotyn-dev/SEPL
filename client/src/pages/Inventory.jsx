@@ -358,7 +358,21 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                           <span className="text-[12px]">{r.warehouse_name}</span>
                         </div>
                       </td>
-                      <td className="px-3 py-2 text-gray-800">{r.item_name}{r.specification && <span className="block text-[10px] text-gray-400">{r.specification}</span>}</td>
+                      <td className="px-3 py-2 text-gray-800">
+                        {/* Full item details — name on top, then a labelled
+                            secondary line showing Size / Spec / Make so mam
+                            can identify which exact SKU this row is at a
+                            glance, especially when many BALL VALVE / etc.
+                            rows differ only by size or spec. */}
+                        <div className="font-medium leading-snug">{r.item_name}</div>
+                        {(r.size || r.specification || r.make) && (
+                          <div className="text-[10px] text-gray-500 leading-snug mt-0.5 space-x-1.5">
+                            {r.size && <span><span className="text-gray-400">Size:</span> <span className="font-medium text-gray-600">{r.size}</span></span>}
+                            {r.specification && <span><span className="text-gray-400">Spec:</span> <span className="font-medium text-gray-600">{r.specification}</span></span>}
+                            {r.make && <span><span className="text-gray-400">Make:</span> <span className="font-medium text-gray-600">{r.make}</span></span>}
+                          </div>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-gray-600">{r.uom || '—'}</td>
                       <td className={`px-3 py-2 text-right font-bold tabular-nums ${low ? 'text-amber-700' : 'text-gray-800'}`}>
                         {fmtNum(r.quantity)} {low && <FiAlertTriangle className="inline ml-1 text-amber-500" size={12} />}
