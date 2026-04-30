@@ -1322,6 +1322,11 @@ function initializeDatabase() {
     // there. Photo is never required; rendered as a thumbnail in the
     // movements list when set.
     ['stock_movements', 'photo_url TEXT'],
+    // Item condition at the time of this movement — captured for
+    // opening-balance entries so mam can tell brand-new stock apart from
+    // already-used / scrap material on the same item line. NULL for older
+    // rows + non-OPENING movements; UI dropdown is Used / Unused / Scrap.
+    ['stock_movements', 'item_condition TEXT'],
     // Per-user opt-out from live location tracking. Admin / office-only
     // staff get track_location=0 so they don't show in Admin → Location
     // Tracking. Default 1 so existing field staff keep being tracked.

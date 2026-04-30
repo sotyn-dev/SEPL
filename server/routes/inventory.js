@@ -144,7 +144,7 @@ router.get('/low-stock', requirePermission('inventory', 'view'), (req, res) => {
 // Throws if OUT would push qty below 0 (we don't allow negative stock).
 function applyMovement(db, m) {
   const { warehouse_id, item_master_id, type, quantity, rate, reference_type, reference_id,
-          from_warehouse_id, to_warehouse_id, site_id, notes, user_id, photo_url } = m;
+          from_warehouse_id, to_warehouse_id, site_id, notes, user_id, photo_url, item_condition } = m;
   const qty = Number(quantity);
   if (!warehouse_id || !item_master_id || !qty || qty <= 0) throw new Error('warehouse_id, item_master_id and positive quantity required');
 
@@ -178,13 +178,13 @@ function applyMovement(db, m) {
   const r = db.prepare(
     `INSERT INTO stock_movements
        (warehouse_id, item_master_id, type, quantity, rate, total_value,
-        reference_type, reference_id, from_warehouse_id, to_warehouse_id, site_id, notes, created_by, photo_url)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        reference_type, reference_id, from_warehouse_id, to_warehouse_id, site_id, notes, created_by, photo_url, item_condition)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     warehouse_id, item_master_id, type, qty, rate || 0, qty * (rate || 0),
     reference_type || null, reference_id || null,
     from_warehouse_id || null, to_warehouse_id || null, site_id || null,
-    notes || null, user_id || null, photo_url || null,
+    notes || null, user_id || null, photo_url || null, item_condition || null,
   );
   return r.lastInsertRowid;
 }
@@ -209,7 +209,8 @@ router.post('/receive', requirePermission('inventory', 'create'), (req, res) => 
           quantity: +it.quantity, rate: +(it.rate || 0),
           reference_type: reference_type || 'PURCHASE', reference_id: reference_id || null,
           notes, user_id: req.user.id,
-          photo_url: it.photo_url || null,  // optional per-line photo (opening balance proof, etc.)
+          photo_url: it.photo_url || null,           // optional per-line photo (opening balance proof, etc.)
+          item_condition: it.item_condition || null, // Used / Unused / Scrap — captured for OPENING entries
         });
         movementIds.push(id);
       }

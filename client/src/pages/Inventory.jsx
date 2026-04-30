@@ -469,10 +469,16 @@ function OpeningStockTab({ warehouses, items, reload }) {
 }
 
 // ---------- OPENING STOCK — ROW ENTRY ----------
-// Free rows. Each row is a single (Site · Item · Qty · Photo · Rate?)
-// movement. Add as many as needed, save all at once.
+// One site per session — mam's typical flow is "I'm at Site X, here are
+// 50 items with their conditions". Site picker lives at the TOP, item rows
+// share that site. Rate + Type are auto-pulled from Item Master (read-only)
+// so the user can't accidentally enter a wrong rate. Condition (Used /
+// Unused / Scrap) is a per-row dropdown — required because mam tracks
+// brand-new stock vs already-used vs scrap on the same item line.
 function OpeningRowEntry({ warehouses, items, reload }) {
-  const newRow = () => ({ warehouse_id: '', item_master_id: '', quantity: '', rate: '', photo_url: '', uploading: false });
+  const CONDITIONS = ['Unused', 'Used', 'Scrap'];
+  const newRow = () => ({ item_master_id: '', quantity: '', condition: '', photo_url: '', uploading: false });
+  const [warehouseId, setWarehouseId] = useState(''); // shared across all rows in this session
   const [rows, setRows] = useState([newRow()]);
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -508,25 +514,42 @@ function OpeningRowEntry({ warehouses, items, reload }) {
     }
   };
 
-  const valid = rows.filter(r => r.warehouse_id && r.item_master_id && +r.quantity > 0);
+  // A row is valid only when item is picked, qty > 0, AND condition is set.
+  // Site is shared at the top — checked separately on submit.
+  const valid = rows.filter(r => r.item_master_id && +r.quantity > 0 && r.condition);
 
   const submit = async (e) => {
     e.preventDefault();
-    if (valid.length === 0) return toast.error('Add at least one complete row (Site + Item + Qty)');
+    if (!warehouseId) return toast.error('Pick a Site / Warehouse at the top first');
+    // Surface row-level issues so mam knows exactly which row to fix
+    // (instead of "no valid rows" which doesn't help her).
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const hasAny = r.item_master_id || +r.quantity > 0 || r.condition;
+      if (!hasAny) continue; // empty row — silently skipped
+      if (!r.item_master_id) return toast.error(`Row ${i + 1}: pick an Item`);
+      if (!(+r.quantity > 0)) return toast.error(`Row ${i + 1}: Quantity must be greater than 0`);
+      if (!r.condition) return toast.error(`Row ${i + 1}: pick Condition (Used / Unused / Scrap)`);
+    }
+    if (valid.length === 0) return toast.error('Add at least one complete row (Item + Qty + Condition)');
     if (rows.some(r => r.uploading)) return toast.error('Wait for photo uploads to finish');
     setSaving(true);
     let okCount = 0;
     for (const row of valid) {
+      // Rate auto-pulled from Item Master at submit time (not user-entered)
+      const it = items.find(o => o.id === +row.item_master_id);
+      const masterRate = +(it?.current_price || 0);
       try {
         await api.post('/inventory/receive', {
-          warehouse_id: +row.warehouse_id,
+          warehouse_id: +warehouseId,
           reference_type: 'OPENING',
           notes: notes || 'Opening balance',
           items: [{
             item_master_id: +row.item_master_id,
             quantity: +row.quantity,
-            rate: +(row.rate || 0),
+            rate: masterRate,
             photo_url: row.photo_url || null,
+            item_condition: row.condition,
           }],
         });
         okCount += 1;
@@ -546,7 +569,24 @@ function OpeningRowEntry({ warehouses, items, reload }) {
   return (
     <form onSubmit={submit} className="space-y-4">
       <div className="card p-3 bg-amber-50/50 border-l-4 border-amber-400 text-xs text-amber-900">
-        Add one row per (warehouse × item). Pick the site, search the item, type the quantity, optionally snap a photo. Use this for old / existing stock BEFORE going live.
+        Pick the Site / Warehouse at the top, then add as many items as you want underneath. Rate + Type are auto-picked from Item Master so you only enter Qty + Condition. Use this for old / existing stock BEFORE going live.
+      </div>
+
+      {/* SITE / WAREHOUSE picker — ONE for the whole session.
+          mam's workflow: "I'm at Site X, here are 50 items I need to log."
+          Picking site once (instead of repeating per row) is much faster
+          and removes a major source of data-entry errors. */}
+      <div className="card p-3 border-l-4 border-blue-500 bg-blue-50/40">
+        <label className="label">
+          Site / Warehouse <span className="text-red-500">*</span>
+          <span className="ml-2 text-[10px] text-gray-500 font-normal normal-case">— applies to ALL rows below</span>
+        </label>
+        <select className="select" value={warehouseId} onChange={e => setWarehouseId(e.target.value)} required>
+          <option value="">Pick site / warehouse…</option>
+          {activeWarehouses.map(w => (
+            <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}</option>
+          ))}
+        </select>
       </div>
 
       {/* Department pre-filter — narrows the item dropdown from 3,000+
@@ -589,11 +629,25 @@ function OpeningRowEntry({ warehouses, items, reload }) {
           and stay fully visible on mobile. */}
       <div className="space-y-3">
         {rows.map((r, i) => {
-          const wh = activeWarehouses.find(w => w.id === +r.warehouse_id);
           const it = items.find(o => o.id === +r.item_master_id);
-          const ready = r.warehouse_id && r.item_master_id && +r.quantity > 0;
+          const ready = r.item_master_id && +r.quantity > 0 && r.condition;
+          // Rate is AUTO-pulled from Item Master (current_price). Read-only display
+          // so mam's people can't accidentally enter a wrong rate during opening
+          // balance entry — single source of truth = the catalog price.
+          const masterRate = it ? +(it.current_price || 0) : 0;
+          // Type badge (PO / FOC / RGP) auto-picked from Item Master.
+          const t = String(it?.type || '').toUpperCase();
+          const typeClass = t === 'FOC' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+            : t === 'RGP' ? 'bg-amber-50 text-amber-700 border-amber-200'
+            : t === 'PO'  ? 'bg-red-50 text-red-700 border-red-200'
+            : 'bg-gray-50 text-gray-500 border-gray-200';
+          // Condition dot — quick visual anchor on the card stripe
+          const condClass = r.condition === 'Unused' ? 'border-emerald-500'
+            : r.condition === 'Used' ? 'border-amber-500'
+            : r.condition === 'Scrap' ? 'border-red-500'
+            : ready ? 'border-emerald-500' : 'border-gray-200';
           return (
-            <div key={i} className={`card p-4 border-l-4 ${ready ? 'border-emerald-500' : 'border-gray-200'}`}>
+            <div key={i} className={`card p-4 border-l-4 ${condClass}`}>
               <div className="flex items-center justify-between mb-3">
                 <div className="text-xs font-semibold text-gray-500">
                   Row #{i + 1}
@@ -604,17 +658,8 @@ function OpeningRowEntry({ warehouses, items, reload }) {
                 </button>
               </div>
 
-              {/* Site + Item — one per line so the dropdowns have full width */}
               <div className="space-y-3">
-                <div>
-                  <label className="label">Site / Warehouse <span className="text-red-500">*</span></label>
-                  <select className="select" value={r.warehouse_id} onChange={e => setField(i, 'warehouse_id', e.target.value)} required>
-                    <option value="">Pick site / warehouse…</option>
-                    {activeWarehouses.map(w => (
-                      <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}</option>
-                    ))}
-                  </select>
-                </div>
+                {/* Item picker — full width so the dropdown has room to expand */}
                 <div>
                   <label className="label">
                     Item <span className="text-red-500">*</span>
@@ -628,27 +673,45 @@ function OpeningRowEntry({ warehouses, items, reload }) {
                     onChange={(opt) => setField(i, 'item_master_id', opt?.id || '')}
                   />
                   {it && (
-                    <p className="text-[11px] text-gray-500 mt-1">
-                      {it.specification && <span>{it.specification} · </span>}
-                      UOM: {it.uom || '—'}{it.make ? ' · Make: ' + it.make : ''}
-                      {it.department && <span> · Dept: {it.department}</span>}
-                    </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <p className="text-[11px] text-gray-500">
+                        {it.specification && <span>{it.specification} · </span>}
+                        UOM: {it.uom || '—'}{it.make ? ' · Make: ' + it.make : ''}
+                        {it.department && <span> · Dept: {it.department}</span>}
+                      </p>
+                      {/* Type badge — auto from Item Master, read-only */}
+                      {it.type && (
+                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${typeClass}`} title="Auto-picked from Item Master">
+                          {it.type}
+                        </span>
+                      )}
+                    </div>
                   )}
                 </div>
 
-                {/* Qty + Rate + Photo on one row */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* Qty + Rate(auto) + Type(auto) + Condition + Photo on one row */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div>
                     <label className="label">Quantity <span className="text-red-500">*</span></label>
-                    <input className="input text-right tabular-nums" type="number" step="any" min="0" placeholder="0" value={r.quantity} onChange={e => setField(i, 'quantity', e.target.value)} />
+                    <input className="input text-right tabular-nums text-base font-bold" type="number" step="any" min="0" placeholder="0" value={r.quantity} onChange={e => setField(i, 'quantity', e.target.value)} />
                     {it?.uom && <p className="text-[11px] text-gray-400 mt-0.5">in {it.uom}</p>}
                   </div>
                   <div>
-                    <label className="label">Rate ₹ <span className="text-gray-400 font-normal">(optional)</span></label>
-                    <input className="input text-right tabular-nums" type="number" step="any" min="0" placeholder="optional" value={r.rate} onChange={e => setField(i, 'rate', e.target.value)} />
+                    <label className="label">Rate ₹ <span className="text-gray-400 font-normal text-[10px]">(auto from master)</span></label>
+                    <div className="input text-right tabular-nums bg-gray-50 text-gray-700 cursor-not-allowed" title="Auto-picked from Item Master · current_price">
+                      {it ? (masterRate > 0 ? masterRate.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : <span className="text-gray-400 italic font-normal">— not set —</span>) : <span className="text-gray-400 italic font-normal">pick item</span>}
+                    </div>
+                    {it && masterRate > 0 && <p className="text-[11px] text-gray-400 mt-0.5">value: ₹ {(masterRate * (+r.quantity || 0)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>}
                   </div>
                   <div>
-                    <label className="label">Photo <span className="text-gray-400 font-normal">(optional)</span></label>
+                    <label className="label">Condition <span className="text-red-500">*</span></label>
+                    <select className="select" value={r.condition} onChange={e => setField(i, 'condition', e.target.value)} required>
+                      <option value="">— pick —</option>
+                      {CONDITIONS.map(c => (<option key={c} value={c}>{c}</option>))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Photo <span className="text-gray-400 font-normal text-[10px]">(optional)</span></label>
                     <div className="flex items-center gap-2">
                       <input
                         type="file"
@@ -677,7 +740,7 @@ function OpeningRowEntry({ warehouses, items, reload }) {
           onClick={addRow}
           className="w-full card p-4 border-2 border-dashed border-gray-300 hover:border-red-400 hover:bg-red-50/30 text-gray-500 hover:text-red-600 flex items-center justify-center gap-2 text-sm font-medium transition-colors"
         >
-          <FiPlus size={14} /> Add another row
+          <FiPlus size={14} /> Add another item
         </button>
       </div>
 
