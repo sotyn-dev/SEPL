@@ -7,31 +7,131 @@ router.use(authMiddleware);
 // Candidates
 router.get('/candidates', (req, res) => {
   const { status, source } = req.query;
-  let sql = 'SELECT * FROM candidates WHERE 1=1';
+  // Join employees so the row carries the interviewer's name. md_decision /
+  // interview_decision / file fields come along with the SELECT * so the
+  // pipeline UI can decide which action button to show next.
+  let sql = `SELECT c.*, e.name as interviewer_name
+               FROM candidates c
+               LEFT JOIN employees e ON e.id = c.interviewer_id
+              WHERE 1=1`;
   const params = [];
-  if (status) { sql += ' AND status=?'; params.push(status); }
-  if (source) { sql += ' AND source=?'; params.push(source); }
-  sql += ' ORDER BY created_at DESC';
+  if (status) { sql += ' AND c.status=?'; params.push(status); }
+  if (source) { sql += ' AND c.source=?'; params.push(source); }
+  sql += ' ORDER BY c.created_at DESC';
   res.json(getDb().prepare(sql).all(...params));
 });
 
 router.post('/candidates', (req, res) => {
-  const { name, phone, email, source, position, notes } = req.body;
-  const r = getDb().prepare('INSERT INTO candidates (name,phone,email,source,position,notes) VALUES (?,?,?,?,?,?)')
-    .run(name, phone, email, source, position, notes);
+  const { name, phone, email, source, position, notes, resume_file } = req.body;
+  const r = getDb().prepare('INSERT INTO candidates (name,phone,email,source,position,notes,resume_file) VALUES (?,?,?,?,?,?,?)')
+    .run(name, phone, email, source, position, notes, resume_file || null);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
 router.put('/candidates/:id', (req, res) => {
-  const { name, phone, email, source, position, status, notes } = req.body;
-  getDb().prepare('UPDATE candidates SET name=?,phone=?,email=?,source=?,position=?,status=?,notes=? WHERE id=?')
-    .run(name, phone, email, source, position, status, notes, req.params.id);
+  const { name, phone, email, source, position, status, notes, resume_file } = req.body;
+  getDb().prepare('UPDATE candidates SET name=?,phone=?,email=?,source=?,position=?,status=?,notes=?,resume_file=COALESCE(?,resume_file) WHERE id=?')
+    .run(name, phone, email, source, position, status, notes, resume_file || null, req.params.id);
   res.json({ message: 'Updated' });
 });
 
 router.delete('/candidates/:id', (req, res) => {
   getDb().prepare('DELETE FROM candidates WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
+});
+
+// ---------- HIRING PIPELINE STAGE ACTIONS ----------
+// mam's flow:
+//  Stage 1 — Schedule first interview: HR picks interviewer (from employees) +
+//            date/time + uploads resume (file URL from /upload). status moves
+//            to 'interview_scheduled'.
+//  Stage 2 — Mark interview done: interviewer records decision +
+//            notes. status moves to 'interview_done', then 'qualified' if
+//            shortlisted or 'rejected' if not.
+//  Stage 3 — Schedule MD interview: HR picks date for MD round.
+//            status stays 'qualified' (now means "MD round pending").
+//  Stage 4 — MD decision: shortlisted → 'offer_sent' + offer_letter_file
+//            uploaded; rejected → 'rejected'.
+//  Stage 5 — Mark accepted / onboarded as the candidate joins.
+
+router.post('/candidates/:id/schedule-interview', (req, res) => {
+  const { interviewer_id, interview_date, resume_file, notes } = req.body;
+  if (!interviewer_id) return res.status(400).json({ error: 'Pick an interviewer (employee)' });
+  if (!interview_date) return res.status(400).json({ error: 'Interview date required' });
+  const db = getDb();
+  db.prepare(`UPDATE candidates SET
+                interviewer_id = ?,
+                interview_date = ?,
+                resume_file    = COALESCE(?, resume_file),
+                notes          = COALESCE(?, notes),
+                status         = 'interview_scheduled'
+              WHERE id = ?`)
+    .run(+interviewer_id, interview_date, resume_file || null, notes || null, req.params.id);
+  res.json({ message: 'Interview scheduled' });
+});
+
+router.post('/candidates/:id/interview-done', (req, res) => {
+  const { decision, notes } = req.body;
+  if (!['shortlisted','rejected','on_hold'].includes(decision)) {
+    return res.status(400).json({ error: 'decision must be shortlisted / rejected / on_hold' });
+  }
+  // shortlisted → 'qualified' (waiting for MD round)
+  // rejected    → 'rejected'
+  // on_hold     → stays 'interview_done' for HR to come back later
+  const newStatus = decision === 'shortlisted' ? 'qualified'
+                  : decision === 'rejected'    ? 'rejected'
+                  :                              'interview_done';
+  getDb().prepare(`UPDATE candidates SET
+                     interview_decision = ?,
+                     interview_notes    = COALESCE(?, interview_notes),
+                     status             = ?
+                   WHERE id = ?`)
+    .run(decision, notes || null, newStatus, req.params.id);
+  res.json({ message: 'Interview decision recorded' });
+});
+
+router.post('/candidates/:id/schedule-md-interview', (req, res) => {
+  const { md_interview_date, notes } = req.body;
+  if (!md_interview_date) return res.status(400).json({ error: 'MD interview date required' });
+  // Status stays 'qualified' — md_interview_date being set marks the MD round.
+  getDb().prepare(`UPDATE candidates SET
+                     md_interview_date = ?,
+                     notes             = COALESCE(?, notes)
+                   WHERE id = ?`)
+    .run(md_interview_date, notes || null, req.params.id);
+  res.json({ message: 'MD interview scheduled' });
+});
+
+router.post('/candidates/:id/md-decision', (req, res) => {
+  const { decision, notes, offer_letter_file } = req.body;
+  if (!['shortlisted','rejected'].includes(decision)) {
+    return res.status(400).json({ error: 'decision must be shortlisted or rejected' });
+  }
+  if (decision === 'shortlisted' && !offer_letter_file) {
+    return res.status(400).json({ error: 'Upload the offer letter file before MD shortlist' });
+  }
+  const newStatus = decision === 'shortlisted' ? 'offer_sent' : 'rejected';
+  const offerSentAt = decision === 'shortlisted' ? new Date().toISOString() : null;
+  getDb().prepare(`UPDATE candidates SET
+                     md_decision        = ?,
+                     md_interview_notes = COALESCE(?, md_interview_notes),
+                     offer_letter_file  = COALESCE(?, offer_letter_file),
+                     offer_sent_at      = COALESCE(?, offer_sent_at),
+                     status             = ?
+                   WHERE id = ?`)
+    .run(decision, notes || null, offer_letter_file || null, offerSentAt, newStatus, req.params.id);
+  res.json({ message: decision === 'shortlisted' ? 'Offer letter sent' : 'Candidate rejected by MD' });
+});
+
+router.post('/candidates/:id/finalize', (req, res) => {
+  // Mark candidate as 'accepted' (offer accepted) or 'onboarded' (joined).
+  const { final_status, notes } = req.body;
+  if (!['accepted','onboarded','rejected'].includes(final_status)) {
+    return res.status(400).json({ error: 'final_status must be accepted / onboarded / rejected' });
+  }
+  getDb().prepare(`UPDATE candidates SET status = ?, notes = COALESCE(?, notes) WHERE id = ?`)
+    .run(final_status, notes || null, req.params.id);
+  res.json({ message: 'Status updated' });
 });
 
 router.get('/candidates/stats', (req, res) => {

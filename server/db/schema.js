@@ -1337,6 +1337,22 @@ function initializeDatabase() {
     ['receivables', 'site_id INTEGER REFERENCES sites(id)'],
     ['receivables', 'site_name TEXT'],
     ['receivables', 'crm_name TEXT'],
+    // Hiring Pipeline — extends candidates with interview / MD / offer tracking.
+    // Status field on candidates already supports the high-level stages
+    // (lead → interview_scheduled → interview_done → qualified → offer_sent →
+    // accepted → onboarded → rejected). These additive columns capture the
+    // detail at each stage so HR can see who's interviewing, when, and what
+    // each interviewer's decision was. All nullable — old candidates stay
+    // untouched.
+    ['candidates', 'interviewer_id INTEGER REFERENCES employees(id)'],
+    ['candidates', 'interview_date DATETIME'],
+    ['candidates', 'interview_notes TEXT'],
+    ['candidates', 'interview_decision TEXT'],     // 'shortlisted' | 'rejected' | 'on_hold'
+    ['candidates', 'md_interview_date DATETIME'],
+    ['candidates', 'md_interview_notes TEXT'],
+    ['candidates', 'md_decision TEXT'],            // 'shortlisted' | 'rejected'
+    ['candidates', 'offer_letter_file TEXT'],
+    ['candidates', 'offer_sent_at DATETIME'],
     ['receivables', 'next_planned_date DATE'],
     ['receivables', 'last_discussion TEXT'],
     ['receivables', 'business_book_id INTEGER REFERENCES business_book(id)'],
