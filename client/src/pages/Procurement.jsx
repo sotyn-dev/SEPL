@@ -1679,7 +1679,47 @@ export default function Procurement() {
             </div>
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div><label className="label">Final Vendor *</label><input className="input" required list="vendor-options" value={finalForm.final_vendor_name || ''} onChange={e => setFinalForm(f => ({ ...f, final_vendor_name: e.target.value }))} /></div>
+            <div>
+              <label className="label">Final Vendor *</label>
+              {/* Dropdown of the 3 quoted vendors. mam's flow: 90% of the
+                  time the lowest rate (auto-suggested) is right; ~10% of
+                  the time mam picks a HIGHER rate vendor because they
+                  offer Credit. Picking a vendor here auto-fills the
+                  matching rate / terms / credit days from that vendor's
+                  quote — overrides allowed below. */}
+              <select
+                className="select"
+                required
+                value={finalForm.final_vendor_name || ''}
+                onChange={e => {
+                  const name = e.target.value;
+                  // Find which of the 3 vendor slots matches the picked name,
+                  // then copy its rate / terms / credit_days into the final fields.
+                  let nMatch = 0;
+                  for (const n of [1, 2, 3]) {
+                    if (finalModal?.[`vendor${n}_name`] === name) { nMatch = n; break; }
+                  }
+                  setFinalForm(f => ({
+                    ...f,
+                    final_vendor_name: name,
+                    final_rate: nMatch ? +finalModal[`vendor${nMatch}_rate`] || 0 : f.final_rate,
+                    final_terms: nMatch ? finalModal[`vendor${nMatch}_terms`] || '' : f.final_terms,
+                    final_credit_days: nMatch ? +finalModal[`vendor${nMatch}_credit_days`] || 0 : f.final_credit_days,
+                  }));
+                }}
+              >
+                <option value="">— Pick vendor —</option>
+                {finalModal && [1, 2, 3].map(n => {
+                  const name = finalModal[`vendor${n}_name`];
+                  const rate = +finalModal[`vendor${n}_rate`] || 0;
+                  if (!name || rate <= 0) return null;
+                  const terms = finalModal[`vendor${n}_terms`] || '';
+                  const days = +finalModal[`vendor${n}_credit_days`] || 0;
+                  const label = `${name} — Rs ${rate}${terms ? ` · ${terms}` : ''}${terms === 'Credit' && days ? ` (${days}d)` : ''}`;
+                  return <option key={n} value={name}>{label}</option>;
+                })}
+              </select>
+            </div>
             <div><label className="label">Final Rate (Rs) *</label><input className="input" type="number" required value={finalForm.final_rate || ''} onChange={e => setFinalForm(f => ({ ...f, final_rate: +e.target.value }))} /></div>
             <div>
               <label className="label">Payment Terms</label>
