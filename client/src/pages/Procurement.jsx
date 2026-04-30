@@ -1152,9 +1152,13 @@ export default function Procurement() {
                 });
 
                 return groups.map((group, gi) => (
-                  <div key={gi} className="border rounded-lg overflow-hidden bg-gray-50/40">
+                  // overflow-visible (not hidden) so the SearchableSelect's
+                  // absolute-positioned options popup can escape this card.
+                  // We use rounded-t-lg on the header instead so the top
+                  // corners still look clean.
+                  <div key={gi} className="border rounded-lg bg-gray-50/40">
                     {/* BOQ HEADER — picker if not yet picked, otherwise read-only summary */}
-                    <div className={`${group.boq_id ? 'bg-gradient-to-r from-blue-50 to-blue-100' : 'bg-gray-50'} border-b px-3 py-2.5`}>
+                    <div className={`${group.boq_id ? 'bg-gradient-to-r from-blue-50 to-blue-100' : 'bg-gray-50'} border-b px-3 py-2.5 rounded-t-lg`}>
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           {group.boq_id ? (
