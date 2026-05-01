@@ -127,90 +127,104 @@ export default function PriceRequired() {
         </button>
       </div>
 
-      {/* TAB 1 — Vendor Rates (Stage 2 + 3 for purchase team) */}
+      {/* TAB 1 — Vendor Rates (Stage 2 + 3 for purchase team).
+          Card-per-item layout: each item gets its own full-width card with
+          a header (item details + companies) and three vendor sections
+          arranged side-by-side. The vendor pickers have proper column width
+          so the dropdown opens cleanly within the card without overflowing
+          a 9-column squeeze. Finalize button sits in the card footer. */}
       {tab === 'quotes' && isQuoter && (
-        <div className="card p-0 overflow-x-auto">
-          <table className="text-xs w-full" style={{ minWidth: '1400px' }}>
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="text-left px-2 py-2" rowSpan="2">Item</th>
-                <th className="text-left px-2 py-2" rowSpan="2">Companies Requested</th>
-                <th className="text-center px-2 py-2" colSpan="3">Vendor 1</th>
-                <th className="text-center px-2 py-2" colSpan="3">Vendor 2</th>
-                <th className="text-center px-2 py-2" colSpan="3">Vendor 3</th>
-                <th className="px-2 py-2" rowSpan="2">Action</th>
-              </tr>
-              <tr className="bg-gray-50 text-[10px]">
-                <th className="px-1 py-1">Name</th><th className="px-1 py-1">Rate</th><th className="px-1 py-1">Terms</th>
-                <th className="px-1 py-1">Name</th><th className="px-1 py-1">Rate</th><th className="px-1 py-1">Terms</th>
-                <th className="px-1 py-1">Name</th><th className="px-1 py-1">Rate</th><th className="px-1 py-1">Terms</th>
-              </tr>
-            </thead>
-            <tbody>
-              {grouped.map(g => (
-                <tr key={g.anchor_id} className="border-t hover:bg-red-50/30">
-                  <td className="px-2 py-2 align-top" style={{ width: '260px', minWidth: '260px' }}>
-                    <div className="font-semibold text-[12px]">{g.item_name}</div>
-                    <div className="text-[10px] text-gray-500 mt-0.5">
-                      {[g.size, g.specification, g.make].filter(Boolean).join(' · ')}
+        <div className="space-y-3">
+          {grouped.map(g => {
+            const typeChip = g.item_type === 'FOC' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              : g.item_type === 'RGP' ? 'bg-amber-50 text-amber-700 border-amber-200'
+              : 'bg-red-50 text-red-700 border-red-200';
+            const filledCount = [1,2,3].filter(n => g[`vendor${n}_name`] && +g[`vendor${n}_rate`] > 0).length;
+            return (
+              <div key={g.anchor_id} className="card p-0 overflow-visible">
+                {/* HEADER — item details + companies + quote progress */}
+                <div className="px-4 py-3 border-b bg-gradient-to-r from-blue-50 to-blue-100">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-semibold text-gray-900 text-sm">{g.item_name}</h4>
+                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${typeChip}`}>{g.item_type}</span>
+                        <span className="text-[11px] text-gray-500">· UOM: {g.uom}</span>
+                      </div>
+                      {(g.size || g.specification || g.make) && (
+                        <div className="text-[11px] text-gray-600 mt-0.5">
+                          {g.size && <span><span className="text-gray-400">Size:</span> {g.size}</span>}
+                          {g.specification && <span className="ml-2"><span className="text-gray-400">Spec:</span> {g.specification}</span>}
+                          {g.make && <span className="ml-2"><span className="text-gray-400">Make:</span> {g.make}</span>}
+                        </div>
+                      )}
+                      <div className="text-[11px] text-gray-600 mt-1">
+                        <span className="text-gray-400">Companies:</span>{' '}
+                        {g.sites.length ? g.sites.map((s, i) => <span key={i}>{i > 0 && ' · '}📍 {s}</span>) : <span className="text-gray-300">—</span>}
+                        {g.request_ids.length > 1 && <span className="text-gray-400 italic ml-2">(merged from {g.request_ids.length})</span>}
+                      </div>
                     </div>
-                    <div className="text-[10px] mt-0.5">
-                      <span className="text-gray-400">{g.uom}</span>
-                      <span className={`ml-2 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${
-                        g.item_type === 'FOC' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : g.item_type === 'RGP' ? 'bg-amber-50 text-amber-700 border-amber-200'
-                        : 'bg-red-50 text-red-700 border-red-200'
-                      }`}>{g.item_type}</span>
+                    <div className="text-right">
+                      <div className="text-[10px] text-gray-500 uppercase tracking-wide">Quotes filled</div>
+                      <div className={`text-lg font-bold ${filledCount === 3 ? 'text-emerald-700' : 'text-amber-700'}`}>{filledCount} / 3</div>
                     </div>
-                    {g.request_ids.length > 1 && (
-                      <div className="text-[9px] text-gray-400 italic mt-0.5">merged from {g.request_ids.length} companies</div>
-                    )}
-                  </td>
-                  <td className="px-2 py-2 align-top text-[11px]" style={{ width: '160px', minWidth: '160px' }}>
-                    {g.sites.length ? g.sites.map(s => <div key={s} className="truncate" title={s}>📍 {s}</div>) : <span className="text-gray-300">—</span>}
-                  </td>
+                  </div>
+                </div>
+
+                {/* THREE VENDOR SECTIONS — side-by-side on desktop, stacked on mobile.
+                    Each section has full width to host the searchable dropdown without
+                    overflow, plus the rate input and terms select right beneath. */}
+                <div className="p-3 grid grid-cols-1 md:grid-cols-3 gap-3">
                   {[1, 2, 3].map(n => (
-                    <Fragment key={n}>
-                      <td className="px-1 py-1" style={{ minWidth: '160px' }}>
-                        <SearchableSelect
-                          options={vendors}
-                          value={g[`vendor${n}_name`] || null}
-                          valueKey="name" displayKey="name"
-                          placeholder="Pick vendor"
-                          buttonClassName="text-[11px] px-2 py-1 w-full border border-gray-200 rounded-md bg-white hover:border-gray-300 text-left flex items-center justify-between gap-1 cursor-pointer"
-                          onChange={(v) => updateRate(g.anchor_id, { [`vendor${n}_name`]: v?.name || '' })}
-                        />
-                      </td>
-                      <td className="px-1 py-1" style={{ minWidth: '90px' }}>
-                        <input className="input text-[11px] px-2 py-1 text-right" type="number" min="0" placeholder="0"
-                          defaultValue={g[`vendor${n}_rate`] || ''}
-                          onBlur={e => {
-                            const v = e.target.value;
-                            if (+v !== +(g[`vendor${n}_rate`] || 0)) updateRate(g.anchor_id, { [`vendor${n}_rate`]: v });
-                          }} />
-                      </td>
-                      <td className="px-1 py-1" style={{ minWidth: '100px' }}>
-                        <select className="select text-[11px] px-2 py-1" value={g[`vendor${n}_terms`] || ''}
-                          onChange={e => updateRate(g.anchor_id, { [`vendor${n}_terms`]: e.target.value })}>
-                          <option value="">—</option>
-                          <option value="Advance">Advance</option>
-                          <option value="Credit">Credit</option>
-                        </select>
-                      </td>
-                    </Fragment>
+                    <div key={n} className="border border-gray-200 rounded-lg p-3 bg-gray-50/50">
+                      <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-2">Vendor {n}</div>
+                      <SearchableSelect
+                        options={vendors}
+                        value={g[`vendor${n}_name`] || null}
+                        valueKey="name" displayKey="name"
+                        placeholder="Pick vendor from master"
+                        onChange={(v) => updateRate(g.anchor_id, { [`vendor${n}_name`]: v?.name || '' })}
+                      />
+                      <div className="grid grid-cols-2 gap-2 mt-2">
+                        <div>
+                          <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Rate ₹</label>
+                          <input className="input text-sm text-right tabular-nums" type="number" min="0" placeholder="0"
+                            defaultValue={g[`vendor${n}_rate`] || ''}
+                            onBlur={e => {
+                              const v = e.target.value;
+                              if (+v !== +(g[`vendor${n}_rate`] || 0)) updateRate(g.anchor_id, { [`vendor${n}_rate`]: v });
+                            }} />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Terms</label>
+                          <select className="select text-sm" value={g[`vendor${n}_terms`] || ''}
+                            onChange={e => updateRate(g.anchor_id, { [`vendor${n}_terms`]: e.target.value })}>
+                            <option value="">—</option>
+                            <option value="Advance">Advance</option>
+                            <option value="Credit">Credit</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
                   ))}
-                  <td className="px-2 py-2">
-                    <button onClick={() => openFinalize(g)} className="btn btn-primary text-[11px] py-1 px-2 flex items-center gap-1">
-                      <FiCheckCircle size={12} /> Finalize
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {grouped.length === 0 && (
-                <tr><td colSpan="12" className="text-center py-8 text-gray-400">No open price requests. ✨</td></tr>
-              )}
-            </tbody>
-          </table>
+                </div>
+
+                {/* FOOTER — Finalize button. Disabled until at least one vendor has a rate. */}
+                <div className="px-4 py-2.5 border-t bg-gray-50/60 flex justify-end">
+                  <button
+                    onClick={() => openFinalize(g)}
+                    disabled={filledCount === 0}
+                    className="btn btn-primary text-sm flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <FiCheckCircle size={14} /> Finalize & Add to Item Master
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          {grouped.length === 0 && (
+            <div className="card p-8 text-center text-gray-400 text-sm">No open price requests. ✨</div>
+          )}
         </div>
       )}
 
