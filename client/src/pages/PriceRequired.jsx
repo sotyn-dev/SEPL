@@ -23,7 +23,10 @@ export default function PriceRequired() {
   const [sites, setSites] = useState([]);
 
   const [createModal, setCreateModal] = useState(false);
-  const [form, setForm] = useState({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', notes: '' });
+  const [form, setForm] = useState({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', department: '', notes: '' });
+  // Distinct departments pulled from Item Master so the dropdown matches the
+  // catalog (CIVIL / ELE / FF / GEN / etc.). Auto-fetched when the page loads.
+  const [departments, setDepartments] = useState([]);
 
   const [finalModal, setFinalModal] = useState(null); // grouped row being finalized
   const [finalForm, setFinalForm] = useState({});
@@ -38,6 +41,13 @@ export default function PriceRequired() {
     load();
     api.get('/procurement/vendors').then(r => setVendors((r.data || []).map(v => ({ ...v, label: v.name })))).catch(() => {});
     api.get('/collections/sites').then(r => setSites((r.data || []).map(s => ({ ...s, label: s.name })))).catch(() => {});
+    // Pull every distinct department from Item Master and offer them as
+    // options. New entries can also be typed (the input is a datalist combo).
+    api.get('/item-master/dropdown').then(r => {
+      const set = new Set();
+      for (const i of (r.data || [])) if (i.department) set.add(String(i.department).trim());
+      setDepartments([...set].sort());
+    }).catch(() => setDepartments([]));
   }, []);
 
   const submit = async (e) => {
@@ -47,7 +57,7 @@ export default function PriceRequired() {
       await api.post('/price-requests', form);
       toast.success('Price request raised — purchase team will quote it');
       setCreateModal(false);
-      setForm({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', notes: '' });
+      setForm({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', department: '', notes: '' });
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
@@ -322,6 +332,23 @@ export default function PriceRequired() {
                 <option value="FOC">FOC (Free of Cost)</option>
                 <option value="RGP">RGP (Returnable Gate Pass)</option>
               </select>
+            </div>
+            <div>
+              <label className="label">Department <span className="text-gray-400 font-normal text-[10px]">(matches Item Master)</span></label>
+              {/* Combo input — pick from existing departments OR type a new one.
+                  The list attribute wires the input to the datalist, so the
+                  browser shows autocomplete suggestions. Stored uppercase to
+                  stay consistent with how Item Master treats them. */}
+              <input
+                className="input"
+                list="price-req-departments"
+                placeholder="e.g. CIVIL / ELE / FF / GEN"
+                value={form.department || ''}
+                onChange={e => setForm({ ...form, department: e.target.value.toUpperCase() })}
+              />
+              <datalist id="price-req-departments">
+                {departments.map(d => <option key={d} value={d} />)}
+              </datalist>
             </div>
             <div className="sm:col-span-2">
               <label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label>

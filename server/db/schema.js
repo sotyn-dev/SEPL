@@ -1409,6 +1409,9 @@ function initializeDatabase() {
     ['candidates', 'md_decision TEXT'],            // 'shortlisted' | 'rejected'
     ['candidates', 'offer_letter_file TEXT'],
     ['candidates', 'offer_sent_at DATETIME'],
+    // price_requests carries the item's department (CIVIL / ELE / FF / etc.)
+    // so the auto-promoted item_master row lands in the right department too.
+    ['price_requests', 'department TEXT'],
     // Announcements module — admin posts; everyone reads. Each user's
     // last-seen timestamp is tracked separately so the bell-icon counter
     // can show a "new" badge until they open the panel. Two tables created

@@ -58,8 +58,8 @@ router.post('/', (req, res) => {
     ? String(b.item_type).toUpperCase() : 'PO';
   const r = getDb().prepare(`
     INSERT INTO price_requests
-      (site_name, item_name, size, specification, make, uom, item_type, notes, raised_by)
-    VALUES (?,?,?,?,?,?,?,?,?)
+      (site_name, item_name, size, specification, make, uom, item_type, department, notes, raised_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
   `).run(
     b.site_name || null,
     String(b.item_name).trim(),
@@ -68,6 +68,7 @@ router.post('/', (req, res) => {
     b.make || null,
     b.uom || 'PCS',
     itemType,
+    b.department ? String(b.department).trim().toUpperCase() : null,
     b.notes || null,
     req.user.id,
   );
@@ -214,7 +215,7 @@ router.post('/:id/finalize', (req, res) => {
     final_vendor_name || cur.make || '',
     +final_rate || 0,
     '18%',
-    null,
+    cur.department || null,
   );
   const newMasterId = r.lastInsertRowid;
 
