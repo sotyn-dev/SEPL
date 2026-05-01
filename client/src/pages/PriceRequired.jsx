@@ -134,7 +134,7 @@ export default function PriceRequired() {
             <thead className="bg-gray-50">
               <tr>
                 <th className="text-left px-2 py-2" rowSpan="2">Item</th>
-                <th className="text-left px-2 py-2" rowSpan="2">Sites Requested</th>
+                <th className="text-left px-2 py-2" rowSpan="2">Companies Requested</th>
                 <th className="text-center px-2 py-2" colSpan="3">Vendor 1</th>
                 <th className="text-center px-2 py-2" colSpan="3">Vendor 2</th>
                 <th className="text-center px-2 py-2" colSpan="3">Vendor 3</th>
@@ -163,7 +163,7 @@ export default function PriceRequired() {
                       }`}>{g.item_type}</span>
                     </div>
                     {g.request_ids.length > 1 && (
-                      <div className="text-[9px] text-gray-400 italic mt-0.5">merged from {g.request_ids.length} sites</div>
+                      <div className="text-[9px] text-gray-400 italic mt-0.5">merged from {g.request_ids.length} companies</div>
                     )}
                   </td>
                   <td className="px-2 py-2 align-top text-[11px]" style={{ width: '160px', minWidth: '160px' }}>
@@ -220,7 +220,7 @@ export default function PriceRequired() {
           <table className="text-sm w-full">
             <thead className="bg-gray-50">
               <tr>
-                <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Site</th>
+                <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Company</th>
                 <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Item</th>
                 <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Size / Spec / Make</th>
                 <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Type</th>
@@ -264,13 +264,12 @@ export default function PriceRequired() {
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="label">Site Name</label>
-              <SearchableSelect
-                options={sites}
-                value={form.site_name || null}
-                valueKey="name" displayKey="label"
-                placeholder="Pick site (optional)"
-                onChange={(s) => setForm({ ...form, site_name: s?.name || '' })}
+              <label className="label">Company Name <span className="text-gray-400 font-normal text-[10px]">(optional · type freely)</span></label>
+              <input
+                className="input"
+                placeholder="e.g. M/s Sardarshahar Agri Energy Pvt. Ltd"
+                value={form.site_name || ''}
+                onChange={e => setForm({ ...form, site_name: e.target.value })}
               />
             </div>
             <div>
