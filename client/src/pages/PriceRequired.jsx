@@ -258,7 +258,16 @@ export default function PriceRequired() {
                     {r.status !== 'added' && (r.raised_by === user?.id || isAdmin()) && (
                       <button onClick={() => remove(r.id)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>
                     )}
-                    {r.status === 'added' && r.item_master_id && <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700"><FiTag size={10} /> in Master</span>}
+                    {r.status === 'added' && r.item_master_id && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700" title="Click Item Master in sidebar to view">
+                        <FiTag size={10} /> in Master
+                        {r.master_item_code && (
+                          <span className="font-mono text-[10px] bg-emerald-50 border border-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded">
+                            {r.master_item_code}
+                          </span>
+                        )}
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}

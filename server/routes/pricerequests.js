@@ -28,11 +28,18 @@ router.get('/', (req, res) => {
   // but can switch to "mine" to focus on their own raises.
   if (!isQuoter || scope === 'mine') { where.push('p.raised_by = ?'); params.push(req.user.id); }
   if (status) { where.push('p.status = ?'); params.push(status); }
+  // JOIN item_master so the All Requests list can display the auto-generated
+  // item_code (e.g. PO-0042) right next to the "in Master" badge — saves
+  // mam from having to flip over to the Item Master page to look it up.
   const sql = `
-    SELECT p.*, u.name as raised_by_name, fu.name as finalized_by_name
+    SELECT p.*,
+           u.name as raised_by_name,
+           fu.name as finalized_by_name,
+           im.item_code as master_item_code
       FROM price_requests p
       LEFT JOIN users u  ON u.id  = p.raised_by
       LEFT JOIN users fu ON fu.id = p.finalized_by
+      LEFT JOIN item_master im ON im.id = p.item_master_id
      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
      ORDER BY p.status='added' ASC, p.created_at DESC
   `;
