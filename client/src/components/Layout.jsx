@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import HelpTicket from './HelpTicket';
+import AnnouncementBell from './AnnouncementBell';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
 import api from '../api';
@@ -239,9 +240,12 @@ export default function Layout() {
           <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 hover:bg-gray-100 rounded-lg flex-shrink-0">
             <FiMenu size={20} />
           </button>
-          <h2 className="text-sm md:text-lg font-semibold text-gray-800 truncate">
+          <h2 className="text-sm md:text-lg font-semibold text-gray-800 truncate flex-1">
             {[...menuItems, ...adminItems].find(m => m.path === location.pathname)?.label || 'SEPL ERP'}
           </h2>
+          {/* Announcement bell — every page has it. Admin can post from the
+              dropdown panel; everyone else sees the unread badge + list. */}
+          <AnnouncementBell />
         </header>
         <main className="flex-1 overflow-y-auto p-2 md:p-6 bg-slate-50">
           <Outlet />

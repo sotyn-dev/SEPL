@@ -1251,6 +1251,26 @@ function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_stock_mvmt_item ON stock_movements(item_master_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_stock_mvmt_ref ON stock_movements(reference_type, reference_id);
 
+    -- Announcements — admin posts, everyone reads. Pinned items rise to the top.
+    -- expires_at is optional; rows without it stay visible forever until deleted.
+    CREATE TABLE IF NOT EXISTS announcements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      body TEXT,
+      pinned INTEGER DEFAULT 0,
+      expires_at DATETIME,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_announcements_created ON announcements(created_at DESC);
+
+    -- Tracks each user's last visit to the announcements panel so the bell
+    -- icon can show a "new" count of announcements posted since.
+    CREATE TABLE IF NOT EXISTS announcement_reads (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- PMS Tasks — Project Management tasks created by CRM against a specific
     -- Business Book project. Same lifecycle as delegations (pending → submitted
     -- → approved/rejected) but each task is tied to a BB project_id so the
@@ -1353,6 +1373,11 @@ function initializeDatabase() {
     ['candidates', 'md_decision TEXT'],            // 'shortlisted' | 'rejected'
     ['candidates', 'offer_letter_file TEXT'],
     ['candidates', 'offer_sent_at DATETIME'],
+    // Announcements module — admin posts; everyone reads. Each user's
+    // last-seen timestamp is tracked separately so the bell-icon counter
+    // can show a "new" badge until they open the panel. Two tables created
+    // unconditionally below via CREATE TABLE IF NOT EXISTS — no migration
+    // entries needed for those.
     ['receivables', 'next_planned_date DATE'],
     ['receivables', 'last_discussion TEXT'],
     ['receivables', 'business_book_id INTEGER REFERENCES business_book(id)'],

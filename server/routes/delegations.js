@@ -63,6 +63,59 @@ router.get('/', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
+// Per-person workload dashboard. mam's spec — one row per assignee with:
+//   Total Tasks · Active · Completed · Delayed · Avg Delay (days) · WIP Limit · Status
+// Status:
+//   Overloaded — active_tasks > wip_limit
+//   Constraint — >= 25% of tasks delayed OR avg_delay > 5 days
+//   OK         — neither
+// WIP limit is 5 by default for everyone; can be made per-user later.
+router.get('/dashboard', (req, res) => {
+  const db = getDb();
+  const today = new Date().toISOString().split('T')[0];
+  const WIP_LIMIT_DEFAULT = 5;
+
+  const rows = db.prepare(`
+    SELECT u.id, u.name as person, u.role, u.department,
+           COUNT(d.id) as total_tasks,
+           SUM(CASE WHEN d.status IN ('pending','submitted','rejected') THEN 1 ELSE 0 END) as active_tasks,
+           SUM(CASE WHEN d.status = 'approved' THEN 1 ELSE 0 END) as completed,
+           SUM(CASE WHEN d.status IN ('pending','submitted')
+                     AND d.due_date IS NOT NULL AND d.due_date < ? THEN 1 ELSE 0 END) as delayed_tasks,
+           ROUND(AVG(CASE WHEN d.status IN ('pending','submitted')
+                           AND d.due_date IS NOT NULL AND d.due_date < ?
+                          THEN julianday(?) - julianday(d.due_date) ELSE NULL END), 1) as avg_delay
+      FROM users u
+      LEFT JOIN delegations d ON d.assigned_to = u.id
+     WHERE u.active = 1
+     GROUP BY u.id
+    HAVING total_tasks > 0
+     ORDER BY active_tasks DESC, delayed_tasks DESC, person
+  `).all(today, today, today);
+
+  const out = rows.map(r => {
+    const wip = WIP_LIMIT_DEFAULT;
+    const delayedRatio = r.total_tasks > 0 ? r.delayed_tasks / r.total_tasks : 0;
+    let status = 'OK';
+    if (r.active_tasks > wip) status = 'Overloaded';
+    else if (delayedRatio >= 0.25 || (r.avg_delay || 0) > 5) status = 'Constraint';
+    return {
+      id: r.id,
+      person: r.person,
+      role: r.role,
+      department: r.department,
+      total_tasks: r.total_tasks || 0,
+      active_tasks: r.active_tasks || 0,
+      completed: r.completed || 0,
+      delayed_tasks: r.delayed_tasks || 0,
+      avg_delay: r.avg_delay || 0,
+      wip_limit: wip,
+      status,
+    };
+  });
+  res.json(out);
+});
+
 // Create a new delegation. Admin-only — regular users are recipients, not creators.
 // Title is derived from the first line of the description (first 80 chars)
 // since the UI no longer asks for it separately.

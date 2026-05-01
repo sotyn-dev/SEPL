@@ -17,6 +17,8 @@ export default function Delegation() {
   // her assistant). Admin also counts. Both see "All" tab + can upload proof
   // for anyone.
   const isEA = isAdmin() || canApprove('delegations');
+  const [view, setView] = useState('list'); // 'list' | 'dashboard'
+  const [dashboard, setDashboard] = useState([]);
   const [scope, setScope] = useState(isEA ? 'all' : 'mine'); // mine | given | all
   const [statusFilter, setStatusFilter] = useState('');
   const [assigneeFilter, setAssigneeFilter] = useState('');
@@ -49,6 +51,14 @@ export default function Delegation() {
     load();
     api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
   }, [scope, statusFilter, assigneeFilter, dateFrom, dateTo]);
+
+  // Per-person workload aggregates — only loaded when the dashboard view
+  // is active. Refreshes when the user toggles back to it after changes.
+  useEffect(() => {
+    if (view === 'dashboard') {
+      api.get('/delegations/dashboard').then(r => setDashboard(r.data || [])).catch(() => setDashboard([]));
+    }
+  }, [view]);
 
   // Voice → description. Appends to existing text so user can combine typing + voice.
   const toggleVoice = () => {
@@ -238,10 +248,83 @@ export default function Delegation() {
           <h3 className="text-xl font-bold text-gray-800">Delegations</h3>
           <p className="text-sm text-gray-500">{isAdmin() ? 'Assign tasks, upload proof, approve or reject' : 'Upload proof for tasks assigned to you'}</p>
         </div>
-        {isAdmin() && (
-          <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center"><FiPlus /> New Task</button>
-        )}
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          {/* View toggle — Dashboard is only meaningful for admin / EA who
+              manages the team's workload. Regular users only see "List". */}
+          {isEA && (
+            <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+              <button onClick={() => setView('list')}
+                className={`px-3 py-1.5 ${view === 'list' ? 'bg-red-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>List</button>
+              <button onClick={() => setView('dashboard')}
+                className={`px-3 py-1.5 ${view === 'dashboard' ? 'bg-red-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>Dashboard</button>
+            </div>
+          )}
+          {isAdmin() && view === 'list' && (
+            <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center"><FiPlus /> New Task</button>
+          )}
+        </div>
       </div>
+
+      {/* DASHBOARD — per-person workload table. mam's spec:
+          Person · Total · Active · Completed · Delayed · Avg Delay · WIP Limit · Status
+          Status: 🔴 Overloaded (active > WIP) · 🔴 Constraint (>=25% delayed
+          or avg_delay > 5d) · 🟢 OK */}
+      {view === 'dashboard' && (
+        <>
+          <div className="card p-3 bg-blue-50/40 border-l-4 border-blue-500 text-xs text-gray-700">
+            <b>Workload Dashboard</b> — one row per person with active tasks. WIP limit is 5 by default. <span className="text-red-600 font-semibold">Overloaded</span> = too many active tasks. <span className="text-amber-700 font-semibold">Constraint</span> = ≥25% delayed or avg delay &gt; 5 days.
+          </div>
+          <div className="card p-0 overflow-x-auto">
+            <table className="text-sm w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Person</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Total</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Active</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Completed</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Delayed</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Avg Delay (Days)</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">WIP Limit</th>
+                  <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dashboard.map(r => {
+                  const dotClass = r.status === 'Overloaded' ? 'bg-red-500'
+                    : r.status === 'Constraint' ? 'bg-red-400'
+                    : 'bg-emerald-500';
+                  const overActive = r.active_tasks > r.wip_limit;
+                  return (
+                    <tr key={r.id} className="border-t hover:bg-gray-50/60">
+                      <td className="px-3 py-2">
+                        <div className="font-medium text-gray-900">{r.person}</div>
+                        <div className="text-[10px] text-gray-400">{r.role}{r.department ? ' · ' + r.department : ''}</div>
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">{r.total_tasks}</td>
+                      <td className={`px-3 py-2 text-right tabular-nums font-bold ${overActive ? 'text-red-600' : 'text-gray-800'}`}>{r.active_tasks}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-emerald-700">{r.completed}</td>
+                      <td className={`px-3 py-2 text-right tabular-nums ${r.delayed_tasks > 0 ? 'text-red-600 font-bold' : 'text-gray-400'}`}>{r.delayed_tasks}</td>
+                      <td className={`px-3 py-2 text-right tabular-nums ${(r.avg_delay || 0) > 5 ? 'text-red-600 font-bold' : 'text-gray-700'}`}>{r.avg_delay || 0}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-gray-500">{r.wip_limit}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex items-center gap-1.5 text-[11px] font-bold uppercase`}>
+                          <span className={`w-2.5 h-2.5 rounded-full ${dotClass}`} />
+                          {r.status}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {dashboard.length === 0 && (
+                  <tr><td colSpan="8" className="text-center py-8 text-gray-400 text-sm">No active delegations yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {view === 'list' && (<>
 
       {/* Filters — scope tabs, status, name (assignee), date from/to. The
           "All" tab shows for admin and EA (anyone with can_approve on
@@ -514,6 +597,8 @@ export default function Delegation() {
           );
         })}
       </div>
+
+      </>)}
 
       {/* Create Modal */}
       <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="Assign New Task">
