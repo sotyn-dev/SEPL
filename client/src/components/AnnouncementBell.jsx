@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { FiBell, FiPlus, FiX, FiTrash2, FiPin, FiEdit2 } from 'react-icons/fi';
+import { FiBell, FiPlus, FiX, FiTrash2, FiBookmark, FiEdit2 } from 'react-icons/fi';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -165,7 +165,7 @@ export default function AnnouncementBell() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      {!!a.pinned && <FiPin size={11} className="text-amber-500 flex-shrink-0" title="Pinned" />}
+                      {!!a.pinned && <FiBookmark size={11} className="text-amber-500 flex-shrink-0 fill-amber-500" title="Pinned" />}
                       <span className="font-semibold text-sm text-gray-800">{a.title}</span>
                       {!!a.is_new && <span className="text-[9px] font-bold uppercase bg-red-100 text-red-700 px-1.5 py-0.5 rounded">NEW</span>}
                     </div>
