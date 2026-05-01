@@ -564,7 +564,8 @@ export default function Procurement() {
                         <thead>
                           <tr className="text-gray-500 border-b">
                             <th className="text-left py-1 pr-3 w-10">#</th>
-                            <th className="text-left py-1 pr-3">Description</th>
+                            <th className="text-left py-1 pr-3">BOQ Description</th>
+                            <th className="text-left py-1 pr-3">Sub-Item (Item Master)</th>
                             <th className="text-left py-1 pr-3">Make</th>
                             <th className="text-right py-1 pr-3 w-20">Qty</th>
                             <th className="text-left py-1 pr-3 w-16">Unit</th>
@@ -573,9 +574,24 @@ export default function Procurement() {
                         </thead>
                         <tbody>
                           {items.map((it, idx) => (
-                            <tr key={it.id} className="border-b border-gray-100 last:border-0">
+                            <tr key={it.id} className="border-b border-gray-100 last:border-0 align-top">
                               <td className="py-1 pr-3 text-gray-500">{idx + 1}</td>
-                              <td className="py-1 pr-3">{it.description || it.master_name || <span className="text-gray-400">—</span>}</td>
+                              <td className="py-1 pr-3">{it.description || <span className="text-gray-400">—</span>}</td>
+                              <td className="py-1 pr-3">
+                                {/* Sub-Item column: shows item_code + name + size + spec from
+                                    item_master so mam can tell rows of the same BOQ apart. */}
+                                {(it.item_code || it.master_name) ? (
+                                  <div>
+                                    {it.item_code && <span className="font-mono text-[10px] text-gray-500">[{it.item_code}]</span>}
+                                    {it.master_name && <span className="ml-1 font-medium">{it.master_name}</span>}
+                                    {(it.master_specification || it.master_size) && (
+                                      <div className="text-[10px] text-gray-500">
+                                        {[it.master_size, it.master_specification].filter(Boolean).join(' / ')}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : <span className="text-gray-400 italic">manual entry</span>}
+                              </td>
                               <td className="py-1 pr-3">{it.make || <span className="text-gray-400">—</span>}</td>
                               <td className="py-1 pr-3 text-right">{it.quantity}</td>
                               <td className="py-1 pr-3">{it.unit || '—'}</td>

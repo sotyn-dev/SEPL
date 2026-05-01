@@ -405,9 +405,16 @@ router.get('/indents', (req, res) => {
 
   // Pull every indent_item in one query and group client-side so the
   // listing can show what was raised without a per-row API call.
+  // Also pulls item_master.item_code / specification / size so the expanded
+  // view can show the actual Sub-Item (Item Master entry) alongside the
+  // BOQ description — the BOQ description is often very long and identical
+  // across rows of the same BOQ, so the sub-item column is what tells the
+  // rows apart at a glance.
   const allItems = db.prepare(
     `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity,
-            ii.unit, ii.item_type, im.item_name as master_name
+            ii.unit, ii.item_type,
+            im.item_code, im.item_name as master_name,
+            im.specification as master_specification, im.size as master_size
      FROM indent_items ii
      LEFT JOIN item_master im ON ii.item_master_id = im.id
      ORDER BY ii.id`
