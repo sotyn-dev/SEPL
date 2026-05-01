@@ -1,20 +1,40 @@
-// Print-friendly Vendor PO page.
+// Print-friendly Vendor PO page — matches Secured Engineers' standard
+// Tally-style PO format: top-right voucher block, side-by-side Vendor /
+// Consignee panels, line items with Due-on / Qty / Rate / per / Disc / Amount,
+// CGST + SGST + round-off totals, terms block, computer-generated footer.
 //
-// Opens at /vendor-po/:id/print — a clean full-screen render with the
-// SEPL header, vendor block, item table, totals, terms, and signature
-// line. Two action buttons (hidden on print): Print/Save-PDF and Share
-// via WhatsApp (uses the vendor's phone number).
-//
-// Browser's "Print → Save as PDF" handles the PDF generation, no
-// server-side library needed.
+// Opens at /vendor-po/:id/print. Browser's "Print → Save as PDF" handles
+// the PDF generation, no server-side library needed.
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import api from '../api';
-import toast from 'react-hot-toast';
-import { FiPrinter, FiArrowLeft, FiShare2, FiMessageCircle } from 'react-icons/fi';
+import { FiPrinter, FiArrowLeft, FiMessageCircle } from 'react-icons/fi';
 
-const fmt = (n) => 'Rs ' + (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const fmtMoney = (n) => (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Date formatter — outputs "6-Feb-26" matching the sample PO.
+const fmtDate = (s) => {
+  if (!s) return '';
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  const day = d.getDate();
+  const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+  const yr = String(d.getFullYear()).slice(-2);
+  return `${day}-${mon}-${yr}`;
+};
+
+// Company header — single source of truth so it's easy to edit later if
+// mam's address / GSTIN changes. Could move to a settings table down the
+// road; for now hard-coded matches the sample PDF exactly.
+const COMPANY = {
+  name: 'SECURED ENGINEERS PVT. LTD - 24-25',
+  gstin: '03AASCS7836D2Z3',
+  pan: 'AASCS7836D',
+  state: 'Punjab',
+  state_code: '03',
+  address: '2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, LUDHIANA, Punjab - 141003, India',
+};
 
 export default function VendorPOPrint() {
   const { id } = useParams();
@@ -30,17 +50,38 @@ export default function VendorPOPrint() {
   if (error) return <div className="min-h-screen flex items-center justify-center text-red-600">{error}</div>;
   if (!data) return <div className="min-h-screen flex items-center justify-center text-gray-400">Loading…</div>;
   const { po, items } = data;
-  const subtotal = items.reduce((s, it) => s + (+it.amount || +it.rate * +it.quantity || 0), 0);
-  const total = +po.total_amount || subtotal;
 
-  // WhatsApp share — opens chat with vendor's number prefilled and the
-  // page link in the message body. mam can edit the message before sending.
+  // Subtotal across line items. Falls back to qty × rate if amount column
+  // wasn't filled when the row was saved.
+  const subtotal = items.reduce((s, it) => s + (+it.amount || (+it.rate * +it.quantity) || 0), 0);
+
+  // GST split. Same-state vendor → CGST 9% + SGST 9% (intra). Different
+  // state → IGST 18%. Defaults to intra-state when state is missing,
+  // matching mam's sample (Punjab buyer, Punjab vendor).
+  const sameState = !po.state || String(po.state).trim().toLowerCase() === COMPANY.state.toLowerCase();
+  const gstRate = 0.18;
+  const cgst = sameState ? subtotal * (gstRate / 2) : 0;
+  const sgst = sameState ? subtotal * (gstRate / 2) : 0;
+  const igst = sameState ? 0 : subtotal * gstRate;
+
+  // Round to nearest rupee — the difference between the rupee total and
+  // the paise-precision running total goes on the ROUND OFF line. So the
+  // grand total is always clean rupees.
+  const beforeRound = subtotal + cgst + sgst + igst;
+  const grandTotal = Math.round(beforeRound);
+  const roundOff = +(grandTotal - beforeRound).toFixed(2);
+
+  // Total quantity sum (e.g. "60 LTR") — uses the most common unit across
+  // line items. Falls back to "—" if mixed.
+  const totalQty = items.reduce((s, it) => s + (+it.quantity || 0), 0);
+  const units = [...new Set(items.map(it => (it.unit || it.uom || '').toUpperCase()).filter(Boolean))];
+  const totalUnit = units.length === 1 ? units[0] : '';
+
   const sharePO = () => {
     const phone = String(po.vendor_phone || '').replace(/\D/g, '');
     const url = window.location.href;
-    const msg = `*PO ${po.po_number}* from Secured Engineers Pvt Ltd\n\nDear ${po.contact_person || po.vendor_name || 'Sir/Madam'},\n\nPlease find our Purchase Order below. View / download:\n${url}\n\nTotal: ${fmt(total)}\n\nRegards,\nSEPL`;
+    const msg = `*PO ${po.po_number}* from ${COMPANY.name}\n\nDear ${po.contact_person || po.vendor_name || 'Sir/Madam'},\n\nPlease find our Purchase Order below. View / download:\n${url}\n\nTotal: ₹ ${fmtMoney(grandTotal)}\n\nRegards,\nSEPL`;
     if (!phone) {
-      // Generic share if no phone on file
       window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
     } else {
       const code = phone.length === 10 ? '91' + phone : phone;
@@ -67,137 +108,217 @@ export default function VendorPOPrint() {
         </div>
       </div>
 
-      {/* PO body — printable */}
-      <div className="max-w-4xl mx-auto bg-white shadow-sm my-6 print:my-0 print:shadow-none">
-        <div className="p-8 print:p-6 text-gray-800">
-          {/* Header */}
-          <div className="flex items-start justify-between border-b-2 border-red-700 pb-4 mb-6">
-            <div>
-              <h1 className="text-2xl font-bold text-red-700">SECURED ENGINEERS PVT LTD</h1>
-              <p className="text-xs text-gray-600 mt-1">Fire Fighting · Electrical · MEP Solutions</p>
-              <p className="text-[11px] text-gray-500 mt-2">Email: sepl@securedengineers.com · Web: securedengineers.com</p>
-            </div>
-            <div className="text-right">
-              <div className="text-[11px] uppercase text-gray-500 tracking-wider">Purchase Order</div>
-              <div className="text-2xl font-extrabold text-red-700">{po.po_number}</div>
-              <div className="text-[11px] text-gray-600 mt-1">Date: {po.po_date || new Date(po.created_at).toLocaleDateString('en-IN')}</div>
-              {po.indent_number && <div className="text-[10px] text-gray-500 mt-0.5">Indent: {po.indent_number}{po.site_name ? ` · ${po.site_name}` : ''}</div>}
+      {/* PO body — printable. Border-on-everything Tally style. */}
+      <div className="max-w-4xl mx-auto bg-white shadow-sm my-6 print:my-0 print:shadow-none border border-gray-800 print:border-black text-[12px] text-gray-900">
+        {/* Title bar */}
+        <div className="text-center border-b border-gray-800 print:border-black py-2 font-bold text-[14px]">PURCHASE ORDER</div>
+
+        {/* GSTIN / PAN row */}
+        <div className="flex justify-between border-b border-gray-800 print:border-black px-3 py-1 text-[11px] font-semibold">
+          <span>GSTIN : {COMPANY.gstin}</span>
+          <span>PAN : {COMPANY.pan}</span>
+        </div>
+
+        {/* Company name + address */}
+        <div className="text-center border-b border-gray-800 print:border-black py-2 px-3">
+          <div className="text-[20px] font-extrabold tracking-tight">{COMPANY.name}</div>
+          <div className="text-[10px] text-gray-700 mt-1">{COMPANY.address}</div>
+        </div>
+
+        {/* TWO-COLUMN HEADER: Details of Vendor (left) | Voucher meta (right) */}
+        <div className="grid grid-cols-2 border-b border-gray-800 print:border-black">
+          <div className="border-r border-gray-800 print:border-black p-3">
+            <div className="text-[10px] text-gray-600 mb-1">Details of Vendor</div>
+            <div className="font-bold">{po.vendor_name || '—'}</div>
+            {po.firm_name && po.firm_name !== po.vendor_name && <div className="text-[11px]">{po.firm_name}</div>}
+            {po.vendor_address && <div className="text-[11px] whitespace-pre-line">{po.vendor_address}</div>}
+            {(po.district || po.state) && <div className="text-[11px]">{[po.district, po.state].filter(Boolean).join(', ')} - India</div>}
+            <div className="mt-2 text-[11px]">
+              {po.gst_number && <div>GSTIN/UIN&nbsp;&nbsp;: {po.gst_number}</div>}
+              {po.state && <div>State Name : {po.state}, Code : {po.state_code || ''}</div>}
             </div>
           </div>
+          <div className="p-0 text-[11px]">
+            {/* Right-side meta block — 2-cell-per-row table layout */}
+            <table className="w-full">
+              <tbody>
+                <tr>
+                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-1 w-1/2">Voucher No.: <span className="font-semibold">SEPL-{po.id}</span></td>
+                  <td className="border-b border-gray-800 print:border-black px-2 py-1 w-1/2">Date : <span className="font-semibold">{fmtDate(po.po_date || po.created_at)}</span></td>
+                </tr>
+                <tr>
+                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-1">SEPL PO No.: <span className="font-semibold">{po.po_number || ''}</span></td>
+                  <td className="border-b border-gray-800 print:border-black px-2 py-1">Vender Code:</td>
+                </tr>
+                <tr>
+                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-1">SEPL Indent No.: <span className="font-semibold">{po.indent_number || ''}</span></td>
+                  <td className="border-b border-gray-800 print:border-black px-2 py-1">Contact Person: {po.contact_person || ''}</td>
+                </tr>
+                <tr>
+                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-1">SEPL Lead No.:</td>
+                  <td className="border-b border-gray-800 print:border-black px-2 py-1">Contact No.: {po.vendor_phone || ''}</td>
+                </tr>
+                <tr>
+                  <td colSpan="2" className="px-2 py-1">Ref Quote No.:</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
 
-          {/* Vendor + Ship-to blocks */}
-          <div className="grid grid-cols-2 gap-6 mb-6 text-sm">
-            <div>
-              <div className="text-[10px] uppercase text-gray-500 font-semibold tracking-wider mb-1">Vendor</div>
-              <div className="font-semibold text-gray-800 text-base">{po.vendor_name || '—'}</div>
-              {po.firm_name && po.firm_name !== po.vendor_name && <div className="text-xs text-gray-600">{po.firm_name}</div>}
-              {po.contact_person && <div className="text-xs text-gray-600">Attn: {po.contact_person}</div>}
-              {po.vendor_address && <div className="text-xs text-gray-600">{po.vendor_address}</div>}
-              {(po.district || po.state) && <div className="text-xs text-gray-600">{[po.district, po.state].filter(Boolean).join(', ')}</div>}
-              {po.vendor_phone && <div className="text-xs text-gray-600">📞 {po.vendor_phone}</div>}
-              {po.vendor_email && <div className="text-xs text-gray-600">✉ {po.vendor_email}</div>}
-              {po.gst_number && <div className="text-xs text-gray-600 mt-1">GSTIN: {po.gst_number}</div>}
-            </div>
-            <div>
-              <div className="text-[10px] uppercase text-gray-500 font-semibold tracking-wider mb-1">Deliver To</div>
-              <div className="font-semibold text-gray-800 text-base">{po.site_name || 'Office Store'}</div>
-              <div className="text-xs text-gray-600">Secured Engineers Pvt Ltd</div>
-              {po.raised_by_name && <div className="text-xs text-gray-600 mt-1">Site Engineer: {po.raised_by_name}</div>}
+        {/* TWO-COLUMN: Supplier (Bill from) | Consignee (Ship to) */}
+        <div className="grid grid-cols-2 border-b border-gray-800 print:border-black">
+          <div className="border-r border-gray-800 print:border-black p-3 text-[11px]">
+            <div className="text-[10px] text-gray-600 mb-1">Supplier (Bill from)</div>
+            <div className="font-bold">{po.vendor_name || '—'}</div>
+            {po.vendor_address && <div className="whitespace-pre-line">{po.vendor_address}</div>}
+            {(po.district || po.state) && <div>{[po.district, po.state].filter(Boolean).join(', ')} - India</div>}
+            <div className="mt-2">
+              {po.gst_number && <div>GSTIN/UIN&nbsp;&nbsp;: {po.gst_number}</div>}
+              {po.state && <div>State Name : {po.state}, Code : {po.state_code || ''}</div>}
             </div>
           </div>
+          <div className="p-3 text-[11px]">
+            <div className="text-[10px] text-gray-600 mb-1">Consignee (Ship to)</div>
+            <div className="font-bold">{po.site_name || COMPANY.name}</div>
+            <div className="text-[10px] text-gray-600 mt-2 italic">
+              Ship to the site mentioned above. For exact address coordinate with the site engineer{po.raised_by_name ? ` — ${po.raised_by_name}` : ''}.
+            </div>
+          </div>
+        </div>
 
-          {/* Items table */}
-          <table className="w-full text-sm border border-gray-300 mb-6">
-            <thead className="bg-gray-100">
-              <tr className="text-[11px] uppercase text-gray-700">
-                <th className="border border-gray-300 px-2 py-2 text-left w-10">#</th>
-                <th className="border border-gray-300 px-2 py-2 text-left">Item Description</th>
-                <th className="border border-gray-300 px-2 py-2 text-right w-20">Qty</th>
-                <th className="border border-gray-300 px-2 py-2 text-left w-16">Unit</th>
-                <th className="border border-gray-300 px-2 py-2 text-right w-24">Rate</th>
-                <th className="border border-gray-300 px-2 py-2 text-right w-28">Amount</th>
+        {/* ITEMS TABLE — 8 columns matching the sample */}
+        <table className="w-full text-[11px] border-collapse">
+          <thead>
+            <tr className="border-b border-gray-800 print:border-black">
+              <th className="border-r border-gray-800 print:border-black px-1 py-1 w-8">Sl<br/>No.</th>
+              <th className="border-r border-gray-800 print:border-black px-2 py-1 text-left">Description of Goods</th>
+              <th className="border-r border-gray-800 print:border-black px-1 py-1 w-20">Due on</th>
+              <th className="border-r border-gray-800 print:border-black px-1 py-1 w-20">Quantity</th>
+              <th className="border-r border-gray-800 print:border-black px-1 py-1 w-20">Rate</th>
+              <th className="border-r border-gray-800 print:border-black px-1 py-1 w-12">per</th>
+              <th className="border-r border-gray-800 print:border-black px-1 py-1 w-14">Disc. %</th>
+              <th className="px-2 py-1 w-24 text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((it, idx) => {
+              const desc = it.master_name || it.description || '—';
+              const detail = [it.size, it.specification].filter(Boolean).join(' / ');
+              const make = it.im_make || it.ii_make;
+              const unit = String(it.unit || it.uom || '').toUpperCase();
+              const amount = +it.amount || (+it.rate * +it.quantity) || 0;
+              const dueOn = fmtDate(po.expected_receipt_date || po.po_date || po.created_at);
+              return (
+                <tr key={it.id} className="align-top">
+                  <td className="border-r border-gray-800 print:border-black px-1 py-1 text-center">{idx + 1}</td>
+                  <td className="border-r border-gray-800 print:border-black px-2 py-1">
+                    <div className="font-semibold">{desc}{unit && desc && !desc.toUpperCase().includes(unit) ? ' ' + unit : ''}</div>
+                    {detail && <div className="text-[10px] text-gray-700">{detail}</div>}
+                    {make && <div className="text-[10px] text-gray-600">Make: {make}</div>}
+                  </td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-1 italic text-center">{dueOn}</td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-1 text-right tabular-nums font-semibold">{(+it.quantity || 0).toLocaleString('en-IN')} {unit}</td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-1 text-right tabular-nums">{fmtMoney(it.rate)}</td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-1 text-center">{unit}</td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-1 text-right">{it.disc_pct ? `${it.disc_pct}%` : ''}</td>
+                  <td className="px-2 py-1 text-right tabular-nums font-semibold">{fmtMoney(amount)}</td>
+                </tr>
+              );
+            })}
+
+            {/* Subtotal line — empty cells then amount */}
+            <tr>
+              <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
+              <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right text-[11px]"></td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
+              <td className="px-2 py-1 text-right tabular-nums border-t border-gray-800 print:border-black font-semibold">{fmtMoney(subtotal)}</td>
+            </tr>
+
+            {/* GST + Round off */}
+            {sameState ? (
+              <>
+                <tr>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
+                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">INPUT CGST</td>
+                  <td className="px-2 py-1 text-right tabular-nums">{fmtMoney(cgst)}</td>
+                </tr>
+                <tr>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
+                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">INPUT SGST</td>
+                  <td className="px-2 py-1 text-right tabular-nums">{fmtMoney(sgst)}</td>
+                </tr>
+              </>
+            ) : (
+              <tr>
+                <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
+                <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">INPUT IGST</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtMoney(igst)}</td>
               </tr>
-            </thead>
-            <tbody>
-              {items.map((it, idx) => {
-                const desc = [it.master_name || it.description, it.specification, it.size]
-                  .filter(Boolean).join(' / ');
-                const make = it.im_make || it.ii_make;
-                const amt = +it.amount || (+it.rate * +it.quantity);
-                return (
-                  <tr key={it.id}>
-                    <td className="border border-gray-300 px-2 py-2 text-gray-500">{idx + 1}</td>
-                    <td className="border border-gray-300 px-2 py-2">
-                      {it.item_code && <div className="text-[10px] font-mono text-gray-500">[{it.item_code}]</div>}
-                      <div>{desc || '—'}</div>
-                      {make && <div className="text-[10px] text-gray-500">Make: {make}</div>}
-                      {it.boq_description && (
-                        <div className="text-[10px] text-gray-400 italic mt-1">BOQ: {it.boq_description.slice(0, 100)}{it.boq_description.length > 100 ? '…' : ''}</div>
-                      )}
-                    </td>
-                    <td className="border border-gray-300 px-2 py-2 text-right tabular-nums">{(+it.quantity || 0).toLocaleString('en-IN')}</td>
-                    <td className="border border-gray-300 px-2 py-2 text-xs">{it.unit || it.uom || '—'}</td>
-                    <td className="border border-gray-300 px-2 py-2 text-right tabular-nums">{fmt(it.rate)}</td>
-                    <td className="border border-gray-300 px-2 py-2 text-right tabular-nums font-semibold">{fmt(amt)}</td>
-                  </tr>
-                );
-              })}
-              {items.length === 0 && (
-                <tr><td colSpan="6" className="border border-gray-300 px-2 py-6 text-center text-gray-400">No line items</td></tr>
-              )}
-            </tbody>
-            <tfoot>
-              <tr className="bg-gray-50">
-                <td colSpan="5" className="border border-gray-300 px-2 py-2 text-right font-semibold">Total</td>
-                <td className="border border-gray-300 px-2 py-2 text-right text-lg font-bold text-red-700 tabular-nums">{fmt(total)}</td>
+            )}
+            {Math.abs(roundOff) > 0.001 && (
+              <tr>
+                <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
+                <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">ROUND OFF</td>
+                <td className="px-2 py-1 text-right tabular-nums">{fmtMoney(roundOff)}</td>
               </tr>
-            </tfoot>
-          </table>
+            )}
 
-          {/* Terms */}
-          <div className="mb-6">
-            <div className="text-[10px] uppercase text-gray-500 font-semibold tracking-wider mb-2">Terms & Conditions</div>
-            <ol className="list-decimal list-inside text-xs text-gray-700 space-y-1 leading-relaxed">
-              {po.terms && <li className="font-medium">Payment Terms: {po.terms}{po.credit_days ? ` (${po.credit_days} days credit)` : ''}</li>}
-              <li>Goods are to be delivered to the site mentioned above.</li>
-              <li>Original challan / invoice must accompany the delivery; receipt requires our stamped acknowledgement.</li>
-              <li>Vendor to provide test certificates / warranty documents where applicable.</li>
-              <li>Any defect or shortage will be notified within 7 days of receipt for replacement.</li>
-              <li>This PO is governed by the laws of India; jurisdiction: Lucknow.</li>
-              {po.remarks && <li className="font-medium text-amber-800">Special Notes: {po.remarks}</li>}
-            </ol>
-          </div>
+            {/* Vertical filler — empty rows so the body doesn't look squished */}
+            <tr>
+              <td colSpan="8" className="h-12"></td>
+            </tr>
 
-          {/* Signature */}
-          <div className="grid grid-cols-2 gap-6 mt-12">
-            <div>
-              <div className="border-t border-gray-400 pt-2 text-xs">
-                <div className="font-semibold">Vendor Acknowledgement</div>
-                <div className="text-gray-500">Signature & Seal</div>
-              </div>
-            </div>
-            <div className="text-right">
-              <div className="border-t border-gray-400 pt-2 text-xs">
-                <div className="font-semibold">For Secured Engineers Pvt Ltd</div>
-                <div className="text-gray-500">{po.created_by_name || 'Authorized Signatory'}</div>
-              </div>
-            </div>
-          </div>
+            {/* TOTAL row */}
+            <tr className="border-t border-gray-800 print:border-black">
+              <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right" colSpan="3"><b>Total</b></td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums font-bold">{totalQty.toLocaleString('en-IN')} {totalUnit}</td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-2"></td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-2"></td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-2"></td>
+              <td className="px-2 py-2 text-right tabular-nums font-bold text-[14px]">₹ {fmtMoney(grandTotal)}</td>
+            </tr>
+          </tbody>
+        </table>
 
-          {/* Footer */}
-          <div className="mt-8 pt-3 border-t text-[10px] text-gray-400 text-center">
-            Generated from SEPL ERP · {new Date().toLocaleString('en-IN')}
+        {/* Terms & Conditions */}
+        <div className="border-t border-gray-800 print:border-black px-3 py-2 text-[11px]">
+          <div className="font-bold mb-2">Terms &amp; Conditions</div>
+          <div className="grid grid-cols-1 gap-1">
+            <div>Payment Terms&nbsp;&nbsp;: {po.terms || ''}{po.credit_days ? ` (${po.credit_days} days)` : ''}</div>
+            <div>Terms for Delivery&nbsp;&nbsp;: {po.expected_receipt_date ? `Delivery by ${fmtDate(po.expected_receipt_date)}` : ''}</div>
           </div>
+          <ul className="mt-2 space-y-0.5 text-[10.5px] leading-snug list-none">
+            <li>Please mention PO No, Item Code and HSN on all the Invoices.</li>
+            <li>Raw Material of Item must be mentioned and cerified with Test Certificate.</li>
+            <li>Goods should contain Packing Slip with description of Item's Name and Quantity.</li>
+            <li>Buyer reserves the right to cancel, amend this PO or any percentage thereof.</li>
+            <li>Buyer assumes no obligation in relation to any goods delivered in excess of those order.</li>
+            <li>GST Amunt will be paid only if our GSTIN details are mentioned in Tax Invoice issued, Liabilities of GST paid &amp; GST Return file intimation against this Purchase Order</li>
+            <li>In case of any credit, refund or other benefit is denied or delayed to the buyer due to any non-compliance by the seller (such as failure to upload the details of supply on GSTIN Portal, failure to Pay GST to the GOVT.) due to non furnishing of incorrect or incomplete document/details/ information by the seller, the seller would reimburse the buyer the loss t buyer including, but not limited.</li>
+            <li>If there is any dispute then first it will be solved be arbitator of the company and then by the court, ALL RESPECT TO LUDHIANA JURISDICTION</li>
+          </ul>
+          {po.remarks && <div className="mt-2 text-[11px]"><b>Special Notes:</b> {po.remarks}</div>}
+        </div>
+
+        {/* Footer */}
+        <div className="text-center border-t border-gray-800 print:border-black py-2 text-[11px] font-semibold italic">
+          This is a Computer Generated Voucher. No Signature Required.
         </div>
       </div>
 
       <style>{`
         @media print {
+          @page { size: A4; margin: 8mm; }
           body { background: white !important; }
           .print\\:hidden { display: none !important; }
           .print\\:my-0 { margin-top: 0 !important; margin-bottom: 0 !important; }
-          .print\\:p-6 { padding: 1.5rem !important; }
           .print\\:shadow-none { box-shadow: none !important; }
+          .print\\:border-black { border-color: black !important; }
         }
       `}</style>
     </div>

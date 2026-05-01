@@ -291,8 +291,14 @@ export default function Procurement() {
 
     try {
       const r = await api.post('/procurement/vendor-po', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      toast.success(`Vendor PO ${r.data.po_number} uploaded (Rs ${r.data.total_amount.toLocaleString()}${r.data.lines ? `, ${r.data.lines} linked items` : ''})`);
+      toast.success(`Vendor PO ${r.data.po_number} created (Rs ${r.data.total_amount.toLocaleString()}${r.data.lines ? `, ${r.data.lines} linked items` : ''}) — opening print view`);
       setModal(false); load();
+      // mam asked for "after create show me po as pdf" — open the printable
+      // PO in a new tab so she can review / print / share immediately. The
+      // browser's "Save as PDF" handles the PDF generation.
+      if (r.data.id) {
+        setTimeout(() => window.open(`/vendor-po/${r.data.id}/print`, '_blank'), 300);
+      }
     } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
   };
 
