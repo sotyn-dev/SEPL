@@ -88,8 +88,18 @@ export default function HR() {
 
   const saveCandidate = async (e) => {
     e.preventDefault();
-    if (editing) { await api.put(`/hr/candidates/${editing.id}`, form); }
-    else { await api.post('/hr/candidates', form); }
+    // Upload the resume first (if attached) and stash the URL on the
+    // candidate row so the same file flows naturally into Stage 2's
+    // schedule-interview screen — no need to re-upload there.
+    let payload = { ...form };
+    delete payload._file; // never POST the File object itself
+    if (form._file) {
+      const url = await uploadFile(form._file);
+      if (!url) return; // uploadFile shows its own error toast
+      payload.resume_file = url;
+    }
+    if (editing) { await api.put(`/hr/candidates/${editing.id}`, payload); }
+    else { await api.post('/hr/candidates', payload); }
     toast.success(editing ? 'Updated' : 'Added candidate (Stage 1 — Lead)');
     setModal(false); load();
   };
@@ -309,8 +319,23 @@ export default function HR() {
             <div><label className="label">Source</label><select className="select" value={form.source || ''} onChange={e => setForm({...form, source: e.target.value})}>{sources.map(s => <option key={s} value={s}>{s}</option>)}</select></div>
             {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{candidateStatuses.map(s => <option key={s} value={s}>{s.replace(/_/g,' ')}</option>)}</select></div>}
           </div>
+          <div>
+            <label className="label">Resume <span className="text-gray-400 font-normal text-[10px]">(optional · PDF / DOC / DOCX)</span></label>
+            <input
+              className="input"
+              type="file"
+              accept=".pdf,.doc,.docx"
+              onChange={e => setForm({...form, _file: e.target.files?.[0] || null})}
+            />
+            {/* Show the existing resume link when editing — uploading a new
+                file replaces it; otherwise the existing URL is preserved. */}
+            {editing && form.resume_file && !form._file && (
+              <p className="text-[10px] text-emerald-600 mt-0.5">Existing: <a href={form.resume_file} target="_blank" rel="noreferrer" className="underline">view resume</a> · upload a new file to replace</p>
+            )}
+            {form._file && <p className="text-[10px] text-blue-600 mt-0.5">Selected: {form._file.name}</p>}
+          </div>
           <div><label className="label">Notes</label><textarea className="input" rows="3" value={form.notes || ''} onChange={e => setForm({...form, notes: e.target.value})} /></div>
-          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Add Candidate'}</button></div>
+          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" disabled={uploading} className="btn btn-primary">{uploading ? 'Uploading…' : (editing ? 'Update' : 'Add Candidate')}</button></div>
         </form>
       </Modal>
 
