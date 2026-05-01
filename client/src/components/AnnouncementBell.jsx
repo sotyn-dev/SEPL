@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { FiBell, FiPlus, FiX, FiTrash2, FiBookmark, FiEdit2 } from 'react-icons/fi';
+import { FiBell, FiPlus, FiX, FiTrash2, FiBookmark, FiEdit2, FiEye, FiChevronDown } from 'react-icons/fi';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -16,6 +16,9 @@ export default function AnnouncementBell() {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ title: '', body: '', pinned: false, expires_at: '' });
   const [editing, setEditing] = useState(null);
+  // Per-announcement reader drill-down (admin only). Map of id → readers data.
+  const [readers, setReaders] = useState({}); // { [annId]: { read_count, unread_count, readers, non_readers } }
+  const [expandedReaders, setExpandedReaders] = useState(null); // id of announcement currently expanded
   const ref = useRef(null);
 
   const loadCount = () => {
@@ -87,6 +90,21 @@ export default function AnnouncementBell() {
     const d = new Date(s);
     if (isNaN(d.getTime())) return s;
     return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) + ' · ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  // Lazy-load the reader breakdown for one announcement when admin clicks
+  // the "👁 N read" pill. Cache so flipping back & forth is instant.
+  const toggleReaders = async (annId) => {
+    if (expandedReaders === annId) { setExpandedReaders(null); return; }
+    setExpandedReaders(annId);
+    if (!readers[annId]) {
+      try {
+        const { data } = await api.get(`/announcements/${annId}/readers`);
+        setReaders(prev => ({ ...prev, [annId]: data }));
+      } catch (err) {
+        toast.error(err.response?.data?.error || 'Failed to load readers');
+      }
+    }
   };
 
   return (
@@ -170,10 +188,57 @@ export default function AnnouncementBell() {
                       {!!a.is_new && <span className="text-[9px] font-bold uppercase bg-red-100 text-red-700 px-1.5 py-0.5 rounded">NEW</span>}
                     </div>
                     {a.body && <p className="text-[12px] text-gray-600 mt-1 whitespace-pre-wrap">{a.body}</p>}
-                    <div className="text-[10px] text-gray-400 mt-1">
-                      {a.created_by_name || 'Admin'} · {fmt(a.created_at)}
-                      {a.expires_at && <> · expires {fmt(a.expires_at)}</>}
+                    <div className="text-[10px] text-gray-400 mt-1 flex flex-wrap items-center gap-2">
+                      <span>{a.created_by_name || 'Admin'} · {fmt(a.created_at)}</span>
+                      {a.expires_at && <span>· expires {fmt(a.expires_at)}</span>}
+                      {/* Read tracker — admin only. Shows N of M read.
+                          Coloured green when everyone read it, amber otherwise.
+                          Click expands a small list of who has / hasn't read. */}
+                      {isAdmin() && a.total_users > 0 && (
+                        <button
+                          onClick={() => toggleReaders(a.id)}
+                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium ${
+                            a.read_count >= a.total_users
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                              : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                          }`}
+                          title="Click to see who read"
+                        >
+                          <FiEye size={10} /> {a.read_count} of {a.total_users} read
+                          <FiChevronDown size={10} className={`transition-transform ${expandedReaders === a.id ? 'rotate-180' : ''}`} />
+                        </button>
+                      )}
                     </div>
+
+                    {/* Reader drill-down — only rendered when expanded.
+                        Shows two lists: ✓ who has read (with timestamp) and
+                        ✗ who hasn't yet, so admin can chase up the laggards. */}
+                    {isAdmin() && expandedReaders === a.id && (
+                      <div className="mt-2 border-t pt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                        <div>
+                          <div className="font-bold text-emerald-700 mb-1">✓ Read ({readers[a.id]?.read_count || 0})</div>
+                          {readers[a.id]?.readers?.length ? (
+                            <ul className="space-y-0.5 max-h-32 overflow-y-auto">
+                              {readers[a.id].readers.map(u => (
+                                <li key={u.id} className="text-gray-700">
+                                  {u.name} <span className="text-gray-400 text-[9px]">· {fmt(u.seen_at)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : <div className="text-gray-400 italic">Nobody yet</div>}
+                        </div>
+                        <div>
+                          <div className="font-bold text-red-700 mb-1">✗ Not yet ({readers[a.id]?.unread_count || 0})</div>
+                          {readers[a.id]?.non_readers?.length ? (
+                            <ul className="space-y-0.5 max-h-32 overflow-y-auto">
+                              {readers[a.id].non_readers.map(u => (
+                                <li key={u.id} className="text-gray-700">{u.name}</li>
+                              ))}
+                            </ul>
+                          ) : <div className="text-emerald-600 italic">Everyone read! 🎉</div>}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   {isAdmin() && (
                     <div className="flex flex-col gap-1 flex-shrink-0">
