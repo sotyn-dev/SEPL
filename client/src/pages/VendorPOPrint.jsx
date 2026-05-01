@@ -108,8 +108,10 @@ export default function VendorPOPrint() {
         </div>
       </div>
 
-      {/* PO body — printable. Branded Tally style with SEPL red accents. */}
-      <div className="max-w-4xl mx-auto bg-white shadow-lg my-6 print:my-0 print:shadow-none border border-gray-800 print:border-black text-[12px] text-gray-900 overflow-hidden">
+      {/* PO body — printable. Branded Tally style with SEPL red accents.
+          The outer text color is locked to gray-900 so no inherited link
+          color (e.g. visited link blue) bleeds into descriptions. */}
+      <div className="max-w-4xl mx-auto bg-white shadow-lg my-6 print:my-0 print:shadow-none border-2 border-gray-800 print:border-black text-[12px] text-gray-900 overflow-hidden po-body">
         {/* RED branded title bar — pops the document immediately as a SEPL PO */}
         <div className="bg-red-700 text-white text-center py-2.5 px-3 print:bg-red-700">
           <div className="font-extrabold text-[16px] tracking-[0.3em] uppercase">Purchase Order</div>
@@ -196,18 +198,21 @@ export default function VendorPOPrint() {
             - Item code shown as a mono-font chip (e.g. PO-0042) for fast
               cross-reference with Item Master and Inventory
             - Totals block visually separated; CGST/SGST in muted text;
-              Grand Total in bold + larger size + thicker top border */}
+              Grand Total in bold + larger size + thicker top border
+            - All cells have explicit borders (incl. rightmost Amount column)
+              so the table reads as a single tight grid even when the page
+              is wider than the content. */}
         <table className="w-full text-[11px] border-collapse">
           <thead>
-            <tr className="border-b-2 border-gray-800 print:border-black bg-red-700 text-white text-[10px] uppercase tracking-wide font-bold print:bg-red-700">
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-8">Sl<br/>No.</th>
-              <th className="border-r border-red-800 print:border-black px-2 py-2 text-left">Description of Goods</th>
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-20">Due on</th>
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-20">Quantity</th>
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-20">Rate</th>
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-12">per</th>
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-12">Disc.%</th>
-              <th className="px-2 py-2 w-24 text-right">Amount</th>
+            <tr className="border-b-2 border-gray-800 print:border-black bg-red-700 text-[10px] uppercase tracking-wide font-bold print:bg-red-700" style={{ color: '#ffffff' }}>
+              <th className="border-r border-red-800 print:border-black px-1 py-2 w-8" style={{ color: '#ffffff' }}>Sl<br/>No.</th>
+              <th className="border-r border-red-800 print:border-black px-2 py-2 text-left" style={{ color: '#ffffff' }}>Description of Goods</th>
+              <th className="border-r border-red-800 print:border-black px-1 py-2 w-20" style={{ color: '#ffffff' }}>Due on</th>
+              <th className="border-r border-red-800 print:border-black px-1 py-2 w-20" style={{ color: '#ffffff' }}>Quantity</th>
+              <th className="border-r border-red-800 print:border-black px-1 py-2 w-20" style={{ color: '#ffffff' }}>Rate</th>
+              <th className="border-r border-red-800 print:border-black px-1 py-2 w-12" style={{ color: '#ffffff' }}>per</th>
+              <th className="border-r border-red-800 print:border-black px-1 py-2 w-12" style={{ color: '#ffffff' }}>Disc.%</th>
+              <th className="border-r border-red-800 print:border-black px-2 py-2 w-24 text-right" style={{ color: '#ffffff' }}>Amount</th>
             </tr>
           </thead>
           <tbody>
@@ -222,19 +227,20 @@ export default function VendorPOPrint() {
               return (
                 <tr key={it.id} className={`align-top ${stripeBg}`}>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-center text-gray-500">{idx + 1}</td>
-                  <td className="border-r border-gray-800 print:border-black px-2 py-2">
+                  <td className="border-r border-gray-800 print:border-black px-2 py-2 text-gray-900">
                     {/* Item code chip + bold name on first visual line, then
                         a subtle secondary line with size · spec · make so
-                        long descriptions don't dominate the cell. */}
+                        long descriptions don't dominate the cell. Explicit
+                        dark text colors so no inherited link color bleeds in. */}
                     <div className="flex items-baseline gap-1.5 flex-wrap">
                       {it.item_code && <span className="font-mono text-[9px] text-gray-500 bg-gray-100 px-1 py-0.5 rounded">{it.item_code}</span>}
-                      <span className="font-bold text-[11.5px] leading-snug">{desc}{unit && desc && !desc.toUpperCase().includes(unit) ? ' ' + unit : ''}</span>
+                      <span className="font-bold text-[11.5px] leading-snug text-gray-900" style={{ color: '#111827' }}>{desc}{unit && desc && !desc.toUpperCase().includes(unit) ? ' ' + unit : ''}</span>
                     </div>
                     {(detail || make) && (
-                      <div className="text-[9.5px] text-gray-600 mt-0.5 leading-tight">
+                      <div className="text-[9.5px] text-gray-700 mt-0.5 leading-tight">
                         {detail && <span>{detail}</span>}
                         {detail && make && <span className="mx-1">·</span>}
-                        {make && <span>Make: <span className="font-semibold text-gray-700">{make}</span></span>}
+                        {make && <span>Make: <span className="font-semibold text-gray-800">{make}</span></span>}
                       </div>
                     )}
                   </td>
@@ -243,7 +249,7 @@ export default function VendorPOPrint() {
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums">{fmtMoney(it.rate)}</td>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-center text-gray-600">{unit}</td>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right text-gray-500">{it.disc_pct ? `${it.disc_pct}%` : ''}</td>
-                  <td className="px-2 py-2 text-right tabular-nums font-bold text-gray-900">{fmtMoney(amount)}</td>
+                  <td className="border-r border-gray-800 print:border-black px-2 py-2 text-right tabular-nums font-bold text-gray-900">{fmtMoney(amount)}</td>
                 </tr>
               );
             })}
@@ -252,7 +258,7 @@ export default function VendorPOPrint() {
             <tr className="border-t-2 border-gray-800 print:border-black">
               <td className="border-r border-gray-800 print:border-black px-1 py-1.5"></td>
               <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1.5 text-right text-[11px] font-semibold text-gray-700">Sub Total</td>
-              <td className="px-2 py-1.5 text-right tabular-nums font-bold">{fmtMoney(subtotal)}</td>
+              <td className="border-r border-gray-800 print:border-black px-2 py-1.5 text-right tabular-nums font-bold">{fmtMoney(subtotal)}</td>
             </tr>
 
             {/* GST + Round off — muted */}
@@ -261,37 +267,37 @@ export default function VendorPOPrint() {
                 <tr className="text-gray-600">
                   <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
                   <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">CGST @ 9%</td>
-                  <td className="px-2 py-1 text-right tabular-nums">{fmtMoney(cgst)}</td>
+                  <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right tabular-nums">{fmtMoney(cgst)}</td>
                 </tr>
                 <tr className="text-gray-600">
                   <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
                   <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">SGST @ 9%</td>
-                  <td className="px-2 py-1 text-right tabular-nums">{fmtMoney(sgst)}</td>
+                  <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right tabular-nums">{fmtMoney(sgst)}</td>
                 </tr>
               </>
             ) : (
               <tr className="text-gray-600">
                 <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
                 <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">IGST @ 18%</td>
-                <td className="px-2 py-1 text-right tabular-nums">{fmtMoney(igst)}</td>
+                <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right tabular-nums">{fmtMoney(igst)}</td>
               </tr>
             )}
             {Math.abs(roundOff) > 0.001 && (
               <tr className="text-gray-500">
                 <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
                 <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">Round Off</td>
-                <td className="px-2 py-1 text-right tabular-nums">{fmtMoney(roundOff)}</td>
+                <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right tabular-nums">{fmtMoney(roundOff)}</td>
               </tr>
             )}
 
             {/* GRAND TOTAL — red branded bg, larger fonts for visual pop */}
-            <tr className="border-t-2 border-b-2 border-gray-800 print:border-black bg-red-700 text-white print:bg-red-700">
-              <td className="border-r border-red-800 print:border-black px-1 py-3 text-right font-extrabold uppercase text-[13px] tracking-wide" colSpan="3">Grand Total</td>
-              <td className="border-r border-red-800 print:border-black px-1 py-3 text-right tabular-nums font-bold text-[13px]">{totalQty.toLocaleString('en-IN')} {totalUnit}</td>
+            <tr className="border-t-2 border-b-2 border-gray-800 print:border-black bg-red-700 print:bg-red-700" style={{ color: '#ffffff' }}>
+              <td className="border-r border-red-800 print:border-black px-1 py-3 text-right font-extrabold uppercase text-[13px] tracking-wide" colSpan="3" style={{ color: '#ffffff' }}>Grand Total</td>
+              <td className="border-r border-red-800 print:border-black px-1 py-3 text-right tabular-nums font-bold text-[13px]" style={{ color: '#ffffff' }}>{totalQty.toLocaleString('en-IN')} {totalUnit}</td>
               <td className="border-r border-red-800 print:border-black px-1 py-3"></td>
               <td className="border-r border-red-800 print:border-black px-1 py-3"></td>
               <td className="border-r border-red-800 print:border-black px-1 py-3"></td>
-              <td className="px-2 py-3 text-right tabular-nums font-extrabold text-[18px]">₹ {fmtMoney(grandTotal)}</td>
+              <td className="border-r border-red-800 print:border-black px-2 py-3 text-right tabular-nums font-extrabold text-[18px]" style={{ color: '#ffffff' }}>₹ {fmtMoney(grandTotal)}</td>
             </tr>
           </tbody>
         </table>
