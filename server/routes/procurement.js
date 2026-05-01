@@ -608,17 +608,19 @@ router.get('/vendor-po', (req, res) => {
 // or share to vendor.
 router.get('/vendor-po/:id/print', (req, res) => {
   const db = getDb();
+  // vendor_pos has no created_by column (verified in schema), so the
+  // print page falls back to "Authorized Signatory" when the creator
+  // can't be looked up. Indent.created_by is available via the indent
+  // join below if mam ever wants the raiser's name on the PO instead.
   const po = db.prepare(`
     SELECT vp.*, v.name as vendor_name, v.firm_name, v.contact_person,
            v.phone as vendor_phone, v.email as vendor_email,
            v.gst_number, v.address as vendor_address,
            v.district, v.state, v.payment_terms as vendor_payment_terms,
-           i.indent_number, i.site_name, i.raised_by_name,
-           u.name as created_by_name
+           i.indent_number, i.site_name, i.raised_by_name
       FROM vendor_pos vp
       LEFT JOIN vendors v ON vp.vendor_id = v.id
       LEFT JOIN indents i ON vp.indent_id = i.id
-      LEFT JOIN users u ON vp.created_by = u.id
      WHERE vp.id = ?
   `).get(req.params.id);
   if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
