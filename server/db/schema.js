@@ -1412,6 +1412,15 @@ function initializeDatabase() {
     // price_requests carries the item's department (CIVIL / ELE / FF / etc.)
     // so the auto-promoted item_master row lands in the right department too.
     ['price_requests', 'department TEXT'],
+    // leave_requests gained these columns over time but the migrations were
+    // never registered — older production DBs (created when leave_requests
+    // had only the basic from/to/reason set) were missing them, blocking
+    // submission with "table leave_requests has no column named hours".
+    ['leave_requests', 'hours REAL DEFAULT 0'],
+    ['leave_requests', 'days INTEGER DEFAULT 1'],
+    ['leave_requests', 'from_time TEXT'],
+    ['leave_requests', 'to_time TEXT'],
+    ['leave_requests', 'remarks TEXT'],
     // Announcements module — admin posts; everyone reads. Each user's
     // last-seen timestamp is tracked separately so the bell-icon counter
     // can show a "new" badge until they open the panel. Two tables created
