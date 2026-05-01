@@ -13,6 +13,7 @@ import Attendance from './pages/Attendance';
 import Vendors from './pages/Vendors';
 import Customers from './pages/Customers';
 import Procurement from './pages/Procurement';
+import PriceRequired from './pages/PriceRequired';
 import Installation from './pages/Installation';
 import Billing from './pages/Billing';
 import Complaints from './pages/Complaints';
@@ -93,6 +94,7 @@ export default function App() {
         <Route path="vendors" element={<ModuleRoute module="vendors"><Vendors /></ModuleRoute>} />
         <Route path="customers" element={<ModuleRoute module="customers"><Customers /></ModuleRoute>} />
         <Route path="procurement" element={<ModuleRoute module="procurement"><Procurement /></ModuleRoute>} />
+        <Route path="price-required" element={<PriceRequired />} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />
         <Route path="installation" element={<ModuleRoute module="installation"><Installation /></ModuleRoute>} />

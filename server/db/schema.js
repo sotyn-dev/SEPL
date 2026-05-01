@@ -1271,6 +1271,42 @@ function initializeDatabase() {
       last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Price Required — site engineer raises a "we need price for this item"
+    -- request when an item isn't yet in the catalog. Purchase team gathers 3
+    -- vendor quotes, picks a final rate, and the system auto-promotes the
+    -- finalized item into item_master so it can be used in future indents.
+    --
+    -- Identical requests from multiple sites (same name+size+spec+make+uom+type)
+    -- merge in the UI so the purchase team only fills rates once.
+    CREATE TABLE IF NOT EXISTS price_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      site_name TEXT,
+      item_name TEXT NOT NULL,
+      size TEXT,
+      specification TEXT,
+      make TEXT,
+      uom TEXT DEFAULT 'PCS',
+      item_type TEXT DEFAULT 'PO' CHECK(item_type IN ('PO','FOC','RGP')),
+      notes TEXT,
+      raised_by INTEGER REFERENCES users(id),
+      status TEXT DEFAULT 'open' CHECK(status IN ('open','quoted','finalized','added')),
+      -- 3 vendor quotes
+      vendor1_name TEXT, vendor1_rate REAL, vendor1_terms TEXT,
+      vendor2_name TEXT, vendor2_rate REAL, vendor2_terms TEXT,
+      vendor3_name TEXT, vendor3_rate REAL, vendor3_terms TEXT,
+      -- Final pick
+      final_vendor_name TEXT,
+      final_rate REAL,
+      final_terms TEXT,
+      finalized_by INTEGER REFERENCES users(id),
+      finalized_at DATETIME,
+      -- Set after the system promotes this to the catalog
+      item_master_id INTEGER REFERENCES item_master(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_price_requests_status ON price_requests(status, created_at DESC);
+
     -- PMS Tasks — Project Management tasks created by CRM against a specific
     -- Business Book project. Same lifecycle as delegations (pending → submitted
     -- → approved/rejected) but each task is tied to a BB project_id so the

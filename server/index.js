@@ -71,6 +71,7 @@ app.use('/api/complaints', require('./routes/complaints'));
 app.use('/api/hr', require('./routes/hr'));
 app.use('/api/delegations', require('./routes/delegations'));
 app.use('/api/announcements', require('./routes/announcements'));
+app.use('/api/price-requests', require('./routes/pricerequests'));
 app.use('/api/pms-tasks', require('./routes/pmstasks'));
 app.use('/api/admin/backups', require('./routes/backups'));
 app.use('/api/admin/word-count', require('./routes/wordcount'));
