@@ -113,9 +113,14 @@ export default function Layout() {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           if (cancelled) return;
+          // accuracy is the radius of GPS uncertainty in meters. Backend
+          // uses it to apply a tolerance to the geofence check so users
+          // physically on site aren't tagged "Outside" because of indoor
+          // GPS drift / cloud cover noise.
           api.post('/attendance/track-location', {
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy || 0,
             address: '',
           }).catch(() => {});
         },

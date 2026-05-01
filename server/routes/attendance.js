@@ -187,7 +187,11 @@ router.post('/punch-in', (req, res) => {
   const existing = db.prepare('SELECT id FROM attendance WHERE user_id=? AND date=?').get(req.user.id, today);
   if (existing) return res.status(400).json({ error: 'Already punched in today' });
 
-  // Check geofence — MANDATORY, must be inside a site area
+  // Check geofence — MANDATORY, must be inside a site area. We accept a
+  // GPS accuracy buffer (clamped to 500m to prevent junk from auto-passing)
+  // so users with normal indoor / cloudy-day GPS noise aren't blocked from
+  // punching in even though they're physically at site.
+  const acc = +req.body?.accuracy > 0 ? Math.min(+req.body.accuracy, 500) : 0;
   const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
   if (geofences.length === 0) {
     return res.status(400).json({ error: 'No site locations configured. Contact admin to add geofence areas.' });
@@ -199,7 +203,9 @@ router.post('/punch-in', (req, res) => {
   for (const gf of geofences) {
     const dist = haversine(latitude, longitude, gf.latitude, gf.longitude);
     if (dist < nearestDist) { nearestDist = dist; nearestSite = gf.site_name; }
-    if (dist <= gf.radius_meters) {
+    // Apply accuracy tolerance — if the raw distance minus the GPS error
+    // bubble fits inside the radius, count as on-site.
+    if (dist - acc <= gf.radius_meters) {
       insideGeofence = true;
       matchedSite = gf.site_name || matchedSite;
       break;
@@ -207,7 +213,8 @@ router.post('/punch-in', (req, res) => {
   }
 
   if (!insideGeofence) {
-    return res.status(400).json({ error: `You are ${Math.round(nearestDist)}m away from nearest site (${nearestSite}). Go to your assigned site to punch. Geofence radius: ${geofences[0]?.radius_meters || 200}m` });
+    const accNote = acc > 50 ? ` (GPS accuracy ±${Math.round(acc)}m — try moving outdoors for a better fix)` : '';
+    return res.status(400).json({ error: `You are ${Math.round(nearestDist)}m away from nearest site (${nearestSite}). Go to your assigned site to punch. Geofence radius: ${geofences[0]?.radius_meters || 200}m.${accNote}` });
   }
 
   // Check if late (after 9:45 AM)
@@ -244,18 +251,26 @@ router.post('/punch-out', (req, res) => {
   res.json({ message: `Punched Out. Total: ${totalHours} hours`, totalHours });
 });
 
-// Live location tracking — site engineer sends location periodically
+// Live location tracking — site engineer sends location periodically.
+// GPS accuracy buffer: phone GPS readings can be off by 50-200m+ indoors
+// or under cloud cover. Without a buffer, users physically on site
+// frequently get tagged "Outside" because the noisy GPS pin lands just
+// past the geofence radius. We subtract the reported accuracy from the
+// haversine distance — i.e. if dist=250m, accuracy=100m, radius=200m,
+// the true position could be anywhere from 150m to 350m away, so we give
+// the benefit of the doubt and treat it as inside (150 <= 200).
 router.post('/track-location', (req, res) => {
-  const { latitude, longitude, address } = req.body;
+  const { latitude, longitude, address, accuracy } = req.body;
   if (!latitude || !longitude) return res.status(400).json({ error: 'Location required' });
+  const acc = +accuracy > 0 ? Math.min(+accuracy, 500) : 0; // clamp to 500m so a junk reading doesn't auto-pass
   const db = getDb();
   const today = new Date().toISOString().split('T')[0];
   const now = new Date().toISOString();
-  // Check which site they're at
   const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
   let siteName = 'Outside';
   for (const gf of geofences) {
-    if (haversine(latitude, longitude, gf.latitude, gf.longitude) <= gf.radius_meters) {
+    const dist = haversine(latitude, longitude, gf.latitude, gf.longitude);
+    if (dist - acc <= gf.radius_meters) {
       siteName = gf.site_name; break;
     }
   }

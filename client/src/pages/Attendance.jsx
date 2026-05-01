@@ -69,7 +69,7 @@ export default function Attendance() {
     const trackLocation = () => {
       if (!navigator.geolocation) return;
       navigator.geolocation.getCurrentPosition(pos => {
-        const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+        const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 };
         setLocation(loc);
         api.post('/attendance/track-location', { ...loc, address: '' }).catch(() => {});
         // Re-fetch my-today so auto-punch events reflect in UI quickly
@@ -88,8 +88,14 @@ export default function Attendance() {
     const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   };
+  // Mirror the backend's accuracy-buffered check so the live "Inside Site"
+  // pill in the Attendance page matches what punch-in / track-location see.
   const insideSite = location && geofences.length > 0
-    ? geofences.filter(g => g.active !== 0).find(g => haversineMeters(location.latitude, location.longitude, g.latitude, g.longitude) <= (g.radius_meters || 200))
+    ? geofences.filter(g => g.active !== 0).find(g => {
+        const dist = haversineMeters(location.latitude, location.longitude, g.latitude, g.longitude);
+        const acc = Math.min(+location.accuracy || 0, 500);
+        return dist - acc <= (g.radius_meters || 200);
+      })
     : null;
 
   // Get current location
@@ -98,7 +104,7 @@ export default function Attendance() {
       if (!navigator.geolocation) return reject('GPS not supported');
       navigator.geolocation.getCurrentPosition(
         pos => {
-          const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+          const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 };
           setLocation(loc);
           setAddress(`${loc.latitude.toFixed(6)}, ${loc.longitude.toFixed(6)}`);
           resolve(loc);
