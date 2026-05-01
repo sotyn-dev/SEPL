@@ -187,100 +187,109 @@ export default function VendorPOPrint() {
           </div>
         </div>
 
-        {/* ITEMS TABLE — 8 columns matching the sample */}
+        {/* ITEMS TABLE — 8 columns matching the sample. Improvements over v1:
+            - Subtle alternating row tint for readability across many lines
+            - First-line of description bold; spec / make / item-code in
+              smaller secondary line so the eye scans the item name first
+            - Item code shown as a mono-font chip (e.g. PO-0042) for fast
+              cross-reference with Item Master and Inventory
+            - Totals block visually separated; CGST/SGST in muted text;
+              Grand Total in bold + larger size + thicker top border */}
         <table className="w-full text-[11px] border-collapse">
           <thead>
-            <tr className="border-b border-gray-800 print:border-black">
-              <th className="border-r border-gray-800 print:border-black px-1 py-1 w-8">Sl<br/>No.</th>
-              <th className="border-r border-gray-800 print:border-black px-2 py-1 text-left">Description of Goods</th>
-              <th className="border-r border-gray-800 print:border-black px-1 py-1 w-20">Due on</th>
-              <th className="border-r border-gray-800 print:border-black px-1 py-1 w-20">Quantity</th>
-              <th className="border-r border-gray-800 print:border-black px-1 py-1 w-20">Rate</th>
-              <th className="border-r border-gray-800 print:border-black px-1 py-1 w-12">per</th>
-              <th className="border-r border-gray-800 print:border-black px-1 py-1 w-14">Disc. %</th>
-              <th className="px-2 py-1 w-24 text-right">Amount</th>
+            <tr className="border-b-2 border-gray-800 print:border-black bg-gray-50 text-[10px] uppercase tracking-wide font-bold text-gray-700">
+              <th className="border-r border-gray-800 print:border-black px-1 py-2 w-8">Sl<br/>No.</th>
+              <th className="border-r border-gray-800 print:border-black px-2 py-2 text-left">Description of Goods</th>
+              <th className="border-r border-gray-800 print:border-black px-1 py-2 w-20">Due on</th>
+              <th className="border-r border-gray-800 print:border-black px-1 py-2 w-20">Quantity</th>
+              <th className="border-r border-gray-800 print:border-black px-1 py-2 w-20">Rate</th>
+              <th className="border-r border-gray-800 print:border-black px-1 py-2 w-12">per</th>
+              <th className="border-r border-gray-800 print:border-black px-1 py-2 w-12">Disc.%</th>
+              <th className="px-2 py-2 w-24 text-right">Amount</th>
             </tr>
           </thead>
           <tbody>
             {items.map((it, idx) => {
               const desc = it.master_name || it.description || '—';
-              const detail = [it.size, it.specification].filter(Boolean).join(' / ');
+              const detail = [it.size, it.specification].filter(Boolean).join(' · ');
               const make = it.im_make || it.ii_make;
               const unit = String(it.unit || it.uom || '').toUpperCase();
               const amount = +it.amount || (+it.rate * +it.quantity) || 0;
               const dueOn = fmtDate(po.expected_receipt_date || po.po_date || po.created_at);
+              const stripeBg = idx % 2 === 1 ? 'bg-gray-50/40' : '';
               return (
-                <tr key={it.id} className="align-top">
-                  <td className="border-r border-gray-800 print:border-black px-1 py-1 text-center">{idx + 1}</td>
-                  <td className="border-r border-gray-800 print:border-black px-2 py-1">
-                    <div className="font-semibold">{desc}{unit && desc && !desc.toUpperCase().includes(unit) ? ' ' + unit : ''}</div>
-                    {detail && <div className="text-[10px] text-gray-700">{detail}</div>}
-                    {make && <div className="text-[10px] text-gray-600">Make: {make}</div>}
+                <tr key={it.id} className={`align-top ${stripeBg}`}>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-2 text-center text-gray-500">{idx + 1}</td>
+                  <td className="border-r border-gray-800 print:border-black px-2 py-2">
+                    {/* Item code chip + bold name on first visual line, then
+                        a subtle secondary line with size · spec · make so
+                        long descriptions don't dominate the cell. */}
+                    <div className="flex items-baseline gap-1.5 flex-wrap">
+                      {it.item_code && <span className="font-mono text-[9px] text-gray-500 bg-gray-100 px-1 py-0.5 rounded">{it.item_code}</span>}
+                      <span className="font-bold text-[11.5px] leading-snug">{desc}{unit && desc && !desc.toUpperCase().includes(unit) ? ' ' + unit : ''}</span>
+                    </div>
+                    {(detail || make) && (
+                      <div className="text-[9.5px] text-gray-600 mt-0.5 leading-tight">
+                        {detail && <span>{detail}</span>}
+                        {detail && make && <span className="mx-1">·</span>}
+                        {make && <span>Make: <span className="font-semibold text-gray-700">{make}</span></span>}
+                      </div>
+                    )}
                   </td>
-                  <td className="border-r border-gray-800 print:border-black px-1 py-1 italic text-center">{dueOn}</td>
-                  <td className="border-r border-gray-800 print:border-black px-1 py-1 text-right tabular-nums font-semibold">{(+it.quantity || 0).toLocaleString('en-IN')} {unit}</td>
-                  <td className="border-r border-gray-800 print:border-black px-1 py-1 text-right tabular-nums">{fmtMoney(it.rate)}</td>
-                  <td className="border-r border-gray-800 print:border-black px-1 py-1 text-center">{unit}</td>
-                  <td className="border-r border-gray-800 print:border-black px-1 py-1 text-right">{it.disc_pct ? `${it.disc_pct}%` : ''}</td>
-                  <td className="px-2 py-1 text-right tabular-nums font-semibold">{fmtMoney(amount)}</td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-2 italic text-center text-gray-700">{dueOn}</td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums font-bold">{(+it.quantity || 0).toLocaleString('en-IN')} {unit}</td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums">{fmtMoney(it.rate)}</td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-2 text-center text-gray-600">{unit}</td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right text-gray-500">{it.disc_pct ? `${it.disc_pct}%` : ''}</td>
+                  <td className="px-2 py-2 text-right tabular-nums font-bold text-gray-900">{fmtMoney(amount)}</td>
                 </tr>
               );
             })}
 
-            {/* Subtotal line — empty cells then amount */}
-            <tr>
-              <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-              <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right text-[11px]"></td>
-              <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-              <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-              <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-              <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-              <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-              <td className="px-2 py-1 text-right tabular-nums border-t border-gray-800 print:border-black font-semibold">{fmtMoney(subtotal)}</td>
+            {/* SUBTOTAL — bold separator line */}
+            <tr className="border-t-2 border-gray-800 print:border-black">
+              <td className="border-r border-gray-800 print:border-black px-1 py-1.5"></td>
+              <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1.5 text-right text-[11px] font-semibold text-gray-700">Sub Total</td>
+              <td className="px-2 py-1.5 text-right tabular-nums font-bold">{fmtMoney(subtotal)}</td>
             </tr>
 
-            {/* GST + Round off */}
+            {/* GST + Round off — muted */}
             {sameState ? (
               <>
-                <tr>
+                <tr className="text-gray-600">
                   <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">INPUT CGST</td>
+                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">CGST @ 9%</td>
                   <td className="px-2 py-1 text-right tabular-nums">{fmtMoney(cgst)}</td>
                 </tr>
-                <tr>
+                <tr className="text-gray-600">
                   <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">INPUT SGST</td>
+                  <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">SGST @ 9%</td>
                   <td className="px-2 py-1 text-right tabular-nums">{fmtMoney(sgst)}</td>
                 </tr>
               </>
             ) : (
-              <tr>
+              <tr className="text-gray-600">
                 <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-                <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">INPUT IGST</td>
+                <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">IGST @ 18%</td>
                 <td className="px-2 py-1 text-right tabular-nums">{fmtMoney(igst)}</td>
               </tr>
             )}
             {Math.abs(roundOff) > 0.001 && (
-              <tr>
+              <tr className="text-gray-500">
                 <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
-                <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">ROUND OFF</td>
+                <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right italic">Round Off</td>
                 <td className="px-2 py-1 text-right tabular-nums">{fmtMoney(roundOff)}</td>
               </tr>
             )}
 
-            {/* Vertical filler — empty rows so the body doesn't look squished */}
-            <tr>
-              <td colSpan="8" className="h-12"></td>
-            </tr>
-
-            {/* TOTAL row */}
-            <tr className="border-t border-gray-800 print:border-black">
-              <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right" colSpan="3"><b>Total</b></td>
-              <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums font-bold">{totalQty.toLocaleString('en-IN')} {totalUnit}</td>
-              <td className="border-r border-gray-800 print:border-black px-1 py-2"></td>
-              <td className="border-r border-gray-800 print:border-black px-1 py-2"></td>
-              <td className="border-r border-gray-800 print:border-black px-1 py-2"></td>
-              <td className="px-2 py-2 text-right tabular-nums font-bold text-[14px]">₹ {fmtMoney(grandTotal)}</td>
+            {/* GRAND TOTAL — heavy bg + larger amount font for visual pop */}
+            <tr className="border-t-2 border-b-2 border-gray-800 print:border-black bg-gray-100">
+              <td className="border-r border-gray-800 print:border-black px-1 py-2.5 text-right font-bold uppercase text-[12px]" colSpan="3">Total</td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-2.5 text-right tabular-nums font-bold text-[12px]">{totalQty.toLocaleString('en-IN')} {totalUnit}</td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-2.5"></td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-2.5"></td>
+              <td className="border-r border-gray-800 print:border-black px-1 py-2.5"></td>
+              <td className="px-2 py-2.5 text-right tabular-nums font-extrabold text-[16px]">₹ {fmtMoney(grandTotal)}</td>
             </tr>
           </tbody>
         </table>
