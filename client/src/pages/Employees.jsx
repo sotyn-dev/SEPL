@@ -38,12 +38,58 @@ export default function Employees() {
     } catch { toast.error('Auto-link failed'); }
   };
 
+  const [uploading, setUploading] = useState(false);
+
+  // Generic file uploader — same pattern as HR.jsx / Inventory.jsx. Posts to
+  // /upload, returns the served URL we can stash on the form.
+  const uploadFile = async (file) => {
+    if (!file) return null;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      return r.data?.url || null;
+    } catch {
+      toast.error('Upload failed');
+      return null;
+    } finally { setUploading(false); }
+  };
+
   const save = async (e) => {
     e.preventDefault();
-    if (editing) { await api.put(`/hr/employees/${editing.id}`, form); }
-    else { await api.post('/hr/employees', form); }
-    toast.success(editing ? 'Updated' : 'Created');
-    setModal(false); load();
+    // Upload any newly-attached document files first, then save the URLs
+    // alongside the rest of the employee fields. Existing URLs (when
+    // editing) stay untouched if no new file is picked.
+    const payload = { ...form };
+    delete payload._aadhar_file;
+    delete payload._pan_file;
+    delete payload._qualification_file;
+    if (form._aadhar_file) {
+      const url = await uploadFile(form._aadhar_file); if (!url) return;
+      payload.aadhar_file = url;
+    }
+    if (form._pan_file) {
+      const url = await uploadFile(form._pan_file); if (!url) return;
+      payload.pan_file = url;
+    }
+    if (form._qualification_file) {
+      const url = await uploadFile(form._qualification_file); if (!url) return;
+      payload.qualification_file = url;
+    }
+    // Required-on-create — backend will also reject, but checking here lets
+    // mam see the error before the upload spinner spins.
+    if (!editing) {
+      if (!payload.aadhar_file)        return toast.error('Upload Aadhar card');
+      if (!payload.pan_file)           return toast.error('Upload PAN card');
+      if (!payload.qualification_file) return toast.error('Upload Highest qualification certificate');
+    }
+    try {
+      if (editing) { await api.put(`/hr/employees/${editing.id}`, payload); }
+      else { await api.post('/hr/employees', payload); }
+      toast.success(editing ? 'Updated' : 'Created');
+      setModal(false); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   // Export CSV — never include salary for non-HR/non-admin users
@@ -221,7 +267,44 @@ export default function Employees() {
               <p className="text-[10px] text-gray-500 mt-0.5">If left blank and email matches a user, it will auto-link on save.</p>
             </div>
           </div>
-          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Create'}</button></div>
+
+          {/* Mandatory KYC docs for new employees. When editing, the inputs
+              show "Existing: view file" if a doc URL is already on file —
+              uploading a new one replaces it. Three docs: Aadhar, PAN,
+              Highest qualification certificate. */}
+          <div className="card p-3 bg-amber-50/40 border-l-4 border-amber-400 space-y-3">
+            <div className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Mandatory documents{editing ? '' : ' *'}</div>
+            {[
+              { key: 'aadhar_file',        slot: '_aadhar_file',        label: 'Aadhar Card *' },
+              { key: 'pan_file',           slot: '_pan_file',           label: 'PAN Card *' },
+              { key: 'qualification_file', slot: '_qualification_file', label: 'Highest Qualification Certificate *' },
+            ].map(({ key, slot, label }) => (
+              <div key={key}>
+                <label className="label">{label} <span className="text-gray-400 font-normal text-[10px]">(PDF / JPG / PNG, max 10 MB)</span></label>
+                <input
+                  className="input"
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  required={!editing && !form[key]}
+                  onChange={e => setForm({ ...form, [slot]: e.target.files?.[0] || null })}
+                />
+                {/* Existing URL link when editing */}
+                {editing && form[key] && !form[slot] && (
+                  <p className="text-[10px] text-emerald-600 mt-0.5">
+                    Existing: <a href={form[key]} target="_blank" rel="noreferrer" className="underline">view file</a> · upload to replace
+                  </p>
+                )}
+                {form[slot] && <p className="text-[10px] text-blue-600 mt-0.5">Selected: {form[slot].name}</p>}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-end gap-3">
+            <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
+            <button type="submit" disabled={uploading} className="btn btn-primary">
+              {uploading ? 'Uploading…' : (editing ? 'Update' : 'Create')}
+            </button>
+          </div>
         </form>
       </Modal>
 
