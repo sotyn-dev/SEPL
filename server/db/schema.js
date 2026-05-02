@@ -1602,6 +1602,36 @@ function initializeDatabase() {
     console.error('[migration] attendance CHECK relax failed:', e.message);
   }
 
+  // Relax leave_requests.leave_type CHECK to include 'short_leave'.
+  // The Apply for Leave form on mobile sends leave_type='short_leave' for
+  // hour-based leave requests, but the original CHECK constraint listed
+  // only ('casual','sick','earned','half_day','comp_off') — so existing
+  // production DBs threw "CHECK constraint failed" when users tried to
+  // submit a short leave. Same table-rebuild pattern as attendance above.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='leave_requests'").get();
+    if (row && !/short_leave/.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+leave_requests/i, 'CREATE TABLE leave_requests_new')
+        .replace(/CHECK\s*\(\s*leave_type\s+IN\s*\([^)]*\)\s*\)/i,
+                 "CHECK(leave_type IN ('casual','sick','earned','half_day','short_leave','comp_off'))");
+      db.exec(newSql);
+      // Copy ONLY the columns that exist in the OLD table to be safe.
+      const oldCols = db.prepare("PRAGMA table_info(leave_requests)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(leave_requests_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO leave_requests_new (${shared}) SELECT ${shared} FROM leave_requests`);
+      db.exec('DROP TABLE leave_requests');
+      db.exec('ALTER TABLE leave_requests_new RENAME TO leave_requests');
+      db.exec('COMMIT');
+      console.log('[migration] leave_requests.leave_type CHECK relaxed to allow short_leave');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] leave_requests CHECK relax failed:', e.message);
+  }
+
   for (const [table, col] of migrations) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
