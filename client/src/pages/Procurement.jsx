@@ -441,6 +441,26 @@ export default function Procurement() {
     }
   };
 
+  // Admin-only: clear ALL the vendor quotes on a merged rate row so the row
+  // returns to "Pending" status. Useful when mam wants to re-quote from
+  // scratch (wrong rates entered, vendor list changed, etc.). Loops over
+  // every rate_id in the merged group.
+  const deleteMergedRate = async (mergedRow) => {
+    if (!mergedRow.rate_ids?.length) {
+      toast('Nothing to clear — no rates entered yet');
+      return;
+    }
+    const label = [mergedRow.master_name || mergedRow.description, mergedRow.size, mergedRow.specification].filter(Boolean).join(' / ');
+    if (!confirm(`Clear all vendor quotes for "${label}"?\nThe row will return to Pending.`)) return;
+    try {
+      for (const rid of mergedRow.rate_ids) {
+        await api.delete(`/procurement/item-rates/${rid}`);
+      }
+      toast.success('Quotes cleared');
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Clear failed'); }
+  };
+
   // UI snappy by updating local state optimistically.
   const updateItemRate = async (indentItemId, patch) => {
     // Optimistically merge the patch, then derive rate_status locally the same
@@ -739,9 +759,19 @@ export default function Procurement() {
                       ))}
                       <td className="px-2 py-2"><span className={`badge ${statColor}`}>{stat}</span></td>
                       <td className="px-2 py-2">
-                        {stat === 'finalized'
-                          ? <div className="text-[11px]"><div className="font-semibold text-emerald-700">{r.final_vendor_name}</div><div>Rs {r.final_rate}</div></div>
-                          : <button onClick={() => openFinalize(r)} disabled={stat === 'pending'} className="btn btn-primary text-[11px] px-2 py-1 disabled:opacity-40">Finalize</button>}
+                        <div className="flex items-center gap-1">
+                          {stat === 'finalized'
+                            ? <div className="text-[11px]"><div className="font-semibold text-emerald-700">{r.final_vendor_name}</div><div>Rs {r.final_rate}</div></div>
+                            : <button onClick={() => openFinalize(r)} disabled={stat === 'pending'} className="btn btn-primary text-[11px] px-2 py-1 disabled:opacity-40">Finalize</button>}
+                          {/* Admin-only: clear ALL vendor quotes for this row.
+                              Useful when mam wants to re-quote (wrong rates,
+                              vendor change, etc.). Returns row to Pending. */}
+                          {(canApprove('procurement') || isAdmin()) && r.rate_ids?.length > 0 && (
+                            <button onClick={() => deleteMergedRate(r)} className="p-1 text-gray-400 hover:text-red-600" title="Clear all quotes (re-quote)">
+                              <FiTrash2 size={12} />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -883,12 +913,40 @@ export default function Procurement() {
                       {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-[10px]">attached PDF</a>}
                     </div>
                   </td>
-                  <td><StatusBadge status={v.status} /></td>
-                  <td>{canDelete('procurement') && <button onClick={async () => {
-                    if (!confirm(`Delete vendor PO "${v.po_number}"?`)) return;
-                    try { await api.delete(`/procurement/vendor-po/${v.id}`); toast.success('Deleted'); load(); }
-                    catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                  }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}</td>
+                  <td>
+                    {v.cancelled
+                      ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-gray-200 text-gray-600 border border-gray-300" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
+                      : <StatusBadge status={v.status} />}
+                  </td>
+                  <td>
+                    {/* Three actions: Cancel (soft-delete, reverses), Restore
+                        (only when already cancelled), Delete (hard, only when
+                        no bills / delivery notes block it). */}
+                    <div className="flex items-center gap-1">
+                      {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
+                        <button onClick={async () => {
+                          const reason = prompt(`Cancel Vendor PO "${v.po_number}"?\n\nThe PO + linked bills/notes stay visible for audit, but it disappears from active follow-ups. Items go back to "Pending for PO".\n\nReason (optional):`);
+                          if (reason === null) return;
+                          try { await api.post(`/procurement/vendor-po/${v.id}/cancel`, { reason }); toast.success('PO cancelled'); load(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Cancel failed'); }
+                        }} className="p-1 text-gray-400 hover:text-amber-600" title="Cancel PO (soft delete)"><FiX size={14} /></button>
+                      )}
+                      {v.cancelled && (canApprove('procurement') || isAdmin()) && (
+                        <button onClick={async () => {
+                          if (!confirm(`Restore Vendor PO "${v.po_number}" from cancelled?`)) return;
+                          try { await api.post(`/procurement/vendor-po/${v.id}/uncancel`); toast.success('PO restored'); load(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Restore failed'); }
+                        }} className="p-1 text-gray-400 hover:text-emerald-600" title="Restore PO"><FiCheck size={14} /></button>
+                      )}
+                      {canDelete('procurement') && (
+                        <button onClick={async () => {
+                          if (!confirm(`Permanently delete vendor PO "${v.po_number}"?\n\nWill fail if bills or delivery notes reference it — use Cancel instead in that case.`)) return;
+                          try { await api.delete(`/procurement/vendor-po/${v.id}`); toast.success('Deleted'); load(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                        }} className="p-1 text-gray-400 hover:text-red-600" title="Delete (hard)"><FiTrash2 size={14} /></button>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
               {vendorPos.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No vendor POs yet — click "Create Vendor PO"</td></tr>}
@@ -904,7 +962,8 @@ export default function Procurement() {
         const billedPoIds = new Set(purchaseBills.map(b => b.vendor_po_id).filter(Boolean));
         const today = new Date().toISOString().slice(0, 10);
         const pendingPos = vendorPos
-          .filter(po => !billedPoIds.has(po.id))
+          // Skip cancelled POs — they're not waiting for a bill anymore.
+          .filter(po => !billedPoIds.has(po.id) && !po.cancelled)
           .sort((a, b) => {
             const ax = a.expected_receipt_date || '9999-12-31';
             const bx = b.expected_receipt_date || '9999-12-31';
@@ -1029,7 +1088,7 @@ export default function Procurement() {
         const dispatchedPoIds = new Set(deliveryNotes.map(d => d.vendor_po_id).filter(Boolean));
         const billedPoIds = new Set(purchaseBills.map(b => b.vendor_po_id).filter(Boolean));
         const readyToDispatch = vendorPos.filter(po =>
-          billedPoIds.has(po.id) && !dispatchedPoIds.has(po.id)
+          billedPoIds.has(po.id) && !dispatchedPoIds.has(po.id) && !po.cancelled
         );
         // Detect item-type hint for each PO (if any indent_item linked is type=PO,
         // suggest Sales Bill; else suggest Challan). We don't have per-item info

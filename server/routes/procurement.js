@@ -650,7 +650,9 @@ router.get('/indents/:id/items-for-po', (req, res) => {
     `SELECT ii.id as indent_item_id, ii.description, ii.make, ii.quantity, ii.unit, ii.item_type,
             ii.item_master_id, im.item_code, im.item_name as master_name, im.specification, im.size, im.uom,
             r.final_rate, r.final_vendor_name, r.final_terms, r.final_credit_days, r.status as rate_status,
-            (SELECT COUNT(*) FROM vendor_po_items vpi WHERE vpi.indent_item_id = ii.id) as in_po_count
+            (SELECT COUNT(*) FROM vendor_po_items vpi
+              JOIN vendor_pos vp_check ON vp_check.id = vpi.vendor_po_id
+              WHERE vpi.indent_item_id = ii.id AND COALESCE(vp_check.cancelled, 0) = 0) as in_po_count
      FROM indent_items ii
      LEFT JOIN indent_item_rates r ON r.indent_item_id = ii.id
      LEFT JOIN item_master im ON im.id = ii.item_master_id
@@ -675,7 +677,12 @@ router.get('/pending-po-items', (req, res) => {
      JOIN indents i ON ii.indent_id = i.id
      LEFT JOIN indent_item_rates r ON r.indent_item_id = ii.id
      LEFT JOIN item_master im ON im.id = ii.item_master_id
-     WHERE NOT EXISTS (SELECT 1 FROM vendor_po_items vpi WHERE vpi.indent_item_id = ii.id)
+     WHERE NOT EXISTS (
+       SELECT 1 FROM vendor_po_items vpi
+         JOIN vendor_pos vp ON vp.id = vpi.vendor_po_id
+        WHERE vpi.indent_item_id = ii.id
+          AND COALESCE(vp.cancelled, 0) = 0
+     )
      ORDER BY
        CASE WHEN r.status = 'finalized' THEN 0 ELSE 1 END,
        i.created_at DESC, ii.id`
@@ -788,9 +795,54 @@ router.delete('/vendor-po/:id', (req, res) => {
   const id = req.params.id;
   const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bills WHERE vendor_po_id=?').get(id).c;
   const dnCount = db.prepare('SELECT COUNT(*) as c FROM delivery_notes WHERE vendor_po_id=?').get(id).c;
-  if (billCount > 0 || dnCount > 0) return res.status(409).json({ error: 'Cannot delete: Purchase Bills or Delivery Notes reference this Vendor PO' });
+  // Hard delete is only allowed when nothing references this PO. Otherwise
+  // the user should use POST /vendor-po/:id/cancel which is a soft-delete
+  // that preserves the audit trail + linked bills / delivery notes.
+  if (billCount > 0 || dnCount > 0) return res.status(409).json({ error: `Cannot delete — ${billCount} bill(s) and ${dnCount} delivery note(s) reference this PO. Use Cancel PO instead.` });
   db.prepare('DELETE FROM vendor_pos WHERE id=?').run(id);
   res.json({ message: 'Deleted' });
+});
+
+// Soft-cancel a Vendor PO. Hides it from "Pending for PO" / "Awaiting Bill" /
+// "Ready to Dispatch" follow-up lists while preserving the row + every
+// linked bill / delivery note for audit. Reversible via /uncancel.
+router.post('/vendor-po/:id/cancel', needsApprove, (req, res) => {
+  const db = getDb();
+  const id = req.params.id;
+  const { reason } = req.body || {};
+  const cur = db.prepare('SELECT id, cancelled FROM vendor_pos WHERE id=?').get(id);
+  if (!cur) return res.status(404).json({ error: 'Vendor PO not found' });
+  if (cur.cancelled) return res.status(400).json({ error: 'PO is already cancelled' });
+  db.prepare(`
+    UPDATE vendor_pos
+       SET cancelled = 1,
+           cancelled_at = CURRENT_TIMESTAMP,
+           cancelled_by = ?,
+           cancel_reason = ?
+     WHERE id = ?
+  `).run(req.user.id, String(reason || '').trim() || null, id);
+  res.json({ message: 'PO cancelled' });
+});
+
+router.post('/vendor-po/:id/uncancel', needsApprove, (req, res) => {
+  const db = getDb();
+  db.prepare(`
+    UPDATE vendor_pos
+       SET cancelled = 0, cancelled_at = NULL, cancelled_by = NULL, cancel_reason = NULL
+     WHERE id = ?
+  `).run(req.params.id);
+  res.json({ message: 'PO restored' });
+});
+
+// Admin-only: clear an item-rate row entirely. Wipes the 3 vendor quotes +
+// any finalize fields. Indent_item itself stays intact so the row reappears
+// in the Vendor Rates list as "Pending" — admin can re-quote from scratch.
+router.delete('/item-rates/:rate_id', needsApprove, (req, res) => {
+  const db = getDb();
+  const cur = db.prepare('SELECT id, indent_item_id FROM indent_item_rates WHERE id=?').get(req.params.rate_id);
+  if (!cur) return res.status(404).json({ error: 'Rate not found' });
+  db.prepare('DELETE FROM indent_item_rates WHERE id=?').run(req.params.rate_id);
+  res.json({ message: 'Rate cleared' });
 });
 
 // Purchase Bills

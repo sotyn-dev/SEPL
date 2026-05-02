@@ -1421,6 +1421,14 @@ function initializeDatabase() {
     ['leave_requests', 'from_time TEXT'],
     ['leave_requests', 'to_time TEXT'],
     ['leave_requests', 'remarks TEXT'],
+    // Soft-cancel for Vendor POs — hard delete is blocked by FK constraints
+    // (purchase_bills + delivery_notes reference vendor_pos). Cancelling
+    // hides the PO from active follow-up lists while preserving the audit
+    // trail and any linked financial records.
+    ['vendor_pos', 'cancelled INTEGER DEFAULT 0'],
+    ['vendor_pos', 'cancelled_at DATETIME'],
+    ['vendor_pos', 'cancelled_by INTEGER REFERENCES users(id)'],
+    ['vendor_pos', 'cancel_reason TEXT'],
     // Announcements module — admin posts; everyone reads. Each user's
     // last-seen timestamp is tracked separately so the bell-icon counter
     // can show a "new" badge until they open the panel. Two tables created
