@@ -1429,6 +1429,14 @@ function initializeDatabase() {
     ['vendor_pos', 'cancelled_at DATETIME'],
     ['vendor_pos', 'cancelled_by INTEGER REFERENCES users(id)'],
     ['vendor_pos', 'cancel_reason TEXT'],
+    // Mandatory employee documents — Aadhar / PAN / highest qualification
+    // certificate. URLs (pointing at /uploads/<file>) so we can render them
+    // as links and download / view directly. NOT NULL is intentionally
+    // omitted at the DB level so legacy rows don't break — frontend
+    // enforces required-on-create for new records.
+    ['employees', 'aadhar_file TEXT'],
+    ['employees', 'pan_file TEXT'],
+    ['employees', 'qualification_file TEXT'],
     // Announcements module — admin posts; everyone reads. Each user's
     // last-seen timestamp is tracked separately so the bell-icon counter
     // can show a "new" badge until they open the panel. Two tables created

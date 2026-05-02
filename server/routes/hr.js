@@ -170,7 +170,8 @@ router.get('/employees', (req, res) => {
 });
 
 router.post('/employees', (req, res) => {
-  const { name, phone, email, designation, department, join_date, salary } = req.body;
+  const { name, phone, email, designation, department, join_date, salary,
+          aadhar_file, pan_file, qualification_file } = req.body;
   let { user_id } = req.body;
   const db = getDb();
   // Auto-link by email if user_id wasn't explicitly set
@@ -178,8 +179,17 @@ router.post('/employees', (req, res) => {
     const u = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?)').get(email);
     if (u) user_id = u.id;
   }
-  const r = db.prepare('INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary) VALUES (?,?,?,?,?,?,?,?)')
-    .run(user_id || null, name, phone, email, designation, department, join_date, salary);
+  // Mandatory documents for NEW employees (not enforced on bulk import or
+  // legacy edits — those keep working without docs).
+  if (!aadhar_file)        return res.status(400).json({ error: 'Aadhar card is required' });
+  if (!pan_file)           return res.status(400).json({ error: 'PAN card is required' });
+  if (!qualification_file) return res.status(400).json({ error: 'Highest qualification certificate is required' });
+  const r = db.prepare(`
+    INSERT INTO employees (user_id,name,phone,email,designation,department,join_date,salary,
+                           aadhar_file, pan_file, qualification_file)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+  `).run(user_id || null, name, phone, email, designation, department, join_date, salary,
+        aadhar_file || null, pan_file || null, qualification_file || null);
   res.status(201).json({ id: r.lastInsertRowid, linked_user_id: user_id || null });
 });
 
@@ -219,9 +229,19 @@ router.post('/employees/bulk', (req, res) => {
 });
 
 router.put('/employees/:id', (req, res) => {
-  const { name, phone, email, designation, department, salary, status, user_id } = req.body;
-  getDb().prepare('UPDATE employees SET name=?,phone=?,email=?,designation=?,department=?,salary=?,status=?,user_id=? WHERE id=?')
-    .run(name, phone, email, designation, department, salary, status, user_id || null, req.params.id);
+  const { name, phone, email, designation, department, salary, status, user_id,
+          aadhar_file, pan_file, qualification_file } = req.body;
+  // COALESCE so passing undefined for a doc field doesn't wipe the existing
+  // upload — frontend can edit other fields without re-uploading docs.
+  getDb().prepare(`
+    UPDATE employees
+       SET name=?, phone=?, email=?, designation=?, department=?, salary=?, status=?, user_id=?,
+           aadhar_file        = COALESCE(?, aadhar_file),
+           pan_file           = COALESCE(?, pan_file),
+           qualification_file = COALESCE(?, qualification_file)
+     WHERE id=?
+  `).run(name, phone, email, designation, department, salary, status, user_id || null,
+        aadhar_file || null, pan_file || null, qualification_file || null, req.params.id);
   res.json({ message: 'Updated' });
 });
 

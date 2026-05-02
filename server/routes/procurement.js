@@ -572,11 +572,21 @@ router.put('/indents/:id', (req, res) => {
 router.delete('/indents/:id', (req, res) => {
   const db = getDb();
   const id = req.params.id;
-  const vpoCount = db.prepare('SELECT COUNT(*) as c FROM vendor_pos WHERE indent_id=?').get(id).c;
-  if (vpoCount > 0) return res.status(409).json({ error: 'Cannot delete: Vendor POs reference this indent' });
+  // Active vendor POs (cancelled=0) referencing this indent block hard delete.
+  // Cancelled POs don't block — they're already soft-deleted themselves.
+  const vpoCount = db.prepare(
+    'SELECT COUNT(*) as c FROM vendor_pos WHERE indent_id=? AND COALESCE(cancelled, 0) = 0'
+  ).get(id).c;
+  if (vpoCount > 0) {
+    // Soft-reject instead of failing. The indent + its items stay for audit
+    // and the linked vendor POs continue to function. Status='rejected' hides
+    // the indent from active "Pending for PO" / "Submitted" queues.
+    db.prepare("UPDATE indents SET status='rejected' WHERE id=?").run(id);
+    return res.json({ message: `Indent rejected (cannot hard-delete — ${vpoCount} active Vendor PO(s) reference it). Indent kept for audit.`, soft: true });
+  }
   db.prepare('DELETE FROM indent_items WHERE indent_id=?').run(id);
   db.prepare('DELETE FROM indents WHERE id=?').run(id);
-  res.json({ message: 'Deleted' });
+  res.json({ message: 'Deleted', soft: false });
 });
 
 router.get('/indents/:id', (req, res) => {
