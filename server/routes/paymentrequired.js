@@ -4,6 +4,22 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
+// Helper: does the user see EVERY payment request, or only their own?
+// Admin always sees all. Anyone with approve / edit / delete permission on
+// payment_required (HR Manager, Accountant, Admin's grants) also sees all
+// — they're approvers / processors. Plain users (Site Engineer who only
+// has view + create) are scoped to rows they raised themselves.
+const seesAll = (req) => {
+  if (req.user.role === 'admin') return true;
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT MAX(rp.can_approve) as ok
+    FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+    WHERE ur.user_id = ? AND rp.module = 'payment_required'
+  `).get(req.user.id);
+  return !!row?.ok;
+};
+
 // Approval workflow based on category
 // TA/DA: Step 1 → Step 2 → Step 5 (skip velocity & billing eng)
 // Others: Step 1 → Step 2 → Step 3 (velocity auto) → Step 4 → Step 5
@@ -88,6 +104,9 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
   const { status, category, search, step } = req.query;
   let sql = `SELECT pr.*, u.name as created_by_name FROM payment_requests pr LEFT JOIN users u ON pr.created_by=u.id WHERE 1=1`;
   const params = [];
+  // Scope filter: non-approvers (e.g. site engineers) only see their own
+  // requests. Approvers / admin see everything.
+  if (!seesAll(req)) { sql += ' AND pr.created_by = ?'; params.push(req.user.id); }
   if (status) { sql += ' AND pr.status=?'; params.push(status); }
   if (category) { sql += ' AND pr.category=?'; params.push(category); }
   if (step) { sql += ' AND pr.current_step=?'; params.push(step); }
@@ -99,22 +118,34 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
   res.json(getDb().prepare(sql).all(...params));
 });
 
-// GET stats
+// GET stats — scoped same way as the list. A site engineer's "totals"
+// reflect only their own requests so the cards don't expose other users'
+// activity.
 router.get('/stats', requirePermission('payment_required', 'view'), (req, res) => {
   const db = getDb();
-  const total = db.prepare('SELECT COUNT(*) as c FROM payment_requests').get();
-  const totalAmount = db.prepare('SELECT COALESCE(SUM(amount),0) as t FROM payment_requests').get();
-  const pending = db.prepare("SELECT COUNT(*) as c FROM payment_requests WHERE status NOT IN ('final_approved','rejected')").get();
-  const approved = db.prepare("SELECT COUNT(*) as c FROM payment_requests WHERE status='final_approved'").get();
-  const rejected = db.prepare("SELECT COUNT(*) as c FROM payment_requests WHERE status='rejected'").get();
-  const byCategory = db.prepare("SELECT category, COUNT(*) as count, COALESCE(SUM(amount),0) as amount FROM payment_requests GROUP BY category").all();
-  const byStep = db.prepare("SELECT current_step, COUNT(*) as count FROM payment_requests WHERE status NOT IN ('final_approved','rejected') GROUP BY current_step").all();
+  const all = seesAll(req);
+  const where = all ? '' : ' WHERE created_by = ?';
+  const args = all ? [] : [req.user.id];
+  const total = db.prepare(`SELECT COUNT(*) as c FROM payment_requests${where}`).get(...args);
+  const totalAmount = db.prepare(`SELECT COALESCE(SUM(amount),0) as t FROM payment_requests${where}`).get(...args);
+  const pending = db.prepare(`SELECT COUNT(*) as c FROM payment_requests WHERE status NOT IN ('final_approved','rejected')${all ? '' : ' AND created_by = ?'}`).get(...args);
+  const approved = db.prepare(`SELECT COUNT(*) as c FROM payment_requests WHERE status='final_approved'${all ? '' : ' AND created_by = ?'}`).get(...args);
+  const rejected = db.prepare(`SELECT COUNT(*) as c FROM payment_requests WHERE status='rejected'${all ? '' : ' AND created_by = ?'}`).get(...args);
+  const byCategory = db.prepare(`SELECT category, COUNT(*) as count, COALESCE(SUM(amount),0) as amount FROM payment_requests${where} GROUP BY category`).all(...args);
+  const byStep = db.prepare(`SELECT current_step, COUNT(*) as count FROM payment_requests WHERE status NOT IN ('final_approved','rejected')${all ? '' : ' AND created_by = ?'} GROUP BY current_step`).all(...args);
   res.json({ total: total.c, totalAmount: totalAmount.t, pending: pending.c, approved: approved.c, rejected: rejected.c, byCategory, byStep });
 });
 
 // GET single with workflow
 router.get('/:id', requirePermission('payment_required', 'view'), (req, res) => {
+  // Defensive ownership check — even if an approver-only ID leaks into
+  // another user's URL, the GET must respect the scope rule.
   const db = getDb();
+  const ownRow = db.prepare('SELECT created_by FROM payment_requests WHERE id=?').get(req.params.id);
+  if (!ownRow) return res.status(404).json({ error: 'Not found' });
+  if (!seesAll(req) && ownRow.created_by !== req.user.id) {
+    return res.status(403).json({ error: 'You can only view your own requests' });
+  }
   const request = db.prepare('SELECT pr.*, u.name as created_by_name FROM payment_requests pr LEFT JOIN users u ON pr.created_by=u.id WHERE pr.id=?').get(req.params.id);
   if (!request) return res.status(404).json({ error: 'Not found' });
   request.approvals = db.prepare(`SELECT pa.*, u.name as approved_by_name FROM payment_approvals pa LEFT JOIN users u ON pa.approved_by=u.id WHERE pa.request_id=? ORDER BY pa.step`).all(req.params.id);
