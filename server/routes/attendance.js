@@ -368,7 +368,28 @@ router.post('/leave', (req, res) => {
 });
 
 router.get('/leaves', requirePermission('attendance', 'view'), (req, res) => {
-  res.json(getDb().prepare(`SELECT lr.*, u.name as user_name FROM leave_requests lr LEFT JOIN users u ON lr.user_id=u.id ORDER BY lr.created_at DESC`).all());
+  // Scope rule: approver / admin sees every leave request. Plain users
+  // (no can_approve on attendance) see only their own. Mam toggles this
+  // via "approve" checkbox in Roles & Permissions for the role.
+  const db = getDb();
+  const isAdmin = req.user.role === 'admin';
+  const canSeeAll = isAdmin || (() => {
+    const r = db.prepare(`
+      SELECT MAX(rp.can_approve) as ok
+      FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+      WHERE ur.user_id = ? AND rp.module = 'attendance'
+    `).get(req.user.id);
+    return !!r?.ok;
+  })();
+  const where = canSeeAll ? '' : 'WHERE lr.user_id = ?';
+  const params = canSeeAll ? [] : [req.user.id];
+  res.json(db.prepare(`
+    SELECT lr.*, u.name as user_name
+      FROM leave_requests lr
+      LEFT JOIN users u ON lr.user_id=u.id
+     ${where}
+     ORDER BY lr.created_at DESC
+  `).all(...params));
 });
 
 router.put('/leave/:id/approve', requirePermission('attendance', 'approve'), (req, res) => {

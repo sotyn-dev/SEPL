@@ -395,13 +395,29 @@ router.get('/boq-items', (req, res) => {
 // boq_file_link (pick the most recent PO for that business_book).
 router.get('/indents', (req, res) => {
   const db = getDb();
+  // Scope filter: anyone with 'approve' permission on procurement (or admin)
+  // sees ALL indents. Plain users (site engineers with only view + create)
+  // see only the ones they raised. Mam toggles this by checking / unchecking
+  // 'approve' on the role's procurement permissions.
+  const isAdmin = req.user.role === 'admin';
+  const canSeeAll = isAdmin || (() => {
+    const r = db.prepare(`
+      SELECT MAX(rp.can_approve) as ok
+      FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+      WHERE ur.user_id = ? AND rp.module = 'procurement'
+    `).get(req.user.id);
+    return !!r?.ok;
+  })();
+  const where = canSeeAll ? '' : 'WHERE i.created_by = ?';
+  const params = canSeeAll ? [] : [req.user.id];
   const indents = db.prepare(
     `SELECT i.*, u.name as created_by_name, au.name as approved_by_name
      FROM indents i
      LEFT JOIN users u ON i.created_by = u.id
      LEFT JOIN users au ON i.approved_by = au.id
+     ${where}
      ORDER BY i.created_at DESC`
-  ).all();
+  ).all(...params);
 
   // Pull every indent_item in one query and group client-side so the
   // listing can show what was raised without a per-row API call.
