@@ -38,6 +38,7 @@ const menuItems = [
   { path: '/complaints', label: 'Complaints', icon: FiAlertCircle, module: 'complaints' },
   { path: '/hr', label: 'HR & Hiring', icon: FiUserPlus, module: 'hr' },
   { path: '/payroll', label: 'Payroll', icon: LuIndianRupee, module: 'payroll' },
+  { path: '/scorecard', label: 'Scorecard (MIS)', icon: FiBarChart2, module: 'scoring' },
   { path: '/weekly-score', label: 'Weekly Score', icon: FiBarChart2, module: 'scoring' },
   { path: '/employees', label: 'Employees', icon: FiUsers, module: 'employees' },
   { path: '/expenses', label: 'Expenses', icon: LuIndianRupee, module: 'expenses' },

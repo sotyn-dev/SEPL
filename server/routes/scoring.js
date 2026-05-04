@@ -16,9 +16,311 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../db/schema');
-const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
 
 router.use(authMiddleware);
+
+// ---------- TEMPLATES & KPIs (admin manages) ----------
+
+// List all templates
+router.get('/templates', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT t.*, (SELECT COUNT(*) FROM score_kpis k WHERE k.template_id = t.id) as kpi_count,
+           (SELECT COUNT(*) FROM score_user_template ut WHERE ut.template_id = t.id) as user_count
+    FROM score_templates t WHERE COALESCE(t.active, 1) = 1
+    ORDER BY t.name`).all();
+  res.json(rows);
+});
+
+// Template detail with KPIs
+router.get('/templates/:id', (req, res) => {
+  const db = getDb();
+  const tpl = db.prepare('SELECT * FROM score_templates WHERE id = ?').get(req.params.id);
+  if (!tpl) return res.status(404).json({ error: 'Template not found' });
+  const kpis = db.prepare(
+    'SELECT * FROM score_kpis WHERE template_id = ? AND COALESCE(active,1)=1 ORDER BY display_order, id'
+  ).all(req.params.id);
+  res.json({ ...tpl, kpis });
+});
+
+// Create template
+router.post('/templates', adminOnly, (req, res) => {
+  const { name, description } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name required' });
+  const db = getDb();
+  try {
+    const r = db.prepare('INSERT INTO score_templates (name, description) VALUES (?, ?)').run(name, description || null);
+    res.status(201).json({ id: r.lastInsertRowid });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.put('/templates/:id', adminOnly, (req, res) => {
+  const { name, description, active } = req.body;
+  getDb().prepare('UPDATE score_templates SET name=COALESCE(?,name), description=COALESCE(?,description), active=COALESCE(?,active) WHERE id=?')
+    .run(name || null, description || null, active === undefined ? null : (active ? 1 : 0), req.params.id);
+  res.json({ message: 'Updated' });
+});
+
+router.delete('/templates/:id', adminOnly, (req, res) => {
+  const db = getDb();
+  db.prepare('DELETE FROM score_kpis WHERE template_id=?').run(req.params.id);
+  db.prepare('DELETE FROM score_user_template WHERE template_id=?').run(req.params.id);
+  db.prepare('DELETE FROM score_templates WHERE id=?').run(req.params.id);
+  res.json({ message: 'Deleted' });
+});
+
+// Add KPI
+router.post('/templates/:id/kpis', adminOnly, (req, res) => {
+  const { group_name, metric_name, weightage, direction, data_source, display_order } = req.body;
+  if (!metric_name) return res.status(400).json({ error: 'metric_name required' });
+  const db = getDb();
+  const r = db.prepare(
+    `INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(req.params.id, group_name || 'Weekly', metric_name, weightage || 0, direction || 'higher_better', data_source || 'manual', display_order || 0);
+  res.status(201).json({ id: r.lastInsertRowid });
+});
+
+router.put('/kpis/:id', adminOnly, (req, res) => {
+  const { group_name, metric_name, weightage, direction, data_source, display_order, active } = req.body;
+  getDb().prepare(
+    `UPDATE score_kpis SET
+       group_name=COALESCE(?, group_name),
+       metric_name=COALESCE(?, metric_name),
+       weightage=COALESCE(?, weightage),
+       direction=COALESCE(?, direction),
+       data_source=COALESCE(?, data_source),
+       display_order=COALESCE(?, display_order),
+       active=COALESCE(?, active)
+     WHERE id=?`
+  ).run(
+    group_name || null, metric_name || null,
+    weightage === undefined ? null : weightage,
+    direction || null, data_source || null,
+    display_order === undefined ? null : display_order,
+    active === undefined ? null : (active ? 1 : 0),
+    req.params.id
+  );
+  res.json({ message: 'Updated' });
+});
+
+router.delete('/kpis/:id', adminOnly, (req, res) => {
+  getDb().prepare('DELETE FROM score_kpis WHERE id=?').run(req.params.id);
+  res.json({ message: 'Deleted' });
+});
+
+// ---------- ASSIGNMENTS ----------
+// List all users with their assigned template
+router.get('/assignments', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT u.id as user_id, u.name, u.role, u.department,
+           ut.template_id, t.name as template_name
+    FROM users u
+    LEFT JOIN score_user_template ut ON ut.user_id = u.id
+    LEFT JOIN score_templates t ON t.id = ut.template_id
+    WHERE COALESCE(u.active, 1) = 1
+    ORDER BY u.name`).all();
+  res.json(rows);
+});
+
+router.put('/assignments/:user_id', adminOnly, (req, res) => {
+  const { template_id } = req.body;
+  const db = getDb();
+  if (template_id) {
+    db.prepare(`INSERT INTO score_user_template (user_id, template_id, assigned_by)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET template_id=excluded.template_id, assigned_at=CURRENT_TIMESTAMP, assigned_by=excluded.assigned_by`)
+      .run(req.params.user_id, template_id, req.user.id);
+  } else {
+    db.prepare('DELETE FROM score_user_template WHERE user_id=?').run(req.params.user_id);
+  }
+  res.json({ message: 'Saved' });
+});
+
+// ---------- SCORECARD ----------
+// GET full scorecard for a user × week (with auto-fill from delegations/pms/etc.)
+router.get('/scorecard', (req, res) => {
+  try {
+    const userId = parseInt(req.query.user_id, 10) || req.user.id;
+    const weekStart = req.query.week_start && /^\d{4}-\d{2}-\d{2}$/.test(req.query.week_start)
+      ? req.query.week_start
+      : defaultWeekStart();
+    const db = getDb();
+
+    // Find user's template
+    const ut = db.prepare('SELECT template_id FROM score_user_template WHERE user_id=?').get(userId);
+    if (!ut) {
+      return res.json({ user_id: userId, week_start: weekStart, template: null, kpis: [], score: 0, message: 'No template assigned to this user yet' });
+    }
+    const tpl = db.prepare('SELECT * FROM score_templates WHERE id=?').get(ut.template_id);
+    const kpis = db.prepare('SELECT * FROM score_kpis WHERE template_id=? AND COALESCE(active,1)=1 ORDER BY display_order, id').all(ut.template_id);
+
+    const lastWeekStart = shiftWeek(weekStart, -7);
+    const startTs = `${weekStart} 00:00:00`;
+    const endTs = `${shiftWeek(weekStart, 5)} 23:59:59`;
+    const lastStartTs = `${lastWeekStart} 00:00:00`;
+    const lastEndTs = `${shiftWeek(lastWeekStart, 5)} 23:59:59`;
+
+    const computeAutoCount = (source, since, until) => {
+      if (source === 'auto:delegations') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND status='approved' AND COALESCE(reviewed_at, submitted_at, created_at) BETWEEN ? AND ?`).get(userId, since, until).c;
+        return { given, done };
+      }
+      if (source === 'auto:pms') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND status='approved' AND COALESCE(reviewed_at, submitted_at, created_at) BETWEEN ? AND ?`).get(userId, since, until).c;
+        return { given, done };
+      }
+      if (source === 'auto:tickets') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND status IN ('resolved','closed') AND COALESCE(resolved_at, updated_at, created_at) BETWEEN ? AND ?`).get(userId, since, until).c;
+        return { given, done };
+      }
+      if (source === 'auto:checklists') {
+        const cklAssigned = db.prepare(`SELECT COUNT(*) as c FROM checklists WHERE assigned_to=? AND COALESCE(active,1)=1`).get(userId).c;
+        const given = cklAssigned * 6;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM checklist_completions WHERE user_id=? AND completion_date BETWEEN ? AND ?`).get(userId, since.slice(0,10), until.slice(0,10)).c;
+        return { given, done };
+      }
+      return { given: null, done: null };
+    };
+
+    let totalScore = 0, totalWeight = 0;
+    const result = kpis.map(k => {
+      const entry = db.prepare('SELECT * FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(userId, k.id, weekStart);
+      const lastEntry = db.prepare('SELECT actual_pct FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(userId, k.id, lastWeekStart);
+
+      let planned = entry?.planned ?? 0;
+      let actual = entry?.actual ?? 0;
+
+      // Auto-fill from ERP if data_source is 'auto:*'
+      if (k.data_source && k.data_source.startsWith('auto:')) {
+        const { given, done } = computeAutoCount(k.data_source, startTs, endTs);
+        if (given !== null) {
+          planned = given;
+          actual = done;
+        }
+      }
+
+      // Calculate Actual %
+      let actualPct = 0;
+      if (planned > 0) {
+        if (k.direction === 'lower_better') {
+          // lower is better: under-budget or fast turnaround
+          actualPct = Math.round(((planned - actual) / planned) * 100);
+        } else {
+          actualPct = Math.round(((actual - planned) / planned) * 100);
+        }
+        // Cap on the negative side at -100 (can't lose more than 100%)
+        if (actualPct < -100) actualPct = -100;
+      } else if (actual === 0) {
+        actualPct = 0;
+      }
+
+      const weight = k.weightage || 0;
+      totalWeight += weight;
+      totalScore += weight * actualPct;
+
+      return {
+        kpi_id: k.id,
+        group_name: k.group_name,
+        metric_name: k.metric_name,
+        weightage: k.weightage,
+        direction: k.direction,
+        data_source: k.data_source,
+        is_auto: k.data_source && k.data_source.startsWith('auto:'),
+        planned,
+        actual,
+        actual_pct: actualPct,
+        last_week_pct: lastEntry?.actual_pct ?? null,
+        total_uptodate: entry?.total_uptodate ?? null,
+        pending_uptodate: entry?.pending_uptodate ?? null,
+        pending_work: entry?.pending_work ?? null,
+        pending_pct: entry?.pending_pct ?? null,
+        commitment: entry?.commitment ?? null,
+        notes: entry?.notes ?? null,
+      };
+    });
+
+    const score = totalWeight > 0 ? Math.round((totalScore / totalWeight) * 100) / 100 : 0;
+
+    res.json({
+      user_id: userId,
+      week_start: weekStart,
+      week_end: shiftWeek(weekStart, 5),
+      template: tpl,
+      kpis: result,
+      score,
+      total_weight: totalWeight,
+    });
+  } catch (err) {
+    console.error('scorecard get error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT save a single KPI entry (planned / actual / pending counts / notes)
+router.put('/scorecard/entry', (req, res) => {
+  try {
+    const { user_id, kpi_id, week_start, planned, actual, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, notes } = req.body;
+    if (!kpi_id || !week_start) return res.status(400).json({ error: 'kpi_id and week_start required' });
+    const targetUser = parseInt(user_id, 10) || req.user.id;
+    // Only admin or the target user themselves can edit
+    if (targetUser !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Cannot edit another user\'s scorecard' });
+    }
+    const db = getDb();
+    const k = db.prepare('SELECT direction FROM score_kpis WHERE id=?').get(kpi_id);
+    let actualPct = 0;
+    if (planned > 0) {
+      if (k?.direction === 'lower_better') {
+        actualPct = Math.round(((planned - actual) / planned) * 100);
+      } else {
+        actualPct = Math.round(((actual - planned) / planned) * 100);
+      }
+      if (actualPct < -100) actualPct = -100;
+    }
+    db.prepare(`
+      INSERT INTO score_entries (user_id, kpi_id, week_start, planned, actual, actual_pct, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, notes, updated_by, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(user_id, kpi_id, week_start) DO UPDATE SET
+        planned=excluded.planned,
+        actual=excluded.actual,
+        actual_pct=excluded.actual_pct,
+        total_uptodate=excluded.total_uptodate,
+        pending_uptodate=excluded.pending_uptodate,
+        pending_work=excluded.pending_work,
+        pending_pct=excluded.pending_pct,
+        commitment=excluded.commitment,
+        notes=excluded.notes,
+        updated_by=excluded.updated_by,
+        updated_at=CURRENT_TIMESTAMP
+    `).run(targetUser, kpi_id, week_start, planned || 0, actual || 0, actualPct, total_uptodate || null, pending_uptodate || null, pending_work || null, pending_pct || null, commitment || null, notes || null, req.user.id);
+    res.json({ message: 'Saved', actual_pct: actualPct });
+  } catch (err) {
+    console.error('scorecard save error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Helpers for scorecard endpoints (defined here so they can use Date math)
+function defaultWeekStart() {
+  const d = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
+  const dow = d.getUTCDay();
+  const offset = dow === 0 ? -6 : (1 - dow);
+  d.setUTCDate(d.getUTCDate() + offset);
+  return d.toISOString().slice(0, 10);
+}
+function shiftWeek(date, days) {
+  const d = new Date(date + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 // ---------- helpers ----------
 

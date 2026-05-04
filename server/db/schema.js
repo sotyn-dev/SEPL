@@ -1161,6 +1161,60 @@ function initializeDatabase() {
       UNIQUE(month, employee_id)
     );
 
+    -- Score-card templates (one per role / job-type). Each template has
+    -- many KPIs that sum to 100% weight. Mam shared 20 such templates as
+    -- PDFs (Aanchal-Finance, Site Eng, Supervisor, etc.) on 2026-05-04.
+    CREATE TABLE IF NOT EXISTS score_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- KPIs (metrics) within a template
+    CREATE TABLE IF NOT EXISTS score_kpis (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      template_id INTEGER REFERENCES score_templates(id) ON DELETE CASCADE,
+      group_name TEXT,                       -- 'Basic' | 'Weekly' | 'Monthly' | custom
+      metric_name TEXT NOT NULL,
+      weightage REAL DEFAULT 0,              -- 0-100, sum to 100 per template
+      direction TEXT DEFAULT 'higher_better',-- 'higher_better' or 'lower_better'
+      data_source TEXT DEFAULT 'manual',     -- 'manual' | 'auto:delegations' | 'auto:pms' | 'auto:checklists' | 'auto:tickets'
+      display_order INTEGER DEFAULT 0,
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Each user is assigned to one template (their role's MIS)
+    CREATE TABLE IF NOT EXISTS score_user_template (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id),
+      template_id INTEGER REFERENCES score_templates(id),
+      assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      assigned_by INTEGER REFERENCES users(id)
+    );
+
+    -- Weekly entries: one row per (user, kpi, week_start_monday)
+    CREATE TABLE IF NOT EXISTS score_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER REFERENCES users(id),
+      kpi_id INTEGER REFERENCES score_kpis(id),
+      week_start DATE NOT NULL,
+      planned REAL DEFAULT 0,
+      actual REAL DEFAULT 0,
+      actual_pct REAL,
+      last_week_pct REAL,
+      total_uptodate REAL,
+      pending_uptodate REAL,
+      pending_work REAL,
+      pending_pct REAL,
+      commitment TEXT,
+      notes TEXT,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, kpi_id, week_start)
+    );
+
     -- Vendor PO ↔ Indent Item link (one PO can cover multiple indent items;
     -- one indent item can split across multiple POs for partial orders).
     CREATE TABLE IF NOT EXISTS vendor_po_items (

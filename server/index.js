@@ -31,6 +31,17 @@ const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 // Initialize DB
 initializeDatabase();
 
+// Seed the 20 MIS scorecard templates on first boot. Idempotent — re-runs
+// when the table already has rows are no-ops.
+try {
+  const { seedScoringTemplates } = require('./db/seedScoring');
+  const { getDb } = require('./db/schema');
+  const r = seedScoringTemplates(getDb());
+  if (r.seeded > 0) console.log(`[seed] scoring: seeded ${r.seeded} templates`);
+} catch (e) {
+  console.warn('[seed] scoring failed:', e.message);
+}
+
 // Nightly DB backup scheduler — runs at 02:00 local time every day and
 // keeps the last 30 backups. Backups go to ~/erp-backups on the VPS (or
 // ../backups on Windows). Admin can also list / download / trigger manually
