@@ -486,22 +486,86 @@ function TemplateKpiEditor({ templateId, onChange }) {
               <td className="p-2">
                 <select className="select text-xs" defaultValue={k.data_source} onChange={e => updateKpi(k, { data_source: e.target.value })}>
                   <option value="manual">manual entry</option>
-                  <option value="auto:delegations">auto: delegations</option>
-                  <option value="auto:pms">auto: pms tasks</option>
-                  <option value="auto:checklists">auto: checklists</option>
-                  <option value="auto:tickets">auto: tickets</option>
-                  <option value="auto:dpr_profit">auto: DPR profit (planned vs actual ₹)</option>
-                  <option value="auto:dpr_count">auto: DPR count (6 days/week target)</option>
-                  <option value="auto:dpr_by_user">auto: DPR submitted BY user (count)</option>
-                  <option value="auto:dpr_profit_by_user">auto: DPR profit/loss SUM (by user)</option>
-                  <option value="auto:dpr_cost_by_user">auto: DPR submitted vs approved (by user)</option>
-                  <option value="auto:indents_in_week">auto: indents created (site)</option>
-                  <option value="auto:mb_signed">auto: MB signed by client (site)</option>
-                  <option value="auto:ra_bills">auto: RA bills raised (site)</option>
-                  <option value="auto:material_received">auto: material received (delivery notes)</option>
-                  <option value="auto:stock_updates">auto: stock updates (per site/week)</option>
-                  <option value="auto:tools_list">auto: tools list submission (per site)</option>
-                  <option value="auto:stock_at_site">auto: stock at site flag</option>
+                  <optgroup label="Tasks & Tickets">
+                    <option value="auto:delegations">delegations (assigned/done)</option>
+                    <option value="auto:pms">pms tasks (assigned/done)</option>
+                    <option value="auto:checklists">checklists (per day)</option>
+                    <option value="auto:tickets">help tickets (assigned/resolved)</option>
+                  </optgroup>
+                  <optgroup label="DPR (Daily Project Report)">
+                    <option value="auto:dpr_profit">DPR profit (planned vs actual ₹) [site]</option>
+                    <option value="auto:dpr_count">DPR count (6 days/week target) [site]</option>
+                    <option value="auto:dpr_by_user">DPR submitted BY user (count)</option>
+                    <option value="auto:dpr_profit_by_user">DPR profit/loss SUM (by user)</option>
+                    <option value="auto:dpr_cost_by_user">DPR submitted vs approved (by user)</option>
+                  </optgroup>
+                  <optgroup label="Sales / CRM">
+                    <option value="auto:leads_created">leads created (assigned to user)</option>
+                    <option value="auto:leads_qualified">leads qualified (by user)</option>
+                    <option value="auto:quotations_sent">quotations sent (by user)</option>
+                    <option value="auto:meetings_planned">meetings planned (this week)</option>
+                  </optgroup>
+                  <optgroup label="Business Book">
+                    <option value="auto:bb_entries">BB entries created (by user)</option>
+                    <option value="auto:bb_po_amount">BB PO amount SUM (by user)</option>
+                    <option value="auto:bb_sale_amount">BB Sale amount SUM (by user)</option>
+                    <option value="auto:bb_advance">BB Advance received SUM (by user)</option>
+                  </optgroup>
+                  <optgroup label="Procurement (Indent → Dispatch)">
+                    <option value="auto:indents_in_week">indents created (site)</option>
+                    <option value="auto:indents_approved">indents approved (by user)</option>
+                    <option value="auto:vendor_pos_created">vendor POs created</option>
+                    <option value="auto:purchase_bills">purchase bills received</option>
+                    <option value="auto:dispatch_sent">dispatches sent (delivery notes)</option>
+                    <option value="auto:material_received">material received (site)</option>
+                  </optgroup>
+                  <optgroup label="Inventory / Stock">
+                    <option value="auto:stock_in">stock IN movements</option>
+                    <option value="auto:stock_out">stock OUT movements</option>
+                    <option value="auto:stock_to_site">stock issued to site</option>
+                    <option value="auto:stock_updates">stock updates per site/week</option>
+                    <option value="auto:tools_list">tools list per site</option>
+                    <option value="auto:stock_at_site">stock at site flag</option>
+                  </optgroup>
+                  <optgroup label="Installation & Billing">
+                    <option value="auto:installations_started">installations started</option>
+                    <option value="auto:installations_completed">installations completed</option>
+                    <option value="auto:sales_bills">sales bills raised</option>
+                    <option value="auto:ra_bills">RA bills raised (site)</option>
+                    <option value="auto:mb_filed">MB bills filed (count)</option>
+                    <option value="auto:mb_signed">MB signed by client (site)</option>
+                  </optgroup>
+                  <optgroup label="Cash Flow / Collections">
+                    <option value="auto:amount_received">amount received SUM (by user)</option>
+                    <option value="auto:amount_received_all">amount received SUM (all)</option>
+                    <option value="auto:collections_count">collections count (by user)</option>
+                    <option value="auto:receivables_outstanding">receivables outstanding SUM (owner)</option>
+                    <option value="auto:receivables_count">receivables outstanding count (owner)</option>
+                  </optgroup>
+                  <optgroup label="Payment Required">
+                    <option value="auto:payments_raised">payment requests raised (by user)</option>
+                    <option value="auto:payments_approved">payment requests final-approved</option>
+                    <option value="auto:payments_rejected">payment requests rejected</option>
+                  </optgroup>
+                  <optgroup label="HR Hiring">
+                    <option value="auto:candidates_added">candidates added</option>
+                    <option value="auto:candidates_shortlisted">candidates shortlisted</option>
+                    <option value="auto:candidates_onboarded">candidates onboarded</option>
+                  </optgroup>
+                  <optgroup label="Attendance">
+                    <option value="auto:attendance_present_days">attendance present days (target 6)</option>
+                    <option value="auto:attendance_late_days">attendance late days</option>
+                    <option value="auto:attendance_absent_days">attendance absent days</option>
+                    <option value="auto:leaves_applied">leaves applied (by user)</option>
+                  </optgroup>
+                  <optgroup label="Complaints">
+                    <option value="auto:complaints_raised">complaints raised</option>
+                    <option value="auto:complaints_resolved">complaints resolved</option>
+                  </optgroup>
+                  <optgroup label="Master Data">
+                    <option value="auto:customers_added">customers added</option>
+                    <option value="auto:vendors_added">vendors added</option>
+                  </optgroup>
                 </select>
               </td>
               <td className="p-2"><button onClick={() => delKpi(k)} className="text-red-500 hover:text-red-700"><FiTrash2 size={12} /></button></td>

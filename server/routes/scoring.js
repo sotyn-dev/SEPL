@@ -356,6 +356,183 @@ router.get('/scorecard', (req, res) => {
         `).get(since, until).c;
         return { given: siteIds.length, done: c };
       }
+
+      // ===== Sales / CRM =====
+      if (source === 'auto:leads_created') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM leads WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:leads_qualified') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM leads WHERE assigned_to=? AND status='qualified' AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:quotations_sent') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM quotations WHERE created_by=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:meetings_planned') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM meetings WHERE meeting_date BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        return { given: null, done: c };
+      }
+
+      // ===== Business Book =====
+      if (source === 'auto:bb_entries') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM business_book WHERE employee_assigned=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:bb_po_amount') {
+        const r = db.prepare(`SELECT COALESCE(SUM(po_amount),0) as s FROM business_book WHERE employee_assigned=? AND created_at BETWEEN ? AND ?`).get(userId, since, until);
+        return { given: null, done: r.s };
+      }
+      if (source === 'auto:bb_sale_amount') {
+        const r = db.prepare(`SELECT COALESCE(SUM(sale_amount_without_gst),0) as s FROM business_book WHERE employee_assigned=? AND created_at BETWEEN ? AND ?`).get(userId, since, until);
+        return { given: null, done: r.s };
+      }
+      if (source === 'auto:bb_advance') {
+        const r = db.prepare(`SELECT COALESCE(SUM(advance_received),0) as s FROM business_book WHERE employee_assigned=? AND created_at BETWEEN ? AND ?`).get(userId, since, until);
+        return { given: null, done: r.s };
+      }
+
+      // ===== Procurement =====
+      if (source === 'auto:indents_approved') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM indents WHERE approved_by=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:vendor_pos_created') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM vendor_pos WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:purchase_bills') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM purchase_bills WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:dispatch_sent') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM delivery_notes WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+
+      // ===== Inventory =====
+      if (source === 'auto:stock_in') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM stock_movements WHERE type='IN' AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:stock_out') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM stock_movements WHERE type='OUT' AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:stock_to_site') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM stock_movements WHERE site_id IS NOT NULL AND type='OUT' AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+
+      // ===== Installation =====
+      if (source === 'auto:installations_completed') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM installations WHERE status='completed' AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:installations_started') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM installations WHERE status IN ('in_progress','testing','completed') AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+
+      // ===== Billing =====
+      if (source === 'auto:sales_bills') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM sales_bills WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:mb_filed') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM mb_bills WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+
+      // ===== Cash Flow / Collections =====
+      if (source === 'auto:amount_received') {
+        const r = db.prepare(`SELECT COALESCE(SUM(amount),0) as s FROM collections WHERE collected_by=? AND collection_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate);
+        return { given: null, done: r.s };
+      }
+      if (source === 'auto:amount_received_all') {
+        const r = db.prepare(`SELECT COALESCE(SUM(amount),0) as s FROM collections WHERE collection_date BETWEEN ? AND ?`).get(sinceDate, untilDate);
+        return { given: null, done: r.s };
+      }
+      if (source === 'auto:receivables_outstanding') {
+        const r = db.prepare(`SELECT COALESCE(SUM(outstanding_amount),0) as s FROM receivables WHERE owner_id=? AND outstanding_amount > 0`).get(userId);
+        return { given: null, done: r.s };
+      }
+      if (source === 'auto:receivables_count') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM receivables WHERE owner_id=? AND outstanding_amount > 0`).get(userId).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:collections_count') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM collections WHERE collected_by=? AND collection_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
+        return { given: null, done: c };
+      }
+
+      // ===== Payment Required =====
+      if (source === 'auto:payments_raised') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM payment_requests WHERE created_by=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:payments_approved') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM payment_requests WHERE status='final_approved' AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:payments_rejected') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM payment_requests WHERE status='rejected' AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+
+      // ===== HR Hiring =====
+      if (source === 'auto:candidates_added') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM candidates WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:candidates_onboarded') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM candidates WHERE status='onboarded' AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:candidates_shortlisted') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM candidates WHERE status IN ('interview_scheduled','interview_done','offer_sent','accepted','onboarded') AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+
+      // ===== Attendance =====
+      if (source === 'auto:attendance_present_days') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM attendance WHERE user_id=? AND date BETWEEN ? AND ? AND status IN ('present','late','half_day','short_day')`).get(userId, sinceDate, untilDate).c;
+        return { given: 6, done: c };
+      }
+      if (source === 'auto:attendance_late_days') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM attendance WHERE user_id=? AND date BETWEEN ? AND ? AND status='late'`).get(userId, sinceDate, untilDate).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:attendance_absent_days') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM attendance WHERE user_id=? AND date BETWEEN ? AND ? AND status='absent'`).get(userId, sinceDate, untilDate).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:leaves_applied') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM leave_requests WHERE user_id=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        return { given: null, done: c };
+      }
+
+      // ===== Complaints =====
+      if (source === 'auto:complaints_raised') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:complaints_resolved') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM complaints WHERE status='resolved' AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+
+      // ===== Customers / Vendors =====
+      if (source === 'auto:customers_added') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM customers WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+      if (source === 'auto:vendors_added') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM vendors WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: null, done: c };
+      }
+
       return { given: null, done: null };
     };
 
