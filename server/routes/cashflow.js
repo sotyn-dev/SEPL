@@ -124,8 +124,12 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
   const totalSale = result.reduce((s, r) => s + r.sale_amount, 0);
   const totalReceived = result.reduce((s, r) => s + r.amount_received, 0);
   const totalPurchase = result.reduce((s, r) => s + r.purchase_value, 0);
+  // Total Value = sum of Aanchal Values (manual entry, stored in lakhs).
+  // Multiply by 100,000 so the dashboard shows full rupees consistent with
+  // the rest of the cards.
+  const totalValue = result.reduce((s, r) => s + (r.aanchal_value || 0), 0) * 100000;
 
-  res.json({ projects: result, summary: { totalSale, totalReceived, totalPurchase, projectCount: result.length } });
+  res.json({ projects: result, summary: { totalSale, totalReceived, totalValue, totalPurchase, projectCount: result.length } });
 });
 
 // POST update project manual fields (milestone, aanchal value, payment days)

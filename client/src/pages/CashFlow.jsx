@@ -74,10 +74,13 @@ export default function CashFlow() {
       {tab === 'projects' && (
         <>
           {summary && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               <div className="card p-3 border-l-4 border-red-500"><p className="text-xs text-gray-500">Total Projects</p><p className="text-2xl font-bold">{summary.projectCount}</p></div>
               <div className="card p-3 border-l-4 border-emerald-500"><p className="text-xs text-gray-500">Total Sale Value</p><p className="text-xl font-bold text-emerald-600">{fmtL(summary.totalSale)}</p></div>
               <div className="card p-3 border-l-4 border-amber-500"><p className="text-xs text-gray-500">Total Received</p><p className="text-xl font-bold text-amber-600">{fmtL(summary.totalReceived)}</p></div>
+              {/* Total Value = sum of Aanchal Values across all projects.
+                  Comes from the backend already pre-multiplied to rupees. */}
+              <div className="card p-3 border-l-4 border-blue-500"><p className="text-xs text-gray-500">Total Value</p><p className="text-xl font-bold text-blue-600">{fmtL(summary.totalValue)}</p></div>
               <div className="card p-3 border-l-4 border-red-500"><p className="text-xs text-gray-500">Total Purchase</p><p className="text-xl font-bold text-red-600">{fmtL(summary.totalPurchase)}</p></div>
             </div>
           )}
