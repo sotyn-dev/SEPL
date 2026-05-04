@@ -61,11 +61,25 @@ export default function HelpTickets() {
 
   const submit = async (e) => {
     e.preventDefault();
+    // Upload optional attachment first (screenshot, log, PDF) and stash
+    // its URL on attachment_link so admin / assignee can see the proof.
+    let payload = { ...form };
+    delete payload._file;
+    if (form._file) {
+      try {
+        const fd = new FormData();
+        fd.append('file', form._file);
+        const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        payload.attachment_link = up.data?.url || null;
+      } catch (err) {
+        toast.error(`Attachment upload failed: ${err.response?.data?.error || err.message} — submitting without file`, { duration: 5000 });
+      }
+    }
     try {
-      const r = await api.post('/support', form);
+      const r = await api.post('/support', payload);
       toast.success(`Ticket ${r.data.ticket_no} created`);
       setCreateModal(false);
-      setForm({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '' });
+      setForm({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '', _file: null });
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
@@ -213,6 +227,18 @@ export default function HelpTickets() {
                 onChange={(emp) => setForm(f => ({ ...f, assigned_to: emp?.id || '' }))}
               />
             </div>
+            <div className="col-span-2">
+              <label className="label">Attachment <span className="text-gray-400 font-normal text-[10px]">(optional · screenshot, log, PDF)</span></label>
+              <input
+                className="input"
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,.webp,.gif,.txt,.log,.xlsx,.xls,.csv,.doc,.docx"
+                onChange={e => setForm(f => ({ ...f, _file: e.target.files?.[0] || null }))}
+              />
+              {form._file && (
+                <p className="text-[10px] text-blue-600 mt-1">Selected: {form._file.name} ({(form._file.size / 1024).toFixed(1)} KB)</p>
+              )}
+            </div>
           </div>
           <div className="flex justify-end gap-2 pt-1">
             <button type="button" onClick={() => setCreateModal(false)} className="btn btn-secondary">Cancel</button>
@@ -242,6 +268,13 @@ export default function HelpTickets() {
                 <label className="label">Description</label>
                 <div className="bg-gray-50 border rounded p-3 text-sm whitespace-pre-wrap">{viewModal.description}</div>
               </div>
+              {viewModal.attachment_link && (
+                <div>
+                  <a href={viewModal.attachment_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline text-sm font-semibold">
+                    📎 View attachment
+                  </a>
+                </div>
+              )}
               {viewModal.admin_response && (
                 <div>
                   <label className="label">Latest Response</label>
