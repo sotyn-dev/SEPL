@@ -73,9 +73,11 @@ router.put('/settings', adminOnly, (req, res) => {
   ensureSettingsRow(db);
   const fields = [
     'late_after_time','half_day_after_time','min_hours_full_day','min_hours_half_day',
-    'skip_half_day_if_short_leave','lates_to_absent','working_days_per_month','sundays_paid',
+    'skip_half_day_if_short_leave','lates_to_absent','late_grace_count','late_per_minute_rate',
+    'working_days_per_month','sundays_paid',
     'cl_per_month','sl_per_month','pl_per_month','short_leave_per_month',
-    'ot_threshold_hours','ot_rate_multiplier','pay_cycle_start_day'
+    'ot_threshold_hours','ot_rate_multiplier','pay_cycle_start_day',
+    'basic_pct','conveyance_pct','hra_pct','adhoc_pct','misc_pct'
   ];
   const sets = [];
   const vals = [];
@@ -138,7 +140,9 @@ function calculateForEmployee(db, settings, employee, month) {
 
   let paidDays = 0, halfDays = 0, absentDays = 0, lateMarks = 0;
   let paidLeaves = 0, unpaidLeaves = 0, sundayCount = 0, otHours = 0;
+  let latePenalty = 0; // accumulated Rs deduction for late punches over grace
   const breakdown = []; // per-day for slip
+  const lateDays = []; // [{date, minutes_late, applies_penalty: bool}]
 
   const lateAfter = timeToMinutes(settings.late_after_time);
   const halfDayAfter = timeToMinutes(settings.half_day_after_time);
@@ -216,7 +220,10 @@ function calculateForEmployee(db, settings, employee, month) {
       } else {
         // Late mark check (between late_after and half_day_after)
         if (punchInMin !== null && lateAfter !== null && punchInMin > lateAfter) {
-          if (!shortLeaveSavesIt) lateMarks += 1;
+          if (!shortLeaveSavesIt) {
+            lateMarks += 1;
+            lateDays.push({ date: dateStr, minutes_late: punchInMin - lateAfter });
+          }
           dayLabel = 'late';
         } else {
           dayLabel = 'present';
@@ -238,11 +245,33 @@ function calculateForEmployee(db, settings, employee, month) {
     breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: 0 });
   }
 
-  // N lates → 1 absent conversion
+  // N lates → 1 absent conversion (legacy model — disabled by default when 0)
   let latesAsAbsent = 0;
   if (settings.lates_to_absent > 0 && lateMarks >= settings.lates_to_absent) {
     latesAsAbsent = Math.floor(lateMarks / settings.lates_to_absent);
     paidDays = Math.max(0, paidDays - latesAsAbsent);
+  }
+
+  // Per-minute late penalty (current model): first N late marks per month
+  // are free, every late day after that is charged Rs/min × minutes_late.
+  const grace = settings.late_grace_count || 0;
+  const perMin = settings.late_per_minute_rate || 0;
+  for (let i = 0; i < lateDays.length; i++) {
+    const d = lateDays[i];
+    if (i < grace) {
+      d.applies_penalty = false;
+    } else {
+      d.applies_penalty = true;
+      const dayPenalty = (d.minutes_late || 0) * perMin;
+      latePenalty += dayPenalty;
+      d.penalty_amount = round2(dayPenalty);
+      // tag the breakdown row with the penalty
+      const br = breakdown.find(b => b.date === d.date);
+      if (br) {
+        br.late_minutes = d.minutes_late;
+        br.late_penalty = round2(dayPenalty);
+      }
+    }
   }
 
   const baseSalary = employee.salary || 0;
@@ -255,14 +284,25 @@ function calculateForEmployee(db, settings, employee, month) {
     : 0;
   const otPay = otHours * perHourRate * (settings.ot_rate_multiplier || 1);
 
-  const netPay = grossEarned + otPay;
-  const deductions = baseSalary - grossEarned; // informational
+  // Salary breakdown — split the prorated gross into Basic / Conveyance /
+  // HRA / Adhoc / Misc using the percentages in settings (matches mam's
+  // SEPL Tally slip format).
+  const basicPay = round2(grossEarned * (settings.basic_pct || 0) / 100);
+  const conveyance = round2(grossEarned * (settings.conveyance_pct || 0) / 100);
+  const hra = round2(grossEarned * (settings.hra_pct || 0) / 100);
+  const adhoc = round2(grossEarned * (settings.adhoc_pct || 0) / 100);
+  const misc = round2(grossEarned * (settings.misc_pct || 0) / 100);
+
+  const totalDeductions = round2(latePenalty);
+  const netPay = round2(grossEarned + otPay - totalDeductions);
+  const deductions = baseSalary - grossEarned + totalDeductions; // informational
 
   return {
     employee_id: employee.id,
     employee_name: employee.name,
     department: employee.department,
     designation: employee.designation,
+    join_date: employee.join_date,
     base_salary: baseSalary,
     per_day_rate: round2(perDayRate),
     working_days: settings.working_days_per_month,
@@ -272,14 +312,24 @@ function calculateForEmployee(db, settings, employee, month) {
     absent_days: absentDays,
     late_marks: lateMarks,
     lates_converted_absent: latesAsAbsent,
+    late_penalty: round2(latePenalty),
+    late_days: lateDays,
     paid_leaves: paidLeaves,
     unpaid_leaves: unpaidLeaves,
     sunday_count: sundayCount,
     ot_hours: round2(otHours),
     gross_earned: round2(grossEarned),
     ot_pay: round2(otPay),
+    // Earnings breakdown (Basic + Conveyance + HRA + Adhoc + Misc = gross)
+    basic_pay: basicPay,
+    conveyance: conveyance,
+    hra: hra,
+    adhoc: adhoc,
+    misc: misc,
+    total_earnings: round2(basicPay + conveyance + hra + adhoc + misc),
+    total_deductions: totalDeductions,
     deductions: round2(deductions),
-    net_pay: round2(netPay),
+    net_pay: netPay,
     cl_used: clUsed,
     sl_used: slUsed,
     pl_used: plUsed,
@@ -301,7 +351,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
     const db = getDb();
     const settings = getSettings(db);
-    const employees = db.prepare(`SELECT id, user_id, name, department, designation, salary FROM employees WHERE status='active' AND salary > 0`).all();
+    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary FROM employees WHERE status='active' AND salary > 0`).all();
 
     // If a run is finalised for this month, return saved snapshots; else live-calc
     const finalised = db.prepare('SELECT COUNT(*) as c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
@@ -348,19 +398,21 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
 
     const ins = db.prepare(`INSERT OR REPLACE INTO payroll_runs (
       month, employee_id, employee_name, base_salary, working_days, paid_days, half_days,
-      absent_days, late_marks, lates_converted_absent, paid_leaves, unpaid_leaves, sundays,
-      ot_hours, gross_earned, ot_pay, deductions, net_pay, breakdown_json, status,
-      finalised_by, finalised_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
+      absent_days, late_marks, lates_converted_absent, late_penalty, paid_leaves, unpaid_leaves, sundays,
+      ot_hours, gross_earned, ot_pay, deductions, net_pay,
+      basic_pay, conveyance, hra, adhoc, misc,
+      breakdown_json, status, finalised_by, finalised_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
 
     const tx = db.transaction(() => {
       for (const emp of employees) {
         const r = calculateForEmployee(db, settings, emp, month);
         ins.run(
           month, emp.id, emp.name, r.base_salary, r.working_days, r.paid_days, r.half_days,
-          r.absent_days, r.late_marks, r.lates_converted_absent, r.paid_leaves, r.unpaid_leaves, r.sunday_count,
-          r.ot_hours, r.gross_earned, r.ot_pay, r.deductions, r.net_pay, JSON.stringify(r.breakdown), 'finalised',
-          req.user.id
+          r.absent_days, r.late_marks, r.lates_converted_absent, r.late_penalty, r.paid_leaves, r.unpaid_leaves, r.sunday_count,
+          r.ot_hours, r.gross_earned, r.ot_pay, r.deductions, r.net_pay,
+          r.basic_pay, r.conveyance, r.hra, r.adhoc, r.misc,
+          JSON.stringify(r.breakdown), 'finalised', req.user.id
         );
       }
     });

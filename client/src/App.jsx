@@ -19,6 +19,7 @@ import Billing from './pages/Billing';
 import Complaints from './pages/Complaints';
 import HR from './pages/HR';
 import Payroll from './pages/Payroll';
+import SalarySlipPrint from './pages/SalarySlipPrint';
 import Employees from './pages/Employees';
 import Expenses from './pages/Expenses';
 import Checklists from './pages/Checklists';
@@ -75,6 +76,7 @@ export default function App() {
       {/* Print routes — auth-gated but rendered WITHOUT the sidebar / header
           chrome so the document fills the viewport cleanly. */}
       <Route path="/vendor-po/:id/print" element={<ProtectedRoute><VendorPOPrint /></ProtectedRoute>} />
+      <Route path="/payroll/slip/:employee_id" element={<ProtectedRoute><SalarySlipPrint /></ProtectedRoute>} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
         {/* 4 Critical Systems */}

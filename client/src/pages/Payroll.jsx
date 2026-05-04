@@ -11,21 +11,60 @@ const monthNow = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
 
-const SETTING_FIELDS = [
-  { key: 'late_after_time', label: 'Late After Time', help: 'Punch-in after this counts as a late mark', type: 'time' },
-  { key: 'half_day_after_time', label: 'Half-Day After Time', help: 'Punch-in after this = half day deduction', type: 'time' },
-  { key: 'min_hours_full_day', label: 'Min Hours for Full Day', help: 'Worked less than this = half day', type: 'number', step: 0.5 },
-  { key: 'min_hours_half_day', label: 'Min Hours for Half Day', help: 'Worked less than this = absent', type: 'number', step: 0.5 },
-  { key: 'skip_half_day_if_short_leave', label: 'Skip Half-Day if Short Leave Applied', help: '1 = yes, 0 = no', type: 'bool' },
-  { key: 'lates_to_absent', label: 'Late Marks → 1 Absent', help: 'How many lates equal 1 absent', type: 'number' },
-  { key: 'working_days_per_month', label: 'Working Days per Month', help: 'Divisor for per-day rate (26 / 30)', type: 'number' },
-  { key: 'sundays_paid', label: 'Sundays Paid?', help: '1 = paid (monthly staff), 0 = unpaid (daily wage)', type: 'bool' },
-  { key: 'cl_per_month', label: 'Casual Leave / Month', help: 'Paid CL allowance', type: 'number', step: 0.5 },
-  { key: 'sl_per_month', label: 'Sick Leave / Month', help: 'Paid SL allowance', type: 'number', step: 0.5 },
-  { key: 'pl_per_month', label: 'Privilege/Earned Leave / Month', help: 'Paid PL/EL allowance', type: 'number', step: 0.5 },
-  { key: 'short_leave_per_month', label: 'Short Leaves / Month', help: 'Allowed short-leave count', type: 'number' },
-  { key: 'ot_threshold_hours', label: 'OT After (hours)', help: 'Hours/day before OT pay starts', type: 'number', step: 0.5 },
-  { key: 'ot_rate_multiplier', label: 'OT Rate Multiplier', help: 'OT pay = normal × this (1.5 / 2)', type: 'number', step: 0.1 },
+// Grouped settings for the rules tab — clearer than a flat list when there
+// are 20+ rules. Each group renders as its own card.
+const SETTING_GROUPS = [
+  {
+    title: 'Attendance Cutoffs',
+    fields: [
+      { key: 'late_after_time', label: 'Late Zone Start', help: 'Punch-in after this = late mark (e.g. 09:45)', type: 'time' },
+      { key: 'half_day_after_time', label: 'Half-Day After Time', help: 'Punch-in after this = half day deduction (e.g. 10:00)', type: 'time' },
+      { key: 'min_hours_full_day', label: 'Min Hours for Full Day', help: 'Worked less than this = half day', type: 'number', step: 0.5 },
+      { key: 'min_hours_half_day', label: 'Min Hours for Half Day', help: 'Worked less than this = absent', type: 'number', step: 0.5 },
+    ]
+  },
+  {
+    title: 'Late Penalty (per-minute model)',
+    fields: [
+      { key: 'late_grace_count', label: 'Free Late Marks / Month', help: 'First N late punches per month are free', type: 'number' },
+      { key: 'late_per_minute_rate', label: 'Penalty per Minute (Rs)', help: 'After grace, deduct ₹/min × (punch-in - late zone start)', type: 'number' },
+      { key: 'skip_half_day_if_short_leave', label: 'Skip Penalty if Short Leave Applied', help: '1 = if short leave on that day, no late/half-day deduction', type: 'bool' },
+      { key: 'lates_to_absent', label: 'Lates → 1 Absent (legacy)', help: 'Set 0 to disable this alternative model', type: 'number' },
+    ]
+  },
+  {
+    title: 'Working Days & Sundays',
+    fields: [
+      { key: 'working_days_per_month', label: 'Working Days per Month', help: 'Divisor for per-day rate (26 / 30)', type: 'number' },
+      { key: 'sundays_paid', label: 'Sundays Paid?', help: '1 = paid (monthly staff), 0 = unpaid (daily wage)', type: 'bool' },
+    ]
+  },
+  {
+    title: 'Leave Allowances (Paid up to N / month)',
+    fields: [
+      { key: 'cl_per_month', label: 'Casual Leave', help: 'Paid CL allowance per month', type: 'number', step: 0.5 },
+      { key: 'sl_per_month', label: 'Sick Leave', help: 'Paid SL allowance per month', type: 'number', step: 0.5 },
+      { key: 'pl_per_month', label: 'Privilege / Earned Leave', help: 'Paid PL/EL allowance per month', type: 'number', step: 0.5 },
+      { key: 'short_leave_per_month', label: 'Short Leaves / Month', help: 'Allowed short-leave count', type: 'number' },
+    ]
+  },
+  {
+    title: 'Overtime',
+    fields: [
+      { key: 'ot_threshold_hours', label: 'OT After (hours/day)', help: 'Hours/day before OT pay starts', type: 'number', step: 0.5 },
+      { key: 'ot_rate_multiplier', label: 'OT Rate Multiplier', help: 'OT pay = normal × this (1.5 / 2)', type: 'number', step: 0.1 },
+    ]
+  },
+  {
+    title: 'Salary Slip Breakdown (% of gross)',
+    fields: [
+      { key: 'basic_pct', label: 'Basic Pay %', help: 'e.g. 56.5', type: 'number', step: 0.1 },
+      { key: 'conveyance_pct', label: 'Conveyance Allowance %', help: 'e.g. 22.6', type: 'number', step: 0.1 },
+      { key: 'hra_pct', label: 'House Rent Allowance %', help: 'e.g. 5.9', type: 'number', step: 0.1 },
+      { key: 'adhoc_pct', label: 'Adhoc Allowance %', help: 'e.g. 15.0', type: 'number', step: 0.1 },
+      { key: 'misc_pct', label: 'Miscellaneous Allowance %', help: 'Should sum to 100', type: 'number', step: 0.1 },
+    ]
+  },
 ];
 
 const LABEL_PILL = {
@@ -166,6 +205,7 @@ export default function Payroll() {
                   <th className="text-center">Half</th>
                   <th className="text-center">Absent</th>
                   <th className="text-center">Late</th>
+                  <th className="text-right">Late ₹</th>
                   <th className="text-center">Leaves</th>
                   <th className="text-right">OT</th>
                   <th className="text-right">Net Pay</th>
@@ -173,8 +213,8 @@ export default function Payroll() {
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan="11" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
-                {!loading && list.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
+                {loading && <tr><td colSpan="12" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
+                {!loading && list.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
                 {!loading && list.map(r => (
                   <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : ''}>
                     <td className="font-medium">{r.employee_name} {r.locked && <FiLock size={11} className="inline text-emerald-600" title="Finalised" />}</td>
@@ -184,10 +224,14 @@ export default function Payroll() {
                     <td className="text-center">{r.half_days || 0}</td>
                     <td className="text-center text-red-600">{r.absent_days || 0}</td>
                     <td className="text-center text-amber-600">{r.late_marks || 0}{r.lates_converted_absent ? ` (-${r.lates_converted_absent})` : ''}</td>
+                    <td className="text-right text-amber-700">{r.late_penalty ? fmt(r.late_penalty) : '-'}</td>
                     <td className="text-center text-purple-600">{(r.paid_leaves || 0) + (r.unpaid_leaves || 0)}</td>
                     <td className="text-right text-blue-600">{r.ot_hours || 0}h{r.ot_pay ? ` (+${fmt(r.ot_pay)})` : ''}</td>
                     <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}</td>
-                    <td><button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs">View Slip</button></td>
+                    <td className="space-x-1 whitespace-nowrap">
+                      <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs">Detail</button>
+                      <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-primary text-xs">SEPL Slip</a>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -198,34 +242,41 @@ export default function Payroll() {
 
       {/* Settings Tab */}
       {tab === 'settings' && settings && (
-        <div className="card p-6 space-y-4 max-w-3xl">
-          <div className="flex items-center justify-between border-b pb-2">
-            <h3 className="font-bold text-lg">Payroll Calculation Rules</h3>
+        <div className="space-y-4 max-w-4xl">
+          <div className="card p-4 flex items-center justify-between border-b-2 border-red-200">
+            <div>
+              <h3 className="font-bold text-lg">Payroll Calculation Rules</h3>
+              <p className="text-xs text-gray-500">Every value below feeds the auto-calc engine. Save to apply to future months. Finalised months stay locked.</p>
+            </div>
             <button onClick={saveSettings} className="btn btn-primary flex items-center gap-1"><FiSave size={14} /> Save Rules</button>
           </div>
-          <p className="text-xs text-gray-500">Tune each rule to match your company policy. Saving applies to all future calculations. Already-finalised months stay locked.</p>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {SETTING_FIELDS.map(f => (
-              <div key={f.key} className="p-3 bg-gray-50 rounded">
-                <label className="label text-sm">{f.label}</label>
-                {f.type === 'bool' ? (
-                  <select className="select" value={settings[f.key]} onChange={e => setSettings(s => ({ ...s, [f.key]: +e.target.value }))}>
-                    <option value={1}>Yes (1)</option>
-                    <option value={0}>No (0)</option>
-                  </select>
-                ) : f.type === 'time' ? (
-                  <input type="time" className="input" value={settings[f.key] || ''} onChange={e => setSettings(s => ({ ...s, [f.key]: e.target.value }))} />
-                ) : (
-                  <input type="number" step={f.step || 1} className="input" value={settings[f.key] ?? 0} onChange={e => setSettings(s => ({ ...s, [f.key]: +e.target.value }))} />
-                )}
-                <p className="text-[10px] text-gray-500 mt-1">{f.help}</p>
+          {SETTING_GROUPS.map(group => (
+            <div key={group.title} className="card p-4">
+              <h4 className="font-semibold text-sm mb-3 text-red-700 border-b pb-1">{group.title}</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {group.fields.map(f => (
+                  <div key={f.key} className="p-3 bg-gray-50 rounded">
+                    <label className="label text-sm">{f.label}</label>
+                    {f.type === 'bool' ? (
+                      <select className="select" value={settings[f.key]} onChange={e => setSettings(s => ({ ...s, [f.key]: +e.target.value }))}>
+                        <option value={1}>Yes (1)</option>
+                        <option value={0}>No (0)</option>
+                      </select>
+                    ) : f.type === 'time' ? (
+                      <input type="time" className="input" value={settings[f.key] || ''} onChange={e => setSettings(s => ({ ...s, [f.key]: e.target.value }))} />
+                    ) : (
+                      <input type="number" step={f.step || 1} className="input" value={settings[f.key] ?? 0} onChange={e => setSettings(s => ({ ...s, [f.key]: +e.target.value }))} />
+                    )}
+                    <p className="text-[10px] text-gray-500 mt-1">{f.help}</p>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
 
           {savedSettings?.updated_at && (
-            <p className="text-[11px] text-gray-400 pt-2 border-t">Last updated: {savedSettings.updated_at}</p>
+            <p className="text-[11px] text-gray-400 pt-2">Last updated: {savedSettings.updated_at}</p>
           )}
         </div>
       )}
@@ -245,7 +296,27 @@ export default function Payroll() {
               <Stat label="Half Days" value={detail.half_days} color="text-orange-600" />
               <Stat label="Absent" value={detail.absent_days} color="text-red-600" />
               <Stat label="Late Marks" value={`${detail.late_marks}${detail.lates_converted_absent ? ` (-${detail.lates_converted_absent} day)` : ''}`} color="text-amber-600" />
+              <Stat label="Late Penalty" value={detail.late_penalty ? fmt(detail.late_penalty) : '0'} color="text-red-600" />
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Stat label="OT" value={`${detail.ot_hours} h (+${fmt(detail.ot_pay)})`} color="text-blue-600" />
+              <Stat label="Gross Earned" value={fmt(detail.gross_earned)} color="text-emerald-700" />
+              <Stat label="Total Deductions" value={fmt(detail.total_deductions)} color="text-red-600" />
+              <Stat label="Sundays" value={detail.sunday_count} color="text-blue-600" />
+            </div>
+
+            {/* Earnings Breakdown — matches the printable slip */}
+            <div className="border rounded p-3 bg-emerald-50">
+              <h5 className="font-semibold text-sm mb-2 text-emerald-700">Earnings Breakdown</h5>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm">
+                <div className="flex justify-between"><span className="text-gray-500">Basic Pay</span><span className="font-semibold">{fmt(detail.basic_pay)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Conveyance</span><span className="font-semibold">{fmt(detail.conveyance)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">HRA</span><span className="font-semibold">{fmt(detail.hra)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Adhoc</span><span className="font-semibold">{fmt(detail.adhoc)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Misc</span><span className="font-semibold">{fmt(detail.misc)}</span></div>
+                <div className="flex justify-between border-t pt-1 col-span-full sm:col-span-1"><span className="font-bold">Total</span><span className="font-bold text-emerald-700">{fmt(detail.total_earnings)}</span></div>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -286,7 +357,7 @@ export default function Payroll() {
             </div>
 
             <div className="flex justify-end gap-3 pt-3 border-t">
-              <button onClick={() => window.print()} className="btn btn-secondary text-sm">Print Slip</button>
+              <a href={`/payroll/slip/${detail.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-success text-sm">Open SEPL Salary Slip</a>
               <button onClick={() => setDetail(null)} className="btn btn-primary text-sm">Close</button>
             </div>
           </div>

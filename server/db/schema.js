@@ -1104,12 +1104,19 @@ function initializeDatabase() {
     -- cutoff, leave allowances, working days, OT rate, etc.
     CREATE TABLE IF NOT EXISTS payroll_settings (
       id INTEGER PRIMARY KEY CHECK(id = 1),
-      late_after_time TEXT DEFAULT '09:30',           -- after this time = late mark
-      half_day_after_time TEXT DEFAULT '10:00',       -- after this time = half day
+      late_after_time TEXT DEFAULT '09:45',           -- start of late zone (after this = late mark)
+      half_day_after_time TEXT DEFAULT '10:00',       -- after this time = half day deduction
       min_hours_full_day REAL DEFAULT 8,              -- below this hours = half day
       min_hours_half_day REAL DEFAULT 4,              -- below this hours = absent
       skip_half_day_if_short_leave INTEGER DEFAULT 1, -- if short leave applied that day → no half-day deduction
-      lates_to_absent INTEGER DEFAULT 3,              -- N late marks = 1 absent
+      late_grace_count INTEGER DEFAULT 3,             -- N late marks per month are free
+      late_per_minute_rate REAL DEFAULT 20,           -- Rs / minute deduction once over grace
+      lates_to_absent INTEGER DEFAULT 0,              -- N late marks = 1 absent (alternative model, 0 disables)
+      basic_pct REAL DEFAULT 56.5,                    -- Salary breakdown (matches SEPL slip)
+      conveyance_pct REAL DEFAULT 22.6,
+      hra_pct REAL DEFAULT 5.9,
+      adhoc_pct REAL DEFAULT 15.0,
+      misc_pct REAL DEFAULT 0,
       working_days_per_month INTEGER DEFAULT 26,      -- divisor for per-day rate
       sundays_paid INTEGER DEFAULT 1,                 -- 1 = Sundays counted as paid for monthly staff
       cl_per_month REAL DEFAULT 1,                    -- paid casual leave allowance per month
@@ -1410,6 +1417,24 @@ function initializeDatabase() {
 
   // Safe schema migrations for columns added after initial release
   const migrations = [
+    // Payroll grace + per-minute late penalty (added when mam moved from a
+    // simple "late mark" model to a graduated penalty: 3 free late marks per
+    // month, then ₹20/min off the salary for any further late punch).
+    ['payroll_settings', 'late_grace_count INTEGER DEFAULT 3'],
+    ['payroll_settings', 'late_per_minute_rate REAL DEFAULT 20'],
+    // Salary breakdown percentages — match SEPL Tally slip format
+    ['payroll_settings', 'basic_pct REAL DEFAULT 56.5'],
+    ['payroll_settings', 'conveyance_pct REAL DEFAULT 22.6'],
+    ['payroll_settings', 'hra_pct REAL DEFAULT 5.9'],
+    ['payroll_settings', 'adhoc_pct REAL DEFAULT 15.0'],
+    ['payroll_settings', 'misc_pct REAL DEFAULT 0'],
+    // Snapshot fields for finalised runs so historical slips don't drift
+    ['payroll_runs', 'late_penalty REAL DEFAULT 0'],
+    ['payroll_runs', 'basic_pay REAL DEFAULT 0'],
+    ['payroll_runs', 'conveyance REAL DEFAULT 0'],
+    ['payroll_runs', 'hra REAL DEFAULT 0'],
+    ['payroll_runs', 'adhoc REAL DEFAULT 0'],
+    ['payroll_runs', 'misc REAL DEFAULT 0'],
     ['purchase_orders', 'site_engineer_id INTEGER REFERENCES users(id)'],
     ['purchase_orders', 'site_engineer_ids TEXT'],
     ['purchase_orders', 'crm_name TEXT'],
