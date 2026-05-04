@@ -63,7 +63,7 @@ function getUserPermissions(userId) {
     const modules = [
       'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement',
       'cashflow','collections','payment_required','attendance','indent_fms','dpr',
-      'installation','billing','complaints','hr','payroll','employees','expenses','checklists','users','delegations','pms_tasks','inventory','scoring','tools'
+      'installation','billing','complaints','hr','payroll','employees','expenses','checklists','users','delegations','pms_tasks','inventory','scoring','tools','rentals'
     ];
     const perms = {};
     for (const m of modules) {

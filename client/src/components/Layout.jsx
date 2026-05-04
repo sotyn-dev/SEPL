@@ -35,6 +35,7 @@ const menuItems = [
   { path: '/price-required', label: 'Price Required', icon: LuIndianRupee, module: null },
   { path: '/inventory', label: 'Inventory', icon: FiPackage, module: 'inventory' },
   { path: '/tools', label: 'Tools', icon: FiTool, module: 'tools' },
+  { path: '/rentals', label: 'Room Rentals', icon: FiHome, module: 'rentals' },
   { path: '/installation', label: 'Installation', icon: FiTool, module: 'installation' },
   { path: '/billing', label: 'Billing', icon: FiClipboard, module: 'billing' },
   { path: '/complaints', label: 'Complaints', icon: FiAlertCircle, module: 'complaints' },

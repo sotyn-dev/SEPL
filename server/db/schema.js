@@ -1240,6 +1240,83 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Rental properties — flats / houses / guest-houses we rent for
+    -- staff accommodation (site engineers / supervisors stationed at
+    -- project locations). One row per property, agreement-level info.
+    CREATE TABLE IF NOT EXISTS rental_properties (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      address TEXT,
+      city TEXT,
+      state TEXT,
+      pincode TEXT,
+      landlord_name TEXT,
+      landlord_phone TEXT,
+      landlord_email TEXT,
+      monthly_rent REAL DEFAULT 0,
+      deposit_paid REAL DEFAULT 0,
+      agreement_start_date DATE,
+      agreement_end_date DATE,
+      bedrooms INTEGER DEFAULT 1,
+      total_capacity INTEGER DEFAULT 1,
+      amenities TEXT,                       -- comma-sep e.g. 'AC, Wifi, Geyser'
+      agreement_file_url TEXT,
+      status TEXT DEFAULT 'active' CHECK(status IN ('active','expired','terminated')),
+      notes TEXT,
+      site_id INTEGER REFERENCES sites(id), -- optional linkage to project site
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Individual rooms within a property (a 3BHK flat has 3 rooms)
+    CREATE TABLE IF NOT EXISTS rental_rooms (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      property_id INTEGER REFERENCES rental_properties(id) ON DELETE CASCADE,
+      room_name TEXT NOT NULL,              -- e.g. 'Master Bedroom', 'Room A'
+      capacity INTEGER DEFAULT 1,           -- bed count
+      status TEXT DEFAULT 'available' CHECK(status IN ('available','occupied','maintenance','reserved')),
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Booking = an occupant stay. Multiple occupants can share a room
+    -- (each gets their own row with rent_share splitting the room cost).
+    CREATE TABLE IF NOT EXISTS rental_bookings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      room_id INTEGER REFERENCES rental_rooms(id),
+      property_id INTEGER REFERENCES rental_properties(id),
+      occupant_user_id INTEGER REFERENCES users(id),  -- nullable for non-employees
+      occupant_name TEXT,                              -- snapshot
+      occupant_phone TEXT,
+      check_in_date DATE NOT NULL,
+      check_out_date DATE,                             -- planned
+      actual_checkout_date DATE,
+      site_id INTEGER REFERENCES sites(id),            -- which project site
+      rent_share REAL DEFAULT 0,                       -- per-occupant share of rent
+      deposit_collected REAL DEFAULT 0,
+      status TEXT DEFAULT 'active' CHECK(status IN ('active','completed','cancelled')),
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Monthly rent payments paid to landlord
+    CREATE TABLE IF NOT EXISTS rental_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      property_id INTEGER REFERENCES rental_properties(id) ON DELETE CASCADE,
+      period_month TEXT NOT NULL,           -- 'YYYY-MM'
+      amount_paid REAL DEFAULT 0,
+      paid_date DATE,
+      paid_via TEXT,                        -- 'Bank' / 'UPI' / 'Cash'
+      transaction_ref TEXT,
+      receipt_url TEXT,
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(property_id, period_month)
+    );
+
     -- Tools master catalog (returnable assets, separate from consumable
     -- stock). Each tool is unique — drill machine, multimeter, ladder,
     -- etc. — and tracked individually with serial / current location.

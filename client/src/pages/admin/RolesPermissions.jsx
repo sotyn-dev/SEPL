@@ -32,6 +32,7 @@ const ALL_MODULES = [
   { key: 'payroll', label: 'Payroll' },
   { key: 'scoring', label: 'Weekly Score' },
   { key: 'tools', label: 'Tools Management' },
+  { key: 'rentals', label: 'Room Rentals' },
   { key: 'employees', label: 'Employees' },
   { key: 'expenses', label: 'Expenses' },
   { key: 'indent_fms', label: 'Indent FMS (legacy)' },
