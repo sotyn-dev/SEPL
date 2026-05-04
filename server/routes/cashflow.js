@@ -81,15 +81,20 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
     const startDate = p.committed_start_date ? new Date(p.committed_start_date) : new Date(p.created_at);
     const completionDate = p.committed_completion_date ? new Date(p.committed_completion_date) : null;
     const todayDate = new Date(today);
-    const completionDays = completionDate ? Math.ceil((completionDate - startDate) / (1000 * 60 * 60 * 24)) : 0;
+    const computedCompletionDays = completionDate ? Math.ceil((completionDate - startDate) / (1000 * 60 * 60 * 24)) : 0;
     const paymentDays = manualPaymentDays; // Q: Payment Days (manual)
-    const totalDays = completionDays + paymentDays; // R: Total = P + Q
+
+    // Effective completion days — manual override (project_finance) takes
+    // precedence over the date-computed value. The TOTAL displayed in the
+    // grid must use this same effective value, otherwise the row reads
+    // (manual 10) + (manual 10) = 25 because the totalDays kept silently
+    // using the date-computed 15 instead of the manual override 10.
+    const effCompletion = pf?.manual_completion_days ?? computedCompletionDays;
+    const totalDays = effCompletion + paymentDays; // R: Total = P (effective) + Q
 
     // Cash Velocity = (J - K) / R = (Aanchal Value - Purchase Value) / Total Days
     const effPurchase = pf?.manual_purchase_value != null ? pf.manual_purchase_value * 100000 : purchaseAmt;
-    const effCompletion = pf?.manual_completion_days ?? completionDays;
-    const effTotal = effCompletion + paymentDays;
-    const cashVelocity = effTotal > 0 ? Math.round(((aanchalValue - effPurchase) / effTotal / 100000) * 100) / 100 : 0;
+    const cashVelocity = totalDays > 0 ? Math.round(((aanchalValue - effPurchase) / totalDays / 100000) * 100) / 100 : 0;
 
     return {
       sr_no: idx + 1,
@@ -107,9 +112,9 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
       cash_velocity: cashVelocity,  // M: (J-K)/R
       live_date: today,  // N: Today
       payment_investment_days: paymentInvestDays,  // O: Manual by Nitin ji
-      completion_days: pf?.manual_completion_days ?? completionDays,  // P: from dates
+      completion_days: effCompletion,  // P: manual override OR computed from dates
       payment_days: paymentDays,  // Q: Manual
-      total_days: totalDays,  // R: P+Q
+      total_days: totalDays,  // R: effective P + Q (now consistent with displayed P + Q)
       committed_start: p.committed_start_date,
       committed_completion: p.committed_completion_date,
     };
