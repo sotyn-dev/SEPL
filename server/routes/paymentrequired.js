@@ -302,4 +302,34 @@ router.delete('/:id', requirePermission('payment_required', 'delete'), (req, res
   res.json({ message: 'Deleted' });
 });
 
+// PATCH attach a proof URL to an existing request. Some users miss the
+// upload step on the form and the approver only sees "No proofs uploaded"
+// — this endpoint lets the original creator OR an approver fix it after
+// the fact, before the request is finalised.
+//   field options: ticket_upload | km_photo | end_km_photo | quotation_link | attachment_link
+router.patch('/:id/proof', requirePermission('payment_required', 'view'), (req, res) => {
+  const { field, url } = req.body;
+  const allowed = ['ticket_upload', 'km_photo', 'end_km_photo', 'quotation_link', 'attachment_link'];
+  if (!allowed.includes(field)) return res.status(400).json({ error: 'Invalid proof field' });
+  if (!url || typeof url !== 'string') return res.status(400).json({ error: 'URL required' });
+  const db = getDb();
+  const request = db.prepare('SELECT created_by, status, category FROM payment_requests WHERE id=?').get(req.params.id);
+  if (!request) return res.status(404).json({ error: 'Not found' });
+  if (request.status === 'final_approved' || request.status === 'rejected') {
+    return res.status(400).json({ error: 'Cannot edit proofs on finalised request' });
+  }
+  // Permission: admin, original creator, OR anyone who can approve this category
+  const isOwner = request.created_by === req.user.id;
+  const isAdmin = req.user.role === 'admin';
+  const canApprove = canUserApproveStep(db, req.user.id, request.category, 1) ||
+                     canUserApproveStep(db, req.user.id, request.category, 2) ||
+                     canUserApproveStep(db, req.user.id, request.category, 4) ||
+                     canUserApproveStep(db, req.user.id, request.category, 5);
+  if (!isOwner && !isAdmin && !canApprove) {
+    return res.status(403).json({ error: 'Only the request creator or an approver can attach proofs' });
+  }
+  db.prepare(`UPDATE payment_requests SET ${field} = ? WHERE id = ?`).run(url, req.params.id);
+  res.json({ message: 'Proof attached', field, url });
+});
+
 module.exports = router;

@@ -317,15 +317,28 @@ export default function PaymentRequired() {
             {/* Proofs / Receipts — shown prominently so approver can verify
                 tickets / KM photos / quotations / attachments before clicking
                 Approve or Reject. Images show as thumbnails, PDFs/docs show
-                as a 📄 card. Click any tile to open full-size in a new tab. */}
+                as a 📄 card. Click any tile to open full-size in a new tab.
+                If a proof is missing, an "Upload now" button appears so the
+                approver / creator can attach it before deciding. */}
             {(() => {
-              const proofs = [
-                viewData.ticket_upload && { url: viewData.ticket_upload, label: 'Travel Ticket', tint: 'purple' },
-                viewData.km_photo && { url: viewData.km_photo, label: `Start KM Photo${viewData.start_km ? ` (${viewData.start_km} km)` : ''}`, tint: 'orange' },
-                viewData.end_km_photo && { url: viewData.end_km_photo, label: `End KM Photo${viewData.end_km ? ` (${viewData.end_km} km)` : ''}`, tint: 'emerald' },
-                viewData.quotation_link && { url: viewData.quotation_link, label: 'Quotation / Purchase Order', tint: 'red' },
-                viewData.attachment_link && { url: viewData.attachment_link, label: 'Other Attachment', tint: 'blue' },
-              ].filter(Boolean);
+              // Build a list of expected proof slots based on category.
+              // Each slot has: field (DB column), label, tint, and required flag.
+              const slots = [];
+              if (viewData.category === 'TA/DA') {
+                if (['Bus','Train','Flight'].includes(viewData.mode_of_travel)) {
+                  slots.push({ field: 'ticket_upload', label: 'Travel Ticket', tint: 'purple', required: true });
+                }
+                if (['Car','Bike'].includes(viewData.mode_of_travel)) {
+                  slots.push({ field: 'km_photo', label: `Start KM Photo${viewData.start_km ? ` (${viewData.start_km} km)` : ''}`, tint: 'orange', required: true });
+                  slots.push({ field: 'end_km_photo', label: `End KM Photo${viewData.end_km ? ` (${viewData.end_km} km)` : ''}`, tint: 'emerald', required: true });
+                }
+              }
+              if (viewData.category === 'Purchase') {
+                slots.push({ field: 'quotation_link', label: 'Quotation / Purchase Order', tint: 'red', required: true });
+              }
+              // Always allow a generic attachment slot at the end
+              slots.push({ field: 'attachment_link', label: 'Other Attachment', tint: 'blue', required: false });
+
               const isImg = (url) => /\.(jpg|jpeg|png|webp|gif|bmp|heic)(\?|$)/i.test(url);
               const tintMap = {
                 purple: 'border-purple-300 bg-purple-50',
@@ -334,40 +347,89 @@ export default function PaymentRequired() {
                 red: 'border-red-300 bg-red-50',
                 blue: 'border-blue-300 bg-blue-50',
               };
+
+              const isFinalised = viewData.status === 'final_approved' || viewData.status === 'rejected';
+
+              const uploadProof = async (field, file) => {
+                if (!file) return;
+                try {
+                  const fd = new FormData();
+                  fd.append('file', file);
+                  const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                  await api.patch(`/payment-required/${viewData.id}/proof`, { field, url: up.data.url });
+                  toast.success('Proof attached');
+                  // refresh modal data
+                  const { data } = await api.get(`/payment-required/${viewData.id}`);
+                  setViewData(data);
+                } catch (err) {
+                  toast.error(err.response?.data?.error || 'Upload failed');
+                }
+              };
+
+              const filledCount = slots.filter(s => viewData[s.field]).length;
+
               return (
                 <div className="border-2 border-blue-300 rounded-lg p-3 bg-blue-50/40">
                   <h5 className="font-bold text-sm text-blue-800 mb-2 flex items-center gap-1">
-                    📎 Proofs / Receipts {proofs.length > 0 && <span className="text-blue-600">({proofs.length})</span>}
+                    📎 Proofs / Receipts {filledCount > 0 && <span className="text-blue-600">({filledCount})</span>}
                   </h5>
-                  {proofs.length === 0 ? (
-                    <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-                      ⚠️ No proofs uploaded with this request. Verify with employee before approving.
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {proofs.map((p, i) => (
-                        <a
-                          key={i}
-                          href={p.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={`block rounded-lg border ${tintMap[p.tint]} overflow-hidden hover:shadow-md hover:scale-[1.02] transition-all`}
-                          title={`Click to open ${p.label}`}
-                        >
-                          {isImg(p.url) ? (
-                            <img src={p.url} alt={p.label} className="w-full h-32 object-cover bg-white" />
-                          ) : (
-                            <div className="h-32 flex flex-col items-center justify-center bg-white">
-                              <span className="text-4xl">📄</span>
-                              <span className="text-[10px] text-gray-500 mt-1">PDF / Document</span>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {slots.map((s, i) => {
+                      const url = viewData[s.field];
+                      if (url) {
+                        return (
+                          <a
+                            key={i}
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={`block rounded-lg border ${tintMap[s.tint]} overflow-hidden hover:shadow-md hover:scale-[1.02] transition-all`}
+                            title={`Click to open ${s.label}`}
+                          >
+                            {isImg(url) ? (
+                              <img src={url} alt={s.label} className="w-full h-32 object-cover bg-white" />
+                            ) : (
+                              <div className="h-32 flex flex-col items-center justify-center bg-white">
+                                <span className="text-4xl">📄</span>
+                                <span className="text-[10px] text-gray-500 mt-1">PDF / Document</span>
+                              </div>
+                            )}
+                            <div className="px-2 py-1.5 bg-white border-t">
+                              <div className="text-xs font-semibold truncate">{s.label}</div>
+                              <div className="text-[10px] text-blue-600 underline">Click to open</div>
                             </div>
-                          )}
-                          <div className="px-2 py-1.5 bg-white border-t">
-                            <div className="text-xs font-semibold truncate">{p.label}</div>
-                            <div className="text-[10px] text-blue-600 underline">Click to open</div>
+                          </a>
+                        );
+                      }
+                      // Missing slot — show upload card (only if not finalised)
+                      if (isFinalised) return null;
+                      return (
+                        <label
+                          key={i}
+                          className={`block rounded-lg border-2 border-dashed ${s.required ? 'border-red-300 bg-red-50/50' : 'border-gray-300 bg-gray-50'} overflow-hidden cursor-pointer hover:shadow-md transition-all`}
+                        >
+                          <div className="h-32 flex flex-col items-center justify-center text-center px-2">
+                            <span className="text-3xl">{s.required ? '⚠️' : '➕'}</span>
+                            <span className="text-[11px] font-bold mt-1 text-gray-700">{s.required ? 'MISSING' : 'Optional'}</span>
+                            <span className="text-[10px] text-gray-500 mt-0.5">Click to upload</span>
                           </div>
-                        </a>
-                      ))}
+                          <div className="px-2 py-1.5 bg-white border-t">
+                            <div className="text-xs font-semibold truncate">{s.label}</div>
+                            <div className="text-[10px] text-blue-600 underline">Choose file…</div>
+                          </div>
+                          <input
+                            type="file"
+                            accept="image/*,.pdf"
+                            className="hidden"
+                            onChange={e => uploadProof(s.field, e.target.files?.[0])}
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {filledCount === 0 && (
+                    <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
+                      ⚠️ No proofs uploaded with this request. Click any tile above to attach the missing receipt before approving.
                     </div>
                   )}
                 </div>
