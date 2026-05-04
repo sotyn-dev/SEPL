@@ -57,20 +57,25 @@ export default function Delegation() {
     // existing tasks are also merged in so the dropdown stays useful for
     // legacy free-text entries.
     api.get('/business-book').then(r => {
+      // CSV-imported names sometimes carry stray quotes ("""M/s ...""")
+      // and trailing whitespace. Clean those before deduping so the
+      // dropdown stays tight and 'M/s X' / '"""M/s X"""' don't appear
+      // as separate options.
+      const cleanName = (s) => (s || '')
+        .replace(/^[\s"'`]+|[\s"'`]+$/g, '')   // trim quotes + whitespace from both ends
+        .replace(/\s+/g, ' ')                   // collapse internal whitespace
+        .trim();
       const seen = new Set();
       const list = [];
       for (const bb of r.data || []) {
-        const name = (bb.project_name && bb.project_name.trim())
-          || (bb.company_name && bb.company_name.trim())
-          || null;
+        const name = cleanName(bb.project_name) || cleanName(bb.company_name);
         if (!name) continue;
         const key = name.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
-        list.push({
-          name,
-          subtitle: [bb.client_name, bb.lead_no].filter(Boolean).join(' · '),
-        });
+        // Prefer lead_no as the disambiguator (shorter than client name)
+        // so each option stays readable even on narrow modals.
+        list.push({ name, subtitle: bb.lead_no || '' });
       }
       setProjects(list.sort((a, b) => a.name.localeCompare(b.name)));
     }).catch(() => setProjects([]));
@@ -625,7 +630,7 @@ export default function Delegation() {
       </>)}
 
       {/* Create Modal */}
-      <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="Assign New Task">
+      <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="Assign New Task" wide>
         <form onSubmit={save} className="space-y-3">
           <div>
             <label className="label flex items-center justify-between">
@@ -697,7 +702,7 @@ export default function Delegation() {
       </Modal>
 
       {/* Edit Task Modal — admin / assigner only */}
-      <Modal isOpen={!!editModal} onClose={() => { setEditModal(null); setEditForm({}); }} title={editModal ? `Edit task — ${editModal.title || ''}` : 'Edit task'}>
+      <Modal isOpen={!!editModal} onClose={() => { setEditModal(null); setEditForm({}); }} title={editModal ? `Edit task — ${editModal.title || ''}` : 'Edit task'} wide>
         {editModal && (
           <form onSubmit={saveEdit} className="space-y-3">
             <div>
