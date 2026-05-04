@@ -341,19 +341,15 @@ router.get('/scorecard', (req, res) => {
         const c = db.prepare(`SELECT COUNT(DISTINCT site_id) as c FROM stock_movements WHERE site_id IN ${inSites} AND created_at BETWEEN ? AND ?`).get(since, until).c;
         return { given: siteIds.length, done: c };
       }
-      // Tools List submission: count of tool-type stock_movements at
-      // this user's sites in the week. Mam: "as per given site name
-      // tools should be update". We treat any stock_movement tagged
-      // as 'tool' (notes LIKE %tool% or item_master.category='Tool')
-      // as a tools list update. Target = 1 per site.
+      // Tools List submission: count of weekly tools_list_submissions
+      // by this user for sites they manage. Target = sites count (one
+      // submission per site per week).
       if (source === 'auto:tools_list') {
         const c = db.prepare(`
-          SELECT COUNT(DISTINCT sm.site_id) as c FROM stock_movements sm
-          LEFT JOIN item_master im ON im.id = sm.item_master_id
-          WHERE sm.site_id IN ${inSites}
-            AND sm.created_at BETWEEN ? AND ?
-            AND (LOWER(COALESCE(im.category,'')) LIKE '%tool%' OR LOWER(COALESCE(sm.notes,'')) LIKE '%tool%')
-        `).get(since, until).c;
+          SELECT COUNT(DISTINCT site_id) as c FROM tools_list_submissions
+          WHERE submitted_by = ? AND site_id IN ${inSites}
+            AND week_start = ?
+        `).get(userId, sinceDate).c;
         return { given: siteIds.length, done: c };
       }
 

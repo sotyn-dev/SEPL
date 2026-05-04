@@ -1216,6 +1216,67 @@ function initializeDatabase() {
       UNIQUE(user_id, kpi_id, week_start)
     );
 
+    -- Tools master catalog (returnable assets, separate from consumable
+    -- stock). Each tool is unique — drill machine, multimeter, ladder,
+    -- etc. — and tracked individually with serial / current location.
+    CREATE TABLE IF NOT EXISTS tools (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tool_code TEXT UNIQUE,                  -- e.g. T-2026-0001 auto-generated
+      name TEXT NOT NULL,
+      category TEXT,                          -- 'Drilling','Cutting','Measurement','Safety','Power','Hand','Other'
+      brand TEXT,
+      model TEXT,
+      serial_no TEXT,
+      purchase_date DATE,
+      purchase_price REAL DEFAULT 0,
+      condition TEXT DEFAULT 'good' CHECK(condition IN ('new','good','fair','poor','scrap')),
+      status TEXT DEFAULT 'available' CHECK(status IN ('available','in_use','maintenance','lost','scrapped')),
+      current_site_id INTEGER REFERENCES sites(id),
+      current_user_id INTEGER REFERENCES users(id),
+      last_calibration_date DATE,
+      next_calibration_date DATE,
+      photo_url TEXT,
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Movement log — every issue / return / transfer / maintenance / scrap
+    -- captured here so admin can answer 'where did this drill go on Apr 5?'
+    CREATE TABLE IF NOT EXISTS tool_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tool_id INTEGER REFERENCES tools(id) ON DELETE CASCADE,
+      action TEXT NOT NULL CHECK(action IN ('issue','return','transfer','maintenance','repair','scrap','calibration')),
+      from_site_id INTEGER REFERENCES sites(id),
+      to_site_id INTEGER REFERENCES sites(id),
+      from_user_id INTEGER REFERENCES users(id),
+      to_user_id INTEGER REFERENCES users(id),
+      expected_return_date DATE,
+      actual_return_date DATE,
+      condition_at_action TEXT,
+      notes TEXT,
+      photo_url TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Weekly tools list submission per site (Supervisor MIS KPI: "Tools
+    -- List submission as per given site name tools should be update").
+    -- One row per (site, submitter, week_start) — UNIQUE prevents dupes.
+    CREATE TABLE IF NOT EXISTS tools_list_submissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      site_id INTEGER REFERENCES sites(id),
+      submitted_by INTEGER REFERENCES users(id),
+      week_start DATE NOT NULL,
+      tools_count INTEGER DEFAULT 0,
+      tools_json TEXT,                        -- JSON array of {tool_id, name, qty, condition}
+      photo_url TEXT,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(site_id, submitted_by, week_start)
+    );
+
     -- Vendor PO ↔ Indent Item link (one PO can cover multiple indent items;
     -- one indent item can split across multiple POs for partial orders).
     CREATE TABLE IF NOT EXISTS vendor_po_items (
