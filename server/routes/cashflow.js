@@ -13,6 +13,18 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
   const db = getDb();
   const today = new Date().toISOString().split('T')[0];
   const isAdmin = req.user.role === 'admin';
+  // Bypass the CRM-name scope filter when the role has can_approve OR
+  // can_see_all on cashflow — that's the explicit "see everyone's
+  // projects" toggle in Roles & Permissions. Accountant / Auditor /
+  // any role mam ticks See All for, gets the full list like admin.
+  const canSeeAll = isAdmin || (() => {
+    const r = db.prepare(`
+      SELECT MAX(CASE WHEN rp.can_approve = 1 OR rp.can_see_all = 1 THEN 1 ELSE 0 END) as ok
+      FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+      WHERE ur.user_id = ? AND rp.module = 'cashflow'
+    `).get(req.user.id);
+    return !!r?.ok;
+  })();
 
   let sql = `SELECT bb.id, bb.lead_no, bb.company_name as project_name, bb.client_name,
     bb.employee_assigned as crm_person, bb.sale_amount_without_gst, bb.po_amount, bb.advance_received,
@@ -21,7 +33,7 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
     FROM business_book bb
     LEFT JOIN sites s ON s.business_book_id=bb.id`;
   const params = [];
-  if (!isAdmin) {
+  if (!canSeeAll) {
     const fullName = (req.user.name || '').trim();
     const firstName = fullName.split(/\s+/)[0] || fullName;
     sql += ` WHERE (LOWER(COALESCE(bb.employee_assigned,'')) LIKE ? OR LOWER(COALESCE(bb.employee_assigned,'')) LIKE ?)`;
