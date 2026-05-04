@@ -60,6 +60,9 @@ export default function WordCount() {
   const [drillUser, setDrillUser] = useState(null); // { user_id, user_name }
   const [detail, setDetail] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
+  // Changelog — what new systems/features were created in the ERP
+  // on the picked date, sourced from git log on the deployed repo.
+  const [changelog, setChangelog] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -80,6 +83,17 @@ export default function WordCount() {
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [date, dateTo]);
+
+  // Pull the changelog (git log) for the same date range so MD can
+  // see exactly what new modules / features / fixes shipped that day.
+  useEffect(() => {
+    const params = new URLSearchParams();
+    params.set('date', date);
+    if (dateTo && dateTo !== date) params.set('date_to', dateTo);
+    api.get(`/admin/changelog?${params.toString()}`)
+      .then(r => setChangelog(r.data))
+      .catch(() => setChangelog(null));
+  }, [date, dateTo]);
 
   const openDrill = async (u) => {
     setDrillUser(u);
@@ -179,6 +193,60 @@ export default function WordCount() {
             <span className="font-semibold">{data.truncated_activities}</span> activities had very large payloads that were
             truncated by the audit log (2000-char cap), so their word count is a lower bound.
           </div>
+        </div>
+      )}
+
+      {/* What's NEW in the ERP — git log for the same date range. Shows
+          MD which new modules / features / fixes shipped each day so he
+          can review at a glance. Auto-pulled, no manual upkeep. */}
+      {changelog && changelog.commits && changelog.commits.length > 0 && (
+        <div className="card p-0 overflow-hidden border-l-4 border-emerald-500">
+          <div className="px-4 py-3 border-b bg-gradient-to-r from-emerald-50 to-blue-50 flex items-center justify-between">
+            <div>
+              <h4 className="font-semibold text-gray-800 flex items-center gap-2">
+                ✨ What's New in ERP
+                <span className="text-xs font-normal text-gray-500">— ({changelog.total} {changelog.total === 1 ? 'change' : 'changes'} {changelog.since !== changelog.until ? `${changelog.since} → ${changelog.until}` : `on ${changelog.since}`})</span>
+              </h4>
+              <p className="text-[11px] text-gray-500 mt-0.5">Auto-pulled from the deploy log so MD can review each day's shipped work.</p>
+            </div>
+            <div className="flex gap-3 text-xs">
+              {changelog.by_type?.new > 0 && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold">🆕 {changelog.by_type.new} New</span>}
+              {changelog.by_type?.tweak > 0 && <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-bold">🔧 {changelog.by_type.tweak} Tweaks</span>}
+              {changelog.by_type?.fix > 0 && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">🛠️ {changelog.by_type.fix} Fixes</span>}
+            </div>
+          </div>
+          <div className="divide-y max-h-[420px] overflow-y-auto">
+            {changelog.commits.map(c => (
+              <details key={c.hash} className="group">
+                <summary className="cursor-pointer px-4 py-3 hover:bg-gray-50 flex items-start gap-3 list-none">
+                  <span className="text-xl flex-shrink-0">{c.emoji}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${
+                        c.type === 'new' ? 'bg-emerald-100 text-emerald-700' :
+                        c.type === 'tweak' ? 'bg-blue-100 text-blue-700' :
+                        c.type === 'fix' ? 'bg-amber-100 text-amber-700' :
+                        c.type === 'doc' ? 'bg-purple-100 text-purple-700' :
+                        'bg-gray-100 text-gray-600'
+                      }`}>{c.label}</span>
+                      <span className="text-[10px] text-gray-400 font-mono">{c.hash}</span>
+                      <span className="text-[10px] text-gray-500">{c.time} · {c.author}</span>
+                    </div>
+                    <div className="font-semibold text-gray-800 mt-1 text-sm">{c.subject}</div>
+                  </div>
+                  {c.body && <span className="text-gray-400 text-xs flex-shrink-0">▸</span>}
+                </summary>
+                {c.body && (
+                  <div className="px-12 pb-3 -mt-1 text-xs text-gray-600 whitespace-pre-wrap leading-relaxed">{c.body}</div>
+                )}
+              </details>
+            ))}
+          </div>
+        </div>
+      )}
+      {changelog && changelog.commits && changelog.commits.length === 0 && (
+        <div className="card p-3 bg-gray-50 border-l-4 border-gray-300 text-xs text-gray-600">
+          ✨ No new ERP features shipped on this date. Pick another date or expand the range.
         </div>
       )}
 
