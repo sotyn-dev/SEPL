@@ -70,6 +70,7 @@ app.use('/api/installation', require('./routes/installation'));
 app.use('/api/complaints', require('./routes/complaints'));
 app.use('/api/hr', require('./routes/hr'));
 app.use('/api/payroll', require('./routes/payroll'));
+app.use('/api/scoring', require('./routes/scoring'));
 app.use('/api/delegations', require('./routes/delegations'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/price-requests', require('./routes/pricerequests'));

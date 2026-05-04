@@ -20,6 +20,7 @@ import Complaints from './pages/Complaints';
 import HR from './pages/HR';
 import Payroll from './pages/Payroll';
 import SalarySlipPrint from './pages/SalarySlipPrint';
+import WeeklyScore from './pages/WeeklyScore';
 import Employees from './pages/Employees';
 import Expenses from './pages/Expenses';
 import Checklists from './pages/Checklists';
@@ -105,6 +106,7 @@ export default function App() {
         <Route path="complaints" element={<ModuleRoute module="complaints"><Complaints /></ModuleRoute>} />
         <Route path="hr" element={<ModuleRoute module="hr"><HR /></ModuleRoute>} />
         <Route path="payroll" element={<ModuleRoute module="payroll"><Payroll /></ModuleRoute>} />
+        <Route path="weekly-score" element={<ModuleRoute module="scoring"><WeeklyScore /></ModuleRoute>} />
         <Route path="employees" element={<ModuleRoute module="employees"><Employees /></ModuleRoute>} />
         <Route path="expenses" element={<ModuleRoute module="expenses"><Expenses /></ModuleRoute>} />
         <Route path="checklists" element={<ModuleRoute module="checklists"><Checklists /></ModuleRoute>} />
