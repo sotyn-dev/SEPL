@@ -67,13 +67,13 @@ function getUserPermissions(userId) {
     ];
     const perms = {};
     for (const m of modules) {
-      perms[m] = { can_view: 1, can_create: 1, can_edit: 1, can_delete: 1, can_approve: 1 };
+      perms[m] = { can_view: 1, can_create: 1, can_edit: 1, can_delete: 1, can_approve: 1, can_see_all: 1 };
     }
     return perms;
   }
 
   const rows = db.prepare(`
-    SELECT rp.module, rp.can_view, rp.can_create, rp.can_edit, rp.can_delete, rp.can_approve
+    SELECT rp.module, rp.can_view, rp.can_create, rp.can_edit, rp.can_delete, rp.can_approve, rp.can_see_all
     FROM role_permissions rp
     JOIN user_roles ur ON rp.role_id = ur.role_id
     WHERE ur.user_id = ?
@@ -82,13 +82,14 @@ function getUserPermissions(userId) {
   const perms = {};
   for (const r of rows) {
     if (!perms[r.module]) {
-      perms[r.module] = { can_view: 0, can_create: 0, can_edit: 0, can_delete: 0, can_approve: 0 };
+      perms[r.module] = { can_view: 0, can_create: 0, can_edit: 0, can_delete: 0, can_approve: 0, can_see_all: 0 };
     }
     // Merge permissions (if user has multiple roles, take highest privilege)
     perms[r.module].can_view = perms[r.module].can_view || r.can_view;
     perms[r.module].can_create = perms[r.module].can_create || r.can_create;
     perms[r.module].can_edit = perms[r.module].can_edit || r.can_edit;
     perms[r.module].can_delete = perms[r.module].can_delete || r.can_delete;
+    perms[r.module].can_see_all = perms[r.module].can_see_all || r.can_see_all;
     perms[r.module].can_approve = perms[r.module].can_approve || r.can_approve;
   }
   return perms;
