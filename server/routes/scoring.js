@@ -165,16 +165,21 @@ router.get('/scorecard', (req, res) => {
     const lastStartTs = `${lastWeekStart} 00:00:00`;
     const lastEndTs = `${shiftWeek(lastWeekStart, 5)} 23:59:59`;
 
-    // Helper: list site_ids where this user is the assigned site engineer
-    // (used for site-scoped KPIs like DPR Profit, MB Signed, Indents, Stock).
+    // Helper: list site_ids where this user is the assigned site engineer.
+    // Two sources combined:
+    //   sites.site_engineer_id           (direct linkage on the sites table)
+    //   purchase_orders.site_engineer_id (CSV via site_engineer_ids too) →
+    //                                    sites are linked through po.id
     const siteIdsForUser = () => {
       const rows = db.prepare(`
-        SELECT DISTINCT bb.site_id FROM business_book bb
-        JOIN purchase_orders po ON po.business_book_id = bb.id
+        SELECT id FROM sites WHERE site_engineer_id = ?
+        UNION
+        SELECT s.id FROM sites s
+        JOIN purchase_orders po ON po.id = s.po_id
         WHERE po.site_engineer_id = ?
            OR (',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ?
-      `).all(userId, `%,${userId},%`);
-      return rows.map(r => r.site_id).filter(Boolean);
+      `).all(userId, userId, `%,${userId},%`);
+      return rows.map(r => r.id).filter(Boolean);
     };
 
     const computeAutoCount = (source, since, until) => {
@@ -231,18 +236,35 @@ router.get('/scorecard', (req, res) => {
         return { given: c, done: c };
       }
       if (source === 'auto:mb_signed') {
-        // MB bills signed by client in the week
-        const total = db.prepare(`SELECT COUNT(*) as c FROM mb_bills WHERE site_id IN ${inSites} AND created_at BETWEEN ? AND ?`).get(since, until).c;
-        const signed = db.prepare(`SELECT COUNT(*) as c FROM mb_bills WHERE site_id IN ${inSites} AND created_at BETWEEN ? AND ? AND COALESCE(client_signed,0) = 1`).get(since, until).c;
+        // MB bills approved (client-signed proxy) / total raised in the week.
+        // mb_bills doesn't carry site_id — joined via installation_id →
+        // installations.po_id → sites.po_id.
+        const total = db.prepare(`
+          SELECT COUNT(DISTINCT mb.id) as c FROM mb_bills mb
+          JOIN installations i ON i.id = mb.installation_id
+          JOIN sites s ON s.po_id = i.po_id
+          WHERE s.id IN ${inSites} AND mb.created_at BETWEEN ? AND ?
+        `).get(since, until).c;
+        const signed = db.prepare(`
+          SELECT COUNT(DISTINCT mb.id) as c FROM mb_bills mb
+          JOIN installations i ON i.id = mb.installation_id
+          JOIN sites s ON s.po_id = i.po_id
+          WHERE s.id IN ${inSites} AND mb.created_at BETWEEN ? AND ? AND mb.status = 'approved'
+        `).get(since, until).c;
         return { given: total, done: signed };
       }
       if (source === 'auto:ra_bills') {
-        // RA bills raised in the week
-        const c = db.prepare(`SELECT COUNT(*) as c FROM ra_bills WHERE site_id IN ${inSites} AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        // RA bills raised in the week — joined via installation_id → po → sites
+        const c = db.prepare(`
+          SELECT COUNT(DISTINCT r.id) as c FROM ra_bills r
+          JOIN installations i ON i.id = r.installation_id
+          JOIN sites s ON s.po_id = i.po_id
+          WHERE s.id IN ${inSites} AND r.created_at BETWEEN ? AND ?
+        `).get(since, until).c;
         return { given: 3, done: c }; // SEPL target = 3/week per Indresh template
       }
       if (source === 'auto:stock_at_site') {
-        // Latest non-zero stock count at any of this user's sites
+        // Latest non-zero stock at any of this user's sites — binary flag
         const c = db.prepare(`SELECT COUNT(*) as c FROM stock_movements WHERE site_id IN ${inSites} AND quantity > 0`).get().c;
         return { given: 1, done: c > 0 ? 1 : 0 };
       }
@@ -257,12 +279,18 @@ router.get('/scorecard', (req, res) => {
       let planned = entry?.planned ?? 0;
       let actual = entry?.actual ?? 0;
 
-      // Auto-fill from ERP if data_source is 'auto:*'
+      // Auto-fill from ERP if data_source is 'auto:*'. Wrap in try/catch
+      // so one broken auto source (e.g. table missing a column on a stale
+      // DB) doesn't take down the whole scorecard render.
       if (k.data_source && k.data_source.startsWith('auto:')) {
-        const { given, done } = computeAutoCount(k.data_source, startTs, endTs);
-        if (given !== null) {
-          planned = given;
-          actual = done;
+        try {
+          const { given, done } = computeAutoCount(k.data_source, startTs, endTs);
+          if (given !== null) {
+            planned = given;
+            actual = done;
+          }
+        } catch (e) {
+          console.warn(`auto-fetch failed for ${k.data_source}:`, e.message);
         }
       }
 
