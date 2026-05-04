@@ -229,8 +229,12 @@ export default function Payroll() {
                 {loading && <tr><td colSpan="12" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
                 {!loading && list.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
                 {!loading && list.map(r => (
-                  <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : ''}>
-                    <td className="font-medium">{r.employee_name} {r.locked && <FiLock size={11} className="inline text-emerald-600" title="Finalised" />}</td>
+                  <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : (r.user_linked === false ? 'bg-amber-50/40' : '')}>
+                    <td className="font-medium">
+                      {r.employee_name}
+                      {r.locked && <FiLock size={11} className="inline text-emerald-600 ml-1" title="Finalised" />}
+                      {r.user_linked === false && <span className="ml-1 text-[10px] bg-amber-200 text-amber-800 px-1 py-0.5 rounded" title="No login user linked — attendance can't be looked up. Open HR → Employees and set the User for this employee.">⚠ no login</span>}
+                    </td>
                     <td className="text-xs text-gray-500">{r.department || '-'}</td>
                     <td className="text-right">{fmt(r.base_salary)}</td>
                     <td className="text-right font-semibold">{r.paid_days}</td>

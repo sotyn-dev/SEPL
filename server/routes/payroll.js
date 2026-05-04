@@ -117,7 +117,23 @@ function calculateForEmployee(db, settings, employee, month) {
     lastDay = todayD; // current month — only up to today
   }
 
-  const userId = employee.user_id;
+  // Resolve the user_id for this employee. Many HR employee rows were
+  // created from candidates / manual entry without a login linkage, so
+  // employee.user_id is NULL. Without a user_id, attendance / leaves
+  // can't be looked up and every day looks 'absent'. Fall back to matching
+  // by name (case-insensitive, trimmed) — and once found, persist the
+  // linkage so the next run is fast.
+  let userId = employee.user_id;
+  if (!userId && employee.name) {
+    const nameMatch = db.prepare(
+      `SELECT id FROM users WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND active != 0 LIMIT 1`
+    ).get(employee.name);
+    if (nameMatch) {
+      userId = nameMatch.id;
+      try { db.prepare('UPDATE employees SET user_id = ? WHERE id = ?').run(userId, employee.id); } catch (e) { /* ignore */ }
+    }
+  }
+
   // Pull all attendance rows for this month at once
   const startDate = `${month}-01`;
   const endDate = `${month}-${pad(totalDays)}`;
@@ -328,6 +344,8 @@ function calculateForEmployee(db, settings, employee, month) {
     days_counted: lastDay,
     is_current_month: (year === todayY && mm === todayM),
     is_future_month: (year > todayY || (year === todayY && mm > todayM)),
+    user_linked: !!userId,
+    user_id: userId || null,
     paid_days: round2(paidDays),
     half_days: halfDays,
     absent_days: absentDays,
