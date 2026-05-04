@@ -3,7 +3,7 @@ import api from '../../api';
 import Modal from '../../components/Modal';
 import StatusBadge from '../../components/StatusBadge';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2 } from 'react-icons/fi';
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
@@ -64,6 +64,30 @@ export default function UserManagement() {
   const toggleActive = async (user) => {
     await api.put(`/auth/users/${user.id}`, { ...user, active: !user.active, role_ids: undefined });
     toast.success(user.active ? 'User deactivated' : 'User activated');
+  };
+
+  // Hard delete a user. Two-step confirm (so it's hard to fumble) and we
+  // surface the backend error verbatim if it's blocked by FK references
+  // (e.g. user is the created_by on indents / payments / etc.).
+  const deleteUser = async (user) => {
+    const first = confirm(
+      `Delete user "${user.name}" (${user.email || user.username})?\n\n` +
+      'This is permanent. Their login disappears and any audit trail referencing them as a creator may break.\n\n' +
+      'Tip: if you just want to stop them logging in, use the "Deactivate" button instead — that\'s reversible.'
+    );
+    if (!first) return;
+    const typed = prompt(`Type "DELETE ${user.name}" exactly to confirm:`);
+    if (typed !== `DELETE ${user.name}`) {
+      toast('Cancelled — confirmation text did not match');
+      return;
+    }
+    try {
+      await api.delete(`/auth/users/${user.id}`);
+      toast.success(`User "${user.name}" deleted`);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Delete failed — try Deactivate instead');
+    }
   };
 
   // Per-user opt-out from Admin → Location Tracking. Admins, office staff,
@@ -177,6 +201,13 @@ export default function UserManagement() {
                       className={`p-1.5 rounded ${u.track_location ? 'hover:bg-amber-50 text-amber-600' : 'hover:bg-emerald-50 text-emerald-600'}`}
                       title={u.track_location ? 'Hide from Location Tracking' : 'Show in Location Tracking'}>
                       {u.track_location ? <FiMapPin size={15} /> : <FiEyeOff size={15} />}
+                    </button>
+                    {/* Hard delete — admin's escape hatch when a user really
+                        needs to be removed (typo, wrong invite, employee left).
+                        Two-step confirmation prompts inside deleteUser to
+                        guard against accidental clicks. */}
+                    <button onClick={() => deleteUser(u)} className="p-1.5 hover:bg-red-100 rounded text-red-700" title="Delete user (permanent)">
+                      <FiTrash2 size={15} />
                     </button>
                   </div>
                 </td>

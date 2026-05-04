@@ -258,9 +258,35 @@ router.post('/users/:id/reset-password', authMiddleware, adminOnly, (req, res) =
 });
 
 // Deactivate user (admin only)
+// Hard delete a user. Admin-only. Guarded so admins can't:
+//   - delete themselves (would lock them out of the session)
+//   - delete the last active admin (would orphan the system)
+// Falls back to "deactivate" guidance if FK references block the delete.
 router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
-  getDb().prepare('UPDATE users SET active=0 WHERE id=?').run(req.params.id);
-  res.json({ message: 'User deactivated' });
+  const db = getDb();
+  const id = +req.params.id;
+  if (id === req.user.id) {
+    return res.status(400).json({ error: "You can't delete your own account. Ask another admin." });
+  }
+  const target = db.prepare('SELECT id, name, role FROM users WHERE id=?').get(id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.role === 'admin') {
+    const adminCount = db.prepare("SELECT COUNT(*) as c FROM users WHERE role='admin' AND active=1").get().c;
+    if (adminCount <= 1) {
+      return res.status(400).json({ error: 'Cannot delete the only admin. Promote another user to admin first.' });
+    }
+  }
+  try {
+    // user_roles has ON DELETE CASCADE on user_id, so role assignments clear
+    // automatically. Other tables (audit_log, indents.created_by, etc.) hold
+    // soft references that will keep their snapshotted user_name field —
+    // deletion just nulls the join, doesn't break old rows.
+    db.prepare('DELETE FROM user_roles WHERE user_id = ?').run(id);
+    db.prepare('DELETE FROM users WHERE id=?').run(id);
+    res.json({ message: `User "${target.name}" deleted` });
+  } catch (e) {
+    res.status(409).json({ error: `Delete blocked: ${e.message}. Try Deactivate instead — same effect, reversible.` });
+  }
 });
 
 // ===== ROLES & PERMISSIONS (Admin Only) =====
