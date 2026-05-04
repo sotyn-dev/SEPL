@@ -20,7 +20,6 @@ import Complaints from './pages/Complaints';
 import HR from './pages/HR';
 import Payroll from './pages/Payroll';
 import SalarySlipPrint from './pages/SalarySlipPrint';
-import WeeklyScore from './pages/WeeklyScore';
 import Scorecard from './pages/Scorecard';
 import Tools from './pages/Tools';
 import Rentals from './pages/Rentals';
@@ -109,8 +108,10 @@ export default function App() {
         <Route path="complaints" element={<ModuleRoute module="complaints"><Complaints /></ModuleRoute>} />
         <Route path="hr" element={<ModuleRoute module="hr"><HR /></ModuleRoute>} />
         <Route path="payroll" element={<ModuleRoute module="payroll"><Payroll /></ModuleRoute>} />
-        <Route path="weekly-score" element={<ModuleRoute module="scoring"><WeeklyScore /></ModuleRoute>} />
         <Route path="scorecard" element={<ModuleRoute module="scoring"><Scorecard /></ModuleRoute>} />
+        {/* Legacy /weekly-score URL → redirect to Scorecard's Team Overview tab.
+            Kept so any bookmarked links / push notification deep-links don't 404. */}
+        <Route path="weekly-score" element={<Navigate to="/scorecard" replace />} />
         <Route path="tools" element={<ModuleRoute module="tools"><Tools /></ModuleRoute>} />
         <Route path="rentals" element={<ModuleRoute module="rentals"><Rentals /></ModuleRoute>} />
         <Route path="employees" element={<ModuleRoute module="employees"><Employees /></ModuleRoute>} />
