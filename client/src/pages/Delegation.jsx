@@ -13,6 +13,7 @@ export default function Delegation() {
   const { user, isAdmin, canApprove } = useAuth();
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
+  const [projects, setProjects] = useState([]); // unique project names from Business Book
   // EA = anyone with approve permission on delegations (mam grants this to
   // her assistant). Admin also counts. Both see "All" tab + can upload proof
   // for anyone.
@@ -50,6 +51,29 @@ export default function Delegation() {
   useEffect(() => {
     load();
     api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
+    // Pull all Business Book entries → build unique project list for the
+    // Project Name picker. Fall back to company_name when project_name is
+    // blank so every BB row is reachable. Already-typed project names on
+    // existing tasks are also merged in so the dropdown stays useful for
+    // legacy free-text entries.
+    api.get('/business-book').then(r => {
+      const seen = new Set();
+      const list = [];
+      for (const bb of r.data || []) {
+        const name = (bb.project_name && bb.project_name.trim())
+          || (bb.company_name && bb.company_name.trim())
+          || null;
+        if (!name) continue;
+        const key = name.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        list.push({
+          name,
+          subtitle: [bb.client_name, bb.lead_no].filter(Boolean).join(' · '),
+        });
+      }
+      setProjects(list.sort((a, b) => a.name.localeCompare(b.name)));
+    }).catch(() => setProjects([]));
   }, [scope, statusFilter, assigneeFilter, dateFrom, dateTo]);
 
   // Per-person workload aggregates — only loaded when the dashboard view
@@ -630,8 +654,29 @@ export default function Delegation() {
             </div>
             <div>
               <label className="label">Project Name <span className="text-gray-400 font-normal">(optional)</span></label>
-              <input className="input" type="text" value={form.project_name || ''} onChange={e => setForm({ ...form, project_name: e.target.value })} placeholder="e.g. ONGC Mehsana" />
-              <p className="text-[10px] text-gray-400 mt-0.5">Free text — you can edit this later from the list.</p>
+              <SearchableSelect
+                options={(() => {
+                  // Merge legacy free-text project names already on tasks so
+                  // they don't disappear when admin opens the modal.
+                  const merged = [...projects];
+                  const seen = new Set(projects.map(p => p.name.toLowerCase()));
+                  for (const t of tasks) {
+                    if (t.project_name && !seen.has(t.project_name.toLowerCase())) {
+                      seen.add(t.project_name.toLowerCase());
+                      merged.push({ name: t.project_name, subtitle: '(existing tag)' });
+                    }
+                  }
+                  return merged.map(p => ({
+                    ...p,
+                    label: p.subtitle ? `${p.name} — ${p.subtitle}` : p.name,
+                  }));
+                })()}
+                value={form.project_name || null}
+                valueKey="name" displayKey="label"
+                placeholder="Search project from Business Book…"
+                onChange={(p) => setForm({ ...form, project_name: p?.name || '' })}
+              />
+              <p className="text-[10px] text-gray-400 mt-0.5">From Business Book unique projects. Type to filter — pick one or leave blank.</p>
             </div>
           </div>
           <div>
@@ -679,7 +724,20 @@ export default function Delegation() {
               </div>
               <div>
                 <label className="label">Project (optional)</label>
-                <input className="input" value={editForm.project_name || ''} onChange={e => setEditForm(f => ({ ...f, project_name: e.target.value }))} placeholder="Free text tag" />
+                <SearchableSelect
+                  options={(() => {
+                    const merged = [...projects];
+                    const seen = new Set(projects.map(p => p.name.toLowerCase()));
+                    if (editForm.project_name && !seen.has(editForm.project_name.toLowerCase())) {
+                      merged.push({ name: editForm.project_name, subtitle: '(existing tag)' });
+                    }
+                    return merged.map(p => ({ ...p, label: p.subtitle ? `${p.name} — ${p.subtitle}` : p.name }));
+                  })()}
+                  value={editForm.project_name || null}
+                  valueKey="name" displayKey="label"
+                  placeholder="Search project from Business Book…"
+                  onChange={(p) => setEditForm(f => ({ ...f, project_name: p?.name || '' }))}
+                />
               </div>
             </div>
             {editModal.status === 'rejected' && (
