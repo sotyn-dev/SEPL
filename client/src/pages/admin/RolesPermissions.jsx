@@ -42,6 +42,11 @@ const ACTIONS = [
   { key: 'can_edit', label: 'Edit', color: 'text-amber-600' },
   { key: 'can_delete', label: 'Delete', color: 'text-red-600' },
   { key: 'can_approve', label: 'Approve', color: 'text-purple-600' },
+  // can_see_all: explicit "scope=ALL records" toggle (decoupled from approve).
+  // When OFF (default), users with this role only see records they raised /
+  // own. When ON, they see every record in the module like an approver does.
+  // Useful for auditor-style roles that need full read but no approval power.
+  { key: 'can_see_all', label: 'See All', color: 'text-blue-600' },
 ];
 
 export default function RolesPermissions() {
@@ -70,6 +75,7 @@ export default function RolesPermissions() {
       can_edit: permMap[m.key]?.can_edit || 0,
       can_delete: permMap[m.key]?.can_delete || 0,
       can_approve: permMap[m.key]?.can_approve || 0,
+      can_see_all: permMap[m.key]?.can_see_all || 0,
     }));
     setPermissions(fullPerms);
   };
@@ -82,9 +88,9 @@ export default function RolesPermissions() {
       if (newVal && actionKey !== 'can_view') {
         return { ...p, [actionKey]: newVal, can_view: 1 };
       }
-      // If disabling view, disable all
+      // If disabling view, disable all (including the new can_see_all)
       if (!newVal && actionKey === 'can_view') {
-        return { ...p, can_view: 0, can_create: 0, can_edit: 0, can_delete: 0, can_approve: 0 };
+        return { ...p, can_view: 0, can_create: 0, can_edit: 0, can_delete: 0, can_approve: 0, can_see_all: 0 };
       }
       return { ...p, [actionKey]: newVal };
     }));

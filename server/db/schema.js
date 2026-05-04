@@ -1437,6 +1437,12 @@ function initializeDatabase() {
     ['employees', 'aadhar_file TEXT'],
     ['employees', 'pan_file TEXT'],
     ['employees', 'qualification_file TEXT'],
+    // can_see_all on role_permissions: explicit per-role-per-module toggle
+    // for "scope = ALL records" vs "scope = OWN only". Decoupled from
+    // can_approve so admin can grant a role full visibility without giving
+    // them approval power (e.g. an auditor role). When can_see_all = 1 OR
+    // can_approve = 1, the user sees every record in that module.
+    ['role_permissions', 'can_see_all INTEGER DEFAULT 0'],
     // Announcements module — admin posts; everyone reads. Each user's
     // last-seen timestamp is tracked separately so the bell-icon counter
     // can show a "new" badge until they open the panel. Two tables created

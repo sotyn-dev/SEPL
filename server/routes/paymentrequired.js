@@ -5,15 +5,15 @@ const router = express.Router();
 router.use(authMiddleware);
 
 // Helper: does the user see EVERY payment request, or only their own?
-// Admin always sees all. Anyone with approve / edit / delete permission on
-// payment_required (HR Manager, Accountant, Admin's grants) also sees all
-// — they're approvers / processors. Plain users (Site Engineer who only
-// has view + create) are scoped to rows they raised themselves.
+// Admin always sees all. Otherwise the user sees all iff one of their
+// roles has either can_approve=1 OR can_see_all=1 on payment_required.
+// can_see_all is the explicit "scope=ALL" toggle mam can flip in
+// Roles & Permissions UI, decoupled from approval power.
 const seesAll = (req) => {
   if (req.user.role === 'admin') return true;
   const db = getDb();
   const row = db.prepare(`
-    SELECT MAX(rp.can_approve) as ok
+    SELECT MAX(CASE WHEN rp.can_approve = 1 OR rp.can_see_all = 1 THEN 1 ELSE 0 END) as ok
     FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
     WHERE ur.user_id = ? AND rp.module = 'payment_required'
   `).get(req.user.id);

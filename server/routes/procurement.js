@@ -402,7 +402,7 @@ router.get('/indents', (req, res) => {
   const isAdmin = req.user.role === 'admin';
   const canSeeAll = isAdmin || (() => {
     const r = db.prepare(`
-      SELECT MAX(rp.can_approve) as ok
+      SELECT MAX(CASE WHEN rp.can_approve = 1 OR rp.can_see_all = 1 THEN 1 ELSE 0 END) as ok
       FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
       WHERE ur.user_id = ? AND rp.module = 'procurement'
     `).get(req.user.id);

@@ -302,14 +302,17 @@ router.get('/roles/:id/permissions', authMiddleware, (req, res) => {
   res.json(perms);
 });
 
-// Set permissions for a role (bulk update)
+// Set permissions for a role (bulk update). Now also persists can_see_all
+// — explicit "scope = ALL records" toggle decoupled from approve.
 router.put('/roles/:id/permissions', authMiddleware, adminOnly, (req, res) => {
-  const { permissions } = req.body; // Array of { module, can_view, can_create, can_edit, can_delete, can_approve }
+  const { permissions } = req.body;
   const db = getDb();
   db.prepare('DELETE FROM role_permissions WHERE role_id=?').run(req.params.id);
-  const insert = db.prepare('INSERT INTO role_permissions (role_id, module, can_view, can_create, can_edit, can_delete, can_approve) VALUES (?,?,?,?,?,?,?)');
+  const insert = db.prepare('INSERT INTO role_permissions (role_id, module, can_view, can_create, can_edit, can_delete, can_approve, can_see_all) VALUES (?,?,?,?,?,?,?,?)');
   for (const p of (permissions || [])) {
-    insert.run(req.params.id, p.module, p.can_view ? 1 : 0, p.can_create ? 1 : 0, p.can_edit ? 1 : 0, p.can_delete ? 1 : 0, p.can_approve ? 1 : 0);
+    insert.run(req.params.id, p.module,
+      p.can_view ? 1 : 0, p.can_create ? 1 : 0, p.can_edit ? 1 : 0,
+      p.can_delete ? 1 : 0, p.can_approve ? 1 : 0, p.can_see_all ? 1 : 0);
   }
   res.json({ message: 'Permissions updated' });
 });
