@@ -47,8 +47,8 @@ const TEMPLATES = [
       { group: 'Weekly', name: 'Daily Manpower photo', weight: 5 },
       { group: 'Weekly', name: 'Tools List submission', weight: 5, source: 'auto:tools_list' },
       { group: 'Weekly', name: 'Material Loss / Pilferage', weight: 5, direction: 'lower_better' },
-      { group: 'Weekly', name: 'DPR Cost Accuracy', weight: 5 },
-      { group: 'Weekly', name: 'DPR Profitability Accuracy', weight: 10 },
+      { group: 'Weekly', name: 'DPR Cost Accuracy', weight: 5, source: 'auto:dpr_cost_by_user' },
+      { group: 'Weekly', name: 'DPR Profitability Accuracy', weight: 10, source: 'auto:dpr_profit_by_user' },
     ],
   },
   {
@@ -381,6 +381,8 @@ function upgradeAutoSources(db) {
     ['Supervisor', 'Material Receiving signed from client', 'auto:material_received'],
     ['Supervisor', 'Stock report accuracy', 'auto:stock_updates'],
     ['Supervisor', 'Tools List submission', 'auto:tools_list'],
+    ['Supervisor', 'DPR Cost Accuracy', 'auto:dpr_cost_by_user'],
+    ['Supervisor', 'DPR Profitability Accuracy', 'auto:dpr_profit_by_user'],
     ['Indresh — Billing Engineer', 'RA Bills Raised Weekly', 'auto:ra_bills'],
   ];
   const upd = db.prepare(`

@@ -282,6 +282,22 @@ router.get('/scorecard', (req, res) => {
         const c = db.prepare(`SELECT COUNT(*) as c FROM dpr WHERE submitted_by = ? AND report_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
         return { given: 6, done: c }; // 6 working days target
       }
+      // Sum of profit_loss across DPRs submitted BY this user in the week.
+      // Mam: "if dpr is one count then why not profit or loss show" —
+      // pulls the profit number directly off the DPR rows.
+      if (source === 'auto:dpr_profit_by_user') {
+        const r = db.prepare(`SELECT COALESCE(SUM(profit_loss),0) as p FROM dpr WHERE submitted_by = ? AND report_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate);
+        // planned defaults to the row's default_planned (set by admin),
+        // actual = sum of profit_loss across this user's DPRs.
+        return { given: null, done: r.p }; // given=null preserves the
+        // template's default_planned target as the comparison base.
+      }
+      // DPR Cost Accuracy = sum of grand_total_b (planned cost) across
+      // user's DPRs in the week. Lower-better KPI on Supervisor template.
+      if (source === 'auto:dpr_cost_by_user') {
+        const r = db.prepare(`SELECT COALESCE(SUM(grand_total_b),0) as c FROM dpr WHERE submitted_by = ? AND report_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate);
+        return { given: null, done: r.c };
+      }
       // Material Receiving: how many vendor PO deliveries were received
       // at this user's sites this week. Mam: "indent to dispatch user
       // assign as per site name week how much dispatch & rec".
@@ -344,11 +360,16 @@ router.get('/scorecard', (req, res) => {
       // Auto-fill from ERP if data_source is 'auto:*'. Wrap in try/catch
       // so one broken auto source (e.g. table missing a column on a stale
       // DB) doesn't take down the whole scorecard render.
+      // - If `given` is non-null, override Planned (e.g. 6 days for DPR count)
+      // - If `given` is null, keep template default_planned and only set Actual
+      //   (e.g. DPR profit Actual = sum from DPR rows, target stays as 30000)
       if (k.data_source && k.data_source.startsWith('auto:')) {
         try {
           const { given, done } = computeAutoCount(k.data_source, startTs, endTs);
           if (given !== null) {
             planned = given;
+          }
+          if (done !== null && done !== undefined) {
             actual = done;
           }
         } catch (e) {
