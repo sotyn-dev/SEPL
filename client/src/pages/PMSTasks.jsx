@@ -312,7 +312,7 @@ export default function PMSTasks() {
                   </td>
                   <td>
                     <div className="flex gap-1 items-center">
-                      {isAssigner && t.status === 'submitted' && (
+                      {(isAssigner || isAdmin()) && t.status === 'submitted' && (
                         <>
                           <button onClick={() => approve(t)} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
                           <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="text-[10px] text-red-600 font-bold hover:underline">Reject</button>
