@@ -11,6 +11,7 @@ import { useState, useEffect } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { FiMapPin, FiRefreshCw, FiUser, FiCalendar, FiClock, FiNavigation, FiExternalLink, FiAlertCircle } from 'react-icons/fi';
+import RouteMap from '../../components/RouteMap';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—';
@@ -248,6 +249,26 @@ export default function Locations() {
                 <div className="card p-3 bg-amber-50 border-l-4 border-amber-400 flex items-start gap-2 text-xs text-amber-900">
                   <FiAlertCircle className="mt-0.5 flex-shrink-0" />
                   <div>This employee has GPS pings but didn't punch in on {timeline.date}. The "during work" tag won't apply.</div>
+                </div>
+              )}
+
+              {/* Embedded route map — draws the day's GPS pings as a red
+                  polyline with start (green) / end (red) markers and the
+                  office geofence as a faint blue circle. Mam's exact ask:
+                  "draw red line office to outside outside to office". */}
+              {timeline.pings.length > 0 && (
+                <div className="card p-0 overflow-hidden">
+                  <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
+                    <h4 className="font-semibold text-gray-700 flex items-center gap-2">
+                      <FiMapPin size={14} className="text-red-600" /> Route Map ({timeline.pings.length} points · total {(timeline.total_distance_m/1000).toFixed(2)} km)
+                    </h4>
+                    <span className="text-[11px] text-gray-400">🟢 start · 🔴 last seen · blue circle = office</span>
+                  </div>
+                  <RouteMap
+                    pings={timeline.pings.map(p => ({ ...p, time_str: fmtTime(p.time) }))}
+                    geofences={timeline.geofences || []}
+                    height={420}
+                  />
                 </div>
               )}
 

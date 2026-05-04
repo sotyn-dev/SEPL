@@ -124,6 +124,12 @@ router.get('/timeline', (req, res) => {
     return { ...r, dist_from_prev_m: distFromPrev, phase };
   });
 
+  // Active geofences for office overlay on the map (faint blue circles)
+  const geofences = db.prepare(
+    `SELECT site_name, latitude, longitude, radius_meters
+       FROM geofence_settings WHERE active = 1`
+  ).all();
+
   res.json({
     user,
     date,
@@ -139,6 +145,7 @@ router.get('/timeline', (req, res) => {
       status: att.status || null,
     },
     pings: enriched,
+    geofences,
   });
 });
 
