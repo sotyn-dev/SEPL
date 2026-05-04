@@ -46,9 +46,13 @@ router.post('/sites', (req, res) => {
 });
 
 router.put('/sites/:id', (req, res) => {
-  const { name, address, client_name, site_engineer_id, supervisor, status } = req.body;
-  getDb().prepare('UPDATE sites SET name=?, address=?, client_name=?, site_engineer_id=?, supervisor=?, status=? WHERE id=?')
-    .run(name, address, client_name, site_engineer_id, supervisor, status, req.params.id);
+  const { name, address, client_name, site_engineer_id, supervisor, supervisor_id, status } = req.body;
+  getDb().prepare(
+    `UPDATE sites SET
+       name=?, address=?, client_name=?,
+       site_engineer_id=?, supervisor=?, supervisor_id=?, status=?
+     WHERE id=?`
+  ).run(name, address, client_name, site_engineer_id, supervisor, supervisor_id || null, status, req.params.id);
   res.json({ message: 'Updated' });
 });
 

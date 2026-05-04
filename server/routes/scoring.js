@@ -167,20 +167,25 @@ router.get('/scorecard', (req, res) => {
     const lastStartTs = `${lastWeekStart} 00:00:00`;
     const lastEndTs = `${shiftWeek(lastWeekStart, 5)} 23:59:59`;
 
-    // Helper: list site_ids where this user is the assigned site engineer.
-    // Two sources combined:
+    // Helper: list site_ids where this user is the assigned site engineer
+    // OR supervisor. Three sources combined:
     //   sites.site_engineer_id           (direct linkage on the sites table)
+    //   sites.supervisor_id              (added 2026-05-04 for supervisor MIS)
+    //   sites.supervisor TEXT (legacy)   matched by user.name
     //   purchase_orders.site_engineer_id (CSV via site_engineer_ids too) →
     //                                    sites are linked through po.id
+    const userName = db.prepare('SELECT name FROM users WHERE id=?').get(userId)?.name || '';
     const siteIdsForUser = () => {
       const rows = db.prepare(`
-        SELECT id FROM sites WHERE site_engineer_id = ?
+        SELECT id FROM sites WHERE site_engineer_id = ? OR supervisor_id = ?
+        UNION
+        SELECT id FROM sites WHERE LOWER(TRIM(COALESCE(supervisor,''))) = LOWER(TRIM(?))
         UNION
         SELECT s.id FROM sites s
         JOIN purchase_orders po ON po.id = s.po_id
         WHERE po.site_engineer_id = ?
            OR (',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ?
-      `).all(userId, userId, `%,${userId},%`);
+      `).all(userId, userId, userName, userId, `%,${userId},%`);
       return rows.map(r => r.id).filter(Boolean);
     };
 
@@ -269,6 +274,59 @@ router.get('/scorecard', (req, res) => {
         // Latest non-zero stock at any of this user's sites — binary flag
         const c = db.prepare(`SELECT COUNT(*) as c FROM stock_movements WHERE site_id IN ${inSites} AND quantity > 0`).get().c;
         return { given: 1, done: c > 0 ? 1 : 0 };
+      }
+      // Supervisor template: DPR Daily Actual = count of DPRs SUBMITTED
+      // BY this user during the week (not by site). Mam: "from as per
+      // date and as per user name count which dpr submit".
+      if (source === 'auto:dpr_by_user') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM dpr WHERE submitted_by = ? AND report_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
+        return { given: 6, done: c }; // 6 working days target
+      }
+      // Material Receiving: how many vendor PO deliveries were received
+      // at this user's sites this week. Mam: "indent to dispatch user
+      // assign as per site name week how much dispatch & rec".
+      if (source === 'auto:material_received') {
+        // indents doesn't have site_id — match via site_name (TEXT) → sites.name
+        const total = db.prepare(`
+          SELECT COUNT(DISTINCT dn.id) as c FROM delivery_notes dn
+          JOIN vendor_pos vp ON vp.id = dn.vendor_po_id
+          JOIN indents ind ON ind.id = vp.indent_id
+          JOIN sites s ON LOWER(TRIM(s.name)) = LOWER(TRIM(COALESCE(ind.site_name,'')))
+          WHERE s.id IN ${inSites}
+            AND dn.created_at BETWEEN ? AND ?
+        `).get(since, until).c;
+        const received = db.prepare(`
+          SELECT COUNT(DISTINCT dn.id) as c FROM delivery_notes dn
+          JOIN vendor_pos vp ON vp.id = dn.vendor_po_id
+          JOIN indents ind ON ind.id = vp.indent_id
+          JOIN sites s ON LOWER(TRIM(s.name)) = LOWER(TRIM(COALESCE(ind.site_name,'')))
+          WHERE s.id IN ${inSites}
+            AND dn.created_at BETWEEN ? AND ?
+            AND dn.status = 'received'
+        `).get(since, until).c;
+        return { given: total, done: received };
+      }
+      // Stock report accuracy: count of stock movements at user's sites
+      // in the week. Target = 1 update per site per week (mam: "stock
+      // per week one time update as per site assign").
+      if (source === 'auto:stock_updates') {
+        const c = db.prepare(`SELECT COUNT(DISTINCT site_id) as c FROM stock_movements WHERE site_id IN ${inSites} AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: siteIds.length, done: c };
+      }
+      // Tools List submission: count of tool-type stock_movements at
+      // this user's sites in the week. Mam: "as per given site name
+      // tools should be update". We treat any stock_movement tagged
+      // as 'tool' (notes LIKE %tool% or item_master.category='Tool')
+      // as a tools list update. Target = 1 per site.
+      if (source === 'auto:tools_list') {
+        const c = db.prepare(`
+          SELECT COUNT(DISTINCT sm.site_id) as c FROM stock_movements sm
+          LEFT JOIN item_master im ON im.id = sm.item_master_id
+          WHERE sm.site_id IN ${inSites}
+            AND sm.created_at BETWEEN ? AND ?
+            AND (LOWER(COALESCE(im.category,'')) LIKE '%tool%' OR LOWER(COALESCE(sm.notes,'')) LIKE '%tool%')
+        `).get(since, until).c;
+        return { given: siteIds.length, done: c };
       }
       return { given: null, done: null };
     };

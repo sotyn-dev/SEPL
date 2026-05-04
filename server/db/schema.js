@@ -1479,6 +1479,10 @@ function initializeDatabase() {
     // ROI=1, Automations=4, etc.). Used as the Planned default when no
     // weekly entry exists.
     ['score_kpis', 'default_planned REAL DEFAULT 0'],
+    // Supervisor → site linkage so Supervisor template KPIs (DPR Daily
+    // Actual, Stock report, Tools List, Material Receiving) can scope
+    // by site. The TEXT 'supervisor' column was insufficient for joins.
+    ['sites', 'supervisor_id INTEGER REFERENCES users(id)'],
     ['payroll_settings', 'late_grace_count INTEGER DEFAULT 3'],
     ['payroll_settings', 'late_per_minute_rate REAL DEFAULT 20'],
     // Salary breakdown percentages — match SEPL Tally slip format

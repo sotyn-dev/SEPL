@@ -492,9 +492,13 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   <option value="auto:tickets">auto: tickets</option>
                   <option value="auto:dpr_profit">auto: DPR profit (planned vs actual ₹)</option>
                   <option value="auto:dpr_count">auto: DPR count (6 days/week target)</option>
+                  <option value="auto:dpr_by_user">auto: DPR submitted BY user</option>
                   <option value="auto:indents_in_week">auto: indents created (site)</option>
                   <option value="auto:mb_signed">auto: MB signed by client (site)</option>
                   <option value="auto:ra_bills">auto: RA bills raised (site)</option>
+                  <option value="auto:material_received">auto: material received (delivery notes)</option>
+                  <option value="auto:stock_updates">auto: stock updates (per site/week)</option>
+                  <option value="auto:tools_list">auto: tools list submission (per site)</option>
                   <option value="auto:stock_at_site">auto: stock at site flag</option>
                 </select>
               </td>
