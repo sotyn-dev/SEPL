@@ -1099,6 +1099,61 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Payroll settings (single-row config, id=1). Admin tunes every rule
+    -- here so salary auto-calc isn't hardcoded — late cutoff, half-day
+    -- cutoff, leave allowances, working days, OT rate, etc.
+    CREATE TABLE IF NOT EXISTS payroll_settings (
+      id INTEGER PRIMARY KEY CHECK(id = 1),
+      late_after_time TEXT DEFAULT '09:30',           -- after this time = late mark
+      half_day_after_time TEXT DEFAULT '10:00',       -- after this time = half day
+      min_hours_full_day REAL DEFAULT 8,              -- below this hours = half day
+      min_hours_half_day REAL DEFAULT 4,              -- below this hours = absent
+      skip_half_day_if_short_leave INTEGER DEFAULT 1, -- if short leave applied that day → no half-day deduction
+      lates_to_absent INTEGER DEFAULT 3,              -- N late marks = 1 absent
+      working_days_per_month INTEGER DEFAULT 26,      -- divisor for per-day rate
+      sundays_paid INTEGER DEFAULT 1,                 -- 1 = Sundays counted as paid for monthly staff
+      cl_per_month REAL DEFAULT 1,                    -- paid casual leave allowance per month
+      sl_per_month REAL DEFAULT 1,                    -- paid sick leave allowance
+      pl_per_month REAL DEFAULT 1.5,                  -- paid privilege/earned leave
+      short_leave_per_month INTEGER DEFAULT 2,        -- short-leave count allowed
+      ot_threshold_hours REAL DEFAULT 8,              -- hours/day before OT kicks in
+      ot_rate_multiplier REAL DEFAULT 1.5,            -- OT pay rate (× normal hourly)
+      pay_cycle_start_day INTEGER DEFAULT 1,          -- 1 = month-start, 26 = 26th-to-25th
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_by INTEGER REFERENCES users(id)
+    );
+
+    -- Saved monthly payroll runs — when admin "Finalises" a month the
+    -- calculated salary snapshot is locked here so future attendance edits
+    -- don't change historical payslips.
+    CREATE TABLE IF NOT EXISTS payroll_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      month TEXT NOT NULL,                            -- YYYY-MM
+      employee_id INTEGER REFERENCES employees(id),
+      employee_name TEXT,
+      base_salary REAL DEFAULT 0,
+      working_days INTEGER DEFAULT 0,
+      paid_days REAL DEFAULT 0,
+      half_days INTEGER DEFAULT 0,
+      absent_days INTEGER DEFAULT 0,
+      late_marks INTEGER DEFAULT 0,
+      lates_converted_absent REAL DEFAULT 0,
+      paid_leaves REAL DEFAULT 0,
+      unpaid_leaves REAL DEFAULT 0,
+      sundays REAL DEFAULT 0,
+      ot_hours REAL DEFAULT 0,
+      gross_earned REAL DEFAULT 0,
+      ot_pay REAL DEFAULT 0,
+      deductions REAL DEFAULT 0,
+      net_pay REAL DEFAULT 0,
+      breakdown_json TEXT,                            -- per-day breakdown for slip
+      status TEXT DEFAULT 'draft' CHECK(status IN ('draft','finalised','disbursed')),
+      finalised_by INTEGER REFERENCES users(id),
+      finalised_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(month, employee_id)
+    );
+
     -- Vendor PO ↔ Indent Item link (one PO can cover multiple indent items;
     -- one indent item can split across multiple POs for partial orders).
     CREATE TABLE IF NOT EXISTS vendor_po_items (

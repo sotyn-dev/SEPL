@@ -29,6 +29,7 @@ const ALL_MODULES = [
   { key: 'billing', label: 'Billing' },
   { key: 'complaints', label: 'Complaints' },
   { key: 'hr', label: 'HR & Hiring' },
+  { key: 'payroll', label: 'Payroll' },
   { key: 'employees', label: 'Employees' },
   { key: 'expenses', label: 'Expenses' },
   { key: 'indent_fms', label: 'Indent FMS (legacy)' },

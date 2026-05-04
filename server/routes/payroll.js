@@ -1,0 +1,383 @@
+// Payroll auto-calculator. Reads rules from the payroll_settings table and
+// computes per-employee monthly salary by walking each day of the month
+// and applying:
+//   - Sunday handling (paid / unpaid per setting)
+//   - Approved leaves (CL / SL / PL paid up to allowance, LWP unpaid)
+//   - Short leave (skips half-day deduction if setting enabled)
+//   - Attendance (no punch = absent, late punch = late mark / half day,
+//     low hours = half day / absent, overtime hours)
+//   - N lates → 1 absent (configurable)
+// Everything is recalculated live unless a run is "finalised" — then we
+// return the snapshot from payroll_runs so historical slips don't drift.
+
+const express = require('express');
+const router = express.Router();
+const { getDb } = require('../db/schema');
+const { authMiddleware, requirePermission, adminOnly } = require('../middleware/auth');
+
+router.use(authMiddleware);
+
+// ---------- helpers ----------
+
+function ensureSettingsRow(db) {
+  const row = db.prepare('SELECT id FROM payroll_settings WHERE id=1').get();
+  if (!row) {
+    db.prepare(`INSERT INTO payroll_settings (id) VALUES (1)`).run();
+  }
+}
+
+function getSettings(db) {
+  ensureSettingsRow(db);
+  return db.prepare('SELECT * FROM payroll_settings WHERE id=1').get();
+}
+
+function daysInMonth(month) {
+  // month = "YYYY-MM"
+  const [y, m] = month.split('-').map(Number);
+  return new Date(y, m, 0).getDate();
+}
+
+function isSunday(year, month, day) {
+  return new Date(year, month - 1, day).getDay() === 0;
+}
+
+function pad(n) { return String(n).padStart(2, '0'); }
+
+// Parse "HH:MM" / "HH:MM:SS" / ISO datetime → minutes since midnight
+function timeToMinutes(t) {
+  if (!t) return null;
+  // ISO datetime?
+  if (t.includes('T') || t.includes(' ')) {
+    const d = new Date(t);
+    if (isNaN(d)) return null;
+    return d.getHours() * 60 + d.getMinutes();
+  }
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + (m || 0);
+}
+
+// ---------- routes ----------
+
+// GET current settings
+router.get('/settings', (req, res) => {
+  try {
+    res.json(getSettings(getDb()));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT update settings (admin only)
+router.put('/settings', adminOnly, (req, res) => {
+  const db = getDb();
+  ensureSettingsRow(db);
+  const fields = [
+    'late_after_time','half_day_after_time','min_hours_full_day','min_hours_half_day',
+    'skip_half_day_if_short_leave','lates_to_absent','working_days_per_month','sundays_paid',
+    'cl_per_month','sl_per_month','pl_per_month','short_leave_per_month',
+    'ot_threshold_hours','ot_rate_multiplier','pay_cycle_start_day'
+  ];
+  const sets = [];
+  const vals = [];
+  for (const f of fields) {
+    if (req.body[f] !== undefined) {
+      sets.push(`${f} = ?`);
+      vals.push(req.body[f]);
+    }
+  }
+  if (sets.length === 0) return res.status(400).json({ error: 'No fields to update' });
+  sets.push('updated_at = CURRENT_TIMESTAMP', 'updated_by = ?');
+  vals.push(req.user.id);
+  db.prepare(`UPDATE payroll_settings SET ${sets.join(', ')} WHERE id = 1`).run(...vals);
+  res.json({ message: 'Settings updated', settings: getSettings(db) });
+});
+
+// Core calculator — runs for one employee for one month, returns full breakdown.
+function calculateForEmployee(db, settings, employee, month) {
+  const [year, mm] = month.split('-').map(Number);
+  const totalDays = daysInMonth(month);
+
+  const userId = employee.user_id;
+  // Pull all attendance rows for this month at once
+  const startDate = `${month}-01`;
+  const endDate = `${month}-${pad(totalDays)}`;
+  const attRows = userId
+    ? db.prepare(`SELECT date, punch_in_time, punch_out_time, total_hours, status
+                  FROM attendance WHERE user_id = ? AND date BETWEEN ? AND ?`).all(userId, startDate, endDate)
+    : [];
+  const attByDate = {};
+  for (const r of attRows) attByDate[r.date] = r;
+
+  // Pull approved leaves overlapping this month
+  const leaveRows = userId
+    ? db.prepare(`SELECT leave_type, from_date, to_date, days, hours
+                  FROM leave_requests
+                  WHERE user_id = ? AND status='approved'
+                    AND NOT (to_date < ? OR from_date > ?)`).all(userId, startDate, endDate)
+    : [];
+
+  // Track allowance usage
+  let clUsed = 0, slUsed = 0, plUsed = 0, shortLeaveUsed = 0;
+
+  // Build per-day map of leave type
+  const leaveByDate = {}; // date → leave_type ('casual','sick','earned','short_leave','comp_off')
+  const shortLeaveByDate = {}; // date → true if short leave applied that day
+  for (const lr of leaveRows) {
+    const from = new Date(lr.from_date);
+    const to = new Date(lr.to_date);
+    for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+      const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      if (dateStr < startDate || dateStr > endDate) continue;
+      if (lr.leave_type === 'short_leave') {
+        shortLeaveByDate[dateStr] = true;
+      } else {
+        leaveByDate[dateStr] = lr.leave_type;
+      }
+    }
+  }
+
+  let paidDays = 0, halfDays = 0, absentDays = 0, lateMarks = 0;
+  let paidLeaves = 0, unpaidLeaves = 0, sundayCount = 0, otHours = 0;
+  const breakdown = []; // per-day for slip
+
+  const lateAfter = timeToMinutes(settings.late_after_time);
+  const halfDayAfter = timeToMinutes(settings.half_day_after_time);
+
+  for (let day = 1; day <= totalDays; day++) {
+    const dateStr = `${year}-${pad(mm)}-${pad(day)}`;
+    const sun = isSunday(year, mm, day);
+    const att = attByDate[dateStr];
+    const leaveType = leaveByDate[dateStr];
+    const isShortLeave = !!shortLeaveByDate[dateStr];
+
+    let dayLabel = 'absent';
+    let dayPay = 0; // 1 = full, 0.5 = half, 0 = absent
+
+    // Sunday
+    if (sun && !leaveType && !att) {
+      if (settings.sundays_paid) {
+        dayPay = 1;
+        sundayCount += 1;
+        dayLabel = 'sunday_paid';
+      } else {
+        dayLabel = 'sunday_unpaid';
+      }
+      breakdown.push({ date: dateStr, day: 'Sun', label: dayLabel, pay: dayPay });
+      paidDays += dayPay;
+      continue;
+    }
+
+    // Approved leave that day
+    if (leaveType) {
+      let allowance = 0, used = 0;
+      if (leaveType === 'casual') { allowance = settings.cl_per_month; used = clUsed; }
+      else if (leaveType === 'sick') { allowance = settings.sl_per_month; used = slUsed; }
+      else if (leaveType === 'earned') { allowance = settings.pl_per_month; used = plUsed; }
+
+      if (allowance > 0 && used < allowance) {
+        // Within allowance → paid
+        dayPay = 1;
+        if (leaveType === 'casual') clUsed += 1;
+        else if (leaveType === 'sick') slUsed += 1;
+        else if (leaveType === 'earned') plUsed += 1;
+        paidLeaves += 1;
+        dayLabel = `paid_${leaveType}_leave`;
+      } else {
+        // Over allowance → unpaid
+        unpaidLeaves += 1;
+        dayLabel = `unpaid_${leaveType}_leave`;
+      }
+      breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: dayPay });
+      paidDays += dayPay;
+      continue;
+    }
+
+    // Attendance row
+    if (att && att.punch_in_time) {
+      const punchInMin = timeToMinutes(att.punch_in_time);
+      const hours = att.total_hours || 0;
+
+      // Half-day cutoff (punched in late)
+      const veryLate = punchInMin !== null && halfDayAfter !== null && punchInMin > halfDayAfter;
+      const lowHoursHalfDay = hours > 0 && hours < settings.min_hours_full_day && hours >= settings.min_hours_half_day;
+      const lowHoursAbsent = hours > 0 && hours < settings.min_hours_half_day;
+
+      // Skip half-day if short leave was applied that day (and setting enabled)
+      const shortLeaveSavesIt = isShortLeave && settings.skip_half_day_if_short_leave;
+
+      if (lowHoursAbsent) {
+        absentDays += 1;
+        dayLabel = 'absent_low_hours';
+        dayPay = 0;
+      } else if ((veryLate || lowHoursHalfDay) && !shortLeaveSavesIt) {
+        halfDays += 1;
+        dayPay = 0.5;
+        dayLabel = veryLate ? 'half_day_late' : 'half_day_low_hours';
+      } else {
+        // Late mark check (between late_after and half_day_after)
+        if (punchInMin !== null && lateAfter !== null && punchInMin > lateAfter) {
+          if (!shortLeaveSavesIt) lateMarks += 1;
+          dayLabel = 'late';
+        } else {
+          dayLabel = 'present';
+        }
+        dayPay = 1;
+        // Overtime
+        if (hours > settings.ot_threshold_hours) {
+          otHours += hours - settings.ot_threshold_hours;
+        }
+      }
+      paidDays += dayPay;
+      breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: dayPay, punch_in: att.punch_in_time, hours });
+      continue;
+    }
+
+    // No attendance, no leave, not Sunday → absent
+    absentDays += 1;
+    dayLabel = 'absent_no_punch';
+    breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: 0 });
+  }
+
+  // N lates → 1 absent conversion
+  let latesAsAbsent = 0;
+  if (settings.lates_to_absent > 0 && lateMarks >= settings.lates_to_absent) {
+    latesAsAbsent = Math.floor(lateMarks / settings.lates_to_absent);
+    paidDays = Math.max(0, paidDays - latesAsAbsent);
+  }
+
+  const baseSalary = employee.salary || 0;
+  const perDayRate = settings.working_days_per_month > 0 ? baseSalary / settings.working_days_per_month : 0;
+  const grossEarned = perDayRate * paidDays;
+
+  // Overtime pay
+  const perHourRate = settings.working_days_per_month > 0
+    ? baseSalary / (settings.working_days_per_month * settings.ot_threshold_hours)
+    : 0;
+  const otPay = otHours * perHourRate * (settings.ot_rate_multiplier || 1);
+
+  const netPay = grossEarned + otPay;
+  const deductions = baseSalary - grossEarned; // informational
+
+  return {
+    employee_id: employee.id,
+    employee_name: employee.name,
+    department: employee.department,
+    designation: employee.designation,
+    base_salary: baseSalary,
+    per_day_rate: round2(perDayRate),
+    working_days: settings.working_days_per_month,
+    total_days_in_month: totalDays,
+    paid_days: round2(paidDays),
+    half_days: halfDays,
+    absent_days: absentDays,
+    late_marks: lateMarks,
+    lates_converted_absent: latesAsAbsent,
+    paid_leaves: paidLeaves,
+    unpaid_leaves: unpaidLeaves,
+    sunday_count: sundayCount,
+    ot_hours: round2(otHours),
+    gross_earned: round2(grossEarned),
+    ot_pay: round2(otPay),
+    deductions: round2(deductions),
+    net_pay: round2(netPay),
+    cl_used: clUsed,
+    sl_used: slUsed,
+    pl_used: plUsed,
+    short_leave_used: Object.keys(shortLeaveByDate).length,
+    breakdown,
+  };
+}
+
+function round2(n) { return Math.round((n || 0) * 100) / 100; }
+
+function dayName(y, m, d) {
+  return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(y, m - 1, d).getDay()];
+}
+
+// GET monthly payroll for ALL employees
+router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
+  try {
+    const month = req.query.month;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+    const db = getDb();
+    const settings = getSettings(db);
+    const employees = db.prepare(`SELECT id, user_id, name, department, designation, salary FROM employees WHERE status='active' AND salary > 0`).all();
+
+    // If a run is finalised for this month, return saved snapshots; else live-calc
+    const finalised = db.prepare('SELECT COUNT(*) as c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
+    const out = employees.map(emp => {
+      if (finalised) {
+        const snap = db.prepare('SELECT * FROM payroll_runs WHERE month=? AND employee_id=?').get(month, emp.id);
+        if (snap) return { ...snap, locked: true };
+      }
+      return calculateForEmployee(db, settings, emp, month);
+    });
+
+    res.json({ month, settings, employees: out });
+  } catch (err) {
+    console.error('payroll calc error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET single employee detail (with breakdown)
+router.get('/calculate/:employee_id', requirePermission('payroll', 'view'), (req, res) => {
+  try {
+    const month = req.query.month;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+    const db = getDb();
+    const settings = getSettings(db);
+    const emp = db.prepare('SELECT * FROM employees WHERE id=?').get(req.params.employee_id);
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+    const result = calculateForEmployee(db, settings, emp, month);
+    res.json({ month, settings, ...result });
+  } catch (err) {
+    console.error('payroll detail error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST finalise a month — locks the snapshot for all employees
+router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => {
+  try {
+    const { month } = req.body;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month required' });
+    const db = getDb();
+    const settings = getSettings(db);
+    const employees = db.prepare(`SELECT * FROM employees WHERE status='active' AND salary > 0`).all();
+
+    const ins = db.prepare(`INSERT OR REPLACE INTO payroll_runs (
+      month, employee_id, employee_name, base_salary, working_days, paid_days, half_days,
+      absent_days, late_marks, lates_converted_absent, paid_leaves, unpaid_leaves, sundays,
+      ot_hours, gross_earned, ot_pay, deductions, net_pay, breakdown_json, status,
+      finalised_by, finalised_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
+
+    const tx = db.transaction(() => {
+      for (const emp of employees) {
+        const r = calculateForEmployee(db, settings, emp, month);
+        ins.run(
+          month, emp.id, emp.name, r.base_salary, r.working_days, r.paid_days, r.half_days,
+          r.absent_days, r.late_marks, r.lates_converted_absent, r.paid_leaves, r.unpaid_leaves, r.sunday_count,
+          r.ot_hours, r.gross_earned, r.ot_pay, r.deductions, r.net_pay, JSON.stringify(r.breakdown), 'finalised',
+          req.user.id
+        );
+      }
+    });
+    tx();
+    res.json({ message: `Payroll finalised for ${month}`, count: employees.length });
+  } catch (err) {
+    console.error('payroll finalise error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST unlock a finalised month (admin only — for corrections)
+router.post('/unlock', adminOnly, (req, res) => {
+  const { month } = req.body;
+  const db = getDb();
+  db.prepare('DELETE FROM payroll_runs WHERE month=? AND status != ?').run(month, 'disbursed');
+  res.json({ message: `Unlocked ${month}` });
+});
+
+module.exports = router;
