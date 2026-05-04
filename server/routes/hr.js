@@ -22,10 +22,21 @@ router.get('/candidates', (req, res) => {
 });
 
 router.post('/candidates', (req, res) => {
-  const { name, phone, email, source, position, notes, resume_file } = req.body;
-  const r = getDb().prepare('INSERT INTO candidates (name,phone,email,source,position,notes,resume_file) VALUES (?,?,?,?,?,?,?)')
-    .run(name, phone, email, source, position, notes, resume_file || null);
-  res.status(201).json({ id: r.lastInsertRowid });
+  try {
+    const { name, phone, email, source, position, notes, resume_file } = req.body;
+    if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name is required' });
+    // SQLite CHECK on source must match one of the allowed values, else the
+    // row is rejected with a cryptic constraint error. Validate up-front so
+    // HR sees a clean message ('Source must be one of...') instead of a 500.
+    const allowedSources = ['facebook','naukri','linkedin','reference','other'];
+    const src = source && allowedSources.includes(source) ? source : 'other';
+    const r = getDb().prepare('INSERT INTO candidates (name,phone,email,source,position,notes,resume_file) VALUES (?,?,?,?,?,?,?)')
+      .run(name, phone || null, email || null, src, position || null, notes || null, resume_file || null);
+    res.status(201).json({ id: r.lastInsertRowid });
+  } catch (err) {
+    console.error('POST /hr/candidates error', err);
+    res.status(500).json({ error: err.message || 'Failed to add candidate' });
+  }
 });
 
 router.put('/candidates/:id', (req, res) => {

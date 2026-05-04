@@ -80,8 +80,11 @@ export default function HR() {
       fd.append('file', file);
       const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       return r.data.url;
-    } catch {
-      toast.error('Upload failed');
+    } catch (err) {
+      // Show the real reason — multer size limit, auth token expired, etc.
+      const msg = err.response?.data?.error || err.message || 'Upload failed';
+      toast.error(`Resume upload failed: ${msg}`, { duration: 6000 });
+      console.error('uploadFile error', err);
       return null;
     } finally { setUploading(false); }
   };
@@ -98,10 +101,19 @@ export default function HR() {
       if (!url) return; // uploadFile shows its own error toast
       payload.resume_file = url;
     }
-    if (editing) { await api.put(`/hr/candidates/${editing.id}`, payload); }
-    else { await api.post('/hr/candidates', payload); }
-    toast.success(editing ? 'Updated' : 'Added candidate (Stage 1 — Lead)');
-    setModal(false); load();
+    try {
+      if (editing) { await api.put(`/hr/candidates/${editing.id}`, payload); }
+      else { await api.post('/hr/candidates', payload); }
+      toast.success(editing ? 'Updated' : 'Added candidate (Stage 1 — Lead)');
+      setModal(false); load();
+    } catch (err) {
+      // Surface the real backend error instead of failing silently — mam
+      // (and HR users) need to see WHY a candidate save was rejected so
+      // they can fix the input or report a real bug.
+      const msg = err.response?.data?.error || err.message || 'Failed to save candidate';
+      toast.error(msg, { duration: 6000 });
+      console.error('saveCandidate error', err);
+    }
   };
 
   const saveContractor = async (e) => {
