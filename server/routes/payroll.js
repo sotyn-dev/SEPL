@@ -99,6 +99,24 @@ function calculateForEmployee(db, settings, employee, month) {
   const [year, mm] = month.split('-').map(Number);
   const totalDays = daysInMonth(month);
 
+  // Don't penalise employees for days that haven't happened yet. For the
+  // CURRENT month, stop the day-loop at today's date so May 5-31 (still in
+  // the future on May 4) aren't counted as absent. Past months use all
+  // days. Future months return zero everything.
+  // Use IST (UTC+5:30) regardless of server timezone — Hostinger VPS runs
+  // UTC by default, which would mark days as 'future' for ~5.5 hours after
+  // midnight IST.
+  const istNow = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
+  const todayY = istNow.getUTCFullYear();
+  const todayM = istNow.getUTCMonth() + 1;
+  const todayD = istNow.getUTCDate();
+  let lastDay = totalDays;
+  if (year > todayY || (year === todayY && mm > todayM)) {
+    lastDay = 0; // future month — nothing to calc yet
+  } else if (year === todayY && mm === todayM) {
+    lastDay = todayD; // current month — only up to today
+  }
+
   const userId = employee.user_id;
   // Pull all attendance rows for this month at once
   const startDate = `${month}-01`;
@@ -147,7 +165,7 @@ function calculateForEmployee(db, settings, employee, month) {
   const lateAfter = timeToMinutes(settings.late_after_time);
   const halfDayAfter = timeToMinutes(settings.half_day_after_time);
 
-  for (let day = 1; day <= totalDays; day++) {
+  for (let day = 1; day <= lastDay; day++) {
     const dateStr = `${year}-${pad(mm)}-${pad(day)}`;
     const sun = isSunday(year, mm, day);
     const att = attByDate[dateStr];
@@ -307,6 +325,9 @@ function calculateForEmployee(db, settings, employee, month) {
     per_day_rate: round2(perDayRate),
     working_days: settings.working_days_per_month,
     total_days_in_month: totalDays,
+    days_counted: lastDay,
+    is_current_month: (year === todayY && mm === todayM),
+    is_future_month: (year > todayY || (year === todayY && mm > todayM)),
     paid_days: round2(paidDays),
     half_days: halfDays,
     absent_days: absentDays,

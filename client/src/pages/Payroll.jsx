@@ -177,6 +177,19 @@ export default function Payroll() {
               <label className="label">Pay Month</label>
               <input type="month" className="input" value={month} onChange={e => setMonth(e.target.value)} />
             </div>
+            {/* Friendly notice when viewing the current month — explains why
+                paid_days is partial and absent count looks low. Saves mam
+                from doubting the engine on the 4th of any month. */}
+            {list[0]?.is_current_month && (
+              <div className="bg-amber-50 border border-amber-200 px-3 py-2 rounded text-xs text-amber-800">
+                Showing salary <strong>earned so far</strong> (day 1 to day {list[0].days_counted}). Future days aren't counted as absent. Final figures land at month-end.
+              </div>
+            )}
+            {list[0]?.is_future_month && (
+              <div className="bg-blue-50 border border-blue-200 px-3 py-2 rounded text-xs text-blue-800">
+                Future month — nothing to calculate yet.
+              </div>
+            )}
             <div className="flex-1" />
             <div className="text-right">
               <p className="text-xs text-gray-500">Total Net Payout</p>
