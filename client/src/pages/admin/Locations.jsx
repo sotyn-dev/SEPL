@@ -158,13 +158,28 @@ export default function Locations() {
                         <span>{fmtTime(u.time)} · {u.minutes_ago === 0 ? 'just now' : `${u.minutes_ago} min ago`}</span>
                       </div>
                     </div>
-                    <a
-                      href={mapsUrl(u.latitude, u.longitude)}
-                      target="_blank" rel="noreferrer"
-                      className="mt-3 inline-flex items-center gap-1 text-xs text-red-600 hover:underline font-medium"
-                    >
-                      <FiExternalLink size={12} /> View on Google Maps
-                    </a>
+                    <div className="mt-3 flex items-center gap-3 flex-wrap">
+                      <a
+                        href={mapsUrl(u.latitude, u.longitude)}
+                        target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-red-600 hover:underline font-medium"
+                      >
+                        <FiExternalLink size={12} /> View on Google Maps
+                      </a>
+                      {/* One-click jump to this person's full-day timeline.
+                          Pre-fills the Timeline tab with their user_id +
+                          today's date so mam doesn't re-pick from dropdowns. */}
+                      <button
+                        onClick={() => {
+                          setTimelineUserId(String(u.user_id));
+                          setTimelineDate(todayIso());
+                          setTab('timeline');
+                        }}
+                        className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline font-medium"
+                      >
+                        <FiNavigation size={12} /> View Today's Timeline
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -244,11 +259,35 @@ export default function Locations() {
 
               {timeline.pings.length > 0 && (
                 <div className="card p-0 overflow-hidden">
-                  <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
+                  <div className="px-4 py-3 border-b bg-gray-50 flex flex-wrap items-center justify-between gap-2">
                     <h4 className="font-semibold text-gray-700 flex items-center gap-2">
                       <FiNavigation size={14} className="text-red-600" /> Movement Timeline ({timeline.pings.length} pings)
                     </h4>
-                    <span className="text-[11px] text-gray-400">green = during work hours · grey = before in · amber = after out</span>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      {/* Draw the whole day's route as a single Google Maps
+                          directions URL with sampled waypoints. Free Maps
+                          allows ~9 waypoints between origin & destination,
+                          so we evenly downsample longer ping lists. */}
+                      <a
+                        href={(() => {
+                          const pings = timeline.pings;
+                          const maxStops = 11; // origin + 9 waypoints + destination
+                          let sample = pings;
+                          if (pings.length > maxStops) {
+                            const step = (pings.length - 1) / (maxStops - 1);
+                            sample = Array.from({ length: maxStops }, (_, i) => pings[Math.round(i * step)]);
+                          }
+                          const path = sample.map(p => `${p.latitude},${p.longitude}`).join('/');
+                          return `https://www.google.com/maps/dir/${path}`;
+                        })()}
+                        target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md font-medium"
+                        title={timeline.pings.length > 11 ? `Sampled to 11 of ${timeline.pings.length} pings (Google Maps free limit)` : 'Full route'}
+                      >
+                        <FiExternalLink size={12} /> Draw Route on Google Maps
+                      </a>
+                      <span className="text-[11px] text-gray-400">green = during work · grey = before in · amber = after out</span>
+                    </div>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="text-xs w-full">
