@@ -431,18 +431,187 @@ function seedScoringTemplates(db) {
     }
   });
   tx();
-  return { seeded: TEMPLATES.length, skipped: 0, upgraded };
+  // After initial seed, run the fixed-target pass so brand-new installs
+  // get all the bulk-seeded Planned values too.
+  const targetsApplied = upgradeFixedTargets(db);
+  return { seeded: TEMPLATES.length, skipped: 0, upgraded, targetsApplied };
 }
 
-// One-time pass to set default_planned on existing seeded KPIs that
-// have known fixed targets (mam confirmed Monika's are fixed; others
-// can be set via the Templates admin UI).
+// Bulk-seed all 100+ fixed Planned targets extracted from mam's MIS PDFs.
+// Idempotent — only sets default_planned when it's still 0, so any
+// admin tweaks via the Templates UI are preserved across deploys.
 function upgradeFixedTargets(db) {
   const targets = [
+    // Aanchal — Finance Executive
+    ['Aanchal — Finance Executive', 'Checklist', 47],
+    ['Aanchal — Finance Executive', 'Expense Control (As Per Budget)', 10000],
+    ['Aanchal — Finance Executive', 'Cash Flow Positive', 1000000],
+    ['Aanchal — Finance Executive', 'Weekly Amount Received', 1.25],
+
+    // Site Engineer
+    ['Site Engineer', 'Weekly DPR Profit', 22753.5],
+    ['Site Engineer', 'MB Signed from Client', 1],
+    ['Site Engineer', 'Indent vs Bill', 1],
+    ['Site Engineer', 'Rework', 2],
+    ['Site Engineer', 'Indent vs Consumption', 3],
+    ['Site Engineer', 'Stock at site', 1],
+
+    // Supervisor
+    ['Supervisor', 'Rework', 2],
+    ['Supervisor', 'DPR Planning', 1],
+    ['Supervisor', 'DPR Daily Actual', 7],
+    ['Supervisor', 'Stock report accuracy', 15],
+    ['Supervisor', 'Daily Manpower photo', 7],
+    ['Supervisor', 'Tools List submission', 1],
+    ['Supervisor', 'DPR Cost Accuracy', 7],
+    ['Supervisor', 'DPR Profitability Accuracy', 30000],
+
+    // Monika — AI Implementation Head
     ['Monika — AI Implementation Head', 'New Tool Evaluated / Month', 3],
     ['Monika — AI Implementation Head', 'Automations Live Count', 4],
     ['Monika — AI Implementation Head', 'Hours Saved Company Wide / Month', 80],
     ['Monika — AI Implementation Head', 'ROI of AI Dept (X)', 1],
+
+    // Anmol — DPR / Score Card
+    ['Anmol — DPR / Score Card', 'DPR Planning', 7],
+    ['Anmol — DPR / Score Card', 'DPR Actual Collection', 49],
+    ['Anmol — DPR / Score Card', 'DPR Planning Profit', 135057],
+    ['Anmol — DPR / Score Card', 'DPR Actual Profit', 135057],
+    ['Anmol — DPR / Score Card', 'Score Card Accuracy', 40],
+    ['Anmol — DPR / Score Card', 'System Running FMS', -20],
+    ['Anmol — DPR / Score Card', 'Checklist', 197],
+    ['Anmol — DPR / Score Card', 'AI Automation Created', 2],
+    ['Anmol — DPR / Score Card', 'Time Saved', 120],
+
+    // Ankush — HR Ops + Marketing
+    ['Ankush — HR Ops + Marketing', 'MEP Marketing Qualified Lead', 6],
+    ['Ankush — HR Ops + Marketing', 'GEM Project Qualified Supply', 6],
+    ['Ankush — HR Ops + Marketing', 'Company Social Media Post / Reels', 30],
+    ['Ankush — HR Ops + Marketing', 'Company Social Media Likes', 5],
+    ['Ankush — HR Ops + Marketing', 'Personal Social Media Post', 30],
+    ['Ankush — HR Ops + Marketing', 'Manpower Required Blue', 120],
+    ['Ankush — HR Ops + Marketing', 'Manpower Required White', 120],
+    ['Ankush — HR Ops + Marketing', 'Complaint Solved %', 24],
+    ['Ankush — HR Ops + Marketing', 'Training', 3],
+
+    // Ajmer — Procurement Lead
+    ['Ajmer — Procurement Lead', 'Transportation Saving', 15000],
+
+    // Gaganpreet — Cash Flow Manager
+    ['Gaganpreet — Cash Flow Manager', 'Cash Positive', 1000000],
+    ['Gaganpreet — Cash Flow Manager', 'Billing Conversion', 822712],
+    ['Gaganpreet — Cash Flow Manager', 'AR Control', 15],
+    ['Gaganpreet — Cash Flow Manager', 'Top 10 Client Collection', 10],
+
+    // Indresh — Billing Engineer
+    ['Indresh — Billing Engineer', 'RA Bills Raised Weekly', 3],
+    ['Indresh — Billing Engineer', 'Measurement Sheet Submitted', 3],
+    ['Indresh — Billing Engineer', 'RA Bill Value (Lakhs)', 125],
+    ['Indresh — Billing Engineer', 'RA Bills Raised / Month', 12],
+    ['Indresh — Billing Engineer', 'RA Bill Value (Lakhs) Monthly', 500],
+    ['Indresh — Billing Engineer', 'RA Bill Rejection %', 2],
+    ['Indresh — Billing Engineer', 'AI Auto RA / MB Templates Used %', 90],
+    ['Indresh — Billing Engineer', 'AI Billing TAT Reduction %', 50],
+
+    // Lovely — Sales Coordinator
+    ['Lovely — Sales Coordinator', 'Payments Cleared (In lakh)', 62.5],
+    ['Lovely — Sales Coordinator', 'Response Client Time On Whatsapp', 30],
+    ['Lovely — Sales Coordinator', 'Response Client Time On Email', 60],
+    ['Lovely — Sales Coordinator', 'Number of Escalations to MD', 5],
+    ['Lovely — Sales Coordinator', 'Before Start', 12],
+    ['Lovely — Sales Coordinator', 'Running', 12],
+    ['Lovely — Sales Coordinator', 'On Time', 48],
+    ['Lovely — Sales Coordinator', 'AR Cleared (In CR)', 2.5],
+    ['Lovely — Sales Coordinator', 'AR (In CR)', 5],
+
+    // Nancy — Estimation & Costing Head
+    ['Nancy — Estimation & Costing Head', 'BOQ / Estimates Delivered', 2],
+    ['Nancy — Estimation & Costing Head', 'Estimation TAT', 2],
+    ['Nancy — Estimation & Costing Head', 'Revisions per Project', 2],
+    ['Nancy — Estimation & Costing Head', 'Margin Protected on Quotes', 35],
+    ['Nancy — Estimation & Costing Head', 'Conversion', 1],
+    ['Nancy — Estimation & Costing Head', 'Lead Entry Indent & Lead', 114],
+    ['Nancy — Estimation & Costing Head', 'Delegation Entry', 25],
+    ['Nancy — Estimation & Costing Head', 'Task Entry', 28],
+
+    // Nitin Sir — MD
+    ['Nitin Sir — MD', 'Throughput', 1000000],
+    ['Nitin Sir — MD', 'Barchart vs Per Plan', 30],
+    ['Nitin Sir — MD', 'Cash Flow Positive', 1000000],
+    ['Nitin Sir — MD', 'Full Kitting Execution', 12],
+    ['Nitin Sir — MD', 'Daily Sales Outstanding', 30],
+
+    // Parul — Compliance & Tender
+    ['Parul — Compliance & Tender', 'Delegation', 1],
+    ['Parul — Compliance & Tender', 'PMS', 2],
+    ['Parul — Compliance & Tender', 'Compliance', 20],
+    ['Parul — Compliance & Tender', 'Bad Debts', 32.5],
+    ['Parul — Compliance & Tender', 'Gaganpreet Score', -10],
+    ['Parul — Compliance & Tender', 'Litigation (1 case per month)', 1],
+    ['Parul — Compliance & Tender', 'Compliance (Monthly)', 32.5],
+
+    // Pradeep Panda — Operations Lead
+    ['Pradeep Panda — Operations Lead', 'Labour at Site', 200],
+    ['Pradeep Panda — Operations Lead', 'Email Reply in 24hrs', 24],
+    ['Pradeep Panda — Operations Lead', 'MD Sir Call Escalation', 5],
+    ['Pradeep Panda — Operations Lead', 'All Company Delegation Task', 32],
+    ['Pradeep Panda — Operations Lead', 'PMS Task', 13],
+    ['Pradeep Panda — Operations Lead', 'Regular Meetings', 45],
+    ['Pradeep Panda — Operations Lead', '50% Calendar Blank', 6],
+    ['Pradeep Panda — Operations Lead', 'Travel Schedule', 6],
+
+    // Raj Kumar — Procurement Manager
+    ['Raj Kumar — Procurement Manager', 'Credit Period Days', 60],
+    ['Raj Kumar — Procurement Manager', 'Full Kitting', 9],
+    ['Raj Kumar — Procurement Manager', 'Indent to Receiving', 109],
+    ['Raj Kumar — Procurement Manager', 'Cost Saving', 20],
+    ['Raj Kumar — Procurement Manager', 'Vendor Performance Score', 90],
+    ['Raj Kumar — Procurement Manager', 'Procurement Impact on Delays', 5],
+
+    // Rajeev Sood — Quotation
+    ['Rajeev Sood — Quotation', 'Quantity', 2],
+    ['Rajeev Sood — Quotation', 'Turnaround Time', 2],
+    ['Rajeev Sood — Quotation', 'Conversion', 1],
+    ['Rajeev Sood — Quotation', 'Costing Accuracy', 5],
+    ['Rajeev Sood — Quotation', 'Revision Turnaround Time', 1],
+    ['Rajeev Sood — Quotation', 'GP %', 30],
+    ['Rajeev Sood — Quotation', 'Conversion (Monthly)', 20],
+
+    // Riti — Sales Coordinator (Sales Side)
+    ['Riti — Sales Coordinator (Sales Side)', 'Meeting Planned', 12],
+    ['Riti — Sales Coordinator (Sales Side)', 'Average Ticket', 50],
+    ['Riti — Sales Coordinator (Sales Side)', 'Client Response Time Email', 60],
+    ['Riti — Sales Coordinator (Sales Side)', 'Client Response Time Whatsapp', 30],
+    ['Riti — Sales Coordinator (Sales Side)', 'Proposal Turnaround Time', 2],
+    ['Riti — Sales Coordinator (Sales Side)', 'Lead Time to Call', 2],
+    ['Riti — Sales Coordinator (Sales Side)', 'Escalation Matrix to MD', 5],
+    ['Riti — Sales Coordinator (Sales Side)', 'Conversion %', 20],
+    ['Riti — Sales Coordinator (Sales Side)', 'Sales Pipeline %', 30],
+
+    // Ruksana — HR Hiring
+    ['Ruksana — HR Hiring', 'SEPL White Collar Lead to Call', 30],
+    ['Ruksana — HR Hiring', 'SEPL White Collar Cost', 50000],
+    ['Ruksana — HR Hiring', 'Shortlisted Turnaround Time', 2],
+    ['Ruksana — HR Hiring', 'Joining Conversion', 2],
+
+    // Shubham — Accounts
+    ['Shubham — Accounts', 'PMS', 2],
+    ['Shubham — Accounts', 'Checklist', 18],
+    ['Shubham — Accounts', 'Indent to Comparison', 66],
+    ['Shubham — Accounts', 'Compliance', 20],
+
+    // Sushila — Sales Coordinator
+    ['Sushila — Sales Coordinator', 'PMS Task', 1],
+    ['Sushila — Sales Coordinator', 'Checklist', 4],
+    ['Sushila — Sales Coordinator', 'Payments Cleared (In lakh)', 62.5],
+    ['Sushila — Sales Coordinator', 'Response Client Time On Whatsapp', 30],
+    ['Sushila — Sales Coordinator', 'Response Client Time On Email', 60],
+    ['Sushila — Sales Coordinator', 'Number of Escalations to MD', 5],
+    ['Sushila — Sales Coordinator', 'Before Start', 12],
+    ['Sushila — Sales Coordinator', 'Running', 12],
+    ['Sushila — Sales Coordinator', 'On Time', 48],
+    ['Sushila — Sales Coordinator', 'AR Cleared (In CR)', 2.5],
+    ['Sushila — Sales Coordinator', 'AR (In CR)', 5],
   ];
   const upd = db.prepare(`
     UPDATE score_kpis
