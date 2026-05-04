@@ -141,6 +141,11 @@ export default function Scorecard() {
             <button onClick={() => setWeekStart(lastMonday(0))} className="btn btn-secondary text-xs">This Week</button>
             <button onClick={() => setWeekStart(lastMonday(2))} className="btn btn-secondary text-xs">Two Weeks Ago</button>
           </div>
+          {/* Admin-only employee switcher — pick anyone to inspect their MIS
+              without leaving the My Scorecard tab. */}
+          {(tab === 'my' || tab === 'view') && isAdmin() && (
+            <EmployeeSwitcher value={viewUserId} onChange={setViewUserId} />
+          )}
           <div className="ml-auto text-sm text-gray-700">
             <span className="font-semibold">{fmtRange(weekStart)}</span>
           </div>
@@ -258,6 +263,26 @@ export default function Scorecard() {
       <Modal isOpen={!!tplDetail} onClose={() => setTplDetail(null)} title={tplDetail?.name || 'Template'} wide>
         {tplDetail && <TemplateKpiEditor templateId={tplDetail.id} onChange={() => api.get(`/scoring/templates/${tplDetail.id}`).then(r => setTplDetail(r.data))} />}
       </Modal>
+    </div>
+  );
+}
+
+// ---------- Employee Switcher (admin) ----------
+function EmployeeSwitcher({ value, onChange }) {
+  const [users, setUsers] = useState([]);
+  useEffect(() => {
+    api.get('/scoring/assignments').then(r => setUsers(r.data || [])).catch(() => {});
+  }, []);
+  return (
+    <div>
+      <label className="label">View as</label>
+      <select className="select" value={value || ''} onChange={e => onChange(+e.target.value)}>
+        {users.map(u => (
+          <option key={u.user_id} value={u.user_id}>
+            {u.name} {u.template_name ? `— ${u.template_name}` : '(no template)'}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
