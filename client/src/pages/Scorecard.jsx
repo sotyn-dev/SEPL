@@ -420,7 +420,7 @@ function TemplatesAdmin({ templates, reload, setTplDetail }) {
 function TemplateKpiEditor({ templateId, onChange }) {
   const [tpl, setTpl] = useState(null);
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ group_name: 'Weekly', metric_name: '', weightage: 0, direction: 'higher_better', data_source: 'manual' });
+  const [form, setForm] = useState({ group_name: 'Weekly', metric_name: '', weightage: 0, direction: 'higher_better', data_source: 'manual', default_planned: 0 });
 
   const load = useCallback(() => {
     api.get(`/scoring/templates/${templateId}`).then(r => setTpl(r.data));
@@ -431,7 +431,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
     e.preventDefault();
     try {
       await api.post(`/scoring/templates/${templateId}/kpis`, form);
-      setForm({ group_name: 'Weekly', metric_name: '', weightage: 0, direction: 'higher_better', data_source: 'manual' });
+      setForm({ group_name: 'Weekly', metric_name: '', weightage: 0, direction: 'higher_better', data_source: 'manual', default_planned: 0 });
       setAdding(false);
       load(); onChange?.();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
@@ -464,6 +464,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
             <th className="text-left p-2">Group</th>
             <th className="text-left p-2">Metric</th>
             <th className="text-center p-2 w-16">Weight</th>
+            <th className="text-center p-2 w-20">Target</th>
             <th className="text-center p-2 w-24">Direction</th>
             <th className="text-center p-2 w-32">Source</th>
             <th></th>
@@ -475,6 +476,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
               <td className="p-2"><input className="input text-xs" defaultValue={k.group_name} onBlur={e => updateKpi(k, { group_name: e.target.value })} /></td>
               <td className="p-2"><input className="input text-xs" defaultValue={k.metric_name} onBlur={e => updateKpi(k, { metric_name: e.target.value })} /></td>
               <td className="p-2"><input type="number" className="input text-xs text-center" defaultValue={k.weightage} onBlur={e => updateKpi(k, { weightage: +e.target.value })} /></td>
+              <td className="p-2"><input type="number" step="0.1" className="input text-xs text-center" defaultValue={k.default_planned || 0} onBlur={e => updateKpi(k, { default_planned: +e.target.value })} title="Fixed weekly Planned target" /></td>
               <td className="p-2">
                 <select className="select text-xs" defaultValue={k.direction} onChange={e => updateKpi(k, { direction: e.target.value })}>
                   <option value="higher_better">↑ higher</option>
@@ -507,6 +509,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
           <input className="input text-sm" placeholder="Group (e.g. Weekly)" value={form.group_name} onChange={e => setForm(f => ({ ...f, group_name: e.target.value }))} />
           <input className="input text-sm" placeholder="Metric name" required value={form.metric_name} onChange={e => setForm(f => ({ ...f, metric_name: e.target.value }))} />
           <input type="number" className="input text-sm" placeholder="Weight %" value={form.weightage} onChange={e => setForm(f => ({ ...f, weightage: +e.target.value }))} />
+          <input type="number" step="0.1" className="input text-sm" placeholder="Default Target (fixed Planned)" value={form.default_planned} onChange={e => setForm(f => ({ ...f, default_planned: +e.target.value }))} />
           <select className="select text-sm" value={form.direction} onChange={e => setForm(f => ({ ...f, direction: e.target.value }))}>
             <option value="higher_better">↑ higher better</option>
             <option value="lower_better">↓ lower better</option>

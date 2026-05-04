@@ -85,7 +85,7 @@ router.post('/templates/:id/kpis', adminOnly, (req, res) => {
 });
 
 router.put('/kpis/:id', adminOnly, (req, res) => {
-  const { group_name, metric_name, weightage, direction, data_source, display_order, active } = req.body;
+  const { group_name, metric_name, weightage, direction, data_source, display_order, active, default_planned } = req.body;
   getDb().prepare(
     `UPDATE score_kpis SET
        group_name=COALESCE(?, group_name),
@@ -94,7 +94,8 @@ router.put('/kpis/:id', adminOnly, (req, res) => {
        direction=COALESCE(?, direction),
        data_source=COALESCE(?, data_source),
        display_order=COALESCE(?, display_order),
-       active=COALESCE(?, active)
+       active=COALESCE(?, active),
+       default_planned=COALESCE(?, default_planned)
      WHERE id=?`
   ).run(
     group_name || null, metric_name || null,
@@ -102,6 +103,7 @@ router.put('/kpis/:id', adminOnly, (req, res) => {
     direction || null, data_source || null,
     display_order === undefined ? null : display_order,
     active === undefined ? null : (active ? 1 : 0),
+    default_planned === undefined ? null : default_planned,
     req.params.id
   );
   res.json({ message: 'Updated' });
@@ -276,7 +278,9 @@ router.get('/scorecard', (req, res) => {
       const entry = db.prepare('SELECT * FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(userId, k.id, weekStart);
       const lastEntry = db.prepare('SELECT actual_pct FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(userId, k.id, lastWeekStart);
 
-      let planned = entry?.planned ?? 0;
+      // If no weekly entry yet, fall back to the template's default Planned
+      // target (mam's "this plan is fix" — Monika's ROI=1, Auto=4, etc.).
+      let planned = (entry?.planned != null && entry?.planned !== 0) ? entry.planned : (k.default_planned || 0);
       let actual = entry?.actual ?? 0;
 
       // Auto-fill from ERP if data_source is 'auto:*'. Wrap in try/catch
@@ -320,6 +324,7 @@ router.get('/scorecard', (req, res) => {
         weightage: k.weightage,
         direction: k.direction,
         data_source: k.data_source,
+        default_planned: k.default_planned || 0,
         is_auto: k.data_source && k.data_source.startsWith('auto:'),
         planned,
         actual,

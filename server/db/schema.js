@@ -1183,6 +1183,7 @@ function initializeDatabase() {
       data_source TEXT DEFAULT 'manual',     -- 'manual' | 'auto:delegations' | 'auto:pms' | 'auto:checklists' | 'auto:tickets'
       display_order INTEGER DEFAULT 0,
       active INTEGER DEFAULT 1,
+      default_planned REAL DEFAULT 0,        -- fixed weekly target (mam's "this plan is fix")
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -1474,6 +1475,10 @@ function initializeDatabase() {
     // Payroll grace + per-minute late penalty (added when mam moved from a
     // simple "late mark" model to a graduated penalty: 3 free late marks per
     // month, then ₹20/min off the salary for any further late punch).
+    // Fixed weekly target per KPI (mam's "this plan is fix" — Monika's
+    // ROI=1, Automations=4, etc.). Used as the Planned default when no
+    // weekly entry exists.
+    ['score_kpis', 'default_planned REAL DEFAULT 0'],
     ['payroll_settings', 'late_grace_count INTEGER DEFAULT 3'],
     ['payroll_settings', 'late_per_minute_rate REAL DEFAULT 20'],
     // Salary breakdown percentages — match SEPL Tally slip format

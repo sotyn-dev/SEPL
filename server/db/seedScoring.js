@@ -73,10 +73,10 @@ const TEMPLATES = [
       { group: 'Basic',  name: 'Delegation', weight: 10, source: 'auto:delegations' },
       { group: 'Basic',  name: 'Help Ticket', weight: 0, source: 'auto:tickets' },
       { group: 'Basic',  name: 'PMS', weight: 0, source: 'auto:pms' },
-      { group: 'Weekly', name: 'New Tool Evaluated / Month', weight: 15 },
-      { group: 'Weekly', name: 'Automations Live Count', weight: 20 },
-      { group: 'Weekly', name: 'Hours Saved Company Wide / Month', weight: 20 },
-      { group: 'Weekly', name: 'ROI of AI Dept (X)', weight: 30 },
+      { group: 'Weekly', name: 'New Tool Evaluated / Month', weight: 15, target: 3 },
+      { group: 'Weekly', name: 'Automations Live Count', weight: 20, target: 4 },
+      { group: 'Weekly', name: 'Hours Saved Company Wide / Month', weight: 20, target: 80 },
+      { group: 'Weekly', name: 'ROI of AI Dept (X)', weight: 30, target: 1 },
     ],
   },
   {
@@ -396,18 +396,19 @@ function upgradeAutoSources(db) {
 }
 
 function seedScoringTemplates(db) {
-  // Always run the upgrade pass — does nothing if already done.
+  // Always run the upgrade passes — both are idempotent
   const upgraded = upgradeAutoSources(db);
+  const targetsUpgraded = upgradeFixedTargets(db);
   // Skip initial seed if templates already exist
   const count = db.prepare('SELECT COUNT(*) as c FROM score_templates').get().c;
-  if (count > 0) return { seeded: 0, skipped: count, upgraded };
+  if (count > 0) return { seeded: 0, skipped: count, upgraded, targetsUpgraded };
 
   const insertTemplate = db.prepare(
     'INSERT INTO score_templates (name, description) VALUES (?, ?)'
   );
   const insertKpi = db.prepare(
-    `INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order, default_planned)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
   const tx = db.transaction(() => {
@@ -423,13 +424,39 @@ function seedScoringTemplates(db) {
           k.weight || 0,
           k.direction || 'higher_better',
           k.source || 'manual',
-          order++
+          order++,
+          k.target || 0
         );
       }
     }
   });
   tx();
-  return { seeded: TEMPLATES.length, skipped: 0 };
+  return { seeded: TEMPLATES.length, skipped: 0, upgraded };
+}
+
+// One-time pass to set default_planned on existing seeded KPIs that
+// have known fixed targets (mam confirmed Monika's are fixed; others
+// can be set via the Templates admin UI).
+function upgradeFixedTargets(db) {
+  const targets = [
+    ['Monika — AI Implementation Head', 'New Tool Evaluated / Month', 3],
+    ['Monika — AI Implementation Head', 'Automations Live Count', 4],
+    ['Monika — AI Implementation Head', 'Hours Saved Company Wide / Month', 80],
+    ['Monika — AI Implementation Head', 'ROI of AI Dept (X)', 1],
+  ];
+  const upd = db.prepare(`
+    UPDATE score_kpis
+       SET default_planned = ?
+     WHERE COALESCE(default_planned, 0) = 0
+       AND metric_name = ?
+       AND template_id = (SELECT id FROM score_templates WHERE name = ? LIMIT 1)
+  `);
+  let changed = 0;
+  for (const [tpl, kpi, val] of targets) {
+    const r = upd.run(val, kpi, tpl);
+    changed += r.changes || 0;
+  }
+  return changed;
 }
 
 module.exports = { seedScoringTemplates, TEMPLATES };
