@@ -202,7 +202,24 @@ export default function PaymentRequired() {
                   <td className="text-sm">{r.site_display || r.site_name || '-'}</td>
                   <td><span className={`badge ${r.category === 'TA/DA' ? 'badge-purple' : r.category === 'Purchase' ? 'badge-blue' : r.category === 'Labour' ? 'badge-green' : 'badge-gray'}`}>{r.category}</span></td>
                   <td className="font-semibold">{fmt(r.amount)}</td>
-                  <td className="text-sm max-w-[200px] truncate">{r.purpose}</td>
+                  <td className="text-sm max-w-[280px]">
+                    {/* Show full purpose text, wrap to multiple lines for
+                        long entries. Hover shows it again as a tooltip
+                        for screen-reader / extra-long cases. Below the
+                        purpose we also show the category-specific extra
+                        detail (item_description for Purchase, stay_details
+                        for TA/DA, etc.) so the row carries everything mam
+                        typed without having to open the request. */}
+                    <div className="whitespace-normal break-words leading-snug" title={r.purpose}>{r.purpose}</div>
+                    {(r.item_description || r.material_description || r.stay_details || r.travel_from_to) && (
+                      <div className="text-[10px] text-gray-500 mt-0.5 leading-tight whitespace-normal break-words">
+                        {r.item_description && <span>📦 {r.item_description}</span>}
+                        {r.material_description && <span>🚚 {r.material_description}</span>}
+                        {r.stay_details && <span>🏨 {r.stay_details}</span>}
+                        {r.travel_from_to && <span>✈️ {r.travel_from_to}</span>}
+                      </div>
+                    )}
+                  </td>
                   <td><span className="text-xs bg-gray-100 px-2 py-0.5 rounded">{r.current_step}/5</span></td>
                   <td><StatusBadge status={r.status} /></td>
                   <td className="text-xs">{r.created_at?.split('T')[0]}</td>
