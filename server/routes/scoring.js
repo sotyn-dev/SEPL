@@ -165,7 +165,22 @@ router.get('/scorecard', (req, res) => {
     const lastStartTs = `${lastWeekStart} 00:00:00`;
     const lastEndTs = `${shiftWeek(lastWeekStart, 5)} 23:59:59`;
 
+    // Helper: list site_ids where this user is the assigned site engineer
+    // (used for site-scoped KPIs like DPR Profit, MB Signed, Indents, Stock).
+    const siteIdsForUser = () => {
+      const rows = db.prepare(`
+        SELECT DISTINCT bb.site_id FROM business_book bb
+        JOIN purchase_orders po ON po.business_book_id = bb.id
+        WHERE po.site_engineer_id = ?
+           OR (',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ?
+      `).all(userId, `%,${userId},%`);
+      return rows.map(r => r.site_id).filter(Boolean);
+    };
+
     const computeAutoCount = (source, since, until) => {
+      const sinceDate = since.slice(0, 10);
+      const untilDate = until.slice(0, 10);
+
       if (source === 'auto:delegations') {
         const given = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
         const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND status='approved' AND COALESCE(reviewed_at, submitted_at, created_at) BETWEEN ? AND ?`).get(userId, since, until).c;
@@ -184,8 +199,52 @@ router.get('/scorecard', (req, res) => {
       if (source === 'auto:checklists') {
         const cklAssigned = db.prepare(`SELECT COUNT(*) as c FROM checklists WHERE assigned_to=? AND COALESCE(active,1)=1`).get(userId).c;
         const given = cklAssigned * 6;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM checklist_completions WHERE user_id=? AND completion_date BETWEEN ? AND ?`).get(userId, since.slice(0,10), until.slice(0,10)).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM checklist_completions WHERE user_id=? AND completion_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
         return { given, done };
+      }
+
+      // Site-scoped KPIs (Site Engineer / Supervisor templates) — need
+      // the list of sites this user manages first.
+      const siteIds = siteIdsForUser();
+      if (siteIds.length === 0) {
+        // No sites mapped to this user → can't aggregate. Return zero.
+        return { given: 0, done: 0 };
+      }
+      const inSites = `(${siteIds.join(',')})`;
+
+      if (source === 'auto:dpr_profit') {
+        // Sum of profit_loss across DPRs in the week. Planned = sum of
+        // grand_total_b (planned cost), Actual = sum of grand_total_a
+        // (actual revenue). Score = (a - b) / b × 100 → matches "DPR
+        // Profit" KPI on the Site Eng template.
+        const r = db.prepare(`SELECT COALESCE(SUM(grand_total_b),0) as planned, COALESCE(SUM(grand_total_a),0) as actual FROM dpr WHERE site_id IN ${inSites} AND report_date BETWEEN ? AND ?`).get(sinceDate, untilDate);
+        return { given: r.planned, done: r.actual };
+      }
+      if (source === 'auto:dpr_count') {
+        // DPRs submitted this week (planned = 6 days, actual = count)
+        const c = db.prepare(`SELECT COUNT(*) as c FROM dpr WHERE site_id IN ${inSites} AND report_date BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
+        return { given: 6, done: c };
+      }
+      if (source === 'auto:indents_in_week') {
+        // Indents created in the week (no per-week target → planned=actual so % = 0; admin can override)
+        const c = db.prepare(`SELECT COUNT(*) as c FROM indents WHERE site_id IN ${inSites} AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: c, done: c };
+      }
+      if (source === 'auto:mb_signed') {
+        // MB bills signed by client in the week
+        const total = db.prepare(`SELECT COUNT(*) as c FROM mb_bills WHERE site_id IN ${inSites} AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        const signed = db.prepare(`SELECT COUNT(*) as c FROM mb_bills WHERE site_id IN ${inSites} AND created_at BETWEEN ? AND ? AND COALESCE(client_signed,0) = 1`).get(since, until).c;
+        return { given: total, done: signed };
+      }
+      if (source === 'auto:ra_bills') {
+        // RA bills raised in the week
+        const c = db.prepare(`SELECT COUNT(*) as c FROM ra_bills WHERE site_id IN ${inSites} AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        return { given: 3, done: c }; // SEPL target = 3/week per Indresh template
+      }
+      if (source === 'auto:stock_at_site') {
+        // Latest non-zero stock count at any of this user's sites
+        const c = db.prepare(`SELECT COUNT(*) as c FROM stock_movements WHERE site_id IN ${inSites} AND quantity > 0`).get().c;
+        return { given: 1, done: c > 0 ? 1 : 0 };
       }
       return { given: null, done: null };
     };

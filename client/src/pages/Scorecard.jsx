@@ -488,6 +488,12 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   <option value="auto:pms">auto: pms tasks</option>
                   <option value="auto:checklists">auto: checklists</option>
                   <option value="auto:tickets">auto: tickets</option>
+                  <option value="auto:dpr_profit">auto: DPR profit (planned vs actual ₹)</option>
+                  <option value="auto:dpr_count">auto: DPR count (6 days/week target)</option>
+                  <option value="auto:indents_in_week">auto: indents created (site)</option>
+                  <option value="auto:mb_signed">auto: MB signed by client (site)</option>
+                  <option value="auto:ra_bills">auto: RA bills raised (site)</option>
+                  <option value="auto:stock_at_site">auto: stock at site flag</option>
                 </select>
               </td>
               <td className="p-2"><button onClick={() => delKpi(k)} className="text-red-500 hover:text-red-700"><FiTrash2 size={12} /></button></td>

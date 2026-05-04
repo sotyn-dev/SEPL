@@ -19,10 +19,10 @@ const TEMPLATES = [
     name: 'Site Engineer',
     description: 'Site execution KPIs — DPR, indents, billing, manpower',
     kpis: [
-      { group: 'Weekly', name: 'Weekly DPR Profit', weight: 25 },
-      { group: 'Weekly', name: 'Indent Accuracy', weight: 10 },
+      { group: 'Weekly', name: 'Weekly DPR Profit', weight: 25, source: 'auto:dpr_profit' },
+      { group: 'Weekly', name: 'Indent Accuracy', weight: 10, source: 'auto:indents_in_week' },
       { group: 'Weekly', name: 'Project in Budget', weight: 0 },
-      { group: 'Weekly', name: 'MB Signed from Client', weight: 10 },
+      { group: 'Weekly', name: 'MB Signed from Client', weight: 10, source: 'auto:mb_signed' },
       { group: 'Weekly', name: 'Full kitting of manpower and tools before material', weight: 0 },
       { group: 'Weekly', name: 'Indent vs Bill', weight: 10 },
       { group: 'Weekly', name: 'Buffer used', weight: 10 },
@@ -30,7 +30,7 @@ const TEMPLATES = [
       { group: 'Weekly', name: 'Rework', weight: 5, direction: 'lower_better' },
       { group: 'Weekly', name: 'Milestone completed', weight: 10 },
       { group: 'Weekly', name: 'Indent vs Consumption', weight: 10 },
-      { group: 'Weekly', name: 'Stock at site', weight: 5 },
+      { group: 'Weekly', name: 'Stock at site', weight: 5, source: 'auto:stock_at_site' },
     ],
   },
   {
@@ -39,8 +39,8 @@ const TEMPLATES = [
     kpis: [
       { group: 'Basic',  name: 'PMS Task', weight: 5, source: 'auto:pms' },
       { group: 'Weekly', name: 'Rework', weight: 15, direction: 'lower_better' },
-      { group: 'Weekly', name: 'DPR Planning', weight: 10 },
-      { group: 'Weekly', name: 'DPR Daily Actual', weight: 10 },
+      { group: 'Weekly', name: 'DPR Planning', weight: 10, source: 'auto:dpr_count' },
+      { group: 'Weekly', name: 'DPR Daily Actual', weight: 10, source: 'auto:dpr_count' },
       { group: 'Weekly', name: 'Full kit verification before start', weight: 10 },
       { group: 'Weekly', name: 'Material Receiving signed from client', weight: 10 },
       { group: 'Weekly', name: 'Stock report accuracy', weight: 10 },
@@ -157,7 +157,7 @@ const TEMPLATES = [
       { group: 'Basic',  name: 'Checklist', weight: 5, source: 'auto:checklists' },
       { group: 'Basic',  name: 'Help Ticket', weight: 5, source: 'auto:tickets' },
       { group: 'Basic',  name: 'PMS Task', weight: 5, source: 'auto:pms' },
-      { group: 'Weekly', name: 'RA Bills Raised Weekly', weight: 0 },
+      { group: 'Weekly', name: 'RA Bills Raised Weekly', weight: 0, source: 'auto:ra_bills' },
       { group: 'Weekly', name: 'Measurement Sheet Submitted', weight: 0 },
       { group: 'Weekly', name: 'RA Bill Value (Lakhs)', weight: 0 },
       { group: 'Monthly', name: 'RA Bills Raised / Month', weight: 0 },
@@ -367,10 +367,40 @@ const TEMPLATES = [
   },
 ];
 
+// One-time data_source upgrade for templates seeded BEFORE the auto-fetch
+// patches landed. Maps (template_name, kpi_metric_name) -> new data_source.
+// Idempotent — only updates rows where data_source is still 'manual'.
+function upgradeAutoSources(db) {
+  const map = [
+    ['Site Engineer', 'Weekly DPR Profit', 'auto:dpr_profit'],
+    ['Site Engineer', 'Indent Accuracy', 'auto:indents_in_week'],
+    ['Site Engineer', 'MB Signed from Client', 'auto:mb_signed'],
+    ['Site Engineer', 'Stock at site', 'auto:stock_at_site'],
+    ['Supervisor', 'DPR Planning', 'auto:dpr_count'],
+    ['Supervisor', 'DPR Daily Actual', 'auto:dpr_count'],
+    ['Indresh — Billing Engineer', 'RA Bills Raised Weekly', 'auto:ra_bills'],
+  ];
+  const upd = db.prepare(`
+    UPDATE score_kpis
+       SET data_source = ?
+     WHERE data_source = 'manual'
+       AND metric_name = ?
+       AND template_id = (SELECT id FROM score_templates WHERE name = ? LIMIT 1)
+  `);
+  let changed = 0;
+  for (const [tpl, kpi, src] of map) {
+    const r = upd.run(src, kpi, tpl);
+    changed += r.changes || 0;
+  }
+  return changed;
+}
+
 function seedScoringTemplates(db) {
-  // Skip if already seeded
+  // Always run the upgrade pass — does nothing if already done.
+  const upgraded = upgradeAutoSources(db);
+  // Skip initial seed if templates already exist
   const count = db.prepare('SELECT COUNT(*) as c FROM score_templates').get().c;
-  if (count > 0) return { seeded: 0, skipped: count };
+  if (count > 0) return { seeded: 0, skipped: count, upgraded };
 
   const insertTemplate = db.prepare(
     'INSERT INTO score_templates (name, description) VALUES (?, ?)'
