@@ -40,13 +40,28 @@ export default function HelpTicket() {
     }
   }, [open]);
 
+  // Upload an optional attachment first (screenshot of the bug, error log,
+  // etc.), stash its URL on the form, then POST the ticket. Backend's
+  // /support route already accepts attachment_link, no API change needed.
   const submit = async (e) => {
     e.preventDefault();
+    let payload = { ...form };
+    delete payload._file;
+    if (form._file) {
+      try {
+        const fd = new FormData();
+        fd.append('file', form._file);
+        const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        payload.attachment_link = r.data?.url || null;
+      } catch {
+        toast.error('Attachment upload failed — submitting without file');
+      }
+    }
     try {
-      const res = await api.post('/support', form);
+      const res = await api.post('/support', payload);
       toast.success(`Ticket ${res.data.ticket_no} created${form.assigned_to ? ' — assigned' : ''}`);
       setModal(null);
-      setForm({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '' });
+      setForm({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '', _file: null });
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
@@ -152,6 +167,18 @@ export default function HelpTicket() {
             </div>
           </div>
           <div><label className="label">Description *</label><textarea className="input" rows="4" value={form.description} onChange={e => setForm({...form, description: e.target.value})} placeholder="Describe your issue or request in detail..." required /></div>
+          <div>
+            <label className="label">Attachment <span className="text-gray-400 font-normal text-[10px]">(optional · screenshot, log file, PDF)</span></label>
+            <input
+              className="input"
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.webp,.gif,.txt,.log,.xlsx,.xls,.csv,.doc,.docx"
+              onChange={e => setForm({ ...form, _file: e.target.files?.[0] || null })}
+            />
+            {form._file && (
+              <p className="text-[10px] text-blue-600 mt-1">Selected: {form._file.name} ({(form._file.size / 1024).toFixed(1)} KB)</p>
+            )}
+          </div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Submit Ticket</button></div>
         </form>
       </Modal>
@@ -172,6 +199,13 @@ export default function HelpTicket() {
               {selectedTicket.module && <span className="bg-red-100 px-2 py-1 rounded">{selectedTicket.module}</span>}
             </div>
             <div className="bg-gray-50 p-3 rounded text-sm whitespace-pre-wrap">{selectedTicket.description}</div>
+            {selectedTicket.attachment_link && (
+              <div className="text-xs">
+                <a href={selectedTicket.attachment_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline font-semibold">
+                  📎 View attachment
+                </a>
+              </div>
+            )}
             {selectedTicket.admin_response && (
               <div className="bg-emerald-50 p-3 rounded border-l-4 border-emerald-500">
                 <p className="text-xs font-bold text-emerald-700 mb-1">Admin Response (by {selectedTicket.resolved_by_name})</p>
