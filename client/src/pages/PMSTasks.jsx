@@ -306,7 +306,7 @@ export default function PMSTasks() {
                           </div>
                         )}
                       </div>
-                    ) : isAssignee && t.status !== 'approved' ? (
+                    ) : (isAssignee || isAdmin()) && t.status !== 'approved' ? (
                       <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }} className="text-[11px] text-gray-500 hover:text-red-600 flex items-center gap-1"><FiCalendar size={11} /> Request</button>
                     ) : <span className="text-gray-300 text-xs">—</span>}
                   </td>
