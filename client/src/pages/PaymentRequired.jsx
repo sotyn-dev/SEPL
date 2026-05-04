@@ -313,7 +313,66 @@ export default function PaymentRequired() {
             )}
 
             {viewData.rejection_remarks && <div className="bg-red-50 p-3 rounded text-sm"><strong className="text-red-700">Rejected:</strong> {viewData.rejection_remarks}</div>}
-            {viewData.attachment_link && <a href={viewData.attachment_link} target="_blank" rel="noreferrer" className="text-red-600 underline text-sm">View Attachment</a>}
+
+            {/* Proofs / Receipts — shown prominently so approver can verify
+                tickets / KM photos / quotations / attachments before clicking
+                Approve or Reject. Images show as thumbnails, PDFs/docs show
+                as a 📄 card. Click any tile to open full-size in a new tab. */}
+            {(() => {
+              const proofs = [
+                viewData.ticket_upload && { url: viewData.ticket_upload, label: 'Travel Ticket', tint: 'purple' },
+                viewData.km_photo && { url: viewData.km_photo, label: `Start KM Photo${viewData.start_km ? ` (${viewData.start_km} km)` : ''}`, tint: 'orange' },
+                viewData.end_km_photo && { url: viewData.end_km_photo, label: `End KM Photo${viewData.end_km ? ` (${viewData.end_km} km)` : ''}`, tint: 'emerald' },
+                viewData.quotation_link && { url: viewData.quotation_link, label: 'Quotation / Purchase Order', tint: 'red' },
+                viewData.attachment_link && { url: viewData.attachment_link, label: 'Other Attachment', tint: 'blue' },
+              ].filter(Boolean);
+              const isImg = (url) => /\.(jpg|jpeg|png|webp|gif|bmp|heic)(\?|$)/i.test(url);
+              const tintMap = {
+                purple: 'border-purple-300 bg-purple-50',
+                orange: 'border-orange-300 bg-orange-50',
+                emerald: 'border-emerald-300 bg-emerald-50',
+                red: 'border-red-300 bg-red-50',
+                blue: 'border-blue-300 bg-blue-50',
+              };
+              return (
+                <div className="border-2 border-blue-300 rounded-lg p-3 bg-blue-50/40">
+                  <h5 className="font-bold text-sm text-blue-800 mb-2 flex items-center gap-1">
+                    📎 Proofs / Receipts {proofs.length > 0 && <span className="text-blue-600">({proofs.length})</span>}
+                  </h5>
+                  {proofs.length === 0 ? (
+                    <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                      ⚠️ No proofs uploaded with this request. Verify with employee before approving.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {proofs.map((p, i) => (
+                        <a
+                          key={i}
+                          href={p.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={`block rounded-lg border ${tintMap[p.tint]} overflow-hidden hover:shadow-md hover:scale-[1.02] transition-all`}
+                          title={`Click to open ${p.label}`}
+                        >
+                          {isImg(p.url) ? (
+                            <img src={p.url} alt={p.label} className="w-full h-32 object-cover bg-white" />
+                          ) : (
+                            <div className="h-32 flex flex-col items-center justify-center bg-white">
+                              <span className="text-4xl">📄</span>
+                              <span className="text-[10px] text-gray-500 mt-1">PDF / Document</span>
+                            </div>
+                          )}
+                          <div className="px-2 py-1.5 bg-white border-t">
+                            <div className="text-xs font-semibold truncate">{p.label}</div>
+                            <div className="text-[10px] text-blue-600 underline">Click to open</div>
+                          </div>
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Approval trail */}
             {viewData.approvals?.length > 0 && (
