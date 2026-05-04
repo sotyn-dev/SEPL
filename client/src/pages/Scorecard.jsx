@@ -494,7 +494,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   <option value="auto:dpr_count">auto: DPR count (6 days/week target)</option>
                   <option value="auto:dpr_by_user">auto: DPR submitted BY user (count)</option>
                   <option value="auto:dpr_profit_by_user">auto: DPR profit/loss SUM (by user)</option>
-                  <option value="auto:dpr_cost_by_user">auto: DPR planned cost SUM (by user)</option>
+                  <option value="auto:dpr_cost_by_user">auto: DPR submitted vs approved (by user)</option>
                   <option value="auto:indents_in_week">auto: indents created (site)</option>
                   <option value="auto:mb_signed">auto: MB signed by client (site)</option>
                   <option value="auto:ra_bills">auto: RA bills raised (site)</option>

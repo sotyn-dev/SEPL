@@ -292,11 +292,23 @@ router.get('/scorecard', (req, res) => {
         return { given: null, done: r.p }; // given=null preserves the
         // template's default_planned target as the comparison base.
       }
-      // DPR Cost Accuracy = sum of grand_total_b (planned cost) across
-      // user's DPRs in the week. Lower-better KPI on Supervisor template.
+      // DPR Cost Accuracy = how many DPRs submitted vs how many approved.
+      // Mam: "dpr cost is who much dpr submit vs approval".
+      // Planned = submitted count (denominator), Actual = approved count
+      // (numerator). Score = ((approved - submitted) / submitted) × 100,
+      // so all-approved = 0% (on plan), rejections drag the score
+      // negative.
       if (source === 'auto:dpr_cost_by_user') {
-        const r = db.prepare(`SELECT COALESCE(SUM(grand_total_b),0) as c FROM dpr WHERE submitted_by = ? AND report_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate);
-        return { given: null, done: r.c };
+        const submitted = db.prepare(
+          `SELECT COUNT(*) as c FROM dpr
+           WHERE submitted_by = ? AND report_date BETWEEN ? AND ?`
+        ).get(userId, sinceDate, untilDate).c;
+        const approved = db.prepare(
+          `SELECT COUNT(*) as c FROM dpr
+           WHERE submitted_by = ? AND report_date BETWEEN ? AND ?
+             AND approval_status = 'approved'`
+        ).get(userId, sinceDate, untilDate).c;
+        return { given: submitted, done: approved };
       }
       // Material Receiving: how many vendor PO deliveries were received
       // at this user's sites this week. Mam: "indent to dispatch user
