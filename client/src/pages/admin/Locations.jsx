@@ -252,6 +252,15 @@ export default function Locations() {
                 </div>
               )}
 
+              {timeline.suspicious_count > 0 && (
+                <div className="card p-3 bg-red-50 border-l-4 border-red-500 flex items-start gap-2 text-xs text-red-900">
+                  <FiAlertCircle className="mt-0.5 flex-shrink-0" />
+                  <div>
+                    <strong>{timeline.suspicious_count} suspicious ping{timeline.suspicious_count > 1 ? 's' : ''} detected.</strong> Travel speed exceeded 120 km/h between pings — physically impossible. Most likely cause: a fake-GPS app, weak GPS signal, or cell-tower triangulation glitch. Suspicious pings are <span className="font-bold">excluded from the total distance</span> and tagged ⚠ FAKE in the table below. If this keeps happening for one employee, consider asking them to re-install the browser / disable any "Mock Location" developer setting.
+                  </div>
+                </div>
+              )}
+
               {/* Embedded route map — draws the day's GPS pings as a red
                   polyline with start (green) / end (red) markers and the
                   office geofence as a faint blue circle. Mam's exact ask:
@@ -265,7 +274,9 @@ export default function Locations() {
                     <span className="text-[11px] text-gray-400">🟢 start · 🔴 last seen · blue circle = office</span>
                   </div>
                   <RouteMap
-                    pings={timeline.pings.map(p => ({ ...p, time_str: fmtTime(p.time) }))}
+                    /* Drop suspicious teleport pings from the line so the
+                       trail reflects real movement, not GPS-spoof zigzags. */
+                    pings={timeline.pings.filter(p => !p.suspicious).map(p => ({ ...p, time_str: fmtTime(p.time) }))}
                     geofences={timeline.geofences || []}
                     height={420}
                   />
@@ -324,12 +335,17 @@ export default function Locations() {
                       </thead>
                       <tbody>
                         {timeline.pings.map((p, i) => (
-                          <tr key={p.id} className="border-t hover:bg-gray-50">
+                          <tr key={p.id} className={`border-t ${p.suspicious ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-gray-50'}`}>
                             <td className="px-2 py-1.5 font-mono text-[11px]">{fmtTime(p.time)}</td>
                             <td className="px-2 py-1.5">
                               <span className={`px-2 py-0.5 rounded text-[10px] ${PHASE_PILL[p.phase] || 'bg-gray-100 text-gray-600'}`}>
                                 {PHASE_LABEL[p.phase] || p.phase}
                               </span>
+                              {p.suspicious && (
+                                <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] bg-red-200 text-red-800 font-bold" title={`Travel speed ${p.speed_kmh} km/h is impossible — likely GPS spoof or signal glitch`}>
+                                  ⚠ FAKE
+                                </span>
+                              )}
                             </td>
                             <td className="px-2 py-1.5 text-gray-700">
                               {p.site_name && p.site_name !== 'Outside'
@@ -341,6 +357,7 @@ export default function Locations() {
                             </td>
                             <td className="px-2 py-1.5 text-right text-gray-500">
                               {i === 0 ? '—' : fmtDist(p.dist_from_prev_m)}
+                              {p.suspicious && <div className="text-[9px] text-red-600">@ {p.speed_kmh} km/h ⚠</div>}
                             </td>
                             <td className="px-2 py-1.5 text-right">
                               <a href={mapsUrl(p.latitude, p.longitude)} target="_blank" rel="noreferrer"

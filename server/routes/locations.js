@@ -107,21 +107,49 @@ router.get('/timeline', (req, res) => {
        FROM attendance WHERE user_id = ? AND date = ?`
   ).get(userId, date) || {};
 
+  // Teleport detector — flag any ping that requires faster-than-car
+  // travel (>120 km/h sustained) since the previous ping. This catches
+  // GPS-spoof apps and cell-tower triangulation glitches (e.g. Aanchal's
+  // 11:54 AM ping at Jalandhar, 53 km away from her office punch and
+  // back in 1 minute = 3,180 km/h, physically impossible). Suspicious
+  // pings still appear on the timeline but get a 'suspicious' flag so
+  // the UI can flag them in red and EXCLUDE them from total distance.
+  const SUSPICIOUS_KMH = 120;
   let totalMeters = 0;
+  let suspiciousCount = 0;
+  let lastValidIdx = -1;
   const enriched = rows.map((r, i) => {
     let distFromPrev = 0;
-    if (i > 0) {
-      const prev = rows[i - 1];
+    let speedKmh = 0;
+    let suspicious = false;
+    if (lastValidIdx >= 0) {
+      const prev = rows[lastValidIdx];
       distFromPrev = Math.round(haversine(prev.latitude, prev.longitude, r.latitude, r.longitude));
-      totalMeters += distFromPrev;
+      const dtSec = (new Date(r.time).getTime() - new Date(prev.time).getTime()) / 1000;
+      speedKmh = dtSec > 0 ? (distFromPrev / 1000) / (dtSec / 3600) : 0;
+      if (speedKmh > SUSPICIOUS_KMH) {
+        suspicious = true;
+        suspiciousCount += 1;
+      }
     }
-    // Tag whether this ping is BEFORE punch-in / BETWEEN / AFTER punch-out so
-    // the dashboard can colour-code or filter to "during work hours".
+    // Only count distance for non-suspicious pings, and advance lastValidIdx
+    // to this ping only if it's clean — keeps the next gap measured from
+    // the last *trusted* point so a single bogus ping doesn't double-charge.
+    if (!suspicious) {
+      totalMeters += distFromPrev;
+      lastValidIdx = i;
+    }
     let phase = 'during';
     const t = new Date(r.time).getTime();
     if (att.punch_in_time && t < new Date(att.punch_in_time).getTime()) phase = 'before';
     else if (att.punch_out_time && t > new Date(att.punch_out_time).getTime()) phase = 'after';
-    return { ...r, dist_from_prev_m: distFromPrev, phase };
+    return {
+      ...r,
+      dist_from_prev_m: distFromPrev,
+      speed_kmh: Math.round(speedKmh),
+      suspicious,
+      phase,
+    };
   });
 
   // Active geofences for office overlay on the map (faint blue circles)
@@ -146,6 +174,7 @@ router.get('/timeline', (req, res) => {
     },
     pings: enriched,
     geofences,
+    suspicious_count: suspiciousCount,
   });
 });
 
