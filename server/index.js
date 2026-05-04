@@ -83,6 +83,15 @@ app.use('/api/hr', require('./routes/hr'));
 app.use('/api/payroll', require('./routes/payroll'));
 app.use('/api/scoring', require('./routes/scoring'));
 app.use('/api/tools', require('./routes/tools'));
+app.use('/api/push', require('./routes/push'));
+
+// Initialise VAPID keys on boot (auto-generates on first run, then
+// persists in app_settings so PM2 restarts keep the same keys).
+try {
+  require('./lib/push').ensureVapid();
+} catch (e) {
+  console.warn('[push] VAPID init failed (web-push package may need npm install):', e.message);
+}
 app.use('/api/delegations', require('./routes/delegations'));
 app.use('/api/announcements', require('./routes/announcements'));
 app.use('/api/price-requests', require('./routes/pricerequests'));

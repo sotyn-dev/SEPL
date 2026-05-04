@@ -1216,6 +1216,30 @@ function initializeDatabase() {
       UNIQUE(user_id, kpi_id, week_start)
     );
 
+    -- Web Push subscriptions — one row per (user × device). Multiple
+    -- rows per user is fine (mam wants phone + laptop + desktop).
+    -- VAPID keys stored in app_settings as a single row.
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      user_agent TEXT,
+      device_label TEXT,
+      active INTEGER DEFAULT 1,
+      last_seen_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Generic key/value app settings — used for VAPID keys + future
+    -- one-shot config that doesn't deserve its own table.
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Tools master catalog (returnable assets, separate from consumable
     -- stock). Each tool is unique — drill machine, multimeter, ladder,
     -- etc. — and tracked individually with serial / current location.

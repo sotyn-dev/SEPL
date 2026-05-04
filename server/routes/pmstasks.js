@@ -137,6 +137,15 @@ router.post('/', (req, res) => {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(derivedTitle, desc, proj.id, proj.project_name, proj.crm_name, req.user.id, assigned_to, due_date || null);
 
+  try {
+    const { notify } = require('../lib/push');
+    notify(assigned_to, {
+      title: `📌 PMS — ${proj.project_name || 'Task'}`,
+      body: derivedTitle + (due_date ? ` · due ${due_date}` : ''),
+      url: '/pms-tasks',
+      tag: `pms-${r.lastInsertRowid}`,
+    });
+  } catch {}
   res.status(201).json({ id: r.lastInsertRowid, crm_name: proj.crm_name, project_name: proj.project_name });
 });
 

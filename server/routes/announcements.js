@@ -95,6 +95,17 @@ router.post('/', (req, res) => {
     INSERT INTO announcements (title, body, pinned, expires_at, created_by)
     VALUES (?, ?, ?, ?, ?)
   `).run(t, body || '', pinned ? 1 : 0, expires_at || null, req.user.id);
+  // Push to every active user — company-wide alert.
+  try {
+    const { notifyAll } = require('../lib/push');
+    notifyAll({
+      title: pinned ? '📌 ' + t : '📣 ' + t,
+      body: (body || '').slice(0, 180) || 'New company announcement',
+      url: '/',
+      tag: `announcement-${r.lastInsertRowid}`,
+      requireInteraction: !!pinned,
+    });
+  } catch {}
   res.status(201).json({ id: r.lastInsertRowid });
 });
 

@@ -83,6 +83,26 @@ router.post('/', (req, res) => {
   const r = db.prepare(
     'INSERT INTO support_tickets (ticket_no, user_id, subject, description, category, priority, attachment_link, module, assigned_to) VALUES (?,?,?,?,?,?,?,?,?)'
   ).run(ticketNo, req.user.id, subject, description, category || 'bug', priority || 'medium', attachment_link, module, assigned_to ? +assigned_to : null);
+  // Push to assignee (or every admin if unassigned)
+  try {
+    const { notify, notifyMany } = require('../lib/push');
+    if (assigned_to) {
+      notify(+assigned_to, {
+        title: `🆘 ${ticketNo} — ${priority || 'medium'} priority`,
+        body: subject,
+        url: '/help-tickets',
+        tag: `ticket-${r.lastInsertRowid}`,
+      });
+    } else {
+      const admins = db.prepare(`SELECT id FROM users WHERE role='admin' AND COALESCE(active,1)=1`).all().map(u => u.id);
+      notifyMany(admins, {
+        title: `🆘 New unassigned ticket — ${ticketNo}`,
+        body: subject,
+        url: '/help-tickets',
+        tag: `ticket-${r.lastInsertRowid}`,
+      });
+    }
+  } catch {}
   res.status(201).json({ id: r.lastInsertRowid, ticket_no: ticketNo });
 });
 

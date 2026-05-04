@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import HelpTicket from './HelpTicket';
 import AnnouncementBell from './AnnouncementBell';
+import EnablePushButton from './EnablePushButton';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
 import api from '../api';
@@ -253,6 +254,9 @@ export default function Layout() {
           <h2 className="text-sm md:text-lg font-semibold text-gray-800 truncate flex-1">
             {[...menuItems, ...adminItems].find(m => m.path === location.pathname)?.label || 'SEPL ERP'}
           </h2>
+          {/* Push notification toggle — phone / laptop / desktop each
+              need to be enabled separately. Mam's MD requirement. */}
+          <EnablePushButton />
           {/* Announcement bell — every page has it. Admin can post from the
               dropdown panel; everyone else sees the unread badge + list. */}
           <AnnouncementBell />

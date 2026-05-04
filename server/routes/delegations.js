@@ -135,6 +135,16 @@ router.post('/', (req, res) => {
     `INSERT INTO delegations (title, description, assigned_by, assigned_to, due_date, project_name, attachment_url)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(derivedTitle, desc, req.user.id, assigned_to, due_date || null, project, attachment);
+  // Fire-and-forget push to the assignee
+  try {
+    const { notify } = require('../lib/push');
+    notify(assigned_to, {
+      title: '📋 New Delegation',
+      body: `${req.user.name || 'Admin'} assigned: ${derivedTitle}${due_date ? ` · due ${due_date}` : ''}`,
+      url: '/delegations',
+      tag: `delegation-${r.lastInsertRowid}`,
+    });
+  } catch {}
   res.status(201).json({ id: r.lastInsertRowid });
 });
 

@@ -39,6 +39,17 @@ export function AuthProvider({ children }) {
     setUser(data.user);
     setPermissions(data.permissions || {});
     setUserRoles(data.userRoles || []);
+    // Best-effort: re-subscribe this device for push notifications so
+    // PM2 restarts or expired endpoints don't silently lose this device.
+    // Only triggers if the user previously granted permission — never
+    // pops a fresh permission prompt (that lives in the bell-icon button).
+    setTimeout(() => {
+      try {
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          import('../lib/push').then(m => m.enablePushNotifications());
+        }
+      } catch {}
+    }, 500);
     return data;
   };
 

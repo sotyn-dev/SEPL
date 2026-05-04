@@ -205,6 +205,23 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
     b.vehicle_type, b.from_to_location, b.material_description, b.driver_vendor_name,
     req.user.id
   );
+  // Push to step-1 approvers (everyone with payment_required.approve permission)
+  try {
+    const { notifyMany } = require('../lib/push');
+    const approvers = db.prepare(`
+      SELECT DISTINCT u.id FROM users u
+      LEFT JOIN user_roles ur ON ur.user_id = u.id
+      LEFT JOIN role_permissions rp ON rp.role_id = ur.role_id
+      WHERE COALESCE(u.active,1)=1
+        AND (u.role='admin' OR (rp.module='payment_required' AND rp.can_approve=1))
+    `).all().map(x => x.id);
+    notifyMany(approvers, {
+      title: `💸 ${requestNo} — ${b.category} Rs ${(b.amount || 0).toLocaleString('en-IN')}`,
+      body: `${b.employee_name}: ${b.purpose}`.slice(0, 180),
+      url: '/payment-required',
+      tag: `payment-${r.lastInsertRowid}`,
+    });
+  } catch {}
   res.status(201).json({ id: r.lastInsertRowid, request_no: requestNo });
 });
 
