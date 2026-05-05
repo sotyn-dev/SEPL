@@ -361,14 +361,15 @@ router.get('/rent-requests', requirePermission('rentals', 'view'), (req, res) =>
 router.get('/rent-requests/stats', requirePermission('rentals', 'view'), (req, res) => {
   try {
     const db = getDb();
-    const total = db.prepare('SELECT COUNT(*) as c FROM rent_requests').get().c;
-    const pending = db.prepare(`SELECT COUNT(*) as c FROM rent_requests WHERE status='pending'`).get().c;
-    const approved = db.prepare(`SELECT COUNT(*) as c FROM rent_requests WHERE status='approved'`).get().c;
+    const total = db.prepare('SELECT COUNT(*) as c FROM rent_requests WHERE COALESCE(inactive,0)=0').get().c;
+    const pending = db.prepare(`SELECT COUNT(*) as c FROM rent_requests WHERE status='pending' AND COALESCE(inactive,0)=0`).get().c;
+    const approved = db.prepare(`SELECT COUNT(*) as c FROM rent_requests WHERE status='approved' AND COALESCE(inactive,0)=0`).get().c;
     const paid = db.prepare(`SELECT COUNT(*) as c FROM rent_requests WHERE status='paid'`).get().c;
     const rejected = db.prepare(`SELECT COUNT(*) as c FROM rent_requests WHERE status='rejected'`).get().c;
+    const inactive = db.prepare(`SELECT COUNT(*) as c FROM rent_requests WHERE COALESCE(inactive,0)=1`).get().c;
     const totalAmount = db.prepare(`SELECT COALESCE(SUM(rent_amount),0) as s FROM rent_requests WHERE status='paid'`).get().s;
-    const pendingAmount = db.prepare(`SELECT COALESCE(SUM(rent_amount),0) as s FROM rent_requests WHERE status IN ('pending','approved')`).get().s;
-    res.json({ total, pending, approved, paid, rejected, total_paid_amount: totalAmount, pending_amount: pendingAmount });
+    const pendingAmount = db.prepare(`SELECT COALESCE(SUM(rent_amount),0) as s FROM rent_requests WHERE status IN ('pending','approved') AND COALESCE(inactive,0)=0`).get().s;
+    res.json({ total, pending, approved, paid, rejected, inactive, total_paid_amount: totalAmount, pending_amount: pendingAmount });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -391,15 +392,15 @@ router.post('/rent-requests', requirePermission('rentals', 'create'), (req, res)
         owner_name, owner_phone, owner_aadhar_url,
         room_photo_url, photo_taken_at, photo_lat, photo_lng,
         bank_account, ifsc_code, scanner_url,
-        rent_month, rent_amount, notes, created_by
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        rent_month, rent_amount, pay_by_day, notes, created_by
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       requestNo, b.site_id || null, b.site_name || null,
       b.arrange_for, b.contractor_name || null,
       b.owner_name, b.owner_phone || null, b.owner_aadhar_url || null,
       b.room_photo_url || null, b.photo_taken_at || null, b.photo_lat || null, b.photo_lng || null,
       b.bank_account || null, b.ifsc_code || null, b.scanner_url || null,
-      b.rent_month, b.rent_amount || 0, b.notes || null, req.user.id
+      b.rent_month, b.rent_amount || 0, b.pay_by_day || 10, b.notes || null, req.user.id
     );
     // Notify approvers (admins + anyone with rentals.approve)
     try {
@@ -431,7 +432,7 @@ router.put('/rent-requests/:id', requirePermission('rentals', 'edit'), (req, res
       'owner_name','owner_phone','owner_aadhar_url',
       'room_photo_url','photo_taken_at','photo_lat','photo_lng',
       'bank_account','ifsc_code','scanner_url',
-      'rent_month','rent_amount','notes'
+      'rent_month','rent_amount','pay_by_day','notes'
     ];
     const sets = []; const vals = [];
     for (const f of fields) if (b[f] !== undefined) { sets.push(`${f}=?`); vals.push(b[f]); }
@@ -514,6 +515,25 @@ router.post('/rent-requests/:id/mark-paid', requirePermission('rentals', 'edit')
 router.delete('/rent-requests/:id', requirePermission('rentals', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM rent_requests WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
+});
+
+// Mark inactive — rental relationship ended (vacated). No more rent
+// expected. Mam: 'when we inactive not payment log'.
+router.post('/rent-requests/:id/mark-inactive', requirePermission('rentals', 'edit'), (req, res) => {
+  try {
+    const { reason } = req.body;
+    getDb().prepare(`UPDATE rent_requests SET inactive=1, inactive_at=CURRENT_TIMESTAMP, inactive_reason=? WHERE id=?`)
+      .run(reason || null, req.params.id);
+    res.json({ message: 'Marked inactive' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/rent-requests/:id/mark-active', requirePermission('rentals', 'edit'), (req, res) => {
+  try {
+    getDb().prepare(`UPDATE rent_requests SET inactive=0, inactive_at=NULL, inactive_reason=NULL WHERE id=?`)
+      .run(req.params.id);
+    res.json({ message: 'Marked active' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 module.exports = router;

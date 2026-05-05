@@ -173,7 +173,7 @@ export default function Rentals() {
           <button onClick={() => { setPaymentForm({ period_month: monthNow(), paid_via: 'Bank' }); setPaymentModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Record Payment</button>
         )}
         {canCreate('rentals') && tab === 'requests' && (
-          <button onClick={() => { setRequestForm({ rent_month: monthNow(), arrange_for: 'SEPL' }); setRequestModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Rent</button>
+          <button onClick={() => { setRequestForm({ rent_month: monthNow(), arrange_for: 'SEPL', pay_by_day: 10 }); setRequestModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Rent</button>
         )}
       </div>
 
@@ -220,7 +220,7 @@ export default function Rentals() {
             <table>
               <thead>
                 <tr>
-                  <th>Req No</th><th>Month</th><th>Site</th><th>Arrange For</th>
+                  <th>Req No</th><th>Month / Due By</th><th>Site</th><th>Arrange For</th>
                   <th>Owner</th><th>Aadhar</th><th>Photo</th>
                   <th>Bank / IFSC</th><th>QR</th>
                   <th className="text-right">Amount</th><th>Status</th><th>Actions</th>
@@ -228,10 +228,26 @@ export default function Rentals() {
               </thead>
               <tbody>
                 {requests.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No rent requests yet — click "Raise Rent" to start</td></tr>}
-                {requests.map(r => (
-                  <tr key={r.id}>
-                    <td className="font-bold text-orange-700 text-xs">{r.request_no}</td>
-                    <td className="text-xs">{r.rent_month}</td>
+                {requests.map(r => {
+                  // Compute "due date" and overdue flag
+                  const payByDay = r.pay_by_day || 10;
+                  let dueDate = null, isOverdue = false;
+                  if (r.rent_month) {
+                    const [yr, mo] = r.rent_month.split('-').map(Number);
+                    dueDate = new Date(yr, mo - 1, payByDay);
+                    if (r.status !== 'paid' && r.status !== 'rejected' && !r.inactive && dueDate < new Date()) isOverdue = true;
+                  }
+                  return (
+                  <tr key={r.id} className={r.inactive ? 'opacity-50 bg-gray-50' : ''}>
+                    <td className="font-bold text-orange-700 text-xs">
+                      {r.request_no}
+                      {r.inactive && <div className="text-[9px] mt-0.5 px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded inline-block">INACTIVE</div>}
+                    </td>
+                    <td className="text-xs">
+                      <div className="font-medium">{r.rent_month}</div>
+                      <div className="text-[10px] text-gray-500">Due by {payByDay}{payByDay === 1 ? 'st' : payByDay === 2 ? 'nd' : payByDay === 3 ? 'rd' : 'th'}</div>
+                      {isOverdue && <span className="text-[9px] px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-bold">⚠ OVERDUE</span>}
+                    </td>
                     <td className="text-xs">{r.site_name || r.site_name_live || '—'}</td>
                     <td>
                       <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${r.arrange_for === 'SEPL' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>{r.arrange_for}</span>
@@ -275,6 +291,20 @@ export default function Rentals() {
                       {r.status === 'approved' && canEdit('rentals') && (
                         <button onClick={() => { setPayModal(r); setPayForm({ paid_via: 'Bank' }); }} className="btn btn-success text-[10px] px-2 py-1">Mark Paid</button>
                       )}
+                      {canEdit('rentals') && !r.inactive && (
+                        <button onClick={async () => {
+                          const reason = prompt('Mark this rental inactive (no more rent expected). Reason:');
+                          if (reason === null) return;
+                          try { await api.post(`/rentals/rent-requests/${r.id}/mark-inactive`, { reason }); toast.success('Marked inactive'); loadRequests(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+                        }} className="text-[10px] text-gray-500 hover:text-red-600 underline ml-1" title="Mark rental ended — stops appearing in pending lists">Mark Inactive</button>
+                      )}
+                      {canEdit('rentals') && r.inactive && (
+                        <button onClick={async () => {
+                          try { await api.post(`/rentals/rent-requests/${r.id}/mark-active`); toast.success('Reactivated'); loadRequests(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+                        }} className="text-[10px] text-emerald-600 hover:underline ml-1">Reactivate</button>
+                      )}
                       {canDelete('rentals') && r.status === 'pending' && (
                         <button onClick={async () => {
                           if (!confirm(`Delete ${r.request_no}?`)) return;
@@ -284,7 +314,7 @@ export default function Rentals() {
                       )}
                     </td>
                   </tr>
-                ))}
+                );})}
               </tbody>
             </table>
           </div>
@@ -915,6 +945,10 @@ function RaiseRentForm({ form, setForm, sites, onSubmit, onCancel }) {
 
         <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Amount</h5></div>
         <div><label className="label">Rent Amount (Rs)</label><input className="input" type="number" value={form.rent_amount || 0} onChange={e => setForm(f => ({ ...f, rent_amount: +e.target.value }))} /></div>
+        <div>
+          <label className="label">Pay-By Day of Month <span className="text-gray-400 font-normal text-[10px]">(e.g. 10 = pay by 10th)</span></label>
+          <input className="input" type="number" min="1" max="31" value={form.pay_by_day || 10} onChange={e => setForm(f => ({ ...f, pay_by_day: +e.target.value }))} />
+        </div>
         <div className="col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
       </div>
       <div className="flex justify-end gap-2 pt-3 border-t">

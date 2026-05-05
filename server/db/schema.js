@@ -1324,6 +1324,10 @@ function initializeDatabase() {
       scanner_url TEXT,                        -- UPI QR screenshot
       rent_month TEXT NOT NULL,                -- 'YYYY-MM'
       rent_amount REAL DEFAULT 0,
+      pay_by_day INTEGER DEFAULT 10,           -- day-of-month rent must be paid by
+      inactive INTEGER DEFAULT 0,              -- 1 = rental ended (no future rent expected)
+      inactive_at DATETIME,
+      inactive_reason TEXT,
       status TEXT DEFAULT 'pending' CHECK(status IN ('pending','approved','paid','rejected')),
       approved_by INTEGER REFERENCES users(id),
       approved_at DATETIME,
@@ -1682,6 +1686,15 @@ function initializeDatabase() {
     // Actual, Stock report, Tools List, Material Receiving) can scope
     // by site. The TEXT 'supervisor' column was insufficient for joins.
     ['sites', 'supervisor_id INTEGER REFERENCES users(id)'],
+    // Rent request: due-by day of month (mam: 'date also mention like
+    // 10 date of month need to submit'). Defaults to 10. Once past
+    // (rent_month-01 + pay_by_day) and still pending/approved, the row
+    // shows an Overdue badge. 'inactive' marks the rental as vacated
+    // so it stops appearing in payment expectations.
+    ['rent_requests', 'pay_by_day INTEGER DEFAULT 10'],
+    ['rent_requests', 'inactive INTEGER DEFAULT 0'],
+    ['rent_requests', 'inactive_at DATETIME'],
+    ['rent_requests', 'inactive_reason TEXT'],
     ['payroll_settings', 'late_grace_count INTEGER DEFAULT 3'],
     ['payroll_settings', 'late_per_minute_rate REAL DEFAULT 20'],
     // Salary breakdown percentages — match SEPL Tally slip format
