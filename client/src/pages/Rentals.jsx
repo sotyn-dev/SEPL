@@ -163,14 +163,8 @@ export default function Rentals() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2"><FiHome className="text-orange-600" /> Room Rentals</h1>
-          <p className="text-sm text-gray-500">Staff accommodation — properties, rooms, bookings, monthly rent payments.</p>
+          <p className="text-sm text-gray-500">Raise monthly rent requests with landlord details + photo + bank/UPI proof.</p>
         </div>
-        {canCreate('rentals') && tab === 'properties' && (
-          <button onClick={() => { setPropForm({ status: 'active', bedrooms: 1, total_capacity: 1 }); setPropModal('add'); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Add Property</button>
-        )}
-        {canCreate('rentals') && tab === 'bookings' && (
-          <button onClick={() => { setBookingForm({ check_in_date: new Date().toISOString().slice(0, 10) }); setBookingModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> New Booking</button>
-        )}
         {canCreate('rentals') && tab === 'payments' && (
           <button onClick={() => { setPaymentForm({ period_month: monthNow(), paid_via: 'Bank' }); setPaymentModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Record Payment</button>
         )}
@@ -182,9 +176,6 @@ export default function Rentals() {
       <div className="flex gap-2 flex-wrap text-sm">
         {[
           { id: 'requests', label: 'Raise Rent' },
-          { id: 'dashboard', label: 'Properties Dashboard' },
-          { id: 'properties', label: 'Properties' },
-          { id: 'bookings', label: 'Bookings' },
           { id: 'payments', label: 'Payments Log' },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>
