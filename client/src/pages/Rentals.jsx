@@ -88,7 +88,11 @@ export default function Rentals() {
   useEffect(() => {
     if (tab === 'properties') loadProperties();
     if (tab === 'bookings') loadBookings();
-    if (tab === 'payments') loadPayments();
+    if (tab === 'payments') {
+      loadPayments();
+      // Also pull rent_requests so 'paid' ones show up grouped by month
+      api.get('/rentals/rent-requests').then(r => setRequests(r.data)).catch(() => {});
+    }
     if (tab === 'requests') loadRequests();
   }, [tab, loadProperties, loadRequests]);
 
@@ -397,30 +401,130 @@ export default function Rentals() {
         </div>
       )}
 
-      {/* PAYMENTS */}
-      {tab === 'payments' && (
-        <div className="card p-0 overflow-x-auto">
-          <table>
-            <thead><tr><th>Period</th><th>Property</th><th>Landlord</th><th className="text-right">Amount</th><th>Paid Date</th><th>Mode</th><th>Ref</th><th>Receipt</th><th>Notes</th></tr></thead>
-            <tbody>
-              {payments.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No payments recorded yet</td></tr>}
-              {payments.map(p => (
-                <tr key={p.id}>
-                  <td className="font-bold text-blue-700">{p.period_month}</td>
-                  <td>{p.property_name}</td>
-                  <td className="text-xs">{p.landlord_name || '—'}</td>
-                  <td className="text-right font-bold text-red-700">{fmtRs(p.amount_paid)}</td>
-                  <td className="text-xs">{p.paid_date || '—'}</td>
-                  <td className="text-xs">{p.paid_via || '—'}</td>
-                  <td className="text-xs">{p.transaction_ref || '—'}</td>
-                  <td>{p.receipt_url ? <a href={p.receipt_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs">📎</a> : <span className="text-gray-300 text-xs">—</span>}</td>
-                  <td className="text-xs text-gray-500 max-w-xs truncate">{p.notes || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* PAYMENTS — grouped by month so mam can scan rent paid each
+          month at a glance. Combines paid rent_requests + legacy
+          rental_payments into a single chronological view. */}
+      {tab === 'payments' && (() => {
+        // Build a unified row list from both sources
+        const all = [];
+        for (const r of (requests || []).filter(r => r.status === 'paid')) {
+          all.push({
+            id: `req-${r.id}`,
+            month: r.rent_month,
+            property: r.site_name || r.site_name_live || '—',
+            landlord: r.owner_name,
+            amount: r.rent_amount,
+            paid_date: r.paid_at ? r.paid_at.slice(0, 10) : null,
+            paid_via: r.paid_via,
+            ref: r.transaction_ref,
+            receipt: r.receipt_url,
+            notes: r.notes,
+            request_no: r.request_no,
+            arrange_for: r.arrange_for,
+          });
+        }
+        for (const p of (payments || [])) {
+          all.push({
+            id: `pay-${p.id}`,
+            month: p.period_month,
+            property: p.property_name || '—',
+            landlord: p.landlord_name,
+            amount: p.amount_paid,
+            paid_date: p.paid_date,
+            paid_via: p.paid_via,
+            ref: p.transaction_ref,
+            receipt: p.receipt_url,
+            notes: p.notes,
+          });
+        }
+        // Group by month (descending)
+        const byMonth = {};
+        for (const r of all) {
+          if (!r.month) continue;
+          if (!byMonth[r.month]) byMonth[r.month] = [];
+          byMonth[r.month].push(r);
+        }
+        const months = Object.keys(byMonth).sort().reverse();
+        const fmtMonth = (m) => {
+          const [y, mo] = m.split('-').map(Number);
+          const names = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+          return `${names[mo - 1]} ${y}`;
+        };
+
+        if (months.length === 0) {
+          return <div className="card p-8 text-center text-gray-400">No rent payments recorded yet</div>;
+        }
+        return (
+          <div className="space-y-4">
+            {months.map(m => {
+              const rows = byMonth[m];
+              const monthTotal = rows.reduce((s, r) => s + (r.amount || 0), 0);
+              const sepl = rows.filter(r => r.arrange_for === 'SEPL').reduce((s, r) => s + (r.amount || 0), 0);
+              const contractor = rows.filter(r => r.arrange_for === 'Contractor').reduce((s, r) => s + (r.amount || 0), 0);
+              return (
+                <div key={m} className="card p-0 overflow-hidden">
+                  <div className="px-4 py-3 bg-gradient-to-r from-orange-50 to-blue-50 border-b flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="font-bold text-base text-gray-800">{fmtMonth(m)}</h3>
+                      <p className="text-[11px] text-gray-500 mt-0.5">{rows.length} payment{rows.length !== 1 ? 's' : ''} · {m}</p>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs text-gray-500">Month Total</div>
+                      <div className="text-xl font-bold text-red-700">{fmtRs(monthTotal)}</div>
+                      {(sepl > 0 || contractor > 0) && (
+                        <div className="text-[10px] text-gray-500 mt-0.5">
+                          {sepl > 0 && <span>SEPL {fmtRs(sepl)}</span>}
+                          {sepl > 0 && contractor > 0 && <span className="mx-1">·</span>}
+                          {contractor > 0 && <span>Contractor {fmtRs(contractor)}</span>}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table>
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th>Req No / Property</th>
+                          <th>Landlord</th>
+                          <th>Type</th>
+                          <th className="text-right">Amount</th>
+                          <th>Paid Date</th>
+                          <th>Mode</th>
+                          <th>Ref</th>
+                          <th>Receipt</th>
+                          <th>Notes</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map(r => (
+                          <tr key={r.id}>
+                            <td>
+                              {r.request_no && <div className="text-[10px] text-orange-600 font-bold">{r.request_no}</div>}
+                              <div className="text-xs">{r.property}</div>
+                            </td>
+                            <td className="text-xs">{r.landlord || '—'}</td>
+                            <td>
+                              {r.arrange_for ? (
+                                <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${r.arrange_for === 'SEPL' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>{r.arrange_for}</span>
+                              ) : <span className="text-gray-300 text-xs">—</span>}
+                            </td>
+                            <td className="text-right font-bold text-red-700">{fmtRs(r.amount)}</td>
+                            <td className="text-xs">{r.paid_date || '—'}</td>
+                            <td className="text-xs">{r.paid_via || '—'}</td>
+                            <td className="text-xs">{r.ref || '—'}</td>
+                            <td>{r.receipt ? <a href={r.receipt} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs">📎</a> : <span className="text-gray-300 text-xs">—</span>}</td>
+                            <td className="text-xs text-gray-500 max-w-xs truncate" title={r.notes}>{r.notes || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* PROPERTY DETAIL MODAL */}
       <Modal isOpen={!!propDetail} onClose={() => setPropDetail(null)} title={propDetail?.name || 'Property'} wide>
