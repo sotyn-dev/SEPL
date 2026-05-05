@@ -64,7 +64,7 @@ router.get('/', (req, res) => {
   const db = getDb();
   const isAdmin = req.user.role === 'admin';
   const uid = req.user.id;
-  const { scope = 'mine', status } = req.query;
+  const { scope = 'mine', status, crm_id, assignee_id, date_from, date_to } = req.query;
 
   const where = [];
   const params = [];
@@ -82,6 +82,11 @@ router.get('/', (req, res) => {
     where.push('(p.assigned_to = ? OR p.assigned_by = ?)'); params.push(uid, uid);
   }
   if (status) { where.push('p.status = ?'); params.push(status); }
+  // Mam-requested filters: CRM (assigner), assignee, date range on due_date
+  if (crm_id) { where.push('p.assigned_by = ?'); params.push(+crm_id); }
+  if (assignee_id) { where.push('p.assigned_to = ?'); params.push(+assignee_id); }
+  if (date_from) { where.push('COALESCE(p.due_date, p.created_at) >= ?'); params.push(date_from); }
+  if (date_to) { where.push('COALESCE(p.due_date, p.created_at) <= ?'); params.push(date_to + ' 23:59:59'); }
 
   const sql = `SELECT p.*,
       au.name AS assigned_by_name,

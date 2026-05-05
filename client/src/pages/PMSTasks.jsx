@@ -20,6 +20,11 @@ export default function PMSTasks() {
   // users land on their own queue, not the entire team's.
   const [scope, setScope] = useState('mine');
   const [statusFilter, setStatusFilter] = useState('');
+  // Mam-requested filters: CRM (creator), assignee, date range
+  const [crmFilter, setCrmFilter] = useState('');
+  const [assigneeFilter, setAssigneeFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [createModal, setCreateModal] = useState(false);
   const [editModal, setEditModal] = useState(null);
   const [editForm, setEditForm] = useState({});
@@ -35,13 +40,17 @@ export default function PMSTasks() {
   const load = () => {
     const params = new URLSearchParams({ scope });
     if (statusFilter) params.set('status', statusFilter);
+    if (crmFilter) params.set('crm_id', crmFilter);
+    if (assigneeFilter) params.set('assignee_id', assigneeFilter);
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
     api.get(`/pms-tasks?${params.toString()}`).then(r => setTasks(r.data)).catch(() => setTasks([]));
   };
   useEffect(() => {
     load();
     api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
     api.get('/pms-tasks/projects').then(r => setProjects(r.data || [])).catch(() => setProjects([]));
-  }, [scope, statusFilter]);
+  }, [scope, statusFilter, crmFilter, assigneeFilter, dateFrom, dateTo]);
 
   const openCreate = () => {
     setForm({
@@ -215,6 +224,39 @@ export default function PMSTasks() {
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
         </select>
+      </div>
+
+      {/* Mam-requested filters: CRM (creator), Assignee, From / To date */}
+      <div className="card p-3 flex flex-wrap items-end gap-3 text-sm">
+        <div>
+          <label className="label">Created by (CRM)</label>
+          <select className="select text-sm w-48" value={crmFilter} onChange={e => setCrmFilter(e.target.value)}>
+            <option value="">All</option>
+            {users.map(u => <option key={u.id} value={u.id}>{u.name}{u.department ? ` — ${u.department}` : ''}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Assigned to</label>
+          <select className="select text-sm w-48" value={assigneeFilter} onChange={e => setAssigneeFilter(e.target.value)}>
+            <option value="">All</option>
+            {users.map(u => <option key={u.id} value={u.id}>{u.name}{u.department ? ` — ${u.department}` : ''}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Due From</label>
+          <input type="date" className="input text-sm" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">Due To</label>
+          <input type="date" className="input text-sm" value={dateTo} onChange={e => setDateTo(e.target.value)} min={dateFrom || undefined} />
+        </div>
+        {(crmFilter || assigneeFilter || dateFrom || dateTo) && (
+          <button onClick={() => { setCrmFilter(''); setAssigneeFilter(''); setDateFrom(''); setDateTo(''); }}
+                  className="text-[11px] text-red-600 hover:underline self-end pb-2">Clear filters</button>
+        )}
+        <div className="ml-auto text-[11px] text-gray-500 self-end pb-2">
+          {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+        </div>
       </div>
 
       {/* Desktop table */}
