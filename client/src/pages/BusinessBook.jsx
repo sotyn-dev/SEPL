@@ -64,18 +64,36 @@ export default function BusinessBook() {
 
   useEffect(() => { loadEntries(); loadStats(); }, [loadEntries]);
 
+  // Strip CSV-import quote artifacts ('"""M/s X"""') and surrounding
+  // whitespace from text fields before saving — also collapses internal
+  // double-spaces. Runs on every text field so old quoted data gets
+  // cleaned the next time someone edits + saves.
+  const cleanText = (s) => (typeof s === 'string')
+    ? s.replace(/^[\s"'`]+|[\s"'`]+$/g, '').replace(/\s+/g, ' ').trim()
+    : s;
+  const cleanFormText = (f) => {
+    const out = { ...f };
+    const textFields = ['client_name', 'company_name', 'project_name', 'lead_type',
+      'district', 'state', 'po_number', 'category', 'order_type', 'employee_assigned',
+      'client_contact', 'client_email', 'email_address', 'source_of_enquiry',
+      'customer_type', 'client_type', 'customer_code'];
+    for (const k of textFields) if (typeof out[k] === 'string') out[k] = cleanText(out[k]);
+    return out;
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
     if (!form.client_name || !form.client_name.trim()) {
       toast.error('Client Name is required');
       return;
     }
+    const cleaned = cleanFormText(form);
     try {
       if (modal === 'edit' && form.id) {
-        await api.put(`/business-book/${form.id}`, form);
+        await api.put(`/business-book/${form.id}`, cleaned);
         toast.success('Entry updated');
       } else {
-        const res = await api.post('/business-book', form);
+        const res = await api.post('/business-book', cleaned);
         toast.success(`Created ${res.data.lead_no} with auto-links`);
       }
       setModal(null); setForm({ ...emptyForm }); loadEntries(); loadStats();
@@ -203,10 +221,10 @@ export default function BusinessBook() {
                 <tr key={b.id} className="hover:bg-red-50/30 transition-colors">
                   <td className="px-3 py-3"><span className="font-bold text-red-600 cursor-pointer hover:underline" onClick={() => handleView(b)}>{b.lead_no}</span></td>
                   <td className="px-3 py-3"><span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${b.lead_type === 'Government' ? 'bg-purple-100 text-purple-700' : 'bg-red-100 text-red-700'}`}>{b.lead_type}</span></td>
-                  <td className="px-3 py-3"><div className="font-medium text-sm">{b.client_name}</div><div className="text-[10px] text-gray-400 uppercase tracking-wide">Client</div></td>
+                  <td className="px-3 py-3"><div className="font-medium text-sm">{cleanText(b.client_name)}</div><div className="text-[10px] text-gray-400 uppercase tracking-wide">Client</div></td>
                   <td className="px-3 py-3">
-                    <div className="font-medium text-sm text-gray-800">{b.project_name || b.company_name || '-'}</div>
-                    {b.district && <div className="text-xs text-gray-500">{[b.district, b.state].filter(Boolean).join(', ')}</div>}
+                    <div className="font-medium text-sm text-gray-800">{cleanText(b.project_name) || cleanText(b.company_name) || '-'}</div>
+                    {b.district && <div className="text-xs text-gray-500">{[cleanText(b.district), cleanText(b.state)].filter(Boolean).join(', ')}</div>}
                   </td>
                   <td className="px-3 py-3 text-sm">{b.category || '-'}</td>
                   <td className="px-3 py-3"><span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{b.order_type}</span></td>

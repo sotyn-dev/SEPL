@@ -42,6 +42,24 @@ try {
   console.warn('[seed] scoring failed:', e.message);
 }
 
+// One-time cleanup: strip CSV-import quote artifacts ("""M/s X""") and
+// extra whitespace from business_book text columns. Idempotent — only
+// updates rows where the cleaned value differs.
+try {
+  const { getDb } = require('./db/schema');
+  const db = getDb();
+  const cols = ['client_name', 'company_name', 'project_name', 'district', 'state', 'po_number', 'category', 'employee_assigned'];
+  const expr = (c) => `TRIM(REPLACE(REPLACE(REPLACE(REPLACE(${c}, '"', ''), CHAR(96), ''), CHAR(39), ''), CHAR(9), ' '))`;
+  let total = 0;
+  for (const c of cols) {
+    const r = db.prepare(`UPDATE business_book SET ${c} = ${expr(c)} WHERE ${c} IS NOT NULL AND ${c} != ${expr(c)}`).run();
+    total += r.changes || 0;
+  }
+  if (total > 0) console.log(`[cleanup] business_book: scrubbed ${total} cells`);
+} catch (e) {
+  // Non-fatal — DB may not have business_book yet
+}
+
 // Nightly DB backup scheduler — runs at 02:00 local time every day and
 // keeps the last 30 backups. Backups go to ~/erp-backups on the VPS (or
 // ../backups on Windows). Admin can also list / download / trigger manually
