@@ -51,13 +51,21 @@ export default function Expenses() {
       </div>
 
       <div className="card p-0 overflow-x-auto"><table>
-        <thead><tr><th>Title</th><th>Category</th><th>Amount</th><th>Date</th><th>Submitted By</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Title</th><th>Description</th><th>Category</th><th>Amount</th><th>Date</th><th>Submitted By</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
           {expenses.map(e => (
             <tr key={e.id}>
-              <td className="font-medium">{e.title}</td><td>{e.category}</td>
-              <td className="font-semibold">Rs {e.amount?.toLocaleString()}</td><td>{e.expense_date}</td>
-              <td>{e.submitted_by_name}</td><td><StatusBadge status={e.status} /></td>
+              <td className="font-medium">{e.title}</td>
+              <td className="text-xs text-gray-600 max-w-[260px]" title={e.description}>
+                {e.description ? (
+                  <div className="whitespace-normal break-words leading-snug">{e.description}</div>
+                ) : <span className="text-gray-300">—</span>}
+              </td>
+              <td>{e.category}</td>
+              <td className="font-semibold">Rs {e.amount?.toLocaleString()}</td>
+              <td>{e.expense_date}</td>
+              <td>{e.submitted_by_name}</td>
+              <td><StatusBadge status={e.status} /></td>
               <td>
                 <div className="flex gap-1 items-center">
                   {e.status === 'pending' && (
@@ -76,7 +84,7 @@ export default function Expenses() {
               </td>
             </tr>
           ))}
-          {expenses.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No expenses yet</td></tr>}
+          {expenses.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No expenses yet</td></tr>}
         </tbody>
       </table></div>
 
