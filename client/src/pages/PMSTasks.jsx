@@ -15,10 +15,10 @@ export default function PMSTasks() {
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [projects, setProjects] = useState([]);
-  // Default to 'followup' — mam removed the My Tasks / Given by me tabs
-  // (2026-05-04), so PMS now lands on the team-wide active list.
-  // Admin can still toggle to All for the full archive.
-  const [scope, setScope] = useState('followup');
+  // Default scope = 'mine' (tasks the logged-in user is involved in,
+  // either as assignee or assigner). Mirrors the Delegations page so
+  // users land on their own queue, not the entire team's.
+  const [scope, setScope] = useState('mine');
   const [statusFilter, setStatusFilter] = useState('');
   const [createModal, setCreateModal] = useState(false);
   const [editModal, setEditModal] = useState(null);
@@ -193,11 +193,13 @@ export default function PMSTasks() {
         )}
       </div>
 
-      {/* Mam removed the personal "My Tasks" / "Given by me" tabs on
-          2026-05-04 — PMS is now a team-wide list, not a personal queue.
-          Followup shows every active task; All is admin-only archive. */}
+      {/* Mam wants PMS scoped to the logged-in user (like Delegations) —
+          users land on their own queue, can expand to team-wide via
+          'Followup'. Admin gets the full archive too. */}
       <div className="flex flex-wrap gap-2 text-sm">
         {[
+          { id: 'mine', label: 'My Tasks' },
+          { id: 'given', label: 'Given by me' },
           { id: 'followup', label: 'Followup (all active)' },
           ...(isAdmin() ? [{ id: 'all', label: 'All (admin)' }] : []),
         ].map(t => (
