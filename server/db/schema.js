@@ -1319,8 +1319,10 @@ function initializeDatabase() {
       photo_taken_at DATETIME,                 -- client-side timestamp
       photo_lat REAL,
       photo_lng REAL,
+      payment_mode TEXT DEFAULT 'Bank' CHECK(payment_mode IN ('Bank','UPI','Scanner')),
       bank_account TEXT,
       ifsc_code TEXT,
+      upi_id TEXT,                             -- UPI handle e.g. 9876543210@paytm
       scanner_url TEXT,                        -- UPI QR screenshot
       rent_month TEXT NOT NULL,                -- 'YYYY-MM'
       rent_amount REAL DEFAULT 0,
@@ -1695,6 +1697,11 @@ function initializeDatabase() {
     ['rent_requests', 'inactive INTEGER DEFAULT 0'],
     ['rent_requests', 'inactive_at DATETIME'],
     ['rent_requests', 'inactive_reason TEXT'],
+    // Payment-mode selector — Bank / UPI / Scanner. Form shows only
+    // the matching fields (mam: 'if scanner upload scanner, if bank
+    // then bank details, if upi fill upi').
+    ['rent_requests', `payment_mode TEXT DEFAULT 'Bank'`],
+    ['rent_requests', 'upi_id TEXT'],
     ['payroll_settings', 'late_grace_count INTEGER DEFAULT 3'],
     ['payroll_settings', 'late_per_minute_rate REAL DEFAULT 20'],
     // Salary breakdown percentages — match SEPL Tally slip format

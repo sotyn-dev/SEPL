@@ -386,20 +386,28 @@ router.post('/rent-requests', requirePermission('rentals', 'create'), (req, res)
     const { nextSequence } = require('../db/nextSequence');
     const yr = new Date().getFullYear();
     const requestNo = nextSequence(db, 'rent_requests', 'request_no', `RR-${yr}-`, { startFrom: 0, pad: 4 });
+    // Validate payment_mode and clear non-relevant fields so each row
+    // only carries the data for the selected mode.
+    const mode = ['Bank', 'UPI', 'Scanner'].includes(b.payment_mode) ? b.payment_mode : 'Bank';
+    const bankAcc = mode === 'Bank' ? (b.bank_account || null) : null;
+    const ifsc = mode === 'Bank' ? (b.ifsc_code || null) : null;
+    const upiId = mode === 'UPI' ? (b.upi_id || null) : null;
+    const scannerUrl = mode === 'Scanner' ? (b.scanner_url || null) : null;
+
     const r = db.prepare(`
       INSERT INTO rent_requests (
         request_no, site_id, site_name, arrange_for, contractor_name,
         owner_name, owner_phone, owner_aadhar_url,
         room_photo_url, photo_taken_at, photo_lat, photo_lng,
-        bank_account, ifsc_code, scanner_url,
+        payment_mode, bank_account, ifsc_code, upi_id, scanner_url,
         rent_month, rent_amount, pay_by_day, notes, created_by
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       requestNo, b.site_id || null, b.site_name || null,
       b.arrange_for, b.contractor_name || null,
       b.owner_name, b.owner_phone || null, b.owner_aadhar_url || null,
       b.room_photo_url || null, b.photo_taken_at || null, b.photo_lat || null, b.photo_lng || null,
-      b.bank_account || null, b.ifsc_code || null, b.scanner_url || null,
+      mode, bankAcc, ifsc, upiId, scannerUrl,
       b.rent_month, b.rent_amount || 0, b.pay_by_day || 10, b.notes || null, req.user.id
     );
     // Notify approvers (admins + anyone with rentals.approve)
@@ -431,7 +439,7 @@ router.put('/rent-requests/:id', requirePermission('rentals', 'edit'), (req, res
       'site_id','site_name','arrange_for','contractor_name',
       'owner_name','owner_phone','owner_aadhar_url',
       'room_photo_url','photo_taken_at','photo_lat','photo_lng',
-      'bank_account','ifsc_code','scanner_url',
+      'payment_mode','bank_account','ifsc_code','upi_id','scanner_url',
       'rent_month','rent_amount','pay_by_day','notes'
     ];
     const sets = []; const vals = [];

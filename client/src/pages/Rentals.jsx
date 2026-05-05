@@ -173,7 +173,7 @@ export default function Rentals() {
           <button onClick={() => { setPaymentForm({ period_month: monthNow(), paid_via: 'Bank' }); setPaymentModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Record Payment</button>
         )}
         {canCreate('rentals') && tab === 'requests' && (
-          <button onClick={() => { setRequestForm({ rent_month: monthNow(), arrange_for: 'SEPL', pay_by_day: 10 }); setRequestModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Rent</button>
+          <button onClick={() => { setRequestForm({ rent_month: monthNow(), arrange_for: 'SEPL', pay_by_day: 10, payment_mode: 'Bank' }); setRequestModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Rent</button>
         )}
       </div>
 
@@ -222,12 +222,12 @@ export default function Rentals() {
                 <tr>
                   <th>Req No</th><th>Month / Due By</th><th>Site</th><th>Arrange For</th>
                   <th>Owner</th><th>Aadhar</th><th>Photo</th>
-                  <th>Bank / IFSC</th><th>QR</th>
+                  <th>Pay Mode</th>
                   <th className="text-right">Amount</th><th>Status</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {requests.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No rent requests yet — click "Raise Rent" to start</td></tr>}
+                {requests.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No rent requests yet — click "Raise Rent" to start</td></tr>}
                 {requests.map(r => {
                   // Compute "due date" and overdue flag
                   const payByDay = r.pay_by_day || 10;
@@ -264,10 +264,36 @@ export default function Rentals() {
                       {r.photo_lat && <div className="text-[9px] text-gray-500">{r.photo_lat.toFixed(4)}, {r.photo_lng.toFixed(4)}</div>}
                     </td>
                     <td className="text-xs">
-                      {r.bank_account ? <div>A/c: {r.bank_account}</div> : <span className="text-gray-300">—</span>}
-                      {r.ifsc_code && <div className="text-[10px] text-gray-500">IFSC: {r.ifsc_code}</div>}
+                      {(() => {
+                        const mode = r.payment_mode || 'Bank';
+                        if (mode === 'Bank' && r.bank_account) {
+                          return (
+                            <div>
+                              <div className="text-[10px] font-bold text-blue-700">🏦 Bank</div>
+                              <div>A/c: {r.bank_account}</div>
+                              {r.ifsc_code && <div className="text-[10px] text-gray-500">IFSC: {r.ifsc_code}</div>}
+                            </div>
+                          );
+                        }
+                        if (mode === 'UPI' && r.upi_id) {
+                          return (
+                            <div>
+                              <div className="text-[10px] font-bold text-purple-700">💸 UPI</div>
+                              <div className="break-all">{r.upi_id}</div>
+                            </div>
+                          );
+                        }
+                        if (mode === 'Scanner' && r.scanner_url) {
+                          return (
+                            <div>
+                              <div className="text-[10px] font-bold text-emerald-700">📱 Scanner</div>
+                              <a href={r.scanner_url} target="_blank" rel="noreferrer" className="text-blue-600 underline">View QR</a>
+                            </div>
+                          );
+                        }
+                        return <span className="text-gray-300">—</span>;
+                      })()}
                     </td>
-                    <td>{r.scanner_url ? <a href={r.scanner_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs">📎 QR</a> : <span className="text-gray-300 text-xs">—</span>}</td>
                     <td className="text-right font-bold text-red-700">{fmtRs(r.rent_amount)}</td>
                     <td>
                       <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${
@@ -928,20 +954,54 @@ function RaiseRentForm({ form, setForm, sites, onSubmit, onCancel }) {
           )}
         </div>
 
-        <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Bank / UPI</h5></div>
-        <div><label className="label">Bank Account</label><input className="input" value={form.bank_account || ''} onChange={e => setForm(f => ({ ...f, bank_account: e.target.value }))} placeholder="A/c number" /></div>
-        <div><label className="label">IFSC Code</label><input className="input" value={form.ifsc_code || ''} onChange={e => setForm(f => ({ ...f, ifsc_code: e.target.value.toUpperCase() }))} placeholder="SBIN0001234" /></div>
+        <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Payment Method</h5></div>
         <div className="col-span-2">
-          <label className="label">UPI Scanner Screenshot</label>
-          {form.scanner_url ? (
-            <div className="flex items-center gap-2"><a href={form.scanner_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-sm">📎 QR uploaded</a><button type="button" onClick={() => setForm(f => ({ ...f, scanner_url: '' }))} className="text-red-500 text-xs">Remove</button></div>
-          ) : (
-            <input type="file" accept="image/*" className="text-xs" onChange={async e => {
-              const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, scanner_url: url }));
-              e.target.value = '';
-            }} />
-          )}
+          <label className="label">Payment Mode *</label>
+          <div className="flex gap-2">
+            {['Bank', 'UPI', 'Scanner'].map(m => (
+              <label key={m} className={`flex-1 cursor-pointer border-2 rounded-lg p-3 text-center transition ${(form.payment_mode || 'Bank') === m ? 'border-orange-500 bg-orange-50 text-orange-700 font-bold' : 'border-gray-200 hover:bg-gray-50'}`}>
+                <input type="radio" name="payment_mode" value={m} checked={(form.payment_mode || 'Bank') === m} onChange={e => setForm(f => ({ ...f, payment_mode: e.target.value }))} className="sr-only" />
+                <div className="text-lg mb-1">{m === 'Bank' ? '🏦' : m === 'UPI' ? '💸' : '📱'}</div>
+                <div className="text-sm">{m === 'Bank' ? 'Bank Transfer' : m === 'UPI' ? 'UPI ID' : 'QR Scanner'}</div>
+              </label>
+            ))}
+          </div>
         </div>
+
+        {/* Bank fields — only when Bank selected */}
+        {(form.payment_mode || 'Bank') === 'Bank' && (
+          <>
+            <div><label className="label">Bank Account *</label><input className="input" value={form.bank_account || ''} onChange={e => setForm(f => ({ ...f, bank_account: e.target.value }))} placeholder="A/c number" /></div>
+            <div><label className="label">IFSC Code *</label><input className="input" value={form.ifsc_code || ''} onChange={e => setForm(f => ({ ...f, ifsc_code: e.target.value.toUpperCase() }))} placeholder="SBIN0001234" /></div>
+          </>
+        )}
+
+        {/* UPI ID — only when UPI selected */}
+        {form.payment_mode === 'UPI' && (
+          <div className="col-span-2">
+            <label className="label">UPI ID *</label>
+            <input className="input" value={form.upi_id || ''} onChange={e => setForm(f => ({ ...f, upi_id: e.target.value }))} placeholder="9876543210@paytm or owner@okhdfcbank" />
+          </div>
+        )}
+
+        {/* Scanner upload — only when Scanner selected */}
+        {form.payment_mode === 'Scanner' && (
+          <div className="col-span-2">
+            <label className="label">UPI Scanner Screenshot *</label>
+            {form.scanner_url ? (
+              <div className="flex items-center gap-3">
+                <img src={form.scanner_url} alt="QR" className="w-20 h-20 object-contain border rounded" />
+                <a href={form.scanner_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-sm">View full size</a>
+                <button type="button" onClick={() => setForm(f => ({ ...f, scanner_url: '' }))} className="text-red-500 text-xs">Remove</button>
+              </div>
+            ) : (
+              <input type="file" accept="image/*" className="text-xs" onChange={async e => {
+                const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, scanner_url: url }));
+                e.target.value = '';
+              }} />
+            )}
+          </div>
+        )}
 
         <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Amount</h5></div>
         <div><label className="label">Rent Amount (Rs)</label><input className="input" type="number" value={form.rent_amount || 0} onChange={e => setForm(f => ({ ...f, rent_amount: +e.target.value }))} /></div>
