@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
-import { FiPlus, FiTrendingUp, FiTrendingDown, FiCalendar, FiTrash2, FiSearch } from 'react-icons/fi';
+import { FiPlus, FiTrendingUp, FiTrendingDown, FiCalendar, FiTrash2, FiSearch, FiEdit2, FiCheck, FiX } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 import { useAuth } from '../context/AuthContext';
 
@@ -42,6 +42,20 @@ export default function CashFlow() {
   const inflowCategories = ['Collection', 'Advance Received', 'Milestone Payment', 'Handover Payment', 'Delivery Payment', 'Refund', 'Other Income'];
   const outflowCategories = ['Indent Payment', 'Vendor Payment', 'Salary', 'Rent', 'Transport', 'TA/DA', 'Labour', 'Office Expense', 'Tax', 'EMI', 'Other'];
   const fmt = (n) => `Rs ${(n || 0).toLocaleString('en-IN')}`;
+
+  // Strip CSV-import quote artifacts ("""M/s X""") and trailing
+  // whitespace from project names so the tracker reads clean.
+  const cleanName = (s) => (s || '').replace(/^[\s"'`]+|[\s"'`]+$/g, '').replace(/\s+/g, ' ').trim();
+  // Compact date: '2026-05-05' → '5 May'
+  const fmtDate = (iso) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return iso;
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${d.getDate()} ${months[d.getMonth()]}`;
+  };
+  // Soft dash for empty cells
+  const dash = <span className="text-gray-300">—</span>;
   // Mam wants amounts shown in full Indian-format rupees (e.g. 40,00,000)
   // not the compact "40.00L" lakh form. Keeping fmtL as an alias of fmt
   // so existing call sites work without churn — every amount renders the
@@ -94,66 +108,109 @@ export default function CashFlow() {
             </div>
           )}
           <div className="relative"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input className="input pl-10" placeholder="Search project..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-          <div className="card p-0 overflow-x-auto">
-            <div className="p-3 border-b bg-red-50"><h4 className="font-bold text-red-800">ALL NEW PROJECTS - Financial Tracker</h4></div>
-            <div className="overflow-x-auto"><table className="min-w-[1200px] text-xs">
-              <thead><tr className="bg-gray-100">
-                <th className="px-2 py-2">Sr</th><th className="px-2 py-2 text-left">Project</th><th className="px-2 py-2 text-left">CRM</th>
-                <th className="px-2 py-2 text-right">Sale Value</th>
-                <th className="px-2 py-2 text-right">Amt Received</th><th className="px-2 py-2">Milestone</th><th className="px-2 py-2 text-right">Value</th>
-                <th className="px-2 py-2 text-right">Purchase</th><th className="px-2 py-2 text-right">Velocity</th><th className="px-2 py-2">Date</th>
-                <th className="px-2 py-2 text-right">Invest Days</th><th className="px-2 py-2 text-right">Completion</th><th className="px-2 py-2 text-right">Payment</th><th className="px-2 py-2 text-right">Total</th><th className="px-2 py-2"></th>
-              </tr></thead>
-              <tbody>{filtered.map(p => (
-                <tr key={p.id} className="border-b hover:bg-red-50/30">
-                  <td className="px-2 py-2 font-bold text-gray-500">{p.sr_no}</td>
-                  <td className="px-2 py-2 font-semibold text-red-700">{p.project_name}</td>
-                  {editRow === p.id ? (
+          <div className="card p-0 overflow-hidden">
+            <div className="p-3 border-b bg-gradient-to-r from-red-50 to-amber-50 flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-red-800">All New Projects · Financial Tracker</h4>
+                <p className="text-[11px] text-gray-500 mt-0.5">Click any row's pencil to edit · totals auto-update at bottom</p>
+              </div>
+              <div className="text-[11px] text-gray-500">{filtered.length} projects</div>
+            </div>
+            <div className="overflow-x-auto"><table className="min-w-[1200px] text-xs cf-tracker-table">
+              <thead>
+                <tr className="bg-gray-100 text-[10px] uppercase text-gray-600">
+                  <th className="px-2 py-2 sticky left-0 bg-gray-100 z-10">Sr</th>
+                  <th className="px-2 py-2 text-left sticky left-10 bg-gray-100 z-10 min-w-[200px]">Project</th>
+                  <th className="px-2 py-2 text-left">CRM</th>
+                  <th className="px-2 py-2 text-right" title="Sale value of the project (PO amount, ex-GST)">Sale ₹</th>
+                  <th className="px-2 py-2 text-right" title="Amount actually received from client so far">Received ₹</th>
+                  <th className="px-2 py-2 text-center" title="Current milestone — handover / delivery / etc.">Milestone</th>
+                  <th className="px-2 py-2 text-right" title="Aanchal value (manual ₹ in lakhs × 1,00,000)">Aanchal ₹</th>
+                  <th className="px-2 py-2 text-right" title="Total purchase / cost spent on this project">Purchase ₹</th>
+                  <th className="px-2 py-2 text-right" title="Cash velocity = received ÷ purchase. ≥1 means we're cash-positive">Velocity</th>
+                  <th className="px-2 py-2 text-center" title="Project go-live date">Live</th>
+                  <th className="px-2 py-2 text-right" title="Payment-investment days (manual)">Inv Days</th>
+                  <th className="px-2 py-2 text-right" title="Completion days (manual override available)">Compl.</th>
+                  <th className="px-2 py-2 text-right" title="Payment days (manual)">Pmt</th>
+                  <th className="px-2 py-2 text-right font-bold" title="Total = Completion + Payment">Total</th>
+                  <th className="px-2 py-2 text-center w-16"></th>
+                </tr>
+              </thead>
+              <tbody>{filtered.map(p => {
+                const editing = editRow === p.id;
+                return (
+                <tr key={p.id} className={`border-b transition-colors ${editing ? 'bg-amber-50' : 'bg-white hover:bg-red-50/40'}`}>
+                  <td className={`px-2 py-2 font-bold text-gray-400 sticky left-0 ${editing ? 'bg-amber-50' : 'bg-white'}`}>{p.sr_no}</td>
+                  <td className={`px-2 py-2 font-semibold text-red-700 sticky left-10 max-w-[260px] ${editing ? 'bg-amber-50' : 'bg-white'}`} title={cleanName(p.project_name)}>
+                    <div className="truncate">{cleanName(p.project_name)}</div>
+                  </td>
+                  {editing ? (
                     <td className="px-1 py-1"><input className="input text-xs w-24" value={editForm.crm_person||''} onChange={e=>setEditForm({...editForm,crm_person:e.target.value})} /></td>
                   ) : (
-                    <td className="px-2 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${(p.crm_person||'').toLowerCase().includes('sushila') ? 'bg-gray-800 text-white' : (p.crm_person||'').toLowerCase().includes('lovely') ? 'bg-amber-500 text-white' : 'bg-gray-100'}`}>{p.crm_person || '-'}</span></td>
+                    <td className="px-2 py-2">{p.crm_person ? (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${(p.crm_person).toLowerCase().includes('sushila') ? 'bg-gray-800 text-white' : (p.crm_person).toLowerCase().includes('lovely') ? 'bg-amber-500 text-white' : 'bg-gray-200 text-gray-700'}`}>{p.crm_person}</span>
+                    ) : dash}</td>
                   )}
-                  <td className="px-2 py-2 text-right font-semibold text-red-600">{p.sale_amount > 0 ? fmtL(p.sale_amount) : '-'}</td>
-                  {editRow === p.id ? (<>
-                    <td className="px-1 py-1"><input className="input text-xs w-20" type="number" value={editForm.amount_received||''} onChange={e=>setEditForm({...editForm,amount_received:+e.target.value})} /></td>
-                    <td className="px-1 py-1"><select className="input text-xs w-24" value={editForm.milestone_name||''} onChange={e=>setEditForm({...editForm,milestone_name:e.target.value})}><option value="">-</option><option>milestone</option><option>handover</option><option>delivery</option></select></td>
-                    <td className="px-1 py-1"><input className="input text-xs w-16" type="number" step="0.01" value={editForm.aanchal_value||''} onChange={e=>setEditForm({...editForm,aanchal_value:+e.target.value})} /></td>
+                  <td className="px-2 py-2 text-right font-semibold text-red-600 tabular-nums">{p.sale_amount > 0 ? fmtL(p.sale_amount) : dash}</td>
+                  {editing ? (<>
+                    <td className="px-1 py-1"><input className="input text-xs w-24" type="number" value={editForm.amount_received||''} onChange={e=>setEditForm({...editForm,amount_received:+e.target.value})} /></td>
+                    <td className="px-1 py-1"><select className="input text-xs w-24" value={editForm.milestone_name||''} onChange={e=>setEditForm({...editForm,milestone_name:e.target.value})}><option value="">—</option><option>milestone</option><option>handover</option><option>delivery</option></select></td>
+                    <td className="px-1 py-1"><input className="input text-xs w-20" type="number" step="0.01" value={editForm.aanchal_value||''} onChange={e=>setEditForm({...editForm,aanchal_value:+e.target.value})} placeholder="lakhs" /></td>
                   </>) : (<>
-                    <td className="px-2 py-2 text-right font-medium">{p.amount_received > 0 ? fmt(p.amount_received) : '-'}</td>
-                    <td className="px-2 py-2 text-center"><span className="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">{p.milestone_name || '-'}</span></td>
-                    {/* Aanchal value is stored in lakhs (manual entry), but
-                        displayed in full rupees per mam's "no L format"
-                        rule — multiply by 1,00,000 before formatting. */}
-                    <td className="px-2 py-2 text-right font-semibold">{p.aanchal_value > 0 ? fmt(p.aanchal_value * 100000) : '-'}</td>
+                    <td className="px-2 py-2 text-right font-medium text-emerald-700 tabular-nums">{p.amount_received > 0 ? fmt(p.amount_received) : dash}</td>
+                    <td className="px-2 py-2 text-center">{p.milestone_name ? (
+                      <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">{p.milestone_name}</span>
+                    ) : dash}</td>
+                    <td className="px-2 py-2 text-right font-semibold tabular-nums">{p.aanchal_value > 0 ? fmt(p.aanchal_value * 100000) : dash}</td>
                   </>)}
-                  {editRow === p.id ? (<td className="px-1 py-1"><input className="input text-xs w-20" type="number" value={editForm.manual_purchase_value||''} onChange={e=>setEditForm({...editForm,manual_purchase_value:+e.target.value})} /></td>) : (<td className="px-2 py-2 text-right font-semibold text-red-600">{p.purchase_value > 0 ? fmtL(p.purchase_value) : '-'}</td>)}
-                  <td className={`px-2 py-2 text-right font-bold ${p.cash_velocity >= 1 ? 'text-emerald-600' : p.cash_velocity > 0 ? 'text-amber-600' : 'text-gray-400'}`}>{p.cash_velocity > 0 ? p.cash_velocity.toFixed(2) : '-'}</td>
-                  <td className="px-2 py-2 text-[10px]">{p.live_date}</td>
-                  {editRow === p.id ? (
-                    <td className="px-1 py-1"><input className="input text-xs w-12" type="number" value={editForm.payment_investment_days||''} onChange={e=>setEditForm({...editForm,payment_investment_days:+e.target.value})} /></td>
+                  {editing ? (
+                    <td className="px-1 py-1"><input className="input text-xs w-24" type="number" value={editForm.manual_purchase_value||''} onChange={e=>setEditForm({...editForm,manual_purchase_value:+e.target.value})} /></td>
                   ) : (
-                    <td className="px-2 py-2 text-right">{p.payment_investment_days || '-'}</td>
+                    <td className="px-2 py-2 text-right font-semibold text-red-600 tabular-nums">{p.purchase_value > 0 ? fmtL(p.purchase_value) : dash}</td>
                   )}
-                  {editRow === p.id ? (<td className="px-1 py-1"><input className="input text-xs w-12" type="number" value={editForm.manual_completion_days||''} onChange={e=>setEditForm({...editForm,manual_completion_days:+e.target.value})} /></td>) : (<td className="px-2 py-2 text-right">{p.completion_days || '-'}</td>)}
-                  {editRow === p.id ? (
-                    <td className="px-1 py-1"><input className="input text-xs w-12" type="number" value={editForm.payment_days||''} onChange={e=>setEditForm({...editForm,payment_days:+e.target.value})} /></td>
+                  <td className={`px-2 py-2 text-right font-bold tabular-nums ${p.cash_velocity >= 1 ? 'text-emerald-600' : p.cash_velocity > 0 ? 'text-amber-600' : 'text-gray-300'}`}>
+                    {p.cash_velocity > 0 ? (
+                      <span className="inline-flex items-center gap-1">
+                        <span className={`w-1.5 h-1.5 rounded-full ${p.cash_velocity >= 1 ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
+                        {p.cash_velocity.toFixed(2)}
+                      </span>
+                    ) : dash}
+                  </td>
+                  <td className="px-2 py-2 text-center text-[10px] text-gray-500 whitespace-nowrap" title={p.live_date}>{fmtDate(p.live_date)}</td>
+                  {editing ? (
+                    <td className="px-1 py-1"><input className="input text-xs w-14" type="number" value={editForm.payment_investment_days||''} onChange={e=>setEditForm({...editForm,payment_investment_days:+e.target.value})} /></td>
                   ) : (
-                    <td className="px-2 py-2 text-right">{p.payment_days || '-'}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{p.payment_investment_days || dash}</td>
                   )}
-                  <td className="px-2 py-2 text-right font-bold">{p.total_days || '-'}</td>
-                  <td className="px-1 py-1">{editRow === p.id ? (
-                    <div className="flex gap-1"><button onClick={()=>saveManualFields(p.id)} className="text-[10px] text-emerald-600 font-bold">Save</button><button onClick={()=>setEditRow(null)} className="text-[10px] text-gray-400">X</button></div>
+                  {editing ? (
+                    <td className="px-1 py-1"><input className="input text-xs w-14" type="number" value={editForm.manual_completion_days||''} onChange={e=>setEditForm({...editForm,manual_completion_days:+e.target.value})} /></td>
                   ) : (
-                    <button onClick={()=>{setEditRow(p.id);setEditForm({crm_person:p.crm_person,amount_received:p.amount_received,milestone_name:p.milestone_name,aanchal_value:p.aanchal_value,payment_investment_days:p.payment_investment_days,payment_days:p.payment_days,manual_purchase_value:p.purchase_value,manual_completion_days:p.completion_days});}} className="text-[10px] text-red-600 font-bold">Edit</button>
+                    <td className="px-2 py-2 text-right tabular-nums">{p.completion_days || dash}</td>
+                  )}
+                  {editing ? (
+                    <td className="px-1 py-1"><input className="input text-xs w-14" type="number" value={editForm.payment_days||''} onChange={e=>setEditForm({...editForm,payment_days:+e.target.value})} /></td>
+                  ) : (
+                    <td className="px-2 py-2 text-right tabular-nums">{p.payment_days || dash}</td>
+                  )}
+                  <td className="px-2 py-2 text-right font-bold text-base text-gray-800 tabular-nums">{p.total_days || dash}</td>
+                  <td className="px-1 py-1 text-center">{editing ? (
+                    <div className="flex gap-1 justify-center">
+                      <button onClick={()=>saveManualFields(p.id)} className="p-1.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded" title="Save"><FiCheck size={14} /></button>
+                      <button onClick={()=>setEditRow(null)} className="p-1.5 bg-gray-100 text-gray-500 hover:bg-gray-200 rounded" title="Cancel"><FiX size={14} /></button>
+                    </div>
+                  ) : (
+                    <button onClick={()=>{setEditRow(p.id);setEditForm({crm_person:p.crm_person,amount_received:p.amount_received,milestone_name:p.milestone_name,aanchal_value:p.aanchal_value,payment_investment_days:p.payment_investment_days,payment_days:p.payment_days,manual_purchase_value:p.purchase_value,manual_completion_days:p.completion_days});}}
+                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Edit row"><FiEdit2 size={13} /></button>
                   )}</td>
                 </tr>
-              ))}</tbody>
-              <tfoot><tr className="bg-gray-100 font-bold text-xs">
-                <td className="px-2 py-2" colSpan="3">TOTAL ({filtered.length})</td>
-                <td className="px-2 py-2 text-right text-red-700">{fmtL(filtered.reduce((s, p) => s + p.sale_amount, 0))}</td>
-                <td className="px-2 py-2 text-right text-emerald-700">{fmt(filtered.reduce((s, p) => s + p.amount_received, 0))}</td>
-                <td></td><td className="px-2 py-2 text-right">{fmt(filtered.reduce((s, p) => s + p.aanchal_value, 0) * 100000)}</td>
-                <td className="px-2 py-2 text-right text-red-700">{fmtL(filtered.reduce((s, p) => s + p.purchase_value, 0))}</td>
+              );})}</tbody>
+              <tfoot><tr className="bg-gray-100 font-bold text-xs border-t-2 border-gray-300">
+                <td className="px-2 py-3 sticky left-0 bg-gray-100" colSpan="3">TOTAL · {filtered.length} project{filtered.length !== 1 ? 's' : ''}</td>
+                <td className="px-2 py-3 text-right text-red-700 tabular-nums">{fmtL(filtered.reduce((s, p) => s + p.sale_amount, 0))}</td>
+                <td className="px-2 py-3 text-right text-emerald-700 tabular-nums">{fmt(filtered.reduce((s, p) => s + p.amount_received, 0))}</td>
+                <td></td>
+                <td className="px-2 py-3 text-right tabular-nums">{fmt(filtered.reduce((s, p) => s + p.aanchal_value, 0) * 100000)}</td>
+                <td className="px-2 py-3 text-right text-red-700 tabular-nums">{fmtL(filtered.reduce((s, p) => s + p.purchase_value, 0))}</td>
                 <td colSpan="7"></td>
               </tr></tfoot>
             </table></div>
