@@ -32,7 +32,19 @@ const monthNow = () => {
 
 export default function Rentals() {
   const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
-  const [tab, setTab] = useState('dashboard');
+  // 'requests' is the primary workflow now (mam's "Raise Rent" flow).
+  // Properties / Bookings / Payments stay as deeper tools but don't
+  // open by default.
+  const [tab, setTab] = useState('requests');
+  const [requests, setRequests] = useState([]);
+  const [requestStats, setRequestStats] = useState(null);
+  const [requestModal, setRequestModal] = useState(false);
+  const [requestForm, setRequestForm] = useState({});
+  const [rejectingId, setRejectingId] = useState(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [payModal, setPayModal] = useState(null);
+  const [payForm, setPayForm] = useState({ paid_via: 'Bank' });
+  const [reqFilter, setReqFilter] = useState({ month: '', status: '' });
   const [stats, setStats] = useState(null);
   const [properties, setProperties] = useState([]);
   const [bookings, setBookings] = useState([]);
@@ -65,11 +77,20 @@ export default function Rentals() {
     api.get('/dpr/sites?all=1').then(r => setSites(r.data)).catch(() => {});
   }, []);
 
+  const loadRequests = useCallback(() => {
+    const params = new URLSearchParams();
+    if (reqFilter.month) params.set('month', reqFilter.month);
+    if (reqFilter.status) params.set('status', reqFilter.status);
+    api.get(`/rentals/rent-requests?${params}`).then(r => setRequests(r.data)).catch(() => {});
+    api.get('/rentals/rent-requests/stats').then(r => setRequestStats(r.data)).catch(() => {});
+  }, [reqFilter]);
+
   useEffect(() => {
     if (tab === 'properties') loadProperties();
     if (tab === 'bookings') loadBookings();
     if (tab === 'payments') loadPayments();
-  }, [tab, loadProperties]);
+    if (tab === 'requests') loadRequests();
+  }, [tab, loadProperties, loadRequests]);
 
   const saveProp = async (e) => {
     e.preventDefault();
@@ -153,15 +174,127 @@ export default function Rentals() {
         {canCreate('rentals') && tab === 'payments' && (
           <button onClick={() => { setPaymentForm({ period_month: monthNow(), paid_via: 'Bank' }); setPaymentModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Record Payment</button>
         )}
+        {canCreate('rentals') && tab === 'requests' && (
+          <button onClick={() => { setRequestForm({ rent_month: monthNow(), arrange_for: 'SEPL' }); setRequestModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Rent</button>
+        )}
       </div>
 
       <div className="flex gap-2 flex-wrap text-sm">
-        {['dashboard', 'properties', 'bookings', 'payments'].map(t => (
-          <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'}`}>
-            {t.charAt(0).toUpperCase() + t.slice(1)}
+        {[
+          { id: 'requests', label: 'Raise Rent' },
+          { id: 'dashboard', label: 'Properties Dashboard' },
+          { id: 'properties', label: 'Properties' },
+          { id: 'bookings', label: 'Bookings' },
+          { id: 'payments', label: 'Payments Log' },
+        ].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>
+            {t.label}
           </button>
         ))}
       </div>
+
+      {/* RAISE RENT — primary workflow */}
+      {tab === 'requests' && (
+        <>
+          {requestStats && (
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="card p-3 border-l-4 border-amber-500"><p className="text-xs text-gray-500">Pending</p><p className="text-2xl font-bold text-amber-600">{requestStats.pending}</p></div>
+              <div className="card p-3 border-l-4 border-blue-500"><p className="text-xs text-gray-500">Approved</p><p className="text-2xl font-bold text-blue-600">{requestStats.approved}</p></div>
+              <div className="card p-3 border-l-4 border-emerald-500"><p className="text-xs text-gray-500">Paid</p><p className="text-2xl font-bold text-emerald-600">{requestStats.paid}</p></div>
+              <div className="card p-3 border-l-4 border-orange-500"><p className="text-xs text-gray-500">Pending Amount</p><p className="text-base font-bold text-orange-700">{fmtRs(requestStats.pending_amount)}</p></div>
+              <div className="card p-3 border-l-4 border-emerald-500"><p className="text-xs text-gray-500">Total Paid</p><p className="text-base font-bold text-emerald-700">{fmtRs(requestStats.total_paid_amount)}</p></div>
+            </div>
+          )}
+          <div className="card p-3 flex flex-wrap items-center gap-3">
+            <div>
+              <label className="label">Month</label>
+              <input className="input" type="month" value={reqFilter.month} onChange={e => setReqFilter(f => ({ ...f, month: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">Status</label>
+              <select className="select" value={reqFilter.status} onChange={e => setReqFilter(f => ({ ...f, status: e.target.value }))}>
+                <option value="">All</option>
+                <option value="pending">Pending</option>
+                <option value="approved">Approved</option>
+                <option value="paid">Paid</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+          </div>
+          <div className="card p-0 overflow-x-auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>Req No</th><th>Month</th><th>Site</th><th>Arrange For</th>
+                  <th>Owner</th><th>Aadhar</th><th>Photo</th>
+                  <th>Bank / IFSC</th><th>QR</th>
+                  <th className="text-right">Amount</th><th>Status</th><th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requests.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No rent requests yet — click "Raise Rent" to start</td></tr>}
+                {requests.map(r => (
+                  <tr key={r.id}>
+                    <td className="font-bold text-orange-700 text-xs">{r.request_no}</td>
+                    <td className="text-xs">{r.rent_month}</td>
+                    <td className="text-xs">{r.site_name || r.site_name_live || '—'}</td>
+                    <td>
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${r.arrange_for === 'SEPL' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>{r.arrange_for}</span>
+                      {r.contractor_name && <div className="text-[10px] text-gray-500 mt-0.5">{r.contractor_name}</div>}
+                    </td>
+                    <td className="text-xs"><div className="font-medium">{r.owner_name}</div>{r.owner_phone && <div className="text-[10px] text-gray-500">{r.owner_phone}</div>}</td>
+                    <td>{r.owner_aadhar_url ? <a href={r.owner_aadhar_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs">📎 view</a> : <span className="text-gray-300 text-xs">—</span>}</td>
+                    <td>
+                      {r.room_photo_url ? (
+                        <a href={r.room_photo_url} target="_blank" rel="noreferrer">
+                          <img src={r.room_photo_url} alt="room" className="w-12 h-12 object-cover rounded" />
+                        </a>
+                      ) : <span className="text-gray-300 text-xs">—</span>}
+                      {r.photo_lat && <div className="text-[9px] text-gray-500">{r.photo_lat.toFixed(4)}, {r.photo_lng.toFixed(4)}</div>}
+                    </td>
+                    <td className="text-xs">
+                      {r.bank_account ? <div>A/c: {r.bank_account}</div> : <span className="text-gray-300">—</span>}
+                      {r.ifsc_code && <div className="text-[10px] text-gray-500">IFSC: {r.ifsc_code}</div>}
+                    </td>
+                    <td>{r.scanner_url ? <a href={r.scanner_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs">📎 QR</a> : <span className="text-gray-300 text-xs">—</span>}</td>
+                    <td className="text-right font-bold text-red-700">{fmtRs(r.rent_amount)}</td>
+                    <td>
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${
+                        r.status === 'paid' ? 'bg-emerald-100 text-emerald-700' :
+                        r.status === 'approved' ? 'bg-blue-100 text-blue-700' :
+                        r.status === 'rejected' ? 'bg-red-100 text-red-700' :
+                        'bg-amber-100 text-amber-700'
+                      }`}>{r.status}</span>
+                      {r.reject_reason && <div className="text-[9px] text-red-600 mt-0.5" title={r.reject_reason}>↳ {r.reject_reason.slice(0, 40)}...</div>}
+                    </td>
+                    <td className="whitespace-nowrap">
+                      {r.status === 'pending' && isAdmin() && (
+                        <div className="flex gap-1">
+                          <button onClick={async () => {
+                            try { await api.post(`/rentals/rent-requests/${r.id}/approve`); toast.success('Approved'); loadRequests(); }
+                            catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+                          }} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
+                          <button onClick={() => { setRejectingId(r.id); setRejectReason(''); }} className="text-[10px] text-red-600 font-bold hover:underline">Reject</button>
+                        </div>
+                      )}
+                      {r.status === 'approved' && canEdit('rentals') && (
+                        <button onClick={() => { setPayModal(r); setPayForm({ paid_via: 'Bank' }); }} className="btn btn-success text-[10px] px-2 py-1">Mark Paid</button>
+                      )}
+                      {canDelete('rentals') && r.status === 'pending' && (
+                        <button onClick={async () => {
+                          if (!confirm(`Delete ${r.request_no}?`)) return;
+                          try { await api.delete(`/rentals/rent-requests/${r.id}`); toast.success('Deleted'); loadRequests(); }
+                          catch {}
+                        }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={12} /></button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       {/* DASHBOARD */}
       {tab === 'dashboard' && stats && (
@@ -496,6 +629,203 @@ export default function Rentals() {
           <div className="flex justify-end gap-2"><button type="button" onClick={() => setPaymentModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>
       </Modal>
+
+      {/* RAISE RENT MODAL — mam's exact field list */}
+      <Modal isOpen={requestModal} onClose={() => { setRequestModal(false); setRequestForm({}); }} title="Raise Rent Request" wide>
+        <RaiseRentForm
+          form={requestForm}
+          setForm={setRequestForm}
+          sites={sites}
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!requestForm.owner_name || !requestForm.rent_month || !requestForm.arrange_for) {
+              return toast.error('Owner name, rent month, and arrange-for are required');
+            }
+            try {
+              const r = await api.post('/rentals/rent-requests', requestForm);
+              toast.success(`Raised ${r.data.request_no}`);
+              setRequestModal(false); setRequestForm({});
+              loadRequests();
+            } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+          }}
+          onCancel={() => { setRequestModal(false); setRequestForm({}); }}
+        />
+      </Modal>
+
+      {/* REJECT MODAL */}
+      <Modal isOpen={!!rejectingId} onClose={() => { setRejectingId(null); setRejectReason(''); }} title="Reject Rent Request">
+        <div className="space-y-3">
+          <div>
+            <label className="label">Reason *</label>
+            <textarea className="input" rows="3" value={rejectReason} onChange={e => setRejectReason(e.target.value)} placeholder="Min 5 chars — e.g. owner Aadhar mismatch, photo unclear" />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => { setRejectingId(null); setRejectReason(''); }} className="btn btn-secondary">Cancel</button>
+            <button onClick={async () => {
+              try {
+                await api.post(`/rentals/rent-requests/${rejectingId}/reject`, { reason: rejectReason });
+                toast.success('Rejected'); setRejectingId(null); setRejectReason(''); loadRequests();
+              } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+            }} className="btn btn-danger">Reject</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* MARK PAID MODAL */}
+      <Modal isOpen={!!payModal} onClose={() => setPayModal(null)} title={payModal ? `Mark Paid — ${payModal.request_no}` : ''}>
+        {payModal && (
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            try {
+              await api.post(`/rentals/rent-requests/${payModal.id}/mark-paid`, payForm);
+              toast.success('Marked paid'); setPayModal(null); setPayForm({ paid_via: 'Bank' }); loadRequests();
+            } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+          }} className="space-y-3">
+            <div className="bg-gray-50 p-3 rounded text-sm">
+              <div><b>{payModal.owner_name}</b> · {payModal.rent_month}</div>
+              <div className="text-red-700 font-bold mt-1">{fmtRs(payModal.rent_amount)}</div>
+            </div>
+            <div>
+              <label className="label">Paid Via *</label>
+              <select className="select" value={payForm.paid_via} onChange={e => setPayForm(f => ({ ...f, paid_via: e.target.value }))}>
+                <option>Bank</option><option>UPI</option><option>Cash</option><option>Cheque</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Transaction Ref</label>
+              <input className="input" value={payForm.transaction_ref || ''} onChange={e => setPayForm(f => ({ ...f, transaction_ref: e.target.value }))} placeholder="UTR / UPI ref / Cheque no" />
+            </div>
+            <div>
+              <label className="label">Receipt URL</label>
+              <input className="input" value={payForm.receipt_url || ''} onChange={e => setPayForm(f => ({ ...f, receipt_url: e.target.value }))} placeholder="Upload separately and paste link" />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setPayModal(null)} className="btn btn-secondary">Cancel</button>
+              <button type="submit" className="btn btn-success">Mark Paid</button>
+            </div>
+          </form>
+        )}
+      </Modal>
     </div>
+  );
+}
+
+// ---------- Raise Rent Form ----------
+function RaiseRentForm({ form, setForm, sites, onSubmit, onCancel }) {
+  const [uploading, setUploading] = useState(false);
+
+  const upload = async (file) => {
+    if (!file) return null;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      return r.data.url;
+    } catch (err) {
+      toast.error(`Upload failed: ${err.response?.data?.error || err.message}`);
+      return null;
+    } finally { setUploading(false); }
+  };
+
+  const capturePhoto = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = await upload(file);
+    if (!url) return;
+    const now = new Date().toISOString();
+    let lat = null, lng = null;
+    if ('geolocation' in navigator) {
+      try {
+        await new Promise((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => { lat = pos.coords.latitude; lng = pos.coords.longitude; resolve(); },
+            () => resolve(),
+            { enableHighAccuracy: true, timeout: 5000 }
+          );
+        });
+      } catch {}
+    }
+    setForm(f => ({ ...f, room_photo_url: url, photo_taken_at: now, photo_lat: lat, photo_lng: lng }));
+    toast.success(lat ? `Photo + GPS captured (${lat.toFixed(4)}, ${lng.toFixed(4)})` : 'Photo captured (GPS unavailable)');
+  };
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-3 max-h-[75vh] overflow-y-auto pr-1">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="label">Site Name</label>
+          <SearchableSelect options={sites} value={form.site_id || null} valueKey="id" displayKey="name" placeholder="Pick site…" onChange={(s) => setForm(f => ({ ...f, site_id: s?.id || '', site_name: s?.name || '' }))} />
+        </div>
+        <div>
+          <label className="label">Rent Month *</label>
+          <input className="input" type="month" required value={form.rent_month || ''} onChange={e => setForm(f => ({ ...f, rent_month: e.target.value }))} />
+        </div>
+        <div>
+          <label className="label">Arrange For *</label>
+          <select className="select" required value={form.arrange_for || ''} onChange={e => setForm(f => ({ ...f, arrange_for: e.target.value }))}>
+            <option value="">— pick —</option>
+            <option value="SEPL">SEPL (own staff)</option>
+            <option value="Contractor">Contractor</option>
+          </select>
+        </div>
+        {form.arrange_for === 'Contractor' && (
+          <div><label className="label">Contractor Name</label><input className="input" value={form.contractor_name || ''} onChange={e => setForm(f => ({ ...f, contractor_name: e.target.value }))} /></div>
+        )}
+        <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Room Owner</h5></div>
+        <div><label className="label">Owner Name *</label><input className="input" required value={form.owner_name || ''} onChange={e => setForm(f => ({ ...f, owner_name: e.target.value }))} /></div>
+        <div><label className="label">Owner Phone</label><input className="input" value={form.owner_phone || ''} onChange={e => setForm(f => ({ ...f, owner_phone: e.target.value }))} /></div>
+        <div className="col-span-2">
+          <label className="label">Owner Aadhar Card <span className="text-gray-400 font-normal text-[10px]">(image / PDF)</span></label>
+          {form.owner_aadhar_url ? (
+            <div className="flex items-center gap-2"><a href={form.owner_aadhar_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-sm">📎 Aadhar uploaded</a><button type="button" onClick={() => setForm(f => ({ ...f, owner_aadhar_url: '' }))} className="text-red-500 text-xs">Remove</button></div>
+          ) : (
+            <input type="file" accept="image/*,.pdf" className="text-xs" onChange={async e => {
+              const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, owner_aadhar_url: url }));
+              e.target.value = '';
+            }} />
+          )}
+        </div>
+
+        <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Room Outside Photo (timestamped + GPS)</h5></div>
+        <div className="col-span-2">
+          {form.room_photo_url ? (
+            <div className="flex items-start gap-3">
+              <img src={form.room_photo_url} alt="room" className="w-32 h-32 object-cover rounded border" />
+              <div className="text-xs">
+                <div className="text-gray-700">📅 {form.photo_taken_at ? new Date(form.photo_taken_at).toLocaleString('en-IN') : '—'}</div>
+                {form.photo_lat && <div className="text-gray-600">📍 {form.photo_lat.toFixed(5)}, {form.photo_lng.toFixed(5)}</div>}
+                <button type="button" onClick={() => setForm(f => ({ ...f, room_photo_url: '', photo_taken_at: null, photo_lat: null, photo_lng: null }))} className="text-red-500 text-xs mt-1">Remove</button>
+              </div>
+            </div>
+          ) : (
+            <input type="file" accept="image/*" capture="environment" className="text-xs" onChange={capturePhoto} />
+          )}
+        </div>
+
+        <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Bank / UPI</h5></div>
+        <div><label className="label">Bank Account</label><input className="input" value={form.bank_account || ''} onChange={e => setForm(f => ({ ...f, bank_account: e.target.value }))} placeholder="A/c number" /></div>
+        <div><label className="label">IFSC Code</label><input className="input" value={form.ifsc_code || ''} onChange={e => setForm(f => ({ ...f, ifsc_code: e.target.value.toUpperCase() }))} placeholder="SBIN0001234" /></div>
+        <div className="col-span-2">
+          <label className="label">UPI Scanner Screenshot</label>
+          {form.scanner_url ? (
+            <div className="flex items-center gap-2"><a href={form.scanner_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-sm">📎 QR uploaded</a><button type="button" onClick={() => setForm(f => ({ ...f, scanner_url: '' }))} className="text-red-500 text-xs">Remove</button></div>
+          ) : (
+            <input type="file" accept="image/*" className="text-xs" onChange={async e => {
+              const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, scanner_url: url }));
+              e.target.value = '';
+            }} />
+          )}
+        </div>
+
+        <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Amount</h5></div>
+        <div><label className="label">Rent Amount (Rs)</label><input className="input" type="number" value={form.rent_amount || 0} onChange={e => setForm(f => ({ ...f, rent_amount: +e.target.value }))} /></div>
+        <div className="col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
+      </div>
+      <div className="flex justify-end gap-2 pt-3 border-t">
+        <button type="button" onClick={onCancel} className="btn btn-secondary">Cancel</button>
+        <button type="submit" disabled={uploading} className="btn btn-primary">{uploading ? 'Uploading…' : 'Submit Request'}</button>
+      </div>
+    </form>
   );
 }

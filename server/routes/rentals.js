@@ -332,4 +332,188 @@ router.delete('/payments/:id', requirePermission('rentals', 'delete'), (req, res
   res.json({ message: 'Deleted' });
 });
 
+// ---------- RENT REQUESTS (mam's "Raise Rent" workflow) ----------
+
+router.get('/rent-requests', requirePermission('rentals', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const { month, site_id, status, arrange_for } = req.query;
+    let sql = `
+      SELECT rr.*, s.name as site_name_live, u.name as created_by_name,
+             ap.name as approved_by_name, pp.name as paid_by_name
+      FROM rent_requests rr
+      LEFT JOIN sites s ON s.id = rr.site_id
+      LEFT JOIN users u ON u.id = rr.created_by
+      LEFT JOIN users ap ON ap.id = rr.approved_by
+      LEFT JOIN users pp ON pp.id = rr.paid_by
+      WHERE 1=1
+    `;
+    const params = [];
+    if (month) { sql += ' AND rr.rent_month = ?'; params.push(month); }
+    if (site_id) { sql += ' AND rr.site_id = ?'; params.push(site_id); }
+    if (status) { sql += ' AND rr.status = ?'; params.push(status); }
+    if (arrange_for) { sql += ' AND rr.arrange_for = ?'; params.push(arrange_for); }
+    sql += ' ORDER BY rr.created_at DESC';
+    res.json(db.prepare(sql).all(...params));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/rent-requests/stats', requirePermission('rentals', 'view'), (req, res) => {
+  try {
+    const db = getDb();
+    const total = db.prepare('SELECT COUNT(*) as c FROM rent_requests').get().c;
+    const pending = db.prepare(`SELECT COUNT(*) as c FROM rent_requests WHERE status='pending'`).get().c;
+    const approved = db.prepare(`SELECT COUNT(*) as c FROM rent_requests WHERE status='approved'`).get().c;
+    const paid = db.prepare(`SELECT COUNT(*) as c FROM rent_requests WHERE status='paid'`).get().c;
+    const rejected = db.prepare(`SELECT COUNT(*) as c FROM rent_requests WHERE status='rejected'`).get().c;
+    const totalAmount = db.prepare(`SELECT COALESCE(SUM(rent_amount),0) as s FROM rent_requests WHERE status='paid'`).get().s;
+    const pendingAmount = db.prepare(`SELECT COALESCE(SUM(rent_amount),0) as s FROM rent_requests WHERE status IN ('pending','approved')`).get().s;
+    res.json({ total, pending, approved, paid, rejected, total_paid_amount: totalAmount, pending_amount: pendingAmount });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/rent-requests', requirePermission('rentals', 'create'), (req, res) => {
+  try {
+    const b = req.body;
+    if (!b.owner_name || !b.rent_month || !b.arrange_for) {
+      return res.status(400).json({ error: 'owner_name, rent_month, and arrange_for are required' });
+    }
+    if (!['SEPL', 'Contractor'].includes(b.arrange_for)) {
+      return res.status(400).json({ error: 'arrange_for must be SEPL or Contractor' });
+    }
+    const db = getDb();
+    const { nextSequence } = require('../db/nextSequence');
+    const yr = new Date().getFullYear();
+    const requestNo = nextSequence(db, 'rent_requests', 'request_no', `RR-${yr}-`, { startFrom: 0, pad: 4 });
+    const r = db.prepare(`
+      INSERT INTO rent_requests (
+        request_no, site_id, site_name, arrange_for, contractor_name,
+        owner_name, owner_phone, owner_aadhar_url,
+        room_photo_url, photo_taken_at, photo_lat, photo_lng,
+        bank_account, ifsc_code, scanner_url,
+        rent_month, rent_amount, notes, created_by
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      requestNo, b.site_id || null, b.site_name || null,
+      b.arrange_for, b.contractor_name || null,
+      b.owner_name, b.owner_phone || null, b.owner_aadhar_url || null,
+      b.room_photo_url || null, b.photo_taken_at || null, b.photo_lat || null, b.photo_lng || null,
+      b.bank_account || null, b.ifsc_code || null, b.scanner_url || null,
+      b.rent_month, b.rent_amount || 0, b.notes || null, req.user.id
+    );
+    // Notify approvers (admins + anyone with rentals.approve)
+    try {
+      const { notifyMany } = require('../lib/push');
+      const approvers = db.prepare(`
+        SELECT DISTINCT u.id FROM users u
+        LEFT JOIN user_roles ur ON ur.user_id = u.id
+        LEFT JOIN role_permissions rp ON rp.role_id = ur.role_id
+        WHERE COALESCE(u.active,1)=1
+          AND (u.role='admin' OR (rp.module='rentals' AND rp.can_approve=1))
+      `).all().map(x => x.id);
+      notifyMany(approvers, {
+        title: `🏠 ${requestNo} — Rent for ${b.rent_month}`,
+        body: `${b.owner_name}${b.site_name ? ` · ${b.site_name}` : ''} · Rs ${(b.rent_amount || 0).toLocaleString('en-IN')}`,
+        url: '/rentals',
+        tag: `rent-req-${r.lastInsertRowid}`,
+      });
+    } catch {}
+    res.status(201).json({ id: r.lastInsertRowid, request_no: requestNo });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/rent-requests/:id', requirePermission('rentals', 'edit'), (req, res) => {
+  try {
+    const b = req.body;
+    const db = getDb();
+    const fields = [
+      'site_id','site_name','arrange_for','contractor_name',
+      'owner_name','owner_phone','owner_aadhar_url',
+      'room_photo_url','photo_taken_at','photo_lat','photo_lng',
+      'bank_account','ifsc_code','scanner_url',
+      'rent_month','rent_amount','notes'
+    ];
+    const sets = []; const vals = [];
+    for (const f of fields) if (b[f] !== undefined) { sets.push(`${f}=?`); vals.push(b[f]); }
+    if (!sets.length) return res.status(400).json({ error: 'No fields' });
+    vals.push(req.params.id);
+    db.prepare(`UPDATE rent_requests SET ${sets.join(', ')} WHERE id=?`).run(...vals);
+    res.json({ message: 'Updated' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/rent-requests/:id/approve', requirePermission('rentals', 'approve'), (req, res) => {
+  try {
+    const db = getDb();
+    db.prepare(`UPDATE rent_requests SET status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(req.user.id, req.params.id);
+    // Push to creator
+    const r = db.prepare('SELECT request_no, created_by, owner_name FROM rent_requests WHERE id=?').get(req.params.id);
+    if (r) {
+      try {
+        const { notify } = require('../lib/push');
+        notify(r.created_by, {
+          title: `✅ Rent Approved — ${r.request_no}`,
+          body: `${r.owner_name} — awaiting payment release`,
+          url: '/rentals',
+          tag: `rent-approved-${req.params.id}`,
+        });
+      } catch {}
+    }
+    res.json({ message: 'Approved' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/rent-requests/:id/reject', requirePermission('rentals', 'approve'), (req, res) => {
+  try {
+    const { reason } = req.body;
+    if (!reason || reason.trim().length < 5) return res.status(400).json({ error: 'Reason required (min 5 chars)' });
+    const db = getDb();
+    db.prepare(`UPDATE rent_requests SET status='rejected', reject_reason=?, approved_by=?, approved_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(reason.trim(), req.user.id, req.params.id);
+    const r = db.prepare('SELECT request_no, created_by FROM rent_requests WHERE id=?').get(req.params.id);
+    if (r) {
+      try {
+        const { notify } = require('../lib/push');
+        notify(r.created_by, {
+          title: `❌ Rent Rejected — ${r.request_no}`,
+          body: reason,
+          url: '/rentals',
+        });
+      } catch {}
+    }
+    res.json({ message: 'Rejected' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/rent-requests/:id/mark-paid', requirePermission('rentals', 'edit'), (req, res) => {
+  try {
+    const { paid_via, transaction_ref, receipt_url } = req.body;
+    const db = getDb();
+    db.prepare(`
+      UPDATE rent_requests SET
+        status='paid', paid_by=?, paid_at=CURRENT_TIMESTAMP,
+        paid_via=?, transaction_ref=?, receipt_url=COALESCE(?, receipt_url)
+      WHERE id=?
+    `).run(req.user.id, paid_via || null, transaction_ref || null, receipt_url || null, req.params.id);
+    const r = db.prepare('SELECT request_no, created_by, owner_name, rent_amount FROM rent_requests WHERE id=?').get(req.params.id);
+    if (r) {
+      try {
+        const { notify } = require('../lib/push');
+        notify(r.created_by, {
+          title: `💰 Rent Paid — ${r.request_no}`,
+          body: `${r.owner_name} · Rs ${(r.rent_amount || 0).toLocaleString('en-IN')} disbursed`,
+          url: '/rentals',
+        });
+      } catch {}
+    }
+    res.json({ message: 'Marked paid' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/rent-requests/:id', requirePermission('rentals', 'delete'), (req, res) => {
+  getDb().prepare('DELETE FROM rent_requests WHERE id=?').run(req.params.id);
+  res.json({ message: 'Deleted' });
+});
+
 module.exports = router;

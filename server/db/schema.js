@@ -1301,6 +1301,43 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Per-month rent requests — site engineer fills in landlord
+    -- details + Aadhar + outside photo + bank/UPI + month and submits.
+    -- Admin / accountant approves → paid. Designed as a self-contained
+    -- payment workflow (separate from the property/booking entity model).
+    CREATE TABLE IF NOT EXISTS rent_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_no TEXT UNIQUE,                  -- RR-YYYY-####
+      site_id INTEGER REFERENCES sites(id),
+      site_name TEXT,                          -- snapshot for display
+      arrange_for TEXT CHECK(arrange_for IN ('SEPL','Contractor')),
+      contractor_name TEXT,                    -- only if Contractor
+      owner_name TEXT NOT NULL,
+      owner_phone TEXT,
+      owner_aadhar_url TEXT,                   -- file upload (image / PDF)
+      room_photo_url TEXT,                     -- outside-of-room photo
+      photo_taken_at DATETIME,                 -- client-side timestamp
+      photo_lat REAL,
+      photo_lng REAL,
+      bank_account TEXT,
+      ifsc_code TEXT,
+      scanner_url TEXT,                        -- UPI QR screenshot
+      rent_month TEXT NOT NULL,                -- 'YYYY-MM'
+      rent_amount REAL DEFAULT 0,
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending','approved','paid','rejected')),
+      approved_by INTEGER REFERENCES users(id),
+      approved_at DATETIME,
+      paid_by INTEGER REFERENCES users(id),
+      paid_at DATETIME,
+      paid_via TEXT,                           -- 'Bank' / 'UPI' / 'Cash'
+      transaction_ref TEXT,
+      receipt_url TEXT,
+      reject_reason TEXT,
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Monthly rent payments paid to landlord
     CREATE TABLE IF NOT EXISTS rental_payments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
