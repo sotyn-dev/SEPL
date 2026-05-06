@@ -375,30 +375,30 @@ export default function Delegation() {
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
         </select>
-        {/* Name + Date filters — only useful when looking across users, so
-            only show on the "All" scope. */}
+        {/* Assignee filter — only useful on 'All tasks' (filtering by
+            'self' on My Tasks adds nothing), so still admin-scoped. */}
         {scope === 'all' && (
-          <>
-            <div className="w-[220px]">
-              <SearchableSelect
-                options={users.map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') }))}
-                value={assigneeFilter || null}
-                valueKey="id" displayKey="label"
-                placeholder="All assignees — search…"
-                onChange={(u) => setAssigneeFilter(u?.id || '')}
-              />
-            </div>
-            <div className="flex items-center gap-1 text-xs text-gray-500">
-              <span>From</span>
-              <input type="date" className="input py-1 text-xs w-36" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
-              <span>To</span>
-              <input type="date" className="input py-1 text-xs w-36" value={dateTo} onChange={e => setDateTo(e.target.value)} />
-              {(dateFrom || dateTo || assigneeFilter) && (
-                <button onClick={() => { setAssigneeFilter(''); setDateFrom(''); setDateTo(''); }} className="text-[11px] text-red-600 hover:underline ml-1">Clear</button>
-              )}
-            </div>
-          </>
+          <div className="w-[220px]">
+            <SearchableSelect
+              options={users.map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') }))}
+              value={assigneeFilter || null}
+              valueKey="id" displayKey="label"
+              placeholder="All assignees — search…"
+              onChange={(u) => setAssigneeFilter(u?.id || '')}
+            />
+          </div>
         )}
+        {/* Date range — useful for everyone (filter MY tasks by date too).
+            Mam: 'user can also filter date from to'. */}
+        <div className="flex items-center gap-1 text-xs text-gray-500">
+          <span>From</span>
+          <input type="date" className="input py-1 text-xs w-36" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+          <span>To</span>
+          <input type="date" className="input py-1 text-xs w-36" value={dateTo} onChange={e => setDateTo(e.target.value)} min={dateFrom || undefined} />
+          {(dateFrom || dateTo || assigneeFilter) && (
+            <button onClick={() => { setAssigneeFilter(''); setDateFrom(''); setDateTo(''); }} className="text-[11px] text-red-600 hover:underline ml-1">Clear</button>
+          )}
+        </div>
       </div>
 
       {/* Table view — Serial / Task ID / Description / Project / Assigned To /
