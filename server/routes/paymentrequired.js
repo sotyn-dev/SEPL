@@ -165,6 +165,24 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
   if (b.category === 'Purchase' && !String(b.vendor_name || '').trim()) {
     return res.status(400).json({ error: 'Vendor name is required for Purchase requests' });
   }
+  // Mandatory proofs by category + mode — keeps the audit trail clean.
+  // Mam's rule: 'proofs must be uploaded at request time, not after'.
+  const missingProofs = [];
+  if (b.category === 'TA/DA') {
+    if (['Bus','Train','Flight'].includes(b.mode_of_travel) && !b.ticket_upload) {
+      missingProofs.push('Travel Ticket');
+    }
+    if (['Car','Bike'].includes(b.mode_of_travel)) {
+      if (!b.km_photo) missingProofs.push('Start KM Photo');
+      if (!b.end_km_photo) missingProofs.push('End KM Photo');
+    }
+  }
+  if (b.category === 'Purchase' && !b.quotation_link) {
+    missingProofs.push('Quotation / Purchase Order');
+  }
+  if (missingProofs.length > 0) {
+    return res.status(400).json({ error: `Upload required proof${missingProofs.length > 1 ? 's' : ''} before submitting: ${missingProofs.join(', ')}` });
+  }
   // Required By Date must be at least 5 days out — immediate payouts aren't possible.
   if (b.required_by_date) {
     const minDate = new Date(); minDate.setHours(0,0,0,0); minDate.setDate(minDate.getDate() + 5);

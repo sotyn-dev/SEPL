@@ -73,8 +73,32 @@ export default function PaymentRequired() {
     api.get('/hr/employees').then(r => setEmployees(r.data)).catch(() => {});
   }, [load]);
 
+  // Mandatory-proof validation per category + mode (mam: 'if proof
+  // mandatory then why missing'). Block submission until every required
+  // receipt is attached — same rules as the approval-modal audit view.
+  const requiredProofsMissing = (f) => {
+    const missing = [];
+    if (f.category === 'TA/DA') {
+      if (['Bus','Train','Flight'].includes(f.mode_of_travel) && !f.ticket_upload) {
+        missing.push('Travel Ticket');
+      }
+      if (['Car','Bike'].includes(f.mode_of_travel)) {
+        if (!f.km_photo) missing.push('Start KM Photo');
+        if (!f.end_km_photo) missing.push('End KM Photo');
+      }
+    }
+    if (f.category === 'Purchase' && !f.quotation_link) {
+      missing.push('Quotation / Purchase Order');
+    }
+    return missing;
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
+    const missing = requiredProofsMissing(form);
+    if (missing.length > 0) {
+      return toast.error(`Upload required proof${missing.length > 1 ? 's' : ''} before submitting: ${missing.join(', ')}`, { duration: 7000 });
+    }
     try {
       const res = await api.post('/payment-required', form);
       toast.success(`Request ${res.data.request_no} created`);
@@ -348,27 +372,39 @@ export default function PaymentRequired() {
                 blue: 'border-blue-300 bg-blue-50',
               };
 
-              // Approval view is intentionally read-only — proofs must be
-              // uploaded by the employee at request-creation time. Mam's
-              // audit principle: 'here only show filled proof only check
-              // so can audit'.
+              const isFinalised = viewData.status === 'final_approved' || viewData.status === 'rejected';
 
-              // READ-ONLY audit view — proofs must be uploaded by the
-              // employee at request-creation time. Approver only verifies.
-              // Mam: 'here only show filled proof only check so can audit'.
-              const filledSlots = slots.filter(s => viewData[s.field]);
-              const missingRequired = slots.filter(s => s.required && !viewData[s.field]);
+              // Upload helper — kept available so legacy / in-flight
+              // requests that landed before mandatory-proof validation
+              // can still attach receipts. Backend PATCH endpoint logs
+              // updated_by + updated_at for audit.
+              const uploadProof = async (field, file) => {
+                if (!file) return;
+                try {
+                  const fd = new FormData();
+                  fd.append('file', file);
+                  const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                  await api.patch(`/payment-required/${viewData.id}/proof`, { field, url: up.data.url });
+                  toast.success('Proof attached');
+                  const { data } = await api.get(`/payment-required/${viewData.id}`);
+                  setViewData(data);
+                } catch (err) {
+                  toast.error(err.response?.data?.error || 'Upload failed');
+                }
+              };
+
+              const filledCount = slots.filter(s => viewData[s.field]).length;
 
               return (
                 <div className="border-2 border-blue-300 rounded-lg p-3 bg-blue-50/40">
-                  <h5 className="font-bold text-sm text-blue-800 mb-2 flex items-center justify-between">
-                    <span>📎 Proofs / Receipts ({filledSlots.length})</span>
-                    <span className="text-[10px] font-normal text-gray-500">read-only · uploaded by employee at request time</span>
+                  <h5 className="font-bold text-sm text-blue-800 mb-2 flex items-center gap-1">
+                    📎 Proofs / Receipts {filledCount > 0 && <span className="text-blue-600">({filledCount})</span>}
                   </h5>
-                  {filledSlots.length > 0 ? (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {filledSlots.map((s, i) => {
-                        const url = viewData[s.field];
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {slots.map((s, i) => {
+                      const url = viewData[s.field];
+                      if (url) {
+                        // Filled — show as clickable thumbnail
                         return (
                           <a
                             key={i}
@@ -392,15 +428,38 @@ export default function PaymentRequired() {
                             </div>
                           </a>
                         );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="text-xs text-gray-500 text-center py-4">No proofs were uploaded with this request.</div>
-                  )}
-                  {missingRequired.length > 0 && (
-                    <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mt-2">
-                      ⚠️ <strong>Missing required proof{missingRequired.length > 1 ? 's' : ''}:</strong> {missingRequired.map(s => s.label).join(', ')}.
-                      <div className="mt-1 text-[11px]">Reject this request and ask the employee to re-submit with the proof attached. Proofs must be uploaded at request time, not after.</div>
+                      }
+                      // Empty slot — show upload tile (only if not finalised).
+                      // Required ones get a red "MISSING" treatment; optional
+                      // ones a softer gray "Optional" tile.
+                      if (isFinalised) return null;
+                      return (
+                        <label
+                          key={i}
+                          className={`block rounded-lg border-2 border-dashed ${s.required ? 'border-red-300 bg-red-50/50' : 'border-gray-300 bg-gray-50'} overflow-hidden cursor-pointer hover:shadow-md transition-all`}
+                        >
+                          <div className="h-32 flex flex-col items-center justify-center text-center px-2">
+                            <span className="text-3xl">{s.required ? '⚠️' : '➕'}</span>
+                            <span className="text-[11px] font-bold mt-1 text-gray-700">{s.required ? 'MISSING' : 'Optional'}</span>
+                            <span className="text-[10px] text-gray-500 mt-0.5">Click to upload</span>
+                          </div>
+                          <div className="px-2 py-1.5 bg-white border-t">
+                            <div className="text-xs font-semibold truncate">{s.label}</div>
+                            <div className="text-[10px] text-blue-600 underline">Choose file…</div>
+                          </div>
+                          <input
+                            type="file"
+                            accept="image/*,.pdf"
+                            className="hidden"
+                            onChange={e => uploadProof(s.field, e.target.files?.[0])}
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {filledCount === 0 && (
+                    <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
+                      ⚠️ No proofs uploaded with this request. New requests are blocked at filing time if proofs are missing — for legacy requests like this one, click any tile above to attach the receipt before approving.
                     </div>
                   )}
                 </div>
@@ -628,9 +687,26 @@ export default function PaymentRequired() {
             </div>
           )}
 
+          {/* Missing-proofs banner — visible before Submit so the user
+              knows what's blocking the request. Same rules as the
+              approval-modal audit view + handleSave validation. */}
+          {(() => {
+            const missing = requiredProofsMissing(form);
+            if (missing.length === 0) return null;
+            return (
+              <div className="bg-red-50 border-2 border-red-300 rounded-lg p-3 text-sm text-red-800">
+                <div className="font-bold flex items-center gap-1">⚠️ Missing required proof{missing.length > 1 ? 's' : ''}:</div>
+                <ul className="list-disc ml-5 mt-1 text-xs">
+                  {missing.map(m => <li key={m}>{m}</li>)}
+                </ul>
+                <p className="text-[11px] mt-1.5 text-red-700">Submit is blocked until you attach {missing.length > 1 ? 'these receipts' : 'this receipt'}. Proof must be uploaded at request time.</p>
+              </div>
+            );
+          })()}
+
           <div className="flex justify-end gap-3 pt-2 border-t">
             <button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">Submit Request</button>
+            <button type="submit" className="btn btn-primary" disabled={requiredProofsMissing(form).length > 0}>Submit Request</button>
           </div>
         </form>
       </Modal>
