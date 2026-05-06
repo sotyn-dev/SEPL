@@ -348,35 +348,27 @@ export default function PaymentRequired() {
                 blue: 'border-blue-300 bg-blue-50',
               };
 
-              const isFinalised = viewData.status === 'final_approved' || viewData.status === 'rejected';
+              // Approval view is intentionally read-only — proofs must be
+              // uploaded by the employee at request-creation time. Mam's
+              // audit principle: 'here only show filled proof only check
+              // so can audit'.
 
-              const uploadProof = async (field, file) => {
-                if (!file) return;
-                try {
-                  const fd = new FormData();
-                  fd.append('file', file);
-                  const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-                  await api.patch(`/payment-required/${viewData.id}/proof`, { field, url: up.data.url });
-                  toast.success('Proof attached');
-                  // refresh modal data
-                  const { data } = await api.get(`/payment-required/${viewData.id}`);
-                  setViewData(data);
-                } catch (err) {
-                  toast.error(err.response?.data?.error || 'Upload failed');
-                }
-              };
-
-              const filledCount = slots.filter(s => viewData[s.field]).length;
+              // READ-ONLY audit view — proofs must be uploaded by the
+              // employee at request-creation time. Approver only verifies.
+              // Mam: 'here only show filled proof only check so can audit'.
+              const filledSlots = slots.filter(s => viewData[s.field]);
+              const missingRequired = slots.filter(s => s.required && !viewData[s.field]);
 
               return (
                 <div className="border-2 border-blue-300 rounded-lg p-3 bg-blue-50/40">
-                  <h5 className="font-bold text-sm text-blue-800 mb-2 flex items-center gap-1">
-                    📎 Proofs / Receipts {filledCount > 0 && <span className="text-blue-600">({filledCount})</span>}
+                  <h5 className="font-bold text-sm text-blue-800 mb-2 flex items-center justify-between">
+                    <span>📎 Proofs / Receipts ({filledSlots.length})</span>
+                    <span className="text-[10px] font-normal text-gray-500">read-only · uploaded by employee at request time</span>
                   </h5>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {slots.map((s, i) => {
-                      const url = viewData[s.field];
-                      if (url) {
+                  {filledSlots.length > 0 ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {filledSlots.map((s, i) => {
+                        const url = viewData[s.field];
                         return (
                           <a
                             key={i}
@@ -396,40 +388,19 @@ export default function PaymentRequired() {
                             )}
                             <div className="px-2 py-1.5 bg-white border-t">
                               <div className="text-xs font-semibold truncate">{s.label}</div>
-                              <div className="text-[10px] text-blue-600 underline">Click to open</div>
+                              <div className="text-[10px] text-blue-600 underline">Click to view full size</div>
                             </div>
                           </a>
                         );
-                      }
-                      // Missing slot — show upload card (only if not finalised)
-                      if (isFinalised) return null;
-                      return (
-                        <label
-                          key={i}
-                          className={`block rounded-lg border-2 border-dashed ${s.required ? 'border-red-300 bg-red-50/50' : 'border-gray-300 bg-gray-50'} overflow-hidden cursor-pointer hover:shadow-md transition-all`}
-                        >
-                          <div className="h-32 flex flex-col items-center justify-center text-center px-2">
-                            <span className="text-3xl">{s.required ? '⚠️' : '➕'}</span>
-                            <span className="text-[11px] font-bold mt-1 text-gray-700">{s.required ? 'MISSING' : 'Optional'}</span>
-                            <span className="text-[10px] text-gray-500 mt-0.5">Click to upload</span>
-                          </div>
-                          <div className="px-2 py-1.5 bg-white border-t">
-                            <div className="text-xs font-semibold truncate">{s.label}</div>
-                            <div className="text-[10px] text-blue-600 underline">Choose file…</div>
-                          </div>
-                          <input
-                            type="file"
-                            accept="image/*,.pdf"
-                            className="hidden"
-                            onChange={e => uploadProof(s.field, e.target.files?.[0])}
-                          />
-                        </label>
-                      );
-                    })}
-                  </div>
-                  {filledCount === 0 && (
-                    <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
-                      ⚠️ No proofs uploaded with this request. Click any tile above to attach the missing receipt before approving.
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500 text-center py-4">No proofs were uploaded with this request.</div>
+                  )}
+                  {missingRequired.length > 0 && (
+                    <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mt-2">
+                      ⚠️ <strong>Missing required proof{missingRequired.length > 1 ? 's' : ''}:</strong> {missingRequired.map(s => s.label).join(', ')}.
+                      <div className="mt-1 text-[11px]">Reject this request and ask the employee to re-submit with the proof attached. Proofs must be uploaded at request time, not after.</div>
                     </div>
                   )}
                 </div>
