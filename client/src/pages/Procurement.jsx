@@ -553,9 +553,16 @@ export default function Procurement() {
                     {items.length === 0
                       ? <span className="text-gray-400 text-xs">—</span>
                       : (
-                        <button onClick={() => toggleIndentRow(i.id)} className="text-xs text-red-600 hover:underline">
-                          {items.length} item{items.length === 1 ? '' : 's'}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => toggleIndentRow(i.id)} className="text-xs text-red-600 hover:underline">
+                            {items.length} item{items.length === 1 ? '' : 's'}
+                          </button>
+                          <a href={`/indent/${i.id}/print`} target="_blank" rel="noreferrer"
+                             className="text-[10px] text-blue-600 hover:underline flex items-center gap-0.5"
+                             title="Open print-friendly BoQ — Save as PDF from browser">
+                            📄 PDF
+                          </a>
+                        </div>
                       )}
                   </td>
                   <td>

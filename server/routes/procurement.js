@@ -605,6 +605,33 @@ router.delete('/indents/:id', (req, res) => {
   res.json({ message: 'Deleted', soft: false });
 });
 
+// Print-friendly payload for the indent — same shape mam uses on the
+// indent page expanded view (BoQ description + sub-item from item
+// master + make + qty + unit + type), plus site + raised-by info
+// for the page header. Mam: 'where 19 items show able to download pdf'.
+router.get('/indents/:id/print', (req, res) => {
+  const db = getDb();
+  const indent = db.prepare(`
+    SELECT i.*, u.name as created_by_name
+    FROM indents i LEFT JOIN users u ON i.created_by = u.id
+    WHERE i.id = ?
+  `).get(req.params.id);
+  if (!indent) return res.status(404).json({ error: 'Indent not found' });
+  const items = db.prepare(`
+    SELECT ii.*,
+           im.item_code, im.item_name as master_name, im.size as master_size, im.uom as master_uom,
+           v.name as vendor_name,
+           poi.description as boq_description
+      FROM indent_items ii
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+      LEFT JOIN vendors v ON v.id = ii.vendor_id
+      LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+     WHERE ii.indent_id = ?
+     ORDER BY ii.id
+  `).all(req.params.id);
+  res.json({ indent, items });
+});
+
 router.get('/indents/:id', (req, res) => {
   const indent = getDb().prepare(
     `SELECT i.*, u.name as created_by_name FROM indents i LEFT JOIN users u ON i.created_by=u.id WHERE i.id=?`

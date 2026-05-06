@@ -35,6 +35,7 @@ import PMSTasks from './pages/PMSTasks';
 import Inventory from './pages/Inventory';
 import HelpTickets from './pages/HelpTickets';
 import VendorPOPrint from './pages/VendorPOPrint';
+import IndentPrint from './pages/IndentPrint';
 import UserManagement from './pages/admin/UserManagement';
 import RolesPermissions from './pages/admin/RolesPermissions';
 import DatabaseBackups from './pages/admin/DatabaseBackups';
@@ -79,6 +80,7 @@ export default function App() {
       {/* Print routes — auth-gated but rendered WITHOUT the sidebar / header
           chrome so the document fills the viewport cleanly. */}
       <Route path="/vendor-po/:id/print" element={<ProtectedRoute><VendorPOPrint /></ProtectedRoute>} />
+      <Route path="/indent/:id/print" element={<ProtectedRoute><IndentPrint /></ProtectedRoute>} />
       <Route path="/payroll/slip/:employee_id" element={<ProtectedRoute><SalarySlipPrint /></ProtectedRoute>} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
