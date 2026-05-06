@@ -397,14 +397,16 @@ router.post('/rent-requests', requirePermission('rentals', 'create'), (req, res)
     const r = db.prepare(`
       INSERT INTO rent_requests (
         request_no, site_id, site_name, arrange_for, contractor_name,
+        employee_user_id, employee_name,
         owner_name, owner_phone, owner_aadhar_url,
         room_photo_url, photo_taken_at, photo_lat, photo_lng,
         payment_mode, bank_account, ifsc_code, upi_id, scanner_url,
         rent_month, rent_amount, pay_by_day, notes, created_by
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       requestNo, b.site_id || null, b.site_name || null,
       b.arrange_for, b.contractor_name || null,
+      b.employee_user_id || null, b.employee_name || null,
       b.owner_name, b.owner_phone || null, b.owner_aadhar_url || null,
       b.room_photo_url || null, b.photo_taken_at || null, b.photo_lat || null, b.photo_lng || null,
       mode, bankAcc, ifsc, upiId, scannerUrl,
@@ -437,6 +439,7 @@ router.put('/rent-requests/:id', requirePermission('rentals', 'edit'), (req, res
     const db = getDb();
     const fields = [
       'site_id','site_name','arrange_for','contractor_name',
+      'employee_user_id','employee_name',
       'owner_name','owner_phone','owner_aadhar_url',
       'room_photo_url','photo_taken_at','photo_lat','photo_lng',
       'payment_mode','bank_account','ifsc_code','upi_id','scanner_url',

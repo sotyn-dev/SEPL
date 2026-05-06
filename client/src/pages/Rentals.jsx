@@ -787,6 +787,7 @@ export default function Rentals() {
           form={requestForm}
           setForm={setRequestForm}
           sites={sites}
+          users={users}
           onSubmit={async (e) => {
             e.preventDefault();
             if (!requestForm.owner_name || !requestForm.rent_month || !requestForm.arrange_for) {
@@ -862,7 +863,7 @@ export default function Rentals() {
 }
 
 // ---------- Raise Rent Form ----------
-function RaiseRentForm({ form, setForm, sites, onSubmit, onCancel }) {
+function RaiseRentForm({ form, setForm, sites, users, onSubmit, onCancel }) {
   const [uploading, setUploading] = useState(false);
 
   const upload = async (file) => {
@@ -923,6 +924,17 @@ function RaiseRentForm({ form, setForm, sites, onSubmit, onCancel }) {
         {form.arrange_for === 'Contractor' && (
           <div><label className="label">Contractor Name</label><input className="input" value={form.contractor_name || ''} onChange={e => setForm(f => ({ ...f, contractor_name: e.target.value }))} /></div>
         )}
+        <div className="col-span-2">
+          <label className="label">Employee Name <span className="text-gray-400 font-normal text-[10px]">(room occupant)</span></label>
+          <SearchableSelect
+            options={(users || []).map(u => ({ ...u, label: u.name + (u.department ? ` — ${u.department}` : '') }))}
+            value={form.employee_user_id || null}
+            valueKey="id"
+            displayKey="label"
+            placeholder="Search employee…"
+            onChange={(u) => setForm(f => ({ ...f, employee_user_id: u?.id || '', employee_name: u?.name || '' }))}
+          />
+        </div>
         <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Room Owner</h5></div>
         <div><label className="label">Owner Name *</label><input className="input" required value={form.owner_name || ''} onChange={e => setForm(f => ({ ...f, owner_name: e.target.value }))} /></div>
         <div><label className="label">Owner Phone</label><input className="input" value={form.owner_phone || ''} onChange={e => setForm(f => ({ ...f, owner_phone: e.target.value }))} /></div>

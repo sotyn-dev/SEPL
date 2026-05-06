@@ -1702,6 +1702,10 @@ function initializeDatabase() {
     // then bank details, if upi fill upi').
     ['rent_requests', `payment_mode TEXT DEFAULT 'Bank'`],
     ['rent_requests', 'upi_id TEXT'],
+    // Employee the rent is being arranged for (room occupant). Snapshot
+    // the name so it survives if the user is later deactivated/renamed.
+    ['rent_requests', 'employee_user_id INTEGER REFERENCES users(id)'],
+    ['rent_requests', 'employee_name TEXT'],
     ['payroll_settings', 'late_grace_count INTEGER DEFAULT 3'],
     ['payroll_settings', 'late_per_minute_rate REAL DEFAULT 20'],
     // Salary breakdown percentages — match SEPL Tally slip format
