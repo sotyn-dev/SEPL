@@ -40,11 +40,24 @@ router.get('/my-month', (req, res) => {
   ).all(req.user.id, monthStart, monthEnd);
 
   const leaves = db.prepare(
-    `SELECT leave_type, from_date, to_date, status
+    `SELECT leave_type, from_date, to_date, status, hours, days
      FROM leave_requests
      WHERE user_id=? AND status='approved'
        AND NOT (to_date < ? OR from_date > ?)`
   ).all(req.user.id, monthStart, monthEnd);
+
+  // Pull configured late-cutoff from payroll_settings so the dashboard
+  // late-count reflects mam's actual policy (e.g. 09:30) instead of the
+  // hard-coded 09:45 from the punch-in flow. Falls back to 09:45 if the
+  // settings table doesn't exist yet on a stale DB.
+  let lateCutoffMin = 9 * 60 + 45;
+  try {
+    const ps = db.prepare(`SELECT late_after_time FROM payroll_settings WHERE id=1`).get();
+    if (ps?.late_after_time) {
+      const [h, m] = ps.late_after_time.split(':').map(Number);
+      lateCutoffMin = h * 60 + (m || 0);
+    }
+  } catch {}
 
   // Build a per-day map of status. Key = YYYY-MM-DD.
   // Order of precedence: attendance row wins; else leave; else (past weekdays) absent; future = blank.
@@ -61,11 +74,20 @@ router.get('/my-month', (req, res) => {
     const isWeekend = dow === 0;
     const att = attendance.find(a => a.date === dateStr);
     // Is this day inside any approved leave range?
-    const onLeave = leaves.find(l => dateStr >= l.from_date && dateStr <= l.to_date);
+    const onLeave = leaves.find(l => dateStr >= l.from_date && dateStr <= l.to_date && l.leave_type !== 'short_leave');
     let status;
     if (att) {
       status = att.status;
       totalHours += +att.total_hours || 0;
+      // Re-classify as 'late' based on the configured late_after_time
+      // (rather than the hard-coded threshold the punch-in flow used).
+      if (status === 'present' && att.punch_in_time) {
+        const piDate = new Date(att.punch_in_time);
+        if (!isNaN(piDate)) {
+          const piMin = piDate.getHours() * 60 + piDate.getMinutes();
+          if (piMin > lateCutoffMin) status = 'late';
+        }
+      }
     } else if (onLeave) {
       status = 'on_leave';
     } else if (isWeekend) {
@@ -78,6 +100,13 @@ router.get('/my-month', (req, res) => {
     if (byStatus[status] !== undefined) byStatus[status]++;
     days.push({ date: dateStr, day: d, dow, status });
   }
+
+  // Short leave summary — count and sum hours across this month's
+  // approved short_leave entries. Mam: 'not like which I fill shortleave
+  // mins/hours according to month current'.
+  const shortLeaves = leaves.filter(l => l.leave_type === 'short_leave');
+  const shortLeaveCount = shortLeaves.length;
+  const shortLeaveHours = shortLeaves.reduce((s, l) => s + (+l.hours || 0), 0);
 
   // Current-week summary (Mon-Sun of the week containing today). If the user
   // is viewing a different month via ?month=, still compute the week relative
@@ -124,6 +153,8 @@ router.get('/my-month', (req, res) => {
     summary: {
       ...byStatus,
       total_hours: Math.round(totalHours * 100) / 100,
+      short_leave_count: shortLeaveCount,
+      short_leave_hours: Math.round(shortLeaveHours * 100) / 100,
     },
     week: {
       start: weekStartStr,

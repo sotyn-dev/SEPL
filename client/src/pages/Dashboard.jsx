@@ -132,7 +132,15 @@ export default function Dashboard() {
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3 text-center text-xs">
               <div className="bg-emerald-50 rounded p-2"><div className="font-bold text-emerald-700 text-lg">{summary.present}</div><div className="text-emerald-600">Present</div></div>
               <div className="bg-amber-50 rounded p-2"><div className="font-bold text-amber-700 text-lg">{summary.late}</div><div className="text-amber-600">Late</div></div>
-              <div className="bg-orange-50 rounded p-2"><div className="font-bold text-orange-700 text-lg">{summary.half_day + summary.short_day}</div><div className="text-orange-600">Half/Short</div></div>
+              <div className="bg-orange-50 rounded p-2">
+                <div className="font-bold text-orange-700 text-lg">
+                  {summary.half_day + summary.short_day}
+                  {summary.short_leave_count > 0 && (
+                    <span className="text-[10px] font-normal text-orange-600 ml-1">+{summary.short_leave_count}sl</span>
+                  )}
+                </div>
+                <div className="text-orange-600">Half/Short {summary.short_leave_hours > 0 && <span className="text-[9px]">({summary.short_leave_hours}h)</span>}</div>
+              </div>
               <div className="bg-blue-50 rounded p-2"><div className="font-bold text-blue-700 text-lg">{summary.on_leave}</div><div className="text-blue-600">On Leave</div></div>
               <div className="bg-red-50 rounded p-2"><div className="font-bold text-red-700 text-lg">{summary.absent}</div><div className="text-red-600">Absent</div></div>
               <div className="bg-gray-50 rounded p-2"><div className="font-bold text-gray-700 text-lg">{summary.total_hours}</div><div className="text-gray-600">Total Hrs</div></div>
