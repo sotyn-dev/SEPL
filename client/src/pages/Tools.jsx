@@ -323,6 +323,30 @@ export default function Tools() {
             </div>
             <div><label className="label">Last Calibration</label><input type="date" className="input" value={form.last_calibration_date || ''} onChange={e => setForm(f => ({ ...f, last_calibration_date: e.target.value }))} /></div>
             <div><label className="label">Next Calibration</label><input type="date" className="input" value={form.next_calibration_date || ''} onChange={e => setForm(f => ({ ...f, next_calibration_date: e.target.value }))} /></div>
+            {/* Site / user assignment — mam: lets her correct where a tool
+                is parked without going through the Issue / Return flow. */}
+            <div>
+              <label className="label">Current Site</label>
+              <SearchableSelect
+                options={sites}
+                value={form.current_site_id || null}
+                valueKey="id"
+                displayKey="name"
+                placeholder="Pick site…"
+                onChange={(s) => setForm(f => ({ ...f, current_site_id: s?.id || '' }))}
+              />
+            </div>
+            <div>
+              <label className="label">Issued To <span className="text-gray-400 font-normal text-[10px]">(employee)</span></label>
+              <SearchableSelect
+                options={users.map(u => ({ ...u, label: u.name + (u.department ? ` — ${u.department}` : '') }))}
+                value={form.current_user_id || null}
+                valueKey="id"
+                displayKey="label"
+                placeholder="Pick employee…"
+                onChange={(u) => setForm(f => ({ ...f, current_user_id: u?.id || '' }))}
+              />
+            </div>
             <div className="col-span-2"><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
           </div>
           <div className="flex justify-end gap-2 pt-2 border-t">
