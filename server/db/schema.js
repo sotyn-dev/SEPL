@@ -1943,6 +1943,11 @@ function initializeDatabase() {
     // a loss; optional otherwise.
     // Categories: Money / Machine / Material / Manpower / Site Clearance.
     ['dpr', 'hindrance_category TEXT'],
+    // Per-entry working sheet upload on Business Book — mam: 'upload here
+    // file option call working sheet'. Stores the URL of the uploaded
+    // file (Excel / PDF / etc) so admin can attach the costing /
+    // calculation sheet to each booked order.
+    ['business_book', 'working_sheet_link TEXT'],
     // Indent items now pick from item_master; keeps backward-compat description too
     ['indent_items', 'item_master_id INTEGER REFERENCES item_master(id)'],
     ['indent_items', 'make TEXT'],                 // e.g. "Schneider", "L&T"

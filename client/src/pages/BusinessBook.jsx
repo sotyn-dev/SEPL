@@ -237,6 +237,9 @@ export default function BusinessBook() {
                   <td className="px-3 py-3">
                     <div className="flex items-center justify-center gap-1">
                       <button onClick={() => handleView(b)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="View"><FiEye size={15} /></button>
+                      {b.working_sheet_link && (
+                        <a href={b.working_sheet_link} target="_blank" rel="noreferrer" className="p-1.5 text-blue-600 hover:bg-blue-50 rounded" title="Working Sheet">📎</a>
+                      )}
                       {canEdit('business_book') && <button onClick={() => handleEdit(b)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded" title="Edit"><FiEdit2 size={15} /></button>}
                       {canDelete('business_book') && <button onClick={() => handleDelete(b.id, b.lead_no)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete"><FiTrash2 size={15} /></button>}
                     </div>
@@ -423,6 +426,39 @@ export default function BusinessBook() {
                     }}
                     className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100" />
                 )}
+              </div>
+            </div>
+          </FSection>
+
+          {/* 10. Working Sheet Upload — mam: 'upload here file option call
+              working sheet'. Per-entry costing/calculation document (Excel /
+              PDF) attached to each booked order. */}
+          <FSection title="Working Sheet" color="blue">
+            <div className="grid grid-cols-1 gap-3">
+              <div>
+                <label className="label flex items-center gap-2"><FiUpload size={14} /> Upload Working Sheet</label>
+                {form.working_sheet_link ? (
+                  <div className="flex items-center gap-2">
+                    <a href={form.working_sheet_link} target="_blank" rel="noreferrer" className="text-sm text-blue-600 underline truncate flex-1">
+                      📎 {form.working_sheet_link.split('/').pop()}
+                    </a>
+                    <button type="button" onClick={() => F('working_sheet_link', '')} className="text-red-500 text-xs hover:underline">Remove</button>
+                  </div>
+                ) : (
+                  <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.jpg,.jpeg,.png"
+                    onChange={async (e) => {
+                      const file = e.target.files[0]; if (!file) return;
+                      try {
+                        const fd = new FormData(); fd.append('file', file);
+                        const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                        F('working_sheet_link', res.data.url);
+                        toast.success(`Uploaded: ${res.data.filename}`);
+                      } catch { toast.error('Upload failed'); }
+                      e.target.value = '';
+                    }}
+                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+                )}
+                <p className="text-[10px] text-gray-500 mt-1">Costing / calculation sheet for this order (Excel, PDF, CSV, image).</p>
               </div>
             </div>
           </FSection>

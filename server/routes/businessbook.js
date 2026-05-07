@@ -26,6 +26,7 @@ const ALL_FIELDS = [
   'po_number', 'po_date', 'po_copy_link',
   'boq_file_link', 'boq_signed_link', 'tpa_material_link', 'tpa_material_signed_link',
   'tpa_labour_link', 'tpa_labour_signed_link', 'final_drawing_link',
+  'working_sheet_link',
   'remarks', 'status'
 ];
 
@@ -106,8 +107,9 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
     po_number, po_date, po_copy_link,
     boq_file_link, boq_signed_link, tpa_material_link, tpa_material_signed_link,
     tpa_labour_link, tpa_labour_signed_link, final_drawing_link,
+    working_sheet_link,
     remarks, created_by
-  ) VALUES (${Array(69).fill('?').join(',')})`).run(
+  ) VALUES (${Array(70).fill('?').join(',')})`).run(
     leadNo, b.lead_type || 'Private', b.client_name, b.company_name, b.project_name, b.client_contact, b.client_email, b.email_address,
     b.source_of_enquiry, b.district, b.state, b.billing_address, b.shipping_address,
     b.guarantee_required || 'No', b.guarantee_percentage, b.sale_amount_without_gst || 0, b.po_amount || 0,
@@ -128,6 +130,7 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
     b.po_number, b.po_date || null, b.po_copy_link,
     b.boq_file_link, b.boq_signed_link, b.tpa_material_link, b.tpa_material_signed_link,
     b.tpa_labour_link, b.tpa_labour_signed_link, b.final_drawing_link,
+    b.working_sheet_link || null,
     b.remarks, req.user.id
   );
   const bbId = r.lastInsertRowid;
@@ -207,6 +210,7 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
     po_number=?, po_date=?, po_copy_link=?,
     boq_file_link=?, boq_signed_link=?, tpa_material_link=?, tpa_material_signed_link=?,
     tpa_labour_link=?, tpa_labour_signed_link=?, final_drawing_link=?,
+    working_sheet_link=?,
     remarks=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(
     b.lead_type, b.client_name, b.company_name, b.project_name, b.client_contact, b.client_email, b.email_address,
     b.source_of_enquiry, b.district, b.state, b.billing_address, b.shipping_address,
@@ -228,6 +232,7 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
     b.po_number, b.po_date || null, b.po_copy_link,
     b.boq_file_link, b.boq_signed_link, b.tpa_material_link, b.tpa_material_signed_link,
     b.tpa_labour_link, b.tpa_labour_signed_link, b.final_drawing_link,
+    b.working_sheet_link || null,
     b.remarks, b.status, req.params.id
   );
   res.json({ message: 'Updated' });
