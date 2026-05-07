@@ -76,6 +76,13 @@ export function AuthProvider({ children }) {
   const canEdit = (module) => can(module, 'edit');
   const canDelete = (module) => can(module, 'delete');
   const canApprove = (module) => can(module, 'approve');
+  // The "See All" toggle in the role matrix — bypasses scope filters
+  // (e.g. show every help ticket / DPR / cashflow project, not just
+  // the user's own). Admin always passes.
+  const canSeeAll = (module) => {
+    if (user?.role === 'admin') return true;
+    return !!permissions[module]?.can_see_all;
+  };
   const isAdmin = () => user?.role === 'admin';
 
   // Called after the user successfully saves a recovery code so the
@@ -86,7 +93,7 @@ export function AuthProvider({ children }) {
     <AuthContext.Provider value={{
       user, token, permissions, userRoles,
       login, logout, loading,
-      can, canView, canCreate, canEdit, canDelete, canApprove, isAdmin,
+      can, canView, canCreate, canEdit, canDelete, canApprove, canSeeAll, isAdmin,
       markRecoveryCodeSet,
     }}>
       {children}

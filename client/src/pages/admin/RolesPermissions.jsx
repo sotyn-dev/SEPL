@@ -30,6 +30,7 @@ const ALL_MODULES = [
   { key: 'complaints', label: 'Complaints' },
   { key: 'snags', label: 'Snag List' },
   { key: 'company_assets', label: 'Company Assets' },
+  { key: 'help_tickets', label: 'Help Tickets' },
   { key: 'hr', label: 'HR & Hiring' },
   { key: 'payroll', label: 'Payroll' },
   { key: 'scoring', label: 'Weekly Score' },

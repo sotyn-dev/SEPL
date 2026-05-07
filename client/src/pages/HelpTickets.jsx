@@ -27,7 +27,11 @@ const CATEGORIES = ['bug', 'feature_request', 'how_to', 'access_issue', 'data_is
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 
 export default function HelpTickets() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, canSeeAll } = useAuth();
+  // Mam: 'help tickets also permission one PC we need to followup all
+  // help tickets'. Anyone with help_tickets.see_all (or admin) can see
+  // every ticket and triage them.
+  const canFollowAll = isAdmin() || canSeeAll('help_tickets');
   const [scope, setScope] = useState('mine');     // mine | given | all
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
@@ -55,9 +59,9 @@ export default function HelpTickets() {
     Promise.all([
       api.get('/support?scope=mine').then(r => r.data?.length || 0).catch(() => 0),
       api.get('/support?scope=given').then(r => r.data?.length || 0).catch(() => 0),
-      isAdmin() ? api.get('/support?scope=all').then(r => r.data?.length || 0).catch(() => 0) : Promise.resolve(0),
+      canFollowAll ? api.get('/support?scope=all').then(r => r.data?.length || 0).catch(() => 0) : Promise.resolve(0),
     ]).then(([m, g, a]) => setCounts({ mine: m, given: g, all: a }));
-  }, [tickets.length, isAdmin]);
+  }, [tickets.length, canFollowAll]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -123,7 +127,7 @@ export default function HelpTickets() {
         {[
           { id: 'mine',  label: 'Assigned to me',  count: counts.mine },
           { id: 'given', label: 'Raised by me',    count: counts.given },
-          ...(isAdmin() ? [{ id: 'all', label: 'All tickets (admin)', count: counts.all }] : []),
+          ...(canFollowAll ? [{ id: 'all', label: isAdmin() ? 'All tickets (admin)' : 'All tickets (follow-up)', count: counts.all }] : []),
         ].map(t => (
           <button key={t.id} onClick={() => setScope(t.id)}
             className={`px-4 py-2 rounded-lg text-sm font-medium border ${scope === t.id ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>
@@ -163,7 +167,7 @@ export default function HelpTickets() {
             {filtered.map(t => {
               const isRaiser = t.user_id === user?.id;
               const isAssignee = t.assigned_to === user?.id;
-              const canClose = isAdmin() || isRaiser;
+              const canClose = canFollowAll || isRaiser;
               return (
                 <tr key={t.id} className="border-t hover:bg-gray-50 cursor-pointer" onClick={() => { setViewModal(t); setResponse(t.admin_response || ''); setReassign(t.assigned_to || ''); }}>
                   <td className="px-3 py-2 font-mono text-xs text-red-700 font-semibold">{t.ticket_no}</td>
@@ -178,7 +182,7 @@ export default function HelpTickets() {
                     {canClose && t.status !== 'resolved' && t.status !== 'closed' && (
                       <button onClick={() => update(t.id, { status: 'resolved' })} className="text-[10px] text-emerald-700 font-bold hover:underline mr-2" title="Mark resolved">Close</button>
                     )}
-                    {(isAdmin() || isRaiser) && (
+                    {(canFollowAll || isRaiser) && (
                       <button onClick={() => del(t)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={12} /></button>
                     )}
                   </td>
@@ -252,8 +256,8 @@ export default function HelpTickets() {
         {viewModal && (() => {
           const isRaiser = viewModal.user_id === user?.id;
           const isAssignee = viewModal.assigned_to === user?.id;
-          const canClose = isAdmin() || isRaiser;
-          const canRespond = isAdmin() || isAssignee || isRaiser;
+          const canClose = canFollowAll || isRaiser;
+          const canRespond = canFollowAll || isAssignee || isRaiser;
           return (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 text-sm">
@@ -287,7 +291,7 @@ export default function HelpTickets() {
                   <textarea className="input" rows="3" value={response} onChange={e => setResponse(e.target.value)} placeholder="What's the status, plan, or fix..." />
                 </div>
               )}
-              {isAdmin() && (
+              {canFollowAll && (
                 <div>
                   <label className="label">Reassign To</label>
                   <SearchableSelect
@@ -302,10 +306,10 @@ export default function HelpTickets() {
               <div className="flex flex-wrap justify-end gap-2 pt-2 border-t">
                 <button onClick={() => setViewModal(null)} className="btn btn-secondary">Close</button>
                 {canRespond && viewModal.status !== 'resolved' && viewModal.status !== 'closed' && (
-                  <button onClick={() => update(viewModal.id, { status: 'in_progress', admin_response: response, ...(isAdmin() && reassign !== viewModal.assigned_to ? { assigned_to: reassign || null } : {}) })} className="btn btn-secondary text-amber-700">Mark In Progress</button>
+                  <button onClick={() => update(viewModal.id, { status: 'in_progress', admin_response: response, ...(canFollowAll && reassign !== viewModal.assigned_to ? { assigned_to: reassign || null } : {}) })} className="btn btn-secondary text-amber-700">Mark In Progress</button>
                 )}
                 {canRespond && (
-                  <button onClick={() => update(viewModal.id, { admin_response: response, ...(isAdmin() && reassign !== viewModal.assigned_to ? { assigned_to: reassign || null } : {}) })} className="btn btn-primary">Save Response</button>
+                  <button onClick={() => update(viewModal.id, { admin_response: response, ...(canFollowAll && reassign !== viewModal.assigned_to ? { assigned_to: reassign || null } : {}) })} className="btn btn-primary">Save Response</button>
                 )}
                 {canClose && viewModal.status !== 'resolved' && viewModal.status !== 'closed' && (
                   <button onClick={() => update(viewModal.id, { status: 'resolved', admin_response: response || viewModal.admin_response })} className="btn btn-success flex items-center gap-1"><FiCheckCircle size={12} /> Mark Resolved</button>

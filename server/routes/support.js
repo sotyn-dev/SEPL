@@ -9,21 +9,34 @@ router.use(authMiddleware);
 // the slice:
 //   mine  -> assigned_to = current user (default for non-admins on the page)
 //   given -> user_id = current user (raised by me)
-//   all   -> everything (admin only)
+//   all   -> everything (admin OR users with help_tickets.see_all)
+//
+// Mam: 'help tickets also permission one PC we need to followup all help
+// tickets'. The help_tickets module See All toggle in Roles & Permissions
+// lets her give one specific user/role access to every ticket without
+// making them full admin.
 router.get('/', (req, res) => {
   const db = getDb();
   const user = db.prepare('SELECT role FROM users WHERE id=?').get(req.user.id);
   const isAdmin = user?.role === 'admin';
+  // can_see_all OR can_approve on help_tickets → treated as "follow-up everything"
+  const seeAllRow = db.prepare(`
+    SELECT MAX(CASE WHEN rp.can_see_all = 1 OR rp.can_approve = 1 THEN 1 ELSE 0 END) as ok
+    FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+    WHERE ur.user_id = ? AND rp.module = 'help_tickets'
+  `).get(req.user.id);
+  const canSeeAll = isAdmin || !!seeAllRow?.ok;
   const scope = String(req.query.scope || '').toLowerCase();
   const status = req.query.status;
   const where = [];
   const params = [];
   if (scope === 'mine') { where.push('t.assigned_to = ?'); params.push(req.user.id); }
   else if (scope === 'given') { where.push('t.user_id = ?'); params.push(req.user.id); }
-  else if (scope === 'all' && !isAdmin) {
-    // non-admins can't see everything; fall back to OR of mine+given
+  else if (scope === 'all' && !canSeeAll) {
+    // No See-All permission → fall back to OR of mine+given so the URL
+    // can't be used to leak other users' tickets.
     where.push('(t.user_id = ? OR t.assigned_to = ?)'); params.push(req.user.id, req.user.id);
-  } else if (!scope && !isAdmin) {
+  } else if (!scope && !canSeeAll) {
     where.push('(t.user_id = ? OR t.assigned_to = ?)'); params.push(req.user.id, req.user.id);
   }
   if (status) { where.push('t.status = ?'); params.push(status); }
@@ -120,15 +133,24 @@ router.put('/:id', (req, res) => {
   const ticket = db.prepare('SELECT * FROM support_tickets WHERE id=?').get(req.params.id);
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
   const isAdmin = user?.role === 'admin';
+  // Mam's follow-up role: anyone with help_tickets.can_see_all OR
+  // can_approve gets the same powers as admin for triage (close /
+  // reassign / respond on any ticket).
+  const seeAllRow = db.prepare(`
+    SELECT MAX(CASE WHEN rp.can_see_all = 1 OR rp.can_approve = 1 THEN 1 ELSE 0 END) as ok
+    FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+    WHERE ur.user_id = ? AND rp.module = 'help_tickets'
+  `).get(req.user.id);
+  const canFollowAll = isAdmin || !!seeAllRow?.ok;
   const isAssignee = ticket.assigned_to === req.user.id;
   const isRaiser = ticket.user_id === req.user.id;
   const closing = (status === 'resolved' || status === 'closed');
 
-  if (!isAdmin) {
+  if (!canFollowAll) {
     if (closing && !isRaiser) {
       return res.status(403).json({ error: 'Only the person who raised this ticket (or admin) can close it' });
     }
-    if (assigned_to !== undefined) return res.status(403).json({ error: 'Only admin can reassign a ticket' });
+    if (assigned_to !== undefined) return res.status(403).json({ error: 'Only admin / follow-up role can reassign a ticket' });
     if (!isAssignee && !isRaiser) {
       return res.status(403).json({ error: 'Only the assignee, raiser, or admin can update this ticket' });
     }
@@ -142,14 +164,14 @@ router.put('/:id', (req, res) => {
        status = COALESCE(?, status),
        admin_response = COALESCE(?, admin_response),
        priority = COALESCE(?, priority),
-       assigned_to = ${isAdmin && assigned_to !== undefined ? '?' : 'assigned_to'},
+       assigned_to = ${canFollowAll && assigned_to !== undefined ? '?' : 'assigned_to'},
        resolved_by = ?,
        resolved_at = ?,
        updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`
   ).run(
     status, admin_response, priority,
-    ...(isAdmin && assigned_to !== undefined ? [assigned_to ? +assigned_to : null] : []),
+    ...(canFollowAll && assigned_to !== undefined ? [assigned_to ? +assigned_to : null] : []),
     resolvedBy, resolvedAt, req.params.id
   );
   res.json({ message: 'Updated' });

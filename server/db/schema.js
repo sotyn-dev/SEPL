@@ -2156,7 +2156,7 @@ function initializeDatabase() {
 
   const ALL_MODULES = [
     'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement','cashflow','collections','payment_required','attendance','indent_fms','dpr',
-    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags','company_assets'
+    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags','company_assets','help_tickets'
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
