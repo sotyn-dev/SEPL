@@ -16,6 +16,7 @@
     "postinstall": "npm run build"
   },
   "dependencies": {
+    "@sentry/node": "^8.45.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.0.0",
     "concurrently": "^8.2.2",

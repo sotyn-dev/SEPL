@@ -1,8 +1,23 @@
+// Sentry MUST be required before express/route files so the v8 auto-
+// instrumentation can hook into them. No-op if SENTRY_DSN is unset.
+const sentry = require('./lib/sentry');
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const { initializeDatabase } = require('./db/schema');
+
+// Surface uncaught errors to Sentry (and the console). Without these,
+// PM2 just silently restarts on a crash and we lose the stack trace.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+  sentry.captureException(err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err);
+  sentry.captureException(err);
+});
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -159,6 +174,10 @@ if (fs2.existsSync(clientBuild)) {
   app.get('/', (req, res) => res.json({ status: 'API running', message: 'Frontend not built. Run: npm run build' }));
 }
 
+// Sentry's Express error handler — captures the error and forwards it
+// to the next handler. No-op if Sentry isn't initialized.
+sentry.setupExpressErrorHandler(app);
+
 // Global Express error handler — MUST be after all routes. Ensures every
 // crash in a route handler (including synchronous throws from better-sqlite3)
 // returns a JSON body with the real error, instead of HTML or a blank 500.
@@ -173,12 +192,6 @@ app.use((err, req, res, next) => {
     path: req.originalUrl,
     method: req.method,
   });
-});
-
-// Handle uncaught errors (last-resort crash safety)
-process.on('uncaughtException', (err) => {
-  console.error('UNCAUGHT ERROR:', err.message);
-  console.error(err.stack);
 });
 
 const serverPort = process.env.PORT || 5000;
