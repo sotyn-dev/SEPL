@@ -299,14 +299,30 @@ router.get('/', (req, res) => {
 router.get('/summary', (req, res) => {
   const db = getDb();
   const today = new Date().toISOString().split('T')[0];
-  const activeSites = db.prepare("SELECT COUNT(DISTINCT name) as c FROM sites WHERE status='active'").get();
+  // Use the normalized site key so phantom-duplicate rows (Excel paste
+  // junk) don't inflate the active-site count or the missing-DPR list.
+  const activeSites = db.prepare(
+    `SELECT COUNT(DISTINCT ${siteKeySql('name')}) as c FROM sites WHERE status='active'`
+  ).get();
   const todayDprs = db.prepare('SELECT COUNT(*) as c FROM dpr WHERE report_date=?').get(today);
   const pendingApproval = db.prepare("SELECT COUNT(*) as c FROM dpr WHERE approval_status='pending'").get();
   const billingReady = db.prepare('SELECT COUNT(*) as c FROM dpr WHERE billing_ready=1').get();
   const uid = req.user.id;
   const canSeeAll = dprCanSeeAll(db, req.user);
-  let missingSql = `SELECT MIN(s.id) as id, s.name, s.supervisor FROM sites s WHERE s.status='active'
-    AND s.id NOT IN (SELECT site_id FROM dpr WHERE report_date=?)`;
+  // Display name: strip quotes + collapse double spaces, keep original
+  // case. Filter sites that are 'active' AND have NO sibling row (sharing
+  // the normalized key) which already has a DPR today — otherwise the
+  // same logical site shows up multiple times in the 'NO DPR' panel.
+  let missingSql = `SELECT MIN(s.id) as id,
+    TRIM(REPLACE(REPLACE(REPLACE(REPLACE(s.name, '"', ''), CHAR(39), ''), '  ', ' '), '  ', ' ')) as name,
+    MAX(s.supervisor) as supervisor
+    FROM sites s WHERE s.status='active'
+    AND NOT EXISTS (
+      SELECT 1 FROM sites s2
+       JOIN dpr d ON d.site_id = s2.id
+      WHERE d.report_date = ?
+        AND ${siteKeySql('s2.name')} = ${siteKeySql('s.name')}
+    )`;
   const missingParams = [today];
   if (!canSeeAll) {
     missingSql += ` AND (s.site_engineer_id = ? OR EXISTS (
@@ -316,7 +332,7 @@ router.get('/summary', (req, res) => {
     ))`;
     missingParams.push(uid, `%,${uid},%`, uid);
   }
-  missingSql += ' GROUP BY s.name';
+  missingSql += ` GROUP BY ${siteKeySql('s.name')} ORDER BY name`;
   const missingSites = db.prepare(missingSql).all(...missingParams);
   const variance = db.prepare(`SELECT d.report_date, s.name as site_name,
     COALESCE(AVG(w.variance_pct),0) as avg_variance
