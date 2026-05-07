@@ -133,6 +133,7 @@ export default function CashFlow() {
                   <th className="px-2 py-2 text-right" title="Completion days (manual override available)">Compl.</th>
                   <th className="px-2 py-2 text-right" title="Payment days (manual)">Pmt</th>
                   <th className="px-2 py-2 text-right font-bold" title="Total = Completion + Payment">Total</th>
+                  <th className="px-2 py-2 text-center" title="Last payment received date — auto-calculated as Live - Inv Days. Updates the moment you save Inv Days / Completion / Payment days.">Last Pmt Date</th>
                   <th className="px-2 py-2 text-center w-16"></th>
                 </tr>
               </thead>
@@ -196,6 +197,24 @@ export default function CashFlow() {
                     <td className="px-2 py-2 text-right tabular-nums">{p.payment_days || dash}</td>
                   )}
                   <td className="px-2 py-2 text-right font-bold text-base text-gray-800 tabular-nums">{p.total_days || dash}</td>
+                  {/* Last Payment Received Date — auto-calculated. Mam:
+                      'in here last payment rec date calculate when I update
+                      inv days, complete date, payment days'.
+                      Formula: LIVE date − Inv Days. If Inv Days isn't set,
+                      falls back to LIVE − Total Days (completion + payment).
+                      Read-only — refreshes automatically on every save. */}
+                  <td className="px-2 py-2 text-center text-[11px] text-blue-700 font-semibold whitespace-nowrap">
+                    {(() => {
+                      const live = p.live_date ? new Date(p.live_date) : null;
+                      if (!live || isNaN(live)) return dash;
+                      const daysToBack = +p.payment_investment_days > 0
+                        ? +p.payment_investment_days
+                        : (+p.total_days > 0 ? +p.total_days : 0);
+                      if (!daysToBack) return dash;
+                      const lastPaid = new Date(live.getTime() - daysToBack * 24 * 60 * 60 * 1000);
+                      return fmtDate(lastPaid.toISOString().slice(0, 10));
+                    })()}
+                  </td>
                   <td className="px-1 py-1 text-center">{editing ? (
                     <div className="flex gap-1 justify-center">
                       <button onClick={()=>saveManualFields(p.id)} className="p-1.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded" title="Save"><FiCheck size={14} /></button>
@@ -214,7 +233,7 @@ export default function CashFlow() {
                 <td></td>
                 <td className="px-2 py-3 text-right tabular-nums">{fmt(filtered.reduce((s, p) => s + p.aanchal_value, 0) * 100000)}</td>
                 <td className="px-2 py-3 text-right text-red-700 tabular-nums">{fmtL(filtered.reduce((s, p) => s + p.purchase_value, 0))}</td>
-                <td colSpan="7"></td>
+                <td colSpan="8"></td>
               </tr></tfoot>
             </table></div>
           </div>
