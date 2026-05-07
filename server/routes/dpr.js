@@ -4,6 +4,21 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
+// Bypass the site-engineer scope filter when the user's role has
+// can_approve OR can_see_all on the 'dpr' module — that's the
+// explicit "See All" toggle in Roles & Permissions. Mam ticks
+// See All on DPR for CRM / Accounts / Auditor and they get the
+// full list like an admin.
+function dprCanSeeAll(db, user) {
+  if (user.role === 'admin') return true;
+  const r = db.prepare(`
+    SELECT MAX(CASE WHEN rp.can_approve = 1 OR rp.can_see_all = 1 THEN 1 ELSE 0 END) as ok
+    FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+    WHERE ur.user_id = ? AND rp.module = 'dpr'
+  `).get(user.id);
+  return !!r?.ok;
+}
+
 // ===== SITES =====
 // Non-admins see only sites where they are assigned as a site engineer —
 // either directly on the site row, or via a PO linked to that site whose
@@ -16,6 +31,7 @@ router.get('/sites', (req, res) => {
   // Required where every employee should see every site (not just the ones
   // assigned to them as a site engineer).
   const all = req.query.all === '1' || req.query.all === 'true';
+  const canSeeAll = dprCanSeeAll(db, req.user);
 
   let sql = `SELECT MIN(s.id) as id, s.name, s.address, s.client_name, s.po_id, s.business_book_id,
     s.site_engineer_id, s.supervisor, s.status, u.name as engineer_name, bb.lead_no,
@@ -25,7 +41,7 @@ router.get('/sites', (req, res) => {
     LEFT JOIN business_book bb ON s.business_book_id=bb.id`;
   const params = [];
 
-  if (!isAdmin && !all) {
+  if (!canSeeAll && !all) {
     sql += ` WHERE (s.site_engineer_id = ? OR EXISTS (
       SELECT 1 FROM purchase_orders po
       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
@@ -215,15 +231,16 @@ router.get('/sites/:site_id/po-items', (req, res) => {
 // ===== DPR =====
 router.get('/', (req, res) => {
   const { site_id, date, status } = req.query;
-  const isAdmin = req.user.role === 'admin';
+  const db = getDb();
   const uid = req.user.id;
+  const canSeeAll = dprCanSeeAll(db, req.user);
   let sql = `SELECT d.*, s.name as site_name, u.name as submitted_by_name, au.name as approved_by_name
     FROM dpr d LEFT JOIN sites s ON d.site_id=s.id LEFT JOIN users u ON d.submitted_by=u.id LEFT JOIN users au ON d.approved_by=au.id WHERE 1=1`;
   const params = [];
   if (site_id) { sql += ' AND d.site_id=?'; params.push(site_id); }
   if (date) { sql += ' AND d.report_date=?'; params.push(date); }
   if (status) { sql += ' AND d.approval_status=?'; params.push(status); }
-  if (!isAdmin) {
+  if (!canSeeAll) {
     sql += ` AND (s.site_engineer_id = ? OR EXISTS (
       SELECT 1 FROM purchase_orders po
       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
@@ -232,7 +249,7 @@ router.get('/', (req, res) => {
     params.push(uid, `%,${uid},%`, uid);
   }
   sql += ' ORDER BY d.report_date DESC, s.name';
-  res.json(getDb().prepare(sql).all(...params));
+  res.json(db.prepare(sql).all(...params));
 });
 
 // Dashboard summary
@@ -243,12 +260,12 @@ router.get('/summary', (req, res) => {
   const todayDprs = db.prepare('SELECT COUNT(*) as c FROM dpr WHERE report_date=?').get(today);
   const pendingApproval = db.prepare("SELECT COUNT(*) as c FROM dpr WHERE approval_status='pending'").get();
   const billingReady = db.prepare('SELECT COUNT(*) as c FROM dpr WHERE billing_ready=1').get();
-  const isAdmin = req.user.role === 'admin';
   const uid = req.user.id;
+  const canSeeAll = dprCanSeeAll(db, req.user);
   let missingSql = `SELECT MIN(s.id) as id, s.name, s.supervisor FROM sites s WHERE s.status='active'
     AND s.id NOT IN (SELECT site_id FROM dpr WHERE report_date=?)`;
   const missingParams = [today];
-  if (!isAdmin) {
+  if (!canSeeAll) {
     missingSql += ` AND (s.site_engineer_id = ? OR EXISTS (
       SELECT 1 FROM purchase_orders po
       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
@@ -437,8 +454,8 @@ router.delete('/sites/:id', (req, res) => {
 // and a % complete per item and per site.
 router.get('/progress', (req, res) => {
   const db = getDb();
-  const isAdmin = req.user.role === 'admin';
   const uid = req.user.id;
+  const canSeeAll = dprCanSeeAll(db, req.user);
 
   // Base engineer pool: users with Site Engineer role. Non-admins only see themselves.
   let engineers = db.prepare(`
@@ -449,7 +466,7 @@ router.get('/progress', (req, res) => {
     WHERE u.active=1 AND (r.name='Site Engineer' OR u.role='admin')
     ORDER BY u.name
   `).all();
-  if (!isAdmin) engineers = engineers.filter(e => e.id === uid);
+  if (!canSeeAll) engineers = engineers.filter(e => e.id === uid);
 
   const siteSql = `SELECT MIN(s.id) as id, s.name, s.business_book_id, s.po_id, s.site_engineer_id, s.client_name
     FROM sites s
