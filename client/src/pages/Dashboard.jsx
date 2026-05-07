@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiTarget, FiShoppingCart, FiTool, FiAlertCircle, FiUsers, FiCheckSquare, FiUpload, FiClock, FiAlertTriangle, FiExternalLink, FiCalendar, FiHelpCircle } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
+import ErpMantraBanner from '../components/ErpMantraBanner';
 
 export default function Dashboard() {
   const { isAdmin } = useAuth();
@@ -85,6 +86,10 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Daily ERP-culture mantra — rotates by day-of-year so the whole
+          team sees the same quote in their morning standup. */}
+      <ErpMantraBanner />
+
       {/* Stat Cards — each drills into the page it came from */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {cards.map((c, i) => (
