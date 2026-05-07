@@ -13,6 +13,30 @@ function haversine(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// Late detection — read cutoff from payroll_settings (admin-tunable), fall
+// back to 09:45 IST. Returns true if `whenIso` (ISO string in UTC) lies
+// AFTER the IST cutoff for that day.
+//
+// The original implementation called new Date().getHours() which returns
+// UTC hours. On a UTC-running VPS this meant 10:23 IST = 04:53 UTC, so
+// `4 > 9` was false → no one got flagged late before 15:15 IST. Bug
+// affected every attendance row since deploy.
+function isPunchLate(db, whenIso) {
+  let cutoffMin = 9 * 60 + 45; // default 09:45 IST
+  try {
+    const ps = db.prepare('SELECT late_after_time FROM payroll_settings WHERE id=1').get();
+    if (ps?.late_after_time) {
+      const [h, m] = String(ps.late_after_time).split(':').map(Number);
+      cutoffMin = h * 60 + (m || 0);
+    }
+  } catch {}
+  // Shift UTC → IST by adding 5h30m, then read 'UTC' hours/minutes from
+  // the shifted Date — those values are now the actual IST time-of-day.
+  const ist = new Date(new Date(whenIso || Date.now()).getTime() + 5.5 * 60 * 60 * 1000);
+  const istMin = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  return istMin > cutoffMin;
+}
+
 // GET today's attendance for current user.
 // Admin-marked rows are intentionally hidden from the user (mam's request:
 // admin can back-fill present without the user seeing they were marked).
@@ -325,10 +349,10 @@ router.post('/punch-in', (req, res) => {
     return res.status(400).json({ error: `You are ${Math.round(nearestDist)}m away from nearest site (${nearestSite}). Go to your assigned site to punch. Geofence radius: ${geofences[0]?.radius_meters || 200}m.${accNote}` });
   }
 
-  // Check if late (after 9:45 AM)
-  const hours = new Date().getHours();
-  const mins = new Date().getMinutes();
-  const isLate = hours > 9 || (hours === 9 && mins > 45);
+  // Check if late — uses IST timezone + payroll_settings.late_after_time.
+  // Fixes the UTC-vs-IST bug where 10:23 IST (04:53 UTC) was treated as
+  // not-late because getHours() on UTC-running VPS returned 4.
+  const isLate = isPunchLate(db, now);
 
   const r = db.prepare(`INSERT INTO attendance (user_id, date, punch_in_time, punch_in_lat, punch_in_lng, punch_in_address, punch_in_photo, site_name, status)
     VALUES (?,?,?,?,?,?,?,?,?)`).run(req.user.id, today, now, latitude, longitude, address, photo, matchedSite, isLate ? 'late' : 'present');
@@ -547,9 +571,8 @@ function runAutoPunchCheck() {
     const latest = updates[0];
 
     if (!attendance && allInside) {
-      const h = new Date().getHours();
-      const m = new Date().getMinutes();
-      const isLate = h > 9 || (h === 9 && m > 45);
+      // Same IST-aware late check as manual punch-in.
+      const isLate = isPunchLate(db, now);
       try {
         db.prepare(`INSERT INTO attendance
           (user_id, date, punch_in_time, punch_in_lat, punch_in_lng, punch_in_address, site_name, status, auto_punched_in)
