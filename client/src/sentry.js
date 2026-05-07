@@ -48,6 +48,15 @@ if (dsn) {
   });
   // eslint-disable-next-line no-console
   console.log('[sentry] initialized for', dsn.replace(/\/\/.*@/, '//***@'));
+
+  // Expose Sentry on window so admins can fire test events from the
+  // DevTools console without needing access to the bundled module.
+  // Useful for verifying the pipeline end-to-end:
+  //   window.Sentry.captureMessage('hello')
+  //   window.Sentry.captureException(new Error('boom'))
+  if (typeof window !== 'undefined') {
+    window.Sentry = Sentry;
+  }
 }
 
 export { Sentry };
