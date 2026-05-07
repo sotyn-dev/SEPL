@@ -122,7 +122,21 @@ router.get('/dashboard', (req, res) => {
 // project_name is optional — free text so admin can tag tasks with a project
 // without depending on any master list.
 router.post('/', (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can create tasks' });
+  // Allow: legacy admin role OR any user whose role-matrix has
+  // delegations.create / can_approve. Mam's MD (Ankur Kaplesh) is on
+  // a non-admin role with full delegation perms via the matrix — the
+  // old hardcoded `role !== 'admin'` check blocked him from raising
+  // tasks even though he's the senior-most user. The matrix is the
+  // source of truth now.
+  const db = getDb();
+  if (req.user.role !== 'admin') {
+    const ok = db.prepare(`
+      SELECT MAX(CASE WHEN rp.can_create = 1 OR rp.can_approve = 1 THEN 1 ELSE 0 END) as ok
+      FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+      WHERE ur.user_id = ? AND rp.module = 'delegations'
+    `).get(req.user.id);
+    if (!ok?.ok) return res.status(403).json({ error: 'You need Delegations: Create permission to raise tasks' });
+  }
   const { title, description, assigned_to, due_date, project_name, attachment_url } = req.body;
   const desc = String(description || '').trim();
   if (!desc) return res.status(400).json({ error: 'Description is required' });
@@ -130,7 +144,6 @@ router.post('/', (req, res) => {
   const derivedTitle = (title && title.trim()) || desc.split(/\r?\n/)[0].slice(0, 80).trim() || 'Task';
   const project = project_name && String(project_name).trim() ? String(project_name).trim() : null;
   const attachment = attachment_url && String(attachment_url).trim() ? String(attachment_url).trim() : null;
-  const db = getDb();
   const r = db.prepare(
     `INSERT INTO delegations (title, description, assigned_by, assigned_to, due_date, project_name, attachment_url)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
