@@ -345,22 +345,37 @@ router.get('/summary', (req, res) => {
 router.post('/', (req, res) => {
   const { site_id, report_date, weather, overall_status, shift, contractor_name, contractor_manpower, mb_sheet_no,
     floor_zone, system_type, safety_toolbox_talk, safety_ppe_compliance, safety_incidents,
-    next_day_plan, hindrances, remarks, grand_total_a, grand_total_b, profit_loss,
+    next_day_plan, hindrances, hindrance_category, remarks, grand_total_a, grand_total_b, profit_loss,
     work_items, manpower, machinery, materials } = req.body;
 
   if (!site_id || !report_date) return res.status(400).json({ error: 'Site and date required' });
+
+  // Mam: 'in dpr if loss then hindrance/issue which is reason mandatory,
+  // category one select Money / Machine / Material / Manpower / Site
+  // Clearance, after then write reason'. Enforce both at submit-time
+  // when the DPR shows a loss (profit_loss < 0). No-op when profit/break-even.
+  const VALID_CATEGORIES = ['Money', 'Machine', 'Material', 'Manpower', 'Site Clearance'];
+  if ((+profit_loss || 0) < 0) {
+    if (!hindrance_category || !VALID_CATEGORIES.includes(hindrance_category)) {
+      return res.status(400).json({ error: 'Loss recorded — please pick a hindrance category (Money / Machine / Material / Manpower / Site Clearance)' });
+    }
+    if (!hindrances || !String(hindrances).trim()) {
+      return res.status(400).json({ error: 'Loss recorded — please write the hindrance reason' });
+    }
+  }
+
   const db = getDb();
 
   try {
   const r = db.prepare(`INSERT INTO dpr (site_id, report_date, submitted_by, submission_time, weather, overall_status,
     shift, contractor_name, contractor_manpower, mb_sheet_no, grand_total_a, grand_total_b, profit_loss,
     floor_zone, system_type, safety_toolbox_talk, safety_ppe_compliance, safety_incidents,
-    next_day_plan, hindrances, remarks) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    next_day_plan, hindrances, hindrance_category, remarks) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(site_id, report_date, req.user.id, weather || 'clear', overall_status || 'on_track',
       shift || 'day', contractor_name, contractor_manpower || 0, mb_sheet_no,
       grand_total_a || 0, grand_total_b || 0, profit_loss || 0,
       floor_zone, system_type, safety_toolbox_talk ? 1 : 0, safety_ppe_compliance ? 1 : 0,
-      safety_incidents, next_day_plan, hindrances, remarks);
+      safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks);
   const dprId = r.lastInsertRowid;
 
   // Table A: Installation work items from PO

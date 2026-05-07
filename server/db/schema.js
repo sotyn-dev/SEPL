@@ -1937,6 +1937,12 @@ function initializeDatabase() {
     // IMEI for mobile/tablet (separate from generic serial_no).
     ['company_assets', 'ip_address TEXT'],
     ['company_assets', 'imei TEXT'],
+    // When a DPR shows a LOSS (Total B > Total A), mam wants the
+    // hindrance category captured so we can analyse root causes
+    // across sites. Required field at submit-time only when there's
+    // a loss; optional otherwise.
+    // Categories: Money / Machine / Material / Manpower / Site Clearance.
+    ['dpr', 'hindrance_category TEXT'],
     // Indent items now pick from item_master; keeps backward-compat description too
     ['indent_items', 'item_master_id INTEGER REFERENCES item_master(id)'],
     ['indent_items', 'make TEXT'],                 // e.g. "Schneider", "L&T"

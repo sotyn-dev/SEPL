@@ -309,7 +309,7 @@ export default function DPR() {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <input type="date" className="input w-48" value={filterDate} onChange={e => { setFilterDate(e.target.value); setDateTouched(true); }} />
             <button onClick={() => {
-              setForm({ site_id: '', report_date: filterDate, weather: 'clear', overall_status: 'on_track', system_type: '', shift: 'day', contractor_name: '', contractor_manpower: 0, mb_sheet_no: '', safety_toolbox_talk: false, safety_ppe_compliance: false, safety_incidents: '', next_day_plan: '', hindrances: '', remarks: '' });
+              setForm({ site_id: '', report_date: filterDate, weather: 'clear', overall_status: 'on_track', system_type: '', shift: 'day', contractor_name: '', contractor_manpower: 0, mb_sheet_no: '', safety_toolbox_talk: false, safety_ppe_compliance: false, safety_incidents: '', next_day_plan: '', hindrances: '', hindrance_category: '', remarks: '' });
               setWorkItems([]); setPoItemsForSite([]);
               setCosts([
                 { type: 'Skilled Manpower', qty: 0, rate: 800, amount: 0, fixed: true },
@@ -621,11 +621,40 @@ export default function DPR() {
             <div className="mt-2"><input className="input" value={form.safety_incidents || ''} onChange={e => setForm({ ...form, safety_incidents: e.target.value })} placeholder="Safety Incidents (Nil if none)" /></div>
           </div>
 
-          {/* Hindrances + Next Day */}
+          {/* Hindrances + Next Day. Mam's rule: when the day ended in a
+              LOSS (profitLoss < 0), category + reason are MANDATORY so we
+              can analyse root causes across sites. Becomes required
+              automatically based on the live profit/loss calc above. */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="border rounded-lg p-3 bg-orange-50">
-              <h5 className="font-semibold text-sm text-orange-700 mb-2">Hindrances / Issues</h5>
-              <textarea className="input" rows="2" value={form.hindrances || ''} onChange={e => setForm({ ...form, hindrances: e.target.value })} placeholder="Material shortage, Drawing pending..." />
+            <div className={`border rounded-lg p-3 ${profitLoss < 0 ? 'border-red-400 bg-red-50' : 'bg-orange-50'}`}>
+              <h5 className="font-semibold text-sm text-orange-700 mb-2">
+                Hindrances / Issues {profitLoss < 0 && <span className="text-red-700 text-[10px] font-bold ml-1">⚠ MANDATORY (Loss)</span>}
+              </h5>
+              <div className="mb-2">
+                <label className="text-[11px] font-bold text-gray-700 uppercase">Category {profitLoss < 0 && <span className="text-red-600">*</span>}</label>
+                <select
+                  className="select"
+                  required={profitLoss < 0}
+                  value={form.hindrance_category || ''}
+                  onChange={e => setForm({ ...form, hindrance_category: e.target.value })}
+                >
+                  <option value="">— pick category —</option>
+                  <option value="Money">Money</option>
+                  <option value="Machine">Machine</option>
+                  <option value="Material">Material</option>
+                  <option value="Manpower">Manpower</option>
+                  <option value="Site Clearance">Site Clearance</option>
+                </select>
+              </div>
+              <label className="text-[11px] font-bold text-gray-700 uppercase">Reason {profitLoss < 0 && <span className="text-red-600">*</span>}</label>
+              <textarea
+                className="input"
+                rows="2"
+                required={profitLoss < 0}
+                value={form.hindrances || ''}
+                onChange={e => setForm({ ...form, hindrances: e.target.value })}
+                placeholder={profitLoss < 0 ? 'Why did this site lose money today? (mandatory)' : 'Material shortage, Drawing pending...'}
+              />
             </div>
             <div className="border rounded-lg p-3 bg-emerald-50">
               <h5 className="font-semibold text-sm text-emerald-700 mb-2">Next Day Plan</h5>
@@ -704,7 +733,13 @@ export default function DPR() {
                 <span className={selectedDpr.safety_ppe_compliance ? 'text-emerald-600 font-bold' : 'text-red-500'}>PPE: {selectedDpr.safety_ppe_compliance ? 'OK' : 'No'}</span>
               </div>
             )}
-            {selectedDpr.hindrances && <div className="bg-orange-50 p-3 rounded text-sm"><strong className="text-orange-700">Hindrances:</strong> {selectedDpr.hindrances}</div>}
+            {selectedDpr.hindrances && (
+              <div className="bg-orange-50 p-3 rounded text-sm">
+                <strong className="text-orange-700">Hindrances:</strong>
+                {selectedDpr.hindrance_category && <span className="ml-1 text-[10px] px-2 py-0.5 rounded bg-red-100 text-red-700 font-bold uppercase">{selectedDpr.hindrance_category}</span>}
+                <div className="mt-1">{selectedDpr.hindrances}</div>
+              </div>
+            )}
             {selectedDpr.next_day_plan && <div className="bg-emerald-50 p-3 rounded text-sm"><strong className="text-emerald-700">Next Day Plan:</strong> {selectedDpr.next_day_plan}</div>}
             {selectedDpr.remarks && <div className="text-sm"><strong>Remarks:</strong> {selectedDpr.remarks}</div>}
           </div>
