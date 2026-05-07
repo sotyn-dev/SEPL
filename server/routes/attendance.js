@@ -113,12 +113,16 @@ router.get('/my-month', (req, res) => {
     if (att) {
       status = att.status;
       totalHours += +att.total_hours || 0;
-      // Re-classify as 'late' based on the configured late_after_time
-      // (rather than the hard-coded threshold the punch-in flow used).
+      // Re-classify as 'late' based on the configured late_after_time.
+      // CRITICAL: punch_in_time is stored as UTC ISO. To compare against
+      // the IST cutoff (09:45 IST), shift to IST first. Bug before this
+      // fix: getHours() returned UTC hours so 10:23 IST (= 04:53 UTC)
+      // was read as '4:53', never exceeded the 9:45 cutoff, dashboard
+      // showed Late=0 for everyone in the morning shift.
       if (status === 'present' && att.punch_in_time) {
-        const piDate = new Date(att.punch_in_time);
-        if (!isNaN(piDate)) {
-          const piMin = piDate.getHours() * 60 + piDate.getMinutes();
+        const piIst = new Date(new Date(att.punch_in_time).getTime() + 5.5 * 60 * 60 * 1000);
+        if (!isNaN(piIst)) {
+          const piMin = piIst.getUTCHours() * 60 + piIst.getUTCMinutes();
           if (piMin > lateCutoffMin) status = 'late';
         }
       }
