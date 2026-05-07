@@ -13,10 +13,14 @@ function haversine(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// GET today's attendance for current user
+// GET today's attendance for current user.
+// Admin-marked rows are intentionally hidden from the user (mam's request:
+// admin can back-fill present without the user seeing they were marked).
 router.get('/my-today', (req, res) => {
   const today = new Date().toISOString().split('T')[0];
-  const record = getDb().prepare('SELECT * FROM attendance WHERE user_id=? AND date=?').get(req.user.id, today);
+  const record = getDb().prepare(
+    'SELECT * FROM attendance WHERE user_id=? AND date=? AND COALESCE(admin_marked,0)=0'
+  ).get(req.user.id, today);
   res.json(record || null);
 });
 
@@ -34,9 +38,15 @@ router.get('/my-month', (req, res) => {
   const lastDay = new Date(year, month, 0).getDate();
   const monthEnd = `${year}-${pad(month)}-${pad(lastDay)}`;
 
-  // Pull attendance + leave records for this user, this month
+  // Pull attendance + leave records for this user, this month.
+  // Skip admin_marked rows so user-facing views don't reveal admin-overridden
+  // presence (mam's policy).
   const attendance = db.prepare(
-    'SELECT date, status, punch_in_time, punch_out_time, total_hours FROM attendance WHERE user_id=? AND date BETWEEN ? AND ? ORDER BY date'
+    `SELECT date, status, punch_in_time, punch_out_time, total_hours
+       FROM attendance
+      WHERE user_id=? AND date BETWEEN ? AND ?
+        AND COALESCE(admin_marked,0)=0
+      ORDER BY date`
   ).all(req.user.id, monthStart, monthEnd);
 
   const leaves = db.prepare(
@@ -184,7 +194,11 @@ router.get('/dashboard', requirePermission('attendance', 'view'), (req, res) => 
   const db = getDb();
   const today = new Date().toISOString().split('T')[0];
   const totalUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE active=1").get();
-  const presentToday = db.prepare("SELECT COUNT(DISTINCT user_id) as c FROM attendance WHERE date=? AND punch_in_time IS NOT NULL").get(today);
+  // Count admin-marked rows as present too — they're a deliberate override
+  // by admin / HR for users who didn't punch.
+  const presentToday = db.prepare(
+    "SELECT COUNT(DISTINCT user_id) as c FROM attendance WHERE date=? AND (punch_in_time IS NOT NULL OR COALESCE(admin_marked,0)=1)"
+  ).get(today);
   const absentToday = totalUsers.c - presentToday.c;
   const lateToday = db.prepare("SELECT COUNT(*) as c FROM attendance WHERE date=? AND status='late'").get(today);
   const onLeave = db.prepare("SELECT COUNT(*) as c FROM leave_requests WHERE status='approved' AND from_date <= ? AND to_date >= ?").get(today, today);
@@ -203,6 +217,47 @@ router.get('/dashboard', requirePermission('attendance', 'view'), (req, res) => 
     totalUsers: totalUsers.c, present: presentToday.c, absent: absentToday, late: lateToday.c, onLeave: onLeave.c,
     todayRecords, notPunched, geofences
   });
+});
+
+// ADMIN MARK PRESENT — admin override for users who didn't punch (phone
+// dead / no network / forgot). Creates an attendance row flagged
+// admin_marked=1 so the user's own dashboard / month view skips it.
+// Restricted to admins or roles with attendance.approve.
+router.post('/admin-mark', (req, res) => {
+  const { user_id, date, status, remarks } = req.body;
+  if (!user_id || !date) return res.status(400).json({ error: 'user_id and date are required' });
+
+  // Permission gate: admin OR a role with attendance.approve
+  const db = getDb();
+  if (req.user.role !== 'admin') {
+    const ok = db.prepare(`
+      SELECT MAX(CASE WHEN rp.can_approve = 1 THEN 1 ELSE 0 END) as ok
+      FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+      WHERE ur.user_id = ? AND rp.module = 'attendance'
+    `).get(req.user.id);
+    if (!ok?.ok) return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const finalStatus = ['present','half_day','short_day','absent','leave','holiday'].includes(status) ? status : 'present';
+
+  // If a real attendance row already exists (user actually punched), don't
+  // overwrite it. Admin-mark is meant for the missing-row case only.
+  const existing = db.prepare('SELECT id, admin_marked FROM attendance WHERE user_id=? AND date=?').get(user_id, date);
+  if (existing && !existing.admin_marked) {
+    return res.status(400).json({ error: 'User already has an attendance record for this date' });
+  }
+  if (existing && existing.admin_marked) {
+    db.prepare(
+      `UPDATE attendance SET status=?, remarks=?, marked_by=? WHERE id=?`
+    ).run(finalStatus, remarks || null, req.user.id, existing.id);
+    return res.json({ message: 'Updated', id: existing.id });
+  }
+
+  const r = db.prepare(
+    `INSERT INTO attendance (user_id, date, status, remarks, admin_marked, marked_by, total_hours)
+     VALUES (?,?,?,?,1,?, ?)`
+  ).run(user_id, date, finalStatus, remarks || null, req.user.id, finalStatus === 'half_day' ? 4 : finalStatus === 'present' ? 8 : 0);
+  res.status(201).json({ id: r.lastInsertRowid, message: 'Marked' });
 });
 
 // PUNCH IN

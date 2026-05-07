@@ -295,8 +295,25 @@ export default function Attendance() {
             <div className="card bg-red-50 border border-red-200">
               <h4 className="font-bold text-red-700 mb-2"><FiAlertTriangle className="inline mr-1" /> Not Punched In Today ({dashboard.notPunched.length})</h4>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">{dashboard.notPunched.map(u => (
-                <div key={u.id} className="bg-white rounded p-2 text-sm"><span className="font-medium">{u.name}</span><br/><span className="text-xs text-gray-500">{u.department}</span></div>
+                <div key={u.id} className="bg-white rounded p-2 text-sm">
+                  <div className="font-medium">{u.name}</div>
+                  <div className="text-xs text-gray-500 mb-1.5">{u.department}</div>
+                  {/* Admin override — back-fill present for users who didn't
+                      punch. Row is hidden from the user's own dashboard. */}
+                  <button onClick={async () => {
+                    const remark = prompt(`Mark ${u.name} as PRESENT for today?\n\nReason (optional, for audit):`);
+                    if (remark === null) return;
+                    try {
+                      await api.post('/attendance/admin-mark', { user_id: u.id, date: today, status: 'present', remarks: remark });
+                      toast.success(`${u.name} marked present`);
+                      load();
+                    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+                  }} className="btn btn-success text-[10px] py-1 px-2 w-full">
+                    <FiCheckCircle className="inline mr-0.5" size={11} /> Mark Present
+                  </button>
+                </div>
               ))}</div>
+              <p className="text-[10px] text-red-700 mt-2 italic">Admin-marked rows don't appear in the user's own dashboard or month view — only in admin reports.</p>
             </div>
           )}
 
@@ -307,7 +324,7 @@ export default function Attendance() {
               <thead><tr><th>Name</th><th>Dept</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th><th>Photo</th></tr></thead>
               <tbody>{dashboard.todayRecords?.map(r => (
                 <tr key={r.id}>
-                  <td className="font-medium">{r.user_name}</td><td className="text-xs">{r.department}</td>
+                  <td className="font-medium">{r.user_name}{r.admin_marked ? <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded font-bold" title="Admin marked — hidden from user">ADMIN</span> : null}</td><td className="text-xs">{r.department}</td>
                   <td className="text-emerald-600 text-xs">{r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}{r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                   <td className="text-red-600 text-xs">{r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}{r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                   <td className="font-semibold">{r.total_hours || '-'}</td>
@@ -328,7 +345,7 @@ export default function Attendance() {
             <thead><tr><th>Name</th><th>Date</th><th>In</th><th>Out</th><th>Hours</th><th>Site</th><th>Status</th><th>In Photo</th><th>Out Photo</th><th>Actions</th></tr></thead>
             <tbody>{records.map(r => (
               <tr key={r.id}>
-                <td className="font-medium">{r.user_name}</td><td>{r.date}</td>
+                <td className="font-medium">{r.user_name}{r.admin_marked ? <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded font-bold" title="Admin marked — hidden from user">ADMIN</span> : null}</td><td>{r.date}</td>
                 <td className="text-xs">{r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}{r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                 <td className="text-xs">{r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}{r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                 <td className="font-semibold">{r.total_hours || '-'}</td>

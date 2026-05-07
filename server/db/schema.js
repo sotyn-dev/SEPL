@@ -1727,6 +1727,14 @@ function initializeDatabase() {
     ['purchase_orders', 'boq_file_link TEXT'],
     ['attendance', 'auto_punched_in INTEGER DEFAULT 0'],
     ['attendance', 'auto_punched_out INTEGER DEFAULT 0'],
+    // Admin override: mam can mark a user present even if they didn't
+    // punch (typically for site engineers whose phone died or had no
+    // network). The flag hides the row from the user's own My Today /
+    // My Month views so they don't see they were marked — only payroll
+    // / admin / HR reports include it. marked_by stores who did it for
+    // audit; remarks stores the reason mam typed.
+    ['attendance', 'admin_marked INTEGER DEFAULT 0'],
+    ['attendance', 'marked_by INTEGER REFERENCES users(id)'],
     ['users', 'username TEXT'],
     // Inventory link on GRN — when goods are received we now auto-IN
     // them into a chosen warehouse. Both columns are nullable so old
