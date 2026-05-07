@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import api from '../api';
-import { FiPlus, FiEye, FiSearch, FiAlertCircle, FiClock, FiCheckCircle, FiList } from 'react-icons/fi';
+import toast from 'react-hot-toast';
+import { useAuth } from '../context/AuthContext';
+import { FiPlus, FiEye, FiSearch, FiAlertCircle, FiClock, FiCheckCircle, FiList, FiEdit2, FiTrash2 } from 'react-icons/fi';
 
 // Matches mam's "Complaint Register Form 24-25" Google Form. Categories are
 // the SEPL service lines; Customer Type is Old Site / Running Site (not
@@ -29,6 +31,7 @@ const TABS = [
 ];
 
 export default function Complaints() {
+  const { canEdit, canDelete, isAdmin } = useAuth();
   const [list, setList] = useState([]);
   const [stats, setStats] = useState({ total:0, open:0, inProgress:0, resolved:0, byCategory:[] });
   const [q, setQ] = useState({ search:'', status:'', category:'' });
@@ -62,6 +65,20 @@ export default function Complaints() {
     await api.put(`/complaints/${viewing.id}`, viewing);
     setViewing(null);
     load();
+  };
+
+  // Open the view modal in edit mode (same modal — already has all the
+  // fields editable, just opens it directly so the row's pencil = same
+  // experience as the eye icon, but communicates intent to edit).
+  const startEdit = (c) => setViewing({ ...c });
+
+  const remove = async (c) => {
+    if (!confirm(`Delete complaint ${c.complaint_number} (${c.client_name})?\n\nThis cannot be undone.`)) return;
+    try {
+      await api.delete(`/complaints/${c.id}`);
+      toast.success(`Deleted ${c.complaint_number}`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
   };
 
   const badge = (s) => ({
@@ -181,7 +198,15 @@ export default function Complaints() {
                 <td className="px-3 py-2">{c.step1_time_delay ?? '-'} d</td>
                 <td className="px-3 py-2">{c.step2_time_delay ?? '-'} d</td>
                 <td className="px-3 py-2">
-                  <button onClick={() => setViewing({ ...c })} className="text-red-600 hover:text-red-800"><FiEye /></button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setViewing({ ...c })} className="text-red-600 hover:text-red-800" title="View"><FiEye /></button>
+                    {(canEdit('complaints') || isAdmin()) && (
+                      <button onClick={() => startEdit(c)} className="text-blue-600 hover:text-blue-800" title="Edit"><FiEdit2 size={14} /></button>
+                    )}
+                    {(canDelete('complaints') || isAdmin()) && (
+                      <button onClick={() => remove(c)} className="text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
