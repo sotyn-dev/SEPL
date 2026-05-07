@@ -577,12 +577,112 @@ router.post('/indents', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, indent_number: indentNum });
 });
 
+// PUT supports two modes:
+//   1. Approve / reject — body has { status } only.
+//   2. Full edit (mam: site engineers in training submit wrong indents,
+//      should be able to fix instead of delete + re-create) — body has
+//      items[] and the header fields. Allowed only while the indent is
+//      still in 'submitted', 'draft' or 'rejected' state AND no active
+//      Vendor PO has been created against it. Once approved or POed,
+//      it's frozen.
 router.put('/indents/:id', (req, res) => {
-  const { status } = req.body;
+  const { status, items, site_name, raised_by_name, notes } = req.body;
   const db = getDb();
-  db.prepare('UPDATE indents SET status=?, approved_by=? WHERE id=?')
-    .run(status, status === 'approved' ? req.user.id : null, req.params.id);
-  res.json({ message: 'Updated' });
+  const id = req.params.id;
+
+  // Approve / reject path — unchanged.
+  if (status && !items) {
+    db.prepare('UPDATE indents SET status=?, approved_by=? WHERE id=?')
+      .run(status, status === 'approved' ? req.user.id : null, id);
+    return res.json({ message: 'Updated' });
+  }
+
+  // Full edit path
+  if (items) {
+    const cur = db.prepare('SELECT status FROM indents WHERE id=?').get(id);
+    if (!cur) return res.status(404).json({ error: 'Indent not found' });
+    if (cur.status === 'approved') {
+      return res.status(400).json({ error: 'Cannot edit an approved indent' });
+    }
+    const vpoCount = db.prepare(
+      'SELECT COUNT(*) as c FROM vendor_pos WHERE indent_id=? AND COALESCE(cancelled, 0) = 0'
+    ).get(id).c;
+    if (vpoCount > 0) {
+      return res.status(400).json({ error: `Cannot edit — ${vpoCount} active Vendor PO(s) reference this indent` });
+    }
+
+    // Same per-row validation as POST.
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const hasBoq = !!it.po_item_id;
+      const hasSub = !!it.item_master_id;
+      const isManual = it.manual === true || !!String(it.description || '').trim();
+      const qtyOk = +it.quantity > 0;
+      if (!qtyOk) return res.status(400).json({ error: `Row ${i + 1}: Quantity must be greater than 0` });
+      if (isManual) continue;
+      if (hasBoq && hasSub) continue;
+      if (!hasBoq) return res.status(400).json({ error: `Row ${i + 1}: pick a BOQ Item (or type a description for manual entry)` });
+      if (!hasSub) return res.status(400).json({ error: `Row ${i + 1}: pick a Sub-Item (Item Master)` });
+    }
+
+    const tx = db.transaction(() => {
+      db.prepare(
+        `UPDATE indents SET site_name=?, raised_by_name=?, client_name=?, notes=?,
+                            status = CASE WHEN status='rejected' THEN 'submitted' ELSE status END
+         WHERE id=?`
+      ).run(site_name || '', raised_by_name || '', site_name || '', notes || '', id);
+
+      db.prepare('DELETE FROM indent_items WHERE indent_id=?').run(id);
+
+      const getPoItem = db.prepare('SELECT description, unit, quantity as boq_qty, item_master_id FROM po_items WHERE id=?');
+      const getMaster = db.prepare('SELECT item_name, specification, size, uom, type, make FROM item_master WHERE id=?');
+      const insertItem = db.prepare(
+        `INSERT INTO indent_items
+          (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+      );
+      for (const i of items) {
+        let desc = i.description || '';
+        let unit = i.unit || 'nos';
+        let itemType = null;
+        let make = i.make || '';
+        let masterId = i.item_master_id || null;
+
+        const poItemId = Number.isInteger(+i.po_item_id) && +i.po_item_id > 0 ? +i.po_item_id : null;
+        if (poItemId) {
+          const p = getPoItem.get(poItemId);
+          if (p) {
+            desc = p.description || desc;
+            // Respect the user's chosen unit on the line — that's the
+            // whole point of the unit dropdown. Only fall back to the
+            // BOQ's unit if the user didn't pick one.
+            if (!i.unit) unit = p.unit || unit;
+            if (!masterId && p.item_master_id) masterId = p.item_master_id;
+          }
+        }
+        if (masterId) {
+          const m = getMaster.get(masterId);
+          if (m) {
+            itemType = m.type || itemType;
+            if (!make && m.make) make = m.make;
+          }
+        }
+
+        const qty = +i.quantity || 0;
+        const foc = String(itemType || '').toUpperCase() === 'FOC' ? 1 : 0;
+        const tool = String(itemType || '').toUpperCase() === 'RGP' ? 1 : 0;
+        insertItem.run(id, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool);
+      }
+    });
+    try {
+      tx();
+      return res.json({ message: 'Indent updated' });
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  return res.status(400).json({ error: 'Nothing to update' });
 });
 
 router.delete('/indents/:id', (req, res) => {

@@ -5,7 +5,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiCheck, FiX, FiTrash2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle } from 'react-icons/fi';
+import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle } from 'react-icons/fi';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false };
 
@@ -21,7 +21,7 @@ const UNIT_OPTIONS = [
 ];
 
 export default function Procurement() {
-  const { canDelete, canCreate, canApprove, user, isAdmin } = useAuth();
+  const { canDelete, canCreate, canEdit, canApprove, user, isAdmin } = useAuth();
   // Site-engineer-style users see only "Raise Indent" — they don't enter
   // vendor rates, upload Vendor POs, Purchase Bills, or Dispatch. Those
   // tabs are gated by canApprove('procurement'), which admin grants to
@@ -53,6 +53,10 @@ export default function Procurement() {
   const [form, setForm] = useState({});
   const [warehouses, setWarehouses] = useState([]);  // for Mark Received auto-IN
   const [indentItems, setIndentItems] = useState([{ ...EMPTY_ITEM }]);
+  // When set, the Raise Indent modal is in EDIT mode for this indent id —
+  // saveIndent will PUT instead of POST. Used by the Edit pencil action
+  // (mam: 'site eng is on training, if they fill wrong indent can edit').
+  const [editingIndentId, setEditingIndentId] = useState(null);
   const [expandedIndents, setExpandedIndents] = useState(() => new Set());
   const toggleIndentRow = (id) => setExpandedIndents(prev => {
     const next = new Set(prev);
@@ -184,16 +188,57 @@ export default function Procurement() {
       if (!it.item_master_id) return toast.error(`Row ${i + 1}: pick Sub-Item (from Item Master)`);
       if (!(+it.quantity > 0)) return toast.error(`Row ${i + 1}: Quantity must be greater than 0`);
     }
+    const payload = {
+      site_name: form.site_name,
+      raised_by_name: form.raised_by_name,
+      notes: form.notes || '',
+      items: indentItems.map(it => ({ ...it, make: it.make || '' })),
+    };
     try {
-      await api.post('/procurement/indents', {
-        site_name: form.site_name,
-        raised_by_name: form.raised_by_name,
-        notes: form.notes || '',
-        items: indentItems.map(it => ({ ...it, make: it.make || '' })),
-      });
-      toast.success('Indent submitted — awaiting approval');
-      setModal(false); load();
+      if (editingIndentId) {
+        await api.put(`/procurement/indents/${editingIndentId}`, payload);
+        toast.success('Indent updated');
+      } else {
+        await api.post('/procurement/indents', payload);
+        toast.success('Indent submitted — awaiting approval');
+      }
+      setModal(false); setEditingIndentId(null); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  // Pre-fill the Raise Indent modal with an existing indent's data so a
+  // wrongly filled indent can be corrected in place. Indents that are
+  // already approved or have an active Vendor PO against them are
+  // blocked server-side anyway — we just hide the button for those.
+  const openEditIndent = async (indent) => {
+    try {
+      const r = await api.get(`/procurement/indents/${indent.id}`);
+      const data = r.data;
+      setForm({
+        site_name: data.site_name || '',
+        raised_by_name: data.raised_by_name || '',
+        notes: data.notes || '',
+      });
+      // Hydrate boqItems for this site so the BOQ Item dropdown populates.
+      await reloadBoq(data.site_name || '');
+      const rows = (data.items || []).map(it => ({
+        po_item_id: it.po_item_id || '',
+        item_master_id: it.item_master_id || '',
+        description: it.description || '',
+        make: it.make || '',
+        quantity: +it.quantity || 0,
+        unit: it.unit || 'nos',
+        item_type: it.item_type || '',
+        boq_qty: 0,
+        remaining_qty: null,
+        manual: !it.po_item_id && !!it.description,
+      }));
+      setIndentItems(rows.length ? rows : [{ ...EMPTY_ITEM }]);
+      setEditingIndentId(indent.id);
+      setModal('indent');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load indent');
+    }
   };
 
   // Admin only — wipes all indents, vendor POs and related rows. Used when
@@ -538,7 +583,7 @@ export default function Procurement() {
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="font-semibold">Raise Indent</h3>
-            <button onClick={() => { setForm({ notes: '', site_name: '', raised_by_name: user?.name || '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Raise Indent</button>
+            <button onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Raise Indent</button>
           </div>
           <div className="card p-0 overflow-x-auto"><table>
             <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th>Items</th><th>BOQ</th><th>Status</th><th>Actions</th></tr></thead>
@@ -591,6 +636,12 @@ export default function Procurement() {
                         </>
                       )}
                       {i.status === 'draft' && <button onClick={() => approveIndent(i.id, 'submitted')} className="btn btn-primary text-xs py-1 px-2">Submit</button>}
+                      {/* Edit — site engineers in training need to fix wrong
+                          indents. Allowed for submitted / draft / rejected;
+                          approved indents are frozen (server enforces too). */}
+                      {(canEdit('procurement') || isAdmin()) && i.status !== 'approved' && (
+                        <button onClick={() => openEditIndent(i)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit indent"><FiEdit2 size={14} /></button>
+                      )}
                       {canDelete('procurement') && <button onClick={async () => {
                         if (!confirm(`Delete indent "${i.indent_number}"?`)) return;
                         try { await api.delete(`/procurement/indents/${i.id}`); toast.success('Deleted'); load(); }
@@ -1230,7 +1281,7 @@ export default function Procurement() {
       })()}
 
       {/* Indent Modal */}
-      <Modal isOpen={modal === 'indent'} onClose={() => setModal(false)} title="Raise Purchase Indent" wide>
+      <Modal isOpen={modal === 'indent'} onClose={() => { setModal(false); setEditingIndentId(null); }} title={editingIndentId ? 'Edit Purchase Indent' : 'Raise Purchase Indent'} wide>
         <form onSubmit={saveIndent} className="space-y-4">
           {/* Auto timestamp — mirrors the 'Dated' field on the physical form */}
           <div className="text-[11px] text-gray-500 bg-gray-50 rounded px-3 py-1.5 flex justify-between items-center">
@@ -1498,8 +1549,8 @@ export default function Procurement() {
           )}
           <div><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm({...form, notes: e.target.value})} placeholder="Any remarks for Purchase…" /></div>
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
-            <button type="button" onClick={() => setModal(false)} className="btn btn-secondary w-full sm:w-auto">Cancel</button>
-            <button type="submit" className="btn btn-primary w-full sm:w-auto">Submit Indent</button>
+            <button type="button" onClick={() => { setModal(false); setEditingIndentId(null); }} className="btn btn-secondary w-full sm:w-auto">Cancel</button>
+            <button type="submit" className="btn btn-primary w-full sm:w-auto">{editingIndentId ? 'Save Changes' : 'Submit Indent'}</button>
           </div>
         </form>
       </Modal>
