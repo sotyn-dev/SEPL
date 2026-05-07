@@ -26,10 +26,29 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
     return !!r?.ok;
   })();
 
-  let sql = `SELECT bb.id, bb.lead_no, bb.company_name as project_name, bb.client_name,
-    bb.employee_assigned as crm_person, bb.sale_amount_without_gst, bb.po_amount, bb.advance_received,
-    bb.balance_amount, bb.category, bb.order_type, bb.committed_start_date, bb.committed_completion_date,
-    bb.created_at, s.name as site_name
+  // GROUP BY company_name — one row per logical project. The bug was
+  // that bb.sale_amount_without_gst etc. were SELECTed without an
+  // aggregate so SQLite picked a single arbitrary row's value (mam:
+  // "concern pharma has 21 BB entries but Sale Value showed only one
+  // order"). Now SUMs across every BB row sharing the same project
+  // name so totals are correct. Same for PO / Advance / Balance.
+  // Dates: take earliest start and latest completion across rows.
+  let sql = `SELECT MIN(bb.id) as id,
+    MAX(bb.lead_no) as lead_no,
+    bb.company_name as project_name,
+    MAX(bb.client_name) as client_name,
+    MAX(bb.employee_assigned) as crm_person,
+    COALESCE(SUM(bb.sale_amount_without_gst), 0) as sale_amount_without_gst,
+    COALESCE(SUM(bb.po_amount), 0) as po_amount,
+    COALESCE(SUM(bb.advance_received), 0) as advance_received,
+    COALESCE(SUM(bb.balance_amount), 0) as balance_amount,
+    MAX(bb.category) as category,
+    MAX(bb.order_type) as order_type,
+    MIN(bb.committed_start_date) as committed_start_date,
+    MAX(bb.committed_completion_date) as committed_completion_date,
+    MIN(bb.created_at) as created_at,
+    MAX(s.name) as site_name,
+    COUNT(bb.id) as bb_entry_count
     FROM business_book bb
     LEFT JOIN sites s ON s.business_book_id=bb.id`;
   const params = [];
@@ -99,6 +118,7 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
     return {
       sr_no: idx + 1,
       id: p.id,
+      bb_entry_count: p.bb_entry_count || 1,  // how many BB rows summed into this project
       project_name: p.project_name || p.client_name,
       // CRM comes from the Client PO if available, falls back to Business Book's employee_assigned
       crm_person: poCrm?.crm_name || p.crm_person,

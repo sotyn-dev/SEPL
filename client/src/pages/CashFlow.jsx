@@ -141,8 +141,11 @@ export default function CashFlow() {
                 return (
                 <tr key={p.id} className={`border-b transition-colors ${editing ? 'bg-amber-50' : 'bg-white hover:bg-red-50/40'}`}>
                   <td className={`px-2 py-2 font-bold text-gray-400 sticky left-0 ${editing ? 'bg-amber-50' : 'bg-white'}`}>{p.sr_no}</td>
-                  <td className={`px-2 py-2 font-semibold text-red-700 sticky left-10 max-w-[260px] ${editing ? 'bg-amber-50' : 'bg-white'}`} title={cleanName(p.project_name)}>
+                  <td className={`px-2 py-2 font-semibold text-red-700 sticky left-10 max-w-[260px] ${editing ? 'bg-amber-50' : 'bg-white'}`} title={`${cleanName(p.project_name)}${p.bb_entry_count > 1 ? ` — sum of ${p.bb_entry_count} Business Book entries` : ''}`}>
                     <div className="truncate">{cleanName(p.project_name)}</div>
+                    {p.bb_entry_count > 1 && (
+                      <span className="text-[9px] font-normal text-gray-400 normal-case">{p.bb_entry_count} BB entries summed</span>
+                    )}
                   </td>
                   {editing ? (
                     <td className="px-1 py-1"><input className="input text-xs w-24" value={editForm.crm_person||''} onChange={e=>setEditForm({...editForm,crm_person:e.target.value})} /></td>
