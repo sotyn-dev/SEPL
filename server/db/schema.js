@@ -1883,6 +1883,10 @@ function initializeDatabase() {
     ['delegations', 'extension_reviewed_by INTEGER REFERENCES users(id)'],
     // Time-of-day for recurring checklists (daily/weekly/…). Stored as 'HH:MM'.
     ['checklists', 'due_time TEXT'],
+    // scoring.js / checklists routes query `WHERE ... COALESCE(active, 1) = 1`.
+    // SQLite needs the column to physically exist or the query fails before
+    // COALESCE runs — surfaces as 'no such column: active' on weekly score.
+    ['checklists', 'active INTEGER DEFAULT 1'],
     // Indent items now pick from item_master; keeps backward-compat description too
     ['indent_items', 'item_master_id INTEGER REFERENCES item_master(id)'],
     ['indent_items', 'make TEXT'],                 // e.g. "Schneider", "L&T"
