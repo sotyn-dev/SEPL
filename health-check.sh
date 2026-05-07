@@ -52,8 +52,11 @@ printf "%-6s %-40s %s\n" "STATUS" "ENDPOINT" "LABEL"
 echo "------------------------------------------------------------------------"
 
 for entry in "${ENDPOINTS[@]}"; do
-  IFS='|' read -r METHOD PATH LABEL <<< "$entry"
-  URL="$BASE$PATH"
+  # IMPORTANT: avoid the variable name `PATH` — bash treats it as the
+  # executable search path, and overwriting it makes curl/python3
+  # unfindable for the rest of the script. Use EP_PATH instead.
+  IFS='|' read -r METHOD EP_PATH LABEL <<< "$entry"
+  URL="$BASE$EP_PATH"
 
   # -w prints status code, -o discards body, -m 10 = 10s timeout
   STATUS=$(curl -s -o /dev/null -w "%{http_code}" -m 10 \
@@ -62,14 +65,14 @@ for entry in "${ENDPOINTS[@]}"; do
     "$URL")
 
   if [ "$STATUS" = "200" ]; then
-    printf "✅ %-3s  %-40s %s\n" "$STATUS" "$PATH" "$LABEL"
+    printf "✅ %-3s  %-40s %s\n" "$STATUS" "$EP_PATH" "$LABEL"
     PASS=$((PASS+1))
   elif [ "$STATUS" = "403" ]; then
     # 403 means the route works but admin doesn't have permission — still healthy
-    printf "🟡 %-3s  %-40s %s (perm-blocked, not crashed)\n" "$STATUS" "$PATH" "$LABEL"
+    printf "🟡 %-3s  %-40s %s (perm-blocked, not crashed)\n" "$STATUS" "$EP_PATH" "$LABEL"
     PASS=$((PASS+1))
   else
-    printf "❌ %-3s  %-40s %s\n" "$STATUS" "$PATH" "$LABEL"
+    printf "❌ %-3s  %-40s %s\n" "$STATUS" "$EP_PATH" "$LABEL"
     FAIL=$((FAIL+1))
   fi
 done
