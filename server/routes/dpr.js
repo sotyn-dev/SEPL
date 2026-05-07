@@ -33,8 +33,23 @@ router.get('/sites', (req, res) => {
   const all = req.query.all === '1' || req.query.all === 'true';
   const canSeeAll = dprCanSeeAll(db, req.user);
 
-  let sql = `SELECT MIN(s.id) as id, s.name, s.address, s.client_name, s.po_id, s.business_book_id,
-    s.site_engineer_id, s.supervisor, s.status, u.name as engineer_name, bb.lead_no,
+  // Group by a NORMALIZED name (uppercase, no quotes, no extra whitespace)
+  // so that Excel-paste artifacts like  '"""M/s X """', '"M/s X "', 'M/s X'
+  // collapse into a single row in the UI. Without this, mam sees the same
+  // site listed 3-4 times because each variant is a separate sites row.
+  // The display name is the cleanest variant we can build with TRIM/REPLACE.
+  // If ANY underlying duplicate is 'active' we treat the row as 'active'.
+  let sql = `SELECT MIN(s.id) as id,
+    TRIM(REPLACE(REPLACE(REPLACE(REPLACE(s.name, '""""', ''), '"""', ''), '""', ''), '"', '')) as name,
+    MAX(s.address) as address,
+    MAX(s.client_name) as client_name,
+    MAX(s.po_id) as po_id,
+    MAX(s.business_book_id) as business_book_id,
+    MAX(s.site_engineer_id) as site_engineer_id,
+    MAX(s.supervisor) as supervisor,
+    CASE WHEN SUM(CASE WHEN s.status='active' THEN 1 ELSE 0 END) > 0 THEN 'active' ELSE MIN(s.status) END as status,
+    MAX(u.name) as engineer_name,
+    MAX(bb.lead_no) as lead_no,
     COUNT(*) as entry_count
     FROM sites s
     LEFT JOIN users u ON s.site_engineer_id=u.id
@@ -50,7 +65,8 @@ router.get('/sites', (req, res) => {
     params.push(uid, `%,${uid},%`, uid);
   }
 
-  sql += ' GROUP BY s.name ORDER BY s.name';
+  sql += ` GROUP BY UPPER(TRIM(REPLACE(REPLACE(s.name, '"', ''), '''', '')))
+           ORDER BY name`;
   res.json(db.prepare(sql).all(...params));
 });
 
@@ -63,12 +79,34 @@ router.post('/sites', (req, res) => {
 
 router.put('/sites/:id', (req, res) => {
   const { name, address, client_name, site_engineer_id, supervisor, supervisor_id, status } = req.body;
-  getDb().prepare(
+  const db = getDb();
+  db.prepare(
     `UPDATE sites SET
        name=?, address=?, client_name=?,
        site_engineer_id=?, supervisor=?, supervisor_id=?, status=?
      WHERE id=?`
   ).run(name, address, client_name, site_engineer_id, supervisor, supervisor_id || null, status, req.params.id);
+
+  // The Sites tab dedupes rows by normalized name (Excel-paste quote /
+  // whitespace noise creates phantom duplicates). When mam clicks
+  // Deactivate / Reactivate on the deduped row, also flip every other
+  // dirty-name row that points at the same logical site — otherwise the
+  // row would still show as 'active' on next refresh because one of its
+  // siblings is still active.
+  if (status) {
+    try {
+      const cur = db.prepare('SELECT name FROM sites WHERE id=?').get(req.params.id);
+      if (cur?.name) {
+        db.prepare(`
+          UPDATE sites SET status=?
+          WHERE id != ?
+            AND UPPER(TRIM(REPLACE(REPLACE(name, '"', ''), '''', ''))) =
+                UPPER(TRIM(REPLACE(REPLACE(?, '"', ''), '''', '')))
+        `).run(status, req.params.id, cur.name);
+      }
+    } catch (e) { /* non-fatal: primary update already succeeded */ }
+  }
+
   res.json({ message: 'Updated' });
 });
 
