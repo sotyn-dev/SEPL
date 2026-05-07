@@ -19,6 +19,14 @@ function dprCanSeeAll(db, user) {
   return !!r?.ok;
 }
 
+// Build a normalized "site key" for grouping — strips ALL whitespace
+// (incl. non-breaking space CHAR(160), tabs, CR/LF) and quotes, then
+// uppercases. This way 'M/s X Pvt. Ltd', '"""M/s X Pvt. Ltd"""' and
+// 'M/s X Pvt. Ltd' all collapse into the same group key. Without
+// this, Excel paste artifacts produce phantom duplicate rows.
+const siteKeySql = (col) =>
+  `UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(${col}, CHAR(160), ''), CHAR(9), ''), CHAR(10), ''), CHAR(13), ''), ' ', ''), '"', ''), CHAR(39), ''))`;
+
 // ===== SITES =====
 // Non-admins see only sites where they are assigned as a site engineer —
 // either directly on the site row, or via a PO linked to that site whose
@@ -33,14 +41,13 @@ router.get('/sites', (req, res) => {
   const all = req.query.all === '1' || req.query.all === 'true';
   const canSeeAll = dprCanSeeAll(db, req.user);
 
-  // Group by a NORMALIZED name (uppercase, no quotes, no extra whitespace)
-  // so that Excel-paste artifacts like  '"""M/s X """', '"M/s X "', 'M/s X'
-  // collapse into a single row in the UI. Without this, mam sees the same
-  // site listed 3-4 times because each variant is a separate sites row.
-  // The display name is the cleanest variant we can build with TRIM/REPLACE.
-  // If ANY underlying duplicate is 'active' we treat the row as 'active'.
+  // Group by the normalized site key (see siteKeySql above) so all the
+  // quote/whitespace variants of the same logical site collapse into
+  // one row. Display name is built by stripping quotes and collapsing
+  // double-spaces — readable, keeps the original casing.
+  // Status: if ANY underlying duplicate is 'active' the row shows active.
   let sql = `SELECT MIN(s.id) as id,
-    TRIM(REPLACE(REPLACE(REPLACE(REPLACE(s.name, '""""', ''), '"""', ''), '""', ''), '"', '')) as name,
+    TRIM(REPLACE(REPLACE(REPLACE(REPLACE(s.name, '"', ''), CHAR(39), ''), '  ', ' '), '  ', ' ')) as name,
     MAX(s.address) as address,
     MAX(s.client_name) as client_name,
     MAX(s.po_id) as po_id,
@@ -65,8 +72,7 @@ router.get('/sites', (req, res) => {
     params.push(uid, `%,${uid},%`, uid);
   }
 
-  sql += ` GROUP BY UPPER(TRIM(REPLACE(REPLACE(s.name, '"', ''), '''', '')))
-           ORDER BY name`;
+  sql += ` GROUP BY ${siteKeySql('s.name')} ORDER BY name`;
   res.json(db.prepare(sql).all(...params));
 });
 
@@ -87,22 +93,21 @@ router.put('/sites/:id', (req, res) => {
      WHERE id=?`
   ).run(name, address, client_name, site_engineer_id, supervisor, supervisor_id || null, status, req.params.id);
 
-  // The Sites tab dedupes rows by normalized name (Excel-paste quote /
-  // whitespace noise creates phantom duplicates). When mam clicks
+  // The Sites tab dedupes rows by the normalized site key (Excel-paste
+  // quote / whitespace noise creates phantom duplicates). When mam clicks
   // Deactivate / Reactivate on the deduped row, also flip every other
-  // dirty-name row that points at the same logical site — otherwise the
-  // row would still show as 'active' on next refresh because one of its
-  // siblings is still active.
+  // sibling row that maps to the same logical site — otherwise the row
+  // would still show as 'active' on next refresh because at least one
+  // sibling is still active.
   if (status) {
     try {
       const cur = db.prepare('SELECT name FROM sites WHERE id=?').get(req.params.id);
       if (cur?.name) {
-        db.prepare(`
-          UPDATE sites SET status=?
-          WHERE id != ?
-            AND UPPER(TRIM(REPLACE(REPLACE(name, '"', ''), '''', ''))) =
-                UPPER(TRIM(REPLACE(REPLACE(?, '"', ''), '''', '')))
-        `).run(status, req.params.id, cur.name);
+        db.prepare(
+          `UPDATE sites SET status=?
+            WHERE id != ?
+              AND ${siteKeySql('name')} = ${siteKeySql('?')}`
+        ).run(status, req.params.id, cur.name);
       }
     } catch (e) { /* non-fatal: primary update already succeeded */ }
   }
