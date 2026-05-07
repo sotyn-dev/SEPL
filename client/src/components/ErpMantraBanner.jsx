@@ -1,5 +1,5 @@
 // ERP Mantra Banner — a daily-rotating motivational quote that reinforces
-// "use the ERP" culture (TATA Rule: 'If it's not in the ERP, it didn't
+// "use the ERP" culture (SEPL Rule: 'If it's not in the ERP, it didn't
 // happen'). Mam's ask: encourage employees to log everything in the ERP
 // instead of WhatsApp / Excel / verbal updates.
 //
@@ -10,7 +10,7 @@ import { useMemo } from 'react';
 import { FiZap } from 'react-icons/fi';
 
 const MANTRAS = [
-  { text: 'If it is not in the ERP, it did not happen.', source: 'TATA Rule' },
+  { text: 'If it is not in the ERP, it did not happen.', source: 'SEPL Rule' },
   { text: 'Single source of truth. Single source of action.', source: 'ERP First' },
   { text: 'Data without entry is data without value.', source: 'SEPL' },
   { text: 'Track it, don’t trust it to memory.', source: 'SEPL' },
