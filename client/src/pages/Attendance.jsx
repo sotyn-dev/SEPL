@@ -546,18 +546,38 @@ export default function Attendance() {
       {/* LEAVES TAB */}
       {tab === 'leaves' && (
         <div className="card p-0 overflow-x-auto"><table className="text-sm">
-          <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody>{leaves.map(l => (
+          <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Hrs / Days</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>{leaves.map(l => {
+            // For short_leave show from-time → to-time so admin can audit
+            // exactly what window the employee took. For full-day leaves
+            // (casual / sick / earned / comp_off) just the dates suffice.
+            const isShort = l.leave_type === 'short_leave' || l.leave_type === 'half_day';
+            return (
             <tr key={l.id}>
-              <td className="font-medium">{l.user_name}</td><td className="capitalize">{l.leave_type}</td>
-              <td>{l.from_date}</td><td>{l.to_date}</td><td>{l.days}</td><td className="text-xs">{l.reason}</td>
+              <td className="font-medium">{l.user_name}</td><td className="capitalize">{l.leave_type?.replace('_', ' ')}</td>
+              <td className="text-xs">
+                <div>{l.from_date}</div>
+                {isShort && l.from_time && <div className="text-[10px] text-blue-600 font-bold">{l.from_time}</div>}
+              </td>
+              <td className="text-xs">
+                <div>{l.to_date}</div>
+                {isShort && l.to_time && <div className="text-[10px] text-blue-600 font-bold">{l.to_time}</div>}
+              </td>
+              <td className="text-xs">
+                {isShort
+                  ? <span className="text-amber-700 font-bold">{l.hours ? `${l.hours} hr${l.hours !== 1 ? 's' : ''}` : '—'}</span>
+                  : <span className="font-medium">{l.days} day{l.days !== 1 ? 's' : ''}</span>
+                }
+              </td>
+              <td className="text-xs">{l.reason}</td>
               <td><StatusBadge status={l.status} /></td>
               <td>{l.status === 'pending' && <>
                 <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'approved' }); toast.success('Approved'); load(); }} className="text-xs text-emerald-600 font-bold mr-2">Approve</button>
                 <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'rejected' }); toast.success('Rejected'); load(); }} className="text-xs text-red-600 font-bold">Reject</button>
               </>}</td>
             </tr>
-          ))}</tbody>
+            );
+          })}</tbody>
         </table></div>
       )}
 
