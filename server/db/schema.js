@@ -1240,6 +1240,44 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Snag list — defects / punch-list items raised against a site,
+    -- assigned to an employee, who uploads proof and only then it's
+    -- closed by approval (delegation-style flow). Mam's ask:
+    -- "assign employee will upload proof and after approval task close
+    -- like delegation".
+    --
+    -- Status flow:
+    --   open       → just raised, assignee hasn't submitted proof yet
+    --   submitted  → assignee uploaded proof_url, awaiting approval
+    --   approved   → raiser/admin accepted the proof, task closed
+    --   rejected   → raiser rejected proof; goes back to 'open' next
+    --                time assignee resubmits (reject_reason carries why)
+    CREATE TABLE IF NOT EXISTS snags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      snag_no TEXT UNIQUE,                       -- SNAG-YYYY-####
+      site_id INTEGER REFERENCES sites(id),
+      site_name TEXT,                            -- snapshot for display
+      location TEXT,                             -- e.g. "2nd floor pump room"
+      description TEXT NOT NULL,
+      photo_url TEXT,                            -- the snag photo (raised)
+      priority TEXT DEFAULT 'medium' CHECK(priority IN ('low','medium','high','critical')),
+      status TEXT DEFAULT 'open' CHECK(status IN ('open','submitted','approved','rejected')),
+      assigned_to INTEGER REFERENCES users(id),
+      assigned_to_name TEXT,                     -- snapshot
+      raised_by INTEGER REFERENCES users(id),
+      raised_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      target_date DATE,
+      proof_url TEXT,                            -- assignee's fix photo / PDF
+      proof_notes TEXT,                          -- assignee's note on submit
+      proof_submitted_at DATETIME,
+      proof_submitted_by INTEGER REFERENCES users(id),
+      approved_by INTEGER REFERENCES users(id),
+      approved_at DATETIME,
+      reject_reason TEXT,                        -- why proof was rejected
+      rejected_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Rental properties — flats / houses / guest-houses we rent for
     -- staff accommodation (site engineers / supervisors stationed at
     -- project locations). One row per property, agreement-level info.
@@ -2058,7 +2096,7 @@ function initializeDatabase() {
 
   const ALL_MODULES = [
     'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement','cashflow','collections','payment_required','attendance','indent_fms','dpr',
-    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory'
+    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags'
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

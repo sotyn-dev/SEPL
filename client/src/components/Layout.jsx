@@ -39,6 +39,7 @@ const menuItems = [
   { path: '/installation', label: 'Installation', icon: FiTool, module: 'installation' },
   { path: '/billing', label: 'Billing', icon: FiClipboard, module: 'billing' },
   { path: '/complaints', label: 'Complaints', icon: FiAlertCircle, module: 'complaints' },
+  { path: '/snags', label: 'Snag List', icon: FiAlertCircle, module: 'snags' },
   { path: '/hr', label: 'HR & Hiring', icon: FiUserPlus, module: 'hr' },
   { path: '/payroll', label: 'Payroll', icon: LuIndianRupee, module: 'payroll' },
   { path: '/scorecard', label: 'Scorecard (MIS)', icon: FiBarChart2, module: 'scoring' },

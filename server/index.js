@@ -102,6 +102,7 @@ app.use('/api/payroll', require('./routes/payroll'));
 app.use('/api/scoring', require('./routes/scoring'));
 app.use('/api/tools', require('./routes/tools'));
 app.use('/api/rentals', require('./routes/rentals'));
+app.use('/api/snags', require('./routes/snags'));
 app.use('/api/push', require('./routes/push'));
 
 // Initialise VAPID keys on boot (auto-generates on first run, then
