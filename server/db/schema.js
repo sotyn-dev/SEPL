@@ -1735,6 +1735,11 @@ function initializeDatabase() {
     // audit; remarks stores the reason mam typed.
     ['attendance', 'admin_marked INTEGER DEFAULT 0'],
     ['attendance', 'marked_by INTEGER REFERENCES users(id)'],
+    // Auto-mark-present allow-list. Users with this flag set get an
+    // admin_marked='present' row created automatically every day so
+    // they don't show up in the 'Not Punched In Today' panel. Mam's
+    // initial seed: management / admin accounts that don't punch.
+    ['users', 'auto_mark_present INTEGER DEFAULT 0'],
     ['users', 'username TEXT'],
     // Inventory link on GRN — when goods are received we now auto-IN
     // them into a chosen warehouse. Both columns are nullable so old
@@ -2015,6 +2020,22 @@ function initializeDatabase() {
   for (const [table, col] of migrations) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
+
+  // One-time seed of mam's auto-mark-present allow-list. Guarded by an
+  // app_settings key so toggling someone OFF via the UI doesn't get
+  // reverted on the next server restart.
+  try {
+    const seeded = db.prepare("SELECT value FROM app_settings WHERE key='seed_auto_mark_v1'").get();
+    if (!seeded) {
+      const seedNames = ['admin','rajat sharma','nitin jain','pooja kaplesh','ankur kaplesh','parul kaplesh','backup admin'];
+      const placeholders = seedNames.map(() => '?').join(',');
+      db.prepare(
+        `UPDATE users SET auto_mark_present=1
+          WHERE LOWER(TRIM(name)) IN (${placeholders})`
+      ).run(...seedNames);
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('seed_auto_mark_v1', '1')").run();
+    }
+  } catch (e) { /* non-fatal */ }
 
   // Seed lead sources
   const sources = ['Indiamart', 'WhatsApp', 'LinkedIn', 'Client Reference', 'YouTube', 'Instagram', 'Twitter'];

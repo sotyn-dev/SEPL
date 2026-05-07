@@ -190,9 +190,31 @@ router.get('/', requirePermission('attendance', 'view'), (req, res) => {
 });
 
 // GET admin dashboard stats
+// Auto-mark today's allow-list users as present (admin_marked=1) so they
+// don't show up in the 'Not Punched In Today' panel. Idempotent — only
+// inserts where no row exists for the user today. Called lazily from the
+// admin dashboard so we don't need a cron.
+function syncAutoMarkPresent(db, today, byUserId) {
+  try {
+    const list = db.prepare("SELECT id FROM users WHERE active=1 AND COALESCE(auto_mark_present,0)=1").all();
+    if (!list.length) return;
+    const exists = db.prepare('SELECT 1 FROM attendance WHERE user_id=? AND date=?');
+    const insert = db.prepare(
+      `INSERT INTO attendance (user_id, date, status, admin_marked, marked_by, total_hours, remarks)
+       VALUES (?,?,?,1,?,?,?)`
+    );
+    for (const u of list) {
+      if (exists.get(u.id, today)) continue;
+      insert.run(u.id, today, 'present', byUserId || null, 8, 'Auto-marked (allow-list)');
+    }
+  } catch (e) { /* never block dashboard on this */ }
+}
+
 router.get('/dashboard', requirePermission('attendance', 'view'), (req, res) => {
   const db = getDb();
   const today = new Date().toISOString().split('T')[0];
+  // Auto-mark allow-list before computing today's stats.
+  syncAutoMarkPresent(db, today, req.user.id);
   const totalUsers = db.prepare("SELECT COUNT(*) as c FROM users WHERE active=1").get();
   // Count admin-marked rows as present too — they're a deliberate override
   // by admin / HR for users who didn't punch.
