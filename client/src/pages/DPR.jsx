@@ -11,7 +11,7 @@ const SYSTEMS = ['Electrical', 'Fire Fighting', 'Fire Alarm', 'CCTV', 'Access Co
 const EQUIPMENT_LIST = ['Welding Machine', 'Pipe Threading Machine', 'Drill Machine', 'Grinder', 'Ladder', 'Scaffolding', 'Pipe Bending Machine', 'Cable Pulling Machine', 'Multimeter', 'Megger', 'Earth Tester', 'Hydro Test Pump', 'Generator', 'Compressor'];
 
 export default function DPR() {
-  const { user, isAdmin, canDelete, canApprove } = useAuth();
+  const { user, isAdmin, canEdit, canDelete, canApprove } = useAuth();
   const [tab, setTab] = useState('dashboard');
   const [reportFilter, setReportFilter] = useState(''); // when set by stat-card click, filters Daily Reports tab
   const [dateTouched, setDateTouched] = useState(false); // true once user explicitly picks a date
@@ -366,9 +366,53 @@ export default function DPR() {
             <button onClick={() => { setForm({ name: '', address: '', client_name: '', site_engineer_id: '', supervisor: '' }); setSiteModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Site</button>
           </div>
           <div className="card p-0 overflow-x-auto"><table>
-            <thead><tr><th>Lead No</th><th>Site</th><th>Address</th><th>Client</th><th>Engineer</th><th>Supervisor</th><th>Status</th></tr></thead>
-            <tbody>{sites.map(s => (<tr key={s.id}><td className="text-red-600 font-bold">{s.lead_no || '-'}</td><td className="font-medium">{s.name}</td><td>{s.address}</td><td>{s.client_name}</td><td>{s.engineer_name}</td><td>{s.supervisor}</td><td><StatusBadge status={s.status} /></td></tr>))}
-              {sites.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No sites</td></tr>}</tbody>
+            <thead><tr><th>Lead No</th><th>Site</th><th>Address</th><th>Client</th><th>Engineer</th><th>Supervisor</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>{sites.map(s => (
+              <tr key={s.id}>
+                <td className="text-red-600 font-bold">{s.lead_no || '-'}</td>
+                <td className="font-medium">{s.name}</td>
+                <td>{s.address}</td>
+                <td>{s.client_name}</td>
+                <td>{s.engineer_name}</td>
+                <td>{s.supervisor}</td>
+                <td><StatusBadge status={s.status} /></td>
+                <td>
+                  {/* Deactivate flips status to 'on_hold' (DPR site picker
+                      filters status='active' so this hides the site without
+                      destroying any DPR / PO / booking history). Reactivate
+                      flips it back. */}
+                  {(canEdit('dpr') || isAdmin()) && (
+                    s.status === 'active' ? (
+                      <button onClick={async () => {
+                        if (!confirm(`Deactivate site "${s.name}"?\n\nIt will stop appearing in the DPR site picker. You can reactivate it any time.`)) return;
+                        try {
+                          await api.put(`/dpr/sites/${s.id}`, {
+                            name: s.name, address: s.address, client_name: s.client_name,
+                            site_engineer_id: s.site_engineer_id, supervisor: s.supervisor,
+                            status: 'on_hold',
+                          });
+                          toast.success('Deactivated');
+                          api.get('/dpr/sites').then(r => setSites(r.data));
+                        } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+                      }} className="btn btn-secondary text-xs py-1 px-2">Deactivate</button>
+                    ) : (
+                      <button onClick={async () => {
+                        try {
+                          await api.put(`/dpr/sites/${s.id}`, {
+                            name: s.name, address: s.address, client_name: s.client_name,
+                            site_engineer_id: s.site_engineer_id, supervisor: s.supervisor,
+                            status: 'active',
+                          });
+                          toast.success('Reactivated');
+                          api.get('/dpr/sites').then(r => setSites(r.data));
+                        } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+                      }} className="btn btn-success text-xs py-1 px-2">Reactivate</button>
+                    )
+                  )}
+                </td>
+              </tr>
+            ))}
+              {sites.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No sites</td></tr>}</tbody>
           </table></div>
         </>
       )}
