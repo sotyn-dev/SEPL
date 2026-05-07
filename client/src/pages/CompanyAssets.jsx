@@ -202,7 +202,12 @@ export default function CompanyAssets() {
                   <div className="font-medium">{a.name}</div>
                   {(a.brand || a.model) && <div className="text-[10px] text-gray-500">{[a.brand, a.model].filter(Boolean).join(' · ')}</div>}
                 </td>
-                <td className="text-xs">{a.serial_no || <span className="text-gray-300">—</span>}</td>
+                <td className="text-xs">
+                  {a.serial_no && <div>{a.serial_no}</div>}
+                  {a.imei && <div className="text-[10px] text-gray-500">IMEI: {a.imei}</div>}
+                  {a.ip_address && <div className="text-[10px] text-blue-600">IP: {a.ip_address}</div>}
+                  {!a.serial_no && !a.imei && !a.ip_address && <span className="text-gray-300">—</span>}
+                </td>
                 <td className="text-xs">
                   {a.mobile_number && <div>{a.mobile_number}</div>}
                   {a.carrier && <div className="text-[10px] text-gray-500">{a.carrier}</div>}
@@ -253,13 +258,41 @@ export default function CompanyAssets() {
             <div><label className="label">Name *</label><input className="input" required value={form.name || ''} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Dell Latitude 5420" /></div>
             <div><label className="label">Brand</label><input className="input" value={form.brand || ''} onChange={e => setForm(f => ({ ...f, brand: e.target.value }))} placeholder="Dell / HP / Apple…" /></div>
             <div><label className="label">Model</label><input className="input" value={form.model || ''} onChange={e => setForm(f => ({ ...f, model: e.target.value }))} placeholder="e.g. Latitude 5420 i5" /></div>
-            <div><label className="label">Serial / IMEI</label><input className="input" value={form.serial_no || ''} onChange={e => setForm(f => ({ ...f, serial_no: e.target.value }))} /></div>
+            <div>
+              {/* Label adapts to category — clearer for the user */}
+              <label className="label">
+                {form.category === 'SIM Card' ? 'SIM Number / ICCID'
+                  : form.category === 'Mobile' || form.category === 'Tablet' ? 'Serial Number'
+                  : 'Serial Number'}
+              </label>
+              <input className="input" value={form.serial_no || ''} onChange={e => setForm(f => ({ ...f, serial_no: e.target.value }))} placeholder={form.category === 'SIM Card' ? '89910...' : 'Manufacturer serial'} />
+            </div>
             <div>
               <label className="label">Condition</label>
               <select className="select" value={form.condition || 'good'} onChange={e => setForm(f => ({ ...f, condition: e.target.value }))}>
                 {['new','good','fair','poor','damaged','scrap'].map(c => <option key={c}>{c}</option>)}
               </select>
             </div>
+
+            {/* IP Address — only for IT / network gear (laptops, desktops,
+                monitors, routers, printers). Mam: 'if laptop select the
+                laptop name ip address'. */}
+            {['Laptop','Desktop','Monitor','Router','Printer'].includes(form.category) && (
+              <div className="col-span-2">
+                <label className="label">IP Address <span className="text-gray-400 font-normal text-[10px]">(optional)</span></label>
+                <input className="input" value={form.ip_address || ''} onChange={e => setForm(f => ({ ...f, ip_address: e.target.value }))} placeholder="e.g. 192.168.1.45" />
+              </div>
+            )}
+
+            {/* IMEI — separate from serial for Mobile/Tablet (these have
+                BOTH a serial AND an IMEI). Mam: 'if sim then number and
+                imei number'. */}
+            {(form.category === 'Mobile' || form.category === 'Tablet') && (
+              <div className="col-span-2">
+                <label className="label">IMEI Number</label>
+                <input className="input" value={form.imei || ''} onChange={e => setForm(f => ({ ...f, imei: e.target.value }))} placeholder="15-digit IMEI" />
+              </div>
+            )}
 
             {/* SIM / mobile-specific fields appear when category is SIM Card or Mobile */}
             {(form.category === 'SIM Card' || form.category === 'Mobile') && (

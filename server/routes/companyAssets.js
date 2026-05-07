@@ -29,10 +29,10 @@ router.get('/', requirePermission('company_assets', 'view'), (req, res) => {
     if (current_user_id) { sql += ' AND a.current_user_id = ?'; params.push(current_user_id); }
     if (search) {
       sql += ` AND (a.name LIKE ? OR a.brand LIKE ? OR a.model LIKE ?
-                    OR a.serial_no LIKE ? OR a.mobile_number LIKE ?
-                    OR a.asset_no LIKE ?)`;
+                    OR a.serial_no LIKE ? OR a.imei LIKE ? OR a.ip_address LIKE ?
+                    OR a.mobile_number LIKE ? OR a.asset_no LIKE ?)`;
       const q = `%${search}%`;
-      params.push(q, q, q, q, q, q);
+      params.push(q, q, q, q, q, q, q, q);
     }
     sql += ' ORDER BY a.created_at DESC';
     res.json(db.prepare(sql).all(...params));
@@ -104,14 +104,15 @@ router.post('/', requirePermission('company_assets', 'create'), (req, res) => {
 
     const r = db.prepare(`
       INSERT INTO company_assets (
-        asset_no, category, name, brand, model, serial_no,
+        asset_no, category, name, brand, model, serial_no, imei, ip_address,
         mobile_number, carrier, monthly_cost,
         purchase_date, purchase_price, vendor, warranty_till,
         condition, status, current_user_id, current_user_name, issued_at,
         photo_url, notes, created_by
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       assetNo, b.category || null, b.name, b.brand || null, b.model || null, b.serial_no || null,
+      b.imei || null, b.ip_address || null,
       b.mobile_number || null, b.carrier || null, +b.monthly_cost || 0,
       b.purchase_date || null, +b.purchase_price || 0, b.vendor || null, b.warranty_till || null,
       cond, stat, b.current_user_id || null, assigneeName,
@@ -139,7 +140,8 @@ router.put('/:id', requirePermission('company_assets', 'edit'), (req, res) => {
     const cur = db.prepare('SELECT * FROM company_assets WHERE id=?').get(req.params.id);
     if (!cur) return res.status(404).json({ error: 'Not found' });
 
-    const fields = ['category','name','brand','model','serial_no','mobile_number','carrier','monthly_cost',
+    const fields = ['category','name','brand','model','serial_no','imei','ip_address',
+                    'mobile_number','carrier','monthly_cost',
                     'purchase_date','purchase_price','vendor','warranty_till',
                     'condition','status','current_user_id','current_user_name',
                     'photo_url','notes'];
