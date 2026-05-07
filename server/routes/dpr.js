@@ -115,6 +115,44 @@ router.put('/sites/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
+// TA/DA cost for a site — sums every payment_requests row of category
+// 'TA/DA' for this site that's already been final-approved. Mam: 'according
+// to site TA/DA that site show here automatically which we fill in payment
+// category TA/DA only'. Optional ?date= filters to that single day's
+// required_by_date so DPRs don't double-count travel claims across days.
+router.get('/sites/:site_id/ta-da-cost', (req, res) => {
+  try {
+    const db = getDb();
+    const site = db.prepare('SELECT id, name FROM sites WHERE id=?').get(req.params.site_id);
+    if (!site) return res.json({ total_amount: 0, count: 0 });
+
+    // Match by site_id (preferred) OR site_name fallback (legacy rows that
+    // pre-date the FK). Approved-only so pending claims don't inflate cost.
+    const params = [req.params.site_id, site.name];
+    let dateClause = '';
+    if (req.query.date) {
+      dateClause = ' AND (required_by_date = ? OR DATE(created_at) = ?)';
+      params.push(req.query.date, req.query.date);
+    }
+    const row = db.prepare(`
+      SELECT COALESCE(SUM(amount),0) as total_amount, COUNT(*) as count
+      FROM payment_requests
+      WHERE category = 'TA/DA'
+        AND status = 'final_approved'
+        AND (site_id = ? OR site_name = ?)
+        ${dateClause}
+    `).get(...params);
+
+    res.json({
+      total_amount: row.total_amount || 0,
+      count: row.count || 0,
+      site_name: site.name,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, total_amount: 0, count: 0 });
+  }
+});
+
 // Per-day staff cost for a site = sum of monthly salary / 30 of all site
 // engineers assigned to the PO for this site. IMPORTANT: returns only the
 // aggregated number + counts — never individual salaries — because salaries

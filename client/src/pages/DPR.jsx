@@ -34,7 +34,7 @@ export default function DPR() {
     { type: 'Helper', qty: 0, rate: 500, amount: 0, fixed: true },
     { type: 'Rental Cost', qty: 0, rate: 0, amount: 0 },
     { type: 'Staff Cost', qty: 1, rate: 0, amount: 0, auto: true, engineer_count: 0 },
-    { type: 'TA/DA', qty: 0, rate: 0, amount: 0 },
+    { type: 'TA/DA', qty: 1, rate: 0, amount: 0, auto: true, ta_da_count: 0 },
   ]);
   const [machinery, setMachinery] = useState([{ equipment: '', quantity: 1, hours_used: 0, condition: 'working' }]);
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
@@ -67,6 +67,16 @@ export default function DPR() {
         setCosts(prev => prev.map(c => c.type === 'Staff Cost'
           // When auto-pull found nothing, unlock the rate so the user can type a value
           ? { ...c, rate: per_day_cost, engineer_count, po_engineers, auto: per_day_cost > 0, diagnostic, amount: (c.qty || 0) * per_day_cost }
+          : c));
+      }).catch(() => {});
+      // Auto-fill TA/DA from approved payment_requests for this site (mam:
+      // 'according to site TA/DA that site show here automatically which we
+      // fill in payment category TA/DA only'). Engineer can still edit if
+      // the figure is wrong.
+      api.get(`/dpr/sites/${siteId}/ta-da-cost`).then(r => {
+        const { total_amount = 0, count = 0 } = r.data || {};
+        setCosts(prev => prev.map(c => c.type === 'TA/DA'
+          ? { ...c, qty: 1, rate: total_amount, amount: total_amount, auto: total_amount > 0, ta_da_count: count }
           : c));
       }).catch(() => {});
     } else { setPoItemsForSite([]); }
@@ -316,7 +326,7 @@ export default function DPR() {
                 { type: 'Helper', qty: 0, rate: 500, amount: 0, fixed: true },
                 { type: 'Rental Cost', qty: 0, rate: 0, amount: 0 },
                 { type: 'Staff Cost', qty: 1, rate: 0, amount: 0, auto: true, engineer_count: 0 },
-                { type: 'TA/DA', qty: 0, rate: 0, amount: 0 },
+                { type: 'TA/DA', qty: 1, rate: 0, amount: 0, auto: true, ta_da_count: 0 },
               ]);
               setMachinery([{ equipment: '', quantity: 1, hours_used: 0, condition: 'working' }]);
               setModal(true);
@@ -534,9 +544,13 @@ export default function DPR() {
             </div>
             {costs.map((c, i) => {
               const isStaff = c.type === 'Staff Cost';
+              const isTaDa = c.type === 'TA/DA';
               // Staff rate is locked only when auto-fetch succeeded. When it
               // returns 0 (no employee/salary), let the user type a rate manually.
               const staffRateLocked = isStaff && c.auto;
+              // TA/DA stays editable even when auto-filled, so the engineer
+              // can override if the auto-pulled total doesn't match reality
+              // for that day.
               const rateLocked = c.fixed || staffRateLocked;
               return (
                 <div key={i} className="bg-white rounded p-1 mb-1.5">
@@ -546,6 +560,8 @@ export default function DPR() {
                       {c.fixed && <span className="ml-1 text-[9px] text-gray-400">(fixed)</span>}
                       {isStaff && c.auto && <span className="ml-1 text-[9px] text-emerald-600">(auto, 1 day)</span>}
                       {isStaff && !c.auto && c.engineer_count === 0 && <span className="ml-1 text-[9px] text-amber-600">(manual — see below)</span>}
+                      {isTaDa && c.auto && <span className="ml-1 text-[9px] text-emerald-600">(auto from {c.ta_da_count || 0} approved request{(c.ta_da_count || 0) === 1 ? '' : 's'})</span>}
+                      {isTaDa && !c.auto && <span className="ml-1 text-[9px] text-gray-400">(no approved TA/DA for this site)</span>}
                     </div>
                     {isStaff ? (
                       <div className="text-sm text-center text-gray-500 font-medium">1</div>
