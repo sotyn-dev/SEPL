@@ -24,6 +24,7 @@ import Scorecard from './pages/Scorecard';
 import Tools from './pages/Tools';
 import Rentals from './pages/Rentals';
 import Snags from './pages/Snags';
+import CompanyAssets from './pages/CompanyAssets';
 import Employees from './pages/Employees';
 import Expenses from './pages/Expenses';
 import Checklists from './pages/Checklists';
@@ -110,6 +111,7 @@ export default function App() {
         <Route path="billing" element={<ModuleRoute module="billing"><Billing /></ModuleRoute>} />
         <Route path="complaints" element={<ModuleRoute module="complaints"><Complaints /></ModuleRoute>} />
         <Route path="snags" element={<ModuleRoute module="snags"><Snags /></ModuleRoute>} />
+        <Route path="company-assets" element={<ModuleRoute module="company_assets"><CompanyAssets /></ModuleRoute>} />
         <Route path="hr" element={<ModuleRoute module="hr"><HR /></ModuleRoute>} />
         <Route path="payroll" element={<ModuleRoute module="payroll"><Payroll /></ModuleRoute>} />
         <Route path="scorecard" element={<ModuleRoute module="scoring"><Scorecard /></ModuleRoute>} />

@@ -40,6 +40,7 @@ const menuItems = [
   { path: '/billing', label: 'Billing', icon: FiClipboard, module: 'billing' },
   { path: '/complaints', label: 'Complaints', icon: FiAlertCircle, module: 'complaints' },
   { path: '/snags', label: 'Snag List', icon: FiAlertCircle, module: 'snags' },
+  { path: '/company-assets', label: 'Company Assets', icon: FiPackage, module: 'company_assets' },
   { path: '/hr', label: 'HR & Hiring', icon: FiUserPlus, module: 'hr' },
   { path: '/payroll', label: 'Payroll', icon: LuIndianRupee, module: 'payroll' },
   { path: '/scorecard', label: 'Scorecard (MIS)', icon: FiBarChart2, module: 'scoring' },

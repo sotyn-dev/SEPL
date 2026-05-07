@@ -1459,6 +1459,52 @@ function initializeDatabase() {
       UNIQUE(site_id, submitted_by, week_start)
     );
 
+    -- Company Assets — IT / office equipment register: laptops, mobile
+    -- phones, SIM cards, chargers, monitors, etc. Separate from Tools
+    -- (which tracks construction equipment). Mam: "add also system
+    -- company assets like laptop, sim, phone etc for maintain record".
+    --
+    -- Issue / Return / Maintenance / Scrap actions are recorded in
+    -- company_asset_movements for full history.
+    CREATE TABLE IF NOT EXISTS company_assets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asset_no TEXT UNIQUE,                       -- AST-YYYY-####
+      category TEXT,                              -- Laptop / Mobile / SIM / etc
+      name TEXT NOT NULL,                         -- e.g. 'Dell Latitude 5420'
+      brand TEXT,
+      model TEXT,
+      serial_no TEXT,                             -- serial / IMEI / SIM number
+      mobile_number TEXT,                         -- for SIM cards
+      carrier TEXT,                               -- for SIM cards (Jio / Airtel / VI)
+      monthly_cost REAL DEFAULT 0,                -- monthly recharge / subscription
+      purchase_date DATE,
+      purchase_price REAL DEFAULT 0,
+      vendor TEXT,
+      warranty_till DATE,
+      condition TEXT DEFAULT 'good' CHECK(condition IN ('new','good','fair','poor','damaged','scrap')),
+      status TEXT DEFAULT 'available' CHECK(status IN ('available','issued','maintenance','lost','scrapped')),
+      current_user_id INTEGER REFERENCES users(id),
+      current_user_name TEXT,                     -- snapshot for display
+      issued_at DATETIME,
+      returned_at DATETIME,
+      photo_url TEXT,
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- One row per Issue / Return / Maintenance / Scrap event.
+    CREATE TABLE IF NOT EXISTS company_asset_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asset_id INTEGER REFERENCES company_assets(id) ON DELETE CASCADE,
+      movement_type TEXT CHECK(movement_type IN ('issue','return','maintenance','scrap')),
+      from_user_id INTEGER REFERENCES users(id),
+      to_user_id INTEGER REFERENCES users(id),
+      notes TEXT,
+      performed_by INTEGER REFERENCES users(id),
+      performed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Vendor PO ↔ Indent Item link (one PO can cover multiple indent items;
     -- one indent item can split across multiple POs for partial orders).
     CREATE TABLE IF NOT EXISTS vendor_po_items (
@@ -2100,7 +2146,7 @@ function initializeDatabase() {
 
   const ALL_MODULES = [
     'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement','cashflow','collections','payment_required','attendance','indent_fms','dpr',
-    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags'
+    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags','company_assets'
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
