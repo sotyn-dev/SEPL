@@ -9,6 +9,17 @@ import { FiPlus, FiCheck, FiX, FiTrash2, FiExternalLink, FiChevronDown, FiChevro
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false };
 
+// Standard units used across MEP / civil indents. Mam asked for a
+// dropdown because the Item Master's stored UoM is often wrong and
+// the user has to override it manually almost every time.
+const UNIT_OPTIONS = [
+  'nos','pcs','set','pair','pkt','box','bdl','roll','coil','bag',
+  'kg','gms','ton','qtl',
+  'mtr','rmt','ft','inch','cm','mm',
+  'sqft','sqmtr','sqm','cum','cft',
+  'ltr','ml',
+];
+
 export default function Procurement() {
   const { canDelete, canCreate, canApprove, user, isAdmin } = useAuth();
   // Site-engineer-style users see only "Raise Indent" — they don't enter
@@ -1401,7 +1412,20 @@ export default function Procurement() {
                           );
                           const makeInput = <input className="input text-sm" placeholder="Make" value={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />;
                           const qtyInput = <input className="input text-base font-bold text-right" type="number" min="0" placeholder="Qty" value={item.quantity} onChange={e => { const n = [...indentItems]; n[i].quantity = +e.target.value; setIndentItems(n); }} />;
-                          const unitInput = <input className="input text-sm" placeholder="Unit" value={item.unit} onChange={e => { const n = [...indentItems]; n[i].unit = e.target.value; setIndentItems(n); }} />;
+                          // Unit dropdown — UNIT_OPTIONS covers the common cases.
+                          // If the BOQ / Item Master has pre-filled a unit that
+                          // isn't in the list (e.g. 'metres'), keep it as an
+                          // option so it stays selected; otherwise mam can pick
+                          // any standard unit without typing.
+                          const curUnit = (item.unit || '').toString().trim();
+                          const unitOpts = curUnit && !UNIT_OPTIONS.some(u => u.toLowerCase() === curUnit.toLowerCase())
+                            ? [curUnit, ...UNIT_OPTIONS]
+                            : UNIT_OPTIONS;
+                          const unitInput = (
+                            <select className="select text-sm" value={curUnit || 'nos'} onChange={e => { const n = [...indentItems]; n[i].unit = e.target.value; setIndentItems(n); }}>
+                              {unitOpts.map(u => <option key={u} value={u}>{u}</option>)}
+                            </select>
+                          );
                           const typeBox = (
                             <div className={`text-center text-[11px] font-bold uppercase px-2 py-1.5 rounded-lg border ${typeClass}`} title="Auto-picked from Item Master sub-item">
                               {item.item_type || <span className="text-gray-400 normal-case font-normal">—</span>}
