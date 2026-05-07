@@ -18,6 +18,10 @@ export default function CashFlow() {
   const [form, setForm] = useState({ date: '', type: 'inflow', category: '', description: '', amount: 0, payment_mode: '', party_name: '' });
   const [search, setSearch] = useState('');
   const [crmFilter, setCrmFilter] = useState('');
+  // Last-payment-date filter — buckets projects by how stale their last
+  // received payment is. Useful for chasing collections (90+ days = call
+  // first). 'never' = no payment ever received (no Inv Days, no Total Days).
+  const [pmtAgeFilter, setPmtAgeFilter] = useState('');
   const [editRow, setEditRow] = useState(null);
   const [editForm, setEditForm] = useState({});
 
@@ -62,9 +66,28 @@ export default function CashFlow() {
   // same way: comma-separated full number.
   const fmtL = (n) => fmt(n);
 
+  // Compute days-since-last-payment for a project — same logic as the
+  // 'Last Pmt Date' column. Returns null if no Inv Days and no Total Days.
+  const daysSinceLastPmt = (p) => {
+    const live = p.live_date ? new Date(p.live_date) : null;
+    if (!live || isNaN(live)) return null;
+    const days = +p.payment_investment_days > 0
+      ? +p.payment_investment_days
+      : (+p.total_days > 0 ? +p.total_days : null);
+    return days;
+  };
+
   const filtered = projects.filter(p => {
     if (crmFilter && !(p.crm_person || '').toLowerCase().includes(crmFilter.toLowerCase())) return false;
     if (search && !(p.project_name || '').toLowerCase().includes(search.toLowerCase()) && !(p.crm_person || '').toLowerCase().includes(search.toLowerCase())) return false;
+    if (pmtAgeFilter) {
+      const d = daysSinceLastPmt(p);
+      if (pmtAgeFilter === 'never' && d !== null) return false;
+      if (pmtAgeFilter === 'recent' && (d === null || d > 30)) return false;
+      if (pmtAgeFilter === '30-60' && (d === null || d <= 30 || d > 60)) return false;
+      if (pmtAgeFilter === '60-90' && (d === null || d <= 60 || d > 90)) return false;
+      if (pmtAgeFilter === '90plus' && (d === null || d <= 90)) return false;
+    }
     return true;
   });
 
@@ -107,7 +130,27 @@ export default function CashFlow() {
               ))}
             </div>
           )}
-          <div className="relative"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input className="input pl-10" placeholder="Search project..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+          {/* Search + Last-Payment-Date age filter row */}
+          <div className="flex flex-wrap gap-3 items-center">
+            <div className="relative flex-1 min-w-[260px]">
+              <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+              <input className="input pl-10" placeholder="Search project..." value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-500 whitespace-nowrap">Last Payment:</label>
+              <select className="select text-sm" value={pmtAgeFilter} onChange={e => setPmtAgeFilter(e.target.value)}>
+                <option value="">All</option>
+                <option value="recent">≤ 30 days (recent)</option>
+                <option value="30-60">31–60 days</option>
+                <option value="60-90">61–90 days</option>
+                <option value="90plus">90+ days (overdue)</option>
+                <option value="never">Never received</option>
+              </select>
+              {pmtAgeFilter && (
+                <button onClick={() => setPmtAgeFilter('')} className="text-[11px] text-gray-500 hover:text-red-600 underline">clear</button>
+              )}
+            </div>
+          </div>
           <div className="card p-0 overflow-hidden">
             <div className="p-3 border-b bg-gradient-to-r from-red-50 to-amber-50 flex items-center justify-between">
               <div>
