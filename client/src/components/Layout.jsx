@@ -175,8 +175,24 @@ export default function Layout() {
         <div className="p-4 border-b border-white/10 flex justify-between items-center">
           <div>
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center shadow-lg shadow-red-900/40">
-                <span className="text-red-700 font-extrabold text-xs">SE</span>
+              {/* Real SEPL logo (served from /sepl-logo.webp). If the file
+                  is missing, fall back to the 'SE' monogram so the header
+                  never looks broken. */}
+              <div className="w-9 h-9 bg-white rounded-lg flex items-center justify-center shadow-lg shadow-red-900/40 overflow-hidden p-0.5">
+                <img
+                  src="/sepl-logo.webp"
+                  alt="SEPL"
+                  className="w-full h-full object-contain"
+                  onError={(e) => {
+                    if (!e.target.dataset.fallback) {
+                      e.target.dataset.fallback = '1';
+                      e.target.style.display = 'none';
+                      const txt = e.target.parentElement.querySelector('span');
+                      if (txt) txt.style.display = '';
+                    }
+                  }}
+                />
+                <span className="text-red-700 font-extrabold text-xs" style={{ display: 'none' }}>SE</span>
               </div>
               <div>
                 <h1 className="text-sm font-extrabold tracking-tight">SEPL ERP</h1>
