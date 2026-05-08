@@ -10,6 +10,9 @@ export default function Attendance() {
   const { user, isAdmin, canDelete } = useAuth();
   const [tab, setTab] = useState('punch');
   const [myToday, setMyToday] = useState(null);
+  // Mam: daily attendance detail (in/out times + leave) belongs on the
+  // Attendance page next to the punch UI, not on the dashboard.
+  const [myMonth, setMyMonth] = useState(null);
   const [dashboard, setDashboard] = useState(null);
   const [records, setRecords] = useState([]);
   const [report, setReport] = useState([]);
@@ -38,6 +41,9 @@ export default function Attendance() {
 
   const load = useCallback(() => {
     api.get('/attendance/my-today').then(r => setMyToday(r.data)).catch(() => {});
+    // Pull current-month detail (per-day in/out + leaves) for the
+    // Daily Detail timeline below the punch UI.
+    api.get('/attendance/my-month').then(r => setMyMonth(r.data)).catch(() => {});
     // Everyone needs geofence list to see auto-punch status live
     api.get('/attendance/geofence').then(r => setGeofences(r.data || [])).catch(() => {});
     if (isAdmin()) {
@@ -276,6 +282,76 @@ export default function Attendance() {
 
           {/* Leave Request */}
           <button onClick={() => { setForm({ leave_type: 'casual', from_date: '', to_date: '', reason: '' }); setModal('leave'); }} className="btn btn-secondary w-full text-sm">Apply for Leave</button>
+
+          {/* Daily Detail — last 15 working days with in/out times + any
+              leave taken on that date. Mam: "where punch/punch out [...]
+              add next to attendance details". */}
+          {myMonth?.days?.length > 0 && (() => {
+            const recent = myMonth.days
+              .filter(d => d.status !== 'future' && d.status !== 'weekend')
+              .slice(-15)
+              .reverse();
+            if (recent.length === 0) return null;
+            const fmtTime = (iso) => {
+              if (!iso) return '—';
+              try {
+                return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+              } catch { return '—'; }
+            };
+            const statusPill = {
+              present: 'bg-emerald-100 text-emerald-700',
+              late: 'bg-amber-100 text-amber-700',
+              half_day: 'bg-amber-50 text-amber-700',
+              short_day: 'bg-orange-100 text-orange-800',
+              on_leave: 'bg-blue-100 text-blue-700',
+              absent: 'bg-red-100 text-red-700',
+            };
+            return (
+              <div className="card p-3">
+                <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Attendance Detail (last 15 working days)</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-gray-500 border-b">
+                        <th className="py-1.5 pr-2 font-semibold">Date</th>
+                        <th className="py-1.5 pr-2 font-semibold">In</th>
+                        <th className="py-1.5 pr-2 font-semibold">Out</th>
+                        <th className="py-1.5 pr-2 font-semibold text-right">Hrs</th>
+                        <th className="py-1.5 pr-2 font-semibold">Status</th>
+                        <th className="py-1.5 font-semibold">Leave (if any)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recent.map(d => (
+                        <tr key={d.date} className="border-b border-gray-50 last:border-0">
+                          <td className="py-1.5 pr-2 font-medium">{d.date}</td>
+                          <td className="py-1.5 pr-2 text-emerald-700">{fmtTime(d.punch_in_time)}</td>
+                          <td className="py-1.5 pr-2 text-red-700">{fmtTime(d.punch_out_time)}</td>
+                          <td className="py-1.5 pr-2 text-right tabular-nums font-semibold">{d.total_hours ? d.total_hours.toFixed(2) : '—'}</td>
+                          <td className="py-1.5 pr-2">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${statusPill[d.status] || 'bg-gray-100 text-gray-600'}`}>
+                              {d.status?.replace('_', ' ')}
+                            </span>
+                          </td>
+                          <td className="py-1.5">
+                            {d.leave ? (
+                              <span className="text-[10px] text-blue-700">
+                                <span className="font-bold capitalize">{d.leave.leave_type.replace('_', ' ')}</span>
+                                {(d.leave.leave_type === 'short_leave' || d.leave.leave_type === 'half_day') && d.leave.from_time && d.leave.to_time && (
+                                  <span className="text-blue-600"> · {d.leave.from_time}–{d.leave.to_time}</span>
+                                )}
+                                {d.leave.hours > 0 && <span className="text-gray-500"> · {d.leave.hours} hr</span>}
+                              </span>
+                            ) : <span className="text-gray-300">—</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
