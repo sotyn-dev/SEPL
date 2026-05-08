@@ -59,6 +59,15 @@ router.get('/', requirePermission('leads', 'view'), (req, res) => {
 // GET stages info
 router.get('/stages', (req, res) => res.json(STAGES));
 
+// Spec-defined sources / categories / sub-trades.
+// MUST be declared before `/:id` so Express doesn't treat 'meta' as a lead id.
+const SOURCES = ['Website','Referral','Cold','IPC','GeM','CPPP','State Portal','Repeat'];
+const CATEGORIES_SPEC = ['MEPF Project','Solar EPC'];
+const SUB_TRADES = ['M','E','P','F','BMS','ELV','Solar'];
+router.get('/meta', (req, res) => res.json({
+  sources: SOURCES, categories: CATEGORIES_SPEC, sub_trades: SUB_TRADES, stages: STAGES,
+}));
+
 // GET pipeline dashboard
 router.get('/dashboard', requirePermission('leads', 'view'), (req, res) => {
   const db = getDb();
@@ -85,11 +94,6 @@ router.get('/:id', requirePermission('leads', 'view'), (req, res) => {
   if (!lead) return res.status(404).json({ error: 'Not found' });
   res.json(withSla([lead])[0]);
 });
-
-// Spec-defined sources / categories / sub-trades.
-const SOURCES = ['Website','Referral','Cold','IPC','GeM','CPPP','State Portal','Repeat'];
-const CATEGORIES_SPEC = ['MEPF Project','Solar EPC'];
-const SUB_TRADES = ['M','E','P','F','BMS','ELV','Solar'];
 
 // Stage 1 validation per mam's spec — GST format, estimated value > 0,
 // bid deadline > today (Govt only), required fields per kind.
@@ -127,11 +131,6 @@ function audit(db, lead_id, stage, action, user, opts = {}) {
     `).run(lead_id, stage || null, action, user?.id || null, user?.name || null, opts.evidence_url || null, opts.notes || null);
   } catch {}
 }
-
-// Expose constants so the frontend can render dropdowns from one source.
-router.get('/meta', (req, res) => res.json({
-  sources: SOURCES, categories: CATEGORIES_SPEC, sub_trades: SUB_TRADES, stages: STAGES,
-}));
 
 // POST create — Stage 1 Lead / Tender Capture. Auto-stamps stage_entered_at
 // so the 1-hour SLA for first-call starts ticking. Audit row written.

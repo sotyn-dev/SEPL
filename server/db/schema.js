@@ -1615,9 +1615,8 @@ function initializeDatabase() {
       before_json TEXT,            -- optional pre-image
       after_json TEXT              -- optional post-image
     );
-    CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(at DESC);
-    CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id, at DESC);
-    CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);
+    -- audit_log indexes are created post-migration in safeIndexes (some
+    -- prod DBs predate the user_id column and we don't want to crash boot)
 
     -- Generic singleton key/value bag for app-level state that doesn't
     -- belong on a domain table (emergency reset hash, feature flags, etc).
@@ -1643,8 +1642,6 @@ function initializeDatabase() {
       active INTEGER DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE INDEX IF NOT EXISTS idx_warehouses_site ON warehouses(site_id);
-
     -- Live stock = quantity on hand per (item, warehouse) with running
     -- average rate so we can value the stock without a separate ledger.
     -- UNIQUE keeps it idempotent — INSERT OR conflict path updates qty.
@@ -1658,9 +1655,6 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(warehouse_id, item_master_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_stock_warehouse ON stock_balance(warehouse_id);
-    CREATE INDEX IF NOT EXISTS idx_stock_item ON stock_balance(item_master_id);
-
     -- Append-only journal of every stock change. type IN/OUT/TRANSFER/ADJUST.
     -- For TRANSFER we write TWO rows — one OUT from from_warehouse_id and one
     -- IN to to_warehouse_id, paired by the same reference_id so the UI can
@@ -1682,91 +1676,15 @@ function initializeDatabase() {
       created_by INTEGER REFERENCES users(id),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE INDEX IF NOT EXISTS idx_stock_mvmt_warehouse ON stock_movements(warehouse_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_stock_mvmt_item ON stock_movements(item_master_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_stock_mvmt_ref ON stock_movements(reference_type, reference_id);
+    -- stock_movements indexes are created post-migration in safeIndexes
 
     -- ─── PERFORMANCE INDEXES on hot tables (fast page loads) ────────────
-    -- Mam: 'why it take time to reload data, how to fast it'. These
-    -- indexes target every WHERE / GROUP BY / ORDER BY across the app.
-    -- SQLite IF NOT EXISTS makes this safe to re-run on every boot.
-
-    -- Attendance — date filters, per-user month view, late stats
-    CREATE INDEX IF NOT EXISTS idx_att_user_date ON attendance(user_id, date);
-    CREATE INDEX IF NOT EXISTS idx_att_date ON attendance(date);
-    CREATE INDEX IF NOT EXISTS idx_att_status ON attendance(status);
-
-    -- Location tracking — live view, per-user-per-day timeline
-    CREATE INDEX IF NOT EXISTS idx_loc_user_date ON location_tracking(user_id, date);
-    CREATE INDEX IF NOT EXISTS idx_loc_time ON location_tracking(time DESC);
-
-    -- Leave requests — admin list, scope=mine
-    CREATE INDEX IF NOT EXISTS idx_leave_user ON leave_requests(user_id, status);
-    CREATE INDEX IF NOT EXISTS idx_leave_status ON leave_requests(status);
-
-    -- Payment requests — list filters, stats by status / category
-    CREATE INDEX IF NOT EXISTS idx_pr_status ON payment_requests(status);
-    CREATE INDEX IF NOT EXISTS idx_pr_category ON payment_requests(category);
-    CREATE INDEX IF NOT EXISTS idx_pr_site ON payment_requests(site_id);
-    CREATE INDEX IF NOT EXISTS idx_pr_creator ON payment_requests(created_by);
-
-    -- Business book — search by company / employee / district
-    CREATE INDEX IF NOT EXISTS idx_bb_company ON business_book(company_name);
-    CREATE INDEX IF NOT EXISTS idx_bb_employee ON business_book(employee_assigned);
-    CREATE INDEX IF NOT EXISTS idx_bb_status ON business_book(status);
-
-    -- Sites — joined heavily in Cashflow / DPR / Procurement
-    CREATE INDEX IF NOT EXISTS idx_sites_name ON sites(name);
-    CREATE INDEX IF NOT EXISTS idx_sites_bb ON sites(business_book_id);
-
-    -- Indents — status / site filter on the Raise Indent table
-    CREATE INDEX IF NOT EXISTS idx_indents_status ON indents(status);
-    CREATE INDEX IF NOT EXISTS idx_indents_site ON indents(site_name);
-    CREATE INDEX IF NOT EXISTS idx_indents_created ON indents(created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_indent_items_indent ON indent_items(indent_id);
-
-    -- Vendor POs — filter by indent / vendor
-    CREATE INDEX IF NOT EXISTS idx_vpo_indent ON vendor_pos(indent_id);
-    CREATE INDEX IF NOT EXISTS idx_vpo_vendor ON vendor_pos(vendor_id);
-    CREATE INDEX IF NOT EXISTS idx_vpo_cancelled ON vendor_pos(cancelled);
-
-    -- DPR — date / site / approval filters
-    CREATE INDEX IF NOT EXISTS idx_dpr_site_date ON dpr(site_id, report_date);
-    CREATE INDEX IF NOT EXISTS idx_dpr_date ON dpr(report_date);
-    CREATE INDEX IF NOT EXISTS idx_dpr_approval ON dpr(approval_status);
-
-    -- Delegations — assignee dashboards
-    CREATE INDEX IF NOT EXISTS idx_del_assignee ON delegations(assigned_to, status);
-    CREATE INDEX IF NOT EXISTS idx_del_user ON delegations(user_id, status);
-    CREATE INDEX IF NOT EXISTS idx_del_status ON delegations(status);
-
-    -- Support / help tickets — assignee, raiser, status filters
-    CREATE INDEX IF NOT EXISTS idx_tk_user ON support_tickets(user_id, status);
-    CREATE INDEX IF NOT EXISTS idx_tk_assignee ON support_tickets(assigned_to, status);
-    CREATE INDEX IF NOT EXISTS idx_tk_status ON support_tickets(status);
-
-    -- Snags + Company assets (new modules)
-    CREATE INDEX IF NOT EXISTS idx_snags_status ON snags(status);
-    CREATE INDEX IF NOT EXISTS idx_snags_assignee ON snags(assigned_to);
-    CREATE INDEX IF NOT EXISTS idx_snags_raiser ON snags(raised_by);
-    CREATE INDEX IF NOT EXISTS idx_assets_status ON company_assets(status);
-    CREATE INDEX IF NOT EXISTS idx_assets_user ON company_assets(current_user_id);
-    CREATE INDEX IF NOT EXISTS idx_assets_category ON company_assets(category);
-
-    -- Cash flow entries — date-bucket queries
-    CREATE INDEX IF NOT EXISTS idx_cf_date ON cash_flow_entries(date);
-    CREATE INDEX IF NOT EXISTS idx_cf_party ON cash_flow_entries(party_name);
-
-    -- Receivables — joined in Cashflow + Collections
-    CREATE INDEX IF NOT EXISTS idx_recv_status ON receivables(status);
-    CREATE INDEX IF NOT EXISTS idx_recv_client ON receivables(client_name);
-
-    -- Complaints — admin list filters
-    CREATE INDEX IF NOT EXISTS idx_cmp_status ON complaints(status);
-    CREATE INDEX IF NOT EXISTS idx_cmp_category ON complaints(category);
-
-    -- Audit logs — user filter (admin audit trail)
-    CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);
+    -- These were originally inline here, but some prod DBs were created
+    -- before certain columns existed (e.g. audit_log.user_id, vendor_pos
+    -- .cancelled, support_tickets.assigned_to). When the rigid db.exec()
+    -- block hit a CREATE INDEX on a missing column, SQLite aborted the
+    -- whole exec → server crashed at boot. They now live in safeIndexes
+    -- below, run AFTER migrations, each guarded by its own try/catch.
 
     -- SQLite query planner optimizations
     -- WAL mode = better concurrency under load (multiple reads while one
@@ -2293,6 +2211,90 @@ function initializeDatabase() {
 
   for (const [table, col] of migrations) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
+  }
+
+  // ─── PERFORMANCE INDEXES on hot tables (fast page loads) ───────────
+  // Runs AFTER migrations so columns added by ALTER TABLE above are
+  // already present. Each index is guarded individually — if a column
+  // is still missing on a particular DB (e.g. a very old prod that
+  // hasn't been touched in a while), the index simply skips and the
+  // server boots normally instead of crash-looping.
+  // Mam: 'why it take time to reload data, how to fast it'.
+  const safeIndexes = [
+    // Audit log
+    'CREATE INDEX IF NOT EXISTS idx_audit_log_at ON audit_log(at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id, at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action)',
+    // Warehouses + stock
+    'CREATE INDEX IF NOT EXISTS idx_warehouses_site ON warehouses(site_id)',
+    'CREATE INDEX IF NOT EXISTS idx_stock_warehouse ON stock_balance(warehouse_id)',
+    'CREATE INDEX IF NOT EXISTS idx_stock_item ON stock_balance(item_master_id)',
+    'CREATE INDEX IF NOT EXISTS idx_stock_mvmt_warehouse ON stock_movements(warehouse_id, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_stock_mvmt_item ON stock_movements(item_master_id, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_stock_mvmt_ref ON stock_movements(reference_type, reference_id)',
+    // Attendance — date filters, per-user month view, late stats
+    'CREATE INDEX IF NOT EXISTS idx_att_user_date ON attendance(user_id, date)',
+    'CREATE INDEX IF NOT EXISTS idx_att_date ON attendance(date)',
+    'CREATE INDEX IF NOT EXISTS idx_att_status ON attendance(status)',
+    // Location tracking
+    'CREATE INDEX IF NOT EXISTS idx_loc_user_date ON location_tracking(user_id, date)',
+    'CREATE INDEX IF NOT EXISTS idx_loc_time ON location_tracking(time DESC)',
+    // Leave requests
+    'CREATE INDEX IF NOT EXISTS idx_leave_user ON leave_requests(user_id, status)',
+    'CREATE INDEX IF NOT EXISTS idx_leave_status ON leave_requests(status)',
+    // Payment requests
+    'CREATE INDEX IF NOT EXISTS idx_pr_status ON payment_requests(status)',
+    'CREATE INDEX IF NOT EXISTS idx_pr_category ON payment_requests(category)',
+    'CREATE INDEX IF NOT EXISTS idx_pr_site ON payment_requests(site_id)',
+    'CREATE INDEX IF NOT EXISTS idx_pr_creator ON payment_requests(created_by)',
+    // Business book
+    'CREATE INDEX IF NOT EXISTS idx_bb_company ON business_book(company_name)',
+    'CREATE INDEX IF NOT EXISTS idx_bb_employee ON business_book(employee_assigned)',
+    'CREATE INDEX IF NOT EXISTS idx_bb_status ON business_book(status)',
+    // Sites
+    'CREATE INDEX IF NOT EXISTS idx_sites_name ON sites(name)',
+    'CREATE INDEX IF NOT EXISTS idx_sites_bb ON sites(business_book_id)',
+    // Indents
+    'CREATE INDEX IF NOT EXISTS idx_indents_status ON indents(status)',
+    'CREATE INDEX IF NOT EXISTS idx_indents_site ON indents(site_name)',
+    'CREATE INDEX IF NOT EXISTS idx_indents_created ON indents(created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_indent_items_indent ON indent_items(indent_id)',
+    // Vendor POs
+    'CREATE INDEX IF NOT EXISTS idx_vpo_indent ON vendor_pos(indent_id)',
+    'CREATE INDEX IF NOT EXISTS idx_vpo_vendor ON vendor_pos(vendor_id)',
+    'CREATE INDEX IF NOT EXISTS idx_vpo_cancelled ON vendor_pos(cancelled)',
+    // DPR
+    'CREATE INDEX IF NOT EXISTS idx_dpr_site_date ON dpr(site_id, report_date)',
+    'CREATE INDEX IF NOT EXISTS idx_dpr_date ON dpr(report_date)',
+    'CREATE INDEX IF NOT EXISTS idx_dpr_approval ON dpr(approval_status)',
+    // Delegations
+    'CREATE INDEX IF NOT EXISTS idx_del_assignee ON delegations(assigned_to, status)',
+    'CREATE INDEX IF NOT EXISTS idx_del_user ON delegations(user_id, status)',
+    'CREATE INDEX IF NOT EXISTS idx_del_status ON delegations(status)',
+    // Support / help tickets
+    'CREATE INDEX IF NOT EXISTS idx_tk_user ON support_tickets(user_id, status)',
+    'CREATE INDEX IF NOT EXISTS idx_tk_assignee ON support_tickets(assigned_to, status)',
+    'CREATE INDEX IF NOT EXISTS idx_tk_status ON support_tickets(status)',
+    // Snags + Company assets
+    'CREATE INDEX IF NOT EXISTS idx_snags_status ON snags(status)',
+    'CREATE INDEX IF NOT EXISTS idx_snags_assignee ON snags(assigned_to)',
+    'CREATE INDEX IF NOT EXISTS idx_snags_raiser ON snags(raised_by)',
+    'CREATE INDEX IF NOT EXISTS idx_assets_status ON company_assets(status)',
+    'CREATE INDEX IF NOT EXISTS idx_assets_user ON company_assets(current_user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_assets_category ON company_assets(category)',
+    // Cash flow
+    'CREATE INDEX IF NOT EXISTS idx_cf_date ON cash_flow_entries(date)',
+    'CREATE INDEX IF NOT EXISTS idx_cf_party ON cash_flow_entries(party_name)',
+    // Receivables
+    'CREATE INDEX IF NOT EXISTS idx_recv_status ON receivables(status)',
+    'CREATE INDEX IF NOT EXISTS idx_recv_client ON receivables(client_name)',
+    // Complaints
+    'CREATE INDEX IF NOT EXISTS idx_cmp_status ON complaints(status)',
+    'CREATE INDEX IF NOT EXISTS idx_cmp_category ON complaints(category)',
+  ];
+  for (const sql of safeIndexes) {
+    try { db.exec(sql); } catch (e) { /* column missing on a stale DB — non-fatal */ }
   }
 
   // Re-classify attendance rows so status reflects the CURRENT cutoff
