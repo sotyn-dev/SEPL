@@ -23,7 +23,7 @@ const PRIORITY_COLORS = {
   high: 'text-amber-700 bg-amber-50',
   urgent: 'text-red-700 bg-red-50 font-bold',
 };
-const CATEGORIES = ['bug', 'feature_request', 'how_to', 'access_issue', 'data_issue', 'other'];
+const CATEGORIES = ['bug', 'feature_request', 'how_to', 'access_issue', 'data_issue', 'manpower', 'material', 'payment', 'other'];
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 
 export default function HelpTickets() {

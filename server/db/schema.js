@@ -155,7 +155,7 @@ function initializeDatabase() {
       user_id INTEGER REFERENCES users(id),
       subject TEXT NOT NULL,
       description TEXT NOT NULL,
-      category TEXT DEFAULT 'bug' CHECK(category IN ('bug','feature_request','how_to','data_issue','other')),
+      category TEXT DEFAULT 'bug' CHECK(category IN ('bug','feature_request','how_to','access_issue','data_issue','manpower','material','payment','other')),
       priority TEXT DEFAULT 'medium' CHECK(priority IN ('low','medium','high','urgent')),
       status TEXT DEFAULT 'open' CHECK(status IN ('open','in_progress','resolved','closed')),
       attachment_link TEXT,
@@ -2047,6 +2047,34 @@ function initializeDatabase() {
   // detect the old 4-category signature in sqlite_master and rebuild the
   // table via a data-preserving copy. Runs exactly once — the new CREATE
   // TABLE IF NOT EXISTS won't re-create if a relaxed version already exists.
+
+  // Same rebuild pattern for support_tickets — the original CHECK on
+  // category only allowed 'bug','feature_request','how_to','data_issue',
+  // 'other'. Mam expanded the list to include access_issue, manpower,
+  // material, payment. Strip the CHECK altogether (app layer validates
+  // via the CATEGORIES list in HelpTickets.jsx) so future additions
+  // don't need a migration.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='support_tickets'").get();
+    if (row && /CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i.test(row.sql)
+            && !/manpower/i.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+support_tickets/i, 'CREATE TABLE support_tickets_new')
+        .replace(/,?\s*CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i, '');
+      db.exec(newSql);
+      // Copy by column list so any future renames don't break this.
+      const cols = db.prepare("PRAGMA table_info(support_tickets)").all().map(c => c.name).join(',');
+      db.exec(`INSERT INTO support_tickets_new (${cols}) SELECT ${cols} FROM support_tickets`);
+      db.exec('DROP TABLE support_tickets');
+      db.exec('ALTER TABLE support_tickets_new RENAME TO support_tickets');
+      db.exec('COMMIT');
+      console.log('[migration] support_tickets rebuilt — category CHECK relaxed (manpower/material/payment now allowed)');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+  }
+
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='payment_requests'").get();
     if (row && /CHECK\s*\(\s*category\s+IN\s*\(\s*'TA\/DA'\s*,\s*'Purchase'\s*,\s*'Labour'\s*,\s*'Transport'\s*\)\s*\)/.test(row.sql)) {
