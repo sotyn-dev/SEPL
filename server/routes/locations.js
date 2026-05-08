@@ -55,8 +55,13 @@ router.get('/live', (req, res) => {
           GROUP BY user_id
        ) latest ON latest.user_id = lt.user_id AND latest.max_time = lt.time
       WHERE COALESCE(u.track_location, 1) = 1
-      ORDER BY (CASE WHEN lt.site_name IS NULL OR lt.site_name = 'Outside' THEN 1 ELSE 0 END),
-               lt.time DESC`
+      ORDER BY
+        CASE
+          WHEN lt.site_name = 'GPS_OFF' THEN 0       -- alerts first (audit priority)
+          WHEN lt.site_name IS NULL OR lt.site_name = 'Outside' THEN 2
+          ELSE 1                                     -- in-site users
+        END,
+        lt.time DESC`
   ).all(sinceIso);
 
   const now = Date.now();

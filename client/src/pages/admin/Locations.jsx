@@ -136,37 +136,55 @@ export default function Locations() {
           {live && live.users.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {live.users.map(u => {
-                const inSite = u.site_name && u.site_name !== 'Outside';
+                // GPS_OFF = the user's browser couldn't get a GPS fix even
+                // though their network ping reached us. Network alive, GPS
+                // off / permission denied / timed out. Show as red card.
+                const gpsOff = u.site_name === 'GPS_OFF' || u.latitude == null || u.longitude == null;
+                const inSite = !gpsOff && u.site_name && u.site_name !== 'Outside';
+                const borderColor = gpsOff ? 'border-red-500' : (inSite ? 'border-emerald-500' : 'border-amber-500');
+                const pillStyle = gpsOff
+                  ? 'bg-red-100 text-red-700'
+                  : (inSite ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700');
+                const pillLabel = gpsOff ? '⚠ GPS OFF' : (inSite ? u.site_name : 'Outside any site');
                 return (
                   <div key={u.user_id}
-                    className={`card p-4 border-l-4 ${inSite ? 'border-emerald-500' : 'border-amber-500'}`}>
+                    className={`card p-4 border-l-4 ${borderColor}`}>
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <div className="font-semibold text-gray-800">{u.user_name}</div>
                         <div className="text-[11px] text-gray-500">{u.department || u.role}</div>
                       </div>
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${inSite ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                        {inSite ? u.site_name : 'Outside any site'}
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${pillStyle}`}>
+                        {pillLabel}
                       </span>
                     </div>
                     <div className="mt-3 text-xs text-gray-600 leading-relaxed">
-                      <div className="flex items-start gap-1.5">
-                        <FiMapPin size={11} className="mt-0.5 text-red-500 flex-shrink-0" />
-                        <span className="break-words">{u.address || `${u.latitude.toFixed(5)}, ${u.longitude.toFixed(5)}`}</span>
-                      </div>
+                      {gpsOff ? (
+                        <div className="text-red-600 italic">
+                          Network alive but GPS not available
+                          {u.address && <span className="text-gray-500 not-italic"> · {u.address.replace('-', ' ')}</span>}
+                        </div>
+                      ) : (
+                        <div className="flex items-start gap-1.5">
+                          <FiMapPin size={11} className="mt-0.5 text-red-500 flex-shrink-0" />
+                          <span className="break-words">{u.address || `${u.latitude.toFixed(5)}, ${u.longitude.toFixed(5)}`}</span>
+                        </div>
+                      )}
                       <div className="flex items-center gap-1.5 mt-1 text-gray-500">
                         <FiClock size={11} />
                         <span>{fmtTime(u.time)} · {u.minutes_ago === 0 ? 'just now' : `${u.minutes_ago} min ago`}</span>
                       </div>
                     </div>
                     <div className="mt-3 flex items-center gap-3 flex-wrap">
-                      <a
-                        href={mapsUrl(u.latitude, u.longitude)}
-                        target="_blank" rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-xs text-red-600 hover:underline font-medium"
-                      >
-                        <FiExternalLink size={12} /> View on Google Maps
-                      </a>
+                      {!gpsOff && (
+                        <a
+                          href={mapsUrl(u.latitude, u.longitude)}
+                          target="_blank" rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-red-600 hover:underline font-medium"
+                        >
+                          <FiExternalLink size={12} /> View on Google Maps
+                        </a>
+                      )}
                       {/* One-click jump to this person's full-day timeline.
                           Pre-fills the Timeline tab with their user_id +
                           today's date so mam doesn't re-pick from dropdowns. */}

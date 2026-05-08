@@ -414,12 +414,24 @@ router.post('/punch-out', (req, res) => {
 // the true position could be anywhere from 150m to 350m away, so we give
 // the benefit of the doubt and treat it as inside (150 <= 200).
 router.post('/track-location', (req, res) => {
-  const { latitude, longitude, address, accuracy } = req.body;
-  if (!latitude || !longitude) return res.status(400).json({ error: 'Location required' });
-  const acc = +accuracy > 0 ? Math.min(+accuracy, 500) : 0; // clamp to 500m so a junk reading doesn't auto-pass
+  const { latitude, longitude, address, accuracy, gps_off, reason } = req.body;
   const db = getDb();
   const today = new Date().toISOString().split('T')[0];
   const now = new Date().toISOString();
+
+  // Heartbeat with gps_off=true → user is online (page is open, network
+  // alive) but their browser couldn't get a GPS fix. Mam: 'can show me
+  // here like some off GPS even network is good'. Stored with NULL
+  // lat/lng + site_name='GPS_OFF' so the admin Location Tracking page
+  // can surface them as a distinct red card.
+  if (gps_off) {
+    db.prepare('INSERT INTO location_tracking (user_id, date, time, latitude, longitude, address, site_name) VALUES (?,?,?,NULL,NULL,?,?)')
+      .run(req.user.id, today, now, reason || null, 'GPS_OFF');
+    return res.json({ site: 'GPS_OFF', recorded: true });
+  }
+
+  if (!latitude || !longitude) return res.status(400).json({ error: 'Location required' });
+  const acc = +accuracy > 0 ? Math.min(+accuracy, 500) : 0; // clamp to 500m so a junk reading doesn't auto-pass
   const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
   let siteName = 'Outside';
   for (const gf of geofences) {

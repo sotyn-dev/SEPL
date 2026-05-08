@@ -77,14 +77,27 @@ export default function Attendance() {
   useEffect(() => {
     if (myToday?.punch_out_time) return; // day is done
     const trackLocation = () => {
-      if (!navigator.geolocation) return;
+      // Even if the browser has no geolocation API, still send a
+      // heartbeat so admin sees "online but GPS unavailable" instead of
+      // mistaking the user for absent / off-network.
+      if (!navigator.geolocation) {
+        api.post('/attendance/track-location', { gps_off: true, reason: 'no-geolocation-api' }).catch(() => {});
+        return;
+      }
       navigator.geolocation.getCurrentPosition(pos => {
         const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 };
         setLocation(loc);
         api.post('/attendance/track-location', { ...loc, address: '' }).catch(() => {});
         // Re-fetch my-today so auto-punch events reflect in UI quickly
         api.get('/attendance/my-today').then(r => setMyToday(r.data)).catch(() => {});
-      }, () => {}, { enableHighAccuracy: true, timeout: 15000 });
+      }, (err) => {
+        // GPS off / permission denied / timeout — send a "GPS OFF"
+        // heartbeat so the admin Location Tracking page can surface
+        // them in red. Mam: 'can show me here like some off GPS even
+        // network is good'.
+        const reasonMap = { 1: 'permission-denied', 2: 'position-unavailable', 3: 'timeout' };
+        api.post('/attendance/track-location', { gps_off: true, reason: reasonMap[err?.code] || 'unknown-error' }).catch(() => {});
+      }, { enableHighAccuracy: true, timeout: 15000 });
     };
     trackLocation(); // fire immediately
     const interval = setInterval(trackLocation, 30 * 1000); // every 30 sec
