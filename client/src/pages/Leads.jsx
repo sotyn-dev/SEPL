@@ -7,7 +7,22 @@ import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiCheck, Fi
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 
 const STAGES = ['new_lead','qualified','meeting_assigned','mom_uploaded','drawing_uploaded','boq_created','quotation_sent','won','lost'];
-const STAGE_LABELS = { new_lead:'New Leads', qualified:'Qualified', meeting_assigned:'Meetings', mom_uploaded:'MOM Done', drawing_uploaded:'Drawings', boq_created:'BOQ Ready', quotation_sent:'Quotation Sent', won:'Won', lost:'Lost' };
+// Stage labels match mam's spec: each is a clear, numbered step in the
+// funnel so the tabs read like Indent-to-Dispatch (Stage 1 → Stage 9).
+const STAGE_LABELS = {
+  new_lead:        'Stage 1 — Lead Capture',
+  qualified:       'Stage 2 — First Call / Qualify',
+  meeting_assigned:'Stage 3 — Meeting',
+  mom_uploaded:    'Stage 4 — MOM + Drawings',
+  drawing_uploaded:'Stage 5 — Drawings',
+  boq_created:     'Stage 6 — BOQ',
+  quotation_sent:  'Stage 7 — Quotation Sent',
+  won:             'Stage 8 — Won',
+  lost:            'Stage 9 — Lost',
+};
+// Compact label used inside the funnel chart / dashboard widgets where
+// the long "Stage N — …" name doesn't fit.
+const STAGE_SHORT = { new_lead:'New Leads', qualified:'Qualified', meeting_assigned:'Meetings', mom_uploaded:'MOM Done', drawing_uploaded:'Drawings', boq_created:'BOQ Ready', quotation_sent:'Quotation Sent', won:'Won', lost:'Lost' };
 const STAGE_COLORS = { new_lead:'#3b82f6', qualified:'#6366f1', meeting_assigned:'#8b5cf6', mom_uploaded:'#a855f7', drawing_uploaded:'#f59e0b', boq_created:'#f97316', quotation_sent:'#06b6d4', won:'#10b981', lost:'#ef4444' };
 const TAB_STYLES = { new_lead:'bg-red-500', qualified:'bg-red-500', meeting_assigned:'bg-purple-500', mom_uploaded:'bg-violet-500', drawing_uploaded:'bg-amber-500', boq_created:'bg-orange-500', quotation_sent:'bg-cyan-500', won:'bg-emerald-500', lost:'bg-red-500' };
 const CATEGORIES = ['MEP','Fire Fighting','Electrical','HVAC','Low Voltage','Solar','Plumbing','CCTV','Access Control'];
@@ -74,12 +89,12 @@ export default function Leads() {
   };
 
   // Chart data
-  const stageChartData = dashboard?.byStage?.map(s => ({ name: STAGE_LABELS[s.current_stage]||s.current_stage, count: s.count, fill: STAGE_COLORS[s.current_stage]||'#888' })) || [];
+  const stageChartData = dashboard?.byStage?.map(s => ({ name: STAGE_SHORT[s.current_stage]||s.current_stage, count: s.count, fill: STAGE_COLORS[s.current_stage]||'#888' })) || [];
   const catChartData = dashboard?.byCategory?.map((c,i) => ({ name: c.category, value: c.count, fill: PIE_COLORS[i%PIE_COLORS.length] })) || [];
   const scChartData = dashboard?.bySC?.map((s,i) => ({ name: s.assigned_sc, count: s.count, fill: PIE_COLORS[i%PIE_COLORS.length] })) || [];
 
   // Funnel data
-  const funnelData = STAGES.filter(s=>s!=='lost').map(s => ({ stage: STAGE_LABELS[s], count: dashboard?.byStage?.find(b=>b.current_stage===s)?.count||0 }));
+  const funnelData = STAGES.filter(s=>s!=='lost').map(s => ({ stage: STAGE_SHORT[s], count: dashboard?.byStage?.find(b=>b.current_stage===s)?.count||0 }));
 
   return (
     <div className="space-y-4">
@@ -89,21 +104,42 @@ export default function Leads() {
         {canCreate('leads') && <button onClick={() => { setForm({ client_name:'',company_name:'',phone:'',email:'',category:'',address:'',source:'',assigned_sc:user?.name||'',assigned_asm:'',remarks:'' }); setModal('add'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15}/> New Lead</button>}
       </div>
 
-      {/* CRM Tabs — Jotform Style */}
-      <div className="flex overflow-x-auto gap-0 bg-white rounded-xl shadow-sm border">
-        <button onClick={()=>{setTab('dashboard');setStageTab('dashboard');}} className={`px-4 py-3 text-xs font-bold whitespace-nowrap border-b-3 transition-all ${tab==='dashboard'?'border-b-2 border-red-600 text-red-600 bg-red-50':'text-gray-500 hover:bg-gray-50'}`}>
-          <FiTrendingUp className="inline mr-1" size={14}/>Dashboard
+      {/* Sales Funnel stage tabs — same pill-button style as the
+          Indent-to-Dispatch tabs (Raise Indent / Vendor Rates / …) so
+          each stage is a clearly visible step. ALL stages are always
+          shown (even when count=0) so mam can see the full pipeline at
+          a glance. The count chip on each tab makes it obvious where
+          the leads are sitting today. */}
+      <div className="flex gap-2 flex-wrap items-center">
+        <button
+          onClick={() => { setTab('dashboard'); setStageTab('dashboard'); }}
+          className={`btn ${tab === 'dashboard' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
+        >
+          <FiTrendingUp size={14} /> Dashboard
         </button>
-        <button onClick={()=>{setTab('list');setStageTab('all');}} className={`px-4 py-3 text-xs font-bold whitespace-nowrap transition-all ${stageTab==='all'&&tab==='list'?'border-b-2 border-gray-800 text-gray-800 bg-gray-50':'text-gray-500 hover:bg-gray-50'}`}>
-          All ({dashboard?.total||0})
+        <button
+          onClick={() => { setTab('list'); setStageTab('all'); }}
+          className={`btn ${tab === 'list' && stageTab === 'all' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
+        >
+          All Leads
+          <span className="bg-white/30 text-white px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center">
+            {dashboard?.total || 0}
+          </span>
         </button>
         {STAGES.map(s => {
-          const count = dashboard?.byStage?.find(b=>b.current_stage===s)?.count||0;
-          if (count === 0 && s !== 'won' && s !== 'lost') return null;
+          const count = dashboard?.byStage?.find(b => b.current_stage === s)?.count || 0;
+          const isActive = stageTab === s && tab === 'list';
           return (
-            <button key={s} onClick={()=>{setTab('list');setStageTab(s);}} className={`px-3 py-3 text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${stageTab===s?'border-b-2 text-white '+TAB_STYLES[s]:'text-gray-500 hover:bg-gray-50'}`}>
-              <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${stageTab===s?'bg-white/30 text-white':'text-white '+TAB_STYLES[s]}`}>{count}</span>
+            <button
+              key={s}
+              onClick={() => { setTab('list'); setStageTab(s); }}
+              className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
+              title={STAGE_LABELS[s]}
+            >
               {STAGE_LABELS[s]}
+              <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center ${isActive ? 'bg-white/30 text-white' : 'text-white ' + (TAB_STYLES[s] || 'bg-gray-400')}`}>
+                {count}
+              </span>
             </button>
           );
         })}
@@ -200,7 +236,7 @@ export default function Leads() {
             <td className="px-3 py-2.5"><span className="text-[9px] bg-gray-100 px-2 py-0.5 rounded-full font-medium">{l.category||'-'}</span></td>
             <td className="px-3 py-2.5 text-gray-500">{l.district||l.address||'-'}</td>
             <td className="px-3 py-2.5">{l.assigned_sc||'-'}</td>
-            <td className="px-3 py-2.5"><span className="text-[9px] px-2 py-1 rounded-full font-bold text-white" style={{backgroundColor:STAGE_COLORS[l.current_stage]||'#888'}}>{STAGE_LABELS[l.current_stage]||l.current_stage}</span></td>
+            <td className="px-3 py-2.5"><span className="text-[9px] px-2 py-1 rounded-full font-bold text-white" style={{backgroundColor:STAGE_COLORS[l.current_stage]||'#888'}}>{STAGE_SHORT[l.current_stage]||l.current_stage}</span></td>
             <td className="px-3 py-2.5">{slaChip}</td>
             <td className="px-3 py-2.5 text-[10px] text-gray-400">{l.created_at?.split('T')[0]}</td>
             <td className="px-3 py-2.5" onClick={e=>e.stopPropagation()}>
@@ -234,7 +270,7 @@ export default function Leads() {
                 className={`px-2 py-1 rounded text-[9px] font-bold min-w-[50px] text-center transition-all hover:scale-105 ${selected?'ring-2 ring-offset-1 ring-red-500':''}`}
                 style={{backgroundColor:cur||done?STAGE_COLORS[key]:'#e5e7eb',color:cur||done?'white':'#9ca3af'}}
                 title={selected ? 'Currently viewing this stage' : `Click to view ${STAGE_LABELS[key]} form`}
-              >{STAGE_LABELS[key]}</button>
+              >{STAGE_SHORT[key]}</button>
               {idx<keys.length-1&&<FiChevronRight size={10} className="text-gray-300 mx-0.5"/>}
             </div>);
           })}</div>
