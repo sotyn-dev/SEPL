@@ -10,7 +10,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   FiHome, FiUsers, FiTarget, FiFileText, FiShoppingCart,
   FiTruck, FiTool, FiAlertCircle, FiUserPlus,
-  FiCheckSquare, FiMenu, FiX, FiLogOut, FiPackage, FiClipboard,
+  FiCheckSquare, FiMenu, FiX, FiLogOut, FiPackage, FiClipboard, FiChevronRight,
   FiSettings, FiShield, FiTrendingUp, FiCreditCard, FiLayers, FiBarChart2, FiBook, FiGrid, FiKey, FiMapPin, FiHelpCircle
 } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
@@ -263,11 +263,29 @@ export default function Layout() {
         </form>
       </Modal>
 
+      {/* Floating "expand sidebar" tab — only when sidebar is collapsed
+          on desktop. Mam: 'if I hide sidebar then show expand'. Sticky
+          to the left edge so it's impossible to miss. */}
+      {!sidebarOpen && !isMobile && (
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="fixed left-0 top-1/2 -translate-y-1/2 z-30 bg-red-700 hover:bg-red-600 text-white pl-1.5 pr-2.5 py-3 rounded-r-lg shadow-lg shadow-red-900/30 flex items-center gap-1 transition-all hover:pl-2.5 group"
+          title="Expand sidebar"
+        >
+          <FiChevronRight size={18} />
+          <span className="text-[10px] font-bold uppercase tracking-wider hidden group-hover:inline">Menu</span>
+        </button>
+      )}
+
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden w-full">
         <header className="bg-white shadow-sm border-b border-gray-200 px-3 md:px-6 py-2.5 flex items-center gap-2">
-          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 hover:bg-gray-100 rounded-lg flex-shrink-0">
-            <FiMenu size={20} />
+          <button
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="p-2 hover:bg-gray-100 rounded-lg flex-shrink-0 text-gray-700"
+            title={sidebarOpen ? 'Hide sidebar' : 'Expand sidebar'}
+          >
+            {sidebarOpen ? <FiMenu size={20} /> : <FiChevronRight size={20} />}
           </button>
           <h2 className="text-sm md:text-lg font-semibold text-gray-800 truncate flex-1">
             {[...menuItems, ...adminItems].find(m => m.path === location.pathname)?.label || 'SEPL ERP'}
