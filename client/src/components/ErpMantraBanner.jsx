@@ -13,8 +13,8 @@ export default function ErpMantraBanner() {
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-[11px] font-bold uppercase tracking-widest text-orange-700">SEPL Rule</p>
-        <p className="text-lg sm:text-xl font-extrabold text-gray-900 mt-0.5 leading-snug">
-          &ldquo;If it is not in the ERP, it did not happen.&rdquo;
+        <p className="text-lg sm:text-xl font-extrabold text-gray-900 mt-0.5 leading-snug uppercase tracking-wide">
+          🚨 &ldquo;IF IT IS NOT IN THE ERP, IT DID NOT HAPPEN.&rdquo; 🚨
         </p>
       </div>
     </div>
