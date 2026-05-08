@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp } from 'react-icons/fi';
@@ -45,6 +46,11 @@ export default function Leads() {
   const [viewStage, setViewStage] = useState(null);
   const [followups, setFollowups] = useState([]);
   const [fuForm, setFuForm] = useState({ followup_date: '', followup_time: '', type: 'call', notes: '' });
+  // Employees list for the "Assign Meeting" dropdown — only active staff
+  // are shown so dropped/inactive employees don't clutter the list.
+  // Each option carries user_id so the lead row stores both the display
+  // name and the FK to users(id) for "My Planned Meetings" filtering.
+  const [employees, setEmployees] = useState([]);
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -55,6 +61,15 @@ export default function Leads() {
   }, [search, stageTab]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Load active employees once for the Assign Meeting dropdown.
+  // Filter to active so dropped employees don't show in the picker.
+  useEffect(() => {
+    api.get('/hr/employees')
+      .then(r => setEmployees((r.data || []).filter(e => !e.status || e.status === 'active')))
+      .catch(() => setEmployees([]));
+  }, []);
+
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const fmt = n => `Rs ${(n||0).toLocaleString('en-IN')}`;
 
@@ -345,7 +360,25 @@ export default function Leads() {
               {activeStage==='qualified'&&(<div className="space-y-2">
                 <input className="input" type="datetime-local" value={stageForm.meeting_date||''} onChange={e=>setStageForm({...stageForm,meeting_date:e.target.value})}/>
                 <input className="input" placeholder="Location" value={stageForm.meeting_location||''} onChange={e=>setStageForm({...stageForm,meeting_location:e.target.value})}/>
-                <input className="input" placeholder="Assign To (ASM)" value={stageForm.meeting_assigned_to||''} onChange={e=>setStageForm({...stageForm,meeting_assigned_to:e.target.value})}/>
+                {/* Assign Meeting → searchable employee dropdown. Stores
+                    both the name (for display) and user_id (so the
+                    assignee's dashboard can filter to their meetings). */}
+                <SearchableSelect
+                  options={employees.map(e => ({
+                    value: e.id,
+                    label: e.name + (e.designation ? ' — ' + e.designation : ''),
+                    name: e.name,
+                    user_id: e.user_id,
+                  }))}
+                  value={stageForm.meeting_assigned_employee_id || ''}
+                  onChange={(opt) => setStageForm({
+                    ...stageForm,
+                    meeting_assigned_employee_id: opt?.value || null,
+                    meeting_assigned_to: opt?.name || '',
+                    meeting_assigned_to_id: opt?.user_id || null,
+                  })}
+                  placeholder="Assign To (search employee)..."
+                />
                 <button onClick={()=>advanceStage(viewData.id,'meeting_assigned',stageForm)} className="btn btn-primary w-full">Assign Meeting</button>
               </div>)}
               {/* Fill MOM — matches mam's Google Form layout (2026-04-23).

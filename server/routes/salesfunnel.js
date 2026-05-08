@@ -280,15 +280,22 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
         b.first_call_remarks || b.qualified_remarks || null, req.params.id];
       break;
 
-    // Meeting Scheduled — now also captures recording URL + live location
+    // Meeting Scheduled — now also captures recording URL + live location.
+    // meeting_assigned_to (TEXT name snapshot) + meeting_assigned_to_id
+    // (FK to users.id) are stored together so the assignee's dashboard
+    // can filter their planned meetings by user_id reliably.
     case 'meeting_assigned':
       if (!b.meeting_date) return res.status(400).json({ error: 'Meeting date required' });
       sql = `UPDATE sales_funnel SET
-        current_stage=?, meeting_date=?, meeting_location=?, meeting_assigned_to=?, meeting_status=?,
-        meeting_recording_url=?, meeting_location_lat=?, meeting_location_lng=?,
+        current_stage=?, meeting_date=?, meeting_location=?,
+        meeting_assigned_to=?, meeting_assigned_to_id=?,
+        meeting_status=?, meeting_recording_url=?,
+        meeting_location_lat=?, meeting_location_lng=?,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = ['meeting_assigned', b.meeting_date, b.meeting_location, b.meeting_assigned_to, 'scheduled',
-        b.meeting_recording_url || null, b.meeting_location_lat || null, b.meeting_location_lng || null,
+      params = ['meeting_assigned', b.meeting_date, b.meeting_location,
+        b.meeting_assigned_to || null, b.meeting_assigned_to_id || null,
+        'scheduled', b.meeting_recording_url || null,
+        b.meeting_location_lat || null, b.meeting_location_lng || null,
         req.params.id];
       break;
 

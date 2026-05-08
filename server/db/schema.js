@@ -2087,6 +2087,12 @@ function initializeDatabase() {
     ['sales_funnel', 'meeting_format TEXT'],                // Phone / VC / In-Person
     ['sales_funnel', 'meeting_scheduled_by TEXT'],          // who scheduled the meeting
     ['sales_funnel', 'meeting_time_spent_min INTEGER'],     // minutes spent in the meeting
+    // user_id of the employee the meeting is assigned to. Stored alongside
+    // meeting_assigned_to (TEXT name) so the assigned employee's dashboard
+    // can filter "My Planned Meetings" by user_id without name-matching.
+    // Mam: 'so that assigned meeting user show their Meeting planned and
+    // he will fill mom after on schedule day visit'.
+    ['sales_funnel', 'meeting_assigned_to_id INTEGER REFERENCES users(id)'],
     // Complaints — mam's Google Form (2026-04-23) adds State and Remarks.
     // Complaint Type = Paid / Free (changed from Urgent/Normal/Low)
     // Customer Type = Old Site / Running Site (changed from New/Existing)
