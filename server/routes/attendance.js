@@ -74,7 +74,7 @@ router.get('/my-month', (req, res) => {
   ).all(req.user.id, monthStart, monthEnd);
 
   const leaves = db.prepare(
-    `SELECT leave_type, from_date, to_date, status, hours, days
+    `SELECT leave_type, from_date, to_date, from_time, to_time, status, hours, days
      FROM leave_requests
      WHERE user_id=? AND status='approved'
        AND NOT (to_date < ? OR from_date > ?)`
@@ -136,7 +136,25 @@ router.get('/my-month', (req, res) => {
       status = 'absent';
     }
     if (byStatus[status] !== undefined) byStatus[status]++;
-    days.push({ date: dateStr, day: d, dow, status });
+    // Include punch-in/out times and total hours so the dashboard can
+    // render a per-day timeline. Also embed any approved leave that
+    // covers this date (short_leave or full-day) for at-a-glance audit.
+    const dayLeave = leaves.find(l => dateStr >= l.from_date && dateStr <= l.to_date);
+    days.push({
+      date: dateStr,
+      day: d,
+      dow,
+      status,
+      punch_in_time: att?.punch_in_time || null,
+      punch_out_time: att?.punch_out_time || null,
+      total_hours: att?.total_hours || 0,
+      leave: dayLeave ? {
+        leave_type: dayLeave.leave_type,
+        from_time: dayLeave.from_time || null,
+        to_time: dayLeave.to_time || null,
+        hours: dayLeave.hours || 0,
+      } : null,
+    });
   }
 
   // Short leave summary — count and sum hours across this month's
