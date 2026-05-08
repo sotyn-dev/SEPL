@@ -46,21 +46,21 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-zinc-900 to-slate-900 flex flex-col">
-      {/* Subtle ambient red glow over the dark canvas */}
+    <div className="min-h-screen bg-gradient-to-br from-zinc-900 via-zinc-950 to-red-950 flex flex-col">
+      {/* Ambient depth — kept subtle so the half/half split shows clearly */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-red-700/10 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/4 right-1/4 w-[600px] h-[600px] bg-red-800/15 rounded-full blur-3xl" />
+        <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-zinc-700/15 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/4 right-1/4 w-[600px] h-[600px] bg-red-700/25 rounded-full blur-3xl" />
       </div>
 
       <div className="flex-1 flex items-center justify-center px-4 py-6 relative z-10">
         <div className="grid lg:grid-cols-2 gap-0 w-full max-w-6xl rounded-3xl overflow-hidden shadow-2xl shadow-black/60 ring-1 ring-zinc-800">
 
-          {/* ─── LEFT — Sign-in form (dark card) ──────────────────── */}
-          <div className="bg-slate-950/90 p-10 sm:p-14 flex flex-col justify-center">
+          {/* ─── LEFT — Sign-in form (GREY half) ──────────────────── */}
+          <div className="bg-gradient-to-br from-zinc-800 via-zinc-850 to-zinc-900 p-10 sm:p-14 flex flex-col justify-center">
             {/* Logo + brand */}
             <div className="flex items-center gap-3 mb-12">
-              <div className="w-14 h-14 rounded-xl overflow-hidden shadow-lg shadow-red-900/40 ring-1 ring-zinc-800 flex items-center justify-center bg-slate-900">
+              <div className="w-14 h-14 rounded-xl overflow-hidden shadow-lg shadow-red-700/30 ring-1 ring-zinc-700 flex items-center justify-center bg-zinc-900">
                 <img src={SEPL_LOGO_PATH}
                 onError={(e) => { if (e.target.src !== SEPL_LOGO_FALLBACK) e.target.src = SEPL_LOGO_FALLBACK; }} alt="SEPL" className="w-full h-full object-contain p-1" />
               </div>
@@ -82,7 +82,7 @@ export default function Login() {
                 <div className="relative">
                   <FiUser className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
                   <input
-                    className="w-full bg-slate-900/80 border border-zinc-800 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 text-white placeholder-zinc-600 rounded-xl pl-10 pr-4 py-3 outline-none transition-colors"
+                    className="w-full bg-zinc-900/80 border border-zinc-700 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 text-white placeholder-zinc-500 rounded-xl pl-10 pr-4 py-3 outline-none transition-colors"
                     type="text"
                     autoComplete="username"
                     value={form.identifier}
@@ -98,7 +98,7 @@ export default function Login() {
                 <div className="relative">
                   <FiLock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
                   <input
-                    className="w-full bg-slate-900/80 border border-zinc-800 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 text-white placeholder-zinc-600 rounded-xl pl-10 pr-10 py-3 outline-none transition-colors"
+                    className="w-full bg-zinc-900/80 border border-zinc-700 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 text-white placeholder-zinc-500 rounded-xl pl-10 pr-10 py-3 outline-none transition-colors"
                     type={showPassword ? 'text' : 'password'}
                     value={form.password}
                     onChange={e => setForm({ ...form, password: e.target.value })}
@@ -142,31 +142,31 @@ export default function Login() {
             </p>
           </div>
 
-          {/* ─── RIGHT — Animated brand panel (dark with red glow) ─ */}
-          <div className="hidden lg:flex relative bg-gradient-to-br from-slate-900 via-zinc-900 to-red-950 items-center justify-center p-12 overflow-hidden">
-            {/* Concentric red rings — pure CSS pulse animation */}
+          {/* ─── RIGHT — Brand panel (RED half) ──────────────────── */}
+          <div className="hidden lg:flex relative bg-gradient-to-br from-red-600 via-red-700 to-red-800 items-center justify-center p-12 overflow-hidden">
+            {/* Concentric white rings — visible against the red field */}
             <div className="absolute inset-0 flex items-center justify-center">
-              <div className="absolute w-[200px] h-[200px] rounded-full border border-red-500/30 animate-ping-slow" />
-              <div className="absolute w-[320px] h-[320px] rounded-full border border-red-500/25 animate-ping-slow" style={{ animationDelay: '1s' }} />
-              <div className="absolute w-[440px] h-[440px] rounded-full border border-red-500/20 animate-ping-slow" style={{ animationDelay: '2s' }} />
-              <div className="absolute w-[560px] h-[560px] rounded-full border border-red-500/15" />
-              <div className="absolute w-[680px] h-[680px] rounded-full border border-zinc-700/50" />
-              <div className="absolute w-[800px] h-[800px] rounded-full border border-zinc-700/30" />
+              <div className="absolute w-[200px] h-[200px] rounded-full border border-white/40 animate-ping-slow" />
+              <div className="absolute w-[320px] h-[320px] rounded-full border border-white/30 animate-ping-slow" style={{ animationDelay: '1s' }} />
+              <div className="absolute w-[440px] h-[440px] rounded-full border border-white/25 animate-ping-slow" style={{ animationDelay: '2s' }} />
+              <div className="absolute w-[560px] h-[560px] rounded-full border border-white/20" />
+              <div className="absolute w-[680px] h-[680px] rounded-full border border-white/15" />
+              <div className="absolute w-[800px] h-[800px] rounded-full border border-white/10" />
             </div>
 
             {/* Centered logo + tagline over the rings */}
             <div className="relative z-10 text-center">
-              <div className="w-36 h-36 mx-auto mb-6 rounded-2xl overflow-hidden shadow-2xl shadow-red-900/60 ring-2 ring-red-500/30 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-3">
+              <div className="w-36 h-36 mx-auto mb-6 rounded-2xl overflow-hidden shadow-2xl shadow-red-950/60 ring-2 ring-white/40 flex items-center justify-center bg-white/95 backdrop-blur-sm p-3">
                 <img src={SEPL_LOGO_PATH}
                 onError={(e) => { if (e.target.src !== SEPL_LOGO_FALLBACK) e.target.src = SEPL_LOGO_FALLBACK; }} alt="SEPL" className="w-full h-full object-contain" />
               </div>
-              <h2 className="text-4xl font-extrabold text-white mb-3 tracking-tight">
+              <h2 className="text-4xl font-extrabold text-white mb-3 tracking-tight drop-shadow-lg">
                 Build secure. <br />
-                <span className="bg-gradient-to-r from-red-400 via-red-300 to-red-500 bg-clip-text text-transparent">
+                <span className="bg-gradient-to-r from-white via-red-100 to-white bg-clip-text text-transparent">
                   Track smart.
                 </span>
               </h2>
-              <p className="text-zinc-400 text-sm max-w-xs mx-auto">
+              <p className="text-white/90 text-sm max-w-xs mx-auto">
                 Every site, every order, every rupee — visible end-to-end.
               </p>
             </div>
