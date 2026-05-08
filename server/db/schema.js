@@ -1251,6 +1251,24 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Sales Funnel — universal stage audit log per mam's spec:
+    -- 'every stage entry timestamp · actor (user_id) · action · evidence
+    -- (file/note) · stage exit timestamp'. Forward-only state machine;
+    -- backward transitions allowed only with reason + supervisor approval
+    -- (also logged here).
+    CREATE TABLE IF NOT EXISTS sales_funnel_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_id INTEGER REFERENCES sales_funnel(id) ON DELETE CASCADE,
+      stage TEXT,                                  -- stage name at time of action
+      action TEXT,                                 -- 'create' | 'enter_stage' | 'exit_stage' | 'drop' | 'reopen' | 'edit'
+      actor_id INTEGER REFERENCES users(id),
+      actor_name TEXT,                             -- snapshot
+      evidence_url TEXT,                           -- optional file
+      notes TEXT,                                  -- free-text reason / context
+      at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sf_audit_lead ON sales_funnel_audit(lead_id, at);
+
     -- Snag list — defects / punch-list items raised against a site,
     -- assigned to an employee, who uploads proof and only then it's
     -- closed by approval (delegation-style flow). Mam's ask:
@@ -2034,6 +2052,34 @@ function initializeDatabase() {
     // IMEI for mobile/tablet (separate from generic serial_no).
     ['company_assets', 'ip_address TEXT'],
     ['company_assets', 'imei TEXT'],
+
+    // ─── Sales Funnel — Stage 1: Lead / Tender Capture (mam's spec) ──
+    // Distinguish Private quotes from Government tenders so the form
+    // shows the correct fields and the audit / SLA rules differ.
+    ['sales_funnel', "lead_kind TEXT DEFAULT 'private'"], // 'private' | 'government'
+    // Customer GST / PAN — may be auto-fetched from MCA later.
+    ['sales_funnel', 'gst_number TEXT'],
+    ['sales_funnel', 'pan_number TEXT'],
+    // Project header (separate from address — project_name is what mam
+    // displays on the BOQ / quote / contract).
+    ['sales_funnel', 'project_name TEXT'],
+    ['sales_funnel', 'project_location TEXT'],
+    ['sales_funnel', 'pin_code TEXT'],
+    // Commercial header
+    ['sales_funnel', 'estimated_value REAL DEFAULT 0'],
+    ['sales_funnel', 'tentative_timeline TEXT'],
+    // Sub-trades scope as CSV: M,E,P,F,BMS,ELV,Solar
+    ['sales_funnel', 'sub_trades_scope TEXT'],
+    // Government-only fields
+    ['sales_funnel', 'tender_id TEXT'],
+    ['sales_funnel', 'bid_deadline DATE'],
+    ['sales_funnel', 'emd_amount REAL DEFAULT 0'],
+    ['sales_funnel', 'pbg_required INTEGER DEFAULT 0'],
+    // Drop tracking — mam's universal principle: 'Drop with reason'
+    ['sales_funnel', 'dropped INTEGER DEFAULT 0'],
+    ['sales_funnel', 'drop_reason TEXT'],
+    ['sales_funnel', 'dropped_at DATETIME'],
+    ['sales_funnel', 'dropped_by INTEGER REFERENCES users(id)'],
     // When a DPR shows a LOSS (Total B > Total A), mam wants the
     // hindrance category captured so we can analyse root causes
     // across sites. Required field at submit-time only when there's

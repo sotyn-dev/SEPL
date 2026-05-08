@@ -433,23 +433,121 @@ export default function Leads() {
       </Modal>
 
       {/* Add/Edit */}
-      <Modal isOpen={modal==='add'||modal==='edit'} onClose={()=>setModal(null)} title={modal==='edit'?'Edit Lead':'New Lead'} wide>
-        <form onSubmit={saveLead} className="space-y-4">
+      {/* STAGE 1 — Lead / Tender Capture (mam's funnel spec).
+          Lead Kind toggle: Private vs Government. Govt-specific fields
+          (Tender ID, bid deadline, EMD, PBG) appear only when needed. */}
+      <Modal isOpen={modal==='add'||modal==='edit'} onClose={()=>setModal(null)} title={modal==='edit'?'Edit Lead':'Stage 1 — Lead / Tender Capture'} wide>
+        <form onSubmit={saveLead} className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
+          {/* Lead Kind selector — drives the rest of the form */}
+          <div>
+            <label className="label">Lead Kind *</label>
+            <div className="flex gap-2">
+              {[
+                { v: 'private', label: '🏢 Private (Quote)', desc: 'Direct customer, RFQ-based' },
+                { v: 'government', label: '🏛 Government (Tender)', desc: 'GeM / CPPP / state portal' },
+              ].map(o => (
+                <label key={o.v} className={`flex-1 cursor-pointer border-2 rounded-lg p-3 text-center transition ${(form.lead_kind || 'private') === o.v ? 'border-red-500 bg-red-50 text-red-700 font-bold' : 'border-gray-200 hover:bg-gray-50'}`}>
+                  <input type="radio" name="lead_kind" value={o.v} checked={(form.lead_kind || 'private') === o.v} onChange={e => F('lead_kind', e.target.value)} className="sr-only" />
+                  <div className="text-sm">{o.label}</div>
+                  <div className="text-[10px] text-gray-500 font-normal mt-0.5">{o.desc}</div>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Customer block */}
+          <div className="border-t pt-3"><h5 className="font-bold text-sm text-red-700 mb-2">Customer</h5></div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-            <div><label className="label">Client Name *</label><input className="input" value={form.client_name||''} onChange={e=>F('client_name',e.target.value)} required/></div>
-            <div><label className="label">Company</label><input className="input" value={form.company_name||''} onChange={e=>F('company_name',e.target.value)}/></div>
+            <div><label className="label">Customer Name *</label><input className="input" value={form.client_name||''} onChange={e=>F('client_name',e.target.value)} required/></div>
+            <div><label className="label">Company / Entity</label><input className="input" value={form.company_name||''} onChange={e=>F('company_name',e.target.value)}/></div>
             <div><label className="label">Phone</label><input className="input" value={form.phone||''} onChange={e=>F('phone',e.target.value)}/></div>
-            <div><label className="label">Email</label><input className="input" value={form.email||''} onChange={e=>F('email',e.target.value)}/></div>
-            <div><label className="label">Category</label><select className="select" value={form.category||''} onChange={e=>F('category',e.target.value)}><option value="">Select</option>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></div>
-            <div><label className="label">Source</label><select className="select" value={form.source||''} onChange={e=>F('source',e.target.value)}><option value="">Select</option><option>Inbound</option><option>Indiamart</option><option>WhatsApp</option><option>LinkedIn</option><option>Reference</option><option>Tender</option></select></div>
-            <div><label className="label">Address</label><input className="input" value={form.address||''} onChange={e=>F('address',e.target.value)}/></div>
+            <div><label className="label">Email</label><input className="input" type="email" value={form.email||''} onChange={e=>F('email',e.target.value)}/></div>
+            <div><label className="label">GST Number</label><input className="input font-mono uppercase" value={form.gst_number||''} onChange={e=>F('gst_number',e.target.value.toUpperCase())} placeholder="03ABCDE1234F1Z5" maxLength="15"/></div>
+            <div><label className="label">PAN Number</label><input className="input font-mono uppercase" value={form.pan_number||''} onChange={e=>F('pan_number',e.target.value.toUpperCase())} placeholder="ABCDE1234F" maxLength="10"/></div>
+          </div>
+
+          {/* Project block */}
+          <div className="border-t pt-3"><h5 className="font-bold text-sm text-red-700 mb-2">Project</h5></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            <div className="md:col-span-2"><label className="label">Project Name {modal!=='edit' && '*'}</label><input className="input" value={form.project_name||''} onChange={e=>F('project_name',e.target.value)} required={modal!=='edit'}/></div>
+            <div><label className="label">PIN Code</label><input className="input" value={form.pin_code||''} onChange={e=>F('pin_code',e.target.value)} maxLength="6"/></div>
+            <div className="md:col-span-3"><label className="label">Project Location</label><input className="input" value={form.project_location||''} onChange={e=>F('project_location',e.target.value)} placeholder="Site address / city"/></div>
             <div><label className="label">District</label><input className="input" value={form.district||''} onChange={e=>F('district',e.target.value)}/></div>
             <div><label className="label">State</label><input className="input" value={form.state||''} onChange={e=>F('state',e.target.value)}/></div>
-            <div><label className="label">SC</label><input className="input" value={form.assigned_sc||''} onChange={e=>F('assigned_sc',e.target.value)}/></div>
-            <div><label className="label">ASM</label><input className="input" value={form.assigned_asm||''} onChange={e=>F('assigned_asm',e.target.value)}/></div>
+            <div><label className="label">Estimated Value (₹)</label><input className="input" type="number" min="0" value={form.estimated_value||0} onChange={e=>F('estimated_value',+e.target.value)}/></div>
+            <div className="md:col-span-3"><label className="label">Tentative Timeline</label><input className="input" value={form.tentative_timeline||''} onChange={e=>F('tentative_timeline',e.target.value)} placeholder="e.g. 4 months / Q3 2026"/></div>
+          </div>
+
+          {/* Category + Sub-trades */}
+          <div className="border-t pt-3"><h5 className="font-bold text-sm text-red-700 mb-2">Scope</h5></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="label">Category</label>
+              <div className="flex gap-2">
+                {['MEPF Project','Solar EPC'].map(c => (
+                  <label key={c} className={`flex-1 cursor-pointer border-2 rounded-lg px-3 py-2 text-center text-sm transition ${form.category === c ? 'border-red-500 bg-red-50 text-red-700 font-bold' : 'border-gray-200 hover:bg-gray-50'}`}>
+                    <input type="radio" name="category" value={c} checked={form.category === c} onChange={e => F('category', e.target.value)} className="sr-only" />
+                    {c}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="label">Sub-trades Scope</label>
+              <div className="flex flex-wrap gap-1.5">
+                {['M','E','P','F','BMS','ELV','Solar'].map(t => {
+                  const list = String(form.sub_trades_scope||'').split(',').map(x=>x.trim()).filter(Boolean);
+                  const checked = list.includes(t);
+                  return (
+                    <label key={t} className={`cursor-pointer border-2 rounded-md px-3 py-1.5 text-xs font-bold transition ${checked ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+                      <input type="checkbox" className="sr-only" checked={checked} onChange={(e) => {
+                        const next = e.target.checked ? [...list, t] : list.filter(x => x !== t);
+                        F('sub_trades_scope', next.join(','));
+                      }} />
+                      {t}
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-gray-400 mt-1">M = Mechanical · E = Electrical · P = Plumbing · F = Fire</p>
+            </div>
+          </div>
+
+          {/* Government-only block */}
+          {form.lead_kind === 'government' && (
+            <>
+              <div className="border-t pt-3"><h5 className="font-bold text-sm text-amber-700 mb-2">🏛 Government / Tender Details</h5></div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 bg-amber-50/40 p-3 rounded-lg border border-amber-200">
+                <div className="md:col-span-2"><label className="label">Tender ID *</label><input className="input" value={form.tender_id||''} onChange={e=>F('tender_id',e.target.value)} required={form.lead_kind==='government'} placeholder="e.g. GEM/2026/B/12345"/></div>
+                <div><label className="label">Bid Deadline</label><input className="input" type="date" value={form.bid_deadline||''} onChange={e=>F('bid_deadline',e.target.value)} min={new Date().toISOString().slice(0,10)}/></div>
+                <div><label className="label">EMD Amount (₹)</label><input className="input" type="number" min="0" value={form.emd_amount||0} onChange={e=>F('emd_amount',+e.target.value)}/></div>
+                <div className="md:col-span-4 flex items-center gap-2 pt-1">
+                  <input id="pbg" type="checkbox" className="w-4 h-4" checked={!!form.pbg_required} onChange={e=>F('pbg_required',e.target.checked?1:0)}/>
+                  <label htmlFor="pbg" className="text-sm">PBG (Performance Bank Guarantee) Required</label>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Source + assignment */}
+          <div className="border-t pt-3"><h5 className="font-bold text-sm text-red-700 mb-2">Source &amp; Assignment</h5></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            <div>
+              <label className="label">Source</label>
+              <select className="select" value={form.source||''} onChange={e=>F('source',e.target.value)}>
+                <option value="">Select</option>
+                {['Website','Referral','Cold','IPC','GeM','CPPP','State Portal','Repeat'].map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div><label className="label">SC (Sales Coordinator)</label><input className="input" value={form.assigned_sc||''} onChange={e=>F('assigned_sc',e.target.value)}/></div>
+            <div><label className="label">ASM (Area Sales Mgr / BD)</label><input className="input" value={form.assigned_asm||''} onChange={e=>F('assigned_asm',e.target.value)}/></div>
           </div>
           <div><label className="label">Remarks</label><textarea className="input" rows="2" value={form.remarks||''} onChange={e=>F('remarks',e.target.value)}/></div>
-          <div className="flex justify-end gap-3"><button type="button" onClick={()=>setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{modal==='edit'?'Update':'Create Lead'}</button></div>
+
+          <div className="flex justify-end gap-3 pt-3 border-t">
+            <button type="button" onClick={()=>setModal(null)} className="btn btn-secondary">Cancel</button>
+            <button type="submit" className="btn btn-primary">{modal==='edit'?'Update':'Save & Assign'}</button>
+          </div>
         </form>
       </Modal>
     </div>

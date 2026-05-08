@@ -86,39 +86,162 @@ router.get('/:id', requirePermission('leads', 'view'), (req, res) => {
   res.json(withSla([lead])[0]);
 });
 
-// POST create new lead (Stage 0: New Lead Enter) — auto-stamps stage_entered_at
-// so the 1-hour SLA for first-call starts ticking immediately.
+// Spec-defined sources / categories / sub-trades.
+const SOURCES = ['Website','Referral','Cold','IPC','GeM','CPPP','State Portal','Repeat'];
+const CATEGORIES_SPEC = ['MEPF Project','Solar EPC'];
+const SUB_TRADES = ['M','E','P','F','BMS','ELV','Solar'];
+
+// Stage 1 validation per mam's spec — GST format, estimated value > 0,
+// bid deadline > today (Govt only), required fields per kind.
+function validateStage1(b, isCreate) {
+  const errors = [];
+  if (!b.client_name) errors.push('Customer name is required');
+  if (!b.project_name && isCreate) errors.push('Project name is required');
+  if (b.lead_kind && !['private','government'].includes(b.lead_kind)) errors.push('Invalid lead_kind');
+  // GST format: 2-digit state code + 10-char PAN + 1Z + 1 check char
+  if (b.gst_number && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(String(b.gst_number).toUpperCase())) {
+    errors.push('GST number is invalid');
+  }
+  if (b.pan_number && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(String(b.pan_number).toUpperCase())) {
+    errors.push('PAN number is invalid');
+  }
+  if (b.estimated_value !== undefined && +b.estimated_value < 0) errors.push('Estimated value must be ≥ 0');
+  // Government-specific
+  if (b.lead_kind === 'government') {
+    if (!b.tender_id && isCreate) errors.push('Tender ID is required for Government leads');
+    if (b.bid_deadline) {
+      const today = new Date(); today.setHours(0,0,0,0);
+      const deadline = new Date(b.bid_deadline);
+      if (!isNaN(deadline) && deadline < today) errors.push('Bid deadline must be today or later');
+    }
+  }
+  return errors;
+}
+
+// Helper: write an audit row — never throws, used everywhere.
+function audit(db, lead_id, stage, action, user, opts = {}) {
+  try {
+    db.prepare(`
+      INSERT INTO sales_funnel_audit (lead_id, stage, action, actor_id, actor_name, evidence_url, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(lead_id, stage || null, action, user?.id || null, user?.name || null, opts.evidence_url || null, opts.notes || null);
+  } catch {}
+}
+
+// Expose constants so the frontend can render dropdowns from one source.
+router.get('/meta', (req, res) => res.json({
+  sources: SOURCES, categories: CATEGORIES_SPEC, sub_trades: SUB_TRADES, stages: STAGES,
+}));
+
+// POST create — Stage 1 Lead / Tender Capture. Auto-stamps stage_entered_at
+// so the 1-hour SLA for first-call starts ticking. Audit row written.
 router.post('/', requirePermission('leads', 'create'), (req, res) => {
   const b = req.body;
-  if (!b.client_name) return res.status(400).json({ error: 'Client name required' });
+  const errors = validateStage1(b, true);
+  if (errors.length) return res.status(400).json({ error: errors.join(' · ') });
+
   const db = getDb();
   const { nextSequence } = require('../db/nextSequence');
   const leadNo = nextSequence(db, 'sales_funnel', 'lead_no', 'SEPL', { startFrom: 9000, pad: 4 });
 
+  const subTrades = Array.isArray(b.sub_trades_scope) ? b.sub_trades_scope.join(',') : (b.sub_trades_scope || null);
+  const leadKind = b.lead_kind === 'government' ? 'government' : 'private';
+
   const r = db.prepare(`INSERT INTO sales_funnel
-    (lead_no, client_name, company_name, phone, email, category, lead_type, city,
-     address, district, state, source, assigned_sc, assigned_asm, remarks, created_by,
+    (lead_no, client_name, company_name, phone, email, category, lead_type, lead_kind,
+     gst_number, pan_number, project_name, project_location, pin_code,
+     estimated_value, tentative_timeline, sub_trades_scope,
+     tender_id, bid_deadline, emd_amount, pbg_required,
+     city, address, district, state, source, assigned_sc, assigned_asm, remarks, created_by,
      current_stage, stage_entered_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new_lead', CURRENT_TIMESTAMP)`).run(
-    leadNo, b.client_name, b.company_name, b.phone, b.email, b.category, b.lead_type || null, b.city || null,
-    b.address, b.district, b.state, b.source, b.assigned_sc, b.assigned_asm, b.remarks, req.user.id
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new_lead', CURRENT_TIMESTAMP)`).run(
+    leadNo, b.client_name, b.company_name || null, b.phone || null, b.email || null,
+    b.category || null, b.lead_type || null, leadKind,
+    b.gst_number ? String(b.gst_number).toUpperCase() : null,
+    b.pan_number ? String(b.pan_number).toUpperCase() : null,
+    b.project_name || null, b.project_location || null, b.pin_code || null,
+    +b.estimated_value || 0, b.tentative_timeline || null, subTrades,
+    b.tender_id || null, b.bid_deadline || null, +b.emd_amount || 0, b.pbg_required ? 1 : 0,
+    b.city || null, b.address || null, b.district || null, b.state || null,
+    b.source || null, b.assigned_sc || null, b.assigned_asm || null, b.remarks || null,
+    req.user.id
   );
+  audit(db, r.lastInsertRowid, 'new_lead', 'create', req.user, {
+    notes: `Captured as ${leadKind === 'government' ? 'Government tender' : 'Private quote'}` + (b.tender_id ? ` · Tender ${b.tender_id}` : '')
+  });
   res.status(201).json({ id: r.lastInsertRowid, lead_no: leadNo });
 });
 
-// PUT update lead details (now also accepts lead_type + city)
+// POST drop — close a lead with mandatory reason. Forward-only state
+// machine: a dropped lead can be reopened later but every transition
+// is audited.
+router.post('/:id/drop', requirePermission('leads', 'edit'), (req, res) => {
+  const { reason } = req.body;
+  if (!reason || !String(reason).trim()) return res.status(400).json({ error: 'Drop reason is required' });
+  const db = getDb();
+  const cur = db.prepare('SELECT id, current_stage, dropped FROM sales_funnel WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Lead not found' });
+  if (cur.dropped) return res.status(400).json({ error: 'Lead is already dropped' });
+  db.prepare(`
+    UPDATE sales_funnel
+       SET dropped=1, drop_reason=?, dropped_at=CURRENT_TIMESTAMP, dropped_by=?,
+           current_stage='lost', updated_at=CURRENT_TIMESTAMP
+     WHERE id=?
+  `).run(String(reason).trim(), req.user.id, req.params.id);
+  audit(db, cur.id, cur.current_stage, 'drop', req.user, { notes: reason });
+  res.json({ message: 'Lead dropped' });
+});
+
+// GET audit log for a lead — read-only timeline for the audit panel.
+router.get('/:id/audit', requirePermission('leads', 'view'), (req, res) => {
+  const rows = getDb().prepare(`
+    SELECT a.*, u.name as actor_live_name
+      FROM sales_funnel_audit a
+      LEFT JOIN users u ON u.id = a.actor_id
+     WHERE a.lead_id = ?
+     ORDER BY a.at DESC
+  `).all(req.params.id);
+  res.json(rows);
+});
+
+// PUT update — Stage 1 fields editable until lead leaves Stage 1.
+// Audit row written for any field change.
 router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
   const b = req.body;
-  getDb().prepare(
-    `UPDATE sales_funnel SET client_name=?, company_name=?, phone=?, email=?,
-       category=?, lead_type=?, city=?, address=?, district=?, state=?, source=?,
-       assigned_sc=?, assigned_asm=?, remarks=?, updated_at=CURRENT_TIMESTAMP
+  const errors = validateStage1(b, false);
+  if (errors.length) return res.status(400).json({ error: errors.join(' · ') });
+  const db = getDb();
+  const cur = db.prepare('SELECT current_stage FROM sales_funnel WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Lead not found' });
+
+  const subTrades = Array.isArray(b.sub_trades_scope) ? b.sub_trades_scope.join(',') : (b.sub_trades_scope || null);
+  const leadKind = b.lead_kind === 'government' ? 'government' : (b.lead_kind === 'private' ? 'private' : null);
+
+  db.prepare(
+    `UPDATE sales_funnel SET
+       client_name=?, company_name=?, phone=?, email=?,
+       category=?, lead_type=?, lead_kind=COALESCE(?, lead_kind),
+       gst_number=?, pan_number=?,
+       project_name=?, project_location=?, pin_code=?,
+       estimated_value=?, tentative_timeline=?, sub_trades_scope=?,
+       tender_id=?, bid_deadline=?, emd_amount=?, pbg_required=?,
+       city=?, address=?, district=?, state=?, source=?,
+       assigned_sc=?, assigned_asm=?, remarks=?,
+       updated_at=CURRENT_TIMESTAMP
      WHERE id=?`
   ).run(
-    b.client_name, b.company_name, b.phone, b.email,
-    b.category, b.lead_type || null, b.city || null, b.address, b.district, b.state, b.source,
-    b.assigned_sc, b.assigned_asm, b.remarks, req.params.id
+    b.client_name, b.company_name || null, b.phone || null, b.email || null,
+    b.category || null, b.lead_type || null, leadKind,
+    b.gst_number ? String(b.gst_number).toUpperCase() : null,
+    b.pan_number ? String(b.pan_number).toUpperCase() : null,
+    b.project_name || null, b.project_location || null, b.pin_code || null,
+    +b.estimated_value || 0, b.tentative_timeline || null, subTrades,
+    b.tender_id || null, b.bid_deadline || null, +b.emd_amount || 0, b.pbg_required ? 1 : 0,
+    b.city || null, b.address || null, b.district || null, b.state || null,
+    b.source || null, b.assigned_sc || null, b.assigned_asm || null, b.remarks || null,
+    req.params.id
   );
+  audit(db, req.params.id, cur.current_stage, 'edit', req.user, { notes: 'Stage 1 fields updated' });
   res.json({ message: 'Updated' });
 });
 
