@@ -22,6 +22,11 @@ export default function CashFlow() {
   // received payment is. Useful for chasing collections (90+ days = call
   // first). 'never' = no payment ever received (no Inv Days, no Total Days).
   const [pmtAgeFilter, setPmtAgeFilter] = useState('');
+  // Date-range filter on Last Payment Date — mam: 'filter from to date as
+  // per last payment date'. Both buckets above and date-range below can
+  // coexist (AND filter); empty = no constraint.
+  const [pmtFromDate, setPmtFromDate] = useState('');
+  const [pmtToDate, setPmtToDate] = useState('');
   const [editRow, setEditRow] = useState(null);
   const [editForm, setEditForm] = useState({});
 
@@ -77,6 +82,17 @@ export default function CashFlow() {
     return days;
   };
 
+  // The actual Last Payment Date as YYYY-MM-DD (or null), reusing the
+  // same calc shown in the 'Last Pmt Date' column. Used by the From/To
+  // filter so what mam sees in the column matches what the filter uses.
+  const lastPmtDateIso = (p) => {
+    const live = p.live_date ? new Date(p.live_date) : null;
+    if (!live || isNaN(live)) return null;
+    const d = daysSinceLastPmt(p);
+    if (!d) return null;
+    return new Date(live.getTime() - d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  };
+
   const filtered = projects.filter(p => {
     if (crmFilter && !(p.crm_person || '').toLowerCase().includes(crmFilter.toLowerCase())) return false;
     if (search && !(p.project_name || '').toLowerCase().includes(search.toLowerCase()) && !(p.crm_person || '').toLowerCase().includes(search.toLowerCase())) return false;
@@ -87,6 +103,14 @@ export default function CashFlow() {
       if (pmtAgeFilter === '30-60' && (d === null || d <= 30 || d > 60)) return false;
       if (pmtAgeFilter === '60-90' && (d === null || d <= 60 || d > 90)) return false;
       if (pmtAgeFilter === '90plus' && (d === null || d <= 90)) return false;
+    }
+    // Date-range filter: keep only rows whose computed Last Payment Date
+    // falls inside [pmtFromDate, pmtToDate]. Either bound is optional.
+    if (pmtFromDate || pmtToDate) {
+      const lpd = lastPmtDateIso(p);
+      if (!lpd) return false;
+      if (pmtFromDate && lpd < pmtFromDate) return false;
+      if (pmtToDate && lpd > pmtToDate) return false;
     }
     return true;
   });
@@ -130,24 +154,38 @@ export default function CashFlow() {
               ))}
             </div>
           )}
-          {/* Search + Last-Payment-Date age filter row */}
-          <div className="flex flex-wrap gap-3 items-center">
+          {/* Search + Last-Payment-Date filters row */}
+          <div className="flex flex-wrap gap-3 items-end">
             <div className="relative flex-1 min-w-[260px]">
               <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
               <input className="input pl-10" placeholder="Search project..." value={search} onChange={e => setSearch(e.target.value)} />
             </div>
             <div className="flex items-center gap-2">
-              <label className="text-xs text-gray-500 whitespace-nowrap">Last Payment:</label>
-              <select className="select text-sm" value={pmtAgeFilter} onChange={e => setPmtAgeFilter(e.target.value)}>
-                <option value="">All</option>
-                <option value="recent">≤ 30 days (recent)</option>
-                <option value="30-60">31–60 days</option>
-                <option value="60-90">61–90 days</option>
-                <option value="90plus">90+ days (overdue)</option>
-                <option value="never">Never received</option>
-              </select>
-              {pmtAgeFilter && (
-                <button onClick={() => setPmtAgeFilter('')} className="text-[11px] text-gray-500 hover:text-red-600 underline">clear</button>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase block mb-0.5">Bucket</label>
+                <select className="select text-sm" value={pmtAgeFilter} onChange={e => setPmtAgeFilter(e.target.value)}>
+                  <option value="">All</option>
+                  <option value="recent">≤ 30 days</option>
+                  <option value="30-60">31–60 days</option>
+                  <option value="60-90">61–90 days</option>
+                  <option value="90plus">90+ days (overdue)</option>
+                  <option value="never">Never received</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase block mb-0.5">From</label>
+                <input type="date" className="input text-sm" value={pmtFromDate} onChange={e => setPmtFromDate(e.target.value)} title="Last Payment Date — from" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase block mb-0.5">To</label>
+                <input type="date" className="input text-sm" value={pmtToDate} onChange={e => setPmtToDate(e.target.value)} title="Last Payment Date — to" />
+              </div>
+              {(pmtAgeFilter || pmtFromDate || pmtToDate) && (
+                <button
+                  onClick={() => { setPmtAgeFilter(''); setPmtFromDate(''); setPmtToDate(''); }}
+                  className="text-[11px] text-gray-500 hover:text-red-600 underline self-end mb-1"
+                  title="Clear all Last-Payment filters"
+                >clear</button>
               )}
             </div>
           </div>
