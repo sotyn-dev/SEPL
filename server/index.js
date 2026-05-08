@@ -27,7 +27,29 @@ app.use(cors({
   origin: process.env.NODE_ENV === 'production' ? false : '*',
   credentials: true
 }));
+
+// Gzip compression — typical 60-80% smaller JSON responses, faster pages
+// over slow networks (mobile / site engineers on 4G). Skip very small
+// responses (level=6 default).
+try {
+  const compression = require('compression');
+  app.use(compression());
+  console.log('[perf] gzip compression enabled');
+} catch (e) {
+  console.warn('[perf] compression not installed — run npm install for faster pages');
+}
+
 app.use(express.json({ limit: '10mb' }));
+
+// Cache static assets (logo, icons, JS bundles) for 1 day in browser.
+// React build files have content-hashed filenames so they invalidate
+// automatically on next deploy — safe to cache aggressively.
+app.use((req, res, next) => {
+  if (req.path.startsWith('/assets/') || req.path.endsWith('.webp') || req.path.endsWith('.png') || req.path.endsWith('.svg') || req.path.endsWith('.css') || req.path.endsWith('.js')) {
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+  }
+  next();
+});
 
 // Trust proxy for cloud deployments
 app.set('trust proxy', 1);

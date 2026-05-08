@@ -12,7 +12,18 @@ function getDb() {
     const dataDir = path.join(__dirname, '..', '..', 'data');
     if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
     db = new Database(DB_PATH);
+    // Performance pragmas — measurable speedup on the SEPL VPS:
+    // - WAL: concurrent reads while a write is happening (mam: pages
+    //   stay snappy even when multiple users punch / save simultaneously)
+    // - synchronous=NORMAL: fewer fsyncs, still crash-safe in WAL mode
+    // - cache_size=-64000: 64 MB page cache (was ~2 MB default)
+    // - mmap_size=128 MB: read pages via memory-map, fewer syscalls
+    // - temp_store=MEMORY: temp tables/indices in RAM, not disk
     db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+    db.pragma('cache_size = -64000');
+    db.pragma('mmap_size = 134217728');
+    db.pragma('temp_store = MEMORY');
     db.pragma('foreign_keys = ON');
   }
   return db;
@@ -1656,6 +1667,92 @@ function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_stock_mvmt_warehouse ON stock_movements(warehouse_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_stock_mvmt_item ON stock_movements(item_master_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_stock_mvmt_ref ON stock_movements(reference_type, reference_id);
+
+    -- ─── PERFORMANCE INDEXES on hot tables (fast page loads) ────────────
+    -- Mam: 'why it take time to reload data, how to fast it'. These
+    -- indexes target every WHERE / GROUP BY / ORDER BY across the app.
+    -- SQLite IF NOT EXISTS makes this safe to re-run on every boot.
+
+    -- Attendance — date filters, per-user month view, late stats
+    CREATE INDEX IF NOT EXISTS idx_att_user_date ON attendance(user_id, date);
+    CREATE INDEX IF NOT EXISTS idx_att_date ON attendance(date);
+    CREATE INDEX IF NOT EXISTS idx_att_status ON attendance(status);
+
+    -- Location tracking — live view, per-user-per-day timeline
+    CREATE INDEX IF NOT EXISTS idx_loc_user_date ON location_tracking(user_id, date);
+    CREATE INDEX IF NOT EXISTS idx_loc_time ON location_tracking(time DESC);
+
+    -- Leave requests — admin list, scope=mine
+    CREATE INDEX IF NOT EXISTS idx_leave_user ON leave_requests(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_leave_status ON leave_requests(status);
+
+    -- Payment requests — list filters, stats by status / category
+    CREATE INDEX IF NOT EXISTS idx_pr_status ON payment_requests(status);
+    CREATE INDEX IF NOT EXISTS idx_pr_category ON payment_requests(category);
+    CREATE INDEX IF NOT EXISTS idx_pr_site ON payment_requests(site_id);
+    CREATE INDEX IF NOT EXISTS idx_pr_creator ON payment_requests(created_by);
+
+    -- Business book — search by company / employee / district
+    CREATE INDEX IF NOT EXISTS idx_bb_company ON business_book(company_name);
+    CREATE INDEX IF NOT EXISTS idx_bb_employee ON business_book(employee_assigned);
+    CREATE INDEX IF NOT EXISTS idx_bb_status ON business_book(status);
+
+    -- Sites — joined heavily in Cashflow / DPR / Procurement
+    CREATE INDEX IF NOT EXISTS idx_sites_name ON sites(name);
+    CREATE INDEX IF NOT EXISTS idx_sites_bb ON sites(business_book_id);
+
+    -- Indents — status / site filter on the Raise Indent table
+    CREATE INDEX IF NOT EXISTS idx_indents_status ON indents(status);
+    CREATE INDEX IF NOT EXISTS idx_indents_site ON indents(site_name);
+    CREATE INDEX IF NOT EXISTS idx_indents_created ON indents(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_indent_items_indent ON indent_items(indent_id);
+
+    -- Vendor POs — filter by indent / vendor
+    CREATE INDEX IF NOT EXISTS idx_vpo_indent ON vendor_pos(indent_id);
+    CREATE INDEX IF NOT EXISTS idx_vpo_vendor ON vendor_pos(vendor_id);
+    CREATE INDEX IF NOT EXISTS idx_vpo_cancelled ON vendor_pos(cancelled);
+
+    -- DPR — date / site / approval filters
+    CREATE INDEX IF NOT EXISTS idx_dpr_site_date ON dpr(site_id, report_date);
+    CREATE INDEX IF NOT EXISTS idx_dpr_date ON dpr(report_date);
+    CREATE INDEX IF NOT EXISTS idx_dpr_approval ON dpr(approval_status);
+
+    -- Delegations — assignee dashboards
+    CREATE INDEX IF NOT EXISTS idx_del_assignee ON delegations(assigned_to, status);
+    CREATE INDEX IF NOT EXISTS idx_del_user ON delegations(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_del_status ON delegations(status);
+
+    -- Support / help tickets — assignee, raiser, status filters
+    CREATE INDEX IF NOT EXISTS idx_tk_user ON support_tickets(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_tk_assignee ON support_tickets(assigned_to, status);
+    CREATE INDEX IF NOT EXISTS idx_tk_status ON support_tickets(status);
+
+    -- Snags + Company assets (new modules)
+    CREATE INDEX IF NOT EXISTS idx_snags_status ON snags(status);
+    CREATE INDEX IF NOT EXISTS idx_snags_assignee ON snags(assigned_to);
+    CREATE INDEX IF NOT EXISTS idx_snags_raiser ON snags(raised_by);
+    CREATE INDEX IF NOT EXISTS idx_assets_status ON company_assets(status);
+    CREATE INDEX IF NOT EXISTS idx_assets_user ON company_assets(current_user_id);
+    CREATE INDEX IF NOT EXISTS idx_assets_category ON company_assets(category);
+
+    -- Cash flow entries — date-bucket queries
+    CREATE INDEX IF NOT EXISTS idx_cf_date ON cash_flow_entries(date);
+    CREATE INDEX IF NOT EXISTS idx_cf_party ON cash_flow_entries(party_name);
+
+    -- Receivables — joined in Cashflow + Collections
+    CREATE INDEX IF NOT EXISTS idx_recv_status ON receivables(status);
+    CREATE INDEX IF NOT EXISTS idx_recv_client ON receivables(client_name);
+
+    -- Complaints — admin list filters
+    CREATE INDEX IF NOT EXISTS idx_cmp_status ON complaints(status);
+    CREATE INDEX IF NOT EXISTS idx_cmp_category ON complaints(category);
+
+    -- Audit logs — user filter (admin audit trail)
+    CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);
+
+    -- SQLite query planner optimizations
+    -- WAL mode = better concurrency under load (multiple reads while one
+    -- write is happening). NORMAL sync = faster, still crash-safe.
 
     -- Announcements — admin posts, everyone reads. Pinned items rise to the top.
     -- expires_at is optional; rows without it stay visible forever until deleted.
