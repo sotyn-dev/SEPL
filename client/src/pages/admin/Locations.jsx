@@ -18,6 +18,22 @@ const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('en-IN', { hour:
 const fmtDist = (m) => m == null ? '—' : (m < 1000 ? `${m} m` : `${(m / 1000).toFixed(2)} km`);
 const mapsUrl = (lat, lng) => `https://www.google.com/maps?q=${lat},${lng}`;
 
+// Mam's complaint (2026-05-08): Sushila was tagged "Office" even though her
+// last GPS ping was 271 min ago — she had almost certainly left. The site
+// label is correct FOR the timestamp of the ping, but the green pill made
+// it look like she's there RIGHT NOW. Anyone who hasn't pinged within this
+// window is shown as STALE / OFFLINE so the live view doesn't lie.
+const FRESH_MAX_MIN = 15;
+// Pretty-print "minutes ago" in human terms — short for cards.
+const fmtAgo = (mins) => {
+  if (mins == null) return '—';
+  if (mins === 0) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m === 0 ? `${h} hr ago` : `${h} hr ${m} min ago`;
+};
+
 const PHASE_PILL = {
   before: 'bg-gray-100 text-gray-600',
   during: 'bg-emerald-100 text-emerald-700 font-semibold',
@@ -136,19 +152,38 @@ export default function Locations() {
           {live && live.users.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {live.users.map(u => {
-                // GPS_OFF = the user's browser couldn't get a GPS fix even
-                // though their network ping reached us. Network alive, GPS
-                // off / permission denied / timed out. Show as red card.
+                // GPS_OFF = browser couldn't get a GPS fix though network
+                // reached us (permission denied / timed out). Red card.
                 const gpsOff = u.site_name === 'GPS_OFF' || u.latitude == null || u.longitude == null;
                 const inSite = !gpsOff && u.site_name && u.site_name !== 'Outside';
-                const borderColor = gpsOff ? 'border-red-500' : (inSite ? 'border-emerald-500' : 'border-amber-500');
-                const pillStyle = gpsOff
-                  ? 'bg-red-100 text-red-700'
-                  : (inSite ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700');
-                const pillLabel = gpsOff ? '⚠ GPS OFF' : (inSite ? u.site_name : 'Outside any site');
+                // STALE = last ping older than FRESH_MAX_MIN. The user's
+                // app stopped pinging — most likely they closed the
+                // attendance page / left the building. The cached site
+                // label is no longer current; show "OFFLINE — last seen
+                // at X" instead of a green "X" pill that lies.
+                const isStale = !gpsOff && u.minutes_ago != null && u.minutes_ago > FRESH_MAX_MIN;
+
+                let borderColor, pillStyle, pillLabel;
+                if (gpsOff) {
+                  borderColor = 'border-red-500';
+                  pillStyle = 'bg-red-100 text-red-700';
+                  pillLabel = '⚠ GPS OFF';
+                } else if (isStale) {
+                  borderColor = 'border-gray-400';
+                  pillStyle = 'bg-gray-200 text-gray-700';
+                  pillLabel = inSite ? `⚠ STALE — was at ${u.site_name}` : '⚠ OFFLINE';
+                } else if (inSite) {
+                  borderColor = 'border-emerald-500';
+                  pillStyle = 'bg-emerald-100 text-emerald-700';
+                  pillLabel = u.site_name;
+                } else {
+                  borderColor = 'border-amber-500';
+                  pillStyle = 'bg-amber-100 text-amber-700';
+                  pillLabel = 'Outside any site';
+                }
                 return (
                   <div key={u.user_id}
-                    className={`card p-4 border-l-4 ${borderColor}`}>
+                    className={`card p-4 border-l-4 ${borderColor} ${isStale ? 'opacity-80' : ''}`}>
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <div className="font-semibold text-gray-800">{u.user_name}</div>
@@ -170,9 +205,19 @@ export default function Locations() {
                           <span className="break-words">{u.address || `${u.latitude.toFixed(5)}, ${u.longitude.toFixed(5)}`}</span>
                         </div>
                       )}
-                      <div className="flex items-center gap-1.5 mt-1 text-gray-500">
+                      {/* Mam's ask: show the time the user last opened the
+                          ERP. Each GPS ping IS a use of the app (the
+                          attendance page pings every 30s while open), so
+                          the latest ping time = last app activity. Bold
+                          + labelled so it can't be confused with the site
+                          label. Stale rows get a red color so mam sees
+                          immediately the data isn't current. */}
+                      <div className={`flex items-center gap-1.5 mt-1 ${isStale ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
                         <FiClock size={11} />
-                        <span>{fmtTime(u.time)} · {u.minutes_ago === 0 ? 'just now' : `${u.minutes_ago} min ago`}</span>
+                        <span>
+                          <span className="text-[10px] uppercase tracking-wide font-bold mr-1 opacity-70">Last app use:</span>
+                          {fmtTime(u.time)} · {fmtAgo(u.minutes_ago)}
+                        </span>
                       </div>
                     </div>
                     <div className="mt-3 flex items-center gap-3 flex-wrap">
