@@ -1104,7 +1104,7 @@ function initializeDatabase() {
     -- cutoff, leave allowances, working days, OT rate, etc.
     CREATE TABLE IF NOT EXISTS payroll_settings (
       id INTEGER PRIMARY KEY CHECK(id = 1),
-      late_after_time TEXT DEFAULT '09:45',           -- start of late zone (after this = late mark)
+      late_after_time TEXT DEFAULT '09:46',           -- start of late zone (after this = late mark)
       half_day_after_time TEXT DEFAULT '10:00',       -- after this time = half day deduction
       min_hours_full_day REAL DEFAULT 8,              -- below this hours = half day
       min_hours_half_day REAL DEFAULT 4,              -- below this hours = absent
@@ -2131,7 +2131,7 @@ function initializeDatabase() {
   // to 'late' it won't match the WHERE again.
   try {
     const ps = db.prepare("SELECT late_after_time FROM payroll_settings WHERE id=1").get();
-    const cutoffStr = (ps?.late_after_time || '09:45').padEnd(5, '0').slice(0, 5);
+    const cutoffStr = (ps?.late_after_time || '09:46').padEnd(5, '0').slice(0, 5);
     // SQLite shifts UTC → IST by adding 5h30m, then time() extracts HH:MM:SS.
     // Compare lexicographically (HH:MM:SS format sorts naturally).
     const r = db.prepare(`

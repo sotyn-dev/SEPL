@@ -14,7 +14,7 @@ function haversine(lat1, lon1, lat2, lon2) {
 }
 
 // Late detection — read cutoff from payroll_settings (admin-tunable), fall
-// back to 09:45 IST. Returns true if `whenIso` (ISO string in UTC) lies
+// back to 09:46 IST. Returns true if `whenIso` (ISO string in UTC) lies
 // AFTER the IST cutoff for that day.
 //
 // The original implementation called new Date().getHours() which returns
@@ -22,7 +22,7 @@ function haversine(lat1, lon1, lat2, lon2) {
 // `4 > 9` was false → no one got flagged late before 15:15 IST. Bug
 // affected every attendance row since deploy.
 function isPunchLate(db, whenIso) {
-  let cutoffMin = 9 * 60 + 45; // default 09:45 IST
+  let cutoffMin = 9 * 60 + 46; // default 09:46 IST
   try {
     const ps = db.prepare('SELECT late_after_time FROM payroll_settings WHERE id=1').get();
     if (ps?.late_after_time) {
@@ -84,7 +84,7 @@ router.get('/my-month', (req, res) => {
   // late-count reflects mam's actual policy (e.g. 09:30) instead of the
   // hard-coded 09:45 from the punch-in flow. Falls back to 09:45 if the
   // settings table doesn't exist yet on a stale DB.
-  let lateCutoffMin = 9 * 60 + 45;
+  let lateCutoffMin = 9 * 60 + 46;
   try {
     const ps = db.prepare(`SELECT late_after_time FROM payroll_settings WHERE id=1`).get();
     if (ps?.late_after_time) {
