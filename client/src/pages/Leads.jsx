@@ -563,25 +563,9 @@ export default function Leads() {
                 {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
-            <div>
-              <label className="label">Sub-trades Scope</label>
-              <div className="flex flex-wrap gap-1.5">
-                {['M','E','P','F','BMS','ELV','Solar'].map(t => {
-                  const list = String(form.sub_trades_scope||'').split(',').map(x=>x.trim()).filter(Boolean);
-                  const checked = list.includes(t);
-                  return (
-                    <label key={t} className={`cursor-pointer border-2 rounded-md px-3 py-1.5 text-xs font-bold transition ${checked ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
-                      <input type="checkbox" className="sr-only" checked={checked} onChange={(e) => {
-                        const next = e.target.checked ? [...list, t] : list.filter(x => x !== t);
-                        F('sub_trades_scope', next.join(','));
-                      }} />
-                      {t}
-                    </label>
-                  );
-                })}
-              </div>
-              <p className="text-[10px] text-gray-400 mt-1">M = Mechanical · E = Electrical · P = Plumbing · F = Fire</p>
-            </div>
+            {/* Sub-trades Scope removed at mam's request — the 7-option
+                Category above already captures the trade. The sub_trades_scope
+                column stays in the schema (harmless, NULL on new rows). */}
           </div>
 
           {/* Government-only block */}
