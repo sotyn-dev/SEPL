@@ -151,9 +151,11 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
      gst_number, pan_number, project_name, project_location, pin_code,
      estimated_value, tentative_timeline, sub_trades_scope,
      tender_id, bid_deadline, emd_amount, pbg_required,
-     city, address, district, state, source, assigned_sc, assigned_asm, remarks, created_by,
+     city, address, district, state, source,
+     assigned_sc, assigned_asm, assigned_asm_id,
+     remarks, created_by,
      current_stage, stage_entered_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new_lead', CURRENT_TIMESTAMP)`).run(
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new_lead', CURRENT_TIMESTAMP)`).run(
     leadNo, b.client_name, b.company_name || null, b.phone || null, b.email || null,
     b.category || null, b.lead_type || null, leadKind,
     b.gst_number ? String(b.gst_number).toUpperCase() : null,
@@ -162,7 +164,9 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
     +b.estimated_value || 0, b.tentative_timeline || null, subTrades,
     b.tender_id || null, b.bid_deadline || null, +b.emd_amount || 0, b.pbg_required ? 1 : 0,
     b.city || null, b.address || null, b.district || null, b.state || null,
-    b.source || null, b.assigned_sc || null, b.assigned_asm || null, b.remarks || null,
+    b.source || null,
+    b.assigned_sc || null, b.assigned_asm || null, b.assigned_asm_id || null,
+    b.remarks || null,
     req.user.id
   );
   audit(db, r.lastInsertRowid, 'new_lead', 'create', req.user, {
@@ -225,7 +229,7 @@ router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
        estimated_value=?, tentative_timeline=?, sub_trades_scope=?,
        tender_id=?, bid_deadline=?, emd_amount=?, pbg_required=?,
        city=?, address=?, district=?, state=?, source=?,
-       assigned_sc=?, assigned_asm=?, remarks=?,
+       assigned_sc=?, assigned_asm=?, assigned_asm_id=?, remarks=?,
        updated_at=CURRENT_TIMESTAMP
      WHERE id=?`
   ).run(
@@ -237,7 +241,9 @@ router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
     +b.estimated_value || 0, b.tentative_timeline || null, subTrades,
     b.tender_id || null, b.bid_deadline || null, +b.emd_amount || 0, b.pbg_required ? 1 : 0,
     b.city || null, b.address || null, b.district || null, b.state || null,
-    b.source || null, b.assigned_sc || null, b.assigned_asm || null, b.remarks || null,
+    b.source || null,
+    b.assigned_sc || null, b.assigned_asm || null, b.assigned_asm_id || null,
+    b.remarks || null,
     req.params.id
   );
   audit(db, req.params.id, cur.current_stage, 'edit', req.user, { notes: 'Stage 1 fields updated' });

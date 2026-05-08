@@ -2093,6 +2093,11 @@ function initializeDatabase() {
     // Mam: 'so that assigned meeting user show their Meeting planned and
     // he will fill mom after on schedule day visit'.
     ['sales_funnel', 'meeting_assigned_to_id INTEGER REFERENCES users(id)'],
+    // user_id of the ASM (Area Sales Manager / BD) the lead is assigned
+    // to at capture time. Same pattern as meeting_assigned_to_id — name
+    // stays in assigned_asm for display, FK in assigned_asm_id for the
+    // ASM's "My Leads" dashboard filter.
+    ['sales_funnel', 'assigned_asm_id INTEGER REFERENCES users(id)'],
     // Complaints — mam's Google Form (2026-04-23) adds State and Remarks.
     // Complaint Type = Paid / Free (changed from Urgent/Normal/Low)
     // Customer Type = Old Site / Running Site (changed from New/Existing)

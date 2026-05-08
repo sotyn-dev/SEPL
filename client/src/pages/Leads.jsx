@@ -26,7 +26,10 @@ const STAGE_LABELS = {
 const STAGE_SHORT = { new_lead:'New Leads', qualified:'Qualified', meeting_assigned:'Meetings', mom_uploaded:'MOM Done', drawing_uploaded:'Drawings', boq_created:'BOQ Ready', quotation_sent:'Quotation Sent', won:'Won', lost:'Lost' };
 const STAGE_COLORS = { new_lead:'#3b82f6', qualified:'#6366f1', meeting_assigned:'#8b5cf6', mom_uploaded:'#a855f7', drawing_uploaded:'#f59e0b', boq_created:'#f97316', quotation_sent:'#06b6d4', won:'#10b981', lost:'#ef4444' };
 const TAB_STYLES = { new_lead:'bg-red-500', qualified:'bg-red-500', meeting_assigned:'bg-purple-500', mom_uploaded:'bg-violet-500', drawing_uploaded:'bg-amber-500', boq_created:'bg-orange-500', quotation_sent:'bg-cyan-500', won:'bg-emerald-500', lost:'bg-red-500' };
-const CATEGORIES = ['MEP','Fire Fighting','Electrical','HVAC','Low Voltage','Solar','Plumbing','CCTV','Access Control'];
+// Sales-funnel category list — exactly mam's 7-option spec (Section 3 of 7
+// of her form): Low Voltage, Fire Fighting, Electrical, SOLAR, MEP, HVAC,
+// Plumbing. Order and casing kept verbatim per mam's screenshot.
+const CATEGORIES = ['Low Voltage','Fire Fighting','Electrical','SOLAR','MEP','HVAC','Plumbing'];
 const PIE_COLORS = ['#3b82f6','#6366f1','#8b5cf6','#f59e0b','#f97316','#06b6d4','#10b981','#ef4444','#ec4899'];
 
 export default function Leads() {
@@ -551,15 +554,14 @@ export default function Leads() {
           <div className="border-t pt-3"><h5 className="font-bold text-sm text-red-700 mb-2">Scope</h5></div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="label">Category</label>
-              <div className="flex gap-2">
-                {['MEPF Project','Solar EPC'].map(c => (
-                  <label key={c} className={`flex-1 cursor-pointer border-2 rounded-lg px-3 py-2 text-center text-sm transition ${form.category === c ? 'border-red-500 bg-red-50 text-red-700 font-bold' : 'border-gray-200 hover:bg-gray-50'}`}>
-                    <input type="radio" name="category" value={c} checked={form.category === c} onChange={e => F('category', e.target.value)} className="sr-only" />
-                    {c}
-                  </label>
-                ))}
-              </div>
+              <label className="label">Category *</label>
+              {/* 7-option dropdown matching mam's spec (Section 3 of 7).
+                  Required — every lead must declare its trade category so
+                  the right team picks it up. */}
+              <select className="select" required value={form.category||''} onChange={e=>F('category',e.target.value)}>
+                <option value="">Select Category</option>
+                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
             </div>
             <div>
               <label className="label">Sub-trades Scope</label>
@@ -609,7 +611,28 @@ export default function Leads() {
               </select>
             </div>
             <div><label className="label">SC (Sales Coordinator)</label><input className="input" value={form.assigned_sc||''} onChange={e=>F('assigned_sc',e.target.value)}/></div>
-            <div><label className="label">ASM (Area Sales Mgr / BD)</label><input className="input" value={form.assigned_asm||''} onChange={e=>F('assigned_asm',e.target.value)}/></div>
+            <div>
+              <label className="label">ASM (Area Sales Mgr / BD)</label>
+              {/* Employee dropdown with search — same pattern as Assign
+                  Meeting. Stores name (display) + user_id (for the ASM
+                  dashboard so they can find their assigned leads). */}
+              <SearchableSelect
+                options={employees.map(e => ({
+                  value: e.id,
+                  label: e.name + (e.designation ? ' — ' + e.designation : ''),
+                  name: e.name,
+                  user_id: e.user_id,
+                }))}
+                value={form.assigned_asm_employee_id || ''}
+                onChange={(opt) => setForm(f => ({
+                  ...f,
+                  assigned_asm_employee_id: opt?.value || null,
+                  assigned_asm: opt?.name || '',
+                  assigned_asm_id: opt?.user_id || null,
+                }))}
+                placeholder="Search employee..."
+              />
+            </div>
           </div>
           <div><label className="label">Remarks</label><textarea className="input" rows="2" value={form.remarks||''} onChange={e=>F('remarks',e.target.value)}/></div>
 
