@@ -105,6 +105,23 @@ export default function Locations() {
           GPS pings sent every 30 seconds while an employee has the Attendance page open.
           Use Live for "where is everyone right now", Timeline for "where did one person go between punch-in and punch-out".
         </p>
+        {/* Plain-English legend so admins know what each pill means.
+            Mam asked "meaning of stale" — keep this visible on-page so
+            she (and any future admin) doesn't have to guess. */}
+        <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+          <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 font-medium">
+            <b>Site name (green)</b> — pinging now, currently at that site
+          </span>
+          <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-700 font-medium">
+            <b>Outside any site</b> — pinging now, not inside any registered site
+          </span>
+          <span className="px-2 py-1 rounded-full bg-gray-200 text-gray-700 font-medium">
+            <b>OFFLINE — last at X</b> — app closed / no ping for 15+ min, was last seen at X
+          </span>
+          <span className="px-2 py-1 rounded-full bg-red-100 text-red-700 font-medium">
+            <b>GPS OFF</b> — phone has signal but GPS / location permission is denied
+          </span>
+        </div>
       </div>
 
       <div className="flex gap-2 flex-wrap">
@@ -169,9 +186,14 @@ export default function Locations() {
                   pillStyle = 'bg-red-100 text-red-700';
                   pillLabel = '⚠ GPS OFF';
                 } else if (isStale) {
+                  // App stopped pinging more than 15 min ago. Plain word
+                  // 'OFFLINE' (mam's vocabulary — WhatsApp-style) instead
+                  // of the technical 'STALE'. Distinguishes "was inside a
+                  // site when they went offline" from "was outside any
+                  // site" so mam can quickly tell where to look first.
                   borderColor = 'border-gray-400';
                   pillStyle = 'bg-gray-200 text-gray-700';
-                  pillLabel = inSite ? `⚠ STALE — was at ${u.site_name}` : '⚠ OFFLINE';
+                  pillLabel = inSite ? `⚠ OFFLINE — last at ${u.site_name}` : '⚠ OFFLINE — outside';
                 } else if (inSite) {
                   borderColor = 'border-emerald-500';
                   pillStyle = 'bg-emerald-100 text-emerald-700';
