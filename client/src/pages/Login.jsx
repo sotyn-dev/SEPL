@@ -46,43 +46,43 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-zinc-900 via-zinc-950 to-red-950 flex flex-col">
-      {/* Ambient depth — kept subtle so the half/half split shows clearly */}
+    <div className="min-h-screen bg-gradient-to-br from-zinc-100 via-zinc-200 to-red-100 flex flex-col">
+      {/* Ambient depth — soft on the light backdrop */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-zinc-700/15 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/4 right-1/4 w-[600px] h-[600px] bg-red-700/25 rounded-full blur-3xl" />
+        <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-zinc-300/40 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/4 right-1/4 w-[600px] h-[600px] bg-red-300/40 rounded-full blur-3xl" />
       </div>
 
       <div className="flex-1 flex items-center justify-center px-4 py-6 relative z-10">
-        <div className="grid lg:grid-cols-2 gap-0 w-full max-w-6xl rounded-3xl overflow-hidden shadow-2xl shadow-black/60 ring-1 ring-zinc-800">
+        <div className="grid lg:grid-cols-2 gap-0 w-full max-w-6xl rounded-3xl overflow-hidden shadow-2xl shadow-zinc-400/40 ring-1 ring-zinc-200">
 
-          {/* ─── LEFT — Sign-in form (GREY half) ──────────────────── */}
-          <div className="bg-gradient-to-br from-zinc-800 via-zinc-850 to-zinc-900 p-10 sm:p-14 flex flex-col justify-center">
+          {/* ─── LEFT — Sign-in form (LIGHT GREY half) ────────────── */}
+          <div className="bg-gradient-to-br from-zinc-100 via-zinc-50 to-zinc-200 p-10 sm:p-14 flex flex-col justify-center">
             {/* Logo + brand */}
             <div className="flex items-center gap-3 mb-12">
-              <div className="w-14 h-14 rounded-xl overflow-hidden shadow-lg shadow-red-700/30 ring-1 ring-zinc-700 flex items-center justify-center bg-zinc-900">
+              <div className="w-14 h-14 rounded-xl overflow-hidden shadow-md shadow-zinc-300 ring-1 ring-zinc-200 flex items-center justify-center bg-white">
                 <img src={SEPL_LOGO_PATH}
                 onError={(e) => { if (e.target.src !== SEPL_LOGO_FALLBACK) e.target.src = SEPL_LOGO_FALLBACK; }} alt="SEPL" className="w-full h-full object-contain p-1" />
               </div>
               <div>
-                <p className="text-white font-extrabold text-lg leading-tight tracking-tight">SEPL ERP</p>
-                <p className="text-[11px] text-zinc-400 tracking-wide">Secured Engineers Pvt Ltd</p>
+                <p className="text-red-700 font-extrabold text-lg leading-tight tracking-tight">SEPL ERP</p>
+                <p className="text-[11px] text-zinc-600 tracking-wide">Secured Engineers Pvt Ltd</p>
               </div>
             </div>
 
             {/* Heading */}
-            <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+            <h1 className="text-3xl sm:text-4xl font-extrabold text-zinc-900 tracking-tight">
               Welcome back <span className="inline-block animate-wave">👋</span>
             </h1>
-            <p className="text-zinc-400 text-sm mt-2 mb-8">Sign in to SEPL ERP</p>
+            <p className="text-zinc-600 text-sm mt-2 mb-8">Sign in to SEPL ERP</p>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="text-[11px] uppercase tracking-wider font-bold text-zinc-400 block mb-1.5">Email / Username</label>
+                <label className="text-[11px] uppercase tracking-wider font-bold text-zinc-600 block mb-1.5">Email / Username</label>
                 <div className="relative">
                   <FiUser className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
                   <input
-                    className="w-full bg-zinc-900/80 border border-zinc-700 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 text-white placeholder-zinc-500 rounded-xl pl-10 pr-4 py-3 outline-none transition-colors"
+                    className="w-full bg-white border border-zinc-300 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 text-zinc-900 placeholder-zinc-400 rounded-xl pl-10 pr-4 py-3 outline-none transition-colors"
                     type="text"
                     autoComplete="username"
                     value={form.identifier}
@@ -94,11 +94,11 @@ export default function Login() {
               </div>
 
               <div>
-                <label className="text-[11px] uppercase tracking-wider font-bold text-zinc-400 block mb-1.5">Password</label>
+                <label className="text-[11px] uppercase tracking-wider font-bold text-zinc-600 block mb-1.5">Password</label>
                 <div className="relative">
                   <FiLock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
                   <input
-                    className="w-full bg-zinc-900/80 border border-zinc-700 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 text-white placeholder-zinc-500 rounded-xl pl-10 pr-10 py-3 outline-none transition-colors"
+                    className="w-full bg-white border border-zinc-300 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 text-zinc-900 placeholder-zinc-400 rounded-xl pl-10 pr-10 py-3 outline-none transition-colors"
                     type={showPassword ? 'text' : 'password'}
                     value={form.password}
                     onChange={e => setForm({ ...form, password: e.target.value })}
@@ -108,7 +108,7 @@ export default function Login() {
                   <button
                     type="button"
                     onClick={() => setShowPassword(s => !s)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-red-400 p-1"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-red-600 p-1"
                     title={showPassword ? 'Hide password' : 'Show password'}
                     tabIndex={-1}
                   >
@@ -117,10 +117,10 @@ export default function Login() {
                 </div>
               </div>
 
-              <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer select-none pt-1">
+              <label className="flex items-center gap-2 text-sm text-zinc-700 cursor-pointer select-none pt-1">
                 <input
                   type="checkbox"
-                  className="w-4 h-4 rounded border-zinc-700 bg-slate-900 text-red-600 focus:ring-red-500 focus:ring-offset-slate-950"
+                  className="w-4 h-4 rounded border-zinc-400 text-red-600 focus:ring-red-500"
                   checked={remember}
                   onChange={e => setRemember(e.target.checked)}
                 />
@@ -130,7 +130,7 @@ export default function Login() {
 
               <button
                 type="submit"
-                className="w-full mt-2 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 active:from-red-700 active:to-red-800 text-white font-semibold py-3.5 px-4 rounded-xl shadow-lg shadow-red-900/50 transition-all flex items-center justify-center gap-2 group"
+                className="w-full mt-2 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 active:from-red-700 active:to-red-800 text-white font-semibold py-3.5 px-4 rounded-xl shadow-lg shadow-red-300 transition-all flex items-center justify-center gap-2 group"
               >
                 Sign in
                 <FiArrowRight className="group-hover:translate-x-0.5 transition-transform" size={16} />
@@ -177,17 +177,17 @@ export default function Login() {
       {/* Footer */}
       <footer className="relative z-10 py-5 px-4 text-center select-none">
         <p className="text-[10px] uppercase tracking-[0.35em] text-zinc-500 mb-1">
-          Crafted with <span className="text-red-400">&hearts;</span> by
+          Crafted with <span className="text-red-500">&hearts;</span> by
         </p>
-        <p className="text-sm font-bold bg-gradient-to-r from-red-300 via-white to-red-300 bg-clip-text text-transparent">
+        <p className="text-sm font-bold bg-gradient-to-r from-red-700 via-red-500 to-red-700 bg-clip-text text-transparent">
           Secured Engineers Pvt Ltd
         </p>
         <div className="mt-1 flex items-center justify-center gap-2">
-          <span className="h-px w-8 bg-gradient-to-r from-transparent via-zinc-600 to-transparent" />
-          <p className="text-[10px] font-semibold tracking-widest text-zinc-400 uppercase">Monika Devi</p>
-          <span className="h-px w-8 bg-gradient-to-r from-transparent via-zinc-600 to-transparent" />
+          <span className="h-px w-8 bg-gradient-to-r from-transparent via-zinc-400 to-transparent" />
+          <p className="text-[10px] font-semibold tracking-widest text-zinc-600 uppercase">Monika Devi</p>
+          <span className="h-px w-8 bg-gradient-to-r from-transparent via-zinc-400 to-transparent" />
         </div>
-        <p className="text-[9px] text-zinc-600 mt-0.5">&copy; {new Date().getFullYear()} · All rights reserved</p>
+        <p className="text-[9px] text-zinc-500 mt-0.5">&copy; {new Date().getFullYear()} · All rights reserved</p>
       </footer>
 
       {/* Custom CSS keyframes — wave hand + slow ping rings.
