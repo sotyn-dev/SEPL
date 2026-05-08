@@ -3,11 +3,11 @@ import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 import { FiUser, FiLock, FiEye, FiEyeOff, FiArrowRight } from 'react-icons/fi';
 
-// SEPL brand logo. Drop the real PNG at client/public/sepl-logo.png and
-// it will be served at /sepl-logo.png in production. If the file is
-// missing, we fall back to the inline SVG shield so the page never
-// shows a broken image.
-const SEPL_LOGO_PATH = '/sepl-logo.png';
+// SEPL brand logo. The real artwork lives at client/public/sepl-logo.webp
+// and is served at /sepl-logo.webp in production. If the file is missing
+// for any reason, we fall back to the inline SVG shield via the onError
+// handler so the page never shows a broken image.
+const SEPL_LOGO_PATH = '/sepl-logo.webp';
 const SEPL_LOGO_FALLBACK = 'data:image/svg+xml;utf8,' + encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
     <defs>
