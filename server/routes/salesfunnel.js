@@ -4,20 +4,41 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
-// Sales Funnel stages + their SLAs (per mam's spec 2026-04-23).
-// `sla_hours` is how long the lead can sit in this stage before it's overdue.
-// null means "no fixed SLA" (T-X) — shown as "—" in the UI, no overdue flag.
+// Sales Funnel — exactly mam's 11-stage spec (SEPL_Sales_Funnel_ERP_Build_Spec).
+// Each key = ERP screen route in the spec. `gate: true` marks stages that
+// REQUIRE an explicit approval (no auto-advance) — Stage 6 (CFO + Sales Head
+// sign-off) and Stage 10 (Legal + CFO contract lock).
+// `sla_hours = null` means no fixed SLA on that stage (T-X in spec).
+// `who` is the role that owns the stage.
 const STAGES = [
-  { key: 'new_lead', label: 'New Lead', color: 'blue', who: 'SC', sla_hours: 1 },
-  { key: 'qualified', label: 'First Call Done', color: 'indigo', who: 'Ritti', sla_hours: 4 },
-  { key: 'meeting_assigned', label: 'Meeting Scheduled', color: 'purple', who: 'Ritti', sla_hours: null },
-  { key: 'mom_uploaded', label: 'MOM + Drawings', color: 'violet', who: 'Ritti', sla_hours: 24 },
-  { key: 'drawing_uploaded', label: 'Drawings Uploaded', color: 'amber', who: 'ASM', sla_hours: null },
-  { key: 'boq_created', label: 'BOQ Ready', color: 'orange', who: 'Designer', sla_hours: null },
-  { key: 'quotation_sent', label: 'Proposal Sent', color: 'cyan', who: 'Estimation Team', sla_hours: 24 * 60 },
-  { key: 'won', label: 'Won', color: 'emerald', who: 'ASM', sla_hours: null },
-  { key: 'lost', label: 'Lost', color: 'red', who: 'ASM', sla_hours: null },
+  { key: 'lead_capture',            label: 'Lead/Tender Capture',          color: 'blue',    who: 'BD',           sla_hours: 1,        gate: false },
+  { key: 'qualification',           label: 'Qualified or Not',             color: 'indigo',  who: 'Sales Head',   sla_hours: 24,       gate: false },
+  { key: 'site_survey',             label: 'Site Survey + Feasibility',    color: 'purple',  who: 'Site Eng',     sla_hours: 72,       gate: false },
+  { key: 'concept_design',          label: 'Concept Design / Drawings',    color: 'violet',  who: 'Designer',     sla_hours: 168,      gate: false },
+  { key: 'boq_costing',             label: 'BOQ + Vendor Costing',         color: 'amber',   who: 'Estimation',   sla_hours: 168,      gate: false },
+  { key: 'pricing_review',          label: 'Internal Pricing Review',      color: 'orange',  who: 'CFO',          sla_hours: 24,       gate: true  },
+  { key: 'quote_submitted',         label: 'Quote / Bid Submission',       color: 'cyan',    who: 'Sales',        sla_hours: null,     gate: false },
+  { key: 'technical_clarification', label: 'Technical Clarification',      color: 'sky',     who: 'Sales + Tech', sla_hours: 24,       gate: false },
+  { key: 'commercial_negotiation',  label: 'Commercial Negotiation',       color: 'teal',    who: 'Sales Head',   sla_hours: null,     gate: false },
+  { key: 'contract_signed',         label: 'Contract + LOI / PO',          color: 'emerald', who: 'Legal + CFO',  sla_hours: null,     gate: true  },
+  { key: 'project_kickoff',         label: 'Project Kickoff',              color: 'lime',    who: 'PM',           sla_hours: null,     gate: false },
+  { key: 'lost',                    label: 'Lost',                         color: 'red',     who: '-',            sla_hours: null,     gate: false },
 ];
+
+// Backward-compat: old single-letter / legacy stage keys map to new ones.
+// Anything still hitting the API with old keys gets translated transparently
+// so the UI doesn't break during the 11-stage rollout.
+const LEGACY_STAGE_MAP = {
+  new_lead: 'lead_capture',
+  qualified: 'qualification',
+  meeting_assigned: 'site_survey',
+  mom_uploaded: 'site_survey',
+  drawing_uploaded: 'concept_design',
+  boq_created: 'boq_costing',
+  quotation_sent: 'quote_submitted',
+  won: 'contract_signed',
+};
+const normalizeStage = (s) => LEGACY_STAGE_MAP[s] || s;
 
 // Helper: add SLA info (due_at, is_overdue, minutes_remaining) to each lead row.
 // Called by GET handlers so the client can render "due in 45 min / overdue" chips.
@@ -250,152 +271,206 @@ router.put('/:id', requirePermission('leads', 'edit'), (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-// POST advance stage — each stage has specific fields
+// POST advance stage — each stage has specific fields per mam's spec.
+// Stage keys map 1:1 to the funnel positions (1-11 + lost). Legacy keys
+// from the pre-spec build are translated via LEGACY_STAGE_MAP so any
+// older client that still calls with old keys keeps working.
 router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
   const b = req.body;
   const db = getDb();
   const lead = db.prepare('SELECT * FROM sales_funnel WHERE id=?').get(req.params.id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
 
-  const { stage } = b;
+  // Translate any legacy stage keys to the current spec keys before the switch.
+  const stage = normalizeStage(b.stage);
   let sql = '';
   let params = [];
 
   switch (stage) {
-    // First Call Interested → advances to 'qualified'. Captures the new
-    // first_call_status field (interested/not_interested) from mam's spec.
-    case 'qualified':
+    // ─── STAGE 2 — QUALIFIED OR NOT (GO/NO-GO) ─────────────────────────
+    // Spec fields: customer_score (A/B/C), eligibility_check (Govt only),
+    // margin_feasibility_pct, strategic_fit (1-5), decision GO/NO-GO + reason.
+    // Existing fields kept so old leads don't lose data: is_qualified,
+    // qualified_by, qualified_remarks, first_call_status / remarks.
+    case 'qualification':
       sql = `UPDATE sales_funnel SET
-        current_stage=?, is_qualified=1, qualified_by=?, qualified_date=CURRENT_TIMESTAMP,
+        current_stage='qualification', is_qualified=1, qualified_by=?, qualified_date=CURRENT_TIMESTAMP,
         qualified_remarks=?, first_call_status=?, first_call_at=CURRENT_TIMESTAMP,
         first_call_remarks=?, stage_entered_at=CURRENT_TIMESTAMP,
         updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = ['qualified', b.qualified_by || req.user.name, b.qualified_remarks,
+      params = [b.qualified_by || req.user.name, b.qualified_remarks,
         b.first_call_status || 'interested', b.first_call_remarks || b.qualified_remarks || null,
         req.params.id];
       break;
 
-    // First Call Not Interested → lead goes to 'lost' immediately.
+    // First Call NOT Interested → drops the lead with reason. Maps to terminal 'lost'.
     case 'not_qualified':
       sql = `UPDATE sales_funnel SET
-        current_stage=?, is_qualified=0, qualified_by=?, qualified_date=CURRENT_TIMESTAMP,
+        current_stage='lost', is_qualified=0, qualified_by=?, qualified_date=CURRENT_TIMESTAMP,
         qualified_remarks=?, first_call_status='not_interested', first_call_at=CURRENT_TIMESTAMP,
         first_call_remarks=?, stage_entered_at=CURRENT_TIMESTAMP,
         updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = ['lost', b.qualified_by || req.user.name, b.qualified_remarks || 'Not qualified',
+      params = [b.qualified_by || req.user.name, b.qualified_remarks || 'Not qualified',
         b.first_call_remarks || b.qualified_remarks || null, req.params.id];
       break;
 
-    // Meeting Scheduled — now also captures recording URL + live location.
-    // meeting_assigned_to (TEXT name snapshot) + meeting_assigned_to_id
-    // (FK to users.id) are stored together so the assignee's dashboard
-    // can filter their planned meetings by user_id reliably.
-    case 'meeting_assigned':
-      if (!b.meeting_date) return res.status(400).json({ error: 'Meeting date required' });
+    // ─── STAGE 3 — SITE SURVEY + FEASIBILITY ───────────────────────────
+    // Replaces 'meeting_assigned'. Existing meeting fields reused as the
+    // survey schedule (date, location, surveyor). Spec fields like load
+    // study, photos, drawings will be added when mam asks for Stage 3.
+    case 'site_survey':
+      if (!b.meeting_date) return res.status(400).json({ error: 'Survey date required' });
       sql = `UPDATE sales_funnel SET
-        current_stage=?, meeting_date=?, meeting_location=?,
+        current_stage='site_survey', meeting_date=?, meeting_location=?,
         meeting_assigned_to=?, meeting_assigned_to_id=?,
-        meeting_status=?, meeting_recording_url=?,
+        meeting_status='scheduled', meeting_recording_url=?,
         meeting_location_lat=?, meeting_location_lng=?,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = ['meeting_assigned', b.meeting_date, b.meeting_location,
+      params = [b.meeting_date, b.meeting_location,
         b.meeting_assigned_to || null, b.meeting_assigned_to_id || null,
-        'scheduled', b.meeting_recording_url || null,
+        b.meeting_recording_url || null,
         b.meeting_location_lat || null, b.meeting_location_lng || null,
         req.params.id];
       break;
 
-    // Face-to-Face outcome — new intermediate step before MOM
+    // Face-to-Face outcome — intermediate step within site_survey
     case 'f2f_done':
       sql = `UPDATE sales_funnel SET
-        current_stage='meeting_assigned', f2f_status=?, f2f_date=CURRENT_TIMESTAMP,
+        current_stage='site_survey', f2f_status=?, f2f_date=CURRENT_TIMESTAMP,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = [b.f2f_status || 'done', req.params.id];
       break;
 
-    // Fill MOM — captures all 12 fields from mam's Google-Form layout:
-    //   Customer Category (radio) → updates sales_funnel.category
-    //   Customer Type (radio)     → updates sales_funnel.lead_type
-    //   Meeting Location          → updates sales_funnel.meeting_location
-    //   Purpose / Pain Points / Requirements / M.O.M. / Action Planned
-    //   Meeting Format / Scheduled By / Time Spent / Timestamp Photo / MOM file
-    // Category/Type/Location use COALESCE so existing values aren't wiped when
-    // the field engineer leaves them blank on the form.
+    // Fill MOM + advance to Stage 4 (Concept Design). MOM marks the
+    // tail of Stage 3 (Site Survey) — once captured, the lead moves
+    // forward to Design Engineer per spec ("Trigger out: assigns to
+    // Design Engineer"). The full MOM Google-Form layout is kept
+    // (purpose, pain points, requirements, action planned, format,
+    // time spent, timestamp photo, MOM file).
     case 'mom_uploaded':
       if (!b.mom_notes) return res.status(400).json({ error: 'MOM notes required' });
       sql = `UPDATE sales_funnel SET
-        current_stage=?, mom_notes=?, mom_file_link=?, mom_filled_by=?, mom_date=CURRENT_TIMESTAMP,
-        meeting_status=?,
+        current_stage='concept_design',
+        mom_notes=?, mom_file_link=?, mom_filled_by=?, mom_date=CURRENT_TIMESTAMP,
+        meeting_status='completed',
         category=COALESCE(?, category),
         lead_type=COALESCE(?, lead_type),
         meeting_location=COALESCE(?, meeting_location),
         meeting_purpose=?, meeting_timestamp_photo_url=?, pain_points=?, requirements=?,
         action_planned=?, meeting_format=?, meeting_scheduled_by=?, meeting_time_spent_min=?,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = ['mom_uploaded', b.mom_notes, b.mom_file_link, b.mom_filled_by || req.user.name,
-        'completed',
-        b.category || null,
-        b.lead_type || null,
-        b.meeting_location || null,
-        b.meeting_purpose || null,
-        b.meeting_timestamp_photo_url || null,
-        b.pain_points || null,
-        b.requirements || null,
-        b.action_planned || null,
-        b.meeting_format || null,
+      params = [b.mom_notes, b.mom_file_link, b.mom_filled_by || req.user.name,
+        b.category || null, b.lead_type || null, b.meeting_location || null,
+        b.meeting_purpose || null, b.meeting_timestamp_photo_url || null,
+        b.pain_points || null, b.requirements || null,
+        b.action_planned || null, b.meeting_format || null,
         b.meeting_scheduled_by || null,
         b.meeting_time_spent_min ? +b.meeting_time_spent_min : null,
         req.params.id];
       break;
 
-    case 'drawing_uploaded':
+    // ─── STAGE 4 — CONCEPT DESIGN / DRAWINGS ───────────────────────────
+    // Replaces 'drawing_uploaded'. Same 3 drawing slots; spec fields
+    // (versioning, SLD, load list, structural calc) added later.
+    case 'concept_design':
       sql = `UPDATE sales_funnel SET
-        current_stage=?, drawing_file1=?, drawing_file2=?, drawing_file3=?, drawing_uploaded_by=?,
+        current_stage='concept_design',
+        drawing_file1=?, drawing_file2=?, drawing_file3=?, drawing_uploaded_by=?,
         drawing_date=CURRENT_TIMESTAMP, stage_entered_at=CURRENT_TIMESTAMP,
         updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = ['drawing_uploaded', b.drawing_file1, b.drawing_file2, b.drawing_file3,
+      params = [b.drawing_file1, b.drawing_file2, b.drawing_file3,
         b.drawing_uploaded_by || req.user.name, req.params.id];
       break;
 
-    // BOQ stage now also captures Revised BOQ if one has been re-worked after
-    // client feedback (mam's spec: "BOQ / Revised BOQ" columns side-by-side).
-    case 'boq_created':
+    // ─── STAGE 5 — BOQ + VENDOR COSTING ────────────────────────────────
+    // Replaces 'boq_created'. Same fields; vendor-quote rule and
+    // estimation sign-off added later.
+    case 'boq_costing':
       sql = `UPDATE sales_funnel SET
-        current_stage=?, boq_file_link=?, revised_boq_file_link=?,
+        current_stage='boq_costing',
+        boq_file_link=?, revised_boq_file_link=?,
         boq_created_by=?, boq_amount=?, boq_date=CURRENT_TIMESTAMP,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = ['boq_created', b.boq_file_link, b.revised_boq_file_link || null,
+      params = [b.boq_file_link, b.revised_boq_file_link || null,
         b.boq_created_by || req.user.name, b.boq_amount || 0, req.params.id];
       break;
 
-    case 'quotation_sent':
+    // ─── STAGE 6 — INTERNAL PRICING REVIEW (GATE) — stub ───────────────
+    // Spec: CFO + Sales Head only. Margin floor enforced at line level.
+    // Slab-based approval routing: <50L Sales Head, 50L-2cr CFO, >2cr CMD.
+    // For now: just advance the lead and capture optional remarks.
+    case 'pricing_review':
       sql = `UPDATE sales_funnel SET
-        current_stage=?, quotation_number=?, quotation_file_link=?, quotation_amount=?,
+        current_stage='pricing_review', stage_entered_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = [req.params.id];
+      break;
+
+    // ─── STAGE 7 — QUOTE / BID SUBMISSION ──────────────────────────────
+    // Replaces 'quotation_sent'. Same fields; Govt EMD/PBG annexures
+    // already on the lead from Stage 1.
+    case 'quote_submitted':
+      sql = `UPDATE sales_funnel SET
+        current_stage='quote_submitted',
+        quotation_number=?, quotation_file_link=?, quotation_amount=?,
         quotation_sent_by=?, quotation_sent_date=CURRENT_TIMESTAMP,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = ['quotation_sent', b.quotation_number, b.quotation_file_link, b.quotation_amount || 0,
+      params = [b.quotation_number, b.quotation_file_link, b.quotation_amount || 0,
         b.quotation_sent_by || req.user.name, req.params.id];
       break;
 
-    case 'won':
+    // ─── STAGE 8 — TECHNICAL CLARIFICATION — stub ──────────────────────
+    case 'technical_clarification':
       sql = `UPDATE sales_funnel SET
-        current_stage=?, result=?, result_remarks=?, result_date=CURRENT_TIMESTAMP,
-        won_amount=?, stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = ['won', 'won', b.result_remarks, b.won_amount || 0, req.params.id];
+        current_stage='technical_clarification', stage_entered_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = [req.params.id];
       break;
 
+    // ─── STAGE 9 — COMMERCIAL NEGOTIATION — stub ───────────────────────
+    case 'commercial_negotiation':
+      sql = `UPDATE sales_funnel SET
+        current_stage='commercial_negotiation', stage_entered_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = [req.params.id];
+      break;
+
+    // ─── STAGE 10 — CONTRACT + LOI/PO (GATE) — stub ────────────────────
+    // Existing 'won' state maps here — old won leads were essentially at
+    // the contract-signed gate. Captures result + amount on the lead row.
+    case 'contract_signed':
+      sql = `UPDATE sales_funnel SET
+        current_stage='contract_signed', result='won', result_remarks=?,
+        result_date=CURRENT_TIMESTAMP, won_amount=?,
+        stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = [b.result_remarks || null, b.won_amount || 0, req.params.id];
+      break;
+
+    // ─── STAGE 11 — PROJECT KICKOFF — stub ─────────────────────────────
+    case 'project_kickoff':
+      sql = `UPDATE sales_funnel SET
+        current_stage='project_kickoff', stage_entered_at=CURRENT_TIMESTAMP,
+        updated_at=CURRENT_TIMESTAMP WHERE id=?`;
+      params = [req.params.id];
+      break;
+
+    // ─── TERMINAL — LOST (drop with reason) ────────────────────────────
     case 'lost':
       sql = `UPDATE sales_funnel SET
-        current_stage=?, result=?, result_remarks=?, result_date=CURRENT_TIMESTAMP,
+        current_stage='lost', result='lost', result_remarks=?,
+        result_date=CURRENT_TIMESTAMP,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = ['lost', 'lost', b.result_remarks, req.params.id];
+      params = [b.result_remarks, req.params.id];
       break;
 
     default:
-      return res.status(400).json({ error: 'Invalid stage' });
+      return res.status(400).json({ error: `Invalid stage: ${b.stage}` });
   }
 
   db.prepare(sql).run(...params);
+  audit(db, req.params.id, stage, 'enter_stage', req.user, {
+    notes: b.result_remarks || b.qualified_remarks || b.mom_notes || null,
+  });
   res.json({ message: `Stage updated to ${stage}` });
 });
 

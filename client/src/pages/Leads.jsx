@@ -7,25 +7,86 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp } from 'react-icons/fi';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 
-const STAGES = ['new_lead','qualified','meeting_assigned','mom_uploaded','drawing_uploaded','boq_created','quotation_sent','won','lost'];
-// Stage labels match mam's spec: each is a clear, numbered step in the
-// funnel so the tabs read like Indent-to-Dispatch (Stage 1 → Stage 9).
+// Mam's 11-stage Sales Funnel spec (SEPL_Sales_Funnel_ERP_Build_Spec).
+// Order in this array is the canonical funnel order; tabs render in this
+// sequence and the dashboard funnel chart walks the same path.
+const STAGES = [
+  'lead_capture',
+  'qualification',
+  'site_survey',
+  'concept_design',
+  'boq_costing',
+  'pricing_review',
+  'quote_submitted',
+  'technical_clarification',
+  'commercial_negotiation',
+  'contract_signed',
+  'project_kickoff',
+  'lost',
+];
+// Long label = "Stage N — <Spec name>" so the tab bar reads exactly like
+// the section headings in mam's spec doc.
 const STAGE_LABELS = {
-  new_lead:        'Stage 1 — Lead Capture',
-  qualified:       'Stage 2 — First Call / Qualify',
-  meeting_assigned:'Stage 3 — Meeting',
-  mom_uploaded:    'Stage 4 — MOM + Drawings',
-  drawing_uploaded:'Stage 5 — Drawings',
-  boq_created:     'Stage 6 — BOQ',
-  quotation_sent:  'Stage 7 — Quotation Sent',
-  won:             'Stage 8 — Won',
-  lost:            'Stage 9 — Lost',
+  lead_capture:            'Stage 1 — Lead/Tender Capture',
+  qualification:           'Stage 2 — Qualified or Not',
+  site_survey:             'Stage 3 — Site Survey + Feasibility',
+  concept_design:          'Stage 4 — Concept Design / Drawings',
+  boq_costing:             'Stage 5 — BOQ + Vendor Costing',
+  pricing_review:          'Stage 6 — Internal Pricing Review',
+  quote_submitted:         'Stage 7 — Quote / Bid Submission',
+  technical_clarification: 'Stage 8 — Technical Clarification',
+  commercial_negotiation:  'Stage 9 — Commercial Negotiation',
+  contract_signed:         'Stage 10 — Contract + LOI / PO',
+  project_kickoff:         'Stage 11 — Project Kickoff',
+  lost:                    'Lost',
 };
-// Compact label used inside the funnel chart / dashboard widgets where
-// the long "Stage N — …" name doesn't fit.
-const STAGE_SHORT = { new_lead:'New Leads', qualified:'Qualified', meeting_assigned:'Meetings', mom_uploaded:'MOM Done', drawing_uploaded:'Drawings', boq_created:'BOQ Ready', quotation_sent:'Quotation Sent', won:'Won', lost:'Lost' };
-const STAGE_COLORS = { new_lead:'#3b82f6', qualified:'#6366f1', meeting_assigned:'#8b5cf6', mom_uploaded:'#a855f7', drawing_uploaded:'#f59e0b', boq_created:'#f97316', quotation_sent:'#06b6d4', won:'#10b981', lost:'#ef4444' };
-const TAB_STYLES = { new_lead:'bg-red-500', qualified:'bg-red-500', meeting_assigned:'bg-purple-500', mom_uploaded:'bg-violet-500', drawing_uploaded:'bg-amber-500', boq_created:'bg-orange-500', quotation_sent:'bg-cyan-500', won:'bg-emerald-500', lost:'bg-red-500' };
+// Compact label used inside the funnel chart / row badges / pipeline pills
+// where the long "Stage N — …" name doesn't fit.
+const STAGE_SHORT = {
+  lead_capture:            'Lead Capture',
+  qualification:           'Qualified?',
+  site_survey:             'Site Survey',
+  concept_design:          'Design',
+  boq_costing:             'BOQ',
+  pricing_review:          'Pricing (GATE)',
+  quote_submitted:         'Quote Sent',
+  technical_clarification: 'Tech Clarify',
+  commercial_negotiation:  'Negotiate',
+  contract_signed:         'Contract (GATE)',
+  project_kickoff:         'Kickoff',
+  lost:                    'Lost',
+};
+const STAGE_COLORS = {
+  lead_capture:            '#3b82f6',  // blue
+  qualification:           '#6366f1',  // indigo
+  site_survey:             '#8b5cf6',  // purple
+  concept_design:          '#a855f7',  // violet
+  boq_costing:             '#f59e0b',  // amber
+  pricing_review:          '#f97316',  // orange (GATE)
+  quote_submitted:         '#06b6d4',  // cyan
+  technical_clarification: '#0ea5e9',  // sky
+  commercial_negotiation:  '#14b8a6',  // teal
+  contract_signed:         '#10b981',  // emerald (GATE)
+  project_kickoff:         '#84cc16',  // lime
+  lost:                    '#ef4444',  // red
+};
+const TAB_STYLES = {
+  lead_capture:            'bg-blue-500',
+  qualification:           'bg-indigo-500',
+  site_survey:             'bg-purple-500',
+  concept_design:          'bg-violet-500',
+  boq_costing:             'bg-amber-500',
+  pricing_review:          'bg-orange-500',
+  quote_submitted:         'bg-cyan-500',
+  technical_clarification: 'bg-sky-500',
+  commercial_negotiation:  'bg-teal-500',
+  contract_signed:         'bg-emerald-500',
+  project_kickoff:         'bg-lime-500',
+  lost:                    'bg-red-500',
+};
+// Stage 6 + Stage 10 are GATE stages — they need an explicit approval
+// and are visually distinguished with a 🚦 marker on the tab.
+const GATE_STAGES = new Set(['pricing_review', 'contract_signed']);
 // Sales-funnel category list — exactly mam's 7-option spec (Section 3 of 7
 // of her form): Low Voltage, Fire Fighting, Electrical, SOLAR, MEP, HVAC,
 // Plumbing. Order and casing kept verbatim per mam's screenshot.
@@ -347,7 +408,10 @@ export default function Leads() {
             // Effective stage for the "Next Action" panel — clicking a pill
             // above sets viewStage, so the user can jump to any stage's form.
             const activeStage = viewStage || viewData.current_stage;
-            if (activeStage === 'won' || activeStage === 'lost') return null;
+            // Terminal states — no further action panel. project_kickoff
+            // ends the sales funnel (lead handed off to Project module);
+            // lost is a dropped lead.
+            if (activeStage === 'lost') return null;
             return (
             <div className="border-2 rounded-xl p-4 space-y-3" style={{borderColor:STAGE_COLORS[activeStage],backgroundColor:STAGE_COLORS[activeStage]+'10'}}>
               <h5 className="font-bold flex items-center justify-between" style={{color:STAGE_COLORS[activeStage]}}>
@@ -356,11 +420,13 @@ export default function Leads() {
                   <span className="text-[10px] font-normal text-gray-500">Lead is currently at: <b>{STAGE_LABELS[viewData.current_stage]}</b></span>
                 )}
               </h5>
-              {activeStage==='new_lead'&&(<div className="space-y-2">
+              {/* Stage 1 → Stage 2: Qualified or Not (GO/NO-GO) */}
+              {activeStage==='lead_capture'&&(<div className="space-y-2">
                 <textarea className="input" rows="2" placeholder="Remarks..." value={stageForm.qualified_remarks||''} onChange={e=>setStageForm({...stageForm,qualified_remarks:e.target.value})}/>
-                <div className="flex gap-2"><button onClick={()=>advanceStage(viewData.id,'qualified',stageForm)} className="btn btn-success flex-1"><FiCheck className="inline mr-1"/>Qualified</button><button onClick={()=>advanceStage(viewData.id,'not_qualified',stageForm)} className="btn btn-danger flex-1"><FiX className="inline mr-1"/>Not Qualified</button></div>
+                <div className="flex gap-2"><button onClick={()=>advanceStage(viewData.id,'qualification',stageForm)} className="btn btn-success flex-1"><FiCheck className="inline mr-1"/>Qualified</button><button onClick={()=>advanceStage(viewData.id,'not_qualified',stageForm)} className="btn btn-danger flex-1"><FiX className="inline mr-1"/>Not Qualified</button></div>
               </div>)}
-              {activeStage==='qualified'&&(<div className="space-y-2">
+              {/* Stage 2 → Stage 3: Schedule Site Survey (was 'Assign Meeting') */}
+              {activeStage==='qualification'&&(<div className="space-y-2">
                 <input className="input" type="datetime-local" value={stageForm.meeting_date||''} onChange={e=>setStageForm({...stageForm,meeting_date:e.target.value})}/>
                 <input className="input" placeholder="Location" value={stageForm.meeting_location||''} onChange={e=>setStageForm({...stageForm,meeting_location:e.target.value})}/>
                 {/* Assign Meeting → searchable employee dropdown. Stores
@@ -382,13 +448,13 @@ export default function Leads() {
                   })}
                   placeholder="Assign To (search employee)..."
                 />
-                <button onClick={()=>advanceStage(viewData.id,'meeting_assigned',stageForm)} className="btn btn-primary w-full">Assign Meeting</button>
+                <button onClick={()=>advanceStage(viewData.id,'site_survey',stageForm)} className="btn btn-primary w-full">Schedule Site Survey</button>
               </div>)}
-              {/* Fill MOM — matches mam's Google Form layout (2026-04-23).
-                  Customer Category + Customer Type are radios (not read-only)
-                  so the field engineer can correct / confirm them at the site.
-                  They also update the lead record itself. */}
-              {activeStage==='meeting_assigned'&&(<div className="space-y-3">
+              {/* Stage 3 — Site Survey + Feasibility. Reuses the MOM form
+                  (mam's Google Form layout from 2026-04-23): Customer
+                  Category, Type, Location, Purpose, Pain Points, Reqs,
+                  M.O.M., Action Planned, Format, Time, photos, MOM file. */}
+              {activeStage==='site_survey'&&(<div className="space-y-3">
                 {/* Customer Category — radio buttons matching the Google Form */}
                 <div>
                   <label className="label text-[10px]">Customer Category *</label>
@@ -476,27 +542,71 @@ export default function Leads() {
                   </div>
                 </div>
 
-                <button onClick={()=>advanceStage(viewData.id,'mom_uploaded',stageForm)} disabled={!stageForm.mom_notes||!stageForm.meeting_purpose} className="btn btn-primary w-full disabled:opacity-50">Submit MOM</button>
+                <button onClick={()=>advanceStage(viewData.id,'mom_uploaded',stageForm)} disabled={!stageForm.mom_notes||!stageForm.meeting_purpose} className="btn btn-primary w-full disabled:opacity-50">Submit MOM &amp; Move to Design</button>
               </div>)}
-              {activeStage==='mom_uploaded'&&(<div className="space-y-2">
+              {/* Stage 3 → Stage 4: upload drawings (concept design) */}
+              {activeStage==='concept_design'&&(<div className="space-y-2">
                 {[1,2,3].map(n=>(<div key={n} className="flex items-center gap-2"><span className="text-xs w-16">Drawing {n}:</span><input type="file" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{const url=await uploadFile(f);setStageForm(s=>({...s,[`drawing_file${n}`]:url}));toast.success(`Drawing ${n}`);}catch{toast.error('Failed');}}} className="text-xs flex-1"/>{stageForm[`drawing_file${n}`]&&<span className="text-emerald-600 text-xs">OK</span>}</div>))}
-                <button onClick={()=>advanceStage(viewData.id,'drawing_uploaded',stageForm)} disabled={!stageForm.drawing_file1} className="btn btn-primary w-full disabled:opacity-50">Submit Drawings</button>
+                <button onClick={()=>advanceStage(viewData.id,'concept_design',stageForm)} disabled={!stageForm.drawing_file1} className="btn btn-primary w-full disabled:opacity-50">Submit Drawings &amp; Move to BOQ</button>
               </div>)}
-              {activeStage==='drawing_uploaded'&&(<div className="space-y-2">
+              {/* Stage 4 → Stage 5: BOQ + vendor costing */}
+              {activeStage==='boq_costing'&&(<div className="space-y-2">
                 <input type="file" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{stageForm.boq_file_link=await uploadFile(f);toast.success('BOQ uploaded');}catch{toast.error('Failed');}}} className="text-xs"/>
-                <input className="input" type="number" placeholder="BOQ Amount" value={stageForm.boq_amount||''} onChange={e=>setStageForm({...stageForm,boq_amount:+e.target.value})}/>
-                <button onClick={()=>advanceStage(viewData.id,'boq_created',stageForm)} className="btn btn-primary w-full">Submit BOQ</button>
+                <input className="input" type="number" placeholder="BOQ Amount (₹)" value={stageForm.boq_amount||''} onChange={e=>setStageForm({...stageForm,boq_amount:+e.target.value})}/>
+                <button onClick={()=>advanceStage(viewData.id,'boq_costing',stageForm)} className="btn btn-primary w-full">Submit BOQ &amp; Send for Pricing Review</button>
               </div>)}
-              {activeStage==='boq_created'&&(<div className="space-y-2">
-                <input className="input" placeholder="Quotation Number" value={stageForm.quotation_number||''} onChange={e=>setStageForm({...stageForm,quotation_number:e.target.value})}/>
-                <input className="input" type="number" placeholder="Amount" value={stageForm.quotation_amount||''} onChange={e=>setStageForm({...stageForm,quotation_amount:+e.target.value})}/>
+              {/* Stage 5 → Stage 6: Internal Pricing Review (GATE) — stub.
+                  Full margin floor / CFO sign-off / slab routing wired
+                  when mam asks for Stage 6. */}
+              {activeStage==='pricing_review'&&(<div className="space-y-2">
+                <div className="text-[11px] bg-orange-50 border border-orange-200 rounded p-2 text-orange-800">
+                  🚦 <b>GATE — CFO + Sales Head sign-off.</b> Margin floor enforcement and slab-based approval routing will be added when mam requests Stage 6.
+                </div>
+                <textarea className="input" rows="2" placeholder="Pricing remarks..." value={stageForm.pricing_remarks||''} onChange={e=>setStageForm({...stageForm,pricing_remarks:e.target.value})}/>
+                <button onClick={()=>advanceStage(viewData.id,'quote_submitted',stageForm)} className="btn btn-primary w-full">Approve &amp; Move to Quote Submission</button>
+              </div>)}
+              {/* Stage 6 → Stage 7: Quote / Bid Submission */}
+              {activeStage==='quote_submitted'&&(<div className="space-y-2">
+                <input className="input" placeholder="Quotation / Bid Number" value={stageForm.quotation_number||''} onChange={e=>setStageForm({...stageForm,quotation_number:e.target.value})}/>
+                <input className="input" type="number" placeholder="Quote Amount (₹)" value={stageForm.quotation_amount||''} onChange={e=>setStageForm({...stageForm,quotation_amount:+e.target.value})}/>
                 <input type="file" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{stageForm.quotation_file_link=await uploadFile(f);toast.success('Uploaded');}catch{toast.error('Failed');}}} className="text-xs"/>
-                <button onClick={()=>advanceStage(viewData.id,'quotation_sent',stageForm)} className="btn btn-primary w-full">Send Quotation</button>
+                <button onClick={()=>advanceStage(viewData.id,'technical_clarification',stageForm)} className="btn btn-primary w-full">Send Quote &amp; Open Clarification Round</button>
               </div>)}
-              {activeStage==='quotation_sent'&&(<div className="space-y-2">
-                <textarea className="input" rows="2" placeholder="Remarks..." value={stageForm.result_remarks||''} onChange={e=>setStageForm({...stageForm,result_remarks:e.target.value})}/>
-                <input className="input" type="number" placeholder="Won Amount" value={stageForm.won_amount||''} onChange={e=>setStageForm({...stageForm,won_amount:+e.target.value})}/>
-                <div className="flex gap-2"><button onClick={()=>advanceStage(viewData.id,'won',stageForm)} className="btn btn-success flex-1">WON</button><button onClick={()=>advanceStage(viewData.id,'lost',stageForm)} className="btn btn-danger flex-1">LOST</button></div>
+              {/* Stage 7 → Stage 8: Technical Clarification — stub */}
+              {activeStage==='technical_clarification'&&(<div className="space-y-2">
+                <div className="text-[11px] bg-sky-50 border border-sky-200 rounded p-2 text-sky-800">
+                  Track customer queries + replies + revision rounds here. Full clarification log will be added when mam requests Stage 8.
+                </div>
+                <textarea className="input" rows="2" placeholder="Latest clarification / reply..." value={stageForm.clarification_note||''} onChange={e=>setStageForm({...stageForm,clarification_note:e.target.value})}/>
+                <button onClick={()=>advanceStage(viewData.id,'commercial_negotiation',stageForm)} className="btn btn-primary w-full">Move to Negotiation</button>
+              </div>)}
+              {/* Stage 8 → Stage 9: Commercial Negotiation — stub */}
+              {activeStage==='commercial_negotiation'&&(<div className="space-y-2">
+                <div className="text-[11px] bg-teal-50 border border-teal-200 rounded p-2 text-teal-800">
+                  Capture counter-offer, discount asked / given, final price, payment terms. Approval routing by slab will be wired when mam requests Stage 9.
+                </div>
+                <input className="input" type="number" placeholder="Final Price (₹)" value={stageForm.won_amount||''} onChange={e=>setStageForm({...stageForm,won_amount:+e.target.value})}/>
+                <textarea className="input" rows="2" placeholder="Negotiation remarks..." value={stageForm.result_remarks||''} onChange={e=>setStageForm({...stageForm,result_remarks:e.target.value})}/>
+                <div className="flex gap-2">
+                  <button onClick={()=>advanceStage(viewData.id,'contract_signed',stageForm)} className="btn btn-success flex-1">WIN — Move to Contract</button>
+                  <button onClick={()=>advanceStage(viewData.id,'lost',stageForm)} className="btn btn-danger flex-1">LOST</button>
+                </div>
+              </div>)}
+              {/* Stage 9 → Stage 10: Contract + LOI/PO (GATE) — stub */}
+              {activeStage==='contract_signed'&&(<div className="space-y-2">
+                <div className="text-[11px] bg-emerald-50 border border-emerald-200 rounded p-2 text-emerald-800">
+                  🚦 <b>GATE — Legal + CFO sign-off.</b> Capture LOI/PO PDF, signed contract, BG, advance receipt, clause checklist. Full vault will be added when mam requests Stage 10.
+                </div>
+                <textarea className="input" rows="2" placeholder="Contract remarks..." value={stageForm.contract_remarks||''} onChange={e=>setStageForm({...stageForm,contract_remarks:e.target.value})}/>
+                <button onClick={()=>advanceStage(viewData.id,'project_kickoff',stageForm)} className="btn btn-primary w-full">Lock Contract &amp; Trigger Project</button>
+              </div>)}
+              {/* Stage 10 → Stage 11: Project Kickoff — stub. Terminal of
+                  the sales funnel; further work moves into Project /
+                  Execution / Billing modules. */}
+              {activeStage==='project_kickoff'&&(<div className="space-y-2">
+                <div className="text-[11px] bg-lime-50 border border-lime-200 rounded p-2 text-lime-800">
+                  🎉 <b>Project kicked off.</b> Lead lifecycle ends here — execution / RA billing / collections continue in Project, Procurement, Billing modules. Full kickoff form (PM assigned, Site Engineer, Gantt, sales→ops handover sign-off) will be added when mam requests Stage 11.
+                </div>
               </div>)}
             </div>
             );

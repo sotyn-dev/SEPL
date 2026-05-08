@@ -2333,6 +2333,44 @@ function initializeDatabase() {
     if (r.changes > 0) console.log(`[backfill] re-synced ${r.changes} attendance rows against cutoff ${cutoffStr} IST`);
   } catch (e) { /* non-fatal */ }
 
+  // ─── Sales Funnel — stage key migration to mam's 11-stage spec ─────
+  // The pre-spec build used keys like 'new_lead','qualified','meeting_
+  // assigned','mom_uploaded','drawing_uploaded','boq_created','quotation_
+  // sent','won'. Mam's 11-stage spec replaces them with: 'lead_capture',
+  // 'qualification','site_survey','concept_design','boq_costing',
+  // 'pricing_review','quote_submitted','technical_clarification',
+  // 'commercial_negotiation','contract_signed','project_kickoff' (+ 'lost').
+  //
+  // This block re-keys every existing lead in one shot so the new tab bar
+  // counts the leads correctly. Idempotent — once 'sf_stages_v2' is set in
+  // app_settings, it never runs again. Each UPDATE is best-effort
+  // (try/catch) so a partial DB doesn't crash boot.
+  try {
+    const migrated = db.prepare("SELECT value FROM app_settings WHERE key='sf_stages_v2'").get();
+    if (!migrated) {
+      const remap = [
+        ['new_lead',         'lead_capture'],
+        ['qualified',        'qualification'],
+        ['meeting_assigned', 'site_survey'],
+        ['mom_uploaded',     'site_survey'],
+        ['drawing_uploaded', 'concept_design'],
+        ['boq_created',      'boq_costing'],
+        ['quotation_sent',   'quote_submitted'],
+        ['won',              'contract_signed'],
+        // 'lost' stays 'lost'
+      ];
+      let total = 0;
+      for (const [oldKey, newKey] of remap) {
+        try {
+          const r = db.prepare('UPDATE sales_funnel SET current_stage=? WHERE current_stage=?').run(newKey, oldKey);
+          total += r.changes;
+        } catch (e) { /* non-fatal */ }
+      }
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('sf_stages_v2', '1')").run();
+      if (total > 0) console.log(`[migration] sales_funnel: re-keyed ${total} leads to 11-stage spec`);
+    }
+  } catch (e) { /* non-fatal */ }
+
   // One-time seed of mam's auto-mark-present allow-list. Guarded by an
   // app_settings key so toggling someone OFF via the UI doesn't get
   // reverted on the next server restart.
