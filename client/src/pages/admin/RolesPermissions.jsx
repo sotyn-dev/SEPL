@@ -16,7 +16,7 @@ const ALL_MODULES = [
   { key: 'dpr', label: 'DPR' },
   { key: 'delegations', label: 'Delegations' },
   { key: 'checklists', label: 'Checklists' },
-  { key: 'leads', label: 'Leads / CRM' },
+  { key: 'leads', label: 'Sales Funnel' },
   { key: 'quotations', label: 'BOQ & Quotations' },
   { key: 'business_book', label: 'Business Book' },
   { key: 'item_master', label: 'Item Master' },

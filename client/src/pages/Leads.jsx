@@ -85,7 +85,7 @@ export default function Leads() {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-        <h1 className="text-xl font-bold flex items-center gap-2"><FiTarget className="text-red-600" /> Sales CRM</h1>
+        <h1 className="text-xl font-bold flex items-center gap-2"><FiTarget className="text-red-600" /> Sales Funnel</h1>
         {canCreate('leads') && <button onClick={() => { setForm({ client_name:'',company_name:'',phone:'',email:'',category:'',address:'',source:'',assigned_sc:user?.name||'',assigned_asm:'',remarks:'' }); setModal('add'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15}/> New Lead</button>}
       </div>
 
