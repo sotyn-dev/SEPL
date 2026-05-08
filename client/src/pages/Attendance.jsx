@@ -4,7 +4,7 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCircle, FiPlus, FiAlertTriangle, FiTrash2 } from 'react-icons/fi';
+import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCircle, FiPlus, FiAlertTriangle, FiTrash2, FiEdit2 } from 'react-icons/fi';
 
 export default function Attendance() {
   const { user, isAdmin, canDelete } = useAuth();
@@ -13,6 +13,10 @@ export default function Attendance() {
   // Mam: daily attendance detail (in/out times + leave) belongs on the
   // Attendance page next to the punch UI, not on the dashboard.
   const [myMonth, setMyMonth] = useState(null);
+  // Mam: 'edit option' on leaves table — fixes typos / wrong dates /
+  // floating-point hours like 1.3500000000000014.
+  const [editingLeave, setEditingLeave] = useState(null);
+  const [leaveEditForm, setLeaveEditForm] = useState({});
   const [dashboard, setDashboard] = useState(null);
   const [records, setRecords] = useState([]);
   const [report, setReport] = useState([]);
@@ -641,21 +645,122 @@ export default function Attendance() {
               </td>
               <td className="text-xs">
                 {isShort
-                  ? <span className="text-amber-700 font-bold">{l.hours ? `${l.hours} hr${l.hours !== 1 ? 's' : ''}` : '—'}</span>
+                  ? <span className="text-amber-700 font-bold">{l.hours ? `${(+l.hours).toFixed(2).replace(/\.?0+$/, '')} hr${l.hours !== 1 ? 's' : ''}` : '—'}</span>
                   : <span className="font-medium">{l.days} day{l.days !== 1 ? 's' : ''}</span>
                 }
               </td>
               <td className="text-xs">{l.reason}</td>
               <td><StatusBadge status={l.status} /></td>
-              <td>{l.status === 'pending' && <>
-                <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'approved' }); toast.success('Approved'); load(); }} className="text-xs text-emerald-600 font-bold mr-2">Approve</button>
-                <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'rejected' }); toast.success('Rejected'); load(); }} className="text-xs text-red-600 font-bold">Reject</button>
-              </>}</td>
+              <td>
+                <div className="flex items-center gap-1">
+                  {l.status === 'pending' && (
+                    <>
+                      <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'approved' }); toast.success('Approved'); load(); }} className="text-xs text-emerald-600 font-bold mr-1">Approve</button>
+                      <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'rejected' }); toast.success('Rejected'); load(); }} className="text-xs text-red-600 font-bold mr-1">Reject</button>
+                    </>
+                  )}
+                  <button
+                    onClick={() => {
+                      setEditingLeave(l);
+                      setLeaveEditForm({
+                        leave_type: l.leave_type || 'casual',
+                        from_date: l.from_date || '',
+                        to_date: l.to_date || '',
+                        from_time: l.from_time || '',
+                        to_time: l.to_time || '',
+                        days: l.days || 0,
+                        hours: l.hours ? +(+l.hours).toFixed(2) : 0,
+                        reason: l.reason || '',
+                      });
+                    }}
+                    className="p-1 text-gray-400 hover:text-blue-600"
+                    title="Edit"
+                  ><FiEdit2 size={14} /></button>
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`Delete this leave request for ${l.user_name}?`)) return;
+                      try {
+                        await api.delete(`/attendance/leave/${l.id}`);
+                        toast.success('Deleted'); load();
+                      } catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                    }}
+                    className="p-1 text-gray-400 hover:text-red-600"
+                    title="Delete"
+                  ><FiTrash2 size={14} /></button>
+                </div>
+              </td>
             </tr>
             );
           })}</tbody>
         </table></div>
       )}
+
+      {/* EDIT LEAVE MODAL — admin / approver fixes typos, wrong dates,
+          rounding errors. Status is NOT editable here (use Approve / Reject). */}
+      <Modal isOpen={!!editingLeave} onClose={() => { setEditingLeave(null); setLeaveEditForm({}); }} title={editingLeave ? `Edit Leave — ${editingLeave.user_name}` : ''}>
+        {editingLeave && (
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            try {
+              await api.put(`/attendance/leave/${editingLeave.id}`, leaveEditForm);
+              toast.success('Updated');
+              setEditingLeave(null); setLeaveEditForm({}); load();
+            } catch (err) { toast.error(err.response?.data?.error || 'Update failed'); }
+          }} className="space-y-3">
+            <div>
+              <label className="label">Type</label>
+              <select className="select" value={leaveEditForm.leave_type || ''} onChange={e => setLeaveEditForm({ ...leaveEditForm, leave_type: e.target.value })}>
+                <option value="casual">Casual</option>
+                <option value="sick">Sick</option>
+                <option value="earned">Earned</option>
+                <option value="half_day">Half Day</option>
+                <option value="short_leave">Short Leave</option>
+                <option value="comp_off">Comp Off</option>
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">From Date</label>
+                <input type="date" className="input" value={leaveEditForm.from_date || ''} onChange={e => setLeaveEditForm({ ...leaveEditForm, from_date: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">To Date</label>
+                <input type="date" className="input" value={leaveEditForm.to_date || ''} onChange={e => setLeaveEditForm({ ...leaveEditForm, to_date: e.target.value })} />
+              </div>
+            </div>
+            {(leaveEditForm.leave_type === 'short_leave' || leaveEditForm.leave_type === 'half_day') && (
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="label">From Time</label>
+                  <input type="time" className="input" value={leaveEditForm.from_time || ''} onChange={e => setLeaveEditForm({ ...leaveEditForm, from_time: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">To Time</label>
+                  <input type="time" className="input" value={leaveEditForm.to_time || ''} onChange={e => setLeaveEditForm({ ...leaveEditForm, to_time: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">Hours</label>
+                  <input type="number" step="0.25" className="input" value={leaveEditForm.hours || 0} onChange={e => setLeaveEditForm({ ...leaveEditForm, hours: +e.target.value })} />
+                </div>
+              </div>
+            )}
+            {!(leaveEditForm.leave_type === 'short_leave' || leaveEditForm.leave_type === 'half_day') && (
+              <div>
+                <label className="label">Days</label>
+                <input type="number" step="0.5" className="input" value={leaveEditForm.days || 0} onChange={e => setLeaveEditForm({ ...leaveEditForm, days: +e.target.value })} />
+              </div>
+            )}
+            <div>
+              <label className="label">Reason</label>
+              <textarea className="input" rows="2" value={leaveEditForm.reason || ''} onChange={e => setLeaveEditForm({ ...leaveEditForm, reason: e.target.value })} />
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <button type="button" onClick={() => { setEditingLeave(null); setLeaveEditForm({}); }} className="btn btn-secondary">Cancel</button>
+              <button type="submit" className="btn btn-primary">Save</button>
+            </div>
+          </form>
+        )}
+      </Modal>
 
       {/* Leave Modal */}
       <Modal isOpen={modal === 'leave'} onClose={() => setModal(null)} title="Apply for Leave">

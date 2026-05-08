@@ -553,6 +553,22 @@ router.put('/leave/:id/approve', requirePermission('attendance', 'approve'), (re
   res.json({ message: `Leave ${status}` });
 });
 
+// Full edit — admin / approver fixes typos, wrong dates, wrong hours,
+// rounding errors. Mam: 'edit option'. Doesn't change status (use the
+// approve route for that).
+router.put('/leave/:id', requirePermission('attendance', 'edit'), (req, res) => {
+  try {
+    const b = req.body;
+    const fields = ['leave_type','from_date','to_date','from_time','to_time','days','hours','reason'];
+    const sets = []; const vals = [];
+    for (const f of fields) if (b[f] !== undefined) { sets.push(`${f}=?`); vals.push(b[f]); }
+    if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
+    vals.push(req.params.id);
+    getDb().prepare(`UPDATE leave_requests SET ${sets.join(', ')} WHERE id=?`).run(...vals);
+    res.json({ message: 'Updated' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 router.delete('/leave/:id', requirePermission('attendance', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM leave_requests WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
