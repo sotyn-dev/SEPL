@@ -2124,24 +2124,29 @@ function initializeDatabase() {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
 
-  // Re-classify attendance rows where status='present' but the punch
-  // was actually late (past late_after_time IST). Fixes the UTC-vs-IST
-  // bug where 10:23 IST got tagged 'present' because the server's
-  // getHours() returned 4 (UTC). Idempotent — once a row is flipped
-  // to 'late' it won't match the WHERE again.
+  // Re-classify attendance rows so status reflects the CURRENT cutoff
+  // (payroll_settings.late_after_time, IST). Idempotent and bidirectional:
+  // - Rows past the cutoff become 'late'
+  // - Rows at/before the cutoff become 'present'
+  // - half_day / short_day / on_leave / absent / admin_marked rows are
+  //   left alone so we don't trample manual classifications.
+  // Fixes both the original UTC-vs-IST bug AND the case where a previous
+  // tighter cutoff left rows mismarked as 'late' after mam relaxed it.
   try {
     const ps = db.prepare("SELECT late_after_time FROM payroll_settings WHERE id=1").get();
     const cutoffStr = (ps?.late_after_time || '09:46').padEnd(5, '0').slice(0, 5);
-    // SQLite shifts UTC → IST by adding 5h30m, then time() extracts HH:MM:SS.
-    // Compare lexicographically (HH:MM:SS format sorts naturally).
     const r = db.prepare(`
       UPDATE attendance
-         SET status = 'late'
-       WHERE status = 'present'
-         AND punch_in_time IS NOT NULL
-         AND time(datetime(punch_in_time, '+5 hours', '+30 minutes')) > ?
+         SET status = CASE
+             WHEN time(datetime(punch_in_time, '+5 hours', '+30 minutes')) > ?
+                  THEN 'late'
+             ELSE 'present'
+           END
+       WHERE punch_in_time IS NOT NULL
+         AND status IN ('present', 'late')
+         AND COALESCE(admin_marked, 0) = 0
     `).run(cutoffStr + ':00');
-    if (r.changes > 0) console.log(`[backfill] re-classified ${r.changes} attendance rows as 'late' (cutoff ${cutoffStr} IST)`);
+    if (r.changes > 0) console.log(`[backfill] re-synced ${r.changes} attendance rows against cutoff ${cutoffStr} IST`);
   } catch (e) { /* non-fatal */ }
 
   // One-time seed of mam's auto-mark-present allow-list. Guarded by an
