@@ -14,7 +14,7 @@ export default function ErpMantraBanner() {
       <div className="flex-1 min-w-0">
         <p className="text-[11px] font-bold uppercase tracking-widest text-orange-700">SEPL Rule</p>
         <p className="text-lg sm:text-xl font-extrabold text-gray-900 mt-0.5 leading-snug">
-          &ldquo;If it is not in the ERP, it will not happen.&rdquo;
+          &ldquo;If it is not in the ERP, it did not happen.&rdquo;
         </p>
       </div>
     </div>
