@@ -25,16 +25,67 @@ const fmtDate = (s) => {
 };
 
 // Company header — single source of truth so it's easy to edit later if
-// mam's address / GSTIN changes. Could move to a settings table down the
-// road; for now hard-coded matches the sample PDF exactly.
+// mam's address / GSTIN changes. Mirrors the SEPL Purchase Order PDF
+// format mam shared as the reference layout.
 const COMPANY = {
   name: 'SECURED ENGINEERS PVT. LTD - 24-25',
   gstin: '03AASCS7836D2Z3',
   pan: 'AASCS7836D',
   state: 'Punjab',
   state_code: '03',
-  address: '2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, LUDHIANA, Punjab - 141003, India',
+  head_office: '2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, LUDHIANA, Punjab - 141003, India',
+  branch_office: '91, Springboard, Sector 2, Noida, Uttar Pradesh, India',
 };
+
+// Marketing band stats from the reference PDF — 15+ years, 309+ staff, etc.
+const STATS = [
+  { num: '15+', label: 'YEARS OF\nEXCELLENCE' },
+  { num: '309+', label: 'STRONG MANPOWER' },
+  { num: '16+', label: 'STATES SERVED' },
+  { num: '4+', label: 'COUNTRIES' },
+  { num: 'ISO 9001:2015', label: 'CERTIFIED', small: true },
+  { num: 'MSME', label: 'REGISTERED', small: true },
+];
+
+// Comprehensive 35-clause Terms & Conditions exactly as on mam's
+// reference PO. Stored in a constant so future edits are one place.
+const TERMS = [
+  ['PO Number Mandatory', 'Our SEPL PO No. {{PO_NUMBER}} must be quoted on every Invoice, Delivery Challan, Packing Slip, Test Certificate, e-Way Bill and all correspondence. Documents without our PO number will not be accepted at site or office.'],
+  ['NO PARTIAL DELIVERIES — FULL KITTING MANDATORY', 'Full and complete kitting of the entire ordered scope (all line items, accessories, fasteners, fittings, glands, lugs, terminations and ancillaries) is mandatory. Partial / part-load / split-lot / staggered deliveries are NOT ACCEPTED. Any partial / un-kitted supply will be returned to the vendor at the vendor’s cost and risk, and shall additionally attract LD as per Clause 9.'],
+  ['Delivery Note is the ONLY Receiving Document', 'Material receipt at site will be acknowledged EXCLUSIVELY on Secured Engineers’ Delivery Note (DN). The vendor must obtain dated signature, name and stamp of our authorised site representative on our DN. Do not send your Bill / Invoice for receiving — your bill is for billing/accounting purposes ONLY and will not constitute proof of delivery.'],
+  ['Delivery at Site is Vendor’s Responsibility', 'The vendor is solely responsible for transportation, freight, loading, unloading, handling, in-transit insurance, octroi (if any), demurrage and safe delivery of material at the site address designated by Secured Engineers. No reimbursement of transportation or related charges will be admissible unless specifically agreed in writing in this PO.'],
+  ['Test Certificate & Raw Material Traceability', 'Each consignment must carry an OEM/Mill Test Certificate identifying raw-material grade, batch, heat number, MFG date and standard reference (IS/BIS/IEC/ASTM). Goods without TC will be rejected.'],
+  ['Packing Slip', 'Every dispatch must include a Packing Slip listing item description, code, HSN, quantity and our PO No. Material received without a Packing Slip will be treated as short-supplied.'],
+  ['HSN, GSTIN & e-Invoice', 'Tax Invoice must mention our GSTIN 03AASCS7836D2Z3, correct HSN, place of supply and e-Invoice IRN/QR (where applicable). GST will be released only upon (a) reflection in our GSTR-2B and (b) timely filing by the vendor.'],
+  ['Quality & Inspection', 'All goods are subject to inspection at site / vendor’s works / OEM works by Secured Engineers or its nominee. Right of rejection is absolute; rejected material to be lifted by vendor within 7 days at vendor’s cost, failing which storage charges of 1% per day on invoice value will be debited.'],
+  ['Liquidated Damages (LD)', 'For any delay beyond the agreed delivery date, LD shall be levied at 0.5% of the order value per week of delay, capped at 10% of the total PO value, recoverable from any pending payment or by debit note. Time is of the essence of this PO.'],
+  ['Warranty / Guarantee (Product-Wise)', 'Goods supplied shall carry warranty as specified per item in the PO / Annexure-A. In the absence of an item-specific warranty, the following minimums apply, whichever is later: (a) Cables, Wires, Conduits, Fasteners, Consumables — 12 months from commissioning or 18 months from dispatch; (b) Panels, Switchgear, MCBs/MCCBs, Starters, DBs, Lighting Fixtures, Pumps, Motors, ELV, Plumbing Fittings — 24 months from commissioning or 30 months from dispatch; (c) HVAC Equipment, Fire-Fighting Equipment, Solar Modules & Inverters, BMS, VFDs and OEM-branded major equipment — 36 months (3 years) from commissioning or 42 months from dispatch; (d) Solar PV modules shall additionally carry the OEM’s standard performance warranty (10/25 years) extended directly to Secured Engineers / End-Client. Defective items shall be replaced / repaired free of cost including freight both ways, with attendance at site within 72 hours of intimation.'],
+  ['Price Firmness & Excess Supply', 'Rates are firm till completion of supply, irrespective of any market / forex / commodity fluctuation. Buyer is under no obligation to accept goods supplied in excess of ordered quantity; such excess shall be returned at vendor’s cost.'],
+  ['Right to Cancel / Amend', 'Secured Engineers reserves the unconditional right to cancel, amend, reduce, foreclose or hold this PO in whole or in part at any time without liability for consequential loss to the vendor.'],
+  ['Indemnity', 'The vendor shall fully indemnify and hold harmless Secured Engineers, its directors, employees and clients against any claim, loss, penalty, fine or damage (including legal cost) arising out of (a) defective material / workmanship, (b) statutory or regulatory non-compliance, (c) IP / patent infringement, (d) acts, omissions or accidents of vendor’s personnel, or (e) third-party injury / property damage attributable to vendor’s supply.'],
+  ['Confidentiality & Non-Solicitation', 'Drawings, specifications, BOQ, rates, client name, site information and any data shared by Secured Engineers are strictly confidential and the property of Secured Engineers. The vendor shall not disclose, sub-contract, reuse or market the same, nor solicit any client / employee of Secured Engineers, without prior written consent. This obligation shall survive termination for 3 years.'],
+  ['Safety, Insurance & Statutory Compliance', 'Vendor’s personnel (if visiting site) shall comply with PPE, EHS, BOCW, applicable labour, ESI, PF and all statutory norms. Vendor shall maintain valid in-transit, workmen’s compensation and public-liability insurance. Secured Engineers bears NO liability for vendor’s personnel, equipment or sub-contractors.'],
+  ['GST Reimbursement Clawback', 'If any input tax credit, refund or other benefit is denied / delayed / reversed against Secured Engineers due to vendor’s non-compliance (non-upload on GSTN, non-payment of GST, incorrect documents, GSTIN cancellation), vendor shall reimburse the full loss including interest and penalty, by debit note adjustable against any pending dues, within 15 days of intimation.'],
+  ['Set-Off / Recovery', 'Secured Engineers reserves the unilateral right to set-off / adjust / recover any amount due from the vendor under this or any other PO / contract / order against any payment payable to the vendor, present or future.'],
+  ['Force Majeure', 'Neither party shall be liable for delay caused by genuine Force Majeure events. The affected party must notify in writing within 7 days with documentary proof, failing which the defence shall not be available. If FM continues beyond 30 days, Secured Engineers may terminate without liability.'],
+  ['Acceptance', 'Acceptance of this PO (by acknowledgement, dispatch of goods, or commencement of work) shall constitute unconditional acceptance of these Terms & Conditions in their entirety. Any vendor’s printed terms on invoices / challans / quotations shall stand OVERRIDDEN in their entirety.'],
+  ['Title, Risk & Acceptance Transfer', 'Title and risk in the goods shall pass to Secured Engineers only upon (a) receipt of acceptable goods at site against our DN, AND (b) successful site inspection / testing / commissioning. Mere dispatch, billing or transit-handover shall NOT constitute acceptance.'],
+  ['No Sub-Contracting / No Substitution', 'The vendor shall not sub-contract, assign, transfer or novate this PO (in whole or part) to any third party without prior written consent of Secured Engineers. The make / brand / model / origin of goods shall not be substituted; any deviation requires written approval, failing which goods shall be liable for outright rejection.'],
+  ['Anti-Bribery, Anti-Corruption & Conflict of Interest', 'The vendor warrants that it has not, and will not, offer any gift, kickback, commission or undue advantage to any director, employee or representative of Secured Engineers or its clients. Breach shall entitle Secured Engineers to terminate the PO with immediate effect, blacklist the vendor, forfeit all pending payments, and pursue criminal / civil action.'],
+  ['Compliance with Laws & Standards', 'All goods / services shall comply with applicable Indian laws, IS / BIS / IEC / NBC / NEC / NFPA / ASHRAE / MNRE / CEA / state electrical / fire / pollution / environmental codes, as relevant. Vendor confirms it holds all valid licences, registrations and statutory approvals required to perform this PO.'],
+  ['Performance Security / Retention', 'Secured Engineers reserves the right to retain 5%–10% of each invoice value as Performance Retention, releasable only upon expiry of the warranty period and final acceptance, OR to demand a Bank Guarantee (BG) of equivalent value valid up to warranty expiry plus claim period. Retention shall not earn any interest.'],
+  ['Audit & Document Rights', 'Secured Engineers and its auditors / clients shall have the right, upon reasonable notice, to audit the vendor’s invoices, GST returns, dispatch records, MTC, calibration certificates and quality records pertaining to this PO, for up to 7 years from the PO date.'],
+  ['Spare Parts & O&M Documentation', 'The vendor shall guarantee availability of spares and after-sales service for a minimum of 10 years from the date of commissioning. Operations & Maintenance manuals, wiring / GA drawings, calibration certificates and as-built documents (in editable + PDF) shall be supplied along with the goods at no additional cost.'],
+  ['Free Replacement & Site Attendance', 'During the warranty period, all defects / failures / under-performance shall be rectified by free replacement / repair at site by the vendor, without dismantling cost, transport cost or labour cost on Secured Engineers’ account. Maximum response time: 72 hours; maximum resolution time: 7 days, failing which Secured Engineers may rectify at vendor’s risk and cost (recoverable from BG / retention / future bills).'],
+  ['Data Protection & Records', 'Any personal / commercial data of Secured Engineers, its employees or clients shared with the vendor shall be processed solely for performance of this PO, kept secure, and returned / destroyed on completion. Breach shall attract recovery of all consequential damages.'],
+  ['Background & Antecedent Verification', 'The vendor warrants that its proprietors / directors / authorised signatories have no adverse criminal, financial, tax-default or regulatory record. Secured Engineers reserves the right to seek and verify such records at any time.'],
+  ['No Lien / No Counter-Claim', 'The vendor shall not exercise any lien on Secured Engineers’ / Client’s property, drawings, tools or material in its possession, on account of any disputed claim, and shall release the same on demand.'],
+  ['Notices', 'All formal notices under this PO shall be sent to Secured Engineers’ registered Head Office address (Ludhiana) by Email + Registered Post / Courier. Verbal commitments by site / field personnel are NOT BINDING on Secured Engineers.'],
+  ['Severability & Survival', 'If any clause is held invalid, the remaining clauses shall continue in full force. Clauses on Warranty, Confidentiality, Indemnity, Set-Off, Audit, Anti-Corruption and Dispute Resolution shall survive completion / termination of this PO.'],
+  ['Governing Law', 'This Purchase Order shall be governed by and construed in accordance with the laws of India.'],
+  ['Acceptance of these Terms is unconditional', 'upon any dispatch / part-performance / acknowledgement of this PO. Vendor’s silence within 3 working days of receipt of this PO shall be deemed acceptance of all terms herein.'],
+  ['Dispute Resolution & Jurisdiction', 'Any dispute, difference or claim arising out of or in connection with this Purchase Order shall first be referred to and finally resolved by sole arbitration of the Company Arbiter — Advocate Vikas Sharma, whose decision shall be binding on both parties. Arbitration shall be conducted under the Arbitration & Conciliation Act, 1996 (as amended), seat Ludhiana, language English. Subject to the foregoing, courts at Ludhiana shall have exclusive jurisdiction.'],
+];
 
 export default function VendorPOPrint() {
   const { id } = useParams();
@@ -121,10 +172,38 @@ export default function VendorPOPrint() {
           </div>
         </div>
 
-        {/* Company name + address — clean white with red underline */}
+        {/* Company name + Head Office + Branch Office addresses */}
         <div className="text-center py-3 px-3 border-b-2 border-red-700 bg-gradient-to-b from-red-50/60 to-white">
           <div className="text-[22px] font-extrabold tracking-tight text-gray-900 leading-tight">{COMPANY.name}</div>
-          <div className="text-[10.5px] text-gray-600 mt-1">{COMPANY.address}</div>
+          <div className="text-[10.5px] text-gray-700 mt-1.5"><span className="font-semibold">Head Office:</span> {COMPANY.head_office}</div>
+          <div className="text-[10.5px] text-gray-700"><span className="font-semibold">Branch Office (Noida):</span> {COMPANY.branch_office}</div>
+        </div>
+
+        {/* Marketing band — A LEADING ENGINEERING COMPANY OF INDIA + stats */}
+        <div className="border-b-2 border-red-700 bg-red-50/40 print:bg-red-50">
+          <div className="text-center py-1.5 text-[11px] font-extrabold tracking-[0.15em] uppercase text-red-700 border-b border-red-200">
+            A Leading Engineering Company of India
+          </div>
+          <div className="grid grid-cols-6 divide-x divide-red-200">
+            {STATS.map((s, i) => (
+              <div key={i} className="text-center py-2 px-1.5">
+                <div className={`font-extrabold text-red-700 leading-none ${s.small ? 'text-[10px]' : 'text-[15px]'}`}>{s.num}</div>
+                <div className="text-[8.5px] uppercase tracking-wide text-gray-600 mt-1 whitespace-pre-line leading-tight">{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* PAN-INDIA PRESENCE band */}
+        <div className="text-center py-1.5 text-[10.5px] font-bold tracking-wider text-gray-800 border-b border-gray-300 bg-gray-50/60 print:bg-gray-50">
+          <span className="text-red-700 uppercase">Pan-India Presence&nbsp;:&nbsp;</span>
+          <span className="font-extrabold text-gray-900 tracking-wide">LUDHIANA | NOIDA | BANGALORE | MUMBAI</span>
+        </div>
+
+        {/* Specialists band — service lines */}
+        <div className="text-center py-1.5 text-[10px] text-gray-700 border-b-2 border-gray-800 bg-white">
+          Specialists in&nbsp;<span className="font-extrabold text-red-700">ELECTRICAL | HVAC | FIRE SAFETY | PLUMBING | SOLAR | ELV</span>
+          <span className="text-gray-500"> — All-in-One Turnkey Project Solutions</span>
         </div>
 
         {/* TWO-COLUMN HEADER: Details of Vendor (left) | Voucher meta (right).
@@ -309,15 +388,15 @@ export default function VendorPOPrint() {
             <div className="text-[11px]"><span className="text-gray-500">Payment Terms&nbsp;&nbsp;:</span> <span className="font-semibold">{po.terms || '—'}{po.credit_days ? ` (${po.credit_days} days)` : ''}</span></div>
             <div className="text-[11px]"><span className="text-gray-500">Terms for Delivery&nbsp;&nbsp;:</span> <span className="font-semibold">{po.expected_receipt_date ? `Delivery by ${fmtDate(po.expected_receipt_date)}` : '—'}</span></div>
           </div>
-          <ol className="mt-1 space-y-0.5 text-[10px] leading-snug list-decimal list-inside text-gray-700">
-            <li>Please mention PO No, Item Code and HSN on all the Invoices.</li>
-            <li>Raw Material of Item must be mentioned and certified with Test Certificate.</li>
-            <li>Goods should contain Packing Slip with description of Item's Name and Quantity.</li>
-            <li>Buyer reserves the right to cancel, amend this PO or any percentage thereof.</li>
-            <li>Buyer assumes no obligation in relation to any goods delivered in excess of those ordered.</li>
-            <li>GST Amount will be paid only if our GSTIN details are mentioned in Tax Invoice issued. Liabilities of GST paid &amp; GST Return file intimation against this Purchase Order.</li>
-            <li>In case of any credit, refund or other benefit is denied or delayed to the buyer due to any non-compliance by the seller (such as failure to upload the details of supply on GSTIN Portal, failure to Pay GST to the GOVT.) due to non-furnishing of incorrect or incomplete document/details/information by the seller, the seller would reimburse the buyer the loss to buyer including, but not limited.</li>
-            <li>If there is any dispute then first it will be solved by arbitrator of the company and then by the court. <b>ALL RESPECT TO LUDHIANA JURISDICTION.</b></li>
+          <ol className="mt-1 space-y-1 text-[10px] leading-snug list-decimal list-outside ml-4 text-gray-700">
+            {TERMS.map(([title, body], i) => {
+              const filled = body.replace('{{PO_NUMBER}}', po.po_number || '');
+              return (
+                <li key={i} className="pl-1">
+                  <b className="text-gray-900">{title}{title.endsWith(':') ? '' : ':'}</b> {filled}
+                </li>
+              );
+            })}
           </ol>
           {po.remarks && (
             <div className="mt-3 text-[11px] bg-amber-50 border-l-4 border-amber-400 px-3 py-1.5">
