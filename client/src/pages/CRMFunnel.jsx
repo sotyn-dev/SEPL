@@ -3,7 +3,9 @@ import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiTrash2, FiExternalLink } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiExternalLink, FiTarget } from 'react-icons/fi';
+
+const fmt = (n) => 'Rs ' + Math.abs(Math.round(+n || 0)).toLocaleString('en-IN');
 import { useAuth } from '../context/AuthContext';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 
@@ -95,11 +97,29 @@ export default function CRMFunnel() {
     return <span className="px-2 py-0.5 text-[10px] rounded font-medium bg-blue-100 text-blue-700">STEP 1 · QUOTATION</span>;
   };
 
+  // Metrics — counts mirror the existing 11-stage Sales Funnel dashboard so
+  // mam recognises the layout. Win/Loss/Win-rate use final_status; This
+  // Month uses created_at falling in the current calendar month.
+  const now = new Date();
+  const thisMonth = rows.filter(r => {
+    if (!r.created_at) return false;
+    const d = new Date(r.created_at.replace(' ', 'T'));
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  }).length;
+  const won = rows.filter(r => r.final_status === 'win');
+  const lost = rows.filter(r => r.final_status === 'loss');
+  const winAmount = won.reduce((s, r) => s + (+r.negotiation_amount || +r.quotation_amount || 0), 0);
+  const winRate = rows.length > 0 ? Math.round((won.length / rows.length) * 100) : 0;
+  const stepCount = (key) => key === 'all' ? rows.length :
+    key === '1' ? rows.filter(r => !r.quotation_submitted).length :
+    key === '2' ? rows.filter(r => r.quotation_submitted && !r.final_status).length :
+    rows.filter(r => r.final_status === 'win' || r.final_status === 'loss').length;
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="font-semibold text-gray-800">CRM Sales Funnel</h3>
+          <h3 className="font-semibold text-gray-800 flex items-center gap-2"><FiTarget /> CRM Sales Funnel</h3>
           <p className="text-xs text-gray-500">Flat 3-step tracker: Quotation → Negotiation → Win/Loss</p>
         </div>
         {canCreate('crm_funnel') && (
@@ -107,25 +127,39 @@ export default function CRMFunnel() {
         )}
       </div>
 
-      {/* Step summary */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {/* Step pill tabs — same visual style as the existing Sales Funnel
+          stage tabs. Each pill is a step + count chip; click to filter. */}
+      <div className="flex gap-2 flex-wrap items-center">
         {[
-          { key: 'all', label: 'All', cls: 'text-gray-700' },
-          { key: '1', label: 'Step 1 — Quotation', cls: 'text-blue-700' },
-          { key: '2', label: 'Step 2 — Negotiation', cls: 'text-amber-700' },
-          { key: '3', label: 'Step 3 — Win/Loss', cls: 'text-emerald-700' },
-        ].map(s => (
-          <button key={s.key} onClick={() => setFilter(f => ({ ...f, step: s.key }))}
-            className={`card text-left transition ${filter.step === s.key ? 'ring-2 ring-red-400' : ''}`}>
-            <div className={`text-2xl font-bold ${s.cls}`}>
-              {s.key === 'all' ? rows.length :
-                s.key === '1' ? rows.filter(r => !r.quotation_submitted).length :
-                s.key === '2' ? rows.filter(r => r.quotation_submitted && !r.final_status).length :
-                rows.filter(r => r.final_status === 'win' || r.final_status === 'loss').length}
-            </div>
-            <div className="text-xs text-gray-500">{s.label}</div>
-          </button>
-        ))}
+          { key: 'all', label: 'All Leads', chipCls: 'bg-gray-500' },
+          { key: '1', label: 'Step 1 — Quotation', chipCls: 'bg-blue-500' },
+          { key: '2', label: 'Step 2 — Negotiation', chipCls: 'bg-amber-500' },
+          { key: '3', label: 'Step 3 — Win / Loss', chipCls: 'bg-emerald-500' },
+        ].map(s => {
+          const isActive = filter.step === s.key;
+          return (
+            <button
+              key={s.key}
+              onClick={() => setFilter(f => ({ ...f, step: s.key }))}
+              className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
+            >
+              {s.label}
+              <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center text-white ${isActive ? 'bg-white/30' : s.chipCls}`}>
+                {stepCount(s.key)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Metric cards — match the existing Sales Funnel dashboard 5-card
+          layout (Total / This Month / Won / Lost / Win Rate). */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="card p-4 border-l-4 border-red-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Total Leads</p><p className="text-3xl font-extrabold text-red-600">{rows.length}</p></div>
+        <div className="card p-4 border-l-4 border-purple-500"><p className="text-[10px] text-gray-500 font-bold uppercase">This Month</p><p className="text-3xl font-extrabold text-purple-600">{thisMonth}</p></div>
+        <div className="card p-4 border-l-4 border-emerald-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Won Deals</p><p className="text-3xl font-extrabold text-emerald-600">{won.length}</p>{winAmount > 0 && <p className="text-xs text-emerald-500">{fmt(winAmount)}</p>}</div>
+        <div className="card p-4 border-l-4 border-red-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Lost</p><p className="text-3xl font-extrabold text-red-600">{lost.length}</p></div>
+        <div className="card p-4 border-l-4 border-amber-500"><p className="text-[10px] text-gray-500 font-bold uppercase">Win Rate</p><p className="text-3xl font-extrabold text-amber-600">{winRate}%</p></div>
       </div>
 
       <div className="card p-3 grid grid-cols-1 sm:grid-cols-4 gap-2">

@@ -9,6 +9,19 @@ import { useAuth } from '../context/AuthContext';
 
 const CRM_OPTIONS = ['Sushila', 'Lovely'];
 
+// Match a PO against a free-text filter. Empty filter = all rows. Checks
+// every field mam asked about: site/project (project field), client name,
+// company name (BB), PO number, lead number, site-engineer names, CRM.
+function poMatches(p, q) {
+  if (!q || !q.trim()) return true;
+  const needle = q.trim().toLowerCase();
+  const hay = [
+    p.po_number, p.lead_no, p.bb_client, p.company_name, p.bb_project,
+    p.site_engineer_names, p.site_engineer_name, p.crm_name, p.bb_category,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return hay.includes(needle);
+}
+
 export default function Orders() {
   const { canDelete } = useAuth();
   const [tab, setTab] = useState('po');
@@ -18,6 +31,10 @@ export default function Orders() {
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
   const [poItems, setPoItems] = useState([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
+  // Mam: "give here filter by site name/project name" — single search box
+  // matches against PO number, lead#, client/company, project, site engineer,
+  // CRM. Lower-case substring match on whatever's typed.
+  const [poFilter, setPoFilter] = useState('');
   const [masterItems, setMasterItems] = useState([]);
   const [siteEngineers, setSiteEngineers] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -147,8 +164,19 @@ export default function Orders() {
 
       {tab === 'po' && (
         <>
-          <div className="flex justify-between items-center">
+          <div className="flex flex-wrap justify-between items-center gap-3">
             <h3 className="font-semibold">Client Purchase Orders</h3>
+            <div className="flex gap-2 items-center flex-1 max-w-md">
+              <input
+                className="input text-sm"
+                placeholder="Filter by site / project / client / PO# / lead# / engineer"
+                value={poFilter}
+                onChange={e => setPoFilter(e.target.value)}
+              />
+              {poFilter && (
+                <button onClick={() => setPoFilter('')} className="text-xs text-gray-500 hover:text-red-600 px-2" title="Clear">×</button>
+              )}
+            </div>
             <button onClick={() => {
               setEditingPO(null);
               setForm({ business_book_id: '', po_number: '', po_date: '', total_amount: 0, advance_amount: 0, po_copy_link: '', boq_file_link: '', pt_advance: '', pt_delivery: '', pt_installation: '', pt_commissioning: '', pt_retention: '', site_engineer_ids: [], crm_name: '' });
@@ -156,10 +184,15 @@ export default function Orders() {
               setModal('po');
             }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add PO</button>
           </div>
+          {poFilter && (
+            <div className="text-xs text-gray-500">
+              Showing {pos.filter(p => poMatches(p, poFilter)).length} of {pos.length} POs matching "{poFilter}"
+            </div>
+          )}
           <div className="card p-0 overflow-x-auto"><table>
             <thead><tr><th>PO Number</th><th>Lead No</th><th>Client</th><th>Project</th><th>Category</th><th>Date</th><th>Amount</th><th>Site Engineer</th><th>CRM</th><th>PO Copy</th><th>BOQ File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-              {pos.map(p => (
+              {pos.filter(p => poMatches(p, poFilter)).map(p => (
                 <tr key={p.id}>
                   <td className="font-medium">{p.po_number}</td>
                   <td className="text-red-600 font-bold">{p.lead_no || '-'}</td>
