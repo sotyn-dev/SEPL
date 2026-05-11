@@ -299,13 +299,44 @@ router.post('/expenses', (req, res) => {
 });
 
 router.put('/expenses/:id', (req, res) => {
-  const { status } = req.body;
+  // Two flows mam uses, both go through this endpoint:
+  //   (1) edit the expense details (title/description/amount/category/date)
+  //   (2) change status (approve / reject / mark paid / un-mark paid)
+  // Body may contain any subset; missing fields are preserved.
+  const { title, description, amount, category, expense_date, status } = req.body;
   const db = getDb();
-  const updates = { status };
-  if (status === 'approved') updates.approved_by = req.user.id;
-  if (status === 'paid') updates.paid_date = new Date().toISOString().split('T')[0];
-  db.prepare('UPDATE expenses SET status=?, approved_by=?, paid_date=? WHERE id=?')
-    .run(updates.status, updates.approved_by || null, updates.paid_date || null, req.params.id);
+  const existing = db.prepare('SELECT * FROM expenses WHERE id=?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Not found' });
+
+  const next = {
+    title: title !== undefined ? title : existing.title,
+    description: description !== undefined ? description : existing.description,
+    amount: amount !== undefined ? +amount : existing.amount,
+    category: category !== undefined ? category : existing.category,
+    expense_date: expense_date !== undefined ? expense_date : existing.expense_date,
+    status: status !== undefined ? status : existing.status,
+    approved_by: existing.approved_by,
+    paid_date: existing.paid_date,
+  };
+
+  if (status !== undefined && status !== existing.status) {
+    // Forward transitions stamp; reverse transitions clear so audit isn't misleading.
+    if (status === 'approved') {
+      next.approved_by = req.user.id;
+      if (existing.status === 'paid') next.paid_date = null; // un-mark paid
+    } else if (status === 'paid') {
+      next.paid_date = new Date().toISOString().split('T')[0];
+    } else if (status === 'pending') {
+      next.approved_by = null;
+      next.paid_date = null;
+    } else if (status === 'rejected') {
+      next.approved_by = req.user.id;
+      next.paid_date = null;
+    }
+  }
+
+  db.prepare(`UPDATE expenses SET title=?, description=?, amount=?, category=?, expense_date=?, status=?, approved_by=?, paid_date=? WHERE id=?`)
+    .run(next.title, next.description, next.amount, next.category, next.expense_date, next.status, next.approved_by, next.paid_date, req.params.id);
   res.json({ message: 'Updated' });
 });
 

@@ -4,22 +4,44 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTrash2 } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiEdit2, FiRotateCcw } from 'react-icons/fi';
 
 export default function Expenses() {
   const { canDelete } = useAuth();
   const [expenses, setExpenses] = useState([]);
   const [modal, setModal] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({});
 
   const load = () => api.get('/hr/expenses').then(r => setExpenses(r.data));
   useEffect(() => { load(); }, []);
 
+  const openNew = () => {
+    setEditingId(null);
+    setForm({ title: '', description: '', amount: 0, category: '', expense_date: new Date().toISOString().split('T')[0] });
+    setModal(true);
+  };
+
+  const openEdit = (e) => {
+    setEditingId(e.id);
+    setForm({ title: e.title || '', description: e.description || '', amount: e.amount || 0, category: e.category || '', expense_date: e.expense_date || '' });
+    setModal(true);
+  };
+
   const save = async (e) => {
     e.preventDefault();
-    await api.post('/hr/expenses', form);
-    toast.success('Expense submitted');
-    setModal(false); load();
+    try {
+      if (editingId) {
+        await api.put(`/hr/expenses/${editingId}`, form);
+        toast.success('Expense updated');
+      } else {
+        await api.post('/hr/expenses', form);
+        toast.success('Expense submitted');
+      }
+      setModal(false); load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Save failed');
+    }
   };
 
   const updateStatus = async (id, status) => {
@@ -32,7 +54,7 @@ export default function Expenses() {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h3 className="font-semibold">Expense Management</h3>
-        <button onClick={() => { setForm({ title: '', description: '', amount: 0, category: '', expense_date: new Date().toISOString().split('T')[0] }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit Expense</button>
+        <button onClick={openNew} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit Expense</button>
       </div>
 
       {/* Summary Cards */}
@@ -67,14 +89,34 @@ export default function Expenses() {
               <td>{e.submitted_by_name}</td>
               <td><StatusBadge status={e.status} /></td>
               <td>
-                <div className="flex gap-1 items-center">
+                <div className="flex gap-1 items-center flex-wrap">
                   {e.status === 'pending' && (
                     <>
                       <button onClick={() => updateStatus(e.id, 'approved')} className="btn btn-success text-xs py-1 px-2">Approve</button>
                       <button onClick={() => updateStatus(e.id, 'rejected')} className="btn btn-danger text-xs py-1 px-2">Reject</button>
                     </>
                   )}
-                  {e.status === 'approved' && <button onClick={() => updateStatus(e.id, 'paid')} className="btn btn-primary text-xs py-1 px-2">Mark Paid</button>}
+                  {e.status === 'approved' && (
+                    <button onClick={() => updateStatus(e.id, 'paid')} className="btn btn-primary text-xs py-1 px-2">Mark Paid</button>
+                  )}
+                  {/* Reverse a wrongly-applied status. "Un-mark Paid" puts the
+                      expense back to Approved (clears paid_date). "Re-open"
+                      sends a Rejected expense back to Pending so it can be
+                      reconsidered. */}
+                  {e.status === 'paid' && (
+                    <button onClick={() => {
+                      if (!confirm(`Un-mark "${e.title}" as paid? It will go back to Approved.`)) return;
+                      updateStatus(e.id, 'approved');
+                    }} className="btn btn-secondary text-xs py-1 px-2 flex items-center gap-1" title="Un-mark Paid">
+                      <FiRotateCcw size={12} /> Un-mark Paid
+                    </button>
+                  )}
+                  {e.status === 'rejected' && (
+                    <button onClick={() => updateStatus(e.id, 'pending')} className="btn btn-secondary text-xs py-1 px-2 flex items-center gap-1" title="Re-open">
+                      <FiRotateCcw size={12} /> Re-open
+                    </button>
+                  )}
+                  <button onClick={() => openEdit(e)} className="p-1 text-gray-500 hover:text-red-600" title="Edit"><FiEdit2 size={14} /></button>
                   {canDelete('expenses') && <button onClick={async () => {
                     if (!confirm(`Delete expense "${e.title}"?`)) return;
                     try { await api.delete(`/hr/expenses/${e.id}`); toast.success('Deleted'); load(); }
@@ -88,7 +130,7 @@ export default function Expenses() {
         </tbody>
       </table></div>
 
-      <Modal isOpen={modal} onClose={() => setModal(false)} title="Submit Expense">
+      <Modal isOpen={modal} onClose={() => setModal(false)} title={editingId ? 'Edit Expense' : 'Submit Expense'}>
         <form onSubmit={save} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -120,7 +162,7 @@ export default function Expenses() {
             <div><label className="label">Amount (Rs) *</label><input className="input" type="number" required value={form.amount || 0} onChange={e => setForm({...form, amount: +e.target.value})} /></div>
             <div><label className="label">Date *</label><input className="input" type="date" required value={form.expense_date || ''} onChange={e => setForm({...form, expense_date: e.target.value})} /></div>
           </div>
-          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Submit</button></div>
+          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editingId ? 'Update' : 'Submit'}</button></div>
         </form>
       </Modal>
     </div>
