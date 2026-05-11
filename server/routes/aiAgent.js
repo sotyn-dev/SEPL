@@ -275,19 +275,27 @@ Guidance:
   }
   messages.push({ role: 'user', content: question });
 
+  // Adaptive thinking + the `effort` parameter are only supported on the
+  // Opus/Sonnet 4.6+ family. Haiku 4.5 (and older Sonnet 4.5) 400 with
+  // "adaptive thinking is not supported on this model". Detect by ID
+  // prefix so the same call works on every model the UI offers.
+  const supportsAdaptive = /^claude-(opus-4-[67]|sonnet-4-6)/.test(model);
+  const baseParams = {
+    model,
+    max_tokens: 16000,
+    system: systemPrompt,
+    tools,
+  };
+  if (supportsAdaptive) {
+    baseParams.thinking = { type: 'adaptive' };
+    baseParams.output_config = { effort: 'high' };
+  }
+
   const sqlRuns = [];
   let response;
   try {
     for (let iter = 0; iter < MAX_TOOL_ITER; iter++) {
-      response = await client.messages.create({
-        model,
-        max_tokens: 16000,
-        system: systemPrompt,
-        tools,
-        messages,
-        thinking: { type: 'adaptive' },
-        output_config: { effort: 'high' },
-      });
+      response = await client.messages.create({ ...baseParams, messages });
 
       if (response.stop_reason === 'end_turn' || response.stop_reason === 'refusal') break;
 
