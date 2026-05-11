@@ -75,6 +75,41 @@ router.post('/', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
+// ------- EDIT request details (raiser or admin) -------
+// Only the item-description fields can be changed here — vendor quotes and
+// finalize state have their own endpoints. Locked after the item has been
+// promoted to Item Master so the master row's source-of-truth doesn't drift.
+router.put('/:id', (req, res) => {
+  const db = getDb();
+  const cur = db.prepare('SELECT raised_by, status FROM price_requests WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const isOwner = cur.raised_by === req.user.id;
+  if (!(req.user.role === 'admin' || isOwner)) return res.status(403).json({ error: 'Not allowed' });
+  if (cur.status === 'added') return res.status(400).json({ error: 'Cannot edit after item promoted to master' });
+
+  const b = req.body || {};
+  if (b.item_name !== undefined && !String(b.item_name).trim()) {
+    return res.status(400).json({ error: 'Item name is required' });
+  }
+  // Pull current row to preserve fields the form didn't send.
+  const full = db.prepare('SELECT * FROM price_requests WHERE id=?').get(req.params.id);
+  db.prepare(`UPDATE price_requests SET
+      site_name=?, item_name=?, size=?, specification=?, make=?, uom=?, item_type=?, department=?, notes=?
+    WHERE id=?`).run(
+    b.site_name !== undefined ? b.site_name : full.site_name,
+    b.item_name !== undefined ? String(b.item_name).trim() : full.item_name,
+    b.size !== undefined ? b.size : full.size,
+    b.specification !== undefined ? b.specification : full.specification,
+    b.make !== undefined ? b.make : full.make,
+    b.uom !== undefined ? b.uom : full.uom,
+    b.item_type !== undefined ? b.item_type : full.item_type,
+    b.department !== undefined ? b.department : full.department,
+    b.notes !== undefined ? b.notes : full.notes,
+    req.params.id,
+  );
+  res.json({ message: 'Updated' });
+});
+
 // ------- DELETE (raiser or admin) -------
 router.delete('/:id', (req, res) => {
   const db = getDb();

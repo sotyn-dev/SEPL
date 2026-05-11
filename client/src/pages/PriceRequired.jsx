@@ -4,7 +4,7 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTrash2, FiCheckCircle, FiTag } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiCheckCircle, FiTag, FiEdit2 } from 'react-icons/fi';
 
 // Price Required — workflow:
 //   1. Site engineer raises a request for a new item not yet in Item Master.
@@ -23,6 +23,7 @@ export default function PriceRequired() {
   const [sites, setSites] = useState([]);
 
   const [createModal, setCreateModal] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', department: '', notes: '' });
   // Distinct departments pulled from Item Master so the dropdown matches the
   // catalog (CIVIL / ELE / FF / GEN / etc.). Auto-fetched when the page loads.
@@ -54,12 +55,40 @@ export default function PriceRequired() {
     e.preventDefault();
     if (!form.item_name || !form.item_name.trim()) return toast.error('Item name is required');
     try {
-      await api.post('/price-requests', form);
-      toast.success('Price request raised — purchase team will quote it');
+      if (editingId) {
+        await api.put(`/price-requests/${editingId}`, form);
+        toast.success('Price request updated');
+      } else {
+        await api.post('/price-requests', form);
+        toast.success('Price request raised — purchase team will quote it');
+      }
       setCreateModal(false);
+      setEditingId(null);
       setForm({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', department: '', notes: '' });
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  const openEdit = (r) => {
+    setEditingId(r.id);
+    setForm({
+      site_name: r.site_name || '',
+      item_name: r.item_name || '',
+      size: r.size || '',
+      specification: r.specification || '',
+      make: r.make || '',
+      uom: r.uom || 'PCS',
+      item_type: r.item_type || 'PO',
+      department: r.department || '',
+      notes: r.notes || '',
+    });
+    setCreateModal(true);
+  };
+
+  const openNew = () => {
+    setEditingId(null);
+    setForm({ site_name: '', item_name: '', size: '', specification: '', make: '', uom: 'PCS', item_type: 'PO', department: '', notes: '' });
+    setCreateModal(true);
   };
 
   const updateRate = async (anchorId, patch) => {
@@ -123,7 +152,7 @@ export default function PriceRequired() {
             Raise items missing from the catalog. Purchase team gets 3 vendor quotes, picks the final rate, and the item is added to Item Master automatically.
           </p>
         </div>
-        <button onClick={() => setCreateModal(true)} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center"><FiPlus /> Raise Price Request</button>
+        <button onClick={openNew} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center"><FiPlus /> Raise Price Request</button>
       </div>
 
       <div className="flex gap-2 flex-wrap">
@@ -266,7 +295,10 @@ export default function PriceRequired() {
                   <td className="px-3 py-2">{statusBadge(r.status)}</td>
                   <td className="px-3 py-2 text-right">
                     {r.status !== 'added' && (r.raised_by === user?.id || isAdmin()) && (
-                      <button onClick={() => remove(r.id)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>
+                      <span className="inline-flex gap-1">
+                        <button onClick={() => openEdit(r)} className="p-1 text-gray-500 hover:text-amber-600" title="Edit"><FiEdit2 size={14} /></button>
+                        <button onClick={() => remove(r.id)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>
+                      </span>
                     )}
                     {r.status === 'added' && r.item_master_id && (
                       <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700" title="Click Item Master in sidebar to view">
@@ -290,7 +322,7 @@ export default function PriceRequired() {
       )}
 
       {/* RAISE MODAL */}
-      <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="Raise Price Request" wide>
+      <Modal isOpen={createModal} onClose={() => { setCreateModal(false); setEditingId(null); }} title={editingId ? 'Edit Price Request' : 'Raise Price Request'} wide>
         <form onSubmit={submit} className="space-y-3">
           <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
             For items NOT yet in the Item Master. Purchase team will collect 3 vendor quotes, pick a final rate, and the item will be added to Master automatically.
@@ -356,8 +388,8 @@ export default function PriceRequired() {
             </div>
           </div>
           <div className="flex justify-end gap-3">
-            <button type="button" onClick={() => setCreateModal(false)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">Submit Request</button>
+            <button type="button" onClick={() => { setCreateModal(false); setEditingId(null); }} className="btn btn-secondary">Cancel</button>
+            <button type="submit" className="btn btn-primary">{editingId ? 'Update Request' : 'Submit Request'}</button>
           </div>
         </form>
       </Modal>
