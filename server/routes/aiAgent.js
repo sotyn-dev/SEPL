@@ -7,7 +7,7 @@
 
 const express = require('express');
 const { getDb } = require('../db/schema');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -31,7 +31,8 @@ function adminOnly(req, res, next) {
 // GET /api/ai-agent/rate-suggestion?item_id=&lead_id=
 // Returns last-quoted-to-this-client + 6-month stats across all clients.
 // Both null when no history exists for that item (UI hides the panel).
-router.get('/rate-suggestion', (req, res) => {
+// Gated by 'quotations' perms — the popup only renders inside the BOQ form.
+router.get('/rate-suggestion', requirePermission('quotations', 'view'), (req, res) => {
   const itemId = +req.query.item_id;
   const leadId = req.query.lead_id ? +req.query.lead_id : null;
   if (!itemId) return res.status(400).json({ error: 'item_id required' });
@@ -86,7 +87,7 @@ router.get('/rate-suggestion', (req, res) => {
 // GET /api/ai-agent/item-history?item_id=&limit=20
 // Full historical log for an item — used by the AI Agent page (later)
 // and useful for "show me the rate trend" view.
-router.get('/item-history', (req, res) => {
+router.get('/item-history', requirePermission('quotations', 'view'), (req, res) => {
   const itemId = +req.query.item_id;
   const limit = Math.min(+req.query.limit || 20, 100);
   if (!itemId) return res.status(400).json({ error: 'item_id required' });
@@ -125,10 +126,9 @@ router.put('/settings', adminOnly, (req, res) => {
   res.json({ message: 'AI settings saved' });
 });
 
-// Lets any logged-in user check if the chatbot is configured (so the UI
-// can show "configured by admin" vs "ask admin to set up" without
-// leaking the key).
-router.get('/status', (req, res) => {
+// Lets users with ai_agent.view check if the chatbot is configured so
+// the floating bubble can render only for permitted users.
+router.get('/status', requirePermission('ai_agent', 'view'), (req, res) => {
   res.json({ configured: !!getSetting('ai_api_key') });
 });
 
@@ -203,7 +203,7 @@ function safeRunQuery(db, sql) {
   }
 }
 
-router.post('/ask', async (req, res) => {
+router.post('/ask', requirePermission('ai_agent', 'view'), async (req, res) => {
   const apiKey = getSetting('ai_api_key');
   if (!apiKey) {
     return res.status(400).json({

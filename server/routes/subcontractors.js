@@ -4,13 +4,13 @@
 
 const express = require('express');
 const { getDb } = require('../db/schema');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
 // GET list — optional filters: q (name/number/type search), state,
 // contractor_type, active=0|1 (default: active only).
-router.get('/', (req, res) => {
+router.get('/', requirePermission('sub_contractors', 'view'), (req, res) => {
   const { q, state, contractor_type, active } = req.query;
   let sql = 'SELECT * FROM sub_contractors WHERE 1=1';
   const params = [];
@@ -30,7 +30,7 @@ router.get('/', (req, res) => {
   res.json(getDb().prepare(sql).all(...params));
 });
 
-router.get('/:id', (req, res) => {
+router.get('/:id', requirePermission('sub_contractors', 'view'), (req, res) => {
   const row = getDb().prepare('SELECT * FROM sub_contractors WHERE id=?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
   res.json(row);
@@ -42,7 +42,7 @@ const num = (v) => {
 };
 const bool01 = (v) => (v === true || v === 1 || v === '1' || v === 'yes' || v === 'Yes') ? 1 : 0;
 
-router.post('/', (req, res) => {
+router.post('/', requirePermission('sub_contractors', 'create'), (req, res) => {
   const b = req.body || {};
   if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: 'Name is required' });
   const r = getDb().prepare(
@@ -72,7 +72,7 @@ router.post('/', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put('/:id', (req, res) => {
+router.put('/:id', requirePermission('sub_contractors', 'edit'), (req, res) => {
   const b = req.body || {};
   const existing = getDb().prepare('SELECT id FROM sub_contractors WHERE id=?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Not found' });
@@ -106,15 +106,14 @@ router.put('/:id', (req, res) => {
 });
 
 // Toggle active (soft-delete pattern — preserves historical references).
-router.patch('/:id/active', (req, res) => {
+router.patch('/:id/active', requirePermission('sub_contractors', 'edit'), (req, res) => {
   const next = req.body?.active ? 1 : 0;
   const r = getDb().prepare('UPDATE sub_contractors SET active=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(next, req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: next ? 'Activated' : 'Deactivated' });
 });
 
-router.delete('/:id', (req, res) => {
-  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+router.delete('/:id', requirePermission('sub_contractors', 'delete'), (req, res) => {
   const r = getDb().prepare('DELETE FROM sub_contractors WHERE id=?').run(req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ message: 'Deleted' });

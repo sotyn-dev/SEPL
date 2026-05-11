@@ -22,6 +22,7 @@ const ALL_MODULES = [
   { key: 'item_master', label: 'Item Master' },
   { key: 'orders', label: 'Orders & Planning' },
   { key: 'vendors', label: 'Vendors' },
+  { key: 'sub_contractors', label: 'Sub-Contractors' },
   { key: 'customers', label: 'Customers' },
   { key: 'procurement', label: 'Indent to Dispatch' },
   { key: 'inventory', label: 'Inventory' },
@@ -40,6 +41,9 @@ const ALL_MODULES = [
   { key: 'expenses', label: 'Expenses' },
   { key: 'indent_fms', label: 'Indent FMS (legacy)' },
   { key: 'pms_tasks', label: 'PMS Tasks' },
+  // AI Agent — gates the floating "Ask ERP" chat bubble. Off by default for
+  // new roles so the chatbot only appears for staff mam explicitly enables.
+  { key: 'ai_agent', label: 'AI Agent (Ask ERP)' },
   { key: 'users', label: 'User Management' },
 ];
 
