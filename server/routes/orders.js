@@ -298,46 +298,65 @@ router.post('/po/:id/items', (req, res) => {
   // can proceed. The indent still exists, it just loses its back-link to
   // the specific po_items row (indent keeps its own qty/desc).
   if (bbId) {
-    // Tables that have FOREIGN KEY → po_items(id). Each one must have its
-    // po_item_id NULL-ed for rows that reference po_items belonging to
-    // this business_book, otherwise the DELETE FROM po_items below blows
-    // up with "FOREIGN KEY constraint failed" (mam: 296-item PO 1111111111
-    // would not save). We wrap individually so a missing table on older
-    // DBs is non-fatal — but if the table EXISTS and the UPDATE itself
-    // throws, we still want to know, so the error is logged AND surfaced.
-    const dependents = ['indent_items', 'dpr_installation', 'dpr_material'];
-    const dependentErrors = [];
-    for (const depTable of dependents) {
+    // Self-heal + diagnose. Ask SQLite itself which tables have a FOREIGN
+    // KEY to po_items (instead of hard-coding the list — mam's prod hit
+    // FK violations even after we nulled the 3 known dependents because
+    // a 4th table existed that we didn't know about). Then null po_item_id
+    // on every discovered table for rows pointing at this PO's items, so
+    // the DELETE always succeeds in normal operation.
+    //
+    // PRAGMA foreign_key_list(<table>) returns the FK targets FROM that
+    // table. We walk every table once and collect any whose target is
+    // po_items, keeping the discovered column name for the null-out.
+    const allTables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    ).all().map(r => r.name);
+
+    const referencers = []; // { table, column }
+    for (const t of allTables) {
       try {
-        const tblExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(depTable);
-        if (!tblExists) continue;
+        const fks = db.prepare(`PRAGMA foreign_key_list(${t})`).all();
+        for (const fk of fks) {
+          if (fk.table === 'po_items') referencers.push({ table: t, column: fk.from });
+        }
+      } catch (_) { /* unreadable table — skip */ }
+    }
+
+    const nullErrors = [];
+    for (const { table, column } of referencers) {
+      try {
         db.prepare(
-          `UPDATE ${depTable} SET po_item_id=NULL
-           WHERE po_item_id IN (SELECT id FROM po_items WHERE business_book_id=?)`
+          `UPDATE ${table} SET ${column}=NULL
+           WHERE ${column} IN (SELECT id FROM po_items WHERE business_book_id=?)`
         ).run(bbId);
       } catch (e) {
-        console.warn(`[PO items save] could not null ${depTable}.po_item_id:`, e.message);
-        dependentErrors.push(`${depTable}: ${e.message}`);
+        console.warn(`[PO items save] could not null ${table}.${column}:`, e.message);
+        nullErrors.push(`${table}.${column}: ${e.message}`);
       }
     }
+
     try {
       db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(bbId);
     } catch (e) {
-      // Diagnose: count any rows in known dependents still pointing at this PO's items
+      // If the DELETE STILL fails, something we don't understand is blocking.
+      // Count remaining refs on every discovered referencer + log everything
+      // so the next iteration has full picture (mam can screenshot the toast).
       const remaining = {};
-      for (const depTable of dependents) {
+      for (const { table, column } of referencers) {
         try {
           const r = db.prepare(
-            `SELECT COUNT(*) AS n FROM ${depTable}
-             WHERE po_item_id IN (SELECT id FROM po_items WHERE business_book_id=?)`
+            `SELECT COUNT(*) AS n FROM ${table}
+             WHERE ${column} IN (SELECT id FROM po_items WHERE business_book_id=?)`
           ).get(bbId);
-          if (r?.n > 0) remaining[depTable] = r.n;
+          if (r?.n > 0) remaining[`${table}.${column}`] = r.n;
         } catch (_) {}
       }
+      const knownList = referencers.map(r => `${r.table}.${r.column}`).join(', ') || '(none discovered)';
       const hint = Object.keys(remaining).length
-        ? ' Linked rows still reference these items: ' + Object.entries(remaining).map(([t, n]) => `${t}(${n})`).join(', ') + '.'
-        : '';
-      console.error('[PO items save] DELETE failed:', e.message, '| remaining refs:', remaining, '| update errors:', dependentErrors);
+        ? ' Still blocking: ' + Object.entries(remaining).map(([k, n]) => `${k}(${n})`).join(', ') + '.'
+        : ` (no remaining refs found across discovered FKs: ${knownList}) — likely a trigger or CHECK constraint. Check pm2 logs for details.`;
+      console.error('[PO items save] DELETE failed:', e.message, '| bbId:', bbId,
+        '| referencers:', referencers, '| remaining:', remaining, '| nullErrors:', nullErrors);
       return res.status(409).json({
         error: `Cannot replace items: existing indents / DPR entries reference these PO items.${hint} Clear or reassign those entries first.`,
       });
