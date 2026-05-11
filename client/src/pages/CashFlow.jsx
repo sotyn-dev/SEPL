@@ -32,7 +32,7 @@ export default function CashFlow() {
 
   const load = () => {
     api.get('/cashflow/projects').then(r => { setProjects(r.data.projects); setSummary(r.data.summary); }).catch(() => {});
-    api.get('/cashflow/summary').then(r => setDailySummary(r.data)).catch(() => {});
+    api.get('/cashflow/summary', { params: { date: selectedDate } }).then(r => setDailySummary(r.data)).catch(() => {});
     api.get(`/cashflow/entries/${selectedDate}`).then(r => setEntries(r.data)).catch(() => {});
   };
   useEffect(() => { load(); }, [selectedDate]);

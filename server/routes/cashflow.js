@@ -196,16 +196,30 @@ router.get('/today', (req, res) => {
 router.get('/summary', (req, res) => {
   const db = getDb();
   const today = new Date().toISOString().split('T')[0];
-  const todayData = db.prepare('SELECT * FROM cash_flow_daily WHERE date = ?').get(today);
+  // Mam: "upper why not showing" — the top 4 cards used to be hard-wired
+  // to today's row only and stayed at Rs 0 whenever the user picked a
+  // different date. Now they reflect the date the client asks for
+  // (?date=YYYY-MM-DD); when no row exists for that date we derive the
+  // opening = closing from the most recent prior day so the numbers
+  // make sense even for days nobody recorded entries.
+  const targetDate = req.query.date || today;
+  let rowData = db.prepare('SELECT * FROM cash_flow_daily WHERE date = ?').get(targetDate);
+  if (!rowData) {
+    const prev = db.prepare('SELECT closing_balance FROM cash_flow_daily WHERE date < ? ORDER BY date DESC LIMIT 1').get(targetDate);
+    const carry = prev?.closing_balance || 0;
+    rowData = { date: targetDate, opening_balance: carry, total_inflows: 0, total_outflows: 0, closing_balance: carry };
+  }
   const last7 = db.prepare('SELECT * FROM cash_flow_daily ORDER BY date DESC LIMIT 7').all();
-  const monthStart = today.substring(0, 7) + '-01';
+  const monthStart = targetDate.substring(0, 7) + '-01';
   const monthInflow = db.prepare("SELECT COALESCE(SUM(amount),0) as total FROM cash_flow_entries WHERE date >= ? AND type = 'inflow'").get(monthStart);
   const monthOutflow = db.prepare("SELECT COALESCE(SUM(amount),0) as total FROM cash_flow_entries WHERE date >= ? AND type = 'outflow'").get(monthStart);
   res.json({
-    today: todayData || { opening_balance: 0, total_inflows: 0, total_outflows: 0, closing_balance: 0 },
+    // Field name stays `today` for frontend compatibility — it's the
+    // selected-date row now, not literal today.
+    today: rowData,
     last7Days: last7,
     monthlyInflow: monthInflow.total,
-    monthlyOutflow: monthOutflow.total
+    monthlyOutflow: monthOutflow.total,
   });
 });
 
