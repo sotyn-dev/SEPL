@@ -184,11 +184,18 @@ export default function Orders() {
               setModal('po');
             }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add PO</button>
           </div>
-          {poFilter && (
-            <div className="text-xs text-gray-500">
-              Showing {pos.filter(p => poMatches(p, poFilter)).length} of {pos.length} POs matching "{poFilter}"
-            </div>
-          )}
+          {poFilter && (() => {
+            const matched = pos.filter(p => poMatches(p, poFilter));
+            const totalAmount = matched.reduce((s, p) => s + (+p.total_amount || 0), 0);
+            return (
+              <div className="text-xs text-gray-500 flex flex-wrap gap-x-3 gap-y-1 items-center">
+                <span>Showing <b>{matched.length}</b> of {pos.length} POs matching "{poFilter}"</span>
+                <span className="text-gray-700">
+                  PO Total: <b className="text-red-700">Rs {totalAmount.toLocaleString('en-IN')}</b>
+                </span>
+              </div>
+            );
+          })()}
           <div className="card p-0 overflow-x-auto"><table>
             <thead><tr><th>PO Number</th><th>Lead No</th><th>Client</th><th>Project</th><th>Category</th><th>Date</th><th>Amount</th><th>Site Engineer</th><th>CRM</th><th>PO Copy</th><th>BOQ File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
