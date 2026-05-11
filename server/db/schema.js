@@ -288,6 +288,24 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Item rate history — every time staff enters a rate for an item
+    -- in a BOQ row that's linked to item_master, we log it here so
+    -- everyone gets last-rate + 6-month avg/low/high suggestions
+    -- next time they quote the same item (mam: AI Agent feature).
+    CREATE TABLE IF NOT EXISTS item_price_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id INTEGER NOT NULL REFERENCES item_master(id) ON DELETE CASCADE,
+      rate REAL NOT NULL,
+      quantity REAL DEFAULT 0,
+      lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+      company_name TEXT,
+      boq_id INTEGER REFERENCES boq(id) ON DELETE SET NULL,
+      source TEXT DEFAULT 'boq',
+      created_by INTEGER REFERENCES users(id),
+      created_by_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Business Book (Master New Business Booked Sheet - matches Google Form/Excel)
     CREATE TABLE IF NOT EXISTS business_book (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2110,6 +2128,11 @@ function initializeDatabase() {
     // Optional attachment (brief / drawing / photo / doc) the creator can
     // attach when assigning the task. Stored as a /uploads/<name> URL.
     ['delegations', 'attachment_url TEXT'],
+    // AI Agent: link a BOQ row back to a catalogue item so quotation
+    // rates feed item_price_history and the rate-suggestion popup can
+    // show last-quoted / 6-month avg-low-high for that exact item.
+    // Optional — free-text descriptions still work for one-off items.
+    ['boq_items', 'item_id INTEGER REFERENCES item_master(id)'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}
@@ -2303,6 +2326,12 @@ function initializeDatabase() {
     // Complaints
     'CREATE INDEX IF NOT EXISTS idx_cmp_status ON complaints(status)',
     'CREATE INDEX IF NOT EXISTS idx_cmp_category ON complaints(category)',
+    // AI Agent item-rate history — speeds up the rate-suggestion popup
+    // (last quoted to this client / 6-month avg-low-high per item).
+    'CREATE INDEX IF NOT EXISTS idx_iph_item_date ON item_price_history(item_id, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_iph_item_lead ON item_price_history(item_id, lead_id)',
+    'CREATE INDEX IF NOT EXISTS idx_iph_item_company ON item_price_history(item_id, company_name)',
+    'CREATE INDEX IF NOT EXISTS idx_boqi_item ON boq_items(item_id)',
   ];
   for (const sql of safeIndexes) {
     try { db.exec(sql); } catch (e) { /* column missing on a stale DB — non-fatal */ }

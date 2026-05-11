@@ -49,7 +49,22 @@
       "Bash(node --check server/scripts/backfill-audit.js)",
       "Bash(node server/scripts/backfill-audit.js)",
       "Bash(node --check server/db/schema.js)",
-      "Bash(xargs ls *)"
+      "Bash(xargs ls *)",
+      "Bash(Get-ChildItem -Path C:\\\\Users\\\\admin\\\\Desktop\\\\business-erp -Recurse -Depth 2 -Directory)",
+      "Bash(Select-Object -First 30)",
+      "Bash(Format-Table FullName)",
+      "Bash(node -e \"require\\('./server/routes/aiAgent.js'\\); console.log\\('aiAgent OK'\\)\")",
+      "Bash(node -c server/index.js)",
+      "Bash(node -c server/routes/quotations.js)",
+      "Bash(node -c server/db/schema.js)",
+      "Bash(node -c server/routes/aiAgent.js)",
+      "Bash(node -c server/routes/orders.js)",
+      "Bash(node --check client/src/pages/Quotations.jsx)",
+      "Bash(NODE_TLS_REJECT_UNAUTHORIZED=0 npm install --no-audit --no-fund --prefer-offline)",
+      "Bash(NODE_TLS_REJECT_UNAUTHORIZED=0 npm install --no-audit --no-fund --prefer-offline --prefix client)",
+      "Bash(npm config *)",
+      "Bash(npm rebuild *)",
+      "Bash(git check-ignore *)"
     ]
   }
 }

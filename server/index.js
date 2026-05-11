@@ -159,6 +159,7 @@ app.use('/api/admin/word-count', require('./routes/wordcount'));
 app.use('/api/admin/changelog', require('./routes/changelog'));
 app.use('/api/admin/locations', require('./routes/locations'));
 app.use('/api/inventory', require('./routes/inventory'));
+app.use('/api/ai-agent', require('./routes/aiAgent'));
 
 // 4 Critical Systems
 app.use('/api/cashflow', require('./routes/cashflow'));

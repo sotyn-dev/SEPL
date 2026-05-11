@@ -298,26 +298,50 @@ router.post('/po/:id/items', (req, res) => {
   // can proceed. The indent still exists, it just loses its back-link to
   // the specific po_items row (indent keeps its own qty/desc).
   if (bbId) {
-    try {
-      db.prepare(
-        `UPDATE indent_items SET po_item_id=NULL
-         WHERE po_item_id IN (SELECT id FROM po_items WHERE business_book_id=?)`
-      ).run(bbId);
-    } catch (e) {
-      console.warn('[PO items save] could not null indent_items.po_item_id:', e.message);
-    }
-    // Also null po_item_id on dpr_installation / dpr_material which also
-    // reference po_items(id) (from the schema). Wrapped in try/catch so
-    // missing tables don't kill the whole update.
-    for (const depTable of ['dpr_installation', 'dpr_material']) {
+    // Tables that have FOREIGN KEY → po_items(id). Each one must have its
+    // po_item_id NULL-ed for rows that reference po_items belonging to
+    // this business_book, otherwise the DELETE FROM po_items below blows
+    // up with "FOREIGN KEY constraint failed" (mam: 296-item PO 1111111111
+    // would not save). We wrap individually so a missing table on older
+    // DBs is non-fatal — but if the table EXISTS and the UPDATE itself
+    // throws, we still want to know, so the error is logged AND surfaced.
+    const dependents = ['indent_items', 'dpr_installation', 'dpr_material'];
+    const dependentErrors = [];
+    for (const depTable of dependents) {
       try {
+        const tblExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(depTable);
+        if (!tblExists) continue;
         db.prepare(
           `UPDATE ${depTable} SET po_item_id=NULL
            WHERE po_item_id IN (SELECT id FROM po_items WHERE business_book_id=?)`
         ).run(bbId);
-      } catch (e) { /* table might not exist in older DBs */ }
+      } catch (e) {
+        console.warn(`[PO items save] could not null ${depTable}.po_item_id:`, e.message);
+        dependentErrors.push(`${depTable}: ${e.message}`);
+      }
     }
-    db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(bbId);
+    try {
+      db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(bbId);
+    } catch (e) {
+      // Diagnose: count any rows in known dependents still pointing at this PO's items
+      const remaining = {};
+      for (const depTable of dependents) {
+        try {
+          const r = db.prepare(
+            `SELECT COUNT(*) AS n FROM ${depTable}
+             WHERE po_item_id IN (SELECT id FROM po_items WHERE business_book_id=?)`
+          ).get(bbId);
+          if (r?.n > 0) remaining[depTable] = r.n;
+        } catch (_) {}
+      }
+      const hint = Object.keys(remaining).length
+        ? ' Linked rows still reference these items: ' + Object.entries(remaining).map(([t, n]) => `${t}(${n})`).join(', ') + '.'
+        : '';
+      console.error('[PO items save] DELETE failed:', e.message, '| remaining refs:', remaining, '| update errors:', dependentErrors);
+      return res.status(409).json({
+        error: `Cannot replace items: existing indents / DPR entries reference these PO items.${hint} Clear or reassign those entries first.`,
+      });
+    }
   }
 
   // Build set of valid item_master ids up-front so we can skip dangling

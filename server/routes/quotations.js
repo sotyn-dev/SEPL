@@ -16,9 +16,26 @@ router.post('/boq', (req, res) => {
   const total = (items || []).reduce((s, i) => s + (i.quantity * i.rate), 0);
   const r = db.prepare('INSERT INTO boq (lead_id, title, drawing_required, total_amount, created_by) VALUES (?,?,?,?,?)')
     .run(lead_id, title, drawing_required ? 1 : 0, total, req.user.id);
-  const insertItem = db.prepare('INSERT INTO boq_items (boq_id, description, quantity, unit, rate, amount) VALUES (?,?,?,?,?,?)');
+  const insertItem = db.prepare('INSERT INTO boq_items (boq_id, description, quantity, unit, rate, amount, item_id) VALUES (?,?,?,?,?,?,?)');
+
+  // AI Agent: when a line item is linked to a catalogue item AND has a
+  // rate > 0, log it to item_price_history so everyone sees this rate
+  // as a suggestion next time. Also bump item_master.current_price to
+  // reflect the latest market rate the team is actually quoting.
+  const insertHistory = db.prepare(`INSERT INTO item_price_history
+    (item_id, rate, quantity, lead_id, company_name, boq_id, source, created_by, created_by_name)
+    VALUES (?,?,?,?,?,?,?,?,?)`);
+  const updateItemPrice = db.prepare('UPDATE item_master SET current_price=?, updated_at=CURRENT_TIMESTAMP WHERE id=?');
+  const lead = lead_id ? db.prepare('SELECT company_name FROM leads WHERE id=?').get(lead_id) : null;
+  const companyName = lead?.company_name || null;
+
   for (const i of (items || [])) {
-    insertItem.run(r.lastInsertRowid, i.description, i.quantity, i.unit, i.rate, i.quantity * i.rate);
+    const itemId = i.item_id ? +i.item_id : null;
+    insertItem.run(r.lastInsertRowid, i.description, i.quantity, i.unit, i.rate, i.quantity * i.rate, itemId);
+    if (itemId && i.rate > 0) {
+      insertHistory.run(itemId, i.rate, i.quantity || 0, lead_id || null, companyName, r.lastInsertRowid, 'boq', req.user.id, req.user.name || null);
+      updateItemPrice.run(i.rate, itemId);
+    }
   }
   res.status(201).json({ id: r.lastInsertRowid });
 });
