@@ -263,7 +263,11 @@ Guidance:
         required: ['query'],
       },
     },
-    { type: 'web_search_20260209', name: 'web_search' },
+    // allowed_callers: ['direct'] = use plain tool use, not programmatic
+    // tool calling (PTC). Haiku 4.5 doesn't support PTC, and PTC is the
+    // default for web_search_20260209 — without this Haiku 400s with
+    // "claude-haiku-4-5 does not support programmatic tool calling".
+    { type: 'web_search_20260209', name: 'web_search', allowed_callers: ['direct'] },
   ];
 
   // Build conversation history
