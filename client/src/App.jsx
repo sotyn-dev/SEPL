@@ -46,6 +46,7 @@ import WordCount from './pages/admin/WordCount';
 import Locations from './pages/admin/Locations';
 import CollectionsMD from './pages/admin/CollectionsMD';
 import AISettings from './pages/AISettings';
+import SubContractors from './pages/SubContractors';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -133,6 +134,7 @@ export default function App() {
         <Route path="admin/locations" element={<AdminRoute><Locations /></AdminRoute>} />
         <Route path="admin/collections-md" element={<AdminRoute><CollectionsMD /></AdminRoute>} />
         <Route path="admin/ai-settings" element={<AdminRoute><AISettings /></AdminRoute>} />
+        <Route path="sub-contractors" element={<ProtectedRoute><SubContractors /></ProtectedRoute>} />
       </Route>
     </Routes>
   );

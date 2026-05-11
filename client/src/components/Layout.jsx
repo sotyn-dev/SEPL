@@ -31,6 +31,7 @@ const menuItems = [
   { path: '/item-master', label: 'Item Master', icon: FiGrid, module: 'item_master' },
   { path: '/orders', label: 'Orders & Planning', icon: FiShoppingCart, module: 'orders' },
   { path: '/vendors', label: 'Vendors', icon: FiTruck, module: 'vendors' },
+  { path: '/sub-contractors', label: 'Sub-Contractors', icon: FiUserPlus, module: null },
   { path: '/customers', label: 'Customers', icon: FiUsers, module: 'customers' },
   { path: '/procurement', label: 'Indent to Dispatch', icon: FiPackage, module: 'procurement' },
   { path: '/price-required', label: 'Price Required', icon: LuIndianRupee, module: null },

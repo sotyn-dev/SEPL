@@ -2148,6 +2148,25 @@ function initializeDatabase() {
     // show last-quoted / 6-month avg-low-high for that exact item.
     // Optional — free-text descriptions still work for one-off items.
     ['boq_items', 'item_id INTEGER REFERENCES item_master(id)'],
+    // Sub-Contractor module (mam's "Sub-Contractor Form" Google-Form
+    // 47-entry workflow brought into ERP). Extends the existing
+    // sub_contractors table — legacy HR fields (phone, email,
+    // specialization, rate, rate_unit, status, notes) stay; these are
+    // added so the same row can carry the full Google-Form data.
+    ['sub_contractors', 'state TEXT'],
+    ['sub_contractors', 'district TEXT'],
+    ['sub_contractors', 'location_extra TEXT'],
+    ['sub_contractors', 'contractor_type TEXT'],
+    ['sub_contractors', 'experience_years INTEGER DEFAULT 0'],
+    ['sub_contractors', 'manpower INTEGER DEFAULT 0'],
+    ['sub_contractors', 'with_tools INTEGER DEFAULT 0'],
+    ['sub_contractors', 'has_gst INTEGER DEFAULT 0'],
+    ['sub_contractors', 'gst_number TEXT'],
+    ['sub_contractors', 'rate_in_budget TEXT'],
+    ['sub_contractors', 'start_within_days INTEGER DEFAULT 0'],
+    ['sub_contractors', 'active INTEGER DEFAULT 1'],
+    ['sub_contractors', 'created_by INTEGER REFERENCES users(id)'],
+    ['sub_contractors', 'updated_at DATETIME'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}
@@ -2349,6 +2368,9 @@ function initializeDatabase() {
     'CREATE INDEX IF NOT EXISTS idx_boqi_item ON boq_items(item_id)',
     // Multi-contractor DPR rows — fetched by dpr_id when loading a DPR detail
     'CREATE INDEX IF NOT EXISTS idx_dpr_contractors_dpr ON dpr_contractors(dpr_id)',
+    // Sub-contractor master list — filter by type/state when planning
+    'CREATE INDEX IF NOT EXISTS idx_sub_contractors_type ON sub_contractors(contractor_type, active)',
+    'CREATE INDEX IF NOT EXISTS idx_sub_contractors_state ON sub_contractors(state, district)',
   ];
   for (const sql of safeIndexes) {
     try { db.exec(sql); } catch (e) { /* column missing on a stale DB — non-fatal */ }

@@ -1,5 +1,5 @@
 node_modules/
-data/
+/data/
 .env
 client/dist/
 client/node_modules/
