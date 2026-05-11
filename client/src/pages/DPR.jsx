@@ -144,12 +144,14 @@ export default function DPR() {
   return (
     <div className="space-y-6">
       <div className="flex gap-2 flex-wrap">
-        {['dashboard', 'reports', 'sites'].map(t => (
+        {['dashboard', 'reports', 'sites', 'losses'].map(t => (
           <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'}`}>
-            {t === 'dashboard' ? 'Dashboard' : t === 'reports' ? 'Daily Reports' : 'Sites'}
+            {t === 'dashboard' ? 'Dashboard' : t === 'reports' ? 'Daily Reports' : t === 'sites' ? 'Sites' : 'Loss Reasons'}
           </button>
         ))}
       </div>
+
+      {tab === 'losses' && <LossReasonsTab />}
 
       {tab === 'dashboard' && (
         <>
@@ -793,6 +795,118 @@ export default function DPR() {
           </div>
         )}
       </Modal>
+    </div>
+  );
+}
+
+// LossReasonsTab — management dashboard for DPRs with profit_loss < 0.
+// Each row shows the site, date, loss amount, hindrance category + reason
+// the engineer filled in, plus a "consecutive loss days" streak. Rows
+// with streak >= 3 are highlighted red because they trigger the automatic
+// email to director@securedengineers.com.
+function LossReasonsTab() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all'); // 'all' | 'streak3' | 'pending'
+
+  const load = () => {
+    setLoading(true);
+    api.get('/dpr/loss-dashboard').then(r => setRows(r.data || []))
+      .catch(e => toast.error(e.response?.data?.error || 'Failed to load'))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, []);
+
+  const toggleAddressed = async (row, addressed) => {
+    let note = '';
+    if (addressed) {
+      note = prompt('Add a note about how this was followed up (optional)') || '';
+    }
+    try {
+      await api.patch(`/dpr/${row.id}/loss-addressed`, { addressed, note });
+      toast.success(addressed ? 'Marked as addressed' : 'Unmarked');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    }
+  };
+
+  const filtered = rows.filter(r => {
+    if (filter === 'streak3') return (r.consecutive_loss_days || 0) >= 3;
+    if (filter === 'pending') return !r.loss_addressed;
+    return true;
+  });
+
+  const streak3Count = rows.filter(r => (r.consecutive_loss_days || 0) >= 3 && !r.loss_addressed).length;
+  const totalLoss = rows.reduce((s, r) => s + (+r.profit_loss || 0), 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <button onClick={() => setFilter('all')} className={`card text-left ${filter === 'all' ? 'ring-2 ring-red-400' : ''}`}>
+          <div className="text-2xl font-bold text-gray-800">{rows.length}</div>
+          <div className="text-xs text-gray-500">All loss DPRs</div>
+        </button>
+        <button onClick={() => setFilter('streak3')} className={`card text-left ${filter === 'streak3' ? 'ring-2 ring-red-400' : ''}`}>
+          <div className="text-2xl font-bold text-red-700">{streak3Count}</div>
+          <div className="text-xs text-gray-500">3+ day streaks · pending — director gets emailed</div>
+        </button>
+        <button onClick={() => setFilter('pending')} className={`card text-left ${filter === 'pending' ? 'ring-2 ring-red-400' : ''}`}>
+          <div className="text-2xl font-bold text-amber-700">{rows.filter(r => !r.loss_addressed).length}</div>
+          <div className="text-xs text-gray-500">Pending follow-up</div>
+        </button>
+      </div>
+
+      <div className="card p-3 text-sm text-gray-600 flex items-center justify-between">
+        <div>Total loss across all rows: <span className="font-bold text-red-700">Rs {Math.abs(Math.round(totalLoss)).toLocaleString('en-IN')}</span></div>
+        <div className="text-xs">Email alerts go to <span className="font-mono">director@securedengineers.com</span> when a site hits 3 consecutive loss days.</div>
+      </div>
+
+      <div className="card p-0 overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Site</th><th>Date</th><th>Loss (P/L)</th><th>Hindrance</th><th>Reason filled by engineer</th>
+              <th>Streak</th><th>Submitted By</th><th>Followed Up?</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && <tr><td colSpan="8" className="text-center py-8 text-gray-400">Loading…</td></tr>}
+            {!loading && filtered.length === 0 && (
+              <tr><td colSpan="8" className="text-center py-8 text-gray-400">
+                {filter === 'all' ? 'No loss DPRs — every site is on track 🎉' : 'Nothing matches this filter.'}
+              </td></tr>
+            )}
+            {filtered.map(r => (
+              <tr key={r.id} className={(r.consecutive_loss_days || 0) >= 3 && !r.loss_addressed ? 'bg-red-50/60' : ''}>
+                <td className="font-medium">{r.site_name || `Site #${r.site_id}`}</td>
+                <td>{r.report_date}</td>
+                <td className="font-bold text-red-700">Rs {Math.abs(Math.round(+r.profit_loss || 0)).toLocaleString('en-IN')}</td>
+                <td>{r.hindrance_category || <span className="text-gray-400">-</span>}</td>
+                <td className="max-w-[320px] text-xs text-gray-700 whitespace-normal break-words" title={r.hindrances}>{r.hindrances || <span className="text-gray-400">-</span>}</td>
+                <td>
+                  {(r.consecutive_loss_days || 0) >= 3
+                    ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800"><FiAlertTriangle size={10} /> {r.consecutive_loss_days} DAYS</span>
+                    : <span className="text-xs text-gray-600">{r.consecutive_loss_days || 1} day{r.consecutive_loss_days > 1 ? 's' : ''}</span>}
+                </td>
+                <td className="text-xs">{r.submitted_by_name || '-'}</td>
+                <td>
+                  {r.loss_addressed ? (
+                    <div className="space-y-0.5">
+                      <button onClick={() => toggleAddressed(r, false)} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200" title={r.loss_addressed_note || ''}>
+                        <FiCheck size={10} /> Done by {r.addressed_by_name || '-'}
+                      </button>
+                      {r.loss_addressed_note && <div className="text-[10px] text-gray-500 max-w-[180px] truncate" title={r.loss_addressed_note}>{r.loss_addressed_note}</div>}
+                    </div>
+                  ) : (
+                    <button onClick={() => toggleAddressed(r, true)} className="text-xs btn btn-secondary py-0.5 px-2">Mark addressed</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

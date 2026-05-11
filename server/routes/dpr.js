@@ -510,11 +510,148 @@ router.post('/', (req, res) => {
     }
   }
 
+  // Fire-and-forget: if this DPR is a loss, check whether the site now
+  // has 3+ consecutive loss days and email director@securedengineers.com
+  // (mam's spec). Email failures must not break the DPR save itself.
+  if ((+profit_loss || 0) < 0) {
+    setImmediate(() => checkConsecutiveLossAndAlert(dprId, site_id).catch(e =>
+      console.warn('[dpr] loss-streak alert failed:', e.message)));
+  }
+
   res.status(201).json({ id: dprId, message: 'DPR submitted', stock_outs: stockOuts });
   } catch (err) {
     console.error('DPR submit error:', err.message);
     res.status(500).json({ error: err.message || 'Failed to submit DPR' });
   }
+});
+
+// Walk backwards from `asOfDate` and count consecutive days where the
+// site's net profit_loss (summed across any same-day DPRs) is < 0.
+// Stops at the first non-loss day or a missing date in the sequence.
+function consecutiveLossDays(db, siteId, asOfDate) {
+  // Aggregate per-day net P/L. Limits to the last 30 dates which is more
+  // than enough for our 3-day check and keeps the streak walk bounded.
+  const days = db.prepare(`SELECT report_date AS d, SUM(profit_loss) AS pl
+                           FROM dpr WHERE site_id=? AND report_date<=?
+                           GROUP BY report_date ORDER BY report_date DESC LIMIT 30`).all(siteId, asOfDate);
+  let streak = 0;
+  let cursor = asOfDate;
+  for (const row of days) {
+    if (row.d !== cursor) break;            // gap (missing day) — streak stops
+    if ((+row.pl || 0) >= 0) break;         // non-loss day — streak stops
+    streak += 1;
+    cursor = isoMinusOneDay(cursor);
+  }
+  return streak;
+}
+
+// Detect a 3+ day consecutive loss streak for `siteId` and email the
+// director if it just crossed the threshold (or just got longer than the
+// last alert we sent). Runs after each loss-DPR save.
+async function checkConsecutiveLossAndAlert(latestDprId, siteId) {
+  const db = getDb();
+  const latest = db.prepare(`SELECT d.id, d.report_date, d.profit_loss,
+                                    s.name AS site_name, s.client_name
+                             FROM dpr d LEFT JOIN sites s ON d.site_id=s.id
+                             WHERE d.id=?`).get(latestDprId);
+  if (!latest) return;
+
+  const streak = consecutiveLossDays(db, siteId, latest.report_date);
+  if (streak < 3) return;
+
+  // Dedupe: only send if this latest DPR's date is newer than the date we
+  // last alerted for on this site (any DPR row for this site carries the
+  // streak_alert_sent_for marker, so check the max across the site).
+  const lastAlertedFor = db.prepare(`SELECT MAX(streak_alert_sent_for) AS d FROM dpr WHERE site_id=?`).get(siteId).d;
+  if (lastAlertedFor && lastAlertedFor >= latest.report_date) return;
+
+  // Pull the 3 most recent loss rows for context.
+  const recent = db.prepare(`SELECT report_date, profit_loss, hindrance_category, hindrances
+                             FROM dpr WHERE site_id=?
+                             ORDER BY report_date DESC LIMIT 5`).all(siteId);
+
+  const totalLoss = recent.slice(0, streak).reduce((s, r) => s + (+r.profit_loss || 0), 0);
+  const siteName = latest.site_name || `Site #${siteId}`;
+  const subject = `[SEPL ERP] ${siteName} — ${streak} consecutive loss days (Rs ${Math.abs(Math.round(totalLoss)).toLocaleString('en-IN')} total)`;
+  const rowsHtml = recent.slice(0, streak).map(r =>
+    `<tr><td style="padding:6px 10px;border:1px solid #eee">${r.report_date}</td>` +
+    `<td style="padding:6px 10px;border:1px solid #eee;color:#b91c1c">Rs ${(+r.profit_loss||0).toLocaleString('en-IN')}</td>` +
+    `<td style="padding:6px 10px;border:1px solid #eee">${r.hindrance_category || '-'}</td>` +
+    `<td style="padding:6px 10px;border:1px solid #eee">${(r.hindrances || '-').replace(/</g,'&lt;')}</td></tr>`
+  ).join('');
+  const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#111">
+    <h2 style="color:#b91c1c;margin:0 0 6px 0">Loss streak alert — ${siteName}</h2>
+    <p>This site has reported a loss for <b>${streak} consecutive days</b>. Latest DPR for <b>${latest.report_date}</b>.</p>
+    <p>Cumulative loss across the streak: <b style="color:#b91c1c">Rs ${Math.abs(Math.round(totalLoss)).toLocaleString('en-IN')}</b></p>
+    <table style="border-collapse:collapse;font-size:13px;margin-top:6px">
+      <thead><tr style="background:#f3f4f6">
+        <th style="padding:6px 10px;border:1px solid #eee;text-align:left">Date</th>
+        <th style="padding:6px 10px;border:1px solid #eee;text-align:left">P/L</th>
+        <th style="padding:6px 10px;border:1px solid #eee;text-align:left">Hindrance Category</th>
+        <th style="padding:6px 10px;border:1px solid #eee;text-align:left">Reason</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <p style="margin-top:12px;color:#666;font-size:12px">Open the DPR module in SEPL ERP and switch to the <b>Loss Reasons</b> tab to follow up.</p>
+  </div>`;
+
+  const { sendEmail } = require('../lib/email');
+  const result = await sendEmail({ subject, html });
+  if (result?.sent) {
+    db.prepare('UPDATE dpr SET streak_alert_sent_for=? WHERE id=?').run(latest.report_date, latest.id);
+    console.log(`[dpr] loss-streak email sent: ${siteName} (${streak} days)`);
+  } else if (result?.skipped) {
+    console.log(`[dpr] loss-streak email skipped (${result.reason}): ${siteName} (${streak} days)`);
+  }
+}
+
+function isoMinusOneDay(iso) {
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().split('T')[0];
+}
+
+// Loss Reasons dashboard — every DPR with profit_loss < 0, latest first.
+// Includes `consecutive_loss_days` for the site as of that DPR's date so
+// the UI can show a streak badge and a 3+ days alert highlight.
+router.get('/loss-dashboard', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare(`SELECT d.id, d.site_id, d.report_date, d.profit_loss, d.grand_total_a,
+                                  d.grand_total_b, d.hindrance_category, d.hindrances,
+                                  d.loss_addressed, d.loss_addressed_at, d.loss_addressed_note,
+                                  s.name AS site_name, s.client_name,
+                                  u.name AS submitted_by_name, au.name AS addressed_by_name
+                           FROM dpr d
+                           LEFT JOIN sites s ON d.site_id=s.id
+                           LEFT JOIN users u ON d.submitted_by=u.id
+                           LEFT JOIN users au ON d.loss_addressed_by=au.id
+                           WHERE d.profit_loss < 0
+                           ORDER BY d.report_date DESC, d.id DESC`).all();
+
+  // Use the shared helper so the loss-dashboard streak count and the
+  // alert-on-submit streak count never diverge.
+  for (const r of rows) {
+    r.consecutive_loss_days = consecutiveLossDays(db, r.site_id, r.report_date);
+  }
+
+  res.json(rows);
+});
+
+// Mark a loss as followed-up / addressed.
+router.patch('/:id/loss-addressed', (req, res) => {
+  const db = getDb();
+  const { addressed, note } = req.body || {};
+  const next = addressed ? 1 : 0;
+  const r = db.prepare(`UPDATE dpr SET loss_addressed=?, loss_addressed_by=?, loss_addressed_at=?, loss_addressed_note=?
+                        WHERE id=?`).run(
+    next,
+    next ? req.user.id : null,
+    next ? new Date().toISOString() : null,
+    next ? (note || null) : null,
+    req.params.id,
+  );
+  if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ message: next ? 'Marked as addressed' : 'Unmarked' });
 });
 
 // Get DPR details

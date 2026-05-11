@@ -126,6 +126,57 @@ router.put('/settings', adminOnly, (req, res) => {
   res.json({ message: 'AI settings saved' });
 });
 
+// Email (SMTP) settings — also lives in app_settings. Admin-only;
+// password is never echoed back. Separate from the AI Agent settings
+// so the UI can show two clear panels even though both go through this
+// router. Recipient defaults to director@securedengineers.com (mam's
+// loss-streak alert target).
+router.get('/email-settings', adminOnly, (req, res) => {
+  const host = getSetting('email_smtp_host');
+  const user = getSetting('email_smtp_user');
+  const pass = getSetting('email_smtp_pass');
+  res.json({
+    host: host || '',
+    port: getSetting('email_smtp_port') || '587',
+    secure: getSetting('email_smtp_secure') === '1',
+    user: user || '',
+    from: getSetting('email_from') || '',
+    director_to: getSetting('email_director_to') || 'director@securedengineers.com',
+    pass_set: !!pass,
+    pass_masked: pass ? `${'•'.repeat(8)}${pass.slice(-2)}` : null,
+  });
+});
+
+router.put('/email-settings', adminOnly, (req, res) => {
+  const b = req.body || {};
+  if (b.host !== undefined) setSetting('email_smtp_host', String(b.host).trim());
+  if (b.port !== undefined) setSetting('email_smtp_port', String(b.port).trim() || '587');
+  if (b.secure !== undefined) setSetting('email_smtp_secure', b.secure ? '1' : '0');
+  if (b.user !== undefined) setSetting('email_smtp_user', String(b.user).trim());
+  if (typeof b.pass === 'string' && b.pass.trim()) setSetting('email_smtp_pass', b.pass.trim());
+  if (b.from !== undefined) setSetting('email_from', String(b.from).trim());
+  if (b.director_to !== undefined) setSetting('email_director_to', String(b.director_to).trim());
+  res.json({ message: 'Email settings saved' });
+});
+
+// Send a test email to confirm SMTP works.
+router.post('/email-test', adminOnly, async (req, res) => {
+  const to = (req.body?.to || '').trim() || getSetting('email_director_to') || 'director@securedengineers.com';
+  try {
+    const { sendEmail } = require('../lib/email');
+    const r = await sendEmail({
+      to,
+      subject: '[SEPL ERP] Test email',
+      html: '<p>This is a test email from SEPL ERP. SMTP is configured correctly.</p>',
+      text: 'This is a test email from SEPL ERP. SMTP is configured correctly.',
+    });
+    if (r?.skipped) return res.status(400).json({ error: `Not configured: ${r.reason}` });
+    res.json({ message: `Test email sent to ${to}`, messageId: r?.messageId });
+  } catch (e) {
+    res.status(502).json({ error: `Send failed: ${e.message}` });
+  }
+});
+
 // Lets users with ai_agent.view check if the chatbot is configured so
 // the floating bubble can render only for permitted users.
 router.get('/status', requirePermission('ai_agent', 'view'), (req, res) => {

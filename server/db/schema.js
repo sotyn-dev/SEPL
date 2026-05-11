@@ -2188,6 +2188,15 @@ function initializeDatabase() {
     // show last-quoted / 6-month avg-low-high for that exact item.
     // Optional — free-text descriptions still work for one-off items.
     ['boq_items', 'item_id INTEGER REFERENCES item_master(id)'],
+    // DPR Loss Reasons follow-up flag (mam: management dashboard so
+    // MD can see why each loss happened and check it off after action).
+    ['dpr', 'loss_addressed INTEGER DEFAULT 0'],
+    ['dpr', 'loss_addressed_by INTEGER REFERENCES users(id)'],
+    ['dpr', 'loss_addressed_at DATETIME'],
+    ['dpr', 'loss_addressed_note TEXT'],
+    // Track which 3-day consecutive-loss alerts were already mailed so
+    // the same alert doesn't fire again on every subsequent DPR save.
+    ['dpr', 'streak_alert_sent_for DATE'],
     // Sub-Contractor module (mam's "Sub-Contractor Form" Google-Form
     // 47-entry workflow brought into ERP). Extends the existing
     // sub_contractors table — legacy HR fields (phone, email,
