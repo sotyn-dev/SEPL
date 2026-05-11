@@ -144,10 +144,16 @@ export default function Procurement() {
   // that references the same BOQ item but a different Item Master entry.
   const pickMasterItem = (i, master) => {
     const n = [...indentItems];
+    // DO NOT overwrite `description` here. `description` carries the BOQ
+    // line's text from the Client PO (set by pickBoqItem) and is what the
+    // BOQ-section header displays. Earlier this function rewrote it with
+    // the sub-item's name, which made the header read the sub-item — mam:
+    // "look at 2 photo when i select po foc item why boq item name change".
+    // The sub-item label is already shown by the SearchableSelect itself,
+    // so we only update the linkage + unit/type/make.
     n[i] = {
       ...n[i],
       item_master_id: master?.id || '',
-      description: master ? [master.item_name, master.specification, master.size].filter(Boolean).join(' / ') : n[i].description,
       unit: master?.uom?.toLowerCase() || n[i].unit || 'nos',
       item_type: master?.type || n[i].item_type || '',
       make: master?.make || n[i].make || '',
