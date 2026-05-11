@@ -13,6 +13,58 @@ const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const upload = multer({ dest: uploadDir, limits: { fileSize: 10 * 1024 * 1024 } });
 
+// Discover every table whose FOREIGN KEY targets `targetTable` (via SQLite's
+// own PRAGMA foreign_key_list) and NULL out the referencing column on rows
+// pointing at `ids`. Returns the list of referencers it touched + any errors
+// so callers can build a diagnostic message on FK failure.
+//
+// Used before DELETE statements that have repeatedly hit "FOREIGN KEY
+// constraint failed" because a hard-coded dependent list missed a table.
+// Self-healing: new tables that gain an FK in future are picked up
+// automatically the next time the path runs.
+function nullReferencers(db, targetTable, ids) {
+  if (!ids || !ids.length) return { referencers: [], errors: [] };
+  const placeholders = ids.map(() => '?').join(',');
+  const allTables = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+  ).all().map(r => r.name);
+  const referencers = [];
+  for (const t of allTables) {
+    try {
+      const fks = db.prepare(`PRAGMA foreign_key_list(${t})`).all();
+      for (const fk of fks) {
+        if (fk.table === targetTable) referencers.push({ table: t, column: fk.from });
+      }
+    } catch (_) { /* unreadable table — skip */ }
+  }
+  const errors = [];
+  for (const { table, column } of referencers) {
+    try {
+      db.prepare(`UPDATE ${table} SET ${column}=NULL WHERE ${column} IN (${placeholders})`).run(...ids);
+    } catch (e) {
+      errors.push(`${table}.${column}: ${e.message}`);
+      console.warn(`[nullReferencers] could not null ${table}.${column}:`, e.message);
+    }
+  }
+  return { referencers, errors };
+}
+
+// Count how many rows still reference `ids` across the given referencers —
+// used to build a precise diagnostic when a DELETE still fails after a
+// null-out pass. Returns `{ "table.col": N, ... }` for non-zero counts only.
+function countRemainingRefs(db, referencers, ids) {
+  if (!ids || !ids.length) return {};
+  const placeholders = ids.map(() => '?').join(',');
+  const out = {};
+  for (const { table, column } of referencers) {
+    try {
+      const r = db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${column} IN (${placeholders})`).get(...ids);
+      if (r?.n > 0) out[`${table}.${column}`] = r.n;
+    } catch (_) {}
+  }
+  return out;
+}
+
 // Business Book entries for PO dropdown
 router.get('/business-book-entries', (req, res) => {
   res.json(getDb().prepare(
@@ -237,14 +289,42 @@ router.delete('/po/:id', (req, res) => {
       cascade();
     }
 
-    // Unlink lingering children and wipe the PO itself
+    // Unlink lingering children and wipe the PO itself. Both the po_items
+    // and purchase_orders DELETEs were hitting FK violations because tables
+    // we didn't hardcode (e.g. indent_items.po_item_id, plus 7 known tables
+    // with po_id REFERENCES purchase_orders) still pointed at the rows.
+    // nullReferencers() asks SQLite for the full list and clears them.
     if (po.business_book_id) {
       db.prepare('UPDATE business_book SET po_number=NULL, po_date=NULL, po_amount=0 WHERE id=?').run(po.business_book_id);
-      db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(po.business_book_id);
+      const poItemIds = db.prepare('SELECT id FROM po_items WHERE business_book_id=?').all(po.business_book_id).map(r => r.id);
+      const { referencers: piRefs, errors: piErrs } = nullReferencers(db, 'po_items', poItemIds);
+      try {
+        db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(po.business_book_id);
+      } catch (e) {
+        const remaining = countRemainingRefs(db, piRefs, poItemIds);
+        console.error('[PO delete] po_items DELETE failed:', e.message, '| bbId:', po.business_book_id,
+          '| referencers:', piRefs, '| remaining:', remaining, '| nullErrors:', piErrs);
+        const hint = Object.keys(remaining).length
+          ? ' Still blocking po_items: ' + Object.entries(remaining).map(([k, n]) => `${k}(${n})`).join(', ') + '.'
+          : '';
+        return res.status(409).json({ error: `Cannot delete PO: line items are referenced elsewhere.${hint}` });
+      }
     }
     db.prepare('UPDATE sites SET po_id=NULL WHERE po_id=?').run(id);
     db.prepare('UPDATE order_planning SET po_id=NULL WHERE po_id=?').run(id);
-    db.prepare('DELETE FROM purchase_orders WHERE id=?').run(id);
+
+    const { referencers: poRefs, errors: poErrs } = nullReferencers(db, 'purchase_orders', [id]);
+    try {
+      db.prepare('DELETE FROM purchase_orders WHERE id=?').run(id);
+    } catch (e) {
+      const remaining = countRemainingRefs(db, poRefs, [id]);
+      console.error('[PO delete] purchase_orders DELETE failed:', e.message, '| poId:', id,
+        '| referencers:', poRefs, '| remaining:', remaining, '| nullErrors:', poErrs);
+      const hint = Object.keys(remaining).length
+        ? ' Still blocking: ' + Object.entries(remaining).map(([k, n]) => `${k}(${n})`).join(', ') + '.'
+        : '';
+      return res.status(409).json({ error: `Cannot delete PO: still referenced by other records.${hint}` });
+    }
     res.json({ message: force ? 'Force-deleted (all dependents removed)' : 'Deleted' });
   } catch (err) {
     console.error('PO delete error:', err);
@@ -298,59 +378,15 @@ router.post('/po/:id/items', (req, res) => {
   // can proceed. The indent still exists, it just loses its back-link to
   // the specific po_items row (indent keeps its own qty/desc).
   if (bbId) {
-    // Self-heal + diagnose. Ask SQLite itself which tables have a FOREIGN
-    // KEY to po_items (instead of hard-coding the list — mam's prod hit
-    // FK violations even after we nulled the 3 known dependents because
-    // a 4th table existed that we didn't know about). Then null po_item_id
-    // on every discovered table for rows pointing at this PO's items, so
-    // the DELETE always succeeds in normal operation.
-    //
-    // PRAGMA foreign_key_list(<table>) returns the FK targets FROM that
-    // table. We walk every table once and collect any whose target is
-    // po_items, keeping the discovered column name for the null-out.
-    const allTables = db.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-    ).all().map(r => r.name);
-
-    const referencers = []; // { table, column }
-    for (const t of allTables) {
-      try {
-        const fks = db.prepare(`PRAGMA foreign_key_list(${t})`).all();
-        for (const fk of fks) {
-          if (fk.table === 'po_items') referencers.push({ table: t, column: fk.from });
-        }
-      } catch (_) { /* unreadable table — skip */ }
-    }
-
-    const nullErrors = [];
-    for (const { table, column } of referencers) {
-      try {
-        db.prepare(
-          `UPDATE ${table} SET ${column}=NULL
-           WHERE ${column} IN (SELECT id FROM po_items WHERE business_book_id=?)`
-        ).run(bbId);
-      } catch (e) {
-        console.warn(`[PO items save] could not null ${table}.${column}:`, e.message);
-        nullErrors.push(`${table}.${column}: ${e.message}`);
-      }
-    }
+    // Null every FK pointing at this PO's po_items rows so DELETE succeeds.
+    // See nullReferencers() at the top of the file for the discovery logic.
+    const poItemIds = db.prepare('SELECT id FROM po_items WHERE business_book_id=?').all(bbId).map(r => r.id);
+    const { referencers, errors: nullErrors } = nullReferencers(db, 'po_items', poItemIds);
 
     try {
       db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(bbId);
     } catch (e) {
-      // If the DELETE STILL fails, something we don't understand is blocking.
-      // Count remaining refs on every discovered referencer + log everything
-      // so the next iteration has full picture (mam can screenshot the toast).
-      const remaining = {};
-      for (const { table, column } of referencers) {
-        try {
-          const r = db.prepare(
-            `SELECT COUNT(*) AS n FROM ${table}
-             WHERE ${column} IN (SELECT id FROM po_items WHERE business_book_id=?)`
-          ).get(bbId);
-          if (r?.n > 0) remaining[`${table}.${column}`] = r.n;
-        } catch (_) {}
-      }
+      const remaining = countRemainingRefs(db, referencers, poItemIds);
       const knownList = referencers.map(r => `${r.table}.${r.column}`).join(', ') || '(none discovered)';
       const hint = Object.keys(remaining).length
         ? ' Still blocking: ' + Object.entries(remaining).map(([k, n]) => `${k}(${n})`).join(', ') + '.'
