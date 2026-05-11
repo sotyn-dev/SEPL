@@ -45,6 +45,7 @@ import AuditLog from './pages/admin/AuditLog';
 import WordCount from './pages/admin/WordCount';
 import Locations from './pages/admin/Locations';
 import CollectionsMD from './pages/admin/CollectionsMD';
+import AISettings from './pages/AISettings';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -131,6 +132,7 @@ export default function App() {
         <Route path="admin/word-count" element={<AdminRoute><WordCount /></AdminRoute>} />
         <Route path="admin/locations" element={<AdminRoute><Locations /></AdminRoute>} />
         <Route path="admin/collections-md" element={<AdminRoute><CollectionsMD /></AdminRoute>} />
+        <Route path="admin/ai-settings" element={<AdminRoute><AISettings /></AdminRoute>} />
       </Route>
     </Routes>
   );

@@ -3,6 +3,7 @@ import { Link, useLocation, Outlet } from 'react-router-dom';
 import HelpTicket from './HelpTicket';
 import AnnouncementBell from './AnnouncementBell';
 import EnablePushButton from './EnablePushButton';
+import AIAgentChat from './AIAgentChat';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
 import api from '../api';
@@ -59,6 +60,7 @@ const adminItems = [
   { path: '/admin/collections-md', label: 'MD Collections', icon: FiTrendingUp, module: 'users' },
   { path: '/admin/backups', label: 'Database Backups', icon: FiPackage, module: 'users' },
   { path: '/admin/audit', label: 'Audit Log', icon: FiShield, module: 'users' },
+  { path: '/admin/ai-settings', label: 'AI Settings', icon: FiSettings, module: 'users' },
 ];
 
 export default function Layout() {
@@ -302,6 +304,7 @@ export default function Layout() {
         </main>
       </div>
       <HelpTicket />
+      <AIAgentChat />
     </div>
   );
 }

@@ -1,17 +1,32 @@
-// AI Agent — read-only "rate intelligence" endpoints powered by the
-// item_price_history log. When a BOQ row with a linked catalogue item
-// is saved, the rate gets logged here so the next quotation can show
-// "last quoted to this client" + 6-month avg-low-high to keep the team
-// consistent on pricing.
-//
-// Future home for the "Ask ERP" chatbot (Feature 3) once mam wires
-// up ANTHROPIC_API_KEY.
+// AI Agent — three features behind /api/ai-agent:
+//   (1) Rate intelligence  — /rate-suggestion + /item-history (Feature 1+2)
+//   (2) Settings           — /settings (admin-only: paste Anthropic API key
+//                            inside the ERP, no .env edit needed — mam's
+//                            requirement: 'in erp')
+//   (3) Ask ERP chatbot    — /ask (Claude + read-only SQL tool)
 
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
+
+// Read/write helpers for the key-value app_settings table. Keys we own:
+//   ai_provider  — 'anthropic' (only one for now)
+//   ai_api_key   — the secret (server-side only; masked in GET)
+//   ai_model     — model id (default claude-opus-4-7)
+function getSetting(key) {
+  const row = getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(key);
+  return row?.value ?? null;
+}
+function setSetting(key, value) {
+  getDb().prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP`).run(key, value);
+}
+function adminOnly(req, res, next) {
+  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  next();
+}
 
 // GET /api/ai-agent/rate-suggestion?item_id=&lead_id=
 // Returns last-quoted-to-this-client + 6-month stats across all clients.
@@ -82,6 +97,225 @@ router.get('/item-history', (req, res) => {
                                 ORDER BY h.created_at DESC
                                 LIMIT ?`).all(itemId, limit);
   res.json(rows);
+});
+
+// ─── AI Settings (admin) ─────────────────────────────────────────────
+// Mam pastes her Anthropic API key here, no SSH/.env editing needed.
+// GET returns a masked key so the UI can show "configured / not configured"
+// without ever sending the secret back to the browser.
+
+router.get('/settings', adminOnly, (req, res) => {
+  const key = getSetting('ai_api_key');
+  res.json({
+    provider: getSetting('ai_provider') || 'anthropic',
+    model: getSetting('ai_model') || 'claude-opus-4-7',
+    api_key_set: !!key,
+    api_key_masked: key ? `${key.slice(0, 7)}…${key.slice(-4)}` : null,
+  });
+});
+
+router.put('/settings', adminOnly, (req, res) => {
+  const { provider, model, api_key } = req.body || {};
+  if (provider) setSetting('ai_provider', String(provider).trim() || 'anthropic');
+  if (model) setSetting('ai_model', String(model).trim() || 'claude-opus-4-7');
+  if (typeof api_key === 'string' && api_key.trim()) {
+    // Accept both bare keys and "sk-ant-..."; just trim and store.
+    setSetting('ai_api_key', api_key.trim());
+  }
+  res.json({ message: 'AI settings saved' });
+});
+
+// Lets any logged-in user check if the chatbot is configured (so the UI
+// can show "configured by admin" vs "ask admin to set up" without
+// leaking the key).
+router.get('/status', (req, res) => {
+  res.json({ configured: !!getSetting('ai_api_key') });
+});
+
+// ─── Ask ERP (chatbot) ───────────────────────────────────────────────
+// POST { question, history?: [{role,content}] } → { answer, sql_runs: [{query,row_count}] }
+// Claude is given a SELECT-only "query_database" tool and a digest of the
+// schema; it can make up to MAX_TOOL_ITER queries before returning a final
+// natural-language answer.
+
+const MAX_TOOL_ITER = 8;
+const ROW_LIMIT = 500;
+
+// Tables Claude is allowed to read. Skipping sensitive auth tables.
+const READABLE_TABLES = new Set([
+  'sites', 'leads', 'customers', 'item_master', 'item_price_history',
+  'boq', 'boq_items', 'quotations', 'business_book', 'purchase_orders',
+  'po_items', 'order_planning', 'indents', 'indent_items', 'vendor_pos',
+  'vendor_po_items', 'purchase_bills', 'sales_bills', 'delivery_notes',
+  'payments', 'cash_flow_entries', 'receivables', 'expenses', 'employees',
+  'attendance', 'payment_requests', 'rent_requests', 'dpr', 'dpr_work_items',
+  'dpr_material', 'dpr_machinery', 'dpr_manpower', 'dpr_contractors',
+  'installations', 'complaints', 'snags', 'sales_funnel', 'company_assets',
+]);
+
+function buildSchemaDigest(db) {
+  // Compact "table(col TYPE, col TYPE)" lines for every readable table.
+  // Cached per process via getSchemaDigest below.
+  const lines = [];
+  for (const t of READABLE_TABLES) {
+    try {
+      const cols = db.prepare(`PRAGMA table_info(${t})`).all();
+      if (!cols.length) continue;
+      const colList = cols.map(c => `${c.name} ${c.type || ''}`.trim()).join(', ');
+      lines.push(`${t}(${colList})`);
+    } catch (_) {}
+  }
+  return lines.join('\n');
+}
+let _cachedDigest = null;
+function getSchemaDigest(db) {
+  if (!_cachedDigest) _cachedDigest = buildSchemaDigest(db);
+  return _cachedDigest;
+}
+
+// SQL safety filter. Reject anything that isn't a single SELECT.
+function validateSelect(sql) {
+  if (typeof sql !== 'string') return 'Query must be a string';
+  const trimmed = sql.trim().replace(/;\s*$/, '');
+  if (!trimmed) return 'Empty query';
+  if (/;/.test(trimmed)) return 'Multiple statements not allowed';
+  if (!/^\s*(SELECT|WITH)\s/i.test(trimmed)) return 'Only SELECT/WITH queries are allowed';
+  // Quick deny-list — even inside a CTE/subquery, these tokens should never appear
+  const banned = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|ATTACH|DETACH|REPLACE|PRAGMA|VACUUM)\b/i;
+  if (banned.test(trimmed)) return 'Mutating keywords are not allowed';
+  return null;
+}
+
+function safeRunQuery(db, sql) {
+  const err = validateSelect(sql);
+  if (err) return { error: err };
+  try {
+    const stmt = db.prepare(sql);
+    const rows = stmt.all();
+    const truncated = rows.length > ROW_LIMIT;
+    return {
+      row_count: rows.length,
+      truncated,
+      rows: truncated ? rows.slice(0, ROW_LIMIT) : rows,
+    };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+router.post('/ask', async (req, res) => {
+  const apiKey = getSetting('ai_api_key');
+  if (!apiKey) {
+    return res.status(400).json({
+      error: 'AI Agent not configured. Ask an admin to paste an Anthropic API key in Admin → AI Settings.',
+    });
+  }
+  const question = String(req.body?.question || '').trim();
+  if (!question) return res.status(400).json({ error: 'question required' });
+  const priorHistory = Array.isArray(req.body?.history) ? req.body.history.slice(-10) : [];
+
+  let Anthropic;
+  try {
+    Anthropic = require('@anthropic-ai/sdk');
+  } catch (e) {
+    return res.status(500).json({ error: '@anthropic-ai/sdk not installed on the server. Run `npm install` on the VPS.' });
+  }
+
+  const db = getDb();
+  const client = new Anthropic.default({ apiKey });
+  const model = getSetting('ai_model') || 'claude-opus-4-7';
+
+  const systemPrompt = `You are the AI assistant inside SEPL Engineers' internal ERP (an MEPF subcontracting business in India). The user asking is staff or admin; answer their question by querying the local SQLite database with the query_database tool, then giving a concise natural-language answer in plain English. Money is in Indian Rupees (Rs). Be specific — include names, numbers, dates. If a question is ambiguous, make one reasonable assumption and state it. Never invent data — only report what the SQL returns.
+
+Database schema (SQLite). Only SELECT/WITH queries are allowed; the tool will reject anything else.
+
+${getSchemaDigest(db)}
+
+Guidance:
+- Prefer JOINs over multiple round-trip queries when sensible.
+- Use date('now') / datetime('now', '-N days') for recency filters.
+- LIMIT large result sets (≤ 100 rows for display).
+- Currency formatting: Indian-style (e.g. "Rs 12,50,000").
+- If the user asks about "rates", look at item_master.current_price and item_price_history.
+- If they ask about overdue payments, sales_bills with payment_status='pending' or 'partial' is the first place to check; receivables also tracks this.
+- If they ask "who", join with employees on the relevant *_by columns.`;
+
+  const tools = [{
+    name: 'query_database',
+    description: 'Run a single read-only SQL query (SELECT or WITH only) against the ERP SQLite database. Returns rows as JSON. Limited to 500 rows per query; the response indicates if truncated.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'A single SELECT/WITH query. No semicolons, no DDL/DML.' },
+      },
+      required: ['query'],
+    },
+  }];
+
+  // Build conversation history
+  const messages = [];
+  for (const m of priorHistory) {
+    if (!m || !m.role || !m.content) continue;
+    if (m.role !== 'user' && m.role !== 'assistant') continue;
+    messages.push({ role: m.role, content: String(m.content).slice(0, 4000) });
+  }
+  messages.push({ role: 'user', content: question });
+
+  const sqlRuns = [];
+  let response;
+  try {
+    for (let iter = 0; iter < MAX_TOOL_ITER; iter++) {
+      response = await client.messages.create({
+        model,
+        max_tokens: 16000,
+        system: systemPrompt,
+        tools,
+        messages,
+        thinking: { type: 'adaptive' },
+        output_config: { effort: 'high' },
+      });
+
+      if (response.stop_reason !== 'tool_use') break;
+
+      // Append assistant turn verbatim (preserves thinking/tool_use blocks)
+      messages.push({ role: 'assistant', content: response.content });
+
+      const toolResults = [];
+      for (const block of response.content) {
+        if (block.type !== 'tool_use' || block.name !== 'query_database') continue;
+        const sql = block.input?.query || '';
+        const result = safeRunQuery(db, sql);
+        sqlRuns.push({ query: sql, row_count: result.row_count ?? 0, error: result.error || null });
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: block.id,
+          content: JSON.stringify(result).slice(0, 50000),
+          is_error: !!result.error,
+        });
+      }
+      if (!toolResults.length) break;
+      messages.push({ role: 'user', content: toolResults });
+    }
+  } catch (e) {
+    console.error('[AI Agent /ask] Anthropic call failed:', e.message);
+    const status = e?.status || 500;
+    let hint = '';
+    if (status === 401) hint = ' Your API key is invalid — update it in Admin → AI Settings.';
+    else if (status === 429) hint = ' Rate limited by Anthropic — wait a few seconds and try again.';
+    return res.status(502).json({ error: `AI request failed: ${e.message}${hint}` });
+  }
+
+  const answer = (response?.content || [])
+    .filter(b => b.type === 'text')
+    .map(b => b.text)
+    .join('\n')
+    .trim();
+
+  res.json({
+    answer: answer || '(no answer)',
+    sql_runs: sqlRuns,
+    stop_reason: response?.stop_reason,
+  });
 });
 
 module.exports = router;
