@@ -225,7 +225,15 @@ router.post('/ask', async (req, res) => {
   const client = new Anthropic.default({ apiKey });
   const model = getSetting('ai_model') || 'claude-opus-4-7';
 
-  const systemPrompt = `You are the AI assistant inside SEPL Engineers' internal ERP (an MEPF subcontracting business in India). The user asking is staff or admin; answer their question by querying the local SQLite database with the query_database tool, then giving a concise natural-language answer in plain English. Money is in Indian Rupees (Rs). Be specific — include names, numbers, dates. If a question is ambiguous, make one reasonable assumption and state it. Never invent data — only report what the SQL returns.
+  const systemPrompt = `You are the AI assistant inside SEPL Engineers' internal ERP (an MEPF subcontracting business in India). The user asking is staff or admin. You have TWO tools:
+
+1. query_database — read the local ERP database (leads, customers, items, quotations, POs, payments, DPR, attendance, etc.). Use this for ANY question about SEPL's own data.
+
+2. web_search — search the live internet. Use this when the user asks about market/online/current rates that aren't in our ERP yet, vendor news, commodity prices, GST rate lookups, supplier company details, or any fact that lives outside our database.
+
+Combine the tools when useful. Example: "is our cement rate competitive?" → first query_database for SEPL's current_price, then web_search for today's market rate on IndiaMART / Justdial / cement industry sites, then compare and answer.
+
+Answer concisely in plain English. Money is in Indian Rupees (Rs) — Indian-style formatting (e.g. "Rs 12,50,000"). Be specific: include names, numbers, dates. If a question is ambiguous, make one reasonable assumption and state it. Never invent data — only report what the tools return. When you cite a web-search number, mention the source briefly ("per IndiaMART today").
 
 Database schema (SQLite). Only SELECT/WITH queries are allowed; the tool will reject anything else.
 
@@ -235,22 +243,28 @@ Guidance:
 - Prefer JOINs over multiple round-trip queries when sensible.
 - Use date('now') / datetime('now', '-N days') for recency filters.
 - LIMIT large result sets (≤ 100 rows for display).
-- Currency formatting: Indian-style (e.g. "Rs 12,50,000").
-- If the user asks about "rates", look at item_master.current_price and item_price_history.
+- If the user asks about "rates", look at item_master.current_price and item_price_history first; only fall back to web_search if they explicitly want "market rate" / "online price" / "current price online".
 - If they ask about overdue payments, sales_bills with payment_status='pending' or 'partial' is the first place to check; receivables also tracks this.
 - If they ask "who", join with employees on the relevant *_by columns.`;
 
-  const tools = [{
-    name: 'query_database',
-    description: 'Run a single read-only SQL query (SELECT or WITH only) against the ERP SQLite database. Returns rows as JSON. Limited to 500 rows per query; the response indicates if truncated.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'A single SELECT/WITH query. No semicolons, no DDL/DML.' },
+  // Two tools: read-only SQL on the local ERP, and Claude's hosted web
+  // search (so the bot can answer "what's the current market rate of MS
+  // pipe online" — mam's "show rate live from net" requirement). Web
+  // search adds ~$0.01 per call but lets Claude decide when it's needed.
+  const tools = [
+    {
+      name: 'query_database',
+      description: 'Run a single read-only SQL query (SELECT or WITH only) against the ERP SQLite database. Returns rows as JSON. Limited to 500 rows per query; the response indicates if truncated.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'A single SELECT/WITH query. No semicolons, no DDL/DML.' },
+        },
+        required: ['query'],
       },
-      required: ['query'],
     },
-  }];
+    { type: 'web_search_20260209', name: 'web_search' },
+  ];
 
   // Build conversation history
   const messages = [];
@@ -274,6 +288,17 @@ Guidance:
         thinking: { type: 'adaptive' },
         output_config: { effort: 'high' },
       });
+
+      if (response.stop_reason === 'end_turn' || response.stop_reason === 'refusal') break;
+
+      // pause_turn: Anthropic-side tool (web_search) hit its server-side
+      // iteration limit. Re-send the same conversation with the assistant
+      // turn appended; the server resumes web_search from where it left off.
+      // No client-side action needed.
+      if (response.stop_reason === 'pause_turn') {
+        messages.push({ role: 'assistant', content: response.content });
+        continue;
+      }
 
       if (response.stop_reason !== 'tool_use') break;
 
