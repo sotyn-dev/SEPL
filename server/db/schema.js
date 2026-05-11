@@ -933,6 +933,46 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- CRM Sales Funnel FMS (mam's spec — flat 3-step tracking table
+    -- parallel to the 11-stage sales_funnel module). Lead capture +
+    -- Step 1 Quotation submission, Step 2 Negotiation, Step 3 Win/Loss.
+    -- Built as its own table so this simpler workflow doesn't have to
+    -- carry the 11-stage funnel's heavier state machine.
+    CREATE TABLE IF NOT EXISTS crm_funnel (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_no TEXT UNIQUE,
+      -- Lead capture
+      client_name TEXT NOT NULL,
+      company_name TEXT,
+      mobile TEXT,
+      email TEXT,
+      source TEXT,                -- 'SOURCE OF ENQUIRY'
+      address TEXT,
+      state TEXT,
+      district TEXT,
+      remarks TEXT,
+      category TEXT,
+      type TEXT,                  -- private / government / other
+      -- Step 1 — Quotation
+      cust_boq_link TEXT,
+      quotation_link TEXT,
+      quotation_amount REAL DEFAULT 0,
+      quotation_submitted INTEGER DEFAULT 0,
+      quotation_submit_date DATETIME,
+      -- Step 2 — Negotiation
+      negotiation_status TEXT,    -- 'in_progress' | 'hold' | 'done' | 'dropped'
+      negotiation_amount REAL DEFAULT 0,
+      negotiation_remarks TEXT,
+      -- Step 3 — Win/Loss
+      final_status TEXT,          -- 'win' | 'loss' | NULL (still open)
+      loss_reason TEXT,
+      closed_at DATETIME,
+      -- Bookkeeping
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Multi-contractor entries for a DPR. Mam: "AT LEAST OPTION OF 5
     -- CONTRACTOR" — the form originally had a single contractor_name +
     -- contractor_manpower field on the dpr row, which kept getting
@@ -2371,6 +2411,10 @@ function initializeDatabase() {
     // Sub-contractor master list — filter by type/state when planning
     'CREATE INDEX IF NOT EXISTS idx_sub_contractors_type ON sub_contractors(contractor_type, active)',
     'CREATE INDEX IF NOT EXISTS idx_sub_contractors_state ON sub_contractors(state, district)',
+    // CRM Funnel — most common views are "open leads" (final_status NULL)
+    // and "by step" (quotation_submitted, negotiation_status, final_status).
+    'CREATE INDEX IF NOT EXISTS idx_crm_funnel_final ON crm_funnel(final_status, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_crm_funnel_neg ON crm_funnel(negotiation_status)',
   ];
   for (const sql of safeIndexes) {
     try { db.exec(sql); } catch (e) { /* column missing on a stale DB — non-fatal */ }

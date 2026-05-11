@@ -47,6 +47,7 @@ import Locations from './pages/admin/Locations';
 import CollectionsMD from './pages/admin/CollectionsMD';
 import AISettings from './pages/AISettings';
 import SubContractors from './pages/SubContractors';
+import CRMFunnel from './pages/CRMFunnel';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -135,6 +136,7 @@ export default function App() {
         <Route path="admin/collections-md" element={<AdminRoute><CollectionsMD /></AdminRoute>} />
         <Route path="admin/ai-settings" element={<AdminRoute><AISettings /></AdminRoute>} />
         <Route path="sub-contractors" element={<ModuleRoute module="sub_contractors"><SubContractors /></ModuleRoute>} />
+        <Route path="crm-funnel" element={<ModuleRoute module="crm_funnel"><CRMFunnel /></ModuleRoute>} />
       </Route>
     </Routes>
   );

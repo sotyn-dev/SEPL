@@ -161,6 +161,7 @@ app.use('/api/admin/locations', require('./routes/locations'));
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/ai-agent', require('./routes/aiAgent'));
 app.use('/api/sub-contractors', require('./routes/subcontractors'));
+app.use('/api/crm-funnel', require('./routes/crmFunnel'));
 
 // 4 Critical Systems
 app.use('/api/cashflow', require('./routes/cashflow'));
