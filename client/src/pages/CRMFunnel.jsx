@@ -294,68 +294,76 @@ export default function CRMFunnel() {
             </div>
           </div>
 
-          {/* Step 1 */}
-          <div className="border-b pb-2"><h4 className="font-semibold text-sm text-red-700">Step 1 — Quotation</h4></div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="label">Customer BOQ Link</label>
-              <input className="input text-sm" placeholder="https://…" value={form.cust_boq_link} onChange={e => setForm({ ...form, cust_boq_link: e.target.value })} />
-            </div>
-            <div>
-              <label className="label">Quotation Link</label>
-              <input className="input text-sm" placeholder="https://…" value={form.quotation_link} onChange={e => setForm({ ...form, quotation_link: e.target.value })} />
-            </div>
-            <div>
-              <label className="label">Quotation Amount (Rs)</label>
-              <input className="input" type="number" min="0" value={form.quotation_amount} onChange={e => setForm({ ...form, quotation_amount: +e.target.value })} />
-            </div>
-            <div>
-              <label className="label">Quotation Submitted?</label>
-              <label className="flex items-center gap-2 mt-2 cursor-pointer">
-                <input type="checkbox" checked={!!form.quotation_submitted} onChange={e => setForm({ ...form, quotation_submitted: e.target.checked })} className="w-4 h-4" />
-                <span className="text-sm">Yes — submitted to client</span>
-              </label>
-            </div>
-          </div>
-
-          {/* Step 2 */}
-          <div className="border-b pb-2"><h4 className="font-semibold text-sm text-red-700">Step 2 — Negotiation</h4></div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="label">Negotiation Status</label>
-              <select className="select" value={form.negotiation_status} onChange={e => setForm({ ...form, negotiation_status: e.target.value })}>
-                <option value="">Not started</option>
-                {NEG_STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="label">Negotiation Amount (Rs)</label>
-              <input className="input" type="number" min="0" value={form.negotiation_amount} onChange={e => setForm({ ...form, negotiation_amount: +e.target.value })} />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="label">Negotiation Remarks</label>
-              <textarea className="input" rows="2" value={form.negotiation_remarks} onChange={e => setForm({ ...form, negotiation_remarks: e.target.value })} />
-            </div>
-          </div>
-
-          {/* Step 3 */}
-          <div className="border-b pb-2"><h4 className="font-semibold text-sm text-red-700">Step 3 — Win / Loss</h4></div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="label">Final Status</label>
-              <select className="select" value={form.final_status} onChange={e => setForm({ ...form, final_status: e.target.value })}>
-                <option value="">Still open</option>
-                <option value="win">Win</option>
-                <option value="loss">Loss</option>
-              </select>
-            </div>
-            {form.final_status === 'loss' && (
-              <div>
-                <label className="label">Reason if Loss</label>
-                <input className="input" value={form.loss_reason} onChange={e => setForm({ ...form, loss_reason: e.target.value })} placeholder="e.g. price, timeline, scope mismatch" />
+          {/* Steps 1/2/3 only show when editing an existing lead. On Add,
+              mam doesn't yet have a quotation, negotiation, or final
+              status — she'll fill those in later by editing the row.
+              Mam: "dont here entry step 1 step 2 step 3". */}
+          {editing && (
+            <>
+              {/* Step 1 */}
+              <div className="border-b pb-2"><h4 className="font-semibold text-sm text-red-700">Step 1 — Quotation</h4></div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Customer BOQ Link</label>
+                  <input className="input text-sm" placeholder="https://…" value={form.cust_boq_link} onChange={e => setForm({ ...form, cust_boq_link: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">Quotation Link</label>
+                  <input className="input text-sm" placeholder="https://…" value={form.quotation_link} onChange={e => setForm({ ...form, quotation_link: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">Quotation Amount (Rs)</label>
+                  <input className="input" type="number" min="0" value={form.quotation_amount} onChange={e => setForm({ ...form, quotation_amount: +e.target.value })} />
+                </div>
+                <div>
+                  <label className="label">Quotation Submitted?</label>
+                  <label className="flex items-center gap-2 mt-2 cursor-pointer">
+                    <input type="checkbox" checked={!!form.quotation_submitted} onChange={e => setForm({ ...form, quotation_submitted: e.target.checked })} className="w-4 h-4" />
+                    <span className="text-sm">Yes — submitted to client</span>
+                  </label>
+                </div>
               </div>
-            )}
-          </div>
+
+              {/* Step 2 */}
+              <div className="border-b pb-2"><h4 className="font-semibold text-sm text-red-700">Step 2 — Negotiation</h4></div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Negotiation Status</label>
+                  <select className="select" value={form.negotiation_status} onChange={e => setForm({ ...form, negotiation_status: e.target.value })}>
+                    <option value="">Not started</option>
+                    {NEG_STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Negotiation Amount (Rs)</label>
+                  <input className="input" type="number" min="0" value={form.negotiation_amount} onChange={e => setForm({ ...form, negotiation_amount: +e.target.value })} />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="label">Negotiation Remarks</label>
+                  <textarea className="input" rows="2" value={form.negotiation_remarks} onChange={e => setForm({ ...form, negotiation_remarks: e.target.value })} />
+                </div>
+              </div>
+
+              {/* Step 3 */}
+              <div className="border-b pb-2"><h4 className="font-semibold text-sm text-red-700">Step 3 — Win / Loss</h4></div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Final Status</label>
+                  <select className="select" value={form.final_status} onChange={e => setForm({ ...form, final_status: e.target.value })}>
+                    <option value="">Still open</option>
+                    <option value="win">Win</option>
+                    <option value="loss">Loss</option>
+                  </select>
+                </div>
+                {form.final_status === 'loss' && (
+                  <div>
+                    <label className="label">Reason if Loss</label>
+                    <input className="input" value={form.loss_reason} onChange={e => setForm({ ...form, loss_reason: e.target.value })} placeholder="e.g. price, timeline, scope mismatch" />
+                  </div>
+                )}
+              </div>
+            </>
+          )}
 
           <div className="flex justify-end gap-2 pt-2 border-t">
             <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
