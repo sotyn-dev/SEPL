@@ -37,6 +37,10 @@ export default function DPR() {
     { type: 'TA/DA', qty: 1, rate: 0, amount: 0, auto: true, ta_da_count: 0 },
   ]);
   const [machinery, setMachinery] = useState([{ equipment: '', quantity: 1, hours_used: 0, condition: 'working' }]);
+  // Mam: 'AT LEAST OPTION OF 5 CONTRACTOR' — start with 5 blank rows; "+ Add"
+  // appends more, "×" removes (only when more than 5). Empty rows are
+  // dropped server-side so we never save junk.
+  const [contractors, setContractors] = useState(() => Array.from({ length: 5 }, () => ({ name: '', manpower: 0 })));
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const [poItemsForSite, setPoItemsForSite] = useState([]);
   const [progress, setProgress] = useState([]);
@@ -122,6 +126,7 @@ export default function DPR() {
         work_items: workItems.filter(w => w.po_item_id || w.description),
         manpower: costs.filter(c => c.qty > 0 || c.amount > 0),
         machinery: machinery.filter(m => m.equipment),
+        contractors: contractors.filter(c => (c.name && c.name.trim()) || c.manpower > 0),
         grand_total_a: grandTotalA,
         grand_total_b: grandTotalB,
         profit_loss: profitLoss
@@ -329,6 +334,7 @@ export default function DPR() {
                 { type: 'TA/DA', qty: 1, rate: 0, amount: 0, auto: true, ta_da_count: 0 },
               ]);
               setMachinery([{ equipment: '', quantity: 1, hours_used: 0, condition: 'working' }]);
+              setContractors(Array.from({ length: 5 }, () => ({ name: '', manpower: 0 })));
               setModal(true);
             }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit DPR</button>
           </div>
@@ -454,8 +460,30 @@ export default function DPR() {
               ) : (
                 <div><label className="label">Engineer Name</label><div className="input bg-gray-100 text-gray-700">{user?.name}</div></div>
               )}
-              <div><label className="label">Contractor Name</label><input className="input" value={form.contractor_name || ''} onChange={e => setForm({ ...form, contractor_name: e.target.value })} /></div>
-              <div><label className="label">Contractor Manpower</label><input className="input" type="number" value={form.contractor_manpower || ''} onChange={e => setForm({ ...form, contractor_manpower: +e.target.value })} /></div>
+              <div className="sm:col-span-2">
+                <div className="flex items-baseline justify-between mb-1">
+                  <label className="label mb-0">Contractors on Site</label>
+                  <button type="button" onClick={() => setContractors([...contractors, { name: '', manpower: 0 }])}
+                    className="text-xs text-red-600 hover:underline">+ Add Contractor</button>
+                </div>
+                <div className="space-y-1.5">
+                  {contractors.map((c, i) => (
+                    <div key={i} className="grid grid-cols-12 gap-2 items-center">
+                      <input className="input col-span-7" placeholder={`Contractor ${i + 1} name`}
+                        value={c.name}
+                        onChange={e => { const n = [...contractors]; n[i] = { ...n[i], name: e.target.value }; setContractors(n); }} />
+                      <input className="input col-span-4" type="number" placeholder="Manpower"
+                        value={c.manpower || ''}
+                        onChange={e => { const n = [...contractors]; n[i] = { ...n[i], manpower: +e.target.value || 0 }; setContractors(n); }} />
+                      {contractors.length > 5 ? (
+                        <button type="button"
+                          onClick={() => setContractors(contractors.filter((_, idx) => idx !== i))}
+                          className="col-span-1 text-gray-400 hover:text-red-600 text-lg leading-none">×</button>
+                      ) : <div className="col-span-1" />}
+                    </div>
+                  ))}
+                </div>
+              </div>
               <div><label className="label">Shift</label>
                 <div className="flex gap-4 mt-1">
                   {['day', 'evening', 'night'].map(s => (
@@ -706,7 +734,11 @@ export default function DPR() {
               <div><strong>Site:</strong> {selectedDpr.site_name}</div>
               <div><strong>Date:</strong> {selectedDpr.report_date}</div>
               <div><strong>Shift:</strong> {selectedDpr.shift || '-'}</div>
-              <div><strong>Contractor:</strong> {selectedDpr.contractor_name || '-'}</div>
+              <div className="col-span-2 md:col-span-4"><strong>Contractors:</strong>{' '}
+                {selectedDpr.contractors?.length
+                  ? selectedDpr.contractors.map(c => `${c.name || '(unnamed)'}${c.manpower ? ` × ${c.manpower}` : ''}`).join(', ')
+                  : (selectedDpr.contractor_name ? `${selectedDpr.contractor_name}${selectedDpr.contractor_manpower ? ` × ${selectedDpr.contractor_manpower}` : ''}` : '-')}
+              </div>
               <div><strong>System:</strong> {selectedDpr.system_type || '-'}</div>
               <div><strong>Weather:</strong> {selectedDpr.weather}</div>
               <div><strong>By:</strong> {selectedDpr.submitted_by_name}</div>

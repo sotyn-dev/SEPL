@@ -933,6 +933,21 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Multi-contractor entries for a DPR. Mam: "AT LEAST OPTION OF 5
+    -- CONTRACTOR" — the form originally had a single contractor_name +
+    -- contractor_manpower field on the dpr row, which kept getting
+    -- overwritten when multiple subcontractors were on site the same day.
+    -- This table lets the engineer log each one separately. The legacy
+    -- dpr.contractor_name / contractor_manpower columns remain so older
+    -- reports stay readable.
+    CREATE TABLE IF NOT EXISTS dpr_contractors (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dpr_id INTEGER REFERENCES dpr(id) ON DELETE CASCADE,
+      name TEXT,
+      manpower INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Work items from PO (item name, qty, rate, amount + floor/zone + planned/actual)
     CREATE TABLE IF NOT EXISTS dpr_work_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2332,6 +2347,8 @@ function initializeDatabase() {
     'CREATE INDEX IF NOT EXISTS idx_iph_item_lead ON item_price_history(item_id, lead_id)',
     'CREATE INDEX IF NOT EXISTS idx_iph_item_company ON item_price_history(item_id, company_name)',
     'CREATE INDEX IF NOT EXISTS idx_boqi_item ON boq_items(item_id)',
+    // Multi-contractor DPR rows — fetched by dpr_id when loading a DPR detail
+    'CREATE INDEX IF NOT EXISTS idx_dpr_contractors_dpr ON dpr_contractors(dpr_id)',
   ];
   for (const sql of safeIndexes) {
     try { db.exec(sql); } catch (e) { /* column missing on a stale DB — non-fatal */ }

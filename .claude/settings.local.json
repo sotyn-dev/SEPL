@@ -64,7 +64,8 @@
       "Bash(NODE_TLS_REJECT_UNAUTHORIZED=0 npm install --no-audit --no-fund --prefer-offline --prefix client)",
       "Bash(npm config *)",
       "Bash(npm rebuild *)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(node -c server/routes/dpr.js)"
     ]
   }
 }

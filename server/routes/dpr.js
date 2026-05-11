@@ -384,7 +384,7 @@ router.post('/', (req, res) => {
   const { site_id, report_date, weather, overall_status, shift, contractor_name, contractor_manpower, mb_sheet_no,
     floor_zone, system_type, safety_toolbox_talk, safety_ppe_compliance, safety_incidents,
     next_day_plan, hindrances, hindrance_category, remarks, grand_total_a, grand_total_b, profit_loss,
-    work_items, manpower, machinery, materials } = req.body;
+    work_items, manpower, machinery, materials, contractors } = req.body;
 
   if (!site_id || !report_date) return res.status(400).json({ error: 'Site and date required' });
 
@@ -415,6 +415,17 @@ router.post('/', (req, res) => {
       floor_zone, system_type, safety_toolbox_talk ? 1 : 0, safety_ppe_compliance ? 1 : 0,
       safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks);
   const dprId = r.lastInsertRowid;
+
+  // Multi-contractor rows (mam's "at least 5 contractor" ask). Skip empty
+  // rows so the table only carries real entries. Legacy single contractor
+  // field stays for backwards compat.
+  const insertContractor = db.prepare('INSERT INTO dpr_contractors (dpr_id, name, manpower) VALUES (?,?,?)');
+  for (const c of (contractors || [])) {
+    const name = (c?.name || '').trim();
+    const mp = +c?.manpower || 0;
+    if (!name && !mp) continue;
+    insertContractor.run(dprId, name || null, mp);
+  }
 
   // Table A: Installation work items from PO
   const insertWork = db.prepare('INSERT INTO dpr_work_items (dpr_id, po_item_id, description, unit, floor_zone, boq_qty, rate, amount, planned_qty, actual_qty, cumulative_qty, variance_pct, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
@@ -516,6 +527,7 @@ router.get('/:id', (req, res) => {
   dpr.manpower = db.prepare('SELECT * FROM dpr_manpower WHERE dpr_id=?').all(req.params.id);
   dpr.materials = db.prepare('SELECT * FROM dpr_material WHERE dpr_id=?').all(req.params.id);
   dpr.machinery = db.prepare('SELECT * FROM dpr_machinery WHERE dpr_id=?').all(req.params.id);
+  dpr.contractors = db.prepare('SELECT id, name, manpower FROM dpr_contractors WHERE dpr_id=? ORDER BY id').all(req.params.id);
   res.json(dpr);
 });
 
