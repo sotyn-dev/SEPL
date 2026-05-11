@@ -2,9 +2,12 @@ import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
+import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { FiPlus, FiEdit2, FiTrash2 } from 'react-icons/fi';
 import { useAuth } from '../context/AuthContext';
+
+const blankRow = () => ({ description: '', quantity: 1, unit: 'nos', rate: 0, item_id: null, suggestion: null });
 
 export default function Quotations() {
   const { canDelete } = useAuth();
@@ -12,14 +15,16 @@ export default function Quotations() {
   const [boqs, setBoqs] = useState([]);
   const [quotations, setQuotations] = useState([]);
   const [leads, setLeads] = useState([]);
+  const [itemOptions, setItemOptions] = useState([]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
-  const [boqItems, setBoqItems] = useState([{ description: '', quantity: 1, unit: 'nos', rate: 0 }]);
+  const [boqItems, setBoqItems] = useState([blankRow()]);
 
   useEffect(() => {
     api.get('/quotations/boq').then(r => setBoqs(r.data));
     api.get('/quotations').then(r => setQuotations(r.data));
     api.get('/leads').then(r => setLeads(r.data));
+    api.get('/item-master/dropdown').then(r => setItemOptions(r.data));
   }, []);
 
   const reload = () => {
@@ -27,11 +32,49 @@ export default function Quotations() {
     api.get('/quotations').then(r => setQuotations(r.data));
   };
 
-  const addBoqItem = () => setBoqItems([...boqItems, { description: '', quantity: 1, unit: 'nos', rate: 0 }]);
+  const addBoqItem = () => setBoqItems([...boqItems, blankRow()]);
+
+  // AI Agent: when an item is picked from the catalogue, fetch the
+  // rate suggestion (last-quoted-to-this-client + 6-month stats) and
+  // pre-fill the rate with the item_master current_price.
+  const pickItem = async (rowIdx, item) => {
+    const next = [...boqItems];
+    if (!item) {
+      next[rowIdx] = { ...next[rowIdx], item_id: null, suggestion: null };
+      setBoqItems(next);
+      return;
+    }
+    next[rowIdx] = {
+      ...next[rowIdx],
+      item_id: item.id,
+      description: item.display_name,
+      unit: item.uom || next[rowIdx].unit,
+      rate: next[rowIdx].rate || item.current_price || 0,
+    };
+    setBoqItems(next);
+    try {
+      const params = { item_id: item.id };
+      if (form.lead_id) params.lead_id = form.lead_id;
+      const { data } = await api.get('/ai-agent/rate-suggestion', { params });
+      setBoqItems(curr => {
+        const c = [...curr];
+        c[rowIdx] = { ...c[rowIdx], suggestion: data };
+        return c;
+      });
+    } catch (e) { /* suggestion is best-effort */ }
+  };
+
+  const useSuggestedRate = (rowIdx, rate) => {
+    const next = [...boqItems];
+    next[rowIdx] = { ...next[rowIdx], rate };
+    setBoqItems(next);
+  };
 
   const createBoq = async (e) => {
     e.preventDefault();
-    await api.post('/quotations/boq', { ...form, items: boqItems });
+    // Strip UI-only `suggestion` field before posting
+    const items = boqItems.map(({ suggestion, ...rest }) => rest);
+    await api.post('/quotations/boq', { ...form, items });
     toast.success('BOQ created');
     setModal(false);
     reload();
@@ -63,7 +106,7 @@ export default function Quotations() {
         <>
           <div className="flex justify-between items-center">
             <h3 className="font-semibold text-gray-800">Bill of Quantities</h3>
-            <button onClick={() => { setForm({ lead_id: '', title: '', drawing_required: false }); setBoqItems([{ description: '', quantity: 1, unit: 'nos', rate: 0 }]); setModal('boq'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create BOQ</button>
+            <button onClick={() => { setForm({ lead_id: '', title: '', drawing_required: false }); setBoqItems([blankRow()]); setModal('boq'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create BOQ</button>
           </div>
           <div className="card p-0 overflow-x-auto">
             <table>
@@ -148,13 +191,36 @@ export default function Quotations() {
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={form.drawing_required} onChange={e => setForm({...form, drawing_required: e.target.checked})} /> Drawing Required
           </label>
-          <h4 className="font-semibold text-sm">Items</h4>
+          <div className="flex items-baseline justify-between">
+            <h4 className="font-semibold text-sm">Items</h4>
+            <span className="text-xs text-gray-400">AI suggests rates based on past quotations</span>
+          </div>
           {boqItems.map((item, i) => (
-            <div key={i} className="grid grid-cols-5 gap-2">
-              <input className="input col-span-2" placeholder="Description" value={item.description} onChange={e => { const n = [...boqItems]; n[i].description = e.target.value; setBoqItems(n); }} />
-              <input className="input" type="number" placeholder="Qty" value={item.quantity} onChange={e => { const n = [...boqItems]; n[i].quantity = +e.target.value; setBoqItems(n); }} />
-              <input className="input" placeholder="Unit" value={item.unit} onChange={e => { const n = [...boqItems]; n[i].unit = e.target.value; setBoqItems(n); }} />
-              <input className="input" type="number" placeholder="Rate" value={item.rate} onChange={e => { const n = [...boqItems]; n[i].rate = +e.target.value; setBoqItems(n); }} />
+            <div key={i} className="space-y-2 border border-gray-100 rounded p-2 bg-gray-50">
+              <div className="grid grid-cols-12 gap-2">
+                <div className="col-span-5">
+                  <SearchableSelect
+                    options={itemOptions}
+                    value={item.item_id}
+                    valueKey="id"
+                    displayKey="display_name"
+                    placeholder="Pick from Item Master (or type description below)"
+                    onChange={opt => pickItem(i, opt)}
+                  />
+                </div>
+                <input className="input col-span-3" placeholder="Description (auto-filled or free text)"
+                  value={item.description}
+                  onChange={e => { const n = [...boqItems]; n[i].description = e.target.value; setBoqItems(n); }} />
+                <input className="input col-span-1" type="number" placeholder="Qty" value={item.quantity}
+                  onChange={e => { const n = [...boqItems]; n[i].quantity = +e.target.value; setBoqItems(n); }} />
+                <input className="input col-span-1" placeholder="Unit" value={item.unit}
+                  onChange={e => { const n = [...boqItems]; n[i].unit = e.target.value; setBoqItems(n); }} />
+                <input className="input col-span-2" type="number" placeholder="Rate" value={item.rate}
+                  onChange={e => { const n = [...boqItems]; n[i].rate = +e.target.value; setBoqItems(n); }} />
+              </div>
+              {item.suggestion && (item.suggestion.last_for_client || item.suggestion.last_overall) && (
+                <RateSuggestion data={item.suggestion} onUse={r => useSuggestedRate(i, r)} />
+              )}
             </div>
           ))}
           <button type="button" onClick={addBoqItem} className="btn btn-secondary text-xs">+ Add Item</button>
@@ -196,6 +262,59 @@ export default function Quotations() {
           </div>
         </form>
       </Modal>
+    </div>
+  );
+}
+
+// AI Agent rate suggestion: shows last-quoted-to-this-client and the
+// 6-month avg/low/high across all clients, with one-click "use" buttons
+// so mam's team quotes consistently and never undersells by accident.
+function RateSuggestion({ data, onUse }) {
+  const { last_for_client, last_overall, six_month_stats, company_name } = data;
+  const fmt = (n) => 'Rs ' + Math.round(n).toLocaleString();
+  const ago = (iso) => {
+    const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+    if (days < 1) return 'today';
+    if (days === 1) return '1 day ago';
+    if (days < 30) return `${days} days ago`;
+    const months = Math.floor(days / 30);
+    return months === 1 ? '1 month ago' : `${months} months ago`;
+  };
+
+  return (
+    <div className="bg-blue-50 border border-blue-200 rounded p-2 text-xs space-y-1">
+      <div className="font-semibold text-blue-900 flex items-center gap-1">
+        <span>AI rate suggestion</span>
+      </div>
+      {last_for_client && company_name && (
+        <div className="flex items-center justify-between">
+          <span>
+            Last quoted to <span className="font-medium">{company_name}</span>:{' '}
+            <span className="font-semibold text-blue-900">{fmt(last_for_client.rate)}</span>{' '}
+            <span className="text-gray-500">· {ago(last_for_client.created_at)}{last_for_client.created_by_name ? ` · ${last_for_client.created_by_name}` : ''}</span>
+          </span>
+          <button type="button" onClick={() => onUse(last_for_client.rate)}
+            className="text-blue-700 hover:bg-blue-100 px-2 py-0.5 rounded text-xs font-medium">Use this</button>
+        </div>
+      )}
+      {!last_for_client && last_overall && (
+        <div className="flex items-center justify-between">
+          <span>
+            Last quoted (any client): <span className="font-semibold text-blue-900">{fmt(last_overall.rate)}</span>{' '}
+            <span className="text-gray-500">· {ago(last_overall.created_at)}{last_overall.company_name ? ` · ${last_overall.company_name}` : ''}</span>
+          </span>
+          <button type="button" onClick={() => onUse(last_overall.rate)}
+            className="text-blue-700 hover:bg-blue-100 px-2 py-0.5 rounded text-xs font-medium">Use this</button>
+        </div>
+      )}
+      {six_month_stats && (
+        <div className="text-gray-600">
+          Last 6 months ({six_month_stats.count} {six_month_stats.count === 1 ? 'quote' : 'quotes'}):
+          {' '}avg <span className="font-medium text-gray-900">{fmt(six_month_stats.avg)}</span>
+          {' '}· low <span className="font-medium text-gray-900">{fmt(six_month_stats.min)}</span>
+          {' '}· high <span className="font-medium text-gray-900">{fmt(six_month_stats.max)}</span>
+        </div>
+      )}
     </div>
   );
 }
