@@ -189,7 +189,10 @@ router.get('/status', requirePermission('ai_agent', 'view'), (req, res) => {
 // schema; it can make up to MAX_TOOL_ITER queries before returning a final
 // natural-language answer.
 
-const MAX_TOOL_ITER = 8;
+const MAX_TOOL_ITER = 5;
+// Wall-clock cap below Nginx's default 60s proxy_read_timeout so the
+// chatbot fails fast with a readable error instead of mam seeing a 504.
+const ANTHROPIC_TIMEOUT_MS = 50_000;
 const ROW_LIMIT = 500;
 
 // Tables Claude is allowed to read. Skipping sensitive auth tables.
@@ -273,8 +276,13 @@ router.post('/ask', requirePermission('ai_agent', 'view'), async (req, res) => {
   }
 
   const db = getDb();
-  const client = new Anthropic.default({ apiKey });
+  const client = new Anthropic.default({ apiKey, timeout: ANTHROPIC_TIMEOUT_MS });
   const model = getSetting('ai_model') || 'claude-opus-4-7';
+  // Adaptive thinking + effort + Anthropic-server-side tools (web_search)
+  // are Opus/Sonnet-4.6-only. Haiku 4.5 either 400s or pushes the request
+  // past Nginx's 60s proxy_read_timeout. Used below to conditionally
+  // attach those request params and tools.
+  const supportsAdaptive = /^claude-(opus-4-[67]|sonnet-4-6)/.test(model);
 
   const systemPrompt = `You are the AI assistant inside SEPL Engineers' internal ERP (an MEPF subcontracting business in India). The user asking is staff or admin. You have TWO tools:
 
@@ -298,10 +306,7 @@ Guidance:
 - If they ask about overdue payments, sales_bills with payment_status='pending' or 'partial' is the first place to check; receivables also tracks this.
 - If they ask "who", join with employees on the relevant *_by columns.`;
 
-  // Two tools: read-only SQL on the local ERP, and Claude's hosted web
-  // search (so the bot can answer "what's the current market rate of MS
-  // pipe online" — mam's "show rate live from net" requirement). Web
-  // search adds ~$0.01 per call but lets Claude decide when it's needed.
+  // Read-only SQL on the local ERP is always available.
   const tools = [
     {
       name: 'query_database',
@@ -314,12 +319,16 @@ Guidance:
         required: ['query'],
       },
     },
-    // allowed_callers: ['direct'] = use plain tool use, not programmatic
-    // tool calling (PTC). Haiku 4.5 doesn't support PTC, and PTC is the
-    // default for web_search_20260209 — without this Haiku 400s with
-    // "claude-haiku-4-5 does not support programmatic tool calling".
-    { type: 'web_search_20260209', name: 'web_search', allowed_callers: ['direct'] },
   ];
+  // Web search is Opus-only here. Haiku triggered Anthropic-side
+  // multi-iteration server-tool loops that pushed total response time
+  // past the Nginx proxy_read_timeout (60s) and surfaced as a 504 to
+  // mam — "Request failed with status code 504" on 'ms pipe 25mm rate'.
+  // Opus 4.x handles tool planning well enough to stay under the cap.
+  // allowed_callers: ['direct'] keeps the tool usable without PTC.
+  if (supportsAdaptive) {
+    tools.push({ type: 'web_search_20260209', name: 'web_search', allowed_callers: ['direct'] });
+  }
 
   // Build conversation history
   const messages = [];
@@ -330,11 +339,8 @@ Guidance:
   }
   messages.push({ role: 'user', content: question });
 
-  // Adaptive thinking + the `effort` parameter are only supported on the
-  // Opus/Sonnet 4.6+ family. Haiku 4.5 (and older Sonnet 4.5) 400 with
-  // "adaptive thinking is not supported on this model". Detect by ID
-  // prefix so the same call works on every model the UI offers.
-  const supportsAdaptive = /^claude-(opus-4-[67]|sonnet-4-6)/.test(model);
+  // supportsAdaptive declared earlier; reused for both adaptive thinking
+  // params here and the conditional web_search tool above.
   const baseParams = {
     model,
     max_tokens: 16000,
@@ -348,6 +354,7 @@ Guidance:
 
   const sqlRuns = [];
   let response;
+  const startMs = Date.now();
   try {
     for (let iter = 0; iter < MAX_TOOL_ITER; iter++) {
       response = await client.messages.create({ ...baseParams, messages });
@@ -385,11 +392,15 @@ Guidance:
       messages.push({ role: 'user', content: toolResults });
     }
   } catch (e) {
-    console.error('[AI Agent /ask] Anthropic call failed:', e.message);
+    const elapsedMs = Date.now() - startMs;
+    console.error(`[AI Agent /ask] Anthropic call failed after ${elapsedMs}ms:`, e.message);
     const status = e?.status || 500;
     let hint = '';
     if (status === 401) hint = ' Your API key is invalid — update it in Admin → AI Settings.';
     else if (status === 429) hint = ' Rate limited by Anthropic — wait a few seconds and try again.';
+    else if (e?.code === 'ETIMEDOUT' || /timeout/i.test(e?.message || '')) {
+      hint = ' Request took too long — try a more specific question, or switch to Claude Opus in Admin → AI Settings.';
+    }
     return res.status(502).json({ error: `AI request failed: ${e.message}${hint}` });
   }
 
@@ -399,10 +410,13 @@ Guidance:
     .join('\n')
     .trim();
 
+  const elapsedMs = Date.now() - startMs;
+  console.log(`[AI Agent /ask] ok ${model} elapsed=${elapsedMs}ms sqlRuns=${sqlRuns.length} stop=${response?.stop_reason}`);
   res.json({
     answer: answer || '(no answer)',
     sql_runs: sqlRuns,
     stop_reason: response?.stop_reason,
+    elapsed_ms: elapsedMs,
   });
 });
 
