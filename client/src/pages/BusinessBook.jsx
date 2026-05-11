@@ -194,7 +194,17 @@ export default function BusinessBook() {
       {/* Count */}
       <div className="flex justify-between items-center text-sm text-gray-500">
         <span>Showing {entries.length} entries</span>
-        {entries.length > 0 && <span className="font-medium">Total: {fmt(entries.reduce((s, e) => s + (e.po_amount || 0), 0))} | Balance: {fmt(entries.reduce((s, e) => s + (e.balance_amount || 0), 0))}</span>}
+        {entries.length > 0 && (
+          <span className="font-medium">
+            {/* Sum the SAME field the SALE AMT column displays per row
+                (sale_amount_without_gst). Was summing po_amount before, which
+                gave totals that disagreed with the Cash Flow project finance
+                grid even when both pages were looking at the same BB rows. */}
+            Sale Total: {fmt(entries.reduce((s, e) => s + (e.sale_amount_without_gst || 0), 0))}
+            {' | PO Total: '}{fmt(entries.reduce((s, e) => s + (e.po_amount || 0), 0))}
+            {' | Balance: '}{fmt(entries.reduce((s, e) => s + (e.balance_amount || 0), 0))}
+          </span>
+        )}
       </div>
 
       {/* Table */}
