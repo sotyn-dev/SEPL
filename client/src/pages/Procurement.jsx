@@ -53,6 +53,13 @@ export default function Procurement() {
   const [form, setForm] = useState({});
   const [warehouses, setWarehouses] = useState([]);  // for Mark Received auto-IN
   const [indentItems, setIndentItems] = useState([{ ...EMPTY_ITEM }]);
+  // Editable per-line items for the Sales Bill / Delivery Note modal.
+  // Pre-filled from Client PO (po_items) so the rate column shows the
+  // SELLING price (what we invoice the client), not vendor cost. Mam can
+  // tweak qty / rate / disc % / include flag per row before generating.
+  const [dispatchItems, setDispatchItems] = useState([]);
+  const [dispatchItemsLoading, setDispatchItemsLoading] = useState(false);
+  const [dispatchItemsSource, setDispatchItemsSource] = useState('po_items'); // 'po_items' | 'vendor_po' | 'empty'
   // When set, the Raise Indent modal is in EDIT mode for this indent id —
   // saveIndent will PUT instead of POST. Used by the Edit pencil action
   // (mam: 'site eng is on training, if they fill wrong indent can edit').
@@ -407,6 +414,43 @@ export default function Procurement() {
        'cgst_pct', 'sgst_pct', 'igst_pct', 'freight_amount', 'round_off_amount']
         .forEach(k => { if (form[k] != null && form[k] !== '') fd.append(k, form[k]); });
       if (form.reverse_charge) fd.append('reverse_charge', '1');
+    }
+    // Per-line-item overrides — only ship rows the user kept (include=true).
+    // The server stores this in items_json and the print endpoint uses it
+    // in preference to po_items / vendor_po_items. Each row carries qty,
+    // rate and disc% so we can rebuild the taxable amount server-side.
+    const includedItems = (dispatchItems || []).filter(it => it.include !== false);
+    if (includedItems.length) {
+      const payload = includedItems.map(it => {
+        const qty = +it.quantity || 0;
+        const rate = +it.rate || 0;
+        const discPct = +it.disc_pct || 0;
+        return {
+          description: it.description || '',
+          hsn: it.hsn || '',
+          unit: it.unit || '',
+          quantity: qty,
+          rate,
+          disc_pct: discPct,
+          amount: +(qty * rate * (1 - discPct / 100)).toFixed(2),
+          item_code: it.item_code || '',
+          specification: it.specification || '',
+          size: it.size || '',
+          item_name: it.item_name || '',
+        };
+      });
+      fd.append('items', JSON.stringify(payload));
+      // Send computed subtotal + grand-total to the row too so the list
+      // view can show the invoice value without re-joining items_json.
+      const subtotal = payload.reduce((s, it) => s + it.amount, 0);
+      const cgst = subtotal * (+form.cgst_pct || 0) / 100;
+      const sgst = subtotal * (+form.sgst_pct || 0) / 100;
+      const igst = subtotal * (+form.igst_pct || 0) / 100;
+      const freight = +form.freight_amount || 0;
+      const roundOff = +form.round_off_amount || 0;
+      const grandTotal = subtotal + cgst + sgst + igst + freight + roundOff;
+      fd.append('subtotal_amount', subtotal.toFixed(2));
+      fd.append('grand_total_amount', grandTotal.toFixed(2));
     }
     if (form.dispatch_file) fd.append('file', form.dispatch_file);
     try {
@@ -1199,7 +1243,35 @@ export default function Procurement() {
             notes: '',
             dispatch_file: null,
           });
+          setDispatchItems([]);
+          setDispatchItemsSource('empty');
           setModal('delivery');
+          // Pull Client PO items so the editable Sales Bill table is
+          // pre-filled with the selling price. Falls back to vendor_po
+          // items if no Client PO chain exists.
+          if (po?.id) {
+            setDispatchItemsLoading(true);
+            api.get(`/procurement/vendor-pos/${po.id}/client-po-items`)
+              .then(r => {
+                const rows = (r.data?.items || []).map(it => ({
+                  include: true,
+                  description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
+                  hsn: it.hsn_code || it.gst_text || '',
+                  unit: it.unit || '',
+                  quantity: +it.quantity || 0,
+                  rate: +it.rate || 0,
+                  disc_pct: 0,
+                  item_code: it.item_code || '',
+                  specification: it.specification || '',
+                  size: it.size || '',
+                  item_name: it.item_name || '',
+                }));
+                setDispatchItems(rows);
+                setDispatchItemsSource(r.data?.source || 'po_items');
+              })
+              .catch(() => { setDispatchItems([]); setDispatchItemsSource('empty'); })
+              .finally(() => setDispatchItemsLoading(false));
+          }
         };
         const openMarkReceived = (d) => {
           setForm({
@@ -1821,6 +1893,108 @@ export default function Procurement() {
             <div>
               <label className="label">Dispatch Date</label>
               <input className="input" type="date" value={form.delivery_date || ''} onChange={e => setForm({...form, delivery_date: e.target.value})} />
+            </div>
+          </div>
+
+          {/* Editable line items — pulled from the Client PO (po_items) so
+              the rate column is the SELLING price, not vendor cost. Mam:
+              "give option for edit" — she wants to tweak qty / rate /
+              disc % per row before the bill is generated. */}
+          <div className="border border-red-200 bg-red-50/40 rounded p-3 space-y-2">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <div className="text-[10px] font-bold uppercase text-red-700">Line Items</div>
+                <div className="text-[10px] text-gray-500">
+                  {dispatchItemsLoading ? 'Loading from Client PO…'
+                   : dispatchItemsSource === 'po_items' ? 'Pre-filled from Client PO line items (selling price). Tweak qty / rate / disc % if needed, or uncheck rows you\'re not dispatching today.'
+                   : dispatchItemsSource === 'vendor_po' ? 'No Client PO items found — falling back to Vendor PO items (vendor cost). Verify rates before saving.'
+                   : 'No items pre-filled. Add rows manually below.'}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="text-[11px] px-2 py-1 rounded border border-red-300 text-red-700 hover:bg-red-100"
+                onClick={() => setDispatchItems(prev => [...prev, {
+                  include: true, description: '', hsn: '', unit: 'nos',
+                  quantity: 0, rate: 0, disc_pct: 0,
+                }])}
+              >+ Add row</button>
+            </div>
+            <div className="overflow-x-auto -mx-3">
+              <table className="w-full text-[11px]">
+                <thead className="bg-red-100/60 text-red-800 uppercase">
+                  <tr>
+                    <th className="px-1 py-1 text-center" style={{ width: '32px' }}>✓</th>
+                    <th className="px-2 py-1 text-left">Description</th>
+                    <th className="px-1 py-1 text-left" style={{ width: '70px' }}>HSN</th>
+                    <th className="px-1 py-1 text-right" style={{ width: '70px' }}>Qty</th>
+                    <th className="px-1 py-1 text-left" style={{ width: '60px' }}>UOM</th>
+                    <th className="px-1 py-1 text-right" style={{ width: '90px' }}>Rate (₹)</th>
+                    <th className="px-1 py-1 text-right" style={{ width: '60px' }}>Disc %</th>
+                    <th className="px-1 py-1 text-right" style={{ width: '100px' }}>Amount (₹)</th>
+                    <th className="px-1 py-1" style={{ width: '32px' }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dispatchItems.length === 0 && !dispatchItemsLoading && (
+                    <tr><td colSpan="9" className="px-2 py-3 text-center text-gray-400 italic">No line items yet. Click "+ Add row" to add manually.</td></tr>
+                  )}
+                  {dispatchItems.map((it, idx) => {
+                    const qty = +it.quantity || 0;
+                    const rate = +it.rate || 0;
+                    const discPct = +it.disc_pct || 0;
+                    const amount = qty * rate * (1 - discPct / 100);
+                    const update = (patch) => {
+                      setDispatchItems(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
+                    };
+                    return (
+                      <tr key={idx} className={`border-b border-red-100 ${it.include === false ? 'opacity-40 bg-gray-50' : ''}`}>
+                        <td className="px-1 py-1 text-center">
+                          <input type="checkbox" checked={it.include !== false} onChange={e => update({ include: e.target.checked })} className="w-3.5 h-3.5" />
+                        </td>
+                        <td className="px-2 py-1">
+                          <input className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5" value={it.description || ''} onChange={e => update({ description: e.target.value })} placeholder="Item description" />
+                        </td>
+                        <td className="px-1 py-1">
+                          <input className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-[10px]" value={it.hsn || ''} onChange={e => update({ hsn: e.target.value })} placeholder="HSN" />
+                        </td>
+                        <td className="px-1 py-1 text-right">
+                          <input type="number" step="0.01" min="0" className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-right" value={it.quantity ?? ''} onChange={e => update({ quantity: e.target.value })} />
+                        </td>
+                        <td className="px-1 py-1">
+                          <input className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-[10px]" value={it.unit || ''} onChange={e => update({ unit: e.target.value })} placeholder="nos" />
+                        </td>
+                        <td className="px-1 py-1 text-right">
+                          <input type="number" step="0.01" min="0" className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-right" value={it.rate ?? ''} onChange={e => update({ rate: e.target.value })} />
+                        </td>
+                        <td className="px-1 py-1 text-right">
+                          <input type="number" step="0.01" min="0" max="100" className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-right" value={it.disc_pct ?? ''} onChange={e => update({ disc_pct: e.target.value })} placeholder="0" />
+                        </td>
+                        <td className="px-1 py-1 text-right font-mono">{amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        <td className="px-1 py-1 text-center">
+                          <button type="button" className="text-red-400 hover:text-red-600 text-sm leading-none" title="Remove row" onClick={() => setDispatchItems(prev => prev.filter((_, i) => i !== idx))}>×</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                {dispatchItems.some(it => it.include !== false) && (
+                  <tfoot>
+                    <tr className="border-t-2 border-red-300 font-semibold">
+                      <td colSpan="7" className="px-2 py-1 text-right text-red-800">Sub-total (taxable)</td>
+                      <td className="px-1 py-1 text-right font-mono text-red-800">
+                        {dispatchItems.filter(it => it.include !== false).reduce((s, it) => {
+                          const qty = +it.quantity || 0;
+                          const rate = +it.rate || 0;
+                          const discPct = +it.disc_pct || 0;
+                          return s + qty * rate * (1 - discPct / 100);
+                        }, 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td></td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
             </div>
           </div>
 

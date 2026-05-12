@@ -2220,6 +2220,15 @@ function initializeDatabase() {
     ['delivery_notes', 'round_off_amount REAL DEFAULT 0'],
     ['delivery_notes', 'subtotal_amount REAL DEFAULT 0'],
     ['delivery_notes', 'grand_total_amount REAL DEFAULT 0'],
+    // Per-line-item overrides for the dispatch (sales-bill / DN).
+    // Sales Bill defaults to po_items (Client PO line items) so the
+    // rate column is what SEPL charges the client, not vendor cost.
+    // The user can edit qty / rate / disc% / include flag inline before
+    // hitting Create — those overrides land in items_json so the
+    // print page renders the exact lines the user signed off on.
+    // Shape: JSON array of {po_item_id, description, hsn, unit, qty,
+    //                       rate, disc_pct, amount}
+    ['delivery_notes', 'items_json TEXT'],
     // Sub-Contractor module (mam's "Sub-Contractor Form" Google-Form
     // 47-entry workflow brought into ERP). Extends the existing
     // sub_contractors table — legacy HR fields (phone, email,

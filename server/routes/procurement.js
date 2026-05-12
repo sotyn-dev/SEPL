@@ -1102,6 +1102,15 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
   }
 
   const num = (v) => { const n = +v; return Number.isFinite(n) ? n : 0; };
+  // Per-line-item overrides — JSON array of {description, hsn, unit, qty,
+  // rate, disc_pct, amount, include}. Defaults to whatever Client PO had;
+  // the form lets mam tweak qty/rate/disc per row before generating.
+  let itemsJson = null;
+  if (Array.isArray(b.items) && b.items.length) {
+    try { itemsJson = JSON.stringify(b.items.filter(it => it && it.include !== false)); } catch (_) {}
+  } else if (typeof b.items === 'string' && b.items.trim()) {
+    itemsJson = b.items;
+  }
   const fields = {
     // Delivery-Note extras
     vehicle_no: b.vehicle_no || null,
@@ -1121,6 +1130,7 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
     round_off_amount: num(b.round_off_amount),
     subtotal_amount: num(b.subtotal_amount),
     grand_total_amount: num(b.grand_total_amount),
+    items_json: itemsJson,
   };
 
   try {
@@ -1259,6 +1269,52 @@ router.delete('/delivery-notes/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+// Pre-fill items for the Sales Bill / Delivery Note modal. Mam picks a
+// vendor PO; the modal needs the Client PO line items (po_items) so she
+// can tweak qty / rate / disc % per row before generating. We resolve
+// the same chain the print endpoint uses:
+//   vendor_pos.indent_id → indents.planning_id → order_planning.business_book_id
+//   → po_items.business_book_id
+// Returns the po_items in the order they were entered. Client-side falls
+// back to vendor_po_items if nothing comes back.
+router.get('/vendor-pos/:id/client-po-items', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT pi.id, pi.description, pi.quantity, pi.unit, pi.rate, pi.amount,
+           pi.hsn_code,
+           im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name
+      FROM po_items pi
+      LEFT JOIN item_master im ON pi.item_master_id = im.id
+     WHERE pi.business_book_id = (
+       SELECT op.business_book_id
+         FROM vendor_pos vp
+         JOIN indents ind ON ind.id = vp.indent_id
+         JOIN order_planning op ON op.id = ind.planning_id
+        WHERE vp.id = ?
+     )
+     ORDER BY pi.id
+  `).all(req.params.id);
+
+  // If no Client PO items found (rare — e.g. FOC challan from a stand-alone
+  // indent), surface the vendor_po lines as a fallback so the modal still
+  // has something to show. We mark them so the UI knows the rate column
+  // is vendor cost, not selling price.
+  if (!rows.length) {
+    const vpRows = db.prepare(`
+      SELECT vpi.id, ii.description, vpi.quantity, ii.unit, vpi.rate, vpi.amount,
+             NULL AS hsn_code,
+             im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name
+        FROM vendor_po_items vpi
+        LEFT JOIN indent_items ii ON vpi.indent_item_id = ii.id
+        LEFT JOIN item_master im ON ii.item_master_id = im.id
+       WHERE vpi.vendor_po_id = ?
+       ORDER BY vpi.id
+    `).all(req.params.id);
+    return res.json({ items: vpRows, source: 'vendor_po' });
+  }
+  res.json({ items: rows, source: 'po_items' });
+});
+
 // Print-page renderer for a dispatch row. Returns a self-contained HTML
 // page styled to match mam's SEPL Delivery Note / Sales Bill templates
 // (red header, two-column blocks, 8-row item table, totals + bank +
@@ -1288,19 +1344,105 @@ router.get('/delivery-notes/:id/print', (req, res) => {
   `).get(req.params.id);
   if (!dn) return res.status(404).send('Dispatch not found');
 
-  const items = db.prepare(`
-    SELECT ii.description, vpi.quantity, ii.unit, vpi.rate, vpi.amount,
-           im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name
-    FROM vendor_po_items vpi
-    LEFT JOIN indent_items ii ON vpi.indent_item_id = ii.id
-    LEFT JOIN item_master im ON ii.item_master_id = im.id
-    WHERE vpi.vendor_po_id = ?
-    ORDER BY vpi.id
-  `).all(dn.vendor_po_id);
+  // Resolve items in priority order:
+  //   1) dn.items_json — per-row overrides the user tweaked in the create
+  //      modal (qty / rate / disc % / include flag). Authoritative when set.
+  //   2) po_items — the Client PO line items (selling price). For a SALES
+  //      BILL this is what mam actually invoices; vendor cost would be wrong.
+  //   3) vendor_po_items — vendor cost fallback. Used when there's no
+  //      Client PO link (rare edge case for FOC challans, etc.).
+  let items = [];
+  let itemsSource = 'vendor_po';
+  if (dn.items_json) {
+    try {
+      const parsed = JSON.parse(dn.items_json);
+      if (Array.isArray(parsed) && parsed.length) {
+        items = parsed
+          .filter(it => it && it.include !== false)
+          .map(it => ({
+            description: it.description || '',
+            quantity: +it.quantity || 0,
+            unit: it.unit || '',
+            rate: +it.rate || 0,
+            disc_pct: +it.disc_pct || 0,
+            amount: +it.amount || ((+it.quantity || 0) * (+it.rate || 0) * (1 - (+it.disc_pct || 0) / 100)),
+            item_code: it.item_code || it.hsn || '',
+            specification: it.specification || '',
+            size: it.size || '',
+            gst_text: it.hsn || it.gst_text || '',
+            item_name: it.item_name || '',
+          }));
+        itemsSource = 'overrides';
+      }
+    } catch (_) { /* fall through to po_items */ }
+  }
+  if (!items.length) {
+    // Client PO line items via the chain:
+    //   delivery_notes.vendor_po_id → vendor_pos.indent_id
+    //   → indents.planning_id → order_planning.business_book_id
+    //   → po_items.business_book_id
+    const poItems = db.prepare(`
+      SELECT pi.description, pi.quantity, pi.unit, pi.rate, pi.amount,
+             pi.hsn_code,
+             im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name
+      FROM po_items pi
+      LEFT JOIN item_master im ON pi.item_master_id = im.id
+      WHERE pi.business_book_id = (
+        SELECT op.business_book_id
+        FROM vendor_pos vp
+        JOIN indents ind ON ind.id = vp.indent_id
+        JOIN order_planning op ON op.id = ind.planning_id
+        WHERE vp.id = ?
+      )
+      ORDER BY pi.id
+    `).all(dn.vendor_po_id);
+    if (poItems.length) {
+      items = poItems.map(it => ({
+        description: it.description || '',
+        quantity: +it.quantity || 0,
+        unit: it.unit || '',
+        rate: +it.rate || 0,
+        disc_pct: 0,
+        amount: +it.amount || ((+it.quantity || 0) * (+it.rate || 0)),
+        item_code: it.item_code || '',
+        specification: it.specification || '',
+        size: it.size || '',
+        gst_text: it.hsn_code || it.gst_text || '',
+        item_name: it.item_name || '',
+      }));
+      itemsSource = 'po_items';
+    }
+  }
+  if (!items.length) {
+    // Last-resort fallback — vendor cost. Used only when no Client PO row
+    // can be located (e.g. FOC challan from a stand-alone indent).
+    const vpItems = db.prepare(`
+      SELECT ii.description, vpi.quantity, ii.unit, vpi.rate, vpi.amount,
+             im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name
+      FROM vendor_po_items vpi
+      LEFT JOIN indent_items ii ON vpi.indent_item_id = ii.id
+      LEFT JOIN item_master im ON ii.item_master_id = im.id
+      WHERE vpi.vendor_po_id = ?
+      ORDER BY vpi.id
+    `).all(dn.vendor_po_id);
+    items = vpItems.map(it => ({
+      description: it.description || '',
+      quantity: +it.quantity || 0,
+      unit: it.unit || '',
+      rate: +it.rate || 0,
+      disc_pct: 0,
+      amount: +it.amount || ((+it.quantity || 0) * (+it.rate || 0)),
+      item_code: it.item_code || '',
+      specification: it.specification || '',
+      size: it.size || '',
+      gst_text: it.gst_text || '',
+      item_name: it.item_name || '',
+    }));
+  }
 
   const isSalesBill = dn.document_type === 'sales_bill';
   res.set('Content-Type', 'text/html; charset=utf-8');
-  res.send(renderDispatchHTML({ dn, items, isSalesBill }));
+  res.send(renderDispatchHTML({ dn, items, isSalesBill, itemsSource }));
 });
 
 // HTML template renderer — kept inline so it stays self-contained and
@@ -1335,11 +1477,17 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
   const padCount = Math.max(0, 8 - items.length);
   const rowsHtml = items.map((it, idx) => {
     const desc = [it.description, it.specification, it.size].filter(Boolean).join(' / ');
-    const taxable = (+it.quantity || 0) * (+it.rate || 0);
+    const qty = +it.quantity || 0;
+    const rate = +it.rate || 0;
+    const discPct = +it.disc_pct || 0;
+    const gross = qty * rate;
+    // Taxable = gross - line discount. If amount was stored we trust it;
+    // otherwise compute from the disc %.
+    const taxable = +it.amount || (gross * (1 - discPct / 100));
     if (isSalesBill) {
-      return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(it.quantity)}</td><td>${esc(it.unit || '')}</td><td class="num">${fmt(it.rate)}</td><td class="num">0</td><td class="num">${fmt(taxable)}</td><td class="num">${fmt(it.amount || taxable)}</td></tr>`;
+      return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td class="num">${fmt(rate)}</td><td class="num">${discPct ? fmt(discPct) : '0'}</td><td class="num">${fmt(taxable)}</td><td class="num">${fmt(taxable)}</td></tr>`;
     }
-    return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(it.quantity)}</td><td>${esc(it.unit || '')}</td><td></td></tr>`;
+    return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td></td></tr>`;
   }).join('') + Array.from({ length: padCount }, (_, i) => {
     const idx = items.length + i + 1;
     return isSalesBill
@@ -1387,9 +1535,15 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
   const docNo = isSalesBill ? `INV/2026/${dn.id}` : (dn.document_number || `DN/2026/${dn.id}`);
   const dnNum = dn.document_number || docNo;
 
-  // Compute totals for sales bill
+  // Compute totals for sales bill — honour per-line discount % so the
+  // taxable value matches what mam tweaked in the create-modal.
   let subtotal = 0;
-  for (const it of items) subtotal += (+it.quantity || 0) * (+it.rate || 0);
+  for (const it of items) {
+    const qty = +it.quantity || 0;
+    const rate = +it.rate || 0;
+    const discPct = +it.disc_pct || 0;
+    subtotal += +it.amount || (qty * rate * (1 - discPct / 100));
+  }
   const cgst = subtotal * (+dn.cgst_pct || 0) / 100;
   const sgst = subtotal * (+dn.sgst_pct || 0) / 100;
   const igst = subtotal * (+dn.igst_pct || 0) / 100;
