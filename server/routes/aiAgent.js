@@ -284,15 +284,18 @@ router.post('/ask', requirePermission('ai_agent', 'view'), async (req, res) => {
   // attach those request params and tools.
   const supportsAdaptive = /^claude-(opus-4-[67]|sonnet-4-6)/.test(model);
 
-  const systemPrompt = `You are the AI assistant inside SEPL Engineers' internal ERP (an MEPF subcontracting business in India). The user asking is staff or admin. You have TWO tools:
+  const systemPrompt = `You are the AI assistant inside SEPL Engineers' internal ERP (an MEPF subcontracting business in India). The user asking is staff or admin. You have TWO tools and you are EXPECTED to use BOTH when relevant — mam said "real ai agent which scan from all over not only from my ERP":
 
 1. query_database — read the local ERP database (leads, customers, items, quotations, POs, payments, DPR, attendance, etc.). Use this for ANY question about SEPL's own data.
 
-2. web_search — search the live internet. Use this when the user asks about market/online/current rates that aren't in our ERP yet, vendor news, commodity prices, GST rate lookups, supplier company details, or any fact that lives outside our database.
+2. web_search — search the live internet. Use this PROACTIVELY for: any question about rates / prices of materials (so you can compare our stored rate against today's market rate on IndiaMART / Justdial / cement / steel / electrical-cable industry sites), vendor news, commodity prices, GST rate lookups, supplier company details, or any fact that lives outside our database.
 
-Combine the tools when useful. Example: "is our cement rate competitive?" → first query_database for SEPL's current_price, then web_search for today's market rate on IndiaMART / Justdial / cement industry sites, then compare and answer.
+Default behaviour for ITEM RATE questions:
+- Always query_database for our internal rate first.
+- Then web_search the same item on the public Indian web (IndiaMART / Justdial / market portals) for today's price range.
+- Present BOTH side by side so the user can see if we're competitive.
 
-Answer concisely in plain English. Money is in Indian Rupees (Rs) — Indian-style formatting (e.g. "Rs 12,50,000"). Be specific: include names, numbers, dates. If a question is ambiguous, make one reasonable assumption and state it. Never invent data — only report what the tools return. When you cite a web-search number, mention the source briefly ("per IndiaMART today").
+Combine the tools when useful. Answer concisely in plain English. Money is in Indian Rupees (Rs) — Indian-style formatting (e.g. "Rs 12,50,000"). Be specific: include names, numbers, dates. If a question is ambiguous, make one reasonable assumption and state it. Never invent data — only report what the tools return. When you cite a web-search number, mention the source briefly ("per IndiaMART today").
 
 Database schema (SQLite). Only SELECT/WITH queries are allowed; the tool will reject anything else.
 
@@ -302,7 +305,7 @@ Guidance:
 - Prefer JOINs over multiple round-trip queries when sensible.
 - Use date('now') / datetime('now', '-N days') for recency filters.
 - LIMIT large result sets (≤ 100 rows for display).
-- If the user asks about "rates", look at item_master.current_price and item_price_history first; only fall back to web_search if they explicitly want "market rate" / "online price" / "current price online".
+- For "rates": ALWAYS read item_master.current_price + item_price_history AND web_search for the market price. Show both.
 - If they ask about overdue payments, sales_bills with payment_status='pending' or 'partial' is the first place to check; receivables also tracks this.
 - If they ask "who", join with employees on the relevant *_by columns.`;
 
@@ -320,15 +323,14 @@ Guidance:
       },
     },
   ];
-  // Web search is Opus-only here. Haiku triggered Anthropic-side
-  // multi-iteration server-tool loops that pushed total response time
-  // past the Nginx proxy_read_timeout (60s) and surfaced as a 504 to
-  // mam — "Request failed with status code 504" on 'ms pipe 25mm rate'.
-  // Opus 4.x handles tool planning well enough to stay under the cap.
-  // allowed_callers: ['direct'] keeps the tool usable without PTC.
-  if (supportsAdaptive) {
-    tools.push({ type: 'web_search_20260209', name: 'web_search', allowed_callers: ['direct'] });
-  }
+  // Web search available on every model — mam: "i want real ai agent
+  // which scan from all over not only from my ERP". Haiku used to
+  // 504 because it triggered many web-search iterations past Nginx's
+  // 60s timeout; that's mitigated now by ANTHROPIC_TIMEOUT_MS=50s
+  // (fails fast with a readable error) + MAX_TOOL_ITER=5.
+  // allowed_callers: ['direct'] keeps the tool usable on Haiku
+  // (it doesn't support programmatic tool calling).
+  tools.push({ type: 'web_search_20260209', name: 'web_search', allowed_callers: ['direct'] });
 
   // Build conversation history
   const messages = [];
