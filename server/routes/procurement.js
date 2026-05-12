@@ -1080,12 +1080,21 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
   const delivery_date = b.delivery_date || null;
   const notes = b.notes || null;
   const document_type = b.document_type || null;     // 'sales_bill' or 'challan'
-  const document_number = b.document_number || null;
   if (!document_type || !['sales_bill', 'challan'].includes(document_type)) {
     return res.status(400).json({ error: 'Dispatch type (Sales Bill or Challan) is required' });
   }
-  if (!document_number || !document_number.trim()) {
-    return res.status(400).json({ error: 'Document number is required' });
+  // Auto-generate the document number when not supplied so mam doesn't
+  // have to think up a unique INV/DC number herself. Format:
+  //   Sales Bill -> INV/{year}/{0001+}   e.g. INV/2026/0042
+  //   Challan    -> DC/{year}/{0001+}    e.g. DC/2026/0042
+  // The nextSequence helper scans existing rows for the same prefix and
+  // returns max+1, so deleting a row doesn't break uniqueness.
+  let document_number = b.document_number && String(b.document_number).trim();
+  if (!document_number) {
+    const { nextSequence } = require('../db/nextSequence');
+    const year = new Date().getFullYear();
+    const prefix = (document_type === 'sales_bill' ? `INV/${year}/` : `DC/${year}/`);
+    document_number = nextSequence(getDb(), 'delivery_notes', 'document_number', prefix, { pad: 4 });
   }
 
   let filePath = null;
@@ -1147,7 +1156,7 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
       fields.place_of_supply, fields.state_code, fields.reverse_charge, fields.e_way_bill_no,
       fields.cgst_pct, fields.sgst_pct, fields.igst_pct, fields.freight_amount, fields.round_off_amount,
       fields.subtotal_amount, fields.grand_total_amount);
-    res.status(201).json({ id: r.lastInsertRowid, file_path: filePath });
+    res.status(201).json({ id: r.lastInsertRowid, file_path: filePath, document_number, document_type });
   } catch (err) {
     if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
     res.status(500).json({ error: err.message });

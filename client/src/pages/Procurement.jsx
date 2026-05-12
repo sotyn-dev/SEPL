@@ -395,7 +395,8 @@ export default function Procurement() {
   const saveDeliveryNote = async (e) => {
     e.preventDefault();
     if (!form.document_type) return toast.error('Pick Sales Bill or Delivery Note');
-    if (!form.document_number || !form.document_number.trim()) return toast.error('Document number is required');
+    // document_number is now auto-generated server-side when blank — no
+    // user-side required check. Mam can still type one to override.
     // File is OPTIONAL now — the ERP generates the document; the signed
     // copy is uploaded later via Mark Received. Mam: "like po I want from
     // erp create sales bill or dispatch which i give you format".
@@ -403,7 +404,10 @@ export default function Procurement() {
     if (form.vendor_po_id) fd.append('vendor_po_id', form.vendor_po_id);
     if (form.delivery_date) fd.append('delivery_date', form.delivery_date);
     if (form.document_type) fd.append('document_type', form.document_type);
-    if (form.document_number) fd.append('document_number', form.document_number);
+    // Only append a document_number if the user explicitly typed one
+    // (mam can override the auto-generated value). When blank, the server
+    // generates INV/YYYY/#### or DC/YYYY/#### automatically.
+    if (form.document_number && form.document_number.trim()) fd.append('document_number', form.document_number.trim());
     if (form.notes) fd.append('notes', form.notes);
     // Document-type-specific fields driven by the conditional cards.
     if (form.document_type === 'challan') {
@@ -455,8 +459,11 @@ export default function Procurement() {
     if (form.dispatch_file) fd.append('file', form.dispatch_file);
     try {
       const r = await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      const which = form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill';
-      toast.success(`${which} created`);
+      const which = form.document_type === 'challan' ? 'Delivery Challan' : 'Sales Bill';
+      // Show the auto-generated number in the toast so mam knows what
+      // INV/DC number was assigned.
+      const generatedNo = r.data?.document_number;
+      toast.success(generatedNo ? `${which} ${generatedNo} created` : `${which} created`);
       setModal(false); load();
       // Auto-open the generated document in a new tab so mam can print
       // immediately, matching the "create like a PO" feel she asked for.
@@ -1887,8 +1894,27 @@ export default function Procurement() {
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="label">{form.document_type === 'challan' ? 'Challan' : 'Sales Bill'} Number *</label>
-              <input className="input" value={form.document_number || ''} onChange={e => setForm({...form, document_number: e.target.value})} required placeholder={form.document_type === 'challan' ? 'e.g. DN/2026/042' : 'e.g. INV/2026/042'} />
+              <label className="label">{form.document_type === 'challan' ? 'Challan' : 'Sales Bill'} Number</label>
+              {/* Auto-generated on save unless mam expands "Override" and
+                  types her own. Keeps the modal clean and prevents
+                  duplicate / inconsistent numbering. */}
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs">
+                <span className="font-mono font-semibold">
+                  {form.document_type === 'challan'
+                    ? `DC/${new Date().getFullYear()}/####`
+                    : `INV/${new Date().getFullYear()}/####`}
+                </span>
+                <span className="text-emerald-600">— auto-generated on save</span>
+              </div>
+              <details className="mt-1 text-[10px] text-gray-500">
+                <summary className="cursor-pointer hover:text-gray-700">Override manually</summary>
+                <input
+                  className="input mt-1"
+                  value={form.document_number || ''}
+                  onChange={e => setForm({...form, document_number: e.target.value})}
+                  placeholder={form.document_type === 'challan' ? 'e.g. DC/2026/0042' : 'e.g. INV/2026/0042'}
+                />
+              </details>
             </div>
             <div>
               <label className="label">Dispatch Date</label>
@@ -1920,7 +1946,14 @@ export default function Procurement() {
                 }])}
               >+ Add row</button>
             </div>
+            {/* Challan = FOC / RGP, not billable, so we hide Rate / Disc /
+                Amount columns entirely. Sales Bill keeps the full set. */}
             <div className="overflow-x-auto -mx-3">
+              {(() => {
+                const isChallan = form.document_type === 'challan';
+                const emptyColspan = isChallan ? 6 : 9;
+                const subtotalLabelColspan = isChallan ? 5 : 7;
+                return (
               <table className="w-full text-[11px]">
                 <thead className="bg-red-100/60 text-red-800 uppercase">
                   <tr>
@@ -1929,15 +1962,15 @@ export default function Procurement() {
                     <th className="px-1 py-1 text-left" style={{ width: '70px' }}>HSN</th>
                     <th className="px-1 py-1 text-right" style={{ width: '70px' }}>Qty</th>
                     <th className="px-1 py-1 text-left" style={{ width: '60px' }}>UOM</th>
-                    <th className="px-1 py-1 text-right" style={{ width: '90px' }}>Rate (₹)</th>
-                    <th className="px-1 py-1 text-right" style={{ width: '60px' }}>Disc %</th>
-                    <th className="px-1 py-1 text-right" style={{ width: '100px' }}>Amount (₹)</th>
+                    {!isChallan && <th className="px-1 py-1 text-right" style={{ width: '90px' }}>Rate (₹)</th>}
+                    {!isChallan && <th className="px-1 py-1 text-right" style={{ width: '60px' }}>Disc %</th>}
+                    {!isChallan && <th className="px-1 py-1 text-right" style={{ width: '100px' }}>Amount (₹)</th>}
                     <th className="px-1 py-1" style={{ width: '32px' }}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {dispatchItems.length === 0 && !dispatchItemsLoading && (
-                    <tr><td colSpan="9" className="px-2 py-3 text-center text-gray-400 italic">No line items yet. Click "+ Add row" to add manually.</td></tr>
+                    <tr><td colSpan={emptyColspan} className="px-2 py-3 text-center text-gray-400 italic">No line items yet. Click "+ Add row" to add manually.</td></tr>
                   )}
                   {dispatchItems.map((it, idx) => {
                     const qty = +it.quantity || 0;
@@ -1964,13 +1997,19 @@ export default function Procurement() {
                         <td className="px-1 py-1">
                           <input className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-[10px]" value={it.unit || ''} onChange={e => update({ unit: e.target.value })} placeholder="nos" />
                         </td>
-                        <td className="px-1 py-1 text-right">
-                          <input type="number" step="0.01" min="0" className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-right" value={it.rate ?? ''} onChange={e => update({ rate: e.target.value })} />
-                        </td>
-                        <td className="px-1 py-1 text-right">
-                          <input type="number" step="0.01" min="0" max="100" className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-right" value={it.disc_pct ?? ''} onChange={e => update({ disc_pct: e.target.value })} placeholder="0" />
-                        </td>
-                        <td className="px-1 py-1 text-right font-mono">{amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        {!isChallan && (
+                          <td className="px-1 py-1 text-right">
+                            <input type="number" step="0.01" min="0" className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-right" value={it.rate ?? ''} onChange={e => update({ rate: e.target.value })} />
+                          </td>
+                        )}
+                        {!isChallan && (
+                          <td className="px-1 py-1 text-right">
+                            <input type="number" step="0.01" min="0" max="100" className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-right" value={it.disc_pct ?? ''} onChange={e => update({ disc_pct: e.target.value })} placeholder="0" />
+                          </td>
+                        )}
+                        {!isChallan && (
+                          <td className="px-1 py-1 text-right font-mono">{amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        )}
                         <td className="px-1 py-1 text-center">
                           <button type="button" className="text-red-400 hover:text-red-600 text-sm leading-none" title="Remove row" onClick={() => setDispatchItems(prev => prev.filter((_, i) => i !== idx))}>×</button>
                         </td>
@@ -1978,10 +2017,10 @@ export default function Procurement() {
                     );
                   })}
                 </tbody>
-                {dispatchItems.some(it => it.include !== false) && (
+                {!isChallan && dispatchItems.some(it => it.include !== false) && (
                   <tfoot>
                     <tr className="border-t-2 border-red-300 font-semibold">
-                      <td colSpan="7" className="px-2 py-1 text-right text-red-800">Sub-total (taxable)</td>
+                      <td colSpan={subtotalLabelColspan} className="px-2 py-1 text-right text-red-800">Sub-total (taxable)</td>
                       <td className="px-1 py-1 text-right font-mono text-red-800">
                         {dispatchItems.filter(it => it.include !== false).reduce((s, it) => {
                           const qty = +it.quantity || 0;
@@ -1995,6 +2034,8 @@ export default function Procurement() {
                   </tfoot>
                 )}
               </table>
+                );
+              })()}
             </div>
           </div>
 
