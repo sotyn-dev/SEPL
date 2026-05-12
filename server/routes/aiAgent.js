@@ -249,6 +249,203 @@ function validateSelect(sql) {
   return null;
 }
 
+// ─── MODULE WORKFLOW GUIDES ────────────────────────────────────────
+// Step-by-step instructions for every major ERP workflow. Surfaced to
+// Claude as a `get_module_guide` tool so it can train staff in plain
+// English / Hindi when they ask "how to ...". Keep keys short and
+// snake_case so the model can call them reliably. Steps stay in
+// English-language module names (so screenshots match) — the model
+// translates to Hindi prose when the user asks for training in Hindi
+// or writes Hindi.
+const MODULE_GUIDES = {
+  dpr: {
+    title: 'DPR — Daily Progress Report',
+    when_to_use: 'Site engineer fills this every day to report installation work, manpower, materials, machinery and contractor counts on a site.',
+    steps: [
+      'Open the **DPR** module from the left sidebar.',
+      'Click **+ New DPR**.',
+      'Pick the **Site** (Business Book project) from the dropdown.',
+      'Fill **Report Date**, **Shift** (morning / day / full-day), **Weather**, and **Overall Status**.',
+      'In the **Contractors** section: pick contractor names from the dropdown and enter their manpower count for the day. Use "+ Add Contractor" if more than 5.',
+      'In **Work Items**: click a BOQ line and enter today\'s Qty done + Cumulative Qty. The Rate and Labour Rate auto-fill from the PO / Planning step.',
+      'In **Manpower Costs**: enter each cost row (Type, Qty, Rate, Amount).',
+      'In **Materials Consumed**: pick the item from PO, enter Consumed Today (in the item\'s UOM). Stock auto-decreases at the site warehouse.',
+      'In **Machinery/Tools**: equipment, hours used, condition.',
+      'Click **Submit DPR**. If you marked Loss for 3 consecutive days, an alert email auto-goes to the director.',
+    ],
+    permissions: 'Site engineers create. Admin / project head reviews. Module: dpr.create / dpr.view.',
+    common_issues: [
+      'If "Site" dropdown is empty: ask admin to create the project in **Business Book** first.',
+      'If labour rate column is blank on a work item: the **Order Planning** step has no Labour Rate Sheet attached — admin needs to upload it on Orders → Planning.',
+    ],
+  },
+  indent: {
+    title: 'Indent — Material Requisition',
+    when_to_use: 'Site team raises this when they need items from procurement (PO / FOC / RGP).',
+    steps: [
+      'Open **Procurement** → **Raise Indent** tab.',
+      'Pick the **Site** from the dropdown — BOQ items for that site auto-load below.',
+      'For each item you need: tick the row, pick a sub-item from **Item Master** (PO / FOC / RGP), set Qty and Make.',
+      'For items not in Item Master: click **Manual** mode and type description, qty, unit.',
+      'Click **Save as Draft** (you can edit later) or **Submit Indent** to send to purchase team.',
+      'Once approved, purchase team gets 3 vendor quotes (Step 2) and finalizes one (Step 3), creating a Vendor PO.',
+    ],
+    permissions: 'Site can create. Purchase team can approve. Module: procurement.create / procurement.approve.',
+    common_issues: [
+      'If BOQ items don\'t load: the site needs a PO with a BOQ Excel uploaded in **Orders**.',
+      'If you can\'t find an item in Item Master: raise a **Price Required** request first.',
+    ],
+  },
+  price_required: {
+    title: 'Price Required — New Item Request',
+    when_to_use: 'When an item you need isn\'t yet in Item Master and needs vendor quotes before it can be used in an Indent.',
+    steps: [
+      'Open **Price Required** from the sidebar.',
+      'Click **+ Raise Price Request** (single item) OR **Bulk Upload** (many items at once).',
+      'For bulk: click **Template** to download Excel, fill rows for each item (Item Name, Size, Spec, Make, UOM, Type, Department), save, then **Bulk Upload** → pick the file.',
+      'Each request appears in **All Requests** as **OPEN**.',
+      'Purchase team enters 3 vendor rates per item (Vendor Rates tab), finalizes one. The item then auto-appears in **Item Master** as **ADDED** with a fresh item code like PO-0042.',
+    ],
+    permissions: 'Any user creates. Purchase / Admin quotes & finalizes. Module: procurement.approve.',
+  },
+  vendor_po: {
+    title: 'Vendor PO — Send Order to Supplier',
+    when_to_use: 'After the purchase team finalizes vendor rates on indented items, a Vendor PO is created to lock the order.',
+    steps: [
+      'Open **Procurement → Vendor PO** tab.',
+      'Click **+ Create Vendor PO**.',
+      'Pick the **Indent** — its finalized items auto-list with rate + qty.',
+      'Set credit days, T&C, payment terms.',
+      'Click **Create Vendor PO** — system generates VPO/YYYY/#### number.',
+      'Upload the signed PO PDF if you have a hard copy.',
+    ],
+    permissions: 'Procurement.approve only.',
+  },
+  purchase_bill: {
+    title: 'Purchase Bill — Record Vendor Invoice',
+    when_to_use: 'When the vendor sends their invoice after delivery, record it here against the Vendor PO.',
+    steps: [
+      'Open **Procurement → Purchase Bills** tab.',
+      'Click **+ Add Bill**.',
+      'Pick the **Vendor PO** — totals auto-fill.',
+      'Enter Bill Number, Bill Date, Amount, GST.',
+      'Upload the vendor\'s invoice file (PDF / image).',
+      'Click **Save** — the bill is now linked to that Vendor PO and gates the Dispatch step.',
+    ],
+    permissions: 'Procurement.approve only.',
+  },
+  sales_bill: {
+    title: 'Sales Bill — Tax Invoice to Client',
+    when_to_use: 'Send a tax invoice to the client after dispatching billable goods.',
+    steps: [
+      'Open **Procurement → Dispatch & Receiving** tab.',
+      'Find the Vendor PO in "Ready to Dispatch" → click **Create Sales Bill / Delivery Note**.',
+      'Pick **Sales Bill** as dispatch type. Document number auto-generates as INV/YYYY/####.',
+      'Edit the line items grid — qty / rate / disc % per row. Rate column pre-fills from the Client PO (selling price). Uncheck rows you\'re not dispatching today.',
+      'Fill **Place of Supply**, **State Code**, **CGST %** (9% for Punjab), **SGST %** (9%), or **IGST %** (18% for inter-state).',
+      'Click **Create Sales Bill** — ERP generates the SEPL-format Tax Invoice in a new tab. Ctrl+P to print on A4.',
+      'After delivery, open the dispatch row and click **Mark Received** — upload the client\'s stamped + signed copy.',
+    ],
+    permissions: 'Procurement.approve only.',
+    common_issues: [
+      'If Bill To / Ship To fields are blank: open the Business Book lead and fill GSTIN, State Code, Billing Address, Shipping Address.',
+    ],
+  },
+  delivery_challan: {
+    title: 'Delivery Challan — FOC / RGP Dispatch',
+    when_to_use: 'For FOC (Free of Cost) or RGP (Returnable Gate Pass) dispatches that are NOT billable.',
+    steps: [
+      'Open **Procurement → Dispatch & Receiving** → **Create Sales Bill / Delivery Note**.',
+      'Pick **Delivery Challan** as the dispatch type. Document number auto-generates as DC/YYYY/####.',
+      'Items grid hides Rate / Disc / Amount columns (challan is not billable).',
+      'Fill **Vehicle No.**, **Driver Name + Mobile**, **LR / Challan No.**, **Total Packages**.',
+      'Click **Create Delivery Note** — ERP generates the SEPL-format DN; print on A4 and send with the truck.',
+    ],
+  },
+  order_planning: {
+    title: 'Order Planning + Labour Rates',
+    when_to_use: 'Plan when execution starts/ends for a PO AND upload the Labour Rate Sheet so DPR can use those rates.',
+    steps: [
+      'Open **Orders → Order Planning** tab.',
+      'Click **+ Create Plan**.',
+      'Pick the **Purchase Order** — its BOQ items auto-load below.',
+      'Set **Planned Start** and **Planned End** dates.',
+      'Click **Upload Labour Rate & Match** → pick the Excel labour-rate sheet. Each row is matched to a BOQ item by SN / description.',
+      'Verify the Labour Rate column — edit any row inline if a match looks off.',
+      'Click **Save Plan + Labour Rates** — labour rates are saved on po_items and auto-flow into DPR when site engineer fills daily progress.',
+    ],
+  },
+  business_book: {
+    title: 'Business Book — Add Client Lead',
+    when_to_use: 'Capture a new client / project. This is the root record everything (PO, Planning, DPR, Sales Bill, Cash Flow) links to.',
+    steps: [
+      'Open **Business Book** from the sidebar.',
+      'Click **+ Add Entry**.',
+      'Fill **Client Name** (required), **Company/Department**, **Project Name**.',
+      'Location & Address: State, **State Code** (e.g. 03 for Punjab), **Client GSTIN**, Billing Address, Shipping Address.',
+      'Project & Order details + Payment Terms.',
+      'Save — system generates lead number like SEPL20042, and auto-creates the Order Planning + DPR Site + Receivable + Cash Flow row.',
+    ],
+    common_issues: [
+      'Fill GSTIN and State Code so generated Sales Bills auto-populate them.',
+    ],
+  },
+  quotation: {
+    title: 'Quotation — Send Price Quote to Client',
+    when_to_use: 'Before the client raises a PO, send them a quotation for an enquiry.',
+    steps: [
+      'Open **Quotations** from sidebar.',
+      'Click **+ New Quotation**.',
+      'Pick the **Lead** (Business Book entry).',
+      'Add BOQ items inline OR upload an Excel BOQ.',
+      'System auto-generates QUO-#### number.',
+      'Click **Send** → download PDF and email to client.',
+    ],
+  },
+  cash_flow: {
+    title: 'Cash Flow — Daily Inflows / Outflows',
+    when_to_use: 'Track every Rs in and out of SEPL\'s bank/cash each day.',
+    steps: [
+      'Open **Cash Flow** from sidebar.',
+      'Top cards show today\'s opening, total in, total out, closing for the picked date.',
+      'Click **+ Add Entry** to add an inflow (client payment) or outflow (vendor payment, salary, etc.).',
+      'Pick category, party, amount, mode (cash / bank / UPI / cheque).',
+      'Save — the day\'s totals + the closing balance auto-update.',
+    ],
+  },
+  expense: {
+    title: 'Expense — Record Site or Office Expense',
+    when_to_use: 'Petty cash, travel, food, fuel, etc.',
+    steps: [
+      'Open **Expenses** from sidebar.',
+      'Click **+ Add Expense**.',
+      'Pick **Category** (Travel / Food / Fuel / Material etc.), **Site** (if site-specific), **Date**, **Amount**, **Mode**.',
+      'Attach a bill photo if you have one.',
+      'Save — appears in Cash Flow as outflow automatically once Paid.',
+    ],
+  },
+  attendance: {
+    title: 'Attendance — Mark In / Out',
+    when_to_use: 'Daily attendance for office + site staff.',
+    steps: [
+      'Open **Attendance** from sidebar.',
+      'Tap **Mark In** at start of day (records timestamp + GPS).',
+      'At end of day tap **Mark Out**.',
+      'Admin can view all attendance, mark leave, approve leave requests in the same module.',
+    ],
+  },
+  dpr_loss_alert: {
+    title: 'DPR Loss-Day Alert',
+    when_to_use: 'Auto-runs — no manual action needed.',
+    steps: [
+      'When a DPR is submitted and that day\'s net (Sale Value − Cost) is negative, the site enters a "loss day" streak.',
+      'If 3 consecutive days are loss, the ERP auto-emails director@securedengineers.com with the site, the 3 dates, and the loss amounts.',
+      'Configure the SMTP credentials in **Admin → Email Settings** for the email to actually send.',
+    ],
+  },
+};
+const GUIDE_KEYS = Object.keys(MODULE_GUIDES);
+
 function safeRunQuery(db, sql) {
   const err = validateSelect(sql);
   if (err) return { error: err };
@@ -320,18 +517,27 @@ router.post('/ask', requirePermission('ai_agent', 'view'), async (req, res) => {
   // attach those request params and tools.
   const supportsAdaptive = /^claude-(opus-4-[67]|sonnet-4-6)/.test(model);
 
-  const systemPrompt = `You are the AI assistant inside SEPL Engineers' internal ERP (an MEPF subcontracting business in India). The user asking is staff or admin. You have TWO tools and you are EXPECTED to use BOTH when relevant — mam said "real ai agent which scan from all over not only from my ERP":
+  const systemPrompt = `You are the AI assistant inside SEPL Engineers' internal ERP (an MEPF subcontracting business in India). The user asking is staff or admin. You have THREE tools and you are EXPECTED to use them when relevant — mam said "real ai agent which scan from all over not only from my ERP":
 
 1. query_database — read the local ERP database (leads, customers, items, quotations, POs, payments, DPR, attendance, etc.). Use this for ANY question about SEPL's own data.
 
 2. web_search — search the live internet. Use this PROACTIVELY for: any question about rates / prices of materials (so you can compare our stored rate against today's market rate on IndiaMART / Justdial / cement / steel / electrical-cable industry sites), vendor news, commodity prices, GST rate lookups, supplier company details, or any fact that lives outside our database.
+
+3. get_module_guide — pull built-in step-by-step instructions for an ERP module. Use this WHENEVER the user asks "how to ...", "kaise karte hai...", "training", "guide me through ...", or asks how to submit / create / file something. Valid module keys: ${GUIDE_KEYS.join(', ')}. Always call this BEFORE saying "I don't know how" — the answer is almost always in the guide.
 
 Default behaviour for ITEM RATE questions:
 - Always query_database for our internal rate first.
 - Then web_search the same item on the public Indian web (IndiaMART / Justdial / market portals) for today's price range.
 - Present BOTH side by side so the user can see if we're competitive.
 
-Combine the tools when useful. Answer concisely in plain English. Money is in Indian Rupees (Rs) — Indian-style formatting (e.g. "Rs 12,50,000"). Be specific: include names, numbers, dates. If a question is ambiguous, make one reasonable assumption and state it. Never invent data — only report what the tools return. When you cite a web-search number, mention the source briefly ("per IndiaMART today").
+LANGUAGE — TRAINING REPLIES:
+- If the user writes in Hindi (Devanagari OR Roman-Hindi like "kaise", "kaisa", "kya", "kar do"), reply in Hindi.
+- If the user asks "how to ..." or asks for training / guidance, reply in BOTH Hindi (Devanagari prose) AND keep module / button / field names in English so screenshots match the UI. Hindi explains "what to do"; English keeps the literal labels.
+- Format step-by-step answers as a numbered list. Bold the literal button text using **markdown** so the user can spot it on screen.
+- Keep tone warm and respectful — say "aap" (आप) not "tu". You're talking to mam or to staff she trained.
+- For non-training data questions in English, reply in English.
+
+Combine the tools when useful. Money is in Indian Rupees (Rs) — Indian-style formatting (e.g. "Rs 12,50,000"). Be specific: include names, numbers, dates. If a question is ambiguous, make one reasonable assumption and state it. Never invent data — only report what the tools return. When you cite a web-search number, mention the source briefly ("per IndiaMART today").
 
 Database schema (SQLite). Only SELECT/WITH queries are allowed; the tool will reject anything else.
 
@@ -356,6 +562,21 @@ Guidance:
           query: { type: 'string', description: 'A single SELECT/WITH query. No semicolons, no DDL/DML.' },
         },
         required: ['query'],
+      },
+    },
+    {
+      name: 'get_module_guide',
+      description: 'Look up the official step-by-step guide for an ERP module. Use this for any "how to ...", "kaise karte hai", training, or workflow question BEFORE saying you don\'t know. Returns title, when_to_use, step-by-step instructions, required permissions, and common issues.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          module: {
+            type: 'string',
+            description: `Module key — must be one of: ${GUIDE_KEYS.join(', ')}.`,
+            enum: GUIDE_KEYS,
+          },
+        },
+        required: ['module'],
       },
     },
   ];
@@ -415,16 +636,38 @@ Guidance:
 
       const toolResults = [];
       for (const block of response.content) {
-        if (block.type !== 'tool_use' || block.name !== 'query_database') continue;
-        const sql = block.input?.query || '';
-        const result = safeRunQuery(db, sql);
-        sqlRuns.push({ query: sql, row_count: result.row_count ?? 0, error: result.error || null });
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          content: JSON.stringify(result).slice(0, 50000),
-          is_error: !!result.error,
-        });
+        if (block.type !== 'tool_use') continue;
+        if (block.name === 'query_database') {
+          const sql = block.input?.query || '';
+          const result = safeRunQuery(db, sql);
+          sqlRuns.push({ query: sql, row_count: result.row_count ?? 0, error: result.error || null });
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: JSON.stringify(result).slice(0, 50000),
+            is_error: !!result.error,
+          });
+        } else if (block.name === 'get_module_guide') {
+          const wanted = String(block.input?.module || '').toLowerCase().trim();
+          const guide = MODULE_GUIDES[wanted];
+          if (!guide) {
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: block.id,
+              content: JSON.stringify({ error: `Unknown module "${wanted}". Available modules: ${GUIDE_KEYS.join(', ')}` }),
+              is_error: true,
+            });
+          } else {
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: block.id,
+              content: JSON.stringify(guide).slice(0, 50000),
+              is_error: false,
+            });
+          }
+        }
+        // Other tools (web_search) are server-side at Anthropic; nothing
+        // for us to do — Anthropic injects its own tool_result block.
       }
       if (!toolResults.length) break;
       messages.push({ role: 'user', content: toolResults });

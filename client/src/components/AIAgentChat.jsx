@@ -154,7 +154,8 @@ export default function AIAgentChat() {
                   {[
                     'What rate did we give L&T for 1.5T AC last time?',
                     'Which customers haven\'t paid in 60 days?',
-                    'Top 5 items by quote volume this quarter',
+                    'DPR kaise submit kare? Hindi me batao',
+                    'How to create Sales Bill?',
                     'Today\'s DPR submissions by site',
                   ].map((s, i) => (
                     <button key={i} onClick={() => setInput(s)}
