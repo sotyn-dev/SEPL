@@ -1331,25 +1331,34 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
 // to be opened in a new tab; user hits Ctrl+P → prints to A4.
 router.get('/delivery-notes/:id/print', (req, res) => {
   const db = getDb();
+  // Resolve client + site info through:
+  //   delivery_notes → vendor_pos → indents → order_planning → business_book
+  // Joining business_book directly via op.business_book_id is the most
+  // reliable path — going through purchase_orders.business_book_id used
+  // to leave bb fields null when op.po_id was absent. mam's screenshot
+  // showed empty CLIENT / COMPANY + DELIVERY SITE blocks for that
+  // reason. Also prefer ind.site_name over bb.project_name when set,
+  // since one BB record can have multiple indent sites.
   const dn = db.prepare(`
     SELECT dn.*, vp.po_number AS vendor_po_no,
            v.name AS vendor_name, v.gst_number AS vendor_gstin, v.address AS vendor_address,
            v.phone AS vendor_phone, v.email AS vendor_email,
            po.po_number AS client_po_no, po.po_date AS client_po_date,
-           bb.company_name AS client_company, bb.client_name AS client_contact,
-           bb.billing_address AS client_address, bb.shipping_address AS site_address,
+           bb.company_name AS client_company, bb.client_name AS client_person_name,
            bb.client_contact AS client_phone, bb.client_email,
+           bb.billing_address AS client_address, bb.shipping_address AS site_address,
            bb.state AS client_state, bb.district AS client_district,
            bb.gstin AS client_gstin, bb.state_code AS client_state_code,
-           bb.project_name AS site_name,
-           ind.indent_number
+           COALESCE(NULLIF(TRIM(ind.site_name), ''), bb.project_name) AS site_name,
+           ind.indent_number,
+           bb.lead_no AS bb_lead_no
     FROM delivery_notes dn
     LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
     LEFT JOIN vendors v ON vp.vendor_id = v.id
     LEFT JOIN indents ind ON vp.indent_id = ind.id
     LEFT JOIN order_planning op ON ind.planning_id = op.id
+    LEFT JOIN business_book bb ON bb.id = op.business_book_id
     LEFT JOIN purchase_orders po ON op.po_id = po.id
-    LEFT JOIN business_book bb ON po.business_book_id = bb.id
     WHERE dn.id = ?
   `).get(req.params.id);
   if (!dn) return res.status(404).send('Dispatch not found');
@@ -1667,7 +1676,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
             <div style="margin-top:3px"><b>Address:</b> ${fill(dn.client_address, '220px')}</div>
             <div style="margin-top:3px"><b>GSTIN:</b> ${fill(dn.client_gstin, '180px')}</div>
             <div style="margin-top:3px"><b>State:</b> ${fill(dn.client_state, '100px')} &nbsp; <b>Code:</b> ${fill(clientStateCode, '40px')}</div>
-            <div style="margin-top:3px"><b>Contact:</b> ${fill(dn.client_contact || dn.client_phone, '180px')}</div>
+            <div style="margin-top:3px"><b>Contact:</b> ${fill([dn.client_person_name, dn.client_phone].filter(Boolean).join(' · '), '180px')}</div>
           </td>
           <td>
             <div><b>Site Name:</b> ${fill(dn.site_name, '220px')}</div>
