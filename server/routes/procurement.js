@@ -1340,6 +1340,7 @@ router.get('/delivery-notes/:id/print', (req, res) => {
            bb.billing_address AS client_address, bb.shipping_address AS site_address,
            bb.client_contact AS client_phone, bb.client_email,
            bb.state AS client_state, bb.district AS client_district,
+           bb.gstin AS client_gstin, bb.state_code AS client_state_code,
            bb.project_name AS site_name,
            ind.indent_number
     FROM delivery_notes dn
@@ -1541,8 +1542,30 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
   `;
 
   const docTitle = isSalesBill ? 'TAX INVOICE / SALES BILL' : 'DELIVERY NOTE';
-  const docNo = isSalesBill ? `INV/2026/${dn.id}` : (dn.document_number || `DN/2026/${dn.id}`);
+  // Use the stored document_number (auto-generated INV/YYYY/#### or
+  // DC/YYYY/####); only fall back to id-based if somehow blank.
+  const docNo = dn.document_number || (isSalesBill ? `INV/${new Date().getFullYear()}/${dn.id}` : `DN/${new Date().getFullYear()}/${dn.id}`);
   const dnNum = dn.document_number || docNo;
+
+  // Best-effort state-name → GST state code lookup. Used when business_book
+  // doesn't have an explicit state_code saved (legacy rows). Punjab=03 etc.
+  const stateCodeFor = (name) => {
+    const map = {
+      'jammu and kashmir': '01', 'himachal pradesh': '02', 'punjab': '03',
+      'chandigarh': '04', 'uttarakhand': '05', 'haryana': '06', 'delhi': '07',
+      'rajasthan': '08', 'uttar pradesh': '09', 'bihar': '10', 'sikkim': '11',
+      'arunachal pradesh': '12', 'nagaland': '13', 'manipur': '14',
+      'mizoram': '15', 'tripura': '16', 'meghalaya': '17', 'assam': '18',
+      'west bengal': '19', 'jharkhand': '20', 'odisha': '21', 'chhattisgarh': '22',
+      'madhya pradesh': '23', 'gujarat': '24', 'daman and diu': '25',
+      'dadra and nagar haveli': '26', 'maharashtra': '27', 'andhra pradesh': '28',
+      'karnataka': '29', 'goa': '30', 'lakshadweep': '31', 'kerala': '32',
+      'tamil nadu': '33', 'puducherry': '34', 'andaman and nicobar islands': '35',
+      'telangana': '36', 'andhra pradesh (new)': '37', 'ladakh': '38',
+    };
+    return map[String(name || '').trim().toLowerCase()] || '';
+  };
+  const clientStateCode = dn.client_state_code || stateCodeFor(dn.client_state);
 
   // Compute totals for sales bill — honour per-line discount % so the
   // taxable value matches what mam tweaked in the create-modal.
@@ -1574,39 +1597,108 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
   `;
 
   if (isSalesBill) {
+    // Match the SEPL Sales Bill template page 1:1 — Bill To / Ship To
+    // with State + Code as two fields, GSTIN (if diff.) on Ship To,
+    // bank details + numbered T&C in side-by-side cards, and two
+    // separate signature panels.
+    const dispDate = (d) => {
+      if (!d) return '';
+      const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
+      return m ? `${m[3]} / ${m[2]} / ${m[1]}` : esc(d);
+    };
+    const billState = esc(dn.client_state || '');
+    const billStateCode = esc(clientStateCode);
+    const shipStateCode = esc(dn.state_code || clientStateCode);
     return `<!doctype html><html><head><title>${esc(docNo)}</title><style>${css}</style></head><body>
       <button class="print-btn" onclick="window.print()">🖨 Print</button>
       ${headerBlock}
       <table class="meta">
-        <tr><td class="lbl">Invoice No.</td><td>${esc(docNo)}</td><td class="lbl">Invoice Date</td><td>${esc(dn.delivery_date || '')}</td><td class="lbl">Client PO No.</td><td>${esc(dn.client_po_no || '')}</td><td class="lbl">PO Date</td><td>${esc(dn.client_po_date || '')}</td><td class="lbl">Delivery Note Ref.</td><td>${esc(dnNum)}</td></tr>
-        <tr><td class="lbl">Place of Supply</td><td>${esc(dn.place_of_supply || dn.client_state || '')}</td><td class="lbl">State Code</td><td>${esc(dn.state_code || '')}</td><td class="lbl">Reverse Charge</td><td>${dn.reverse_charge ? 'YES' : 'NO'}</td><td class="lbl">Vehicle No.</td><td>${esc(dn.vehicle_no || '')}</td><td class="lbl">E-Way Bill No.</td><td>${esc(dn.e_way_bill_no || '')}</td></tr>
+        <tr>
+          <td class="lbl">Invoice No.</td><td>${esc(docNo)}</td>
+          <td class="lbl">Invoice Date</td><td>${dispDate(dn.delivery_date)}</td>
+          <td class="lbl">Client PO No.</td><td>${esc(dn.client_po_no || '')}</td>
+          <td class="lbl">PO Date</td><td>${dispDate(dn.client_po_date)}</td>
+          <td class="lbl">Delivery Note Ref.</td><td>${esc(dnNum)}</td>
+        </tr>
+        <tr>
+          <td class="lbl">Place of Supply</td><td>${esc(dn.place_of_supply || dn.client_state || '')}</td>
+          <td class="lbl">State Code</td><td>${esc(dn.state_code || clientStateCode)}</td>
+          <td class="lbl">Reverse Charge</td><td>${dn.reverse_charge ? 'YES' : 'NO'}</td>
+          <td class="lbl">Vehicle No.</td><td>${esc(dn.vehicle_no || '')}</td>
+          <td class="lbl">E-Way Bill No.</td><td>${esc(dn.e_way_bill_no || '')}</td>
+        </tr>
       </table>
-      <table class="parties"><tr>
-        <td style="width:50%"><div class="lbl">Bill To</div>M/s <b>${esc(dn.client_company || '')}</b><br>Address: ${esc(dn.client_address || '')}<br>GSTIN: ${esc(dn.client_gstin || '')}<br>State: ${esc(dn.client_state || '')}<br>Contact: ${esc(dn.client_contact || dn.client_phone || '')}</td>
-        <td><div class="lbl">Ship To / Site</div>Site Name: <b>${esc(dn.site_name || '')}</b><br>Address: ${esc(dn.site_address || '')}<br>Site Engineer / Contact: ${esc(dn.client_phone || '')}</td>
-      </tr></table>
+      <table class="parties">
+        <tr>
+          <td class="lbl" style="width:50%">Bill To</td>
+          <td class="lbl">Ship To / Site</td>
+        </tr>
+        <tr>
+          <td style="width:50%">
+            <div><b>M/s</b> ${esc(dn.client_company || '')}</div>
+            <div><b>Address:</b> ${esc(dn.client_address || '')}</div>
+            <div><b>GSTIN:</b> ${esc(dn.client_gstin || '')}</div>
+            <div><b>State:</b> ${billState} &nbsp; <b>Code:</b> ${billStateCode}</div>
+            <div><b>Contact:</b> ${esc(dn.client_contact || dn.client_phone || '')}</div>
+          </td>
+          <td>
+            <div><b>Site Name:</b> ${esc(dn.site_name || '')}</div>
+            <div><b>Address:</b> ${esc(dn.site_address || '')}</div>
+            <div><b>GSTIN (if diff.):</b> ${esc(dn.client_gstin || '')}</div>
+            <div><b>State:</b> ${billState} &nbsp; <b>Code:</b> ${shipStateCode}</div>
+            <div><b>Site Engineer / Contact:</b> ${esc(dn.client_phone || '')}</div>
+          </td>
+        </tr>
+      </table>
       <table class="items">
-        <thead><tr><th style="width:30px">SL</th><th>DESCRIPTION OF GOODS / SERVICES</th><th style="width:60px">HSN / SAC</th><th style="width:50px">QTY</th><th style="width:40px">UOM</th><th style="width:60px">RATE (₹)</th><th style="width:40px">DISC %</th><th style="width:80px">TAXABLE (₹)</th><th style="width:80px">AMOUNT (₹)</th></tr></thead>
+        <thead><tr><th style="width:30px">SL NO.</th><th>DESCRIPTION OF GOODS / SERVICES</th><th style="width:60px">HSN / SAC</th><th style="width:50px">QTY</th><th style="width:40px">UOM</th><th style="width:60px">RATE (₹)</th><th style="width:40px">DISC. %</th><th style="width:80px">TAXABLE VALUE (₹)</th><th style="width:80px">AMOUNT (₹)</th></tr></thead>
         <tbody>${rowsHtml}</tbody>
       </table>
       <table class="totals">
         <tr><td class="label">Sub Total (Taxable Value)</td><td class="val">₹ ${fmt(subtotal)}</td></tr>
-        <tr><td class="label">Add: CGST @ ${dn.cgst_pct || 0}%</td><td class="val">₹ ${fmt(cgst)}</td></tr>
-        <tr><td class="label">Add: SGST/UTGST @ ${dn.sgst_pct || 0}%</td><td class="val">₹ ${fmt(sgst)}</td></tr>
-        <tr><td class="label">Add: IGST @ ${dn.igst_pct || 0}%</td><td class="val">₹ ${fmt(igst)}</td></tr>
-        <tr><td class="label">Add: Freight / Packing / Other</td><td class="val">₹ ${fmt(freight)}</td></tr>
+        <tr><td class="label">Add: CGST @ ${dn.cgst_pct || 0} %</td><td class="val">₹ ${fmt(cgst)}</td></tr>
+        <tr><td class="label">Add: SGST / UTGST @ ${dn.sgst_pct || 0} %</td><td class="val">₹ ${fmt(sgst)}</td></tr>
+        <tr><td class="label">Add: IGST @ ${dn.igst_pct || 0} %</td><td class="val">₹ ${fmt(igst)}</td></tr>
+        <tr><td class="label">Add: Freight / Packing / Other Charges</td><td class="val">₹ ${fmt(freight)}</td></tr>
         <tr><td class="label">Less: Round Off</td><td class="val">₹ ${fmt(roundOff)}</td></tr>
         <tr><td class="label grand">GRAND TOTAL (₹)</td><td class="val grand">₹ ${fmt(grandTotal)}</td></tr>
       </table>
-      <div style="margin-top:6px;font-size:11px;"><b>Amount Chargeable (in words):</b> Rupees ${esc(numToWords(grandTotal))} Only</div>
+      <div style="margin-top:6px;font-size:11px;border:1px solid #e7d4d4;padding:5px 8px;"><b>Amount Chargeable (in words):</b> Rupees ${esc(numToWords(grandTotal))} Only</div>
       <div style="display:flex;gap:8px;margin-top:6px;">
-        <div class="bank" style="flex:1"><div class="hdr">Bank Details for Payment</div><b>Beneficiary:</b> SECURED ENGINEERS PVT. LTD.<br><b>Bank:</b> __________________________<br><b>Branch:</b> __________________________<br><b>A/c No.:</b> __________________________<br><b>IFSC:</b> __________________________<br><b>UPI:</b> __________________________</div>
-        <div class="terms" style="flex:1"><div class="hdr">Terms & Conditions</div>1. Payment due within ____ days from invoice date.<br>2. Interest @ 18% p.a. on overdue amounts.<br>3. Goods once sold will not be taken back / exchanged.<br>4. Subject to LUDHIANA jurisdiction only.<br>5. Cheque / DD in favour of "Secured Engineers Pvt. Ltd.".<br>6. Please quote Invoice No. while making payment.</div>
+        <div class="bank" style="flex:1">
+          <div class="hdr">Bank Details for Payment</div>
+          <div><b>Beneficiary:</b> SECURED ENGINEERS PVT. LTD.</div>
+          <div><b>Bank Name:</b> __________________________</div>
+          <div><b>Branch:</b> ______________________________</div>
+          <div><b>A/c No.:</b> _____________________________</div>
+          <div><b>IFSC Code:</b> ___________________________</div>
+          <div><b>UPI ID:</b> ______________________________</div>
+        </div>
+        <div class="terms" style="flex:1">
+          <div class="hdr">Terms &amp; Conditions</div>
+          <ol style="margin:0;padding-left:18px;line-height:1.6">
+            <li>Payment due within ______ days from invoice date.</li>
+            <li>Interest @ 18% p.a. shall be charged on overdue amounts.</li>
+            <li>Goods once sold will not be taken back / exchanged.</li>
+            <li>Subject to <b>LUDHIANA</b> jurisdiction only.</li>
+            <li>Cheque / DD to be drawn in favour of <b>"Secured Engineers Pvt. Ltd."</b></li>
+            <li>Please quote Invoice No. while making payment.</li>
+          </ol>
+        </div>
       </div>
-      <div class="signblk"><div class="hdr">Receiver's Acknowledgement &nbsp; • &nbsp; For Secured Engineers Pvt. Ltd.</div>
-        <div class="row"><div>Name, Signature & Stamp with Date</div><div>Authorised Signatory</div></div>
+      <div style="display:flex;gap:8px;margin-top:6px;">
+        <div class="signblk" style="flex:1">
+          <div class="hdr">Receiver's Acknowledgement</div>
+          <div style="font-size:10px;color:#444;">Received the above material / services in good condition.</div>
+          <div class="row"><div>Name, Signature &amp; Stamp with Date</div></div>
+        </div>
+        <div class="signblk" style="flex:1">
+          <div class="hdr">For Secured Engineers Pvt. Ltd.</div>
+          <div style="height:14px"></div>
+          <div class="row"><div>Authorised Signatory</div></div>
+        </div>
       </div>
-      <div class="footnote">This is a Computer Generated Tax Invoice. &nbsp;|&nbsp; E. & O.E. &nbsp;|&nbsp; Certified that the particulars given above are true and correct.</div>
+      <div class="footnote">This is a Computer Generated Tax Invoice. &nbsp;|&nbsp; E. &amp; O.E. &nbsp;|&nbsp; Certified that the particulars given above are true and correct.</div>
     </body></html>`;
   }
 

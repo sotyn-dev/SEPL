@@ -2082,6 +2082,10 @@ function initializeDatabase() {
     // file (Excel / PDF / etc) so admin can attach the costing /
     // calculation sheet to each booked order.
     ['business_book', 'working_sheet_link TEXT'],
+    // Client GSTIN + state code — needed for the auto-generated Sales
+    // Bill / Tax Invoice (templates require these in the Bill To block).
+    ['business_book', 'gstin TEXT'],
+    ['business_book', 'state_code TEXT'],
     // Indent items now pick from item_master; keeps backward-compat description too
     ['indent_items', 'item_master_id INTEGER REFERENCES item_master(id)'],
     ['indent_items', 'make TEXT'],                 // e.g. "Schneider", "L&T"

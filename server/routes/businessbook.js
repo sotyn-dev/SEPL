@@ -7,7 +7,7 @@ router.use(authMiddleware);
 // All fields from Master Business Sheet
 const ALL_FIELDS = [
   'lead_type', 'client_name', 'company_name', 'project_name', 'client_contact', 'client_email', 'email_address',
-  'source_of_enquiry', 'district', 'state', 'billing_address', 'shipping_address',
+  'source_of_enquiry', 'district', 'state', 'state_code', 'gstin', 'billing_address', 'shipping_address',
   'guarantee_required', 'guarantee_percentage', 'sale_amount_without_gst', 'po_amount',
   'order_type', 'penalty_clause', 'penalty_clause_date',
   'committed_start_date', 'committed_delivery_date', 'committed_completion_date', 'freight_extra',
@@ -88,7 +88,7 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
 
   const r = db.prepare(`INSERT INTO business_book (
     lead_no, lead_type, client_name, company_name, project_name, client_contact, client_email, email_address,
-    source_of_enquiry, district, state, billing_address, shipping_address,
+    source_of_enquiry, district, state, state_code, gstin, billing_address, shipping_address,
     guarantee_required, guarantee_percentage, sale_amount_without_gst, po_amount,
     order_type, penalty_clause, penalty_clause_date,
     committed_start_date, committed_delivery_date, committed_completion_date, freight_extra,
@@ -109,9 +109,9 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
     tpa_labour_link, tpa_labour_signed_link, final_drawing_link,
     working_sheet_link,
     remarks, created_by
-  ) VALUES (${Array(70).fill('?').join(',')})`).run(
+  ) VALUES (${Array(72).fill('?').join(',')})`).run(
     leadNo, b.lead_type || 'Private', b.client_name, b.company_name, b.project_name, b.client_contact, b.client_email, b.email_address,
-    b.source_of_enquiry, b.district, b.state, b.billing_address, b.shipping_address,
+    b.source_of_enquiry, b.district, b.state, b.state_code || null, b.gstin || null, b.billing_address, b.shipping_address,
     b.guarantee_required || 'No', b.guarantee_percentage, b.sale_amount_without_gst || 0, b.po_amount || 0,
     b.order_type || 'Supply', b.penalty_clause || 'No', b.penalty_clause_date || null,
     b.committed_start_date || null, b.committed_delivery_date || null, b.committed_completion_date || null, b.freight_extra || 'No',
@@ -191,7 +191,7 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
 
   getDb().prepare(`UPDATE business_book SET
     lead_type=?, client_name=?, company_name=?, project_name=?, client_contact=?, client_email=?, email_address=?,
-    source_of_enquiry=?, district=?, state=?, billing_address=?, shipping_address=?,
+    source_of_enquiry=?, district=?, state=?, state_code=?, gstin=?, billing_address=?, shipping_address=?,
     guarantee_required=?, guarantee_percentage=?, sale_amount_without_gst=?, po_amount=?,
     order_type=?, penalty_clause=?, penalty_clause_date=?,
     committed_start_date=?, committed_delivery_date=?, committed_completion_date=?, freight_extra=?,
@@ -213,7 +213,7 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
     working_sheet_link=?,
     remarks=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(
     b.lead_type, b.client_name, b.company_name, b.project_name, b.client_contact, b.client_email, b.email_address,
-    b.source_of_enquiry, b.district, b.state, b.billing_address, b.shipping_address,
+    b.source_of_enquiry, b.district, b.state, b.state_code || null, b.gstin || null, b.billing_address, b.shipping_address,
     b.guarantee_required || 'No', b.guarantee_percentage, b.sale_amount_without_gst || 0, b.po_amount || 0,
     b.order_type, b.penalty_clause, b.penalty_clause_date || null,
     b.committed_start_date || null, b.committed_delivery_date || null, b.committed_completion_date || null, b.freight_extra || 'No',

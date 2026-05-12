@@ -19,7 +19,7 @@ const SOURCES = ['Inbound Enquiry', 'Indiamart Enquiry', 'WhatsApp', 'LinkedIn',
 const emptyForm = {
   lead_type: 'Private', client_name: '', company_name: '', project_name: '',
   client_contact: '', client_email: '', email_address: '',
-  source_of_enquiry: '', district: '', state: '', billing_address: '', shipping_address: '',
+  source_of_enquiry: '', district: '', state: '', state_code: '', gstin: '', billing_address: '', shipping_address: '',
   guarantee_required: 'No', guarantee_percentage: '', sale_amount_without_gst: 0, po_amount: 0,
   order_type: 'Supply', penalty_clause: 'No', penalty_clause_date: '',
   committed_start_date: '', committed_delivery_date: '', committed_completion_date: '', freight_extra: 'No',
@@ -74,7 +74,7 @@ export default function BusinessBook() {
   const cleanFormText = (f) => {
     const out = { ...f };
     const textFields = ['client_name', 'company_name', 'project_name', 'lead_type',
-      'district', 'state', 'po_number', 'category', 'order_type', 'employee_assigned',
+      'district', 'state', 'state_code', 'gstin', 'po_number', 'category', 'order_type', 'employee_assigned',
       'client_contact', 'client_email', 'email_address', 'source_of_enquiry',
       'customer_type', 'client_type', 'customer_code'];
     for (const k of textFields) if (typeof out[k] === 'string') out[k] = cleanText(out[k]);
@@ -282,7 +282,7 @@ export default function BusinessBook() {
               <div className="bg-red-50 p-3 rounded-lg text-center"><p className="text-xs text-gray-500">Balance</p><p className="font-bold text-red-600">{fmt(viewEntry.balance_amount)}</p></div>
             </div>
             <DSection title="Client & Company" items={[['Client', viewEntry.client_name], ['Company/Dept', viewEntry.company_name], ['Contact', viewEntry.client_contact], ['Client Email', viewEntry.client_email], ['Email', viewEntry.email_address], ['Source', viewEntry.source_of_enquiry], ['Customer Type', viewEntry.customer_type], ['Client Type', viewEntry.client_type], ['Customer Code', viewEntry.customer_code]]} />
-            <DSection title="Location" items={[['District', viewEntry.district], ['State', viewEntry.state], ['Billing Address', viewEntry.billing_address], ['Shipping Address', viewEntry.shipping_address]]} />
+            <DSection title="Location" items={[['District', viewEntry.district], ['State', viewEntry.state], ['State Code', viewEntry.state_code], ['GSTIN', viewEntry.gstin], ['Billing Address', viewEntry.billing_address], ['Shipping Address', viewEntry.shipping_address]]} />
             <DSection title="Project & Order" items={[['Project', viewEntry.project_name], ['Category', viewEntry.category], ['Order Type', viewEntry.order_type], ['PO Number', viewEntry.po_number], ['PO Date', viewEntry.po_date], ['Guarantee', viewEntry.guarantee_required], ['Guarantee %', viewEntry.guarantee_percentage], ['Penalty Clause', viewEntry.penalty_clause], ['Penalty Date', viewEntry.penalty_clause_date], ['Freight Extra', viewEntry.freight_extra]]} />
             <DSection title="Committed Dates" items={[['Start', viewEntry.committed_start_date], ['Delivery', viewEntry.committed_delivery_date], ['Completion', viewEntry.committed_completion_date]]} />
             <DSection title="People" items={[['Employee', viewEntry.employee_assigned], ['Lead By', viewEntry.lead_by], ['Management Person', viewEntry.management_person_name], ['Mgmt Contact', viewEntry.management_person_contact], ['Operations Person', viewEntry.operations_person_name], ['Ops Contact', viewEntry.operations_person_contact], ['PMC Person', viewEntry.pmc_person_name], ['PMC Contact', viewEntry.pmc_person_contact], ['Architect', viewEntry.architect_person_name], ['Architect Contact', viewEntry.architect_person_contact], ['Accounts Person', viewEntry.accounts_person_name], ['Accounts Contact', viewEntry.accounts_person_contact]]} />
@@ -321,6 +321,12 @@ export default function BusinessBook() {
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               <Inp label="District" value={form.district} onChange={v => F('district', v)} />
               <Inp label="State" value={form.state} onChange={v => F('state', v)} />
+              <Inp label="State Code" value={form.state_code} onChange={v => F('state_code', v)} placeholder="e.g. 03" />
+              {/* GSTIN feeds into the auto-generated Sales Bill / Tax
+                  Invoice. Punjab GSTINs start with 03; verify the format
+                  is 15 chars (2 digit state + 10 char PAN + entity code +
+                  Z + checksum). */}
+              <Inp label="Client GSTIN" value={form.gstin} onChange={v => F('gstin', v)} placeholder="e.g. 03AABCS1234A1Z5" />
               <Inp label="Billing Address" value={form.billing_address} onChange={v => F('billing_address', v)} />
               <div className="col-span-2"><Inp label="Shipping / Site Address" value={form.shipping_address} onChange={v => F('shipping_address', v)} /></div>
             </div>
