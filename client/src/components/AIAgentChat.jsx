@@ -1,6 +1,46 @@
 import { useState, useRef, useEffect } from 'react';
 import api from '../api';
-import { FiMessageCircle, FiX, FiSend, FiAlertCircle } from 'react-icons/fi';
+import { FiX, FiSend, FiAlertCircle } from 'react-icons/fi';
+
+// Tiny robot-head SVG used for the floating chat bubble. Steel head,
+// glowing antenna, cyan eyes that blink, and a subtle smile. Sized via
+// the parent button — width/height = 100%.
+function RobotHead() {
+  return (
+    <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" className="w-9 h-9">
+      {/* Antenna stem + glowing tip */}
+      <line x1="32" y1="4" x2="32" y2="12" stroke="#cbd5e1" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="32" cy="4" r="2.4" fill="#22d3ee">
+        <animate attributeName="opacity" values="1;0.35;1" dur="1.6s" repeatCount="indefinite" />
+      </circle>
+      {/* Head — rounded square */}
+      <rect x="10" y="14" width="44" height="38" rx="9" fill="url(#robotHeadGrad)" stroke="#1e293b" strokeWidth="1.2" />
+      {/* Side "ears" (audio receptors) */}
+      <rect x="6" y="26" width="4" height="12" rx="1.2" fill="#94a3b8" />
+      <rect x="54" y="26" width="4" height="12" rx="1.2" fill="#94a3b8" />
+      {/* Visor / screen panel */}
+      <rect x="15" y="22" width="34" height="18" rx="3" fill="#0f172a" stroke="#334155" strokeWidth="0.6" />
+      {/* Eyes — cyan, blinking */}
+      <circle cx="24" cy="31" r="3" fill="#22d3ee">
+        <animate attributeName="r" values="3;3;0.6;3;3" keyTimes="0;0.45;0.5;0.55;1" dur="3.4s" repeatCount="indefinite" />
+      </circle>
+      <circle cx="40" cy="31" r="3" fill="#22d3ee">
+        <animate attributeName="r" values="3;3;0.6;3;3" keyTimes="0;0.45;0.5;0.55;1" dur="3.4s" repeatCount="indefinite" />
+      </circle>
+      {/* Eye glow */}
+      <circle cx="24" cy="31" r="4.5" fill="#22d3ee" opacity="0.18" />
+      <circle cx="40" cy="31" r="4.5" fill="#22d3ee" opacity="0.18" />
+      {/* Smile */}
+      <path d="M22 46 Q32 50 42 46" stroke="#cbd5e1" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+      <defs>
+        <linearGradient id="robotHeadGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#475569" />
+          <stop offset="100%" stopColor="#1e293b" />
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
 
 // Floating chat bubble + expandable panel. Renders on every page via
 // Layout.jsx. Hidden entirely if the API key isn't configured (so
@@ -65,15 +105,25 @@ export default function AIAgentChat() {
 
   return (
     <>
-      {/* Bubble — bottom-right. The Help & Support button uses bottom-6 right-6,
-          so we sit just above it. */}
+      {/* Floating robot — bottom-right. The Help & Support button uses
+          bottom-6 right-6, so we sit just above it. Style: steel/dark
+          chassis, glowing cyan antenna + eyes, hovers with a slow bob
+          and pulses an outer ring to look "alive". */}
       {!open && (
         <button
           onClick={() => setOpen(true)}
           title="Ask ERP — AI Assistant"
-          className="fixed bottom-24 right-6 z-30 w-14 h-14 rounded-full bg-gradient-to-br from-red-700 to-red-900 text-white shadow-xl shadow-red-900/40 flex items-center justify-center hover:scale-110 transition-transform"
+          className="ai-robot-btn fixed bottom-24 right-6 z-30 w-16 h-16 rounded-2xl bg-gradient-to-b from-slate-700 via-slate-800 to-slate-900 text-white shadow-xl shadow-cyan-900/30 ring-1 ring-cyan-400/30 flex items-center justify-center hover:scale-110 transition-transform"
         >
-          <FiMessageCircle size={22} />
+          {/* Outer glow ring — slow pulse */}
+          <span aria-hidden="true" className="ai-robot-ring absolute inset-0 rounded-2xl ring-2 ring-cyan-400/40" />
+          <RobotHead />
+          <style>{`
+            @keyframes ai-robot-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+            @keyframes ai-robot-pulse { 0%, 100% { opacity: 0.35; transform: scale(1); } 50% { opacity: 0; transform: scale(1.18); } }
+            .ai-robot-btn { animation: ai-robot-bob 3.2s ease-in-out infinite; }
+            .ai-robot-ring { animation: ai-robot-pulse 2.2s ease-out infinite; }
+          `}</style>
         </button>
       )}
 
