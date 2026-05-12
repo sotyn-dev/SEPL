@@ -387,21 +387,42 @@ export default function Procurement() {
 
   const saveDeliveryNote = async (e) => {
     e.preventDefault();
-    if (!form.document_type) return toast.error('Pick Sales Bill or Challan');
+    if (!form.document_type) return toast.error('Pick Sales Bill or Delivery Note');
     if (!form.document_number || !form.document_number.trim()) return toast.error('Document number is required');
-    if (!form.dispatch_file) return toast.error('Dispatch file is required — upload the Sales Bill / Challan');
-    // Multipart so we can attach the Sales Bill / Challan scan.
+    // File is OPTIONAL now — the ERP generates the document; the signed
+    // copy is uploaded later via Mark Received. Mam: "like po I want from
+    // erp create sales bill or dispatch which i give you format".
     const fd = new FormData();
     if (form.vendor_po_id) fd.append('vendor_po_id', form.vendor_po_id);
     if (form.delivery_date) fd.append('delivery_date', form.delivery_date);
     if (form.document_type) fd.append('document_type', form.document_type);
     if (form.document_number) fd.append('document_number', form.document_number);
     if (form.notes) fd.append('notes', form.notes);
+    // Document-type-specific fields driven by the conditional cards.
+    if (form.document_type === 'challan') {
+      ['vehicle_no', 'driver_name', 'driver_mobile', 'lr_challan_no', 'total_packages']
+        .forEach(k => { if (form[k] != null && form[k] !== '') fd.append(k, form[k]); });
+    } else {
+      ['place_of_supply', 'state_code', 'e_way_bill_no', 'vehicle_no',
+       'cgst_pct', 'sgst_pct', 'igst_pct', 'freight_amount', 'round_off_amount']
+        .forEach(k => { if (form[k] != null && form[k] !== '') fd.append(k, form[k]); });
+      if (form.reverse_charge) fd.append('reverse_charge', '1');
+    }
     if (form.dispatch_file) fd.append('file', form.dispatch_file);
     try {
-      await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      toast.success('Dispatch recorded');
+      const r = await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const which = form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill';
+      toast.success(`${which} created`);
       setModal(false); load();
+      // Auto-open the generated document in a new tab so mam can print
+      // immediately, matching the "create like a PO" feel she asked for.
+      if (r.data?.id) {
+        try {
+          const printRes = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'text' });
+          const blob = new Blob([printRes.data], { type: 'text/html' });
+          window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+        } catch (_) { /* user can still click 🖨 Print in the list */ }
+      }
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -1746,8 +1767,15 @@ export default function Procurement() {
         </form>
       </Modal>
 
-      {/* Delivery / Dispatch Modal — Sales Bill or Delivery Challan with file upload */}
-      <Modal isOpen={modal === 'delivery'} onClose={() => setModal(false)} title={form.vendor_po_number ? `Dispatch for ${form.vendor_po_number}` : 'Record Dispatch to Site'}>
+      {/* Create Sales Bill / Delivery Note — mam: "like po I want from erp
+          create sales bill or dispatch". The form gathers everything the
+          template needs, save submits the data, and the SEPL-format
+          document is generated right after save (opens in a new tab).
+          The signed-copy upload is now a follow-up step after delivery. */}
+      <Modal isOpen={modal === 'delivery'} onClose={() => setModal(false)} title={(() => {
+        const which = form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill';
+        return form.vendor_po_number ? `Create ${which} — ${form.vendor_po_number}` : `Create ${which}`;
+      })()}>
         <form onSubmit={saveDeliveryNote} className="space-y-4">
           {form.vendor_po_number && (
             <div className="bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-xs text-emerald-700">
@@ -1831,14 +1859,23 @@ export default function Procurement() {
             </div>
           )}
 
-          <div>
-            <label className="label">{form.document_type === 'challan' ? 'Signed Delivery Note' : 'Signed Sales Bill'} <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX — optional, upload signed copy after delivery)</span></label>
-            <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" onChange={e => setForm({ ...form, dispatch_file: e.target.files?.[0] || null })} />
-            {form.dispatch_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.dispatch_file.name}</p>}
-            <p className="text-[10px] text-gray-500 mt-1">Tip: save the dispatch first, then click <b>🖨 Print</b> in the dispatch list to generate the SEPL-format document. Get it signed at delivery and upload the signed copy here later.</p>
-          </div>
+          {/* Existing-document attachment is now optional + de-emphasised
+              since the ERP itself generates the SEPL-format document.
+              Use this only if you already have a paper copy you want to
+              attach for reference. The signed copy goes in via Mark
+              Received after delivery. */}
+          <details className="text-[11px] text-gray-500">
+            <summary className="cursor-pointer hover:text-gray-700">Optionally attach an existing scan now (not required)</summary>
+            <div className="mt-2">
+              <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" onChange={e => setForm({ ...form, dispatch_file: e.target.files?.[0] || null })} />
+              {form.dispatch_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.dispatch_file.name}</p>}
+            </div>
+          </details>
           <div><label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm({...form, notes: e.target.value})} /></div>
-          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save Dispatch</button></div>
+          <div className="bg-blue-50 border border-blue-200 rounded px-3 py-2 text-[11px] text-blue-800">
+            On <b>Create</b>, the ERP will generate the SEPL-format <b>{form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill'}</b> from this PO's items and client info, and open it in a new tab ready to print. The signed copy gets uploaded later via Mark Received.
+          </div>
+          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Create {form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill'}</button></div>
         </form>
       </Modal>
 
