@@ -90,7 +90,16 @@ export default function AIAgentChat() {
     try {
       const history = messages.slice(-10).map(m => ({ role: m.role, content: m.content }));
       const { data } = await api.post('/ai-agent/ask', { question: q, history });
-      setMessages([...next, { role: 'assistant', content: data.answer || '(no answer)', sql_runs: data.sql_runs || [] }]);
+      // Backend now streams keep-alive whitespace before the JSON body
+      // so nginx doesn't kill long Anthropic calls at its 60s timeout.
+      // The status is always 200 once the stream starts, so true errors
+      // ride in `data.error`. Honour that before falling through to a
+      // successful answer.
+      if (data?.error) {
+        setMessages([...next, { role: 'assistant', content: `⚠️ ${data.error}`, error: true }]);
+      } else {
+        setMessages([...next, { role: 'assistant', content: data.answer || '(no answer)', sql_runs: data.sql_runs || [] }]);
+      }
     } catch (err) {
       const msg = err.response?.data?.error || err.message || 'Request failed';
       setMessages([...next, { role: 'assistant', content: `⚠️ ${msg}`, error: true }]);

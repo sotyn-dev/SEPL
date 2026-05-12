@@ -190,9 +190,18 @@ router.get('/status', requirePermission('ai_agent', 'view'), (req, res) => {
 // natural-language answer.
 
 const MAX_TOOL_ITER = 5;
+// How often we flush a whitespace byte to the client to keep nginx
+// from killing the upstream connection at its 60s proxy_read_timeout.
+// 12s leaves plenty of margin under the default and is invisible to
+// JSON.parse on the client (leading whitespace is allowed).
+const HEARTBEAT_MS = 12_000;
 // Wall-clock cap below Nginx's default 60s proxy_read_timeout so the
 // chatbot fails fast with a readable error instead of mam seeing a 504.
-const ANTHROPIC_TIMEOUT_MS = 50_000;
+// Used to be 50s to fail fast under nginx's 60s timeout. We now stream
+// heartbeats so nginx no longer kills the upstream — bump this to 150s
+// so deep Opus questions with multiple web_search iterations have room
+// to complete instead of returning a "took too long" hint.
+const ANTHROPIC_TIMEOUT_MS = 150_000;
 const ROW_LIMIT = 500;
 
 // Tables Claude is allowed to read. Skipping sensitive auth tables.
@@ -274,6 +283,33 @@ router.post('/ask', requirePermission('ai_agent', 'view'), async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: '@anthropic-ai/sdk not installed on the server. Run `npm install` on the VPS.' });
   }
+
+  // Open a chunked response and start writing tiny heartbeats so nginx's
+  // 60s proxy_read_timeout doesn't kill the upstream while Claude is
+  // working. X-Accel-Buffering disables nginx's own response buffering.
+  // The client (axios → JSON.parse) ignores the leading whitespace.
+  // Helper sendJson() bundles the JSON body + ends the stream cleanly.
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.write(' '); // immediate flush so nginx starts its activity timer
+  const heartbeat = setInterval(() => {
+    try { res.write(' '); } catch (_) {}
+  }, HEARTBEAT_MS);
+  // If mam closes the chat panel mid-call, stop the heartbeat so it
+  // doesn't keep firing into a dead socket.
+  req.on('close', () => clearInterval(heartbeat));
+  const sendJson = (status, payload) => {
+    clearInterval(heartbeat);
+    if (!res.headersSent) res.status(status); // status only settable before first write... but we already wrote, so this is a no-op safety
+    // For error payloads we still want a 502-style outcome — but we
+    // already committed to 200 on the first write. Express keeps the
+    // status from the first write, so the client always gets 200 here.
+    // The body's "error" field carries the real outcome — frontend
+    // already handles that case via toast on err.response?.data?.error
+    // OR a missing "answer" key.
+    res.end(JSON.stringify(payload));
+  };
 
   const db = getDb();
   const client = new Anthropic.default({ apiKey, timeout: ANTHROPIC_TIMEOUT_MS });
@@ -403,7 +439,10 @@ Guidance:
     else if (e?.code === 'ETIMEDOUT' || /timeout/i.test(e?.message || '')) {
       hint = ' Request took too long — try a more specific question, or switch to Claude Opus in Admin → AI Settings.';
     }
-    return res.status(502).json({ error: `AI request failed: ${e.message}${hint}` });
+    // We've already streamed heartbeat bytes — status code is locked to
+    // 200, so the error has to ride along in the body and the frontend
+    // checks data.error before data.answer.
+    return sendJson(200, { error: `AI request failed: ${e.message}${hint}`, elapsed_ms: elapsedMs });
   }
 
   const answer = (response?.content || [])
@@ -414,7 +453,7 @@ Guidance:
 
   const elapsedMs = Date.now() - startMs;
   console.log(`[AI Agent /ask] ok ${model} elapsed=${elapsedMs}ms sqlRuns=${sqlRuns.length} stop=${response?.stop_reason}`);
-  res.json({
+  sendJson(200, {
     answer: answer || '(no answer)',
     sql_runs: sqlRuns,
     stop_reason: response?.stop_reason,
