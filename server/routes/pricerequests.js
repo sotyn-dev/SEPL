@@ -1,8 +1,18 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
+
+// Use the same shared uploads dir Procurement uses, so the file name
+// goes through Multer's tempfile handling and then we read it back.
+const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const bulkUpload = multer({ dest: uploadDir, limits: { fileSize: 5 * 1024 * 1024 } });
 
 // Anyone with item-master view permission (or admin) can also approve /
 // finalize price requests — same gate as Procurement uses for vendor rates.
@@ -276,6 +286,167 @@ router.post('/:id/finalize', (req, res) => {
     item_master_id: newMasterId,
     item_code: itemCode,
     propagated_count: siblings.length,
+  });
+});
+
+// ------- BULK ENTRY: TEMPLATE DOWNLOAD -------
+// Mam: "give above excel template to raise price required so that can do
+// easily in bulk". Returns an XLSX with the right columns + one example
+// row + a "Notes" sheet explaining the allowed values. Mam fills it in,
+// hits Bulk Upload, and every row becomes a price_requests entry.
+router.get('/template', (req, res) => {
+  const wb = XLSX.utils.book_new();
+  // Sheet 1: the entry grid the user fills in.
+  const header = [
+    'Site Name',          // optional — which site the item is needed for
+    'Item Name *',        // required — e.g. "Fire Door"
+    'Size',               // e.g. "h-2330mm w-2025mm"
+    'Specification',      // e.g. "SS 304"
+    'Make',               // preferred brand, e.g. "Trdt"
+    'UOM',                // PCS / KG / MTR / SET / NOS (default PCS)
+    'Item Type',          // PO / FOC / RGP (default PO)
+    'Department',         // ELECTRICAL / HVAC / FF / PLUMBING / ELV / SOLAR / CIVIL
+    'Notes',              // any extra detail for purchase team
+  ];
+  // One illustrative row so mam can see the expected format.
+  const sample = [
+    'CONSERN PHARMA',
+    'Fire Door',
+    'h-2330mm w-2025mm',
+    'SS 304',
+    'Trdt',
+    'PCS',
+    'PO',
+    'FIRE FIGHTING',
+    'Urgent — needed for site walkthrough',
+  ];
+  const sheet1 = XLSX.utils.aoa_to_sheet([header, sample, [], []]);
+  // Set sensible column widths so the template is readable on first open.
+  sheet1['!cols'] = [
+    { wch: 22 }, { wch: 30 }, { wch: 22 }, { wch: 22 }, { wch: 14 },
+    { wch: 8 },  { wch: 10 }, { wch: 18 }, { wch: 40 },
+  ];
+  XLSX.utils.book_append_sheet(wb, sheet1, 'Price Requests');
+  // Sheet 2: instructions + allowed values, so mam doesn't have to ask.
+  const instructions = [
+    ['SEPL ERP — Price Request Bulk Template'],
+    [''],
+    ['HOW TO USE'],
+    ['1. Fill one row per item below the "Sample row" on the "Price Requests" sheet.'],
+    ['2. Leave the Sample row in place (the importer skips it). Or delete it — both work.'],
+    ['3. Save the file, then click "Bulk Upload" on the Price Required page.'],
+    ['4. Each row becomes an Open price request. Purchase team will quote the rates.'],
+    [''],
+    ['FIELD RULES'],
+    ['Item Name (required)', 'Must not be blank. Free text. Keep it short and clean.'],
+    ['UOM',  'Defaults to PCS if blank. Common: PCS, NOS, KG, MTR, SET, LTR, BOX.'],
+    ['Item Type', 'Must be one of: PO, FOC, RGP. Defaults to PO if blank.'],
+    ['Department', 'Free text but use one of: ELECTRICAL, HVAC, FIRE FIGHTING, PLUMBING, SOLAR, ELV, CIVIL.'],
+    ['Site Name', 'Optional. If filled it should match a site from Business Book.'],
+    [''],
+    ['DEDUPLICATION'],
+    ['Identical items (Name + Size + Spec + Make + UOM + Type) merge into one request when shown to the purchase team — no need to worry about duplicates across sites.'],
+  ];
+  const sheet2 = XLSX.utils.aoa_to_sheet(instructions);
+  sheet2['!cols'] = [{ wch: 32 }, { wch: 80 }];
+  XLSX.utils.book_append_sheet(wb, sheet2, 'Instructions');
+
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.set('Content-Disposition', 'attachment; filename="SEPL_PriceRequired_Template.xlsx"');
+  res.send(buf);
+});
+
+// ------- BULK ENTRY: UPLOAD -------
+// Accepts the filled template (or any compatible xlsx/csv). Parses each
+// row, validates Item Name is present, and inserts a price_requests row
+// per item attributed to the current user. Returns summary + per-row
+// errors so the UI can show what failed.
+router.post('/bulk-upload', bulkUpload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Upload an .xlsx or .csv file' });
+  let rows = [];
+  try {
+    const wb = XLSX.readFile(req.file.path);
+    // Prefer a sheet named "Price Requests"; otherwise use the first.
+    const sheetName = wb.SheetNames.find(n => /price/i.test(n)) || wb.SheetNames[0];
+    const ws = wb.Sheets[sheetName];
+    if (!ws) {
+      try { fs.unlinkSync(req.file.path); } catch (_) {}
+      return res.status(400).json({ error: 'No usable sheet found in the file' });
+    }
+    rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+  } catch (e) {
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
+    return res.status(400).json({ error: 'Could not read the file: ' + e.message });
+  }
+  try { fs.unlinkSync(req.file.path); } catch (_) {}
+
+  // Header normalizer — accept "Item Name *", "ITEM NAME", "item_name" etc.
+  const norm = (s) => String(s || '').toLowerCase().replace(/[\s_*]+/g, '');
+  const pick = (row, ...keys) => {
+    for (const k of keys) {
+      const wanted = norm(k);
+      const hit = Object.keys(row).find(rk => norm(rk) === wanted);
+      if (hit && String(row[hit]).trim() !== '') return String(row[hit]).trim();
+    }
+    return '';
+  };
+
+  const allowedTypes = ['PO', 'FOC', 'RGP'];
+  const db = getDb();
+  const insert = db.prepare(`
+    INSERT INTO price_requests
+      (site_name, item_name, size, specification, make, uom, item_type, department, notes, raised_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
+  `);
+
+  const inserted = [];
+  const skipped = [];
+  const tx = db.transaction((rows) => {
+    rows.forEach((row, idx) => {
+      const item_name = pick(row, 'Item Name', 'item_name');
+      // Detect & silently skip the sample row from the template so it
+      // doesn't pollute the live list.
+      const isSample = pick(row, 'Item Name').toLowerCase() === 'fire door'
+        && pick(row, 'Notes').toLowerCase().includes('site walkthrough');
+      if (!item_name) {
+        // Skip totally blank rows without flagging them as errors.
+        const anyVal = Object.values(row).some(v => String(v || '').trim() !== '');
+        if (anyVal) skipped.push({ row: idx + 2, reason: 'Item Name is required' });
+        return;
+      }
+      if (isSample) { skipped.push({ row: idx + 2, reason: 'Sample row skipped' }); return; }
+
+      const rawType = pick(row, 'Item Type', 'item_type').toUpperCase();
+      const item_type = allowedTypes.includes(rawType) ? rawType : 'PO';
+
+      const r = insert.run(
+        pick(row, 'Site Name', 'site_name') || null,
+        item_name,
+        pick(row, 'Size') || null,
+        pick(row, 'Specification', 'spec') || null,
+        pick(row, 'Make') || null,
+        pick(row, 'UOM') || 'PCS',
+        item_type,
+        (pick(row, 'Department') || '').toUpperCase() || null,
+        pick(row, 'Notes') || null,
+        req.user.id,
+      );
+      inserted.push({ row: idx + 2, id: r.lastInsertRowid, item_name });
+    });
+  });
+  try {
+    tx(rows);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+
+  res.json({
+    message: `Imported ${inserted.length} price request${inserted.length === 1 ? '' : 's'}${skipped.length ? ` (${skipped.length} skipped)` : ''}`,
+    inserted_count: inserted.length,
+    skipped_count: skipped.length,
+    inserted,
+    skipped,
   });
 });
 

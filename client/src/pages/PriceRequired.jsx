@@ -1,10 +1,10 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTrash2, FiCheckCircle, FiTag, FiEdit2 } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiCheckCircle, FiTag, FiEdit2, FiDownload, FiUpload } from 'react-icons/fi';
 
 // Price Required — workflow:
 //   1. Site engineer raises a request for a new item not yet in Item Master.
@@ -50,6 +50,42 @@ export default function PriceRequired() {
       setDepartments([...set].sort());
     }).catch(() => setDepartments([]));
   }, []);
+
+  // Bulk Excel flow — mam: "give above excel template to raise price
+  // required so that can do easily in bulk". Download triggers a
+  // pre-filled .xlsx; Upload picks the same template back, inserts
+  // every row as an Open price_request, and shows a toast + per-row
+  // errors so mam knows what went in.
+  const downloadTemplate = async () => {
+    try {
+      const r = await api.get('/price-requests/template', { responseType: 'blob' });
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'SEPL_PriceRequired_Template.xlsx';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) { toast.error(err.response?.data?.error || 'Could not download template'); }
+  };
+  const bulkUploadRef = useRef(null);
+  const handleBulkPick = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-upload of the same name
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    const t = toast.loading('Uploading…');
+    try {
+      const r = await api.post('/price-requests/bulk-upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success(r.data?.message || 'Imported', { id: t });
+      if (Array.isArray(r.data?.skipped) && r.data.skipped.length) {
+        // Don't drown mam in toasts — collapse the first 3 reasons.
+        const sample = r.data.skipped.slice(0, 3).map(s => `Row ${s.row}: ${s.reason}`).join('\n');
+        toast(`Skipped ${r.data.skipped.length} row${r.data.skipped.length === 1 ? '' : 's'}:\n${sample}${r.data.skipped.length > 3 ? '\n…' : ''}`, { duration: 6000 });
+      }
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Upload failed', { id: t }); }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -152,7 +188,28 @@ export default function PriceRequired() {
             Raise items missing from the catalog. Purchase team gets 3 vendor quotes, picks the final rate, and the item is added to Item Master automatically.
           </p>
         </div>
-        <button onClick={openNew} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center"><FiPlus /> Raise Price Request</button>
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          {/* Bulk flow — download a template, fill it offline, upload
+              it back. Same shape as the inline form, just many rows. */}
+          <button
+            onClick={downloadTemplate}
+            className="btn btn-secondary flex items-center gap-2 text-sm"
+            title="Download blank Excel template to fill many rows at once"
+          ><FiDownload /> Template</button>
+          <button
+            onClick={() => bulkUploadRef.current?.click()}
+            className="btn btn-secondary flex items-center gap-2 text-sm"
+            title="Upload a filled template — every row becomes a price request"
+          ><FiUpload /> Bulk Upload</button>
+          <input
+            ref={bulkUploadRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={handleBulkPick}
+          />
+          <button onClick={openNew} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center"><FiPlus /> Raise Price Request</button>
+        </div>
       </div>
 
       <div className="flex gap-2 flex-wrap">
