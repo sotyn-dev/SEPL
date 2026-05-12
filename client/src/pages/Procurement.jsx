@@ -1268,6 +1268,23 @@ export default function Procurement() {
                   </td>
                   <td><StatusBadge status={d.status} /></td>
                   <td className="whitespace-nowrap">
+                    {/* Print the auto-generated SEPL Delivery Note / Sales
+                        Bill PDF (mam's templates). Fetched via axios so the
+                        Bearer token rides along, then opened as a Blob URL —
+                        plain window.open with a header-auth API would 401. */}
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'text' });
+                          const blob = new Blob([res.data], { type: 'text/html' });
+                          window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+                        } catch (err) {
+                          toast.error(err.response?.data?.error || 'Could not generate document');
+                        }
+                      }}
+                      className="btn btn-secondary text-[10px] px-2 py-1 mr-1"
+                      title={`Print SEPL ${d.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill'}`}
+                    >🖨 Print</button>
                     {!d.received_by_name && (
                       <button onClick={() => openMarkReceived(d)} className="btn btn-success text-[10px] px-2 py-1 mr-1">Mark Received</button>
                     )}
@@ -1771,17 +1788,54 @@ export default function Procurement() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">{form.document_type === 'challan' ? 'Challan' : 'Sales Bill'} Number *</label>
-              <input className="input" value={form.document_number || ''} onChange={e => setForm({...form, document_number: e.target.value})} required placeholder="e.g. SB/2026/042" />
+              <input className="input" value={form.document_number || ''} onChange={e => setForm({...form, document_number: e.target.value})} required placeholder={form.document_type === 'challan' ? 'e.g. DN/2026/042' : 'e.g. INV/2026/042'} />
             </div>
             <div>
               <label className="label">Dispatch Date</label>
               <input className="input" type="date" value={form.delivery_date || ''} onChange={e => setForm({...form, delivery_date: e.target.value})} />
             </div>
           </div>
+
+          {/* Conditional fields per document type — fed into the auto-generated
+              print page so it matches mam's SEPL Delivery Note / Sales Bill
+              templates 1:1. */}
+          {form.document_type === 'challan' && (
+            <div className="border border-sky-200 bg-sky-50/40 rounded p-3 space-y-3">
+              <div className="text-[10px] font-bold uppercase text-sky-700">Vehicle / Transport Details</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div><label className="label">Vehicle No.</label><input className="input" value={form.vehicle_no || ''} onChange={e => setForm({ ...form, vehicle_no: e.target.value })} placeholder="e.g. PB10AB1234" /></div>
+                <div><label className="label">Driver Name & Mobile</label><div className="grid grid-cols-2 gap-2"><input className="input" placeholder="Driver name" value={form.driver_name || ''} onChange={e => setForm({ ...form, driver_name: e.target.value })} /><input className="input" placeholder="Mobile" value={form.driver_mobile || ''} onChange={e => setForm({ ...form, driver_mobile: e.target.value })} /></div></div>
+                <div><label className="label">LR / Challan No.</label><input className="input" value={form.lr_challan_no || ''} onChange={e => setForm({ ...form, lr_challan_no: e.target.value })} /></div>
+                <div><label className="label">Total Packages</label><input className="input" value={form.total_packages || ''} onChange={e => setForm({ ...form, total_packages: e.target.value })} placeholder="e.g. 3 boxes + 2 bundles" /></div>
+              </div>
+            </div>
+          )}
+          {form.document_type === 'sales_bill' && (
+            <div className="border border-emerald-200 bg-emerald-50/40 rounded p-3 space-y-3">
+              <div className="text-[10px] font-bold uppercase text-emerald-700">Tax Invoice Details</div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div><label className="label">Place of Supply</label><input className="input" value={form.place_of_supply || ''} onChange={e => setForm({ ...form, place_of_supply: e.target.value })} placeholder="e.g. Punjab" /></div>
+                <div><label className="label">State Code</label><input className="input" value={form.state_code || ''} onChange={e => setForm({ ...form, state_code: e.target.value })} placeholder="e.g. 03" /></div>
+                <div><label className="label">E-Way Bill No.</label><input className="input" value={form.e_way_bill_no || ''} onChange={e => setForm({ ...form, e_way_bill_no: e.target.value })} /></div>
+                <div className="flex items-center gap-2"><input type="checkbox" id="rev_charge" checked={!!form.reverse_charge} onChange={e => setForm({ ...form, reverse_charge: e.target.checked })} className="w-4 h-4" /><label htmlFor="rev_charge" className="text-sm">Reverse Charge</label></div>
+                <div><label className="label">Vehicle No.</label><input className="input" value={form.vehicle_no || ''} onChange={e => setForm({ ...form, vehicle_no: e.target.value })} /></div>
+              </div>
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+                <div><label className="label">CGST %</label><input className="input" type="number" min="0" step="0.01" value={form.cgst_pct || ''} onChange={e => setForm({ ...form, cgst_pct: +e.target.value })} placeholder="9" /></div>
+                <div><label className="label">SGST %</label><input className="input" type="number" min="0" step="0.01" value={form.sgst_pct || ''} onChange={e => setForm({ ...form, sgst_pct: +e.target.value })} placeholder="9" /></div>
+                <div><label className="label">IGST %</label><input className="input" type="number" min="0" step="0.01" value={form.igst_pct || ''} onChange={e => setForm({ ...form, igst_pct: +e.target.value })} placeholder="0" /></div>
+                <div><label className="label">Freight (Rs)</label><input className="input" type="number" min="0" value={form.freight_amount || ''} onChange={e => setForm({ ...form, freight_amount: +e.target.value })} /></div>
+                <div><label className="label">Round Off (Rs)</label><input className="input" type="number" step="0.01" value={form.round_off_amount || ''} onChange={e => setForm({ ...form, round_off_amount: +e.target.value })} /></div>
+              </div>
+              <p className="text-[10px] text-emerald-700">For Punjab clients: CGST 9% + SGST 9% = 18%. For other states: IGST 18%.</p>
+            </div>
+          )}
+
           <div>
-            <label className="label">{form.document_type === 'challan' ? 'Challan' : 'Sales Bill'} File * <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX, max 10 MB)</span></label>
-            <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" required onChange={e => setForm({ ...form, dispatch_file: e.target.files?.[0] || null })} />
+            <label className="label">{form.document_type === 'challan' ? 'Signed Delivery Note' : 'Signed Sales Bill'} <span className="text-gray-400 font-normal">(PDF / JPG / PNG / XLSX — optional, upload signed copy after delivery)</span></label>
+            <input className="input" type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls" onChange={e => setForm({ ...form, dispatch_file: e.target.files?.[0] || null })} />
             {form.dispatch_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.dispatch_file.name}</p>}
+            <p className="text-[10px] text-gray-500 mt-1">Tip: save the dispatch first, then click <b>🖨 Print</b> in the dispatch list to generate the SEPL-format document. Get it signed at delivery and upload the signed copy here later.</p>
           </div>
           <div><label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm({...form, notes: e.target.value})} /></div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save Dispatch</button></div>

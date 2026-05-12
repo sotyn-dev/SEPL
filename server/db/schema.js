@@ -2197,6 +2197,29 @@ function initializeDatabase() {
     // Track which 3-day consecutive-loss alerts were already mailed so
     // the same alert doesn't fire again on every subsequent DPR save.
     ['dpr', 'streak_alert_sent_for DATE'],
+    // Dispatch document generation — mam shared SEPL Delivery Note &
+    // Sales Bill templates. Instead of just uploading a file, the ERP
+    // now generates an HTML print page filled from the Vendor PO + items.
+    // These columns hold the dispatch-time fields the auto-fill can't
+    // know up-front (vehicle/driver, GST split, freight, etc.).
+    // -- Delivery Note specific --
+    ['delivery_notes', 'vehicle_no TEXT'],
+    ['delivery_notes', 'driver_name TEXT'],
+    ['delivery_notes', 'driver_mobile TEXT'],
+    ['delivery_notes', 'lr_challan_no TEXT'],
+    ['delivery_notes', 'total_packages TEXT'],
+    // -- Sales Bill specific --
+    ['delivery_notes', 'place_of_supply TEXT'],
+    ['delivery_notes', 'state_code TEXT'],
+    ['delivery_notes', 'reverse_charge INTEGER DEFAULT 0'],
+    ['delivery_notes', 'e_way_bill_no TEXT'],
+    ['delivery_notes', 'cgst_pct REAL DEFAULT 0'],
+    ['delivery_notes', 'sgst_pct REAL DEFAULT 0'],
+    ['delivery_notes', 'igst_pct REAL DEFAULT 0'],
+    ['delivery_notes', 'freight_amount REAL DEFAULT 0'],
+    ['delivery_notes', 'round_off_amount REAL DEFAULT 0'],
+    ['delivery_notes', 'subtotal_amount REAL DEFAULT 0'],
+    ['delivery_notes', 'grand_total_amount REAL DEFAULT 0'],
     // Sub-Contractor module (mam's "Sub-Contractor Form" Google-Form
     // 47-entry workflow brought into ERP). Extends the existing
     // sub_contractors table — legacy HR fields (phone, email,

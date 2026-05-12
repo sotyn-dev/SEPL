@@ -1072,7 +1072,10 @@ router.get('/delivery-notes', (req, res) => {
 // (sales_bill | challan) so the list can show the right label.
 router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req, res) => {
   const b = req.body || {};
-  if (!req.file) return res.status(400).json({ error: 'Dispatch file is required — upload the Sales Bill / Challan' });
+  // File is OPTIONAL on create. Mam's flow: ERP generates the document
+  // (Delivery Note / Sales Bill PDF via the new print endpoint), staff
+  // print it, get it signed at delivery, then upload the signed copy.
+  // The signed copy can be added later via PUT /dispatches/:id.
   const vendor_po_id = b.vendor_po_id ? +b.vendor_po_id : null;
   const delivery_date = b.delivery_date || null;
   const notes = b.notes || null;
@@ -1098,12 +1101,42 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
     }
   }
 
+  const num = (v) => { const n = +v; return Number.isFinite(n) ? n : 0; };
+  const fields = {
+    // Delivery-Note extras
+    vehicle_no: b.vehicle_no || null,
+    driver_name: b.driver_name || null,
+    driver_mobile: b.driver_mobile || null,
+    lr_challan_no: b.lr_challan_no || null,
+    total_packages: b.total_packages || null,
+    // Sales-Bill extras
+    place_of_supply: b.place_of_supply || null,
+    state_code: b.state_code || null,
+    reverse_charge: b.reverse_charge ? 1 : 0,
+    e_way_bill_no: b.e_way_bill_no || null,
+    cgst_pct: num(b.cgst_pct),
+    sgst_pct: num(b.sgst_pct),
+    igst_pct: num(b.igst_pct),
+    freight_amount: num(b.freight_amount),
+    round_off_amount: num(b.round_off_amount),
+    subtotal_amount: num(b.subtotal_amount),
+    grand_total_amount: num(b.grand_total_amount),
+  };
+
   try {
     const r = getDb().prepare(
       `INSERT INTO delivery_notes (vendor_po_id, delivery_date, received_by, notes,
-                                    document_type, document_number, file_path)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(vendor_po_id, delivery_date, req.user.id, notes, document_type, document_number, filePath);
+                                    document_type, document_number, file_path,
+                                    vehicle_no, driver_name, driver_mobile, lr_challan_no, total_packages,
+                                    place_of_supply, state_code, reverse_charge, e_way_bill_no,
+                                    cgst_pct, sgst_pct, igst_pct, freight_amount, round_off_amount,
+                                    subtotal_amount, grand_total_amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(vendor_po_id, delivery_date, req.user.id, notes, document_type, document_number, filePath,
+      fields.vehicle_no, fields.driver_name, fields.driver_mobile, fields.lr_challan_no, fields.total_packages,
+      fields.place_of_supply, fields.state_code, fields.reverse_charge, fields.e_way_bill_no,
+      fields.cgst_pct, fields.sgst_pct, fields.igst_pct, fields.freight_amount, fields.round_off_amount,
+      fields.subtotal_amount, fields.grand_total_amount);
     res.status(201).json({ id: r.lastInsertRowid, file_path: filePath });
   } catch (err) {
     if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
@@ -1225,6 +1258,231 @@ router.delete('/delivery-notes/:id', (req, res) => {
   getDb().prepare('DELETE FROM delivery_notes WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
+
+// Print-page renderer for a dispatch row. Returns a self-contained HTML
+// page styled to match mam's SEPL Delivery Note / Sales Bill templates
+// (red header, two-column blocks, 8-row item table, totals + bank +
+// terms for SB, transport + receipt block for DN). The page is intended
+// to be opened in a new tab; user hits Ctrl+P → prints to A4.
+router.get('/delivery-notes/:id/print', (req, res) => {
+  const db = getDb();
+  const dn = db.prepare(`
+    SELECT dn.*, vp.po_number AS vendor_po_no,
+           v.name AS vendor_name, v.gst_number AS vendor_gstin, v.address AS vendor_address,
+           v.phone AS vendor_phone, v.email AS vendor_email,
+           po.po_number AS client_po_no, po.po_date AS client_po_date,
+           bb.company_name AS client_company, bb.client_name AS client_contact,
+           bb.billing_address AS client_address, bb.shipping_address AS site_address,
+           bb.client_contact AS client_phone, bb.client_email,
+           bb.state AS client_state, bb.district AS client_district,
+           bb.project_name AS site_name,
+           ind.indent_number
+    FROM delivery_notes dn
+    LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
+    LEFT JOIN vendors v ON vp.vendor_id = v.id
+    LEFT JOIN indents ind ON vp.indent_id = ind.id
+    LEFT JOIN order_planning op ON ind.planning_id = op.id
+    LEFT JOIN purchase_orders po ON op.po_id = po.id
+    LEFT JOIN business_book bb ON po.business_book_id = bb.id
+    WHERE dn.id = ?
+  `).get(req.params.id);
+  if (!dn) return res.status(404).send('Dispatch not found');
+
+  const items = db.prepare(`
+    SELECT ii.description, vpi.quantity, ii.unit, vpi.rate, vpi.amount,
+           im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name
+    FROM vendor_po_items vpi
+    LEFT JOIN indent_items ii ON vpi.indent_item_id = ii.id
+    LEFT JOIN item_master im ON ii.item_master_id = im.id
+    WHERE vpi.vendor_po_id = ?
+    ORDER BY vpi.id
+  `).all(dn.vendor_po_id);
+
+  const isSalesBill = dn.document_type === 'sales_bill';
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(renderDispatchHTML({ dn, items, isSalesBill }));
+});
+
+// HTML template renderer — kept inline so it stays self-contained and
+// matches the PDFs mam supplied. All styling is inline / in a <style>
+// block; no external assets. Tested on Chrome/Edge → A4 portrait.
+function renderDispatchHTML({ dn, items, isSalesBill }) {
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const fmt = (n) => (+n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const numToWords = (() => {
+    // Compact Indian-number-to-words for invoice amounts.
+    const a = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+    const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+    const two = (n) => n < 20 ? a[n] : `${b[Math.floor(n / 10)]}${n % 10 ? ' ' + a[n % 10] : ''}`;
+    const three = (n) => n >= 100 ? `${a[Math.floor(n / 100)]} Hundred${n % 100 ? ' ' + two(n % 100) : ''}` : two(n);
+    return (n) => {
+      n = Math.floor(+n || 0);
+      if (!n) return 'Zero';
+      const parts = [];
+      const crore = Math.floor(n / 10000000); n %= 10000000;
+      const lakh = Math.floor(n / 100000); n %= 100000;
+      const thousand = Math.floor(n / 1000); n %= 1000;
+      const hundred = n;
+      if (crore) parts.push(`${two(crore)} Crore`);
+      if (lakh) parts.push(`${two(lakh)} Lakh`);
+      if (thousand) parts.push(`${two(thousand)} Thousand`);
+      if (hundred) parts.push(three(hundred));
+      return parts.join(' ').trim();
+    };
+  })();
+
+  // Build items rows (pad to 8 like the template)
+  const padCount = Math.max(0, 8 - items.length);
+  const rowsHtml = items.map((it, idx) => {
+    const desc = [it.description, it.specification, it.size].filter(Boolean).join(' / ');
+    const taxable = (+it.quantity || 0) * (+it.rate || 0);
+    if (isSalesBill) {
+      return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(it.quantity)}</td><td>${esc(it.unit || '')}</td><td class="num">${fmt(it.rate)}</td><td class="num">0</td><td class="num">${fmt(taxable)}</td><td class="num">${fmt(it.amount || taxable)}</td></tr>`;
+    }
+    return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(it.quantity)}</td><td>${esc(it.unit || '')}</td><td></td></tr>`;
+  }).join('') + Array.from({ length: padCount }, (_, i) => {
+    const idx = items.length + i + 1;
+    return isSalesBill
+      ? `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`
+      : `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
+  }).join('');
+
+  const css = `
+    @page { size: A4; margin: 12mm 10mm; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #1a1a1a; margin: 0; padding: 0; }
+    .header { background: #7a1b1b; color: #fff; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; }
+    .header .gstin, .header .pan { font-size: 10px; }
+    .header .title { font-size: 18px; font-weight: bold; letter-spacing: 1px; }
+    .companyblock { text-align: center; padding: 6px; }
+    .companyblock h1 { font-size: 16px; margin: 0 0 4px 0; color: #7a1b1b; }
+    .companyblock .addr { font-size: 9.5px; color: #444; }
+    .companyblock .tag { font-size: 9.5px; color: #444; margin-top: 2px; }
+    table.meta, table.parties, table.items, table.totals, table.foot { width: 100%; border-collapse: collapse; }
+    table.meta td, table.parties td { border: 1px solid #e7d4d4; padding: 6px 8px; vertical-align: top; }
+    table.meta .lbl, table.parties .lbl { background: #f8efef; color: #7a1b1b; font-weight: bold; font-size: 9.5px; text-transform: uppercase; }
+    table.items { margin-top: 6px; border: 1px solid #e7d4d4; }
+    table.items th { background: #f8efef; color: #7a1b1b; font-size: 10px; padding: 6px 4px; border: 1px solid #e7d4d4; text-transform: uppercase; }
+    table.items td { border: 1px solid #e7d4d4; padding: 5px 4px; font-size: 10px; min-height: 18px; }
+    table.items td.num { text-align: right; }
+    table.totals { margin-top: 6px; }
+    table.totals td { padding: 4px 8px; font-size: 11px; }
+    table.totals .label { text-align: right; color: #444; }
+    table.totals .val { text-align: right; width: 130px; }
+    table.totals .grand { background: #f8efef; color: #7a1b1b; font-weight: bold; font-size: 13px; }
+    .bank, .terms { border: 1px solid #e7d4d4; padding: 6px 8px; font-size: 10px; margin-top: 6px; }
+    .bank .hdr, .terms .hdr { background: #f8efef; color: #7a1b1b; font-weight: bold; padding: 4px 6px; margin: -6px -8px 6px -8px; text-transform: uppercase; font-size: 10px; }
+    .signblk { border: 1px solid #e7d4d4; margin-top: 6px; padding: 6px 8px; }
+    .signblk .hdr { background: #f8efef; color: #7a1b1b; font-weight: bold; padding: 4px 6px; margin: -6px -8px 6px -8px; text-transform: uppercase; font-size: 10px; text-align: center; }
+    .signblk .row { display: flex; gap: 16px; margin-top: 18px; }
+    .signblk .row > div { flex: 1; border-top: 1px solid #888; padding-top: 4px; font-size: 10px; text-align: center; }
+    .notice { margin-top: 6px; padding: 6px 8px; background: #f8efef; color: #7a1b1b; font-weight: bold; text-align: center; font-size: 10px; border: 1px solid #e7d4d4; }
+    ul.checklist { font-size: 9.5px; padding-left: 16px; margin: 4px 0; color: #444; }
+    .footnote { text-align: center; font-size: 9.5px; color: #888; padding: 8px; border-top: 1px dashed #ccc; margin-top: 10px; }
+    .print-btn { position: fixed; top: 10px; right: 10px; padding: 8px 14px; background: #7a1b1b; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+    @media print { .print-btn { display: none; } }
+  `;
+
+  const docTitle = isSalesBill ? 'TAX INVOICE / SALES BILL' : 'DELIVERY NOTE';
+  const docNo = isSalesBill ? `INV/2026/${dn.id}` : (dn.document_number || `DN/2026/${dn.id}`);
+  const dnNum = dn.document_number || docNo;
+
+  // Compute totals for sales bill
+  let subtotal = 0;
+  for (const it of items) subtotal += (+it.quantity || 0) * (+it.rate || 0);
+  const cgst = subtotal * (+dn.cgst_pct || 0) / 100;
+  const sgst = subtotal * (+dn.sgst_pct || 0) / 100;
+  const igst = subtotal * (+dn.igst_pct || 0) / 100;
+  const freight = +dn.freight_amount || 0;
+  const roundOff = +dn.round_off_amount || 0;
+  const grandTotal = subtotal + cgst + sgst + igst + freight + roundOff;
+
+  const headerBlock = `
+    <div class="header">
+      <div class="gstin">GSTIN : 03AASCS7836D2Z3</div>
+      <div class="title">${docTitle}</div>
+      <div class="pan">PAN : AASCS7836D</div>
+    </div>
+    <div class="companyblock">
+      <h1>SECURED ENGINEERS PVT. LTD - 24-25</h1>
+      <div class="addr"><b>HO:</b> 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, LUDHIANA, Punjab - 141003 &nbsp;|&nbsp; <b>Noida:</b> 91, Springboard, Sector 2, Noida (UP)</div>
+      <div class="tag">PAN-INDIA PRESENCE : <b>LUDHIANA | NOIDA | BANGALORE | MUMBAI</b> — ELECTRICAL | HVAC | FIRE SAFETY | PLUMBING | SOLAR | ELV</div>
+    </div>
+  `;
+
+  if (isSalesBill) {
+    return `<!doctype html><html><head><title>${esc(docNo)}</title><style>${css}</style></head><body>
+      <button class="print-btn" onclick="window.print()">🖨 Print</button>
+      ${headerBlock}
+      <table class="meta">
+        <tr><td class="lbl">Invoice No.</td><td>${esc(docNo)}</td><td class="lbl">Invoice Date</td><td>${esc(dn.delivery_date || '')}</td><td class="lbl">Client PO No.</td><td>${esc(dn.client_po_no || '')}</td><td class="lbl">PO Date</td><td>${esc(dn.client_po_date || '')}</td><td class="lbl">Delivery Note Ref.</td><td>${esc(dnNum)}</td></tr>
+        <tr><td class="lbl">Place of Supply</td><td>${esc(dn.place_of_supply || dn.client_state || '')}</td><td class="lbl">State Code</td><td>${esc(dn.state_code || '')}</td><td class="lbl">Reverse Charge</td><td>${dn.reverse_charge ? 'YES' : 'NO'}</td><td class="lbl">Vehicle No.</td><td>${esc(dn.vehicle_no || '')}</td><td class="lbl">E-Way Bill No.</td><td>${esc(dn.e_way_bill_no || '')}</td></tr>
+      </table>
+      <table class="parties"><tr>
+        <td style="width:50%"><div class="lbl">Bill To</div>M/s <b>${esc(dn.client_company || '')}</b><br>Address: ${esc(dn.client_address || '')}<br>GSTIN: ${esc(dn.client_gstin || '')}<br>State: ${esc(dn.client_state || '')}<br>Contact: ${esc(dn.client_contact || dn.client_phone || '')}</td>
+        <td><div class="lbl">Ship To / Site</div>Site Name: <b>${esc(dn.site_name || '')}</b><br>Address: ${esc(dn.site_address || '')}<br>Site Engineer / Contact: ${esc(dn.client_phone || '')}</td>
+      </tr></table>
+      <table class="items">
+        <thead><tr><th style="width:30px">SL</th><th>DESCRIPTION OF GOODS / SERVICES</th><th style="width:60px">HSN / SAC</th><th style="width:50px">QTY</th><th style="width:40px">UOM</th><th style="width:60px">RATE (₹)</th><th style="width:40px">DISC %</th><th style="width:80px">TAXABLE (₹)</th><th style="width:80px">AMOUNT (₹)</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <table class="totals">
+        <tr><td class="label">Sub Total (Taxable Value)</td><td class="val">₹ ${fmt(subtotal)}</td></tr>
+        <tr><td class="label">Add: CGST @ ${dn.cgst_pct || 0}%</td><td class="val">₹ ${fmt(cgst)}</td></tr>
+        <tr><td class="label">Add: SGST/UTGST @ ${dn.sgst_pct || 0}%</td><td class="val">₹ ${fmt(sgst)}</td></tr>
+        <tr><td class="label">Add: IGST @ ${dn.igst_pct || 0}%</td><td class="val">₹ ${fmt(igst)}</td></tr>
+        <tr><td class="label">Add: Freight / Packing / Other</td><td class="val">₹ ${fmt(freight)}</td></tr>
+        <tr><td class="label">Less: Round Off</td><td class="val">₹ ${fmt(roundOff)}</td></tr>
+        <tr><td class="label grand">GRAND TOTAL (₹)</td><td class="val grand">₹ ${fmt(grandTotal)}</td></tr>
+      </table>
+      <div style="margin-top:6px;font-size:11px;"><b>Amount Chargeable (in words):</b> Rupees ${esc(numToWords(grandTotal))} Only</div>
+      <div style="display:flex;gap:8px;margin-top:6px;">
+        <div class="bank" style="flex:1"><div class="hdr">Bank Details for Payment</div><b>Beneficiary:</b> SECURED ENGINEERS PVT. LTD.<br><b>Bank:</b> __________________________<br><b>Branch:</b> __________________________<br><b>A/c No.:</b> __________________________<br><b>IFSC:</b> __________________________<br><b>UPI:</b> __________________________</div>
+        <div class="terms" style="flex:1"><div class="hdr">Terms & Conditions</div>1. Payment due within ____ days from invoice date.<br>2. Interest @ 18% p.a. on overdue amounts.<br>3. Goods once sold will not be taken back / exchanged.<br>4. Subject to LUDHIANA jurisdiction only.<br>5. Cheque / DD in favour of "Secured Engineers Pvt. Ltd.".<br>6. Please quote Invoice No. while making payment.</div>
+      </div>
+      <div class="signblk"><div class="hdr">Receiver's Acknowledgement &nbsp; • &nbsp; For Secured Engineers Pvt. Ltd.</div>
+        <div class="row"><div>Name, Signature & Stamp with Date</div><div>Authorised Signatory</div></div>
+      </div>
+      <div class="footnote">This is a Computer Generated Tax Invoice. &nbsp;|&nbsp; E. & O.E. &nbsp;|&nbsp; Certified that the particulars given above are true and correct.</div>
+    </body></html>`;
+  }
+
+  // Delivery Note
+  return `<!doctype html><html><head><title>${esc(docNo)}</title><style>${css}</style></head><body>
+    <button class="print-btn" onclick="window.print()">🖨 Print</button>
+    ${headerBlock}
+    <table class="meta">
+      <tr><td class="lbl">Delivery Note No.</td><td>${esc(docNo)}</td><td class="lbl">Date</td><td>${esc(dn.delivery_date || '')}</td><td class="lbl">SEPL PO No.</td><td>${esc(dn.vendor_po_no || '')}</td><td class="lbl">Indent No.</td><td>${esc(dn.indent_number || '')}</td></tr>
+    </table>
+    <table class="parties"><tr>
+      <td style="width:50%"><div class="lbl">Client / Company</div>M/s <b>${esc(dn.client_company || '')}</b><br>Address: ${esc(dn.client_address || '')}<br>GSTIN: ${esc(dn.client_gstin || '')}</td>
+      <td><div class="lbl">Delivery Site</div>Site Name: <b>${esc(dn.site_name || '')}</b><br>Address: ${esc(dn.site_address || '')}<br>Site Engineer / Contact: ${esc(dn.client_phone || '')}</td>
+    </tr></table>
+    <table class="items">
+      <thead><tr><th style="width:30px">SL</th><th>DESCRIPTION OF MATERIAL / WORK</th><th style="width:80px">HSN / CODE</th><th style="width:70px">QUANTITY</th><th style="width:50px">UOM</th><th style="width:130px">REMARKS</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <table class="parties" style="margin-top:6px"><tr>
+      <td><div class="lbl">Vehicle No.</div>${esc(dn.vehicle_no || '')}</td>
+      <td><div class="lbl">Driver Name & Mobile</div>${esc([dn.driver_name, dn.driver_mobile].filter(Boolean).join(' · '))}</td>
+      <td><div class="lbl">LR / Challan No.</div>${esc(dn.lr_challan_no || '')}</td>
+      <td><div class="lbl">Total Packages</div>${esc(dn.total_packages || '')}</td>
+    </tr></table>
+    <div class="notice">IMPORTANT — RECEIVING IS VALID ONLY ON THIS DELIVERY NOTE</div>
+    <div style="font-size:9.5px;color:#444;margin-top:4px">It is the supplier's responsibility to obtain dated signature, name and stamp of Secured Engineers' authorised site representative on this Delivery Note. Receiving acknowledged on the supplier's bill / invoice / challan shall <b>NOT</b> be treated as proof of delivery and may lead to non-payment.</div>
+    <div class="signblk"><div class="hdr">Received in Good Condition (to be filled by SEPL site representative)</div>
+      <div class="row"><div>Name of Receiver</div><div>Designation</div><div>Date & Time</div></div>
+      <div class="row"><div>Signature</div><div>Site Stamp</div><div>Mobile No.</div></div>
+    </div>
+    <ul class="checklist">
+      <li>Please verify quantity, description and condition of material BEFORE signing this Delivery Note.</li>
+      <li>Mention shortage / damage / wrong-supply (if any) clearly under REMARKS column. Once signed without remark, supply shall be deemed accepted in full.</li>
+      <li>Receiving on this Delivery Note is the only recognised proof of delivery. Bills / Invoices are for accounting only.</li>
+      <li>Original copy to be retained by Secured Engineers' site office; duplicate copy may be returned to the supplier for billing reference.</li>
+    </ul>
+    <div class="footnote">This is a Computer Generated Delivery Note. Valid only when received and signed at the designated SEPL site.</div>
+  </body></html>`;
+}
 
 // Sales Bills
 router.get('/sales-bills', (req, res) => {
