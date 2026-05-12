@@ -1514,6 +1514,18 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     @page { size: A4; margin: 12mm 10mm; }
     * { box-sizing: border-box; }
     body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #1a1a1a; margin: 0; padding: 0; }
+    /* Browser preview: render the document as an A4 "paper" centered on
+       a grey background so what mam sees on screen matches what comes
+       out of the printer. The @page rule above governs the actual print
+       so we don't double-up margins. */
+    @media screen {
+      html { background: #e5e5e5; }
+      body { width: 210mm; min-height: 297mm; margin: 8mm auto; padding: 12mm 10mm; background: white; box-shadow: 0 2px 12px rgba(0,0,0,0.15); }
+    }
+    /* Underline placeholder for empty fillable values — makes the
+       generated bill look like the printed template ("M/s ______") when
+       a field isn't filled in the source data yet. */
+    .blank { display: inline-block; min-width: 140px; border-bottom: 1px dotted #999; height: 1em; vertical-align: bottom; }
     .header { background: #7a1b1b; color: #fff; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; }
     .header .gstin, .header .pan { font-size: 10px; }
     .header .title { font-size: 18px; font-weight: bold; letter-spacing: 1px; }
@@ -1609,6 +1621,14 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     return m ? `${m[3]} / ${m[2]} / ${m[1]}` : esc(d);
   };
 
+  // Helper — if a field has no value, render an underline placeholder
+  // so the document looks like the printed fill-in template.
+  const fill = (v, w) => {
+    const s = (v == null ? '' : String(v)).trim();
+    if (s) return esc(s);
+    return `<span class="blank"${w ? ` style="min-width:${w}"` : ''}></span>`;
+  };
+
   if (isSalesBill) {
     // Match the SEPL Sales Bill template page 1:1 — Bill To / Ship To
     // with State + Code as two fields, GSTIN (if diff.) on Ship To,
@@ -1643,18 +1663,18 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         </tr>
         <tr>
           <td style="width:50%">
-            <div><b>M/s</b> ${esc(dn.client_company || '')}</div>
-            <div><b>Address:</b> ${esc(dn.client_address || '')}</div>
-            <div><b>GSTIN:</b> ${esc(dn.client_gstin || '')}</div>
-            <div><b>State:</b> ${billState} &nbsp; <b>Code:</b> ${billStateCode}</div>
-            <div><b>Contact:</b> ${esc(dn.client_contact || dn.client_phone || '')}</div>
+            <div><b>M/s</b> ${fill(dn.client_company, '220px')}</div>
+            <div style="margin-top:3px"><b>Address:</b> ${fill(dn.client_address, '220px')}</div>
+            <div style="margin-top:3px"><b>GSTIN:</b> ${fill(dn.client_gstin, '180px')}</div>
+            <div style="margin-top:3px"><b>State:</b> ${fill(dn.client_state, '100px')} &nbsp; <b>Code:</b> ${fill(clientStateCode, '40px')}</div>
+            <div style="margin-top:3px"><b>Contact:</b> ${fill(dn.client_contact || dn.client_phone, '180px')}</div>
           </td>
           <td>
-            <div><b>Site Name:</b> ${esc(dn.site_name || '')}</div>
-            <div><b>Address:</b> ${esc(dn.site_address || '')}</div>
-            <div><b>GSTIN (if diff.):</b> ${esc(dn.client_gstin || '')}</div>
-            <div><b>State:</b> ${billState} &nbsp; <b>Code:</b> ${shipStateCode}</div>
-            <div><b>Site Engineer / Contact:</b> ${esc(dn.client_phone || '')}</div>
+            <div><b>Site Name:</b> ${fill(dn.site_name, '220px')}</div>
+            <div style="margin-top:3px"><b>Address:</b> ${fill(dn.site_address, '220px')}</div>
+            <div style="margin-top:3px"><b>GSTIN (if diff.):</b> ${fill(dn.client_gstin, '180px')}</div>
+            <div style="margin-top:3px"><b>State:</b> ${fill(dn.client_state, '100px')} &nbsp; <b>Code:</b> ${fill(dn.state_code || clientStateCode, '40px')}</div>
+            <div style="margin-top:3px"><b>Site Engineer / Contact:</b> ${fill(dn.client_phone, '180px')}</div>
           </td>
         </tr>
       </table>
@@ -1734,16 +1754,16 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       </tr>
       <tr>
         <td style="width:50%">
-          <div><b>M/s</b> ${esc(dn.client_company || '')}</div>
+          <div><b>M/s</b> ${fill(dn.client_company, '220px')}</div>
           <div style="margin-top:4px"><b>Address:</b></div>
-          <div style="margin-left:4px">${esc(dn.client_address || '')}</div>
-          <div style="margin-top:4px"><b>GSTIN:</b> ${esc(dn.client_gstin || '')}</div>
+          <div style="margin-left:4px">${fill(dn.client_address, '260px')}</div>
+          <div style="margin-top:4px"><b>GSTIN:</b> ${fill(dn.client_gstin, '180px')}</div>
         </td>
         <td>
-          <div><b>Site Name:</b> ${esc(dn.site_name || '')}</div>
+          <div><b>Site Name:</b> ${fill(dn.site_name, '220px')}</div>
           <div style="margin-top:4px"><b>Address:</b></div>
-          <div style="margin-left:4px">${esc(dn.site_address || '')}</div>
-          <div style="margin-top:4px"><b>Site Engineer / Contact:</b> ${esc(dn.client_phone || '')}</div>
+          <div style="margin-left:4px">${fill(dn.site_address, '260px')}</div>
+          <div style="margin-top:4px"><b>Site Engineer / Contact:</b> ${fill(dn.client_phone, '180px')}</div>
         </td>
       </tr>
     </table>
