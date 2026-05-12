@@ -31,6 +31,13 @@ export default function Orders() {
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
   const [poItems, setPoItems] = useState([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', labour_rate: 0, labour_amount: 0 }]);
+  // Items shown on the Order Planning modal — fetched from
+  // /orders/po/:id/items when mam picks a PO. Mam: "first we upload
+  // all labour rates in order to planning after than link with dpr".
+  // Labour Rate Sheet uploads happen HERE, not on the PO upload modal,
+  // so the rates are captured at the execution-planning stage.
+  const [planItems, setPlanItems] = useState([]);
+  const [planLabourFile, setPlanLabourFile] = useState('');
   // Mam: "give here filter by site name/project name" — single search box
   // matches against PO number, lead#, client/company, project, site engineer,
   // CRM. Lower-case substring match on whatever's typed.
@@ -199,9 +206,98 @@ export default function Orders() {
 
   const savePlanning = async (e) => {
     e.preventDefault();
-    await api.post('/orders/planning', form);
-    toast.success('Planning created');
-    setModal(false); load();
+    if (!form.po_id) return toast.error('Pick a Purchase Order first');
+    try {
+      // Step 1: create / update planning record. (Server already has
+      // POST /orders/planning; idempotency isn't enforced — mam can
+      // edit on a re-save if planning_id exists.)
+      await api.post('/orders/planning', form);
+      // Step 2: push labour rates captured on the items grid down to
+      // po_items so DPR will pick them up. Only items with a non-zero
+      // labour_rate or labour_amount are sent.
+      const dirty = planItems.filter(it => (+it.labour_rate || 0) > 0 || (+it.labour_amount || 0) > 0);
+      if (dirty.length) {
+        await api.post(`/orders/po/${form.po_id}/labour-rates`, {
+          items: dirty.map(it => ({
+            po_item_id: it.id,
+            labour_rate: +it.labour_rate || 0,
+            labour_amount: +it.labour_amount || ((it.quantity || 0) * (it.labour_rate || 0)),
+          })),
+        });
+        toast.success(`Plan created · labour rate saved on ${dirty.length} item${dirty.length === 1 ? '' : 's'}`);
+      } else {
+        toast.success('Planning created');
+      }
+      setModal(false);
+      setPlanItems([]);
+      setPlanLabourFile('');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save planning');
+    }
+  };
+
+  // Pull the BOQ items for the picked PO into the Planning modal grid.
+  // Called from the PO <select> onChange so the items appear without
+  // a manual refresh.
+  const loadPlanItems = async (poId) => {
+    if (!poId) { setPlanItems([]); return; }
+    try {
+      const r = await api.get(`/orders/po/${poId}/items`);
+      setPlanItems((r.data || []).map(it => ({
+        ...it,
+        labour_rate: +it.labour_rate || 0,
+        labour_amount: +it.labour_amount || 0,
+      })));
+    } catch { setPlanItems([]); }
+  };
+
+  // Update labour_rate (or labour_amount) on a row in the Planning grid.
+  const updatePlanItem = (idx, key, val) => {
+    setPlanItems(prev => prev.map((it, i) => {
+      if (i !== idx) return it;
+      const next = { ...it, [key]: val };
+      if (key === 'labour_rate') next.labour_amount = (it.quantity || 0) * (+val || 0);
+      return next;
+    }));
+  };
+
+  // Upload Labour Rate Sheet from the Planning modal context.
+  const handlePlanLabourUpload = async (file) => {
+    if (!file) return;
+    if (!planItems.length) return toast.error('Pick a PO first so labour rows can be matched to its BOQ items');
+    setUploading(true);
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const res = await api.post('/orders/labour-upload-excel', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const rows = res.data?.rows || [];
+      if (!rows.length) {
+        toast.error('No labour rate rows parsed. Check the file has a "Labour Rate" (or "Installation Rate") column.', { duration: 8000 });
+        setUploading(false); return;
+      }
+      const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      const bySn = new Map();
+      for (const r of rows) if (r.sr_no) bySn.set(+r.sr_no, r);
+      let matched = 0;
+      const next = planItems.map((boq, idx) => {
+        let lr = bySn.get(+boq.sr_no);
+        if (!lr && boq.description) {
+          const want = norm(boq.description);
+          lr = rows.find(x => want && (want.includes(norm(x.description)) || norm(x.description).includes(want)));
+        }
+        if (!lr) lr = rows[idx];
+        if (!lr) return boq;
+        matched++;
+        const labourRate = +lr.labour_rate || 0;
+        return { ...boq, labour_rate: labourRate, labour_amount: (boq.quantity || 0) * labourRate };
+      });
+      setPlanItems(next);
+      setPlanLabourFile(res.data.file_url || '');
+      toast.success(`Matched labour rate on ${matched} / ${planItems.length} item${planItems.length === 1 ? '' : 's'}`);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Labour rate upload failed');
+    }
+    setUploading(false);
   };
 
   const itemsTotal = poItems.reduce((s, i) => s + (i.amount || 0), 0);
@@ -469,37 +565,6 @@ export default function Orders() {
             )}
           </div>
 
-          {/* 3b. Upload Labour Rate Sheet — matches each row to a BOQ item
-              and fills the Labour Rate column. The rate then flows down
-              into the DPR work item via po_items.labour_rate. */}
-          <div className="border-2 border-dashed border-amber-400 rounded-lg p-4 bg-amber-50 text-center">
-            <h4 className="font-bold text-amber-800 mb-2">Upload Labour Rate Sheet</h4>
-            <p className="text-xs text-amber-700 mb-3">Excel (.xlsx/.xls) with a <b>Labour Rate</b> (or "Installation Rate") column. Each row will be matched to the BOQ items above by SN / description and the labour rate filled in. Rate also flows into DPR when site engineer fills daily progress.</p>
-            <label className={`btn inline-flex items-center gap-2 cursor-pointer text-base px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded ${uploading ? 'opacity-60 pointer-events-none' : ''}`}>
-              <FiUpload size={18} /> {uploading ? 'Uploading...' : 'Upload Labour Rate & Match Items'}
-              <input
-                type="file"
-                accept=".xlsx,.xls"
-                className="hidden"
-                disabled={uploading || poItems.filter(i => i.description).length === 0}
-                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; handleLabourUpload(f); }}
-              />
-            </label>
-            {poItems.filter(i => i.description && (i.labour_rate || 0) > 0).length > 0 && (
-              <p className="text-xs text-amber-700 font-bold mt-2">{poItems.filter(i => i.description && (i.labour_rate || 0) > 0).length} item{poItems.filter(i => i.description && (i.labour_rate || 0) > 0).length === 1 ? '' : 's'} have labour rate set</p>
-            )}
-            {form.labour_rate_file_link && (
-              <div className="mt-2 flex items-center justify-center gap-2 text-xs">
-                <span className="text-gray-500">Labour file attached:</span>
-                <a href={form.labour_rate_file_link} target="_blank" rel="noreferrer" className="text-amber-700 underline truncate max-w-[260px]">{form.labour_rate_file_link.split('/').pop()}</a>
-                <button type="button" onClick={() => setForm(f => ({ ...f, labour_rate_file_link: '' }))} className="text-amber-700 hover:underline">Remove</button>
-              </div>
-            )}
-            {poItems.filter(i => i.description).length === 0 && (
-              <p className="text-[11px] text-gray-500 italic mt-2">Upload the BOQ file above first so labour rows can be matched.</p>
-            )}
-          </div>
-
           {/* 4. BOQ Items Table */}
           <div className="border rounded-lg p-3 bg-white">
             <div className="flex justify-between items-center mb-3">
@@ -587,16 +652,113 @@ export default function Orders() {
         </form>
       </Modal>
 
-      {/* Order Planning Modal */}
-      <Modal isOpen={modal === 'planning'} onClose={() => setModal(false)} title="Create Order Plan">
-        <form onSubmit={savePlanning} className="space-y-4">
-          <div><label className="label">Purchase Order</label><select className="select" value={form.po_id || ''} onChange={e => setForm({ ...form, po_id: e.target.value })}><option value="">Select</option>{pos.map(p => <option key={p.id} value={p.id}>{p.po_number}</option>)}</select></div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      {/* Order Planning Modal — PO + dates + Labour Rate Sheet upload.
+          Mam's workflow: "first we upload all labour rates in order to
+          planning after than link with dpr". Labour rates captured here
+          flow into po_items.labour_rate and then into dpr_work_items
+          when site engineer fills DPR. */}
+      <Modal isOpen={modal === 'planning'} onClose={() => { setModal(false); setPlanItems([]); setPlanLabourFile(''); }} title="Create Order Plan" wide>
+        <form onSubmit={savePlanning} className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="sm:col-span-3">
+              <label className="label">Purchase Order *</label>
+              <select className="select" value={form.po_id || ''} onChange={e => { const v = e.target.value; setForm({ ...form, po_id: v }); loadPlanItems(v); }} required>
+                <option value="">Select</option>
+                {pos.map(p => <option key={p.id} value={p.id}>{p.po_number} — {p.bb_client || p.company_name || ''}</option>)}
+              </select>
+            </div>
             <div><label className="label">Planned Start</label><input className="input" type="date" value={form.planned_start || ''} onChange={e => setForm({ ...form, planned_start: e.target.value })} /></div>
             <div><label className="label">Planned End</label><input className="input" type="date" value={form.planned_end || ''} onChange={e => setForm({ ...form, planned_end: e.target.value })} /></div>
+            <div><label className="label">Notes</label><textarea className="input" rows="1" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
-          <div><label className="label">Notes</label><textarea className="input" rows="3" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
-          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Create</button></div>
+
+          {/* Labour Rate Sheet upload — matches each row to a po_item by
+              SN / description / position. Disabled until a PO is picked. */}
+          <div className="border-2 border-dashed border-amber-400 rounded-lg p-4 bg-amber-50 text-center">
+            <h4 className="font-bold text-amber-800 mb-1">Upload Labour Rate Sheet</h4>
+            <p className="text-xs text-amber-700 mb-3">Excel (.xlsx/.xls) with a <b>Labour Rate</b> (or "Installation Rate") column. Each row is matched to the PO's BOQ items by SN / description and the labour rate is filled in. Saved labour rates auto-flow into DPR when site engineer fills daily progress.</p>
+            <label className={`btn inline-flex items-center gap-2 cursor-pointer text-base px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded ${uploading || !planItems.length ? 'opacity-60 pointer-events-none' : ''}`}>
+              <FiUpload size={18} /> {uploading ? 'Uploading...' : 'Upload Labour Rate & Match'}
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                className="hidden"
+                disabled={uploading || planItems.length === 0}
+                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; handlePlanLabourUpload(f); }}
+              />
+            </label>
+            {!planItems.length && form.po_id && <p className="text-[11px] text-gray-500 italic mt-2">Loading items…</p>}
+            {!planItems.length && !form.po_id && <p className="text-[11px] text-gray-500 italic mt-2">Pick a Purchase Order first.</p>}
+            {planLabourFile && (
+              <div className="mt-2 flex items-center justify-center gap-2 text-xs">
+                <span className="text-gray-500">Labour file attached:</span>
+                <a href={planLabourFile} target="_blank" rel="noreferrer" className="text-amber-700 underline truncate max-w-[260px]">{planLabourFile.split('/').pop()}</a>
+                <button type="button" onClick={() => setPlanLabourFile('')} className="text-amber-700 hover:underline">Remove</button>
+              </div>
+            )}
+          </div>
+
+          {/* BOQ items grid with editable Labour Rate column */}
+          {planItems.length > 0 && (
+            <div className="border rounded-lg p-3 bg-white">
+              <div className="flex justify-between items-center mb-3 flex-wrap gap-1">
+                <h4 className="font-semibold text-sm text-gray-700">BOQ Items ({planItems.length})</h4>
+                <span className="text-[11px] text-gray-500">Edit Labour Rate inline if needed — it overrides the uploaded value.</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 text-gray-600 uppercase">
+                    <tr>
+                      <th className="px-2 py-1 text-center" style={{ width: '36px' }}>SN</th>
+                      <th className="px-2 py-1 text-left">Description</th>
+                      <th className="px-2 py-1 text-right" style={{ width: '60px' }}>Qty</th>
+                      <th className="px-2 py-1 text-left" style={{ width: '50px' }}>Unit</th>
+                      <th className="px-2 py-1 text-right" style={{ width: '90px' }}>Rate (SITC)</th>
+                      <th className="px-2 py-1 text-right bg-amber-100 text-amber-800" style={{ width: '100px' }}>Labour Rate</th>
+                      <th className="px-2 py-1 text-right bg-amber-50 text-amber-700" style={{ width: '110px' }}>Labour Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {planItems.map((it, idx) => (
+                      <tr key={it.id || idx} className="border-b">
+                        <td className="px-2 py-1 text-center text-gray-500">{it.sr_no || idx + 1}</td>
+                        <td className="px-2 py-1 truncate max-w-[280px]" title={it.description}>{it.description}</td>
+                        <td className="px-2 py-1 text-right">{it.quantity}</td>
+                        <td className="px-2 py-1">{it.unit}</td>
+                        <td className="px-2 py-1 text-right text-gray-700">{(+it.rate || 0).toLocaleString('en-IN')}</td>
+                        <td className="px-1 py-1 bg-amber-50">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className="w-full text-right bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-amber-400 rounded px-1 py-0.5"
+                            value={it.labour_rate || 0}
+                            onChange={e => updatePlanItem(idx, 'labour_rate', +e.target.value)}
+                          />
+                        </td>
+                        <td className="px-2 py-1 text-right font-mono text-amber-800">
+                          {((it.quantity || 0) * (+it.labour_rate || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-amber-300 font-semibold">
+                      <td colSpan="6" className="px-2 py-1 text-right text-amber-800">Labour Total</td>
+                      <td className="px-2 py-1 text-right font-mono text-amber-800">
+                        Rs {planItems.reduce((s, i) => s + (i.quantity || 0) * (+i.labour_rate || 0), 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3">
+            <button type="button" onClick={() => { setModal(false); setPlanItems([]); setPlanLabourFile(''); }} className="btn btn-secondary">Cancel</button>
+            <button type="submit" className="btn btn-primary">Save Plan + Labour Rates</button>
+          </div>
         </form>
       </Modal>
     </div>

@@ -363,6 +363,47 @@ router.get('/po/:id/items', (req, res) => {
   }
 });
 
+// Bulk-patch labour_rate (and the derived labour_amount) on po_items.
+// Mam: "first we upload all labour rates in order to planning after
+// than link with dpr". Used by the Order Planning modal after she
+// uploads the Labour Rate Sheet — the rate from each row is matched
+// to a po_item and written here without disturbing rate / quantity /
+// description. From here the rate flows into dpr_work_items.
+router.post('/po/:id/labour-rates', (req, res) => {
+  const db = getDb();
+  const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
+  if (!po) return res.status(404).json({ error: 'PO not found' });
+  const updates = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (!updates.length) return res.status(400).json({ error: 'No items supplied' });
+
+  // Pre-fetch all po_items for this PO so we can validate ownership
+  // (don't let a stray id from another PO get patched) and read qty
+  // for the labour_amount math.
+  const rows = db.prepare('SELECT id, quantity, business_book_id FROM po_items WHERE business_book_id=?').all(po.business_book_id);
+  const byId = new Map(rows.map(r => [r.id, r]));
+
+  const upd = db.prepare('UPDATE po_items SET labour_rate=?, labour_amount=? WHERE id=?');
+  const tx = db.transaction((items) => {
+    let n = 0;
+    for (const it of items) {
+      const id = +it.po_item_id || +it.id;
+      const row = byId.get(id);
+      if (!row) continue;
+      const labour = +it.labour_rate || 0;
+      const amount = +it.labour_amount || (+row.quantity || 0) * labour;
+      upd.run(labour, amount, id);
+      n++;
+    }
+    return n;
+  });
+  try {
+    const updated = tx(updates);
+    res.json({ message: `Labour rate updated on ${updated} item${updated === 1 ? '' : 's'}`, updated_count: updated });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/po/:id/items', (req, res) => {
  try {
   const { items } = req.body;
