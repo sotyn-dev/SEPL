@@ -1812,7 +1812,6 @@ export default function Procurement() {
               className="input"
               type="file"
               accept=".pdf,.jpg,.jpeg,.png"
-              capture="environment"
               required
               onChange={e => setForm({ ...form, receipt_file: e.target.files?.[0] || null })}
             />

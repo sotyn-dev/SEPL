@@ -307,7 +307,7 @@ export default function Snags() {
                   <button type="button" onClick={() => setForm(f => ({ ...f, photo_url: '' }))} className="text-red-500 text-xs">Remove</button>
                 </div>
               ) : (
-                <input type="file" accept="image/*" capture="environment" className="text-xs" onChange={async e => {
+                <input type="file" accept="image/*" className="text-xs" onChange={async e => {
                   const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, photo_url: url }));
                   e.target.value = '';
                 }} />
@@ -362,7 +362,7 @@ export default function Snags() {
                   <button type="button" onClick={() => setProofForm(f => ({ ...f, proof_url: '' }))} className="text-red-500 text-xs">Remove</button>
                 </div>
               ) : (
-                <input type="file" accept="image/*,.pdf" capture="environment" className="text-xs" onChange={async e => {
+                <input type="file" accept="image/*,.pdf" className="text-xs" onChange={async e => {
                   const url = await upload(e.target.files?.[0]); if (url) setProofForm(f => ({ ...f, proof_url: url }));
                   e.target.value = '';
                 }} />

@@ -962,7 +962,7 @@ function RaiseRentForm({ form, setForm, sites, users, onSubmit, onCancel }) {
               </div>
             </div>
           ) : (
-            <input type="file" accept="image/*" capture="environment" className="text-xs" onChange={capturePhoto} />
+            <input type="file" accept="image/*" className="text-xs" onChange={capturePhoto} />
           )}
         </div>
 

@@ -594,7 +594,7 @@ export default function PaymentRequired() {
                       {form.km_photo ? (
                         <div className="flex items-center gap-2"><a href={form.km_photo} className="text-red-600 text-xs underline truncate" target="_blank" rel="noreferrer">Photo uploaded</a><button type="button" onClick={() => F('km_photo', '')} className="text-red-500 text-[10px]">Remove</button></div>
                       ) : (
-                        <input type="file" accept="image/*" capture="environment" onChange={async (e) => {
+                        <input type="file" accept="image/*" onChange={async (e) => {
                           const file = e.target.files[0]; if (!file) return;
                           try { const fd = new FormData(); fd.append('file', file); const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); F('km_photo', res.data.url); toast.success('Start photo uploaded'); } catch { toast.error('Failed'); }
                           e.target.value = '';
@@ -608,7 +608,7 @@ export default function PaymentRequired() {
                       {form.end_km_photo ? (
                         <div className="flex items-center gap-2"><a href={form.end_km_photo} className="text-red-600 text-xs underline truncate" target="_blank" rel="noreferrer">Photo uploaded</a><button type="button" onClick={() => F('end_km_photo', '')} className="text-red-500 text-[10px]">Remove</button></div>
                       ) : (
-                        <input type="file" accept="image/*" capture="environment" onChange={async (e) => {
+                        <input type="file" accept="image/*" onChange={async (e) => {
                           const file = e.target.files[0]; if (!file) return;
                           try { const fd = new FormData(); fd.append('file', file); const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); F('end_km_photo', res.data.url); toast.success('End photo uploaded'); } catch { toast.error('Failed'); }
                           e.target.value = '';

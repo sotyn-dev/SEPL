@@ -532,7 +532,7 @@ export default function Leads() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
                     <label className="label text-[10px]">Timestamp Photo <span className="text-gray-400 font-normal">(selfie at site with date stamp)</span></label>
-                    <input type="file" accept="image/*" capture="environment" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{const url=await uploadFile(f);setStageForm(s=>({...s,meeting_timestamp_photo_url:url}));toast.success('Photo uploaded');}catch{toast.error('Failed');}}} className="text-xs"/>
+                    <input type="file" accept="image/*" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{const url=await uploadFile(f);setStageForm(s=>({...s,meeting_timestamp_photo_url:url}));toast.success('Photo uploaded');}catch{toast.error('Failed');}}} className="text-xs"/>
                     {stageForm.meeting_timestamp_photo_url && <p className="text-[10px] text-emerald-600 mt-0.5">✓ Photo attached</p>}
                   </div>
                   <div>

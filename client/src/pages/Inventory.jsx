@@ -794,8 +794,7 @@ function OpeningRowEntry({ warehouses, items, reload }) {
                       <input
                         type="file"
                         accept="image/*,.pdf"
-                        capture="environment"
-                        disabled={r.uploading}
+                                                disabled={r.uploading}
                         onChange={e => uploadPhoto(i, e.target.files?.[0])}
                         className="block w-full text-xs text-gray-500 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100"
                       />
@@ -988,7 +987,7 @@ function OpeningItemwiseEntry({ warehouses, items, reload }) {
                         <td className="px-2 py-1.5"><input className="input text-right tabular-nums" type="number" step="any" min="0" placeholder="optional" value={r.rate || ''} onChange={e => setRow(w.id, 'rate', e.target.value)} /></td>
                         <td className="px-2 py-1.5">
                           <div className="flex items-center gap-2">
-                            <input type="file" accept="image/*,.pdf" capture="environment" disabled={r.uploading}
+                            <input type="file" accept="image/*,.pdf" disabled={r.uploading}
                               onChange={e => uploadPhoto(w.id, e.target.files?.[0])}
                               className="text-[10px] text-gray-500 file:mr-1 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100" />
                             {r.uploading && <span className="text-[10px] text-amber-600">…</span>}
@@ -1011,7 +1010,7 @@ function OpeningItemwiseEntry({ warehouses, items, reload }) {
                         <td className="px-2 py-1.5"><input className="input text-right tabular-nums" type="number" step="any" min="0" placeholder="optional" value={r.rate || ''} onChange={e => setRow(w.id, 'rate', e.target.value)} /></td>
                         <td className="px-2 py-1.5">
                           <div className="flex items-center gap-2">
-                            <input type="file" accept="image/*,.pdf" capture="environment" disabled={r.uploading}
+                            <input type="file" accept="image/*,.pdf" disabled={r.uploading}
                               onChange={e => uploadPhoto(w.id, e.target.files?.[0])}
                               className="text-[10px] text-gray-500 file:mr-1 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100" />
                             {r.uploading && <span className="text-[10px] text-amber-600">…</span>}
@@ -1176,8 +1175,7 @@ function ReceiveTab({ warehouses, items, reload }) {
                 <input
                   type="file"
                   accept="image/*,.pdf"
-                  capture="environment"
-                  disabled={l.uploading}
+                                    disabled={l.uploading}
                   onChange={e => uploadPhoto(i, e.target.files?.[0])}
                   className="col-span-7 text-[11px] text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100"
                 />
