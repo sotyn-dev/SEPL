@@ -1451,8 +1451,13 @@ router.get('/delivery-notes/:id/print', (req, res) => {
   }
 
   const isSalesBill = dn.document_type === 'sales_bill';
+  // Ship the HTML as a UTF-8 Buffer so the ₹ / em-dash / 🖨 emoji
+  // round-trip cleanly through proxies that otherwise re-encode the
+  // body as Latin-1. Earlier mam saw mojibake on the printed bill
+  // ("â¹" instead of "₹") — explicit Buffer encoding is the fix.
+  const html = renderDispatchHTML({ dn, items, isSalesBill, itemsSource });
   res.set('Content-Type', 'text/html; charset=utf-8');
-  res.send(renderDispatchHTML({ dn, items, isSalesBill, itemsSource }));
+  res.send(Buffer.from(html, 'utf8'));
 });
 
 // HTML template renderer — kept inline so it stays self-contained and
@@ -1612,7 +1617,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     const billState = esc(dn.client_state || '');
     const billStateCode = esc(clientStateCode);
     const shipStateCode = esc(dn.state_code || clientStateCode);
-    return `<!doctype html><html><head><title>${esc(docNo)}</title><style>${css}</style></head><body>
+    return `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(docNo)}</title><style>${css}</style></head><body>
       <button class="print-btn" onclick="window.print()">🖨 Print</button>
       ${headerBlock}
       <table class="meta">
@@ -1711,7 +1716,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
   // own banner-headed section; the two notices ("IMPORTANT" and
   // "RECEIVED IN GOOD CONDITION") use red banner headers like the
   // template; footer text sits inside a red-bordered banner.
-  return `<!doctype html><html><head><title>${esc(docNo)}</title><style>${css}</style></head><body>
+  return `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(docNo)}</title><style>${css}</style></head><body>
     <button class="print-btn" onclick="window.print()">🖨 Print</button>
     ${headerBlock}
     <table class="meta">

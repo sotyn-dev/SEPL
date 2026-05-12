@@ -469,8 +469,10 @@ export default function Procurement() {
       // immediately, matching the "create like a PO" feel she asked for.
       if (r.data?.id) {
         try {
-          const printRes = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'text' });
-          const blob = new Blob([printRes.data], { type: 'text/html' });
+          // Pull as arraybuffer + tag the blob as UTF-8 so ₹ / em-dash
+          // don't render as mojibake when opened via blob: URL.
+          const printRes = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'arraybuffer' });
+          const blob = new Blob([printRes.data], { type: 'text/html;charset=utf-8' });
           window.open(URL.createObjectURL(blob), '_blank', 'noopener');
         } catch (_) { /* user can still click 🖨 Print in the list */ }
       }
@@ -1375,8 +1377,10 @@ export default function Procurement() {
                     <button
                       onClick={async () => {
                         try {
-                          const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'text' });
-                          const blob = new Blob([res.data], { type: 'text/html' });
+                          // arraybuffer + utf-8 blob so ₹ / em-dash /
+                          // 🖨 emoji don't render as Latin-1 mojibake.
+                          const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' });
+                          const blob = new Blob([res.data], { type: 'text/html;charset=utf-8' });
                           window.open(URL.createObjectURL(blob), '_blank', 'noopener');
                         } catch (err) {
                           toast.error(err.response?.data?.error || 'Could not generate document');
