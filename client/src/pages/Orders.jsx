@@ -30,7 +30,7 @@ export default function Orders() {
   const [bbEntries, setBbEntries] = useState([]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
-  const [poItems, setPoItems] = useState([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
+  const [poItems, setPoItems] = useState([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', labour_rate: 0, labour_amount: 0 }]);
   // Mam: "give here filter by site name/project name" — single search box
   // matches against PO number, lead#, client/company, project, site engineer,
   // CRM. Lower-case substring match on whatever's typed.
@@ -58,13 +58,68 @@ export default function Orders() {
     }).catch(() => {});
   }, []);
 
-  const addItem = () => setPoItems([...poItems, { item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
+  const addItem = () => setPoItems([...poItems, { item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', labour_rate: 0, labour_amount: 0 }]);
   const removeItem = (i) => setPoItems(poItems.filter((_, idx) => idx !== i));
   const updateItem = (i, key, val) => {
     const items = [...poItems];
     items[i][key] = val;
     if (key === 'quantity' || key === 'rate') items[i].amount = (items[i].quantity || 0) * (items[i].rate || 0);
+    // Labour amount auto-tracks qty × labour_rate the same way Amount
+    // tracks qty × rate (SITC). Mam can still override it manually if
+    // the labour sheet had a fixed-amount column.
+    if (key === 'quantity' || key === 'labour_rate') items[i].labour_amount = (items[i].quantity || 0) * (items[i].labour_rate || 0);
     setPoItems(items);
+  };
+
+  // Upload a Labour Rate sheet (Excel). Server parses it, returns rows
+  // keyed by sr_no + description; we merge labour_rate onto the matching
+  // BOQ items already in poItems. Match priority:
+  //   1. exact sr_no
+  //   2. case-insensitive substring match on description
+  //   3. positional fallback (1st BOQ row ↔ 1st labour row, etc.)
+  const handleLabourUpload = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const res = await api.post('/orders/labour-upload-excel', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const rows = res.data?.rows || [];
+      if (!rows.length) {
+        toast.error('No labour rate rows parsed. Check the file has a "Labour Rate" (or "Installation Rate") column.', { duration: 8000 });
+        setUploading(false);
+        return;
+      }
+      const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      const labourBySn = new Map();
+      const labourPool = [...rows];
+      for (const r of rows) if (r.sr_no) labourBySn.set(+r.sr_no, r);
+      let matched = 0;
+      const next = poItems.map((boqItem, idx) => {
+        // 1) try sr_no
+        let lr = labourBySn.get(+boqItem.sr_no);
+        // 2) try description substring
+        if (!lr && boqItem.description) {
+          const want = norm(boqItem.description);
+          lr = labourPool.find(x => want && (want.includes(norm(x.description)) || norm(x.description).includes(want)));
+        }
+        // 3) positional fallback
+        if (!lr) lr = labourPool[idx];
+        if (!lr) return boqItem;
+        matched++;
+        const labourRate = +lr.labour_rate || 0;
+        return {
+          ...boqItem,
+          labour_rate: labourRate,
+          labour_amount: (boqItem.quantity || 0) * labourRate,
+        };
+      });
+      setPoItems(next);
+      setForm(f => ({ ...f, labour_rate_file_link: res.data.file_url || f.labour_rate_file_link }));
+      toast.success(`Matched labour rate on ${matched} / ${poItems.length} item${poItems.length === 1 ? '' : 's'}`);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Labour rate upload failed');
+    }
+    setUploading(false);
   };
 
   const handleBBSelect = (bbId) => {
@@ -94,8 +149,8 @@ export default function Orders() {
     });
     // Load existing PO items
     api.get(`/orders/po/${po.id}/items`).then(r => {
-      setPoItems(r.data.length > 0 ? r.data.map(i => ({ ...i, item_master_id: i.item_master_id || '' })) : [{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
-    }).catch(() => setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]));
+      setPoItems(r.data.length > 0 ? r.data.map(i => ({ ...i, item_master_id: i.item_master_id || '' })) : [{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', labour_rate: 0, labour_amount: 0 }]);
+    }).catch(() => setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', labour_rate: 0, labour_amount: 0 }]));
     setModal('po');
   };
 
@@ -120,7 +175,7 @@ export default function Orders() {
         toast.success('PO created');
       }
       setModal(false); setEditingPO(null);
-      setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
+      setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', labour_rate: 0, labour_amount: 0 }]);
       load();
     } catch (err) {
       // Show the real server response right in the modal so mam can read /
@@ -180,7 +235,7 @@ export default function Orders() {
             <button onClick={() => {
               setEditingPO(null);
               setForm({ business_book_id: '', po_number: '', po_date: '', total_amount: 0, advance_amount: 0, po_copy_link: '', boq_file_link: '', pt_advance: '', pt_delivery: '', pt_installation: '', pt_commissioning: '', pt_retention: '', site_engineer_ids: [], crm_name: '' });
-              setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
+              setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', labour_rate: 0, labour_amount: 0 }]);
               setModal('po');
             }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add PO</button>
           </div>
@@ -414,6 +469,37 @@ export default function Orders() {
             )}
           </div>
 
+          {/* 3b. Upload Labour Rate Sheet — matches each row to a BOQ item
+              and fills the Labour Rate column. The rate then flows down
+              into the DPR work item via po_items.labour_rate. */}
+          <div className="border-2 border-dashed border-amber-400 rounded-lg p-4 bg-amber-50 text-center">
+            <h4 className="font-bold text-amber-800 mb-2">Upload Labour Rate Sheet</h4>
+            <p className="text-xs text-amber-700 mb-3">Excel (.xlsx/.xls) with a <b>Labour Rate</b> (or "Installation Rate") column. Each row will be matched to the BOQ items above by SN / description and the labour rate filled in. Rate also flows into DPR when site engineer fills daily progress.</p>
+            <label className={`btn inline-flex items-center gap-2 cursor-pointer text-base px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded ${uploading ? 'opacity-60 pointer-events-none' : ''}`}>
+              <FiUpload size={18} /> {uploading ? 'Uploading...' : 'Upload Labour Rate & Match Items'}
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                className="hidden"
+                disabled={uploading || poItems.filter(i => i.description).length === 0}
+                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; handleLabourUpload(f); }}
+              />
+            </label>
+            {poItems.filter(i => i.description && (i.labour_rate || 0) > 0).length > 0 && (
+              <p className="text-xs text-amber-700 font-bold mt-2">{poItems.filter(i => i.description && (i.labour_rate || 0) > 0).length} item{poItems.filter(i => i.description && (i.labour_rate || 0) > 0).length === 1 ? '' : 's'} have labour rate set</p>
+            )}
+            {form.labour_rate_file_link && (
+              <div className="mt-2 flex items-center justify-center gap-2 text-xs">
+                <span className="text-gray-500">Labour file attached:</span>
+                <a href={form.labour_rate_file_link} target="_blank" rel="noreferrer" className="text-amber-700 underline truncate max-w-[260px]">{form.labour_rate_file_link.split('/').pop()}</a>
+                <button type="button" onClick={() => setForm(f => ({ ...f, labour_rate_file_link: '' }))} className="text-amber-700 hover:underline">Remove</button>
+              </div>
+            )}
+            {poItems.filter(i => i.description).length === 0 && (
+              <p className="text-[11px] text-gray-500 italic mt-2">Upload the BOQ file above first so labour rows can be matched.</p>
+            )}
+          </div>
+
           {/* 4. BOQ Items Table */}
           <div className="border rounded-lg p-3 bg-white">
             <div className="flex justify-between items-center mb-3">
@@ -421,11 +507,22 @@ export default function Orders() {
               <button type="button" onClick={addItem} className="btn btn-secondary text-xs flex items-center gap-1"><FiPlus size={12} /> Add Item</button>
             </div>
             <div className="space-y-2">
-              <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-gray-500 px-1">
-                <div>SN</div><div className="col-span-3">Description</div><div>Qty</div><div>Unit</div><div className="col-span-2">Rate (SITC)</div><div className="col-span-2">Amount</div><div></div>
+              {/* 14-col grid: SN(1) Desc(3) Qty(1) Unit(1) SITC(2) Labour(2) Amount(3) Trash(1) */}
+              <div className="grid grid-cols-14 gap-2 text-xs font-semibold text-gray-500 px-1" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr))' }}>
+                <div>SN</div>
+                <div className="col-span-3">Description</div>
+                <div>Qty</div>
+                <div>Unit</div>
+                <div className="col-span-2">Rate (SITC)</div>
+                <div className="col-span-2 text-amber-700">Labour Rate</div>
+                <div className="col-span-3">Amount (SITC + Labour)</div>
+                <div></div>
               </div>
-              {poItems.map((item, i) => (
-                <div key={i} className="grid grid-cols-12 gap-2 items-center">
+              {poItems.map((item, i) => {
+                const sitcAmt = +item.amount || 0;
+                const labourAmt = +item.labour_amount || ((item.quantity || 0) * (item.labour_rate || 0));
+                return (
+                <div key={i} className="grid grid-cols-14 gap-2 items-center" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr))' }}>
                   <div className="text-xs text-center font-bold text-gray-500">{item.sr_no || i + 1}</div>
                   <div className="col-span-3">
                     {item.description && !item.item_master_id ? (
@@ -454,14 +551,32 @@ export default function Orders() {
                     <option>Nos</option><option>nos</option><option>mtr</option><option>kg</option><option>sqm</option><option>rft</option><option>set</option><option>lot</option><option>pair</option><option>pc</option><option>pcs</option><option>No</option>
                   </select>
                   <input className="input col-span-2 text-sm" type="number" value={item.rate} onChange={e => updateItem(i, 'rate', +e.target.value)} />
-                  <div className="col-span-2 text-sm font-medium text-gray-700 px-2">Rs {(item.amount || 0).toLocaleString()}</div>
+                  <input
+                    className="input col-span-2 text-sm bg-amber-50"
+                    type="number"
+                    value={item.labour_rate || 0}
+                    onChange={e => updateItem(i, 'labour_rate', +e.target.value)}
+                    placeholder="Labour"
+                    title="Per-unit labour rate. Auto-filled by the Labour Rate Sheet upload above; editable here."
+                  />
+                  <div className="col-span-3 text-sm font-medium text-gray-700 px-2">
+                    Rs {(sitcAmt + labourAmt).toLocaleString('en-IN')}
+                    {(labourAmt > 0) && (
+                      <span className="block text-[10px] text-amber-700 leading-none mt-0.5">
+                        Rs {sitcAmt.toLocaleString('en-IN')} (SITC) + Rs {labourAmt.toLocaleString('en-IN')} (Labour)
+                      </span>
+                    )}
+                  </div>
                   <button type="button" onClick={() => removeItem(i)} className="p-1 text-red-400 hover:text-red-600">{poItems.length > 1 && <FiTrash2 size={14} />}</button>
                 </div>
-              ))}
+              );})}
             </div>
-            <div className="mt-3 pt-2 border-t border-red-200 flex justify-between text-sm">
+            <div className="mt-3 pt-2 border-t border-red-200 flex justify-between text-sm flex-wrap gap-1">
               <span className="text-red-600 font-medium">{poItems.filter(i => i.description).length} items</span>
-              <span className="font-bold text-red-800">Items Total: Rs {itemsTotal.toLocaleString()}</span>
+              <div className="flex flex-col items-end">
+                <span className="font-bold text-red-800">SITC Total: Rs {itemsTotal.toLocaleString('en-IN')}</span>
+                <span className="text-amber-700 font-semibold">Labour Total: Rs {poItems.reduce((s, i) => s + (+i.labour_amount || ((i.quantity || 0) * (i.labour_rate || 0))), 0).toLocaleString('en-IN')}</span>
+              </div>
             </div>
           </div>
 

@@ -2086,6 +2086,17 @@ function initializeDatabase() {
     // Bill / Tax Invoice (templates require these in the Bill To block).
     ['business_book', 'gstin TEXT'],
     ['business_book', 'state_code TEXT'],
+    // Labour rate per BOQ line — mam: "upload labour rate sheet and
+    // when upload below match BOQ item labour rate come next column of
+    // rate(SITC)". Populated either manually inline or via the Labour
+    // Rate Sheet upload that matches by sr_no / description. Flows down
+    // into dpr_work_items so DPR cost calc uses the same per-line rate.
+    ['po_items', 'labour_rate REAL DEFAULT 0'],
+    ['po_items', 'labour_amount REAL DEFAULT 0'],
+    ['po_items', 'sr_no INTEGER'],
+    ['business_book', 'labour_rate_file_link TEXT'],
+    ['dpr_work_items', 'labour_rate REAL DEFAULT 0'],
+    ['dpr_work_items', 'labour_amount REAL DEFAULT 0'],
     // Indent items now pick from item_master; keeps backward-compat description too
     ['indent_items', 'item_master_id INTEGER REFERENCES item_master(id)'],
     ['indent_items', 'make TEXT'],                 // e.g. "Schneider", "L&T"

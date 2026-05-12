@@ -427,17 +427,33 @@ router.post('/', (req, res) => {
     insertContractor.run(dprId, name || null, mp);
   }
 
-  // Table A: Installation work items from PO
-  const insertWork = db.prepare('INSERT INTO dpr_work_items (dpr_id, po_item_id, description, unit, floor_zone, boq_qty, rate, amount, planned_qty, actual_qty, cumulative_qty, variance_pct, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  // Table A: Installation work items from PO. Labour rate now flows from
+  // po_items.labour_rate (set by the Labour Rate Sheet upload on the
+  // BOQ page) so DPR cost math uses the same per-line labour rate mam
+  // captured upstream.
+  const insertWork = db.prepare('INSERT INTO dpr_work_items (dpr_id, po_item_id, description, unit, floor_zone, boq_qty, rate, amount, planned_qty, actual_qty, cumulative_qty, variance_pct, remarks, labour_rate, labour_amount) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  const poItemRow = db.prepare('SELECT id, labour_rate FROM po_items WHERE id=?');
   for (const w of (work_items || [])) {
     if (!w.description && !w.po_item_id) continue;
     const qty = w.qty || 0;
     const rate = w.rate || 0;
     const amount = qty * rate;
-    // Verify po_item_id exists, set null if not
-    const validPoItemId = w.po_item_id ? (db.prepare('SELECT id FROM po_items WHERE id=?').get(w.po_item_id) ? w.po_item_id : null) : null;
+    // Verify po_item_id exists, set null if not. Also fetch the stored
+    // labour rate so it can be applied when the caller didn't pass one.
+    let validPoItemId = null;
+    let poItemLabourRate = 0;
+    if (w.po_item_id) {
+      const piRow = poItemRow.get(w.po_item_id);
+      if (piRow) {
+        validPoItemId = w.po_item_id;
+        poItemLabourRate = +piRow.labour_rate || 0;
+      }
+    }
+    const labourRate = +w.labour_rate || poItemLabourRate;
+    const labourAmount = +w.labour_amount || (qty * labourRate);
     insertWork.run(dprId, validPoItemId, w.description, w.unit, w.location || w.floor_zone,
-      w.boq_qty || 0, rate, amount, qty, qty, w.cumulative_qty || 0, 0, w.remarks);
+      w.boq_qty || 0, rate, amount, qty, qty, w.cumulative_qty || 0, 0, w.remarks,
+      labourRate, labourAmount);
   }
 
   // Table B: Costs (stored in manpower table - trade=type, required=qty, deployed=rate, shortage=amount)

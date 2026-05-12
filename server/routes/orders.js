@@ -128,12 +128,27 @@ router.post('/po', (req, res) => {
 
   // Insert PO items
   if (items && items.length > 0) {
-    const insertItem = db.prepare('INSERT INTO po_items (business_book_id, item_master_id, description, quantity, unit, rate, amount, hsn_code) VALUES (?,?,?,?,?,?,?,?)');
-    for (const item of items) {
+    const insertItem = db.prepare('INSERT INTO po_items (business_book_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, labour_rate, labour_amount, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+    items.forEach((item, idx) => {
       if (item.description && item.description.trim()) {
-        insertItem.run(business_book_id || null, item.item_master_id || null, item.description.trim(), item.quantity || 0, item.unit || 'nos', item.rate || 0, item.amount || 0, item.hsn_code || '');
+        const qty = +item.quantity || 0;
+        const labourRate = +item.labour_rate || 0;
+        const labourAmount = +item.labour_amount || (qty * labourRate);
+        insertItem.run(
+          business_book_id || null,
+          item.item_master_id || null,
+          item.description.trim(),
+          qty,
+          item.unit || 'nos',
+          +item.rate || 0,
+          +item.amount || 0,
+          item.hsn_code || '',
+          labourRate,
+          labourAmount,
+          +item.sr_no || idx + 1,
+        );
       }
-    }
+    });
   }
 
   // Sync po_number back to business_book
@@ -403,7 +418,7 @@ router.post('/po/:id/items', (req, res) => {
   // references without individual queries per row.
   const validMasterIds = new Set(db.prepare('SELECT id FROM item_master').all().map(r => r.id));
 
-  const insert = db.prepare('INSERT INTO po_items (business_book_id, item_master_id, description, quantity, unit, rate, amount, hsn_code) VALUES (?,?,?,?,?,?,?,?)');
+  const insert = db.prepare('INSERT INTO po_items (business_book_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, labour_rate, labour_amount, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
   let count = 0;
   const errors = [];
   // Coerce numerics safely — empty strings, null, NaN all become 0 so a
@@ -426,15 +441,21 @@ router.post('/po/:id/items', (req, res) => {
           const rawMid = item.item_master_id;
           const midNum = parseInt(rawMid, 10);
           const safeMasterId = Number.isFinite(midNum) && validMasterIds.has(midNum) ? midNum : null;
+          const qtyNum = num(item.quantity);
+          const labourRate = num(item.labour_rate);
+          const labourAmount = num(item.labour_amount) || (qtyNum * labourRate);
           insert.run(
             bbId,
             safeMasterId,
             item.description.trim(),
-            num(item.quantity),
+            qtyNum,
             item.unit || 'nos',
             num(item.rate),
             num(item.amount),
-            item.hsn_code || ''
+            item.hsn_code || '',
+            labourRate,
+            labourAmount,
+            num(item.sr_no) || idx + 1
           );
           count++;
         } catch (rowErr) {
@@ -686,6 +707,94 @@ router.post('/po-upload-excel', upload.single('file'), (req, res) => {
     } catch (e) { /* if rename fails, fall back to multer's hashed name */ }
 
     res.json({ items, count: items.length, format: isBOQ ? 'BOQ' : 'template', file_url: fileUrl, filename: req.file.originalname, detectedHeaders, headerRow: headerIdx, colMap, skipped });
+  } catch (err) {
+    try { if (req.file) fs.unlinkSync(req.file.path); } catch (e) {}
+    res.status(500).json({ error: 'Failed to parse Excel: ' + err.message });
+  }
+});
+
+// LABOUR RATE SHEET UPLOAD — mam: "upload Labour rate sheet and when
+// upload below match BOQ item Labour rate come next column of rate(SITC)".
+// Same parser shape as po-upload-excel but it only extracts the labour
+// rate column and returns rows keyed by sr_no + description so the
+// frontend can merge them onto the existing BOQ items without losing
+// SITC rates / quantities. Also persists the file so it can be re-shown
+// on the PO view later.
+router.post('/labour-upload-excel', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    const wb = XLSX.readFile(req.file.path);
+    const parseNum = (v) => {
+      if (v === null || v === undefined || v === '') return 0;
+      if (typeof v === 'number') return v;
+      const cleaned = String(v).replace(/[,\s]/g, '').match(/-?\d+(\.\d+)?/);
+      return cleaned ? parseFloat(cleaned[0]) : 0;
+    };
+    // Parse one sheet — find header row, locate description + labour rate cols.
+    const parseSheet = (sheetName) => {
+      const ws = wb.Sheets[sheetName];
+      if (!ws) return { rows: [], debug: { error: 'sheet missing' } };
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
+      const HEADER_KW = ['description', 'particulars', 'work', 'item', 'labour', 'labor', 'rate', 's/n', 'sl no', 's.no', 'sr no'];
+      let headerIdx = -1;
+      for (let i = 0; i < Math.min(20, data.length); i++) {
+        const row = (data[i] || []).map(c => String(c || '').toLowerCase().trim());
+        const matches = HEADER_KW.filter(k => row.some(c => c === k || c.includes(k))).length;
+        if (matches >= 2) { headerIdx = i; break; }
+      }
+      if (headerIdx === -1) return { rows: [], debug: { error: 'no header row' } };
+      const headers = (data[headerIdx] || []).map(h => String(h || '').toLowerCase().trim());
+      const colMap = {};
+      headers.forEach((h, i) => {
+        if (colMap.name === undefined && (h.includes('item name') || h.includes('description') || h.includes('particulars') || h === 'work' || h.includes('work description') || h === 'item' || h === 'items')) colMap.name = i;
+        // Match anything mentioning labour / labor — also "installation rate"
+        // (template-speak for the labour portion of a SITC).
+        if (colMap.labour === undefined && (h.includes('labour') || h.includes('labor') || h.includes('installation rate') || h === 'installation' || h.includes('install rate'))) colMap.labour = i;
+        // Fallback: a column named just "rate" if no labour column found.
+        if (colMap.rateFallback === undefined && h === 'rate') colMap.rateFallback = i;
+        if (h === 'sn' || h === 's/n' || h === 'sr no' || h === 'sr' || h === 's.no' || h === 's. no' || h === 's.no.' || h === 'sl no' || h === 'sl.no') colMap.sn = i;
+        if (h === 'qty' || h === 'quantity' || h.includes('qty')) colMap.qty = i;
+      });
+      if (colMap.name === undefined) return { rows: [], debug: { error: 'no description column', headers } };
+      // If no labour column at all, return empty (the frontend will warn).
+      const labourCol = colMap.labour !== undefined ? colMap.labour : colMap.rateFallback;
+      if (labourCol === undefined) return { rows: [], debug: { error: 'no labour rate column', headers } };
+      const rows = [];
+      let serial = 1;
+      for (let i = headerIdx + 1; i < data.length; i++) {
+        const row = data[i] || [];
+        const name = String(row[colMap.name] || '').trim();
+        if (!name || name.length < 3) continue;
+        const labourRate = parseNum(row[labourCol]);
+        if (labourRate === 0) continue;
+        const snVal = colMap.sn !== undefined ? parseNum(row[colMap.sn]) : 0;
+        rows.push({
+          sr_no: snVal || serial,
+          description: name,
+          labour_rate: Math.round(labourRate * 100) / 100,
+        });
+        serial++;
+      }
+      return { rows, debug: { headerRow: headerIdx, headers, colMap, labourCol } };
+    };
+    const perSheet = wb.SheetNames.map(parseSheet);
+    const best = perSheet.reduce((a, b) => (b.rows.length > a.rows.length ? b : a), { rows: [], debug: {} });
+    // Keep the uploaded file so it can be re-opened from the PO later.
+    let fileUrl = `/uploads/${req.file.filename}`;
+    try {
+      const safeName = (req.file.originalname || 'labour.xlsx').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const newName = `${Date.now()}-${safeName}`;
+      const newPath = path.join(path.dirname(req.file.path), newName);
+      fs.renameSync(req.file.path, newPath);
+      fileUrl = `/uploads/${newName}`;
+    } catch (e) { /* fallback to multer hashed name */ }
+    res.json({
+      rows: best.rows,
+      count: best.rows.length,
+      file_url: fileUrl,
+      filename: req.file.originalname,
+      debug: best.debug,
+    });
   } catch (err) {
     try { if (req.file) fs.unlinkSync(req.file.path); } catch (e) {}
     res.status(500).json({ error: 'Failed to parse Excel: ' + err.message });
