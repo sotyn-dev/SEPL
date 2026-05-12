@@ -1596,16 +1596,19 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     </div>
   `;
 
+  // Display "DD / MM / YYYY" for any ISO date string. Used by both Sales
+  // Bill and Delivery Note. Returns empty when no date is provided.
+  const dispDate = (d) => {
+    if (!d) return '';
+    const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]} / ${m[2]} / ${m[1]}` : esc(d);
+  };
+
   if (isSalesBill) {
     // Match the SEPL Sales Bill template page 1:1 — Bill To / Ship To
     // with State + Code as two fields, GSTIN (if diff.) on Ship To,
     // bank details + numbered T&C in side-by-side cards, and two
     // separate signature panels.
-    const dispDate = (d) => {
-      if (!d) return '';
-      const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
-      return m ? `${m[3]} / ${m[2]} / ${m[1]}` : esc(d);
-    };
     const billState = esc(dn.client_state || '');
     const billStateCode = esc(clientStateCode);
     const shipStateCode = esc(dn.state_code || clientStateCode);
@@ -1702,40 +1705,94 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     </body></html>`;
   }
 
-  // Delivery Note
+  // Delivery Note — matches the SEPL Delivery Note template 1:1.
+  // Items table is 6 columns (SL / DESCRIPTION / HSN / QUANTITY / UOM /
+  // REMARKS) padded to 8 rows. Vehicle / Transport details get their
+  // own banner-headed section; the two notices ("IMPORTANT" and
+  // "RECEIVED IN GOOD CONDITION") use red banner headers like the
+  // template; footer text sits inside a red-bordered banner.
   return `<!doctype html><html><head><title>${esc(docNo)}</title><style>${css}</style></head><body>
     <button class="print-btn" onclick="window.print()">🖨 Print</button>
     ${headerBlock}
     <table class="meta">
-      <tr><td class="lbl">Delivery Note No.</td><td>${esc(docNo)}</td><td class="lbl">Date</td><td>${esc(dn.delivery_date || '')}</td><td class="lbl">SEPL PO No.</td><td>${esc(dn.vendor_po_no || '')}</td><td class="lbl">Indent No.</td><td>${esc(dn.indent_number || '')}</td></tr>
+      <tr>
+        <td class="lbl">Delivery Note No.</td><td>${esc(docNo)}</td>
+        <td class="lbl">Date</td><td>${dispDate(dn.delivery_date)}</td>
+        <td class="lbl">SEPL PO No.</td><td>${esc(dn.vendor_po_no || '')}</td>
+        <td class="lbl">Indent No.</td><td>${esc(dn.indent_number || '')}</td>
+      </tr>
     </table>
-    <table class="parties"><tr>
-      <td style="width:50%"><div class="lbl">Client / Company</div>M/s <b>${esc(dn.client_company || '')}</b><br>Address: ${esc(dn.client_address || '')}<br>GSTIN: ${esc(dn.client_gstin || '')}</td>
-      <td><div class="lbl">Delivery Site</div>Site Name: <b>${esc(dn.site_name || '')}</b><br>Address: ${esc(dn.site_address || '')}<br>Site Engineer / Contact: ${esc(dn.client_phone || '')}</td>
-    </tr></table>
+    <table class="parties">
+      <tr>
+        <td class="lbl" style="width:50%">Client / Company</td>
+        <td class="lbl">Delivery Site</td>
+      </tr>
+      <tr>
+        <td style="width:50%">
+          <div><b>M/s</b> ${esc(dn.client_company || '')}</div>
+          <div style="margin-top:4px"><b>Address:</b></div>
+          <div style="margin-left:4px">${esc(dn.client_address || '')}</div>
+          <div style="margin-top:4px"><b>GSTIN:</b> ${esc(dn.client_gstin || '')}</div>
+        </td>
+        <td>
+          <div><b>Site Name:</b> ${esc(dn.site_name || '')}</div>
+          <div style="margin-top:4px"><b>Address:</b></div>
+          <div style="margin-left:4px">${esc(dn.site_address || '')}</div>
+          <div style="margin-top:4px"><b>Site Engineer / Contact:</b> ${esc(dn.client_phone || '')}</div>
+        </td>
+      </tr>
+    </table>
     <table class="items">
-      <thead><tr><th style="width:30px">SL</th><th>DESCRIPTION OF MATERIAL / WORK</th><th style="width:80px">HSN / CODE</th><th style="width:70px">QUANTITY</th><th style="width:50px">UOM</th><th style="width:130px">REMARKS</th></tr></thead>
+      <thead><tr><th style="width:30px">SL NO.</th><th>DESCRIPTION OF MATERIAL / WORK</th><th style="width:80px">HSN / CODE</th><th style="width:70px">QUANTITY</th><th style="width:50px">UOM</th><th style="width:130px">REMARKS</th></tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table>
-    <table class="parties" style="margin-top:6px"><tr>
-      <td><div class="lbl">Vehicle No.</div>${esc(dn.vehicle_no || '')}</td>
-      <td><div class="lbl">Driver Name & Mobile</div>${esc([dn.driver_name, dn.driver_mobile].filter(Boolean).join(' · '))}</td>
-      <td><div class="lbl">LR / Challan No.</div>${esc(dn.lr_challan_no || '')}</td>
-      <td><div class="lbl">Total Packages</div>${esc(dn.total_packages || '')}</td>
-    </tr></table>
-    <div class="notice">IMPORTANT — RECEIVING IS VALID ONLY ON THIS DELIVERY NOTE</div>
-    <div style="font-size:9.5px;color:#444;margin-top:4px">It is the supplier's responsibility to obtain dated signature, name and stamp of Secured Engineers' authorised site representative on this Delivery Note. Receiving acknowledged on the supplier's bill / invoice / challan shall <b>NOT</b> be treated as proof of delivery and may lead to non-payment.</div>
-    <div class="signblk"><div class="hdr">Received in Good Condition (to be filled by SEPL site representative)</div>
-      <div class="row"><div>Name of Receiver</div><div>Designation</div><div>Date & Time</div></div>
-      <div class="row"><div>Signature</div><div>Site Stamp</div><div>Mobile No.</div></div>
+    <div style="margin-top:6px;border:1px solid #e7d4d4">
+      <div style="background:#f8efef;color:#7a1b1b;font-weight:bold;padding:4px 8px;font-size:10px;text-transform:uppercase">Vehicle / Transport Details</div>
+      <table class="parties" style="border-top:0"><tr>
+        <td class="lbl" style="border-top:0">Vehicle No.</td>
+        <td class="lbl" style="border-top:0">Driver Name &amp; Mobile</td>
+        <td class="lbl" style="border-top:0">LR / Challan No.</td>
+        <td class="lbl" style="border-top:0">Total Packages</td>
+      </tr><tr>
+        <td>${esc(dn.vehicle_no || '')}</td>
+        <td>${esc([dn.driver_name, dn.driver_mobile].filter(Boolean).join(' · '))}</td>
+        <td>${esc(dn.lr_challan_no || '')}</td>
+        <td>${esc(dn.total_packages || '')}</td>
+      </tr></table>
     </div>
+    <div class="notice" style="margin-top:6px">IMPORTANT — RECEIVING IS VALID ONLY ON THIS DELIVERY NOTE</div>
+    <div style="font-size:9.5px;color:#444;border:1px solid #e7d4d4;border-top:0;padding:6px 8px">
+      It is the supplier's responsibility to obtain dated signature, name and stamp of Secured Engineers' authorised site representative on this Delivery Note. Receiving acknowledged on the supplier's bill / invoice / challan shall <b>NOT</b> be treated as proof of delivery and may lead to non-payment.
+    </div>
+    <div class="notice" style="margin-top:6px">Received in Good Condition (to be filled by SEPL site representative)</div>
+    <table class="parties" style="border-top:0">
+      <tr>
+        <td class="lbl">Name of Receiver</td>
+        <td class="lbl">Designation</td>
+        <td class="lbl">Date &amp; Time</td>
+      </tr>
+      <tr>
+        <td style="height:30px"></td><td></td><td></td>
+      </tr>
+      <tr>
+        <td class="lbl">Signature</td>
+        <td class="lbl">Site Stamp</td>
+        <td class="lbl">Mobile No.</td>
+      </tr>
+      <tr>
+        <td style="height:40px"></td><td></td><td></td>
+      </tr>
+    </table>
     <ul class="checklist">
       <li>Please verify quantity, description and condition of material BEFORE signing this Delivery Note.</li>
-      <li>Mention shortage / damage / wrong-supply (if any) clearly under REMARKS column. Once signed without remark, supply shall be deemed accepted in full.</li>
-      <li>Receiving on this Delivery Note is the only recognised proof of delivery. Bills / Invoices are for accounting only.</li>
+      <li>Mention shortage / damage / wrong-supply (if any) clearly under <b>REMARKS</b> column. Once signed without remark, supply shall be deemed accepted in full.</li>
+      <li>Receiving on this Delivery Note is the <b>only</b> recognised proof of delivery. Bills / Invoices are for accounting only.</li>
       <li>Original copy to be retained by Secured Engineers' site office; duplicate copy may be returned to the supplier for billing reference.</li>
+      <li>For any clarification, contact the Stores / Project Department of Secured Engineers Pvt. Ltd., Ludhiana.</li>
     </ul>
-    <div class="footnote">This is a Computer Generated Delivery Note. Valid only when received and signed at the designated SEPL site.</div>
+    <div style="margin-top:6px;border:1px solid #7a1b1b;background:#fdf2f2;color:#7a1b1b;font-weight:bold;text-align:center;padding:6px 8px;font-size:10.5px">
+      This is a Computer Generated Delivery Note. Valid only when received and signed at the designated SEPL site.
+    </div>
   </body></html>`;
 }
 
