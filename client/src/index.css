@@ -77,32 +77,38 @@ body {
   }
 
   /* Sticky toolbar — keeps tabs / filter pills / stat cards / search
-     visible while the user scrolls a long list. Several previous
-     attempts (with @apply, with negative-margin bleed, with backdrop
-     blur) were not actually sticking in mam's browser. This version
-     is the boring, bulletproof one:
-       - position:sticky with !important so nothing else can win
-       - top:0 + z-index:50 (way above anything we use elsewhere)
-       - -webkit-sticky for older Safari
-       - Solid background, no transparency
-       - display:block + width:100% so flex/grid parents can't squeeze
-         it out of its sticky context
-     If THIS doesn't pin to top while scrolling, the issue is upstream
-     (browser cache / CSS not loading / wrong scroll container).
-  */
+     visible while the user scrolls a long list. Mam: "check proper" —
+     screenshot showed row #1 visible ABOVE the pinned toolbar. The
+     gap was <main>'s top padding (p-2 / md:p-6) — rows would scroll
+     into that padding area before reaching the toolbar's top edge.
+     Fix: negative margins so the toolbar bleeds past main's padding
+     on all sides (top/left/right), and its solid background covers
+     the rows scrolling underneath. The padding on the toolbar itself
+     replaces what we ate via the negative margin, so internal spacing
+     looks the same. */
   .sticky-toolbar {
     position: -webkit-sticky;
     position: sticky !important;
     top: 0 !important;
     z-index: 50 !important;
     display: block;
-    width: 100%;
+    width: auto;
     background-color: rgb(248 250 252);   /* slate-50 */
-    padding-top: 0.5rem;
-    padding-bottom: 0.75rem;
+    margin-top: -0.5rem;
+    margin-left: -0.5rem;
+    margin-right: -0.5rem;
     margin-bottom: 0.25rem;
+    padding: 0.5rem 0.5rem 0.75rem 0.5rem;
     border-bottom: 1px solid rgb(229 231 235);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  }
+  @media (min-width: 768px) {
+    .sticky-toolbar {
+      margin-top: -1.5rem;
+      margin-left: -1.5rem;
+      margin-right: -1.5rem;
+      padding: 1.5rem 1.5rem 0.75rem 1.5rem;
+    }
   }
   .sticky-toolbar > * + * {
     margin-top: 0.75rem;
