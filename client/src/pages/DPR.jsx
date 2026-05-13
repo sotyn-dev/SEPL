@@ -151,7 +151,17 @@ export default function DPR() {
   };
 
   const grandTotalA = workItems.reduce((s, w) => s + (w.amount || 0), 0);
-  const grandTotalB = costs.reduce((s, c) => s + (c.amount || 0), 0);
+  // Labour cost from BOQ work items — the per-line labour rate × qty.
+  // SITC rate (in A) is revenue from the client; labour rate is what we
+  // pay the worker / contractor to do that installation, so it has to
+  // be subtracted to get true profit. Mam: "recent dont consider labour
+  // rate".
+  const boqLabourCost = workItems.reduce((s, w) => s + (+w.labour_amount || ((w.qty || 0) * (+w.labour_rate || 0))), 0);
+  const manualCostsB = costs.reduce((s, c) => s + (c.amount || 0), 0);
+  // grand_total_b sent to the server now bundles manual costs + BOQ
+  // labour so the loss-day alert (which reads grand_total_b) sees the
+  // full cost picture.
+  const grandTotalB = manualCostsB + boqLabourCost;
   const profitLoss = grandTotalA - grandTotalB;
 
   const submitDpr = async (e) => {
@@ -719,7 +729,13 @@ export default function DPR() {
               );
             })}
             <button type="button" onClick={() => setCosts([...costs, { type: '', qty: 0, rate: 0, amount: 0 }])} className="text-xs text-red-700 hover:underline">+ Add Cost Type</button>
-            <div className="mt-2 pt-2 border-t-2 border-red-300 text-right">
+            <div className="mt-2 pt-2 border-t-2 border-red-300 text-right flex flex-col items-end gap-0.5">
+              <span className="text-xs text-gray-600">Manual costs: Rs {manualCostsB.toLocaleString()}</span>
+              {boqLabourCost > 0 && (
+                <span className="text-xs text-amber-700 font-semibold">
+                  + Labour from BOQ items: Rs {boqLabourCost.toLocaleString()} (auto-added)
+                </span>
+              )}
               <span className="font-bold text-red-800 text-lg">Grand Total (B): Rs {grandTotalB.toLocaleString()}</span>
             </div>
           </div>
