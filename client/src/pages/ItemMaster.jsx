@@ -157,13 +157,15 @@ export default function ItemMaster() {
 
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-  // Filter pill buttons — MD's "Add filter buttons on top" spec.
+  // MD's brief specified exactly 4 filter buttons (plus All to clear).
+  // Per-item rate age has only 3 stages (green 0-30 / yellow 31-60 /
+  // red 60+) — the badges colour-code each row, the pills filter the
+  // list. Removed the earlier "Fresh" and "No Price Yet" extras that
+  // weren't in MD's spec.
   const statusPills = [
     { id: '', label: 'All', cls: 'bg-gray-100 text-gray-700 border-gray-200' },
     { id: 'expired', label: 'Expired (60+ days)', cls: 'bg-red-100 text-red-700 border-red-300' },
-    { id: 'ageing', label: 'Ageing (31–60)', cls: 'bg-amber-100 text-amber-800 border-amber-300' },
-    { id: 'fresh', label: 'Fresh (≤30)', cls: 'bg-emerald-100 text-emerald-700 border-emerald-300' },
-    { id: 'never', label: 'No Price Yet', cls: 'bg-gray-100 text-gray-600 border-gray-300' },
+    { id: 'ageing', label: 'Ageing (31–60 days)', cls: 'bg-amber-100 text-amber-800 border-amber-300' },
     { id: 'make_blank', label: 'Make Blank', cls: 'bg-purple-100 text-purple-700 border-purple-300' },
     { id: 'no_vendor', label: 'No Vendor Linked', cls: 'bg-indigo-100 text-indigo-700 border-indigo-300' },
   ];
