@@ -180,14 +180,23 @@ th {
   @apply px-4 py-3 text-left font-bold text-gray-500 uppercase text-[10px] tracking-wider;
 }
 /* Excel-style freeze panes — opt-in per table via the `freeze-head`
-   class on the table. Pins <thead> just below the sticky toolbar
-   (whose live height is in --toolbar-height, set by Layout.jsx).
-   Avoids the global rule which was producing weird half-stuck
-   positions on tables that have their own scroll container. */
+   class on the table.  Mam picked Option B: the table sits inside a
+   bounded scroll area (max-height + overflow:auto) and its <thead>
+   stays pinned at the top of THAT area while the rows scroll inside.
+   This is how Excel's "Freeze Top Row" feels — page header stays
+   above, table scrolls internally with a stuck header.
+   The :has() selector applies the bounded wrapper to whatever element
+   directly contains the freeze-head table (usually `<div className=
+   "card p-0">` after the 1859faa refactor), so no per-page changes
+   are needed beyond adding the `freeze-head` class. */
+:where(div, section, article):has(> table.freeze-head) {
+  max-height: calc(100vh - 200px);
+  overflow: auto;
+}
 table.freeze-head thead {
   position: -webkit-sticky;
   position: sticky;
-  top: var(--toolbar-height, 0px);
+  top: 0;
   z-index: 9;
 }
 table.freeze-head thead th {
