@@ -5,7 +5,7 @@ import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2 } from 'react-icons/fi';
+import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle } from 'react-icons/fi';
 
 const SYSTEMS = ['Electrical', 'Fire Fighting', 'Fire Alarm', 'CCTV', 'Access Control', 'PA System', 'Plumbing', 'HVAC', 'Solar', 'Networking', 'Combined'];
 const EQUIPMENT_LIST = ['Welding Machine', 'Pipe Threading Machine', 'Drill Machine', 'Grinder', 'Ladder', 'Scaffolding', 'Pipe Bending Machine', 'Cable Pulling Machine', 'Multimeter', 'Megger', 'Earth Tester', 'Hydro Test Pump', 'Generator', 'Compressor'];
@@ -43,6 +43,10 @@ export default function DPR() {
   const [contractors, setContractors] = useState(() => Array.from({ length: 5 }, () => ({ name: '', manpower: 0 })));
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const [poItemsForSite, setPoItemsForSite] = useState([]);
+  // Server-side diagnostic when po_items can't be fetched (no BB, no
+  // items, or rates not set). Surfaced as a yellow banner above the
+  // work items grid so mam knows exactly what to fix.
+  const [poItemsDiag, setPoItemsDiag] = useState(null);
   const [progress, setProgress] = useState([]);
   const [expandedSite, setExpandedSite] = useState({}); // { "engineerId-siteId": true }
 
@@ -63,7 +67,17 @@ export default function DPR() {
     setForm(f => ({ ...f, site_id: siteId }));
     setWorkItems([]);
     if (siteId) {
-      api.get(`/dpr/sites/${siteId}/po-items`).then(r => setPoItemsForSite(r.data)).catch(() => setPoItemsForSite([]));
+      // Response is now { items, diagnostic, total_count } — older format
+      // was a bare array. Handle both for robustness.
+      api.get(`/dpr/sites/${siteId}/po-items`).then(r => {
+        if (Array.isArray(r.data)) {
+          setPoItemsForSite(r.data);
+          setPoItemsDiag(null);
+        } else {
+          setPoItemsForSite(r.data?.items || []);
+          setPoItemsDiag(r.data?.diagnostic || null);
+        }
+      }).catch(() => { setPoItemsForSite([]); setPoItemsDiag(null); });
       // Auto-fill Staff Cost rate from the site's PO engineers (salary/30).
       // Backend returns only aggregates + an optional diagnostic — no individual salaries.
       api.get(`/dpr/sites/${siteId}/staff-cost`).then(r => {
@@ -83,7 +97,7 @@ export default function DPR() {
           ? { ...c, qty: 1, rate: total_amount, amount: total_amount, auto: total_amount > 0, ta_da_count: count }
           : c));
       }).catch(() => {});
-    } else { setPoItemsForSite([]); }
+    } else { setPoItemsForSite([]); setPoItemsDiag(null); }
   };
 
   const addWorkItem = () => setWorkItems([
@@ -537,6 +551,23 @@ export default function DPR() {
               <h5 className="font-bold text-red-800">TABLE A: Installation Work (BOQ Items from PO)</h5>
               {poItemsForSite.length > 0 && <button type="button" onClick={addWorkItem} className="btn btn-secondary text-xs flex items-center gap-1"><FiPlus size={12} /> Add Item</button>}
             </div>
+            {/* Server-side diagnostic — tells mam exactly why items aren't
+                fully populated (no Business Book link, no BOQ uploaded,
+                or labour rates missing). */}
+            {poItemsDiag && (
+              <div className="bg-amber-50 border border-amber-300 rounded px-3 py-2 text-xs text-amber-900 mb-2 flex items-start gap-2">
+                <FiAlertCircle className="flex-shrink-0 mt-0.5" size={14} />
+                <div>
+                  <div className="font-bold mb-0.5">
+                    {poItemsDiag.reason === 'no_business_book' ? 'No Business Book linked' :
+                     poItemsDiag.reason === 'no_po_items' ? 'No BOQ items yet' :
+                     poItemsDiag.reason === 'rates_missing' ? `Items loaded — but ${poItemsDiag.total_count - (poItemsDiag.missing_sitc_count || 0)} of ${poItemsDiag.total_count} have all rates set` :
+                     'Heads up'}
+                  </div>
+                  <div>{poItemsDiag.message}</div>
+                </div>
+              </div>
+            )}
             {poItemsForSite.length > 0 ? (
               <>
                 <div className="hidden md:grid grid-cols-14 gap-1 text-[10px] font-bold text-gray-600 mb-1 px-1 uppercase" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr))' }}>
@@ -552,11 +583,20 @@ export default function DPR() {
                   <div key={i} className="grid grid-cols-14 gap-1 mb-1.5 items-start bg-white rounded p-1" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr))' }}>
                     <div className="col-span-14 md:col-span-4">
                       <SearchableSelect
-                        options={poItemsForSite.map(item => ({
-                          id: item.id,
-                          label: `${item.description} (BOQ:${item.quantity} | Remaining:${item.remaining_qty ?? item.quantity} ${item.unit})${item.remaining_qty <= 0 ? ' — COMPLETED' : ''}`,
-                          ...item
-                        }))}
+                        options={poItemsForSite.map(item => {
+                          // Build a rich label so mam sees BOQ qty, remaining,
+                          // SITC rate, and labour rate without picking the
+                          // item first. Each ⚠ flags a missing rate so she
+                          // knows where to go fix it.
+                          const rateBit = +item.rate > 0 ? `Rs ${(+item.rate).toLocaleString('en-IN')}` : '⚠ no rate';
+                          const labourBit = +item.labour_rate > 0 ? `Labour Rs ${(+item.labour_rate).toLocaleString('en-IN')}` : '⚠ no labour';
+                          const completedBit = item.remaining_qty <= 0 ? ' — COMPLETED' : '';
+                          return {
+                            id: item.id,
+                            label: `${item.description} (BOQ:${item.quantity} | Rem:${item.remaining_qty ?? item.quantity} ${item.unit} | ${rateBit} | ${labourBit})${completedBit}`,
+                            ...item,
+                          };
+                        })}
                         value={w.po_item_id || null}
                         valueKey="id"
                         displayKey="label"

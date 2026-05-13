@@ -272,41 +272,98 @@ router.get('/sites/:site_id/staff-cost', (req, res) => {
   res.json({ per_day_cost: perDay, engineer_count: matched, po_engineers: engUsers.length, diagnostic });
 });
 
-// Get PO items for a site - fetches ALL PO items for that company/site name
+// Get PO items for a site - fetches ALL PO items for that company/site name.
+// Mam: "in dpr all data is not fetch from order to planning item fetch". Now
+// joins item_master so every available field flows through (item_code,
+// specification, size, hsn, gst, type), explicitly lists labour_rate +
+// labour_amount, and returns a diagnostic explaining empty results.
 router.get('/sites/:site_id/po-items', (req, res) => {
   const db = getDb();
   const site = db.prepare('SELECT name, po_id, business_book_id FROM sites WHERE id=?').get(req.params.site_id);
-  if (!site) return res.json([]);
-  // Get ALL business_book IDs for this company name (all POs for same company)
-  const allBBIds = db.prepare('SELECT DISTINCT s.business_book_id FROM sites s WHERE s.name=? AND s.business_book_id IS NOT NULL').all(site.name);
-  const bbIds = allBBIds.map(r => r.business_book_id);
-  let items = [];
-  if (bbIds.length > 0) {
-    items = db.prepare(`SELECT * FROM po_items WHERE business_book_id IN (${bbIds.join(',')})`).all();
-  } else if (site.business_book_id) {
-    items = db.prepare('SELECT * FROM po_items WHERE business_book_id=?').all(site.business_book_id);
-  }
-  if (items.length > 0) {
-    // Match DPR consumption by po_item_id OR by description (so re-uploading
-    // a PO — which recycles po_items with new IDs — doesn't lose history).
-    const siteIds = db.prepare('SELECT id FROM sites WHERE name=?').all(site.name).map(r => r.id);
-    const sidPlaceholders = siteIds.length ? siteIds.map(() => '?').join(',') : '?';
-    const sidParams = siteIds.length ? siteIds : [req.params.site_id];
-    const result = items.map(item => {
-      const filled = db.prepare(`
-        SELECT COALESCE(SUM(wi.actual_qty), 0) as total
-        FROM dpr_work_items wi
-        JOIN dpr d ON wi.dpr_id = d.id
-        WHERE d.site_id IN (${sidPlaceholders})
-          AND (wi.po_item_id = ? OR (wi.description IS NOT NULL AND wi.description = ?))
-      `).get(...sidParams, item.id, item.description);
-      const filledQty = filled?.total || 0;
-      const remaining = Math.max(0, (item.quantity || 0) - filledQty);
-      return { ...item, filled_qty: filledQty, remaining_qty: remaining };
+  if (!site) return res.status(404).json({ items: [], diagnostic: { reason: 'no_site', message: 'Site row not found.' } });
+
+  // 1. Find every business_book lead with the same site name (one client
+  //    can span multiple POs / phases — pool the items).
+  const allBBIds = db.prepare(`SELECT DISTINCT s.business_book_id FROM sites s
+                                WHERE s.name = ? AND s.business_book_id IS NOT NULL`).all(site.name);
+  const bbIds = Array.from(new Set([
+    ...allBBIds.map(r => r.business_book_id),
+    ...(site.business_book_id ? [site.business_book_id] : []),
+  ].filter(Boolean)));
+
+  if (!bbIds.length) {
+    return res.json({
+      items: [],
+      diagnostic: {
+        reason: 'no_business_book',
+        message: 'This site has no linked Business Book record. Open Business Book, create / edit the lead for this site, then create the PO so its BOQ items can flow into DPR.',
+      },
     });
-    return res.json(result);
   }
-  res.json([]);
+
+  // 2. SELECT every column on po_items + the item_master extras. Explicit
+  //    column list so the response shape is stable for the UI.
+  const ph = bbIds.map(() => '?').join(',');
+  const items = db.prepare(`
+    SELECT pi.id, pi.business_book_id, pi.item_master_id, pi.description,
+           pi.quantity, pi.unit, pi.rate, pi.amount, pi.hsn_code,
+           pi.labour_rate, pi.labour_amount, pi.sr_no, pi.created_at,
+           im.item_code, im.item_name AS master_name,
+           im.specification AS master_specification, im.size AS master_size,
+           im.type AS master_type, im.make AS master_make,
+           im.gst AS master_gst, im.uom AS master_uom,
+           bb.lead_no, bb.po_number AS bb_po_number, bb.project_name
+      FROM po_items pi
+      LEFT JOIN item_master im ON im.id = pi.item_master_id
+      LEFT JOIN business_book bb ON bb.id = pi.business_book_id
+     WHERE pi.business_book_id IN (${ph})
+     ORDER BY pi.business_book_id, pi.sr_no, pi.id
+  `).all(...bbIds);
+
+  if (!items.length) {
+    return res.json({
+      items: [],
+      diagnostic: {
+        reason: 'no_po_items',
+        message: 'Business Book is linked but no BOQ items found. Open Orders → upload the PO\'s BOQ Excel, then go to Order Planning → upload the Labour Rate Sheet. Items will then appear here.',
+      },
+    });
+  }
+
+  // 3. Add filled_qty + remaining_qty so the UI can show "BOQ:10 Remaining:7".
+  const siteIds = db.prepare('SELECT id FROM sites WHERE name=?').all(site.name).map(r => r.id);
+  const sidPh = siteIds.length ? siteIds.map(() => '?').join(',') : '?';
+  const sidArgs = siteIds.length ? siteIds : [req.params.site_id];
+  const filledStmt = db.prepare(`
+    SELECT COALESCE(SUM(wi.actual_qty), 0) as total
+      FROM dpr_work_items wi
+      JOIN dpr d ON wi.dpr_id = d.id
+     WHERE d.site_id IN (${sidPh})
+       AND (wi.po_item_id = ? OR (wi.description IS NOT NULL AND wi.description = ?))
+  `);
+  const result = items.map(it => {
+    const filledRow = filledStmt.get(...sidArgs, it.id, it.description);
+    const filledQty = filledRow?.total || 0;
+    const remaining = Math.max(0, (it.quantity || 0) - filledQty);
+    return { ...it, filled_qty: filledQty, remaining_qty: remaining };
+  });
+
+  // 4. Surface a soft warning if labour rates aren't set — mam was confused
+  //    earlier because DPR was loading items but rate columns stayed 0.
+  const missingLabour = result.filter(it => !(+it.labour_rate || 0)).length;
+  const missingSitc = result.filter(it => !(+it.rate || 0)).length;
+  const diagnostic = (missingLabour || missingSitc) ? {
+    reason: 'rates_missing',
+    message: [
+      missingSitc ? `${missingSitc} item${missingSitc === 1 ? '' : 's'} have no SITC rate — set them in Orders → PO modal.` : '',
+      missingLabour ? `${missingLabour} item${missingLabour === 1 ? '' : 's'} have no Labour Rate — go to Order Planning → upload the Labour Rate Sheet.` : '',
+    ].filter(Boolean).join(' '),
+    missing_sitc_count: missingSitc,
+    missing_labour_count: missingLabour,
+    total_count: result.length,
+  } : null;
+
+  res.json({ items: result, diagnostic, total_count: result.length, business_book_ids: bbIds });
 });
 
 // ===== DPR =====
