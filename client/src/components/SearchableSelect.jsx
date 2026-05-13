@@ -1,5 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 
+// Render cap — protects against pathological lists (10k+ rows) tanking
+// scroll perf, while staying well above any real-world BOQ. Mam: "in
+// jeewan mala 350+ item and this happen also in indent raise not
+// showing all boq items" — the previous 100 cap silently hid the rest.
+const RENDER_CAP = 2000;
+
 export default function SearchableSelect({ options, value, onChange, placeholder = 'Search...', displayKey = 'label', valueKey = 'value', buttonClassName = 'input text-left text-sm w-full truncate flex items-center justify-between gap-1 cursor-pointer' }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -52,13 +58,13 @@ export default function SearchableSelect({ options, value, onChange, placeholder
               </button>
             )}
             {filtered.length === 0 && <div className="px-3 py-4 text-sm text-gray-400 text-center">No items found</div>}
-            {filtered.slice(0, 100).map(o => (
+            {filtered.slice(0, RENDER_CAP).map(o => (
               <button type="button" key={o[valueKey]} onClick={() => { onChange(o); setOpen(false); setSearch(''); }}
                 className={`w-full text-left px-3 py-2 text-sm whitespace-normal break-words leading-snug hover:bg-red-50 transition-colors ${o[valueKey] === value ? 'bg-red-50 font-medium text-red-700' : 'text-gray-700'}`}>
                 {o[displayKey]}
               </button>
             ))}
-            {filtered.length > 100 && <div className="px-3 py-2 text-xs text-gray-400 text-center">Showing 100 of {filtered.length} — type more to narrow</div>}
+            {filtered.length > RENDER_CAP && <div className="px-3 py-2 text-xs text-gray-400 text-center">Showing {RENDER_CAP} of {filtered.length} — type more to narrow</div>}
           </div>
         </div>
       )}
