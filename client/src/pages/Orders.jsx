@@ -262,6 +262,25 @@ export default function Orders() {
     }));
   };
 
+  // Reset all labour rates on the picked PO. Mam: "delete labour rate
+  // from every previous is ok". Useful when she uploaded a wrong sheet
+  // or wants to start fresh. Double-confirms before firing because it's
+  // a destructive op that touches every BOQ item on the PO.
+  const handlePlanLabourReset = async () => {
+    if (!form.po_id) return toast.error('Pick a PO first');
+    const setItems = planItems.length;
+    if (!window.confirm(`This will set labour_rate = 0 on ALL ${setItems} BOQ item(s) for this PO.\n\nYou can re-upload the Labour Rate Sheet right after. Continue?`)) return;
+    try {
+      const r = await api.post(`/orders/po/${form.po_id}/labour-rates/reset`);
+      toast.success(r.data?.message || 'Labour rates cleared');
+      // Reflect locally so the grid resets without a refetch.
+      setPlanItems(prev => prev.map(it => ({ ...it, labour_rate: 0, labour_amount: 0 })));
+      setPlanLabourFile('');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Reset failed');
+    }
+  };
+
   // Upload Labour Rate Sheet from the Planning modal context.
   const handlePlanLabourUpload = async (file) => {
     if (!file) return;
@@ -677,16 +696,30 @@ export default function Orders() {
           <div className="border-2 border-dashed border-amber-400 rounded-lg p-4 bg-amber-50 text-center">
             <h4 className="font-bold text-amber-800 mb-1">Upload Labour Rate Sheet</h4>
             <p className="text-xs text-amber-700 mb-3">Excel (.xlsx/.xls) with a <b>Labour Rate</b> (or "Installation Rate") column. Each row is matched to the PO's BOQ items by SN / description and the labour rate is filled in. Saved labour rates auto-flow into DPR when site engineer fills daily progress.</p>
-            <label className={`btn inline-flex items-center gap-2 cursor-pointer text-base px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded ${uploading || !planItems.length ? 'opacity-60 pointer-events-none' : ''}`}>
-              <FiUpload size={18} /> {uploading ? 'Uploading...' : 'Upload Labour Rate & Match'}
-              <input
-                type="file"
-                accept=".xlsx,.xls"
-                className="hidden"
-                disabled={uploading || planItems.length === 0}
-                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; handlePlanLabourUpload(f); }}
-              />
-            </label>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <label className={`btn inline-flex items-center gap-2 cursor-pointer text-base px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded ${uploading || !planItems.length ? 'opacity-60 pointer-events-none' : ''}`}>
+                <FiUpload size={18} /> {uploading ? 'Uploading...' : 'Upload Labour Rate & Match'}
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  disabled={uploading || planItems.length === 0}
+                  onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; handlePlanLabourUpload(f); }}
+                />
+              </label>
+              {/* Reset — wipes labour_rate on every po_item for this PO so
+                  mam can re-upload from scratch. Asks for confirmation. */}
+              {planItems.some(it => +it.labour_rate > 0) && (
+                <button
+                  type="button"
+                  onClick={handlePlanLabourReset}
+                  className="inline-flex items-center gap-1 px-3 py-2 text-xs rounded border border-red-300 text-red-700 bg-white hover:bg-red-50"
+                  title="Set labour_rate = 0 on every BOQ item for this PO. Upload again after."
+                >
+                  <FiTrash2 size={12} /> Clear Labour Rates
+                </button>
+              )}
+            </div>
             {!planItems.length && form.po_id && <p className="text-[11px] text-gray-500 italic mt-2">Loading items…</p>}
             {!planItems.length && !form.po_id && <p className="text-[11px] text-gray-500 italic mt-2">Pick a Purchase Order first.</p>}
             {planLabourFile && (

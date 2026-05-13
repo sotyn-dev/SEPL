@@ -363,6 +363,22 @@ router.get('/po/:id/items', (req, res) => {
   }
 });
 
+// Reset (zero out) labour_rate + labour_amount on every po_items row
+// linked to this PO. Mam: "delete labour rate from every previous is ok
+// bcs after labour rate add this happen". Used when a labour rate sheet
+// was applied to the wrong PO or with a wrong-shape sheet; mam can
+// reset and re-upload cleanly. Idempotent and scoped by business_book_id.
+router.post('/po/:id/labour-rates/reset', (req, res) => {
+  const db = getDb();
+  const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
+  if (!po?.business_book_id) return res.status(404).json({ error: 'PO not found or has no business_book link' });
+  const r = db.prepare('UPDATE po_items SET labour_rate = 0, labour_amount = 0 WHERE business_book_id = ?').run(po.business_book_id);
+  res.json({
+    message: `Cleared labour rate on ${r.changes} item${r.changes === 1 ? '' : 's'}. Upload the Labour Rate Sheet again to repopulate.`,
+    cleared_count: r.changes,
+  });
+});
+
 // Bulk-patch labour_rate (and the derived labour_amount) on po_items.
 // Mam: "first we upload all labour rates in order to planning after
 // than link with dpr". Used by the Order Planning modal after she

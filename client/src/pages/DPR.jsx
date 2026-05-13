@@ -571,8 +571,9 @@ export default function DPR() {
                   <div className="font-bold mb-0.5">
                     {poItemsDiag.reason === 'no_business_book' ? 'No Business Book linked' :
                      poItemsDiag.reason === 'no_po_items' ? 'No BOQ items yet' :
-                     poItemsDiag.reason === 'rates_missing' ? `Items loaded — but ${poItemsDiag.total_count - (poItemsDiag.missing_sitc_count || 0)} of ${poItemsDiag.total_count} have all rates set` :
-                     'Heads up'}
+                     poItemsDiag.reason === 'rates_missing'
+                       ? `${poItemsDiag.total_count} item${poItemsDiag.total_count === 1 ? '' : 's'} loaded · SITC set on ${poItemsDiag.total_count - (poItemsDiag.missing_sitc_count || 0)} · Labour set on ${poItemsDiag.total_count - (poItemsDiag.missing_labour_count || 0)}`
+                       : 'Heads up'}
                   </div>
                   <div>{poItemsDiag.message}</div>
                 </div>
@@ -596,14 +597,26 @@ export default function DPR() {
                         options={poItemsForSite.map(item => {
                           // Build a rich label so mam sees BOQ qty, remaining,
                           // SITC rate, and labour rate without picking the
-                          // item first. Each ⚠ flags a missing rate so she
-                          // knows where to go fix it.
+                          // item first. We ALSO prepend item_code + master
+                          // name + specification so the SearchableSelect
+                          // filter matches words like "raceway" / "tray" /
+                          // "MS pipe" even when the BOQ description uses
+                          // different wording (e.g. "Cable raceway 100mm
+                          // hot dip GI" stored as "RW-100 HDG cabletray").
                           const rateBit = +item.rate > 0 ? `Rs ${(+item.rate).toLocaleString('en-IN')}` : '⚠ no rate';
                           const labourBit = +item.labour_rate > 0 ? `Labour Rs ${(+item.labour_rate).toLocaleString('en-IN')}` : '⚠ no labour';
                           const completedBit = item.remaining_qty <= 0 ? ' — COMPLETED' : '';
+                          const codeBit = item.item_code ? `[${item.item_code}] ` : '';
+                          // Pull every searchable text field into a hidden
+                          // suffix so SearchableSelect's substring filter
+                          // finds the row no matter which token mam types.
+                          const searchSuffix = [
+                            item.master_name, item.master_specification, item.master_size,
+                            item.master_make, item.master_type,
+                          ].filter(Boolean).join(' ');
                           return {
                             id: item.id,
-                            label: `${item.description} (BOQ:${item.quantity} | Rem:${item.remaining_qty ?? item.quantity} ${item.unit} | ${rateBit} | ${labourBit})${completedBit}`,
+                            label: `${codeBit}${item.description} (BOQ:${item.quantity} | Rem:${item.remaining_qty ?? item.quantity} ${item.unit} | ${rateBit} | ${labourBit})${completedBit}${searchSuffix ? ' · ' + searchSuffix : ''}`,
                             ...item,
                           };
                         })}
