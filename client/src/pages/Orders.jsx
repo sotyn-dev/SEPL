@@ -31,6 +31,14 @@ export default function Orders() {
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
   const [poItems, setPoItems] = useState([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
+  // Mam: "i upload jeewan mala order yesterday till ok but i check half
+  // data delete". The bug: PO Edit ALWAYS re-saved po_items on Update,
+  // even when she only changed CRM or status — and the server's save
+  // path is destructive (DELETE-then-INSERT). With this flag we only
+  // touch po_items when she actually changed an item row or uploaded a
+  // new BOQ. Reset to false whenever the Edit modal opens with fresh
+  // data, flipped to true on the first user edit.
+  const [poItemsDirty, setPoItemsDirty] = useState(false);
   // Mam: "give here filter by site name/project name" — single search box
   // matches against PO number, lead#, client/company, project, site engineer,
   // CRM. Lower-case substring match on whatever's typed.
@@ -58,13 +66,14 @@ export default function Orders() {
     }).catch(() => {});
   }, []);
 
-  const addItem = () => setPoItems([...poItems, { item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
-  const removeItem = (i) => setPoItems(poItems.filter((_, idx) => idx !== i));
+  const addItem = () => { setPoItems([...poItems, { item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]); setPoItemsDirty(true); };
+  const removeItem = (i) => { setPoItems(poItems.filter((_, idx) => idx !== i)); setPoItemsDirty(true); };
   const updateItem = (i, key, val) => {
     const items = [...poItems];
     items[i][key] = val;
     if (key === 'quantity' || key === 'rate') items[i].amount = (items[i].quantity || 0) * (items[i].rate || 0);
     setPoItems(items);
+    setPoItemsDirty(true);
   };
 
   const handleBBSelect = (bbId) => {
@@ -92,7 +101,10 @@ export default function Orders() {
       pt_retention: po.pt_retention || '', status: po.status || 'received',
       site_engineer_ids: engIds, crm_name: po.crm_name || ''
     });
-    // Load existing PO items
+    // Load existing PO items + reset dirty flag — fresh modal open is
+    // a clean slate. We'll only re-save items when mam actually edits
+    // one (or uploads a new BOQ).
+    setPoItemsDirty(false);
     api.get(`/orders/po/${po.id}/items`).then(r => {
       setPoItems(r.data.length > 0 ? r.data.map(i => ({ ...i, item_master_id: i.item_master_id || '' })) : [{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
     }).catch(() => setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]));
@@ -110,10 +122,16 @@ export default function Orders() {
       if (editingPO) {
         stage = 'PUT /orders/po/:id (metadata)';
         await api.put(`/orders/po/${editingPO.id}`, { ...form });
-        stage = 'POST /orders/po/:id/items (line items)';
-        const itemsPayload = poItems.filter(item => item.description && item.description.trim());
-        await api.post(`/orders/po/${editingPO.id}/items`, { items: itemsPayload });
-        toast.success('PO updated');
+        // Only re-save the line items when mam actually edited them.
+        // Skipping this when only CRM / status / dates changed avoids
+        // the destructive DELETE-then-INSERT path entirely and protects
+        // BOQ data from silent loss on routine PO edits.
+        if (poItemsDirty) {
+          stage = 'POST /orders/po/:id/items (line items)';
+          const itemsPayload = poItems.filter(item => item.description && item.description.trim());
+          await api.post(`/orders/po/${editingPO.id}/items`, { items: itemsPayload });
+        }
+        toast.success(poItemsDirty ? 'PO + line items updated' : 'PO updated (line items unchanged)');
       } else {
         stage = 'POST /orders/po (create)';
         await api.post('/orders/po', { ...form, items: poItems.filter(item => item.description && item.description.trim()) });
@@ -386,6 +404,7 @@ export default function Orders() {
                     const res = await api.post('/orders/po-upload-excel', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
                     if (res.data.items?.length > 0) {
                       setPoItems(res.data.items.map(i => ({ ...i, item_master_id: '' })));
+                      setPoItemsDirty(true);  // BOQ upload definitely changes items
                       const total = res.data.items.reduce((s, i) => s + (i.amount || 0), 0);
                       setForm(f => ({ ...f, total_amount: Math.round(total), boq_file_link: res.data.file_url || f.boq_file_link }));
                       toast.success(`Fetched ${res.data.count} items from BOQ`);
