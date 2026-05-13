@@ -2094,6 +2094,11 @@ function initializeDatabase() {
     ['po_items', 'labour_rate REAL DEFAULT 0'],
     ['po_items', 'labour_amount REAL DEFAULT 0'],
     ['po_items', 'sr_no INTEGER'],
+    // Scope po_items to a specific PO (not just BB) — mam: "i upload
+    // this is order to planning infect upload 4 boq for fetch item".
+    // Multiple POs share a BB → editing one PO's BOQ used to wipe
+    // every other PO's items because DELETE was keyed by business_book_id.
+    ['po_items', 'po_id INTEGER REFERENCES purchase_orders(id)'],
     ['business_book', 'labour_rate_file_link TEXT'],
     ['dpr_work_items', 'labour_rate REAL DEFAULT 0'],
     ['dpr_work_items', 'labour_amount REAL DEFAULT 0'],
@@ -2417,6 +2422,30 @@ function initializeDatabase() {
     }
   } catch (e) {
     console.warn('[backfill] sites.business_book_id link failed:', e.message);
+  }
+
+  // ─── One-time backfill: po_items.po_id ────────────────────────────
+  // Assign every orphan po_items row to the most recent purchase_orders
+  // row for the same business_book_id. If a BB has only one PO this is
+  // perfect; if a BB had multiple POs whose items were merged (because
+  // the old wipe-by-bb-id bug nuked earlier uploads), the surviving
+  // items collapse onto the newest PO — which matches reality, since
+  // earlier uploads were already lost.
+  try {
+    const r = db.prepare(`
+      UPDATE po_items
+         SET po_id = (
+           SELECT po.id FROM purchase_orders po
+            WHERE po.business_book_id = po_items.business_book_id
+            ORDER BY po.id DESC
+            LIMIT 1
+         )
+       WHERE po_id IS NULL
+         AND business_book_id IS NOT NULL
+    `).run();
+    if (r.changes > 0) console.log(`[backfill] po_items.po_id: linked ${r.changes} orphan items to their most-recent PO`);
+  } catch (e) {
+    console.warn('[backfill] po_items.po_id link failed:', e.message);
   }
 
   // ─── PERFORMANCE INDEXES on hot tables (fast page loads) ───────────

@@ -126,9 +126,12 @@ router.post('/po', (req, res) => {
   ).run(business_book_id || null, lead_id || null, quotation_id || null, po_number, po_date, total_amount, advance_amount || 0, po_copy_link || null, boq_file_link || null, pt_advance || 0, pt_delivery || 0, pt_installation || 0, pt_commissioning || 0, pt_retention || 0, primaryEng, engCsv, crm_name, req.user.id);
   const poId = r.lastInsertRowid;
 
-  // Insert PO items
+  // Insert PO items — scoped to THIS PO (po_id = poId) so a later edit
+  // of another PO sharing the same business_book doesn't wipe these
+  // items. business_book_id is still recorded for cross-PO indent /
+  // DPR pooling.
   if (items && items.length > 0) {
-    const insertItem = db.prepare('INSERT INTO po_items (business_book_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, labour_rate, labour_amount, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+    const insertItem = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, labour_rate, labour_amount, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
     items.forEach((item, idx) => {
       if (item.description && item.description.trim()) {
         const qty = +item.quantity || 0;
@@ -136,6 +139,7 @@ router.post('/po', (req, res) => {
         const labourAmount = +item.labour_amount || (qty * labourRate);
         insertItem.run(
           business_book_id || null,
+          poId,
           item.item_master_id || null,
           item.description.trim(),
           qty,
@@ -309,15 +313,29 @@ router.delete('/po/:id', (req, res) => {
     // we didn't hardcode (e.g. indent_items.po_item_id, plus 7 known tables
     // with po_id REFERENCES purchase_orders) still pointed at the rows.
     // nullReferencers() asks SQLite for the full list and clears them.
+    // Wipe THIS PO's items only — was previously by business_book_id
+    // which nuked every sibling PO. Now scoped by po_id with a
+    // legacy-fallback for any items that haven't been backfilled yet
+    // (po_id IS NULL AND business_book_id = po.business_book_id).
     if (po.business_book_id) {
       db.prepare('UPDATE business_book SET po_number=NULL, po_date=NULL, po_amount=0 WHERE id=?').run(po.business_book_id);
-      const poItemIds = db.prepare('SELECT id FROM po_items WHERE business_book_id=?').all(po.business_book_id).map(r => r.id);
+    }
+    const poItemIds = db.prepare(`
+      SELECT id FROM po_items
+       WHERE po_id = ?
+          OR (po_id IS NULL AND business_book_id = ?)
+    `).all(id, po.business_book_id || -1).map(r => r.id);
+    if (poItemIds.length) {
       const { referencers: piRefs, errors: piErrs } = nullReferencers(db, 'po_items', poItemIds);
       try {
-        db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(po.business_book_id);
+        db.prepare(`
+          DELETE FROM po_items
+           WHERE po_id = ?
+              OR (po_id IS NULL AND business_book_id = ?)
+        `).run(id, po.business_book_id || -1);
       } catch (e) {
         const remaining = countRemainingRefs(db, piRefs, poItemIds);
-        console.error('[PO delete] po_items DELETE failed:', e.message, '| bbId:', po.business_book_id,
+        console.error('[PO delete] po_items DELETE failed:', e.message, '| poId:', id, '| bbId:', po.business_book_id,
           '| referencers:', piRefs, '| remaining:', remaining, '| nullErrors:', piErrs);
         const hint = Object.keys(remaining).length
           ? ' Still blocking po_items: ' + Object.entries(remaining).map(([k, n]) => `${k}(${n})`).join(', ') + '.'
@@ -442,28 +460,32 @@ router.post('/po/:id/items', (req, res) => {
     }
   }
 
-  // Clear old items for this business_book so the update is a true replace.
-  // IMPORTANT: indent_items.po_item_id has a foreign key REFERENCE to
-  // po_items(id). If any indents already reference these po_items (because
-  // mam already raised indents from this PO), a plain DELETE hits FOREIGN
-  // KEY constraint failed. Null out those references first so the delete
-  // can proceed. The indent still exists, it just loses its back-link to
-  // the specific po_items row (indent keeps its own qty/desc).
-  if (bbId) {
-    // Null every FK pointing at this PO's po_items rows so DELETE succeeds.
-    // See nullReferencers() at the top of the file for the discovery logic.
-    const poItemIds = db.prepare('SELECT id FROM po_items WHERE business_book_id=?').all(bbId).map(r => r.id);
+  // Clear old items for THIS PO only (was previously by business_book_id,
+  // which wiped every sibling PO's items — mam's "uploaded 4 BOQs, only
+  // one survived" bug). Scope by po_id so each PO has an independent
+  // item set. Legacy items with po_id=NULL get scooped up too so a
+  // re-upload after a migration still replaces them.
+  const poId = +req.params.id || null;
+  const poItemIds = db.prepare(`
+    SELECT id FROM po_items
+     WHERE po_id = ?
+        OR (po_id IS NULL AND business_book_id = ?)
+  `).all(poId, bbId).map(r => r.id);
+  if (poItemIds.length) {
     const { referencers, errors: nullErrors } = nullReferencers(db, 'po_items', poItemIds);
-
     try {
-      db.prepare('DELETE FROM po_items WHERE business_book_id=?').run(bbId);
+      db.prepare(`
+        DELETE FROM po_items
+         WHERE po_id = ?
+            OR (po_id IS NULL AND business_book_id = ?)
+      `).run(poId, bbId);
     } catch (e) {
       const remaining = countRemainingRefs(db, referencers, poItemIds);
       const knownList = referencers.map(r => `${r.table}.${r.column}`).join(', ') || '(none discovered)';
       const hint = Object.keys(remaining).length
         ? ' Still blocking: ' + Object.entries(remaining).map(([k, n]) => `${k}(${n})`).join(', ') + '.'
         : ` (no remaining refs found across discovered FKs: ${knownList}) — likely a trigger or CHECK constraint. Check pm2 logs for details.`;
-      console.error('[PO items save] DELETE failed:', e.message, '| bbId:', bbId,
+      console.error('[PO items save] DELETE failed:', e.message, '| poId:', poId, '| bbId:', bbId,
         '| referencers:', referencers, '| remaining:', remaining, '| nullErrors:', nullErrors);
       return res.status(409).json({
         error: `Cannot replace items: existing indents / DPR entries reference these PO items.${hint} Clear or reassign those entries first.`,
@@ -475,7 +497,7 @@ router.post('/po/:id/items', (req, res) => {
   // references without individual queries per row.
   const validMasterIds = new Set(db.prepare('SELECT id FROM item_master').all().map(r => r.id));
 
-  const insert = db.prepare('INSERT INTO po_items (business_book_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, labour_rate, labour_amount, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+  const insert = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, labour_rate, labour_amount, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
   let count = 0;
   const errors = [];
   // Coerce numerics safely — empty strings, null, NaN all become 0 so a
@@ -503,6 +525,7 @@ router.post('/po/:id/items', (req, res) => {
           const labourAmount = num(item.labour_amount) || (qtyNum * labourRate);
           insert.run(
             bbId,
+            poId,
             safeMasterId,
             item.description.trim(),
             qtyNum,
