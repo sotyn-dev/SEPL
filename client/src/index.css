@@ -179,15 +179,21 @@ thead {
 th {
   @apply px-4 py-3 text-left font-bold text-gray-500 uppercase text-[10px] tracking-wider;
 }
-/* Note: an earlier commit pinned <thead> at top:0 globally. Mam
-   screenshot showed the column header floating ABOVE the page
-   header bar — bad ordering — because the toolbar (.sticky-toolbar)
-   and the thead both compete for the same top:0 slot, and on
-   certain layouts the thead won. Removed the global rule. The
-   sticky-toolbar alone keeps tabs / filters / search in view, which
-   is the actual UX win mam asked for. If a specific page needs its
-   thead sticky too, it should opt in per-table with a wrapper class
-   so we control the z-index hierarchy. */
+/* Excel-style freeze panes — mam: "i need header freeze". Pins every
+   table's <thead> just BELOW the sticky toolbar (whose live height is
+   exposed by Layout.jsx as --toolbar-height). z-index sits below the
+   toolbar's z:50 so the toolbar always wins if they ever overlap
+   during scroll transitions. Each <th> gets a solid bg so row text
+   never bleeds through when the thead pins. */
+table thead {
+  position: -webkit-sticky;
+  position: sticky;
+  top: var(--toolbar-height, 0px);
+  z-index: 9;
+}
+table thead th {
+  background-color: rgb(243 244 246);   /* gray-100 */
+}
 td {
   @apply px-4 py-3 border-t border-gray-50;
 }
