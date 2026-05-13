@@ -77,23 +77,32 @@ body {
   }
 
   /* Sticky toolbar — keeps tabs / filter pills / stat cards / search
-     visible while the user scrolls a long list. Mam: "scroll up every
-     thing above" / "in all erp this help please check and update".
-     Earlier version used @apply with Tailwind utilities + negative
-     margins for an edge-to-edge bleed effect, but the layering
-     occasionally broke and Tailwind's purger could miss the position
-     utility on some builds. Switched to raw CSS so it works
-     unconditionally. Solid bg, no negative margins, no backdrop blur
-     — simple and reliable. */
+     visible while the user scrolls a long list. Several previous
+     attempts (with @apply, with negative-margin bleed, with backdrop
+     blur) were not actually sticking in mam's browser. This version
+     is the boring, bulletproof one:
+       - position:sticky with !important so nothing else can win
+       - top:0 + z-index:50 (way above anything we use elsewhere)
+       - -webkit-sticky for older Safari
+       - Solid background, no transparency
+       - display:block + width:100% so flex/grid parents can't squeeze
+         it out of its sticky context
+     If THIS doesn't pin to top while scrolling, the issue is upstream
+     (browser cache / CSS not loading / wrong scroll container).
+  */
   .sticky-toolbar {
-    position: sticky;
-    top: 0;
-    z-index: 30;
+    position: -webkit-sticky;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 50 !important;
+    display: block;
+    width: 100%;
     background-color: rgb(248 250 252);   /* slate-50 */
     padding-top: 0.5rem;
     padding-bottom: 0.75rem;
     margin-bottom: 0.25rem;
     border-bottom: 1px solid rgb(229 231 235);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   }
   .sticky-toolbar > * + * {
     margin-top: 0.75rem;
