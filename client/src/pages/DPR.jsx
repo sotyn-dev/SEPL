@@ -163,12 +163,14 @@ export default function DPR() {
 
   return (
     <div className="space-y-6">
-      <div className="flex gap-2 flex-wrap">
-        {['dashboard', 'reports', 'sites', 'losses'].map(t => (
-          <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'}`}>
-            {t === 'dashboard' ? 'Dashboard' : t === 'reports' ? 'Daily Reports' : t === 'sites' ? 'Sites' : 'Loss Reasons'}
-          </button>
-        ))}
+      <div className="sticky-toolbar">
+        <div className="flex gap-2 flex-wrap">
+          {['dashboard', 'reports', 'sites', 'losses'].map(t => (
+            <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'}`}>
+              {t === 'dashboard' ? 'Dashboard' : t === 'reports' ? 'Daily Reports' : t === 'sites' ? 'Sites' : 'Loss Reasons'}
+            </button>
+          ))}
+        </div>
       </div>
 
       {tab === 'losses' && <LossReasonsTab />}

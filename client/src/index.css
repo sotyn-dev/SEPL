@@ -75,6 +75,17 @@ body {
   .input-compact {
     @apply w-full min-w-0 px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 transition-all bg-white;
   }
+
+  /* Sticky toolbar — used on every list page to keep tabs / filter
+     pills / stat cards / search visible while the user scrolls a long
+     list. Mam: "scroll up every thing above" / "in all erp this help
+     please check and update". Adopted on Cash Flow first, now rolling
+     out everywhere. Bleeds past the main padding so the backdrop
+     extends edge-to-edge; z-20 keeps it above the global sticky thead
+     (z-5). */
+  .sticky-toolbar {
+    @apply sticky top-0 -mt-2 md:-mt-6 -mx-2 md:-mx-6 px-2 md:px-6 pt-2 md:pt-6 pb-3 bg-slate-50/95 backdrop-blur z-20 space-y-3 border-b border-gray-200 shadow-sm;
+  }
 }
 
 /* Global protection for number inputs styled with `.input` — mam: "qty

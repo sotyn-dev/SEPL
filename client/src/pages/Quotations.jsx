@@ -97,9 +97,11 @@ export default function Quotations() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 mb-4">
-        <button onClick={() => setTab('boq')} className={`btn ${tab === 'boq' ? 'btn-primary' : 'btn-secondary'}`}>BOQ / Drawings</button>
-        <button onClick={() => setTab('quotations')} className={`btn ${tab === 'quotations' ? 'btn-primary' : 'btn-secondary'}`}>Quotations</button>
+      <div className="sticky-toolbar">
+        <div className="flex gap-2">
+          <button onClick={() => setTab('boq')} className={`btn ${tab === 'boq' ? 'btn-primary' : 'btn-secondary'}`}>BOQ / Drawings</button>
+          <button onClick={() => setTab('quotations')} className={`btn ${tab === 'quotations' ? 'btn-primary' : 'btn-secondary'}`}>Quotations</button>
+        </div>
       </div>
 
       {tab === 'boq' && (

@@ -177,9 +177,11 @@ export default function Orders() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2">{tabs.map(t => (
-        <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>{t.label}</button>
-      ))}</div>
+      <div className="sticky-toolbar">
+        <div className="flex gap-2">{tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>{t.label}</button>
+        ))}</div>
+      </div>
 
       {tab === 'po' && (
         <>

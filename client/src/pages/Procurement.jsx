@@ -655,9 +655,11 @@ export default function Procurement() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 flex-wrap">{tabs.map(t => (
-        <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>{t.label}</button>
-      ))}</div>
+      <div className="sticky-toolbar">
+        <div className="flex gap-2 flex-wrap">{tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>{t.label}</button>
+        ))}</div>
+      </div>
 
       {tab === 'indents' && (
         <>

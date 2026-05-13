@@ -61,24 +61,26 @@ export default function Expenses() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h3 className="font-semibold">Expense Management</h3>
-        <button onClick={openNew} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit Expense</button>
-      </div>
+      <div className="sticky-toolbar">
+        <div className="flex justify-between items-center">
+          <h3 className="font-semibold">Expense Management</h3>
+          <button onClick={openNew} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit Expense</button>
+        </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {[
-          { label: 'Pending', filter: 'pending', color: 'text-amber-600' },
-          { label: 'Approved', filter: 'approved', color: 'text-red-600' },
-          { label: 'Paid', filter: 'paid', color: 'text-emerald-600' },
-          { label: 'Rejected', filter: 'rejected', color: 'text-red-600' },
-        ].map(s => (
-          <div key={s.filter} className="card text-center">
-            <div className={`text-2xl font-bold ${s.color}`}>Rs {expenses.filter(e => e.status === s.filter).reduce((sum, e) => sum + e.amount, 0).toLocaleString()}</div>
-            <div className="text-sm text-gray-500">{s.label}</div>
-          </div>
-        ))}
+        {/* Summary Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {[
+            { label: 'Pending', filter: 'pending', color: 'text-amber-600' },
+            { label: 'Approved', filter: 'approved', color: 'text-red-600' },
+            { label: 'Paid', filter: 'paid', color: 'text-emerald-600' },
+            { label: 'Rejected', filter: 'rejected', color: 'text-red-600' },
+          ].map(s => (
+            <div key={s.filter} className="card text-center">
+              <div className={`text-2xl font-bold ${s.color}`}>Rs {expenses.filter(e => e.status === s.filter).reduce((sum, e) => sum + e.amount, 0).toLocaleString()}</div>
+              <div className="text-sm text-gray-500">{s.label}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="card p-0 overflow-x-auto"><table>

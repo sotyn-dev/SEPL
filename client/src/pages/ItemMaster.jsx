@@ -172,53 +172,55 @@ export default function ItemMaster() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2"><FiPackage className="text-red-600" /> Item Master</h1>
-          <p className="text-sm text-gray-500">{items.length} items · with vendor + bill + age tracking</p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          <button onClick={exportCSV} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export</button>
-          {canCreate('item_master') && <>
-            <button onClick={() => { setBulkData(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiUpload size={15} /> Bulk Import</button>
-            <button onClick={() => { setForm({ ...emptyForm }); setModal('add'); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Item</button>
-          </>}
-        </div>
-      </div>
-
-      {/* MD's filter buttons */}
-      <div className="flex flex-wrap gap-2">
-        {statusPills.map(p => (
-          <button
-            key={p.id}
-            onClick={() => setStatusFilter(p.id)}
-            className={`text-[11px] font-semibold px-3 py-1.5 rounded-full border transition ${statusFilter === p.id ? `${p.cls} ring-2 ring-offset-1 ring-red-400` : 'bg-white text-gray-600 border-gray-200 hover:border-red-300 hover:text-red-700'}`}
-          >
-            {p.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-[280px_1fr_auto] gap-3 items-end">
-        <div>
-          <label className="label flex items-center gap-1"><FiFilter size={12} /> Department</label>
-          <select className="select" value={filterDept} onChange={e => setFilterDept(e.target.value)}>
-            <option value="">All Departments</option>
-            {DEPARTMENTS.map(d => <option key={d} value={d}>{d} — {DEPT_LABELS[d] || d}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="label flex items-center gap-1"><FiSearch size={12} /> Search by name / spec / code / make</label>
-          <div className="relative">
-            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-            <input className="input pl-10" placeholder="Type to search…" value={search} onChange={e => setSearch(e.target.value)} />
+      <div className="sticky-toolbar">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2"><FiPackage className="text-red-600" /> Item Master</h1>
+            <p className="text-sm text-gray-500">{items.length} items · with vendor + bill + age tracking</p>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={exportCSV} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export</button>
+            {canCreate('item_master') && <>
+              <button onClick={() => { setBulkData(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiUpload size={15} /> Bulk Import</button>
+              <button onClick={() => { setForm({ ...emptyForm }); setModal('add'); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Item</button>
+            </>}
           </div>
         </div>
-        {(search || filterDept || statusFilter) && (
-          <button onClick={() => { setSearch(''); setFilterDept(''); setStatusFilter(''); }} className="btn btn-secondary text-red-500 flex items-center gap-1 whitespace-nowrap">
-            <FiX size={14} /> Clear
-          </button>
-        )}
+
+        {/* MD's filter buttons */}
+        <div className="flex flex-wrap gap-2">
+          {statusPills.map(p => (
+            <button
+              key={p.id}
+              onClick={() => setStatusFilter(p.id)}
+              className={`text-[11px] font-semibold px-3 py-1.5 rounded-full border transition ${statusFilter === p.id ? `${p.cls} ring-2 ring-offset-1 ring-red-400` : 'bg-white text-gray-600 border-gray-200 hover:border-red-300 hover:text-red-700'}`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-[280px_1fr_auto] gap-3 items-end">
+          <div>
+            <label className="label flex items-center gap-1"><FiFilter size={12} /> Department</label>
+            <select className="select" value={filterDept} onChange={e => setFilterDept(e.target.value)}>
+              <option value="">All Departments</option>
+              {DEPARTMENTS.map(d => <option key={d} value={d}>{d} — {DEPT_LABELS[d] || d}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label flex items-center gap-1"><FiSearch size={12} /> Search by name / spec / code / make</label>
+            <div className="relative">
+              <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+              <input className="input pl-10" placeholder="Type to search…" value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
+          </div>
+          {(search || filterDept || statusFilter) && (
+            <button onClick={() => { setSearch(''); setFilterDept(''); setStatusFilter(''); }} className="btn btn-secondary text-red-500 flex items-center gap-1 whitespace-nowrap">
+              <FiX size={14} /> Clear
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}

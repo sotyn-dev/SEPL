@@ -165,47 +165,49 @@ export default function ChequeFMS() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-        <div>
-          <h3 className="text-xl font-bold text-gray-800">Cheque FMS</h3>
-          <p className="text-sm text-gray-500">
-            Issue a cheque, then log its outcome (clear / hold / bounce / stopped) once the cheque date arrives. Hold cheques get a follow-up action on the next date.
-          </p>
+      <div className="sticky-toolbar">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <div>
+            <h3 className="text-xl font-bold text-gray-800">Cheque FMS</h3>
+            <p className="text-sm text-gray-500">
+              Issue a cheque, then log its outcome (clear / hold / bounce / stopped) once the cheque date arrives. Hold cheques get a follow-up action on the next date.
+            </p>
+          </div>
+          {canCreate('cheques') && (
+            <button onClick={openIssue} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center">
+              <FiPlus /> Issue Cheque
+            </button>
+          )}
         </div>
-        {canCreate('cheques') && (
-          <button onClick={openIssue} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center">
-            <FiPlus /> Issue Cheque
-          </button>
-        )}
-      </div>
 
-      {/* Tabs / counts */}
-      <div className="flex gap-2 flex-wrap">
-        {tabs.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${tab === t.id
-              ? `bg-red-700 text-white border-red-700`
-              : 'bg-white text-gray-600 border-gray-200 hover:border-red-300 hover:text-red-700'}`}>
-            {t.label}{t.count != null ? ` (${t.count})` : ''}
-          </button>
-        ))}
-      </div>
+        {/* Tabs / counts */}
+        <div className="flex gap-2 flex-wrap">
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${tab === t.id
+                ? `bg-red-700 text-white border-red-700`
+                : 'bg-white text-gray-600 border-gray-200 hover:border-red-300 hover:text-red-700'}`}>
+              {t.label}{t.count != null ? ` (${t.count})` : ''}
+            </button>
+          ))}
+        </div>
 
-      <div className="flex flex-wrap gap-2">
-        <input
-          className="input text-sm flex-1 min-w-[200px]"
-          placeholder="Search cheque no, payee, bank…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-      </div>
+        <div className="flex flex-wrap gap-2">
+          <input
+            className="input text-sm flex-1 min-w-[200px]"
+            placeholder="Search cheque no, payee, bank…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
 
-      {/* Stats cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">Action Due</div><div className="text-xl font-bold text-red-700">{stats.action_due_count}</div></div>
-        <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">On Hold</div><div className="text-xl font-bold text-amber-700">{counts.m.hold}</div></div>
-        <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">Cleared</div><div className="text-xl font-bold text-emerald-700">{counts.m.clear}</div></div>
-        <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">Total Value</div><div className="text-base font-bold text-gray-800">Rs {counts.totalAmount.toLocaleString('en-IN')}</div></div>
+        {/* Stats cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">Action Due</div><div className="text-xl font-bold text-red-700">{stats.action_due_count}</div></div>
+          <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">On Hold</div><div className="text-xl font-bold text-amber-700">{counts.m.hold}</div></div>
+          <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">Cleared</div><div className="text-xl font-bold text-emerald-700">{counts.m.clear}</div></div>
+          <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">Total Value</div><div className="text-base font-bold text-gray-800">Rs {counts.totalAmount.toLocaleString('en-IN')}</div></div>
+        </div>
       </div>
 
       {/* List */}

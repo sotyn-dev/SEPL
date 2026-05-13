@@ -127,12 +127,10 @@ export default function CashFlow() {
 
   return (
     <div className="space-y-4">
-      {/* Sticky toolbar — mam: "scroll up every thing above". Pins
-          tabs + stat cards + CRM filter + search row to the top of
-          the scroll area so she keeps context when scrolling the
-          long project list. Backdrop matches the main bg, z-index
-          sits above the thead-sticky rule (z-5). */}
-      <div className="sticky top-0 -mt-2 md:-mt-6 -mx-2 md:-mx-6 px-2 md:px-6 pt-2 md:pt-6 pb-3 bg-slate-50/95 backdrop-blur z-20 space-y-3 border-b border-gray-200 shadow-sm">
+      {/* Sticky toolbar — keeps tabs / cards / filters visible while
+          scrolling the project list. Styles live in `.sticky-toolbar`
+          (index.css) so every page can opt in with one class. */}
+      <div className="sticky-toolbar">
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => setTab('projects')} className={`btn ${tab === 'projects' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Project Finance</button>
           <button onClick={() => setTab('daily')} className={`btn ${tab === 'daily' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Daily Cash Flow</button>

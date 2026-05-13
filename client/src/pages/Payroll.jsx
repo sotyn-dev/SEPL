@@ -151,22 +151,24 @@ export default function Payroll() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2"><LuIndianRupee className="text-emerald-600" /> Payroll</h1>
-          <p className="text-sm text-gray-500">Auto-calculate monthly salary from attendance + leaves using your custom rules</p>
+      <div className="sticky-toolbar">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2"><LuIndianRupee className="text-emerald-600" /> Payroll</h1>
+            <p className="text-sm text-gray-500">Auto-calculate monthly salary from attendance + leaves using your custom rules</p>
+          </div>
         </div>
-      </div>
 
-      <div className="flex gap-2 flex-wrap">
-        <button onClick={() => setTab('monthly')} className={`btn ${tab === 'monthly' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1`}>
-          <FiDollarSign size={14} /> Monthly Payroll
-        </button>
-        {isAdmin && (
-          <button onClick={() => setTab('settings')} className={`btn ${tab === 'settings' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1`}>
-            <FiSettings size={14} /> Rules / Settings
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setTab('monthly')} className={`btn ${tab === 'monthly' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1`}>
+            <FiDollarSign size={14} /> Monthly Payroll
           </button>
-        )}
+          {isAdmin && (
+            <button onClick={() => setTab('settings')} className={`btn ${tab === 'settings' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1`}>
+              <FiSettings size={14} /> Rules / Settings
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Monthly Payroll Tab */}
