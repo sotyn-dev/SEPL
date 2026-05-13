@@ -104,34 +104,10 @@ export default function Layout() {
     return () => window.removeEventListener('resize', check);
   }, []);
 
-  // Excel-style freeze panes: measure the page's .sticky-toolbar (if any)
-  // and expose its rendered height as a CSS variable so the global table
-  // <thead> rule (in index.css) can pin itself just BELOW the toolbar
-  // instead of fighting it at top:0. Re-runs on every route change so the
-  // value is correct after navigating between pages with different
-  // toolbar contents. Also tracks toolbar size changes via ResizeObserver
-  // (e.g. when filter pills wrap or the user opens/closes a tab card).
-  // Mam: "i need header freeze".
-  useEffect(() => {
-    let observer = null;
-    const setVar = (h) => {
-      document.documentElement.style.setProperty('--toolbar-height', `${Math.round(h)}px`);
-    };
-    const setup = () => {
-      const toolbar = document.querySelector('.sticky-toolbar');
-      if (!toolbar) { setVar(0); return; }
-      setVar(toolbar.offsetHeight);
-      observer = new ResizeObserver(() => setVar(toolbar.offsetHeight));
-      observer.observe(toolbar);
-    };
-    // Wait a tick for the new page's DOM to mount.
-    const t = setTimeout(setup, 50);
-    return () => {
-      clearTimeout(t);
-      if (observer) observer.disconnect();
-      setVar(0);
-    };
-  }, [location.pathname]);
+  // (Removed --toolbar-height ResizeObserver — sticky-toolbar and
+  // freeze-head were rolled back to inert classes after the layered
+  // visual collapsed on the DPR dashboard.  Mam: "seriously do you
+  // think its good ui/ux", 2026-05-13.)
 
   // Close sidebar on mobile when route changes
   useEffect(() => {
