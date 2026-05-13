@@ -2217,6 +2217,12 @@ function initializeDatabase() {
     ['sales_funnel', 'f2f_date DATETIME'],
     ['sales_funnel', 'revised_boq_file_link TEXT'],
     ['sales_funnel', 'lead_type TEXT'],                  // customer/lead type
+    // CRM Funnel — mam wants "Lead Type :- new / extra enquiry" and a
+    // BOQ file upload right at lead capture (Add CRM Lead modal). The
+    // existing `type` column is Private / Government — this new
+    // `lead_type` is independent and tracks New vs Extra Enquiry.
+    ['crm_funnel', 'lead_type TEXT'],                    // 'New' | 'Extra Enquiry'
+    ['crm_funnel', 'boq_file_link TEXT'],                // optional BOQ upload from client
     ['sales_funnel', 'city TEXT'],                       // separate from district
     // SLA tracking — stamp the timestamp when the lead entered its current
     // stage, so overdue detection knows the clock start. SLAs are:

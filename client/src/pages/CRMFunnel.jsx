@@ -25,9 +25,12 @@ const NEG_STATUSES = [
   { v: 'dropped', l: 'Dropped' },
 ];
 
+const LEAD_TYPES = ['New', 'Extra Enquiry'];
+
 const blank = () => ({
   client_name: '', company_name: '', mobile: '', email: '', source: '',
   address: '', state: '', district: '', remarks: '', category: '', type: '',
+  lead_type: 'New', boq_file_link: '', boq_file: null,
   cust_boq_link: '', quotation_link: '', quotation_amount: 0, quotation_submitted: false,
   negotiation_status: '', negotiation_amount: 0, negotiation_remarks: '',
   final_status: '', loss_reason: '',
@@ -69,11 +72,23 @@ export default function CRMFunnel() {
     if (!form.client_name?.trim()) { toast.error('Client name is required'); return; }
     setSaving(true);
     try {
+      // Build a multipart form so the BOQ file can ride along when picked.
+      // Server accepts either multipart with `boq_file` or plain JSON for
+      // backwards compatibility — using multipart always keeps it simple.
+      const fd = new FormData();
+      Object.entries(form).forEach(([k, v]) => {
+        if (k === 'boq_file') return;                // file appended separately
+        if (v === null || v === undefined) return;
+        if (typeof v === 'boolean') fd.append(k, v ? '1' : '0');
+        else fd.append(k, v);
+      });
+      if (form.boq_file instanceof File) fd.append('boq_file', form.boq_file);
+      const opts = { headers: { 'Content-Type': 'multipart/form-data' } };
       if (editing) {
-        await api.put(`/crm-funnel/${editing.id}`, form);
+        await api.put(`/crm-funnel/${editing.id}`, fd, opts);
         toast.success('Updated');
       } else {
-        await api.post('/crm-funnel', form);
+        await api.post('/crm-funnel', fd, opts);
         toast.success('Added');
       }
       setModal(false); load();
@@ -270,6 +285,19 @@ export default function CRMFunnel() {
                 {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
+            {/* Lead Type — mam: "add lead type :- new , extra enquiry".
+                Independent from the existing Private/Government Type. */}
+            <div className="sm:col-span-2">
+              <label className="label">Lead Type</label>
+              <div className="flex gap-3 mt-1">
+                {LEAD_TYPES.map(lt => (
+                  <label key={lt} className={`flex-1 border rounded-lg px-3 py-2 cursor-pointer flex items-center gap-2 ${form.lead_type === lt ? 'border-red-400 bg-red-50' : 'border-gray-200 hover:border-red-200'}`}>
+                    <input type="radio" name="lead_type" value={lt} checked={form.lead_type === lt} onChange={() => setForm({ ...form, lead_type: lt })} />
+                    <span className="text-sm font-medium">{lt}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
             <div>
               <label className="label">Address</label>
               <input className="input" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
@@ -287,6 +315,24 @@ export default function CRMFunnel() {
                 value={form.district} valueKey="value" displayKey="label"
                 placeholder={form.state ? 'Pick district' : 'Pick a state first'}
                 onChange={(opt) => setForm({ ...form, district: opt?.value || '' })} />
+            </div>
+            {/* BOQ file upload — Excel / PDF / image at lead-capture time so
+                the client's BOQ stays attached from day one. Optional. */}
+            <div className="sm:col-span-2">
+              <label className="label">Customer BOQ File <span className="text-gray-400 font-normal">(optional)</span></label>
+              <input
+                className="input"
+                type="file"
+                accept=".xlsx,.xls,.pdf,.doc,.docx,.jpg,.jpeg,.png"
+                onChange={e => setForm({ ...form, boq_file: e.target.files?.[0] || null })}
+              />
+              {form.boq_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.boq_file.name}</p>}
+              {!form.boq_file && form.boq_file_link && (
+                <p className="text-[10px] text-gray-500 mt-0.5">
+                  Attached: <a href={form.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 underline">{form.boq_file_link.split('/').pop()}</a>
+                  {' '}<button type="button" className="text-[10px] text-red-500 hover:underline" onClick={() => setForm({ ...form, boq_file_link: '' })}>remove</button>
+                </p>
+              )}
             </div>
             <div className="sm:col-span-2">
               <label className="label">Remarks</label>
