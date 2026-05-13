@@ -1342,6 +1342,46 @@ function initializeDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_sf_audit_lead ON sales_funnel_audit(lead_id, at);
 
+    -- Cheque FMS — mam: "cheque status fms create need filed when
+    -- raise/issue check this is stage one cheque details. stage 2 is
+    -- call cheque status called action is in give dropdwon clear,
+    -- hold, bounce, stopped with give remarks and if cheque hold give
+    -- next date." 3-stage workflow:
+    --   Stage 1: raise/issue → row inserted with current_status='pending'
+    --   Stage 2: on/after cheque_date → action {clear|hold|bounce|stopped}
+    --            hold → must include hold_until (next date)
+    --   Stage 3: on/after hold_until → action {clear|bounce|stopped}
+    -- Every action lands in cheque_actions for full audit trail.
+    CREATE TABLE IF NOT EXISTS cheques (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cheque_number TEXT NOT NULL,
+      payee_to TEXT NOT NULL,
+      bank_name TEXT,
+      bank_other TEXT,
+      cheque_date DATE NOT NULL,
+      amount REAL DEFAULT 0,
+      photo_url TEXT,
+      issue_status TEXT DEFAULT 'approved' CHECK(issue_status IN ('approved','cancel')),
+      current_status TEXT DEFAULT 'pending' CHECK(current_status IN ('pending','clear','hold','bounce','stopped','cancel')),
+      hold_until DATE,
+      raised_by INTEGER REFERENCES users(id),
+      raised_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_cheques_status ON cheques(current_status, cheque_date);
+    CREATE INDEX IF NOT EXISTS idx_cheques_hold ON cheques(current_status, hold_until);
+
+    CREATE TABLE IF NOT EXISTS cheque_actions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cheque_id INTEGER REFERENCES cheques(id) ON DELETE CASCADE,
+      action TEXT NOT NULL CHECK(action IN ('clear','hold','bounce','stopped','cancel','re_issue')),
+      remarks TEXT,
+      next_date DATE,
+      action_by INTEGER REFERENCES users(id),
+      action_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_chq_actions_cheque ON cheque_actions(cheque_id, action_at);
+
     -- Snag list — defects / punch-list items raised against a site,
     -- assigned to an employee, who uploads proof and only then it's
     -- closed by approval (delegation-style flow). Mam's ask:
@@ -2647,7 +2687,8 @@ function initializeDatabase() {
 
   const ALL_MODULES = [
     'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement','cashflow','collections','payment_required','attendance','indent_fms','dpr',
-    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags','company_assets','help_tickets'
+    'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags','company_assets','help_tickets',
+    'sub_contractors','ai_agent','crm_funnel','cheques'
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

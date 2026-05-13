@@ -19,6 +19,7 @@ import { LuIndianRupee } from 'react-icons/lu';
 const menuItems = [
   { path: '/', label: 'Dashboard', icon: FiHome, module: 'dashboard' },
   { path: '/cashflow', label: 'Cash Flow', icon: FiTrendingUp, module: 'cashflow' },
+  { path: '/cheques', label: 'Cheque FMS', icon: FiFileText, module: 'cheques' },
   { path: '/payment-required', label: 'Payment Required', icon: LuIndianRupee, module: 'payment_required' },
   { path: '/attendance', label: 'Attendance', icon: FiCheckSquare, module: 'attendance' },
   { path: '/collections', label: 'Collection Engine', icon: FiCreditCard, module: 'collections' },

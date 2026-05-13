@@ -48,6 +48,7 @@ import CollectionsMD from './pages/admin/CollectionsMD';
 import AISettings from './pages/AISettings';
 import SubContractors from './pages/SubContractors';
 import CRMFunnel from './pages/CRMFunnel';
+import ChequeFMS from './pages/ChequeFMS';
 import EmailSettings from './pages/EmailSettings';
 
 function ProtectedRoute({ children }) {
@@ -139,6 +140,7 @@ export default function App() {
         <Route path="admin/email-settings" element={<AdminRoute><EmailSettings /></AdminRoute>} />
         <Route path="sub-contractors" element={<ModuleRoute module="sub_contractors"><SubContractors /></ModuleRoute>} />
         <Route path="crm-funnel" element={<ModuleRoute module="crm_funnel"><CRMFunnel /></ModuleRoute>} />
+        <Route path="cheques" element={<ModuleRoute module="cheques"><ChequeFMS /></ModuleRoute>} />
       </Route>
     </Routes>
   );

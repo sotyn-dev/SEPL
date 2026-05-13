@@ -162,6 +162,7 @@ app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/ai-agent', require('./routes/aiAgent'));
 app.use('/api/sub-contractors', require('./routes/subcontractors'));
 app.use('/api/crm-funnel', require('./routes/crmFunnel'));
+app.use('/api/cheques', require('./routes/cheques'));
 
 // 4 Critical Systems
 app.use('/api/cashflow', require('./routes/cashflow'));
