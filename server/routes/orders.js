@@ -131,24 +131,19 @@ router.post('/po', (req, res) => {
   // items. business_book_id is still recorded for cross-PO indent /
   // DPR pooling.
   if (items && items.length > 0) {
-    const insertItem = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, labour_rate, labour_amount, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
+    const insertItem = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?)');
     items.forEach((item, idx) => {
       if (item.description && item.description.trim()) {
-        const qty = +item.quantity || 0;
-        const labourRate = +item.labour_rate || 0;
-        const labourAmount = +item.labour_amount || (qty * labourRate);
         insertItem.run(
           business_book_id || null,
           poId,
           item.item_master_id || null,
           item.description.trim(),
-          qty,
+          +item.quantity || 0,
           item.unit || 'nos',
           +item.rate || 0,
           +item.amount || 0,
           item.hsn_code || '',
-          labourRate,
-          labourAmount,
           +item.sr_no || idx + 1,
         );
       }
@@ -497,7 +492,7 @@ router.post('/po/:id/items', (req, res) => {
   // references without individual queries per row.
   const validMasterIds = new Set(db.prepare('SELECT id FROM item_master').all().map(r => r.id));
 
-  const insert = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, labour_rate, labour_amount, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
+  const insert = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?)');
   let count = 0;
   const errors = [];
   // Coerce numerics safely — empty strings, null, NaN all become 0 so a
@@ -520,21 +515,16 @@ router.post('/po/:id/items', (req, res) => {
           const rawMid = item.item_master_id;
           const midNum = parseInt(rawMid, 10);
           const safeMasterId = Number.isFinite(midNum) && validMasterIds.has(midNum) ? midNum : null;
-          const qtyNum = num(item.quantity);
-          const labourRate = num(item.labour_rate);
-          const labourAmount = num(item.labour_amount) || (qtyNum * labourRate);
           insert.run(
             bbId,
             poId,
             safeMasterId,
             item.description.trim(),
-            qtyNum,
+            num(item.quantity),
             item.unit || 'nos',
             num(item.rate),
             num(item.amount),
             item.hsn_code || '',
-            labourRate,
-            labourAmount,
             num(item.sr_no) || idx + 1
           );
           count++;

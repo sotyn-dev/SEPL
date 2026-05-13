@@ -100,10 +100,7 @@ export default function DPR() {
     } else { setPoItemsForSite([]); setPoItemsDiag(null); }
   };
 
-  const addWorkItem = () => setWorkItems([
-    ...workItems,
-    { po_item_id: '', description: '', qty: 0, location: '', rate: 0, amount: 0, labour_rate: 0, labour_amount: 0 },
-  ]);
+  const addWorkItem = () => setWorkItems([...workItems, { po_item_id: '', description: '', qty: 0, location: '', rate: 0, amount: 0 }]);
   const removeWorkItem = (i) => setWorkItems(workItems.filter((_, idx) => idx !== i));
   const selectWorkItem = (i, poItemId) => {
     const item = poItemsForSite.find(p => p.id === +poItemId);
@@ -114,20 +111,11 @@ export default function DPR() {
     n[i].boq_qty = item?.quantity || 0;
     n[i].remaining_qty = item?.remaining_qty ?? item?.quantity ?? 0;
     n[i].filled_qty = item?.filled_qty || 0;
-    // Auto-fill SITC rate and labour rate from po_items — mam: "in dpr
-    // all data is not fetch from order to planning item fetch". Earlier
-    // these stayed at 0 and forced manual re-entry. Now they flow:
-    //   po_items.rate         → workItem.rate (SITC)
-    //   po_items.labour_rate  → workItem.labour_rate
-    // Site engineer can still override either inline if today's actual
-    // differs (rare).
+    // Auto-fill SITC rate from po_items so the site engineer doesn't
+    // have to re-type it. Can still be overridden inline.
     if (item) {
       n[i].rate = +item.rate || 0;
-      n[i].labour_rate = +item.labour_rate || 0;
-      // Recompute amounts based on the qty already in the row (if any).
-      const qty = +n[i].qty || 0;
-      n[i].amount = qty * n[i].rate;
-      n[i].labour_amount = qty * n[i].labour_rate;
+      n[i].amount = (+n[i].qty || 0) * n[i].rate;
     }
     setWorkItems(n);
   };
@@ -135,10 +123,6 @@ export default function DPR() {
     const n = [...workItems];
     n[i][field] = val;
     if (field === 'qty' || field === 'rate') n[i].amount = (n[i].qty || 0) * (n[i].rate || 0);
-    // Keep labour_amount = qty × labour_rate so it stays accurate when
-    // either field changes. Honoured by the backend; if absent it
-    // recomputes from po_items.labour_rate.
-    if (field === 'qty' || field === 'labour_rate') n[i].labour_amount = (n[i].qty || 0) * (n[i].labour_rate || 0);
     setWorkItems(n);
   };
   const updateCost = (i, field, val) => {
@@ -151,17 +135,7 @@ export default function DPR() {
   };
 
   const grandTotalA = workItems.reduce((s, w) => s + (w.amount || 0), 0);
-  // Labour cost from BOQ work items — the per-line labour rate × qty.
-  // SITC rate (in A) is revenue from the client; labour rate is what we
-  // pay the worker / contractor to do that installation, so it has to
-  // be subtracted to get true profit. Mam: "recent dont consider labour
-  // rate".
-  const boqLabourCost = workItems.reduce((s, w) => s + (+w.labour_amount || ((w.qty || 0) * (+w.labour_rate || 0))), 0);
-  const manualCostsB = costs.reduce((s, c) => s + (c.amount || 0), 0);
-  // grand_total_b sent to the server now bundles manual costs + BOQ
-  // labour so the loss-day alert (which reads grand_total_b) sees the
-  // full cost picture.
-  const grandTotalB = manualCostsB + boqLabourCost;
+  const grandTotalB = costs.reduce((s, c) => s + (c.amount || 0), 0);
   const profitLoss = grandTotalA - grandTotalB;
 
   const submitDpr = async (e) => {
@@ -572,7 +546,7 @@ export default function DPR() {
                     {poItemsDiag.reason === 'no_business_book' ? 'No Business Book linked' :
                      poItemsDiag.reason === 'no_po_items' ? 'No BOQ items yet' :
                      poItemsDiag.reason === 'rates_missing'
-                       ? `${poItemsDiag.total_count} item${poItemsDiag.total_count === 1 ? '' : 's'} loaded · SITC set on ${poItemsDiag.total_count - (poItemsDiag.missing_sitc_count || 0)} · Labour set on ${poItemsDiag.total_count - (poItemsDiag.missing_labour_count || 0)}`
+                       ? `${poItemsDiag.total_count} item${poItemsDiag.total_count === 1 ? '' : 's'} loaded · ${poItemsDiag.total_count - (poItemsDiag.missing_sitc_count || 0)} have a rate set`
                        : 'Heads up'}
                   </div>
                   <div>{poItemsDiag.message}</div>
@@ -581,42 +555,28 @@ export default function DPR() {
             )}
             {poItemsForSite.length > 0 ? (
               <>
-                <div className="hidden md:grid grid-cols-14 gap-1 text-[10px] font-bold text-gray-600 mb-1 px-1 uppercase" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr))' }}>
-                  <div className="md:col-span-4">BOQ Item</div>
-                  <div className="md:col-span-1">Qty</div>
-                  <div className="md:col-span-2">Location</div>
-                  <div className="md:col-span-2">Rate SITC</div>
-                  <div className="md:col-span-2 text-amber-700">Labour Rate</div>
-                  <div className="md:col-span-2">Amount</div>
-                  <div></div>
+                <div className="hidden md:grid grid-cols-12 gap-1 text-[10px] font-bold text-gray-600 mb-1 px-1 uppercase">
+                  <div className="md:col-span-4">BOQ Item</div><div className="md:col-span-1">Qty</div><div className="md:col-span-2">Location</div><div className="md:col-span-2">Rate (Rs)</div><div className="md:col-span-2">Amount (Rs)</div><div></div>
                 </div>
                 {workItems.map((w, i) => (
-                  <div key={i} className="grid grid-cols-14 gap-1 mb-1.5 items-start bg-white rounded p-1" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr))' }}>
-                    <div className="col-span-14 md:col-span-4">
+                  <div key={i} className="grid grid-cols-12 gap-1 mb-1.5 items-start bg-white rounded p-1">
+                    <div className="col-span-12 md:col-span-4">
                       <SearchableSelect
                         options={poItemsForSite.map(item => {
-                          // Build a rich label so mam sees BOQ qty, remaining,
-                          // SITC rate, and labour rate without picking the
-                          // item first. We ALSO prepend item_code + master
-                          // name + specification so the SearchableSelect
-                          // filter matches words like "raceway" / "tray" /
-                          // "MS pipe" even when the BOQ description uses
-                          // different wording (e.g. "Cable raceway 100mm
-                          // hot dip GI" stored as "RW-100 HDG cabletray").
+                          // Prepend item_code + append a hidden suffix of
+                          // master_name / specification / size / make / type
+                          // so substring search finds "raceway" etc. even
+                          // when the BOQ description uses different wording.
                           const rateBit = +item.rate > 0 ? `Rs ${(+item.rate).toLocaleString('en-IN')}` : '⚠ no rate';
-                          const labourBit = +item.labour_rate > 0 ? `Labour Rs ${(+item.labour_rate).toLocaleString('en-IN')}` : '⚠ no labour';
                           const completedBit = item.remaining_qty <= 0 ? ' — COMPLETED' : '';
                           const codeBit = item.item_code ? `[${item.item_code}] ` : '';
-                          // Pull every searchable text field into a hidden
-                          // suffix so SearchableSelect's substring filter
-                          // finds the row no matter which token mam types.
                           const searchSuffix = [
                             item.master_name, item.master_specification, item.master_size,
                             item.master_make, item.master_type,
                           ].filter(Boolean).join(' ');
                           return {
                             id: item.id,
-                            label: `${codeBit}${item.description} (BOQ:${item.quantity} | Rem:${item.remaining_qty ?? item.quantity} ${item.unit} | ${rateBit} | ${labourBit})${completedBit}${searchSuffix ? ' · ' + searchSuffix : ''}`,
+                            label: `${codeBit}${item.description} (BOQ:${item.quantity} | Rem:${item.remaining_qty ?? item.quantity} ${item.unit} | ${rateBit})${completedBit}${searchSuffix ? ' · ' + searchSuffix : ''}`,
                             ...item,
                           };
                         })}
@@ -644,39 +604,14 @@ export default function DPR() {
                       )}
                     </div>
                     <input className="input col-span-3 md:col-span-2 text-sm" placeholder="Loc (GF/1F)" value={w.location || ''} onChange={e => updateWork(i, 'location', e.target.value)} />
-                    <input
-                      className="input col-span-3 md:col-span-2 text-sm"
-                      type="number"
-                      placeholder="Rate"
-                      value={w.rate || ''}
-                      onChange={e => updateWork(i, 'rate', +e.target.value)}
-                      title="SITC rate per unit — auto-fills from Order Planning when you pick a BOQ item"
-                    />
-                    <input
-                      className="input col-span-3 md:col-span-2 text-sm bg-amber-50"
-                      type="number"
-                      placeholder="Labour"
-                      value={w.labour_rate || ''}
-                      onChange={e => updateWork(i, 'labour_rate', +e.target.value)}
-                      title="Per-unit labour rate — auto-fills from the Labour Rate Sheet uploaded at Order Planning"
-                    />
-                    <div className="col-span-2 md:col-span-2 text-sm text-right pr-2">
-                      <div className="font-bold">Rs {(w.amount || 0).toLocaleString()}</div>
-                      {(w.labour_amount || 0) > 0 && (
-                        <div className="text-[10px] text-amber-700 leading-none">+ Rs {(w.labour_amount || 0).toLocaleString()} labour</div>
-                      )}
-                    </div>
+                    <input className="input col-span-3 md:col-span-2 text-sm" type="number" placeholder="Rate" value={w.rate || ''} onChange={e => updateWork(i, 'rate', +e.target.value)} />
+                    <div className="col-span-2 md:col-span-2 text-sm font-bold text-right pr-2">Rs {(w.amount || 0).toLocaleString()}</div>
                     <button type="button" onClick={() => removeWorkItem(i)} className="col-span-1 p-1 text-red-400 hover:text-red-600 flex justify-center"><FiTrash2 size={13} /></button>
                   </div>
                 ))}
                 {workItems.length === 0 && <p className="text-xs text-gray-400 text-center py-3">Click "+ Add Item" for items installed today</p>}
-                <div className="mt-2 pt-2 border-t-2 border-red-300 text-right flex flex-col items-end gap-0.5">
+                <div className="mt-2 pt-2 border-t-2 border-red-300 text-right">
                   <span className="font-bold text-red-800 text-lg">Grand Total (A): Rs {grandTotalA.toLocaleString()}</span>
-                  {workItems.some(w => (w.labour_amount || 0) > 0) && (
-                    <span className="text-sm text-amber-700 font-semibold">
-                      Labour Cost Today: Rs {workItems.reduce((s, w) => s + (+w.labour_amount || 0), 0).toLocaleString()}
-                    </span>
-                  )}
                 </div>
               </>
             ) : <p className="text-xs text-amber-600">{form.site_id ? 'No PO items for this site. Add PO items in Orders first.' : 'Select a site to load PO items.'}</p>}
@@ -742,13 +677,7 @@ export default function DPR() {
               );
             })}
             <button type="button" onClick={() => setCosts([...costs, { type: '', qty: 0, rate: 0, amount: 0 }])} className="text-xs text-red-700 hover:underline">+ Add Cost Type</button>
-            <div className="mt-2 pt-2 border-t-2 border-red-300 text-right flex flex-col items-end gap-0.5">
-              <span className="text-xs text-gray-600">Manual costs: Rs {manualCostsB.toLocaleString()}</span>
-              {boqLabourCost > 0 && (
-                <span className="text-xs text-amber-700 font-semibold">
-                  + Labour from BOQ items: Rs {boqLabourCost.toLocaleString()} (auto-added)
-                </span>
-              )}
+            <div className="mt-2 pt-2 border-t-2 border-red-300 text-right">
               <span className="font-bold text-red-800 text-lg">Grand Total (B): Rs {grandTotalB.toLocaleString()}</span>
             </div>
           </div>
@@ -872,25 +801,10 @@ export default function DPR() {
             {selectedDpr.work_items?.length > 0 && (
               <div className="border-2 border-red-300 rounded-lg p-3">
                 <h5 className="font-bold text-red-800 mb-2">TABLE A: Installation Work</h5>
-                <table className="text-xs"><thead><tr><th>BOQ Item</th><th>Qty</th><th>Location</th><th>Rate (SITC)</th><th className="text-amber-700">Labour Rate</th><th>Amount</th><th className="text-amber-700">Labour Cost</th></tr></thead>
-                  <tbody>{selectedDpr.work_items.map(w => (
-                    <tr key={w.id}>
-                      <td>{w.description}</td>
-                      <td className="font-bold">{w.actual_qty || w.planned_qty}</td>
-                      <td>{w.floor_zone || '-'}</td>
-                      <td>Rs {(w.rate || 0).toLocaleString()}</td>
-                      <td className="text-amber-700">Rs {(w.labour_rate || 0).toLocaleString()}</td>
-                      <td className="font-bold text-emerald-600">Rs {(w.amount || 0).toLocaleString()}</td>
-                      <td className="text-amber-700 font-semibold">Rs {(w.labour_amount || 0).toLocaleString()}</td>
-                    </tr>
-                  ))}</tbody>
+                <table className="text-xs"><thead><tr><th>BOQ Item</th><th>Qty</th><th>Location</th><th>Rate</th><th>Amount</th></tr></thead>
+                  <tbody>{selectedDpr.work_items.map(w => (<tr key={w.id}><td>{w.description}</td><td className="font-bold">{w.actual_qty || w.planned_qty}</td><td>{w.floor_zone || '-'}</td><td>Rs {(w.rate || 0).toLocaleString()}</td><td className="font-bold text-emerald-600">Rs {(w.amount || 0).toLocaleString()}</td></tr>))}</tbody>
                 </table>
-                <div className="text-right mt-2 flex flex-col items-end gap-0.5">
-                  <span className="font-bold text-red-800">Grand Total (A): Rs {selectedDpr.work_items.reduce((s, w) => s + (w.amount || 0), 0).toLocaleString()}</span>
-                  {selectedDpr.work_items.some(w => (w.labour_amount || 0) > 0) && (
-                    <span className="text-sm text-amber-700 font-semibold">Labour Cost: Rs {selectedDpr.work_items.reduce((s, w) => s + (w.labour_amount || 0), 0).toLocaleString()}</span>
-                  )}
-                </div>
+                <div className="text-right font-bold text-red-800 mt-2">Grand Total (A): Rs {selectedDpr.work_items.reduce((s, w) => s + (w.amount || 0), 0).toLocaleString()}</div>
               </div>
             )}
 
