@@ -171,8 +171,8 @@ export default function Complaints() {
         </div>
       )}
 
-      <div className="bg-white rounded-xl border overflow-x-auto">
-        <table className="w-full text-sm">
+      <div className="bg-white rounded-xl border">
+        <table className="w-full text-sm freeze-head">
           <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
             <tr>
               <th className="text-left px-3 py-2">Complaint #</th>

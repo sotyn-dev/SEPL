@@ -204,8 +204,8 @@ export default function Snags() {
         </div>
       </div>
 
-      <div className="card p-0 overflow-x-auto">
-        <table>
+      <div className="card p-0">
+        <table className="freeze-head">
           <thead>
             <tr>
               <th>Snag No</th><th>Raised</th><th>Site / Location</th><th>Description</th>

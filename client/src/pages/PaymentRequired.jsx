@@ -211,7 +211,7 @@ export default function PaymentRequired() {
             <select className="select w-40" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}><option value="">All Status</option>{STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}</select>
           </div>
 
-          <div className="card p-0 overflow-x-auto"><table>
+          <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody>
               {requests.filter(r => {

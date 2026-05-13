@@ -405,8 +405,8 @@ export default function Delegation() {
           Due / Status / Upload Proof / Extension / Actions.
           Shown on ALL screen sizes per mam's request (2026-04-23). On phones
           the parent scrolls horizontally so every column stays accessible. */}
-      <div className="card p-0 overflow-x-auto">
-        <table className="text-sm min-w-[1100px]">
+      <div className="card p-0">
+        <table className="text-sm min-w-[1100px] freeze-head">
           <thead>
             <tr>
               <th className="w-12 text-center">S.No.</th>

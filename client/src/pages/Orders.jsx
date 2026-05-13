@@ -217,7 +217,7 @@ export default function Orders() {
               </div>
             );
           })()}
-          <div className="card p-0 overflow-x-auto"><table>
+          <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>PO Number</th><th>Lead No</th><th>Client</th><th>Project</th><th>Category</th><th>Date</th><th>Amount</th><th>Site Engineer</th><th>CRM</th><th>PO Copy</th><th>BOQ File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {pos.filter(p => poMatches(p, poFilter)).map(p => (
@@ -272,7 +272,7 @@ export default function Orders() {
             <h3 className="font-semibold">Order Planning</h3>
             <button onClick={() => { setForm({ po_id: '', business_book_id: '', planned_start: '', planned_end: '', notes: '' }); setModal('planning'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Plan</button>
           </div>
-          <div className="card p-0 overflow-x-auto"><table>
+          <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>PO</th><th>Client</th><th>Start</th><th>End</th><th>Status</th></tr></thead>
             <tbody>
               {planning.map(p => (

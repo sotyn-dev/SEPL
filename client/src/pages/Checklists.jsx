@@ -104,7 +104,7 @@ export default function Checklists() {
               <span className="text-xs font-normal text-gray-400">({byPerson[personName].length})</span>
             </h4>
           </div>
-          <table>
+          <table className="freeze-head">
             <thead><tr><th>Task</th><th>Frequency</th><th>Due Date / Time</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {byPerson[personName].map(c => (

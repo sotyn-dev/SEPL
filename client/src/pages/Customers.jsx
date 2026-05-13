@@ -134,9 +134,9 @@ export default function Customers() {
 
       <p className="text-sm text-gray-500">Showing {filtered.length} customer{filtered.length === 1 ? '' : 's'}</p>
 
-      <div className="card p-0 overflow-x-auto">
-        <div className="overflow-x-auto">
-          <table className="min-w-[1100px] text-xs w-full">
+      <div className="card p-0">
+        <div>
+          <table className="min-w-[1100px] text-xs w-full freeze-head">
             <thead>
               <tr className="bg-gray-50">
                 <th className="px-2 py-2 text-left">Customer Code</th>

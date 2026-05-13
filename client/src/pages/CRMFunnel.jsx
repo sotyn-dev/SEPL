@@ -196,8 +196,8 @@ export default function CRMFunnel() {
         </select>
       </div>
 
-      <div className="card p-0 overflow-x-auto">
-        <table>
+      <div className="card p-0">
+        <table className="freeze-head">
           <thead>
             <tr>
               <th>Lead #</th><th>Client</th><th>Company</th><th>Mobile</th><th>Source</th>

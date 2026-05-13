@@ -132,8 +132,8 @@ export default function SubContractors() {
         </select>
       </div>
 
-      <div className="card p-0 overflow-x-auto">
-        <table>
+      <div className="card p-0">
+        <table className="freeze-head">
           <thead>
             <tr>
               <th>Name</th><th>Type</th><th>Contact</th><th>Location</th>

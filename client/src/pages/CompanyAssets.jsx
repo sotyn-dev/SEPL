@@ -180,8 +180,8 @@ export default function CompanyAssets() {
         </div>
       </div>
 
-      <div className="card p-0 overflow-x-auto">
-        <table>
+      <div className="card p-0">
+        <table className="freeze-head">
           <thead>
             <tr>
               <th>Asset No</th><th>Category</th><th>Name / Model</th>

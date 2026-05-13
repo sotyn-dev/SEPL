@@ -102,8 +102,8 @@ export default function WeeklyScore() {
         )}
       </div>
 
-      <div className="card p-0 overflow-x-auto">
-        <table>
+      <div className="card p-0">
+        <table className="freeze-head">
           <thead>
             <tr>
               <th className="text-left">Rank</th>

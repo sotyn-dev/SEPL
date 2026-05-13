@@ -287,7 +287,7 @@ export default function Leads() {
       {/* List Tab */}
       {tab === 'list' && (<>
         <div className="relative"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16}/><input className="input pl-10" placeholder="Search client, company, lead no, phone..." value={search} onChange={e=>setSearch(e.target.value)}/></div>
-        <div className="card p-0 overflow-x-auto"><table className="text-xs">
+        <div className="card p-0"><table className="text-xs freeze-head">
           <thead><tr><th className="px-3 py-2">Lead No</th><th className="px-3 py-2">Client</th><th className="px-3 py-2">Company</th><th className="px-3 py-2">Category</th><th className="px-3 py-2">Location</th><th className="px-3 py-2">SC</th><th className="px-3 py-2">Stage</th><th className="px-3 py-2">SLA</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Actions</th></tr></thead>
           <tbody>{leads.map(l => {
             // SLA chip: shows "due in Xh" / "overdue by Xd" / "—" based on

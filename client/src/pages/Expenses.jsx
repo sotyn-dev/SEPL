@@ -83,7 +83,7 @@ export default function Expenses() {
         </div>
       </div>
 
-      <div className="card p-0 overflow-x-auto"><table>
+      <div className="card p-0"><table className="freeze-head">
         <thead><tr><th>Description</th><th>Category</th><th>Amount</th><th>Date</th><th>Submitted By</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
           {expenses.map(e => (

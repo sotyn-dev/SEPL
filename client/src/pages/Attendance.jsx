@@ -434,7 +434,7 @@ export default function Attendance() {
       {tab === 'records' && (
         <>
           <input type="date" className="input w-48" value={filterDate} onChange={e => setFilterDate(e.target.value)} />
-          <div className="card p-0 overflow-x-auto"><table className="text-sm">
+          <div className="card p-0"><table className="text-sm freeze-head">
             <thead><tr><th>Name</th><th>Date</th><th>In</th><th>Out</th><th>Hours</th><th>Site</th><th>Status</th><th>In Photo</th><th>Out Photo</th><th>Actions</th></tr></thead>
             <tbody>{records.map(r => (
               <tr key={r.id}>
@@ -598,7 +598,7 @@ export default function Attendance() {
 
       {/* MONTHLY REPORT */}
       {tab === 'report' && (
-        <div className="card p-0 overflow-x-auto"><table className="text-sm">
+        <div className="card p-0"><table className="text-sm freeze-head">
           <thead><tr><th>Employee</th><th>Dept</th><th>Present</th><th>Late</th><th>Half Day</th><th>Absent</th><th>Avg Hours</th></tr></thead>
           <tbody>{report.map(r => (
             <tr key={r.user_id}>

@@ -362,7 +362,7 @@ export default function DPR() {
               setModal(true);
             }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit DPR</button>
           </div>
-          <div className="card p-0 overflow-x-auto"><table>
+          <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Site</th><th>Date</th><th>Shift</th><th>By</th><th>Status</th><th>Total(A)</th><th>Cost(B)</th><th>P/L</th><th>Approval</th><th>Actions</th></tr></thead>
             <tbody>
               {dprs
@@ -405,7 +405,7 @@ export default function DPR() {
           <div className="flex justify-between items-center"><h4 className="font-semibold">Project Sites</h4>
             <button onClick={() => { setForm({ name: '', address: '', client_name: '', site_engineer_id: '', supervisor: '' }); setSiteModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Site</button>
           </div>
-          <div className="card p-0 overflow-x-auto"><table>
+          <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Lead No</th><th>Site</th><th>Address</th><th>Client</th><th>Engineer</th><th>Supervisor</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>{sites.map(s => (
               <tr key={s.id}>

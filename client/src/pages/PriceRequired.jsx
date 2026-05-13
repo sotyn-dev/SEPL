@@ -326,8 +326,8 @@ export default function PriceRequired() {
 
       {/* TAB 2 — All requests (raise / status / personal) */}
       {(tab === 'raise' || !isQuoter) && (
-        <div className="card p-0 overflow-x-auto">
-          <table className="text-sm w-full">
+        <div className="card p-0">
+          <table className="text-sm w-full freeze-head">
             <thead className="bg-gray-50">
               <tr>
                 <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Company</th>

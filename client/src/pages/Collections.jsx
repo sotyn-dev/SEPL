@@ -254,9 +254,9 @@ export default function Collections() {
 
 
       {/* Receivables Table */}
-      <div className="card p-0 overflow-x-auto">
-        <div className="overflow-x-auto">
-          <table>
+      <div className="card p-0">
+        <div>
+          <table className="freeze-head">
             <thead>
               <tr>
                 <th>Site / Client</th>

@@ -342,7 +342,7 @@ export default function CashFlow() {
             <div className="flex items-center gap-2"><FiCalendar className="text-gray-400" /><input type="date" className="input w-48" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} /></div>
             <button onClick={() => { setForm({ date: selectedDate, type: 'inflow', category: '', description: '', amount: 0, payment_mode: '', party_name: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus /> Add Entry</button>
           </div>
-          <div className="card p-0 overflow-x-auto"><table className="text-sm"><thead><tr><th>Date</th><th>Opening</th><th className="text-emerald-600">Inflows</th><th className="text-red-600">Outflows</th><th className="text-purple-600">Closing</th></tr></thead>
+          <div className="card p-0"><table className="text-sm freeze-head"><thead><tr><th>Date</th><th>Opening</th><th className="text-emerald-600">Inflows</th><th className="text-red-600">Outflows</th><th className="text-purple-600">Closing</th></tr></thead>
             <tbody>{dailySummary.last7Days.map(d => (
               <tr key={d.id} className={d.date === selectedDate ? 'bg-red-50' : ''} onClick={() => setSelectedDate(d.date)} style={{ cursor: 'pointer' }}>
                 <td className="font-medium">{d.date}</td><td>{fmt(d.opening_balance)}</td>
@@ -351,7 +351,7 @@ export default function CashFlow() {
               </tr>
             ))}</tbody>
           </table></div>
-          <div className="card p-0 overflow-x-auto"><div className="p-3 border-b"><h4 className="font-semibold text-sm">Entries - {selectedDate}</h4></div><table className="text-sm"><thead><tr><th>Type</th><th>Category</th><th>Description</th><th>Party</th><th>Amount</th><th></th></tr></thead>
+          <div className="card p-0"><div className="p-3 border-b"><h4 className="font-semibold text-sm">Entries - {selectedDate}</h4></div><table className="text-sm freeze-head"><thead><tr><th>Type</th><th>Category</th><th>Description</th><th>Party</th><th>Amount</th><th></th></tr></thead>
             <tbody>{entries.map(e => (
               <tr key={e.id}><td><span className={`badge ${e.type === 'inflow' ? 'badge-green' : 'badge-red'}`}>{e.type}</span></td>
                 <td>{e.category}</td><td>{e.description}</td><td>{e.party_name}</td>

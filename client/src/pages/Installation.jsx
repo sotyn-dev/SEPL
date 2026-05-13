@@ -36,7 +36,7 @@ export default function Installation() {
         <h3 className="font-semibold">Installations</h3>
         <button onClick={() => { setEditing(null); setForm({ po_id: '', site_address: '', start_date: '', end_date: '', assigned_to: '', notes: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Installation</button>
       </div>
-      <div className="card p-0 overflow-x-auto"><table>
+      <div className="card p-0"><table className="freeze-head">
         <thead><tr><th>PO</th><th>Site Address</th><th>Start</th><th>End</th><th>Assigned To</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
           {installations.map(i => (

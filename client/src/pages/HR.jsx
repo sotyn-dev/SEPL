@@ -297,7 +297,7 @@ export default function HR() {
             <h3 className="font-semibold">Sub-Contractors</h3>
             <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', specialization: '', rate: 0, rate_unit: 'per_day', notes: '' }); setModal('contractor'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Contractor</button>
           </div>
-          <div className="card p-0 overflow-x-auto"><table>
+          <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Name</th><th>Phone</th><th>Specialization</th><th>Rate</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {contractors.map(c => (

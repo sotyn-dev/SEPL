@@ -320,8 +320,8 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
           easier across many sites. */}
       {flatStock.length > 0 && (
         <div className="card p-0 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="text-sm w-full">
+          <div>
+            <table className="text-sm w-full freeze-head">
               <thead className="bg-gray-50/60">
                 <tr>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Code</th>
@@ -1364,8 +1364,8 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
         <div className="self-end text-xs text-gray-500">{movements.length} movements</div>
       </div>
 
-      <div className="card p-0 overflow-x-auto">
-        <table className="text-sm w-full">
+      <div className="card p-0">
+        <table className="text-sm w-full freeze-head">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">When</th>
@@ -1566,8 +1566,8 @@ function WarehousesTab({ warehouses, sites, reload, canEdit, canCreate }) {
       <div className="flex justify-end">
         {canCreate && <button onClick={() => open()} className="btn btn-primary flex items-center gap-2"><FiPlus size={14} /> Add Warehouse</button>}
       </div>
-      <div className="card p-0 overflow-x-auto">
-        <table className="text-sm w-full">
+      <div className="card p-0">
+        <table className="text-sm w-full freeze-head">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Name</th>

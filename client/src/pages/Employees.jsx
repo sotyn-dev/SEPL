@@ -209,7 +209,7 @@ export default function Employees() {
       </div>
 
       {/* Table */}
-      <div className="card p-0 overflow-x-auto"><table>
+      <div className="card p-0"><table className="freeze-head">
         <thead><tr>
           <th>Name</th><th>Phone</th><th>Email</th><th>Designation</th><th>Department</th><th>Join Date</th>
           <th title="Linked user login — needed for DPR Staff Cost auto-calc">Linked User</th>

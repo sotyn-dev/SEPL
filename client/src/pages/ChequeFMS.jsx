@@ -211,8 +211,8 @@ export default function ChequeFMS() {
       </div>
 
       {/* List */}
-      <div className="card p-0 overflow-x-auto">
-        <table className="w-full text-xs">
+      <div className="card p-0">
+        <table className="w-full text-xs freeze-head">
           <thead className="bg-gray-50 text-gray-600 uppercase">
             <tr>
               <th className="px-2 py-2 text-left">Cheque #</th>

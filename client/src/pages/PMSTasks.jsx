@@ -260,8 +260,8 @@ export default function PMSTasks() {
       </div>
 
       {/* Desktop table */}
-      <div className="card p-0 overflow-x-auto hidden md:block">
-        <table className="text-sm">
+      <div className="card p-0 hidden md:block">
+        <table className="text-sm freeze-head">
           <thead>
             <tr>
               <th className="w-12 text-center">S.No.</th>

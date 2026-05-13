@@ -110,8 +110,8 @@ export default function Quotations() {
             <h3 className="font-semibold text-gray-800">Bill of Quantities</h3>
             <button onClick={() => { setForm({ lead_id: '', title: '', drawing_required: false }); setBoqItems([blankRow()]); setModal('boq'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create BOQ</button>
           </div>
-          <div className="card p-0 overflow-x-auto">
-            <table>
+          <div className="card p-0">
+            <table className="freeze-head">
               <thead><tr><th>Title</th><th>Client</th><th>Drawing</th><th>Total</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
               <tbody>
                 {boqs.map(b => (
@@ -144,8 +144,8 @@ export default function Quotations() {
             <h3 className="font-semibold text-gray-800">Quotations</h3>
             <button onClick={() => { setForm({ lead_id: '', boq_id: '', total_amount: 0, discount: 0, final_amount: 0, valid_until: '', notes: '' }); setModal('quotation'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Quotation</button>
           </div>
-          <div className="card p-0 overflow-x-auto">
-            <table>
+          <div className="card p-0">
+            <table className="freeze-head">
               <thead><tr><th>Number</th><th>Client</th><th>Total</th><th>Discount</th><th>Final</th><th>Status</th><th>Actions</th></tr></thead>
               <tbody>
                 {quotations.map(q => (

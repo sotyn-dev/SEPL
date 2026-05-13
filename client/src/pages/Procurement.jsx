@@ -667,7 +667,7 @@ export default function Procurement() {
             <h3 className="font-semibold">Raise Indent</h3>
             <button onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Raise Indent</button>
           </div>
-          <div className="card p-0 overflow-x-auto"><table>
+          <div className="card p-0"><table className="freeze-head">
             <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th>Items</th><th>BOQ</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {indents.map(i => {
@@ -1047,7 +1047,7 @@ export default function Procurement() {
             </div>
           )}
 
-          <div className="card p-0 overflow-x-auto"><table>
+          <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>PO Number</th><th>PO Date</th><th>Vendor</th><th>Amount</th><th>File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {vendorPos.map(v => (
@@ -1205,7 +1205,7 @@ export default function Procurement() {
             <h3 className="font-semibold">Purchase Bills</h3>
             <button onClick={() => { setForm({ vendor_id: '', bill_number: '', bill_date: '', amount: 0, gst_amount: 0, total_amount: 0 }); setModal('bill'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Bill</button>
           </div>
-          <div className="card p-0 overflow-x-auto"><table>
+          <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
               {purchaseBills.map(b => (
@@ -1342,7 +1342,7 @@ export default function Procurement() {
             <h3 className="font-semibold">Dispatch & Receiving</h3>
             <button onClick={() => openAddDispatch()} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Dispatch</button>
           </div>
-          <div className="card p-0 overflow-x-auto"><table>
+          <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>ID</th><th>Type</th><th>Doc No</th><th>PO</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {deliveryNotes.map(d => (

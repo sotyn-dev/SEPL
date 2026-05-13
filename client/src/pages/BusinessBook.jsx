@@ -207,9 +207,9 @@ export default function BusinessBook() {
       </div>
 
       {/* Table */}
-      <div className="card p-0 overflow-x-auto">
-        <div className="overflow-x-auto">
-          <table className="min-w-full">
+      <div className="card p-0">
+        <div>
+          <table className="min-w-full freeze-head">
             <thead><tr className="bg-gray-50">
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Lead No</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Type</th>

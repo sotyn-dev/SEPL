@@ -216,8 +216,8 @@ export default function Rentals() {
               </select>
             </div>
           </div>
-          <div className="card p-0 overflow-x-auto">
-            <table>
+          <div className="card p-0">
+            <table className="freeze-head">
               <thead>
                 <tr>
                   <th>Req No</th><th>Month / Due By</th><th>Site</th><th>Arrange For</th>
@@ -430,8 +430,8 @@ export default function Rentals() {
 
       {/* BOOKINGS */}
       {tab === 'bookings' && (
-        <div className="card p-0 overflow-x-auto">
-          <table>
+        <div className="card p-0">
+          <table className="freeze-head">
             <thead><tr><th>Status</th><th>Occupant</th><th>Property / Room</th><th>City</th><th>Site</th><th>Check-in</th><th>Check-out</th><th>Rent Share</th><th>Actions</th></tr></thead>
             <tbody>
               {bookings.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No bookings yet</td></tr>}

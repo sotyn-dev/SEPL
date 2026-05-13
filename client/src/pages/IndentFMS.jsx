@@ -75,9 +75,9 @@ export default function IndentFMS() {
           </div>
 
           {/* Active Indents with Stage */}
-          <div className="card p-0 overflow-x-auto">
+          <div className="card p-0">
             <div className="p-4 border-b"><h4 className="font-semibold">Active Indents</h4></div>
-            <table>
+            <table className="freeze-head">
               <thead><tr><th>Indent No</th><th>Date</th><th>Current Stage</th><th>Progress</th><th>Next Action</th></tr></thead>
               <tbody>
                 {(pipeline.activeIndents || []).map(ind => {
@@ -114,10 +114,10 @@ export default function IndentFMS() {
       )}
 
       {tab === 'tracker' && (
-        <div className="card p-0 overflow-x-auto">
+        <div className="card p-0">
           <div className="p-4 border-b"><h4 className="font-semibold">Full Indent Lifecycle Tracker</h4></div>
-          <div className="overflow-x-auto">
-            <table>
+          <div>
+            <table className="freeze-head">
               <thead><tr><th>Indent No</th><th>Date</th><th>Created By</th><th>Status</th><th>Stages Completed</th><th>Current Stage</th></tr></thead>
               <tbody>
                 {tracker.map(t => (
@@ -150,8 +150,8 @@ export default function IndentFMS() {
             <h4 className="font-semibold">Goods Received Notes (GRN)</h4>
             <button onClick={() => { setForm({ vendor_po_id: '', indent_id: '', grn_date: new Date().toISOString().split('T')[0], notes: '' }); setGrnItems([{ description: '', ordered_qty: 0, received_qty: 0, unit: 'nos', rate: 0 }]); setGrnModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create GRN</button>
           </div>
-          <div className="card p-0 overflow-x-auto">
-            <table>
+          <div className="card p-0">
+            <table className="freeze-head">
               <thead><tr><th>GRN No</th><th>Date</th><th>Received By</th><th>Status</th></tr></thead>
               <tbody>
                 {grns.map(g => (

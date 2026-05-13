@@ -224,8 +224,8 @@ export default function ItemMaster() {
       </div>
 
       {/* Table */}
-      <div className="card p-0 overflow-x-auto">
-        <table className="min-w-full">
+      <div className="card p-0">
+        <table className="min-w-full freeze-head">
           <thead><tr className="bg-gray-50">
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Code</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Dept</th>
