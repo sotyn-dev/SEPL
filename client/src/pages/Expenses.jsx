@@ -12,6 +12,11 @@ export default function Expenses() {
   const [modal, setModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({});
+  // Double-submit guard — mam: "entry one time but showing data 4 to 5
+  // times". A fast double-click on Submit was firing two POSTs back-
+  // to-back. Disable the button while in-flight so only one save can
+  // happen per click.
+  const [saving, setSaving] = useState(false);
 
   const load = () => api.get('/hr/expenses').then(r => setExpenses(r.data));
   useEffect(() => { load(); }, []);
@@ -30,6 +35,8 @@ export default function Expenses() {
 
   const save = async (e) => {
     e.preventDefault();
+    if (saving) return;            // belt-and-braces against double trigger
+    setSaving(true);
     try {
       if (editingId) {
         await api.put(`/hr/expenses/${editingId}`, form);
@@ -41,6 +48,8 @@ export default function Expenses() {
       setModal(false); load();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Save failed');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -162,7 +171,12 @@ export default function Expenses() {
             <div><label className="label">Amount (Rs) *</label><input className="input" type="number" required value={form.amount || 0} onChange={e => setForm({...form, amount: +e.target.value})} /></div>
             <div><label className="label">Date *</label><input className="input" type="date" required value={form.expense_date || ''} onChange={e => setForm({...form, expense_date: e.target.value})} /></div>
           </div>
-          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editingId ? 'Update' : 'Submit'}</button></div>
+          <div className="flex justify-end gap-3">
+            <button type="button" onClick={() => setModal(false)} disabled={saving} className="btn btn-secondary disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={saving} className="btn btn-primary disabled:opacity-50 disabled:cursor-wait">
+              {saving ? (editingId ? 'Updating…' : 'Submitting…') : (editingId ? 'Update' : 'Submit')}
+            </button>
+          </div>
         </form>
       </Modal>
     </div>

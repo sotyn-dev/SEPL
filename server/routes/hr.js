@@ -293,8 +293,29 @@ router.get('/expenses', (req, res) => {
 
 router.post('/expenses', (req, res) => {
   const { title, description, amount, category, expense_date } = req.body;
-  const r = getDb().prepare('INSERT INTO expenses (title,description,amount,category,expense_date,submitted_by) VALUES (?,?,?,?,?,?)')
-    .run(title, description, amount, category, expense_date, req.user.id);
+  const db = getDb();
+  // Server-side dedup — mam: "entry one time but showing data 4 to 5
+  // times". A fast double-click + flaky network was firing 2-4 POSTs
+  // before the modal could close, each writing an identical row. We
+  // reject any insert that exactly matches the same user's most-recent
+  // submission in the last 2 minutes. Returns the existing row so the
+  // client still gets a success-style response (idempotent).
+  const recent = db.prepare(`
+    SELECT id FROM expenses
+     WHERE submitted_by = ?
+       AND COALESCE(title, '') = COALESCE(?, '')
+       AND COALESCE(description, '') = COALESCE(?, '')
+       AND amount = ?
+       AND COALESCE(category, '') = COALESCE(?, '')
+       AND COALESCE(expense_date, '') = COALESCE(?, '')
+       AND created_at >= datetime('now', '-2 minutes')
+     ORDER BY id DESC LIMIT 1
+  `).get(req.user.id, title, description, +amount || 0, category, expense_date);
+  if (recent) {
+    return res.status(200).json({ id: recent.id, deduped: true, message: 'Identical entry already submitted in the last 2 minutes — kept original.' });
+  }
+  const r = db.prepare('INSERT INTO expenses (title,description,amount,category,expense_date,submitted_by) VALUES (?,?,?,?,?,?)')
+    .run(title, description, +amount || 0, category, expense_date, req.user.id);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
