@@ -179,19 +179,18 @@ thead {
 th {
   @apply px-4 py-3 text-left font-bold text-gray-500 uppercase text-[10px] tracking-wider;
 }
-/* Excel-style freeze panes — mam: "i need header freeze". Pins every
-   table's <thead> just BELOW the sticky toolbar (whose live height is
-   exposed by Layout.jsx as --toolbar-height). z-index sits below the
-   toolbar's z:50 so the toolbar always wins if they ever overlap
-   during scroll transitions. Each <th> gets a solid bg so row text
-   never bleeds through when the thead pins. */
-table thead {
+/* Excel-style freeze panes — opt-in per table via the `freeze-head`
+   class on the table. Pins <thead> just below the sticky toolbar
+   (whose live height is in --toolbar-height, set by Layout.jsx).
+   Avoids the global rule which was producing weird half-stuck
+   positions on tables that have their own scroll container. */
+table.freeze-head thead {
   position: -webkit-sticky;
   position: sticky;
   top: var(--toolbar-height, 0px);
   z-index: 9;
 }
-table thead th {
+table.freeze-head thead th {
   background-color: rgb(243 244 246);   /* gray-100 */
 }
 td {
