@@ -591,22 +591,16 @@ export default function Orders() {
               <button type="button" onClick={addItem} className="btn btn-secondary text-xs flex items-center gap-1"><FiPlus size={12} /> Add Item</button>
             </div>
             <div className="space-y-2">
-              {/* 14-col grid: SN(1) Desc(3) Qty(1) Unit(1) SITC(2) Labour(2) Amount(3) Trash(1) */}
-              <div className="grid grid-cols-14 gap-2 text-xs font-semibold text-gray-500 px-1" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr))' }}>
-                <div>SN</div>
-                <div className="col-span-3">Description</div>
-                <div>Qty</div>
-                <div>Unit</div>
-                <div className="col-span-2">Rate (SITC)</div>
-                <div className="col-span-2 text-amber-700">Labour Rate</div>
-                <div className="col-span-3">Amount (SITC + Labour)</div>
-                <div></div>
+              {/* PO modal shows ONLY SITC fields. Labour Rate is captured
+                  in the Order Planning step (mam: "first we upload all
+                  labour rates in order to planning") and "not delete
+                  labour rate column" — so we keep this table clean and
+                  let Planning own the labour workflow. */}
+              <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-gray-500 px-1">
+                <div>SN</div><div className="col-span-3">Description</div><div>Qty</div><div>Unit</div><div className="col-span-2">Rate (SITC)</div><div className="col-span-2">Amount</div><div></div>
               </div>
-              {poItems.map((item, i) => {
-                const sitcAmt = +item.amount || 0;
-                const labourAmt = +item.labour_amount || ((item.quantity || 0) * (item.labour_rate || 0));
-                return (
-                <div key={i} className="grid grid-cols-14 gap-2 items-center" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr))' }}>
+              {poItems.map((item, i) => (
+                <div key={i} className="grid grid-cols-12 gap-2 items-center">
                   <div className="text-xs text-center font-bold text-gray-500">{item.sr_no || i + 1}</div>
                   <div className="col-span-3">
                     {item.description && !item.item_master_id ? (
@@ -635,32 +629,14 @@ export default function Orders() {
                     <option>Nos</option><option>nos</option><option>mtr</option><option>kg</option><option>sqm</option><option>rft</option><option>set</option><option>lot</option><option>pair</option><option>pc</option><option>pcs</option><option>No</option>
                   </select>
                   <input className="input col-span-2 text-sm" type="number" value={item.rate} onChange={e => updateItem(i, 'rate', +e.target.value)} />
-                  <input
-                    className="input col-span-2 text-sm bg-amber-50"
-                    type="number"
-                    value={item.labour_rate || 0}
-                    onChange={e => updateItem(i, 'labour_rate', +e.target.value)}
-                    placeholder="Labour"
-                    title="Per-unit labour rate. Auto-filled by the Labour Rate Sheet upload above; editable here."
-                  />
-                  <div className="col-span-3 text-sm font-medium text-gray-700 px-2">
-                    Rs {(sitcAmt + labourAmt).toLocaleString('en-IN')}
-                    {(labourAmt > 0) && (
-                      <span className="block text-[10px] text-amber-700 leading-none mt-0.5">
-                        Rs {sitcAmt.toLocaleString('en-IN')} (SITC) + Rs {labourAmt.toLocaleString('en-IN')} (Labour)
-                      </span>
-                    )}
-                  </div>
+                  <div className="col-span-2 text-sm font-medium text-gray-700 px-2">Rs {(item.amount || 0).toLocaleString()}</div>
                   <button type="button" onClick={() => removeItem(i)} className="p-1 text-red-400 hover:text-red-600">{poItems.length > 1 && <FiTrash2 size={14} />}</button>
                 </div>
-              );})}
+              ))}
             </div>
-            <div className="mt-3 pt-2 border-t border-red-200 flex justify-between text-sm flex-wrap gap-1">
+            <div className="mt-3 pt-2 border-t border-red-200 flex justify-between text-sm">
               <span className="text-red-600 font-medium">{poItems.filter(i => i.description).length} items</span>
-              <div className="flex flex-col items-end">
-                <span className="font-bold text-red-800">SITC Total: Rs {itemsTotal.toLocaleString('en-IN')}</span>
-                <span className="text-amber-700 font-semibold">Labour Total: Rs {poItems.reduce((s, i) => s + (+i.labour_amount || ((i.quantity || 0) * (i.labour_rate || 0))), 0).toLocaleString('en-IN')}</span>
-              </div>
+              <span className="font-bold text-red-800">Items Total: Rs {itemsTotal.toLocaleString('en-IN')}</span>
             </div>
           </div>
 
