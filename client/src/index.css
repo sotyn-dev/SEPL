@@ -76,15 +76,27 @@ body {
     @apply w-full min-w-0 px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 transition-all bg-white;
   }
 
-  /* Sticky toolbar — used on every list page to keep tabs / filter
-     pills / stat cards / search visible while the user scrolls a long
-     list. Mam: "scroll up every thing above" / "in all erp this help
-     please check and update". Adopted on Cash Flow first, now rolling
-     out everywhere. Bleeds past the main padding so the backdrop
-     extends edge-to-edge; z-20 keeps it above the global sticky thead
-     (z-5). */
+  /* Sticky toolbar — keeps tabs / filter pills / stat cards / search
+     visible while the user scrolls a long list. Mam: "scroll up every
+     thing above" / "in all erp this help please check and update".
+     Earlier version used @apply with Tailwind utilities + negative
+     margins for an edge-to-edge bleed effect, but the layering
+     occasionally broke and Tailwind's purger could miss the position
+     utility on some builds. Switched to raw CSS so it works
+     unconditionally. Solid bg, no negative margins, no backdrop blur
+     — simple and reliable. */
   .sticky-toolbar {
-    @apply sticky top-0 -mt-2 md:-mt-6 -mx-2 md:-mx-6 px-2 md:px-6 pt-2 md:pt-6 pb-3 bg-slate-50/95 backdrop-blur z-20 space-y-3 border-b border-gray-200 shadow-sm;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background-color: rgb(248 250 252);   /* slate-50 */
+    padding-top: 0.5rem;
+    padding-bottom: 0.75rem;
+    margin-bottom: 0.25rem;
+    border-bottom: 1px solid rgb(229 231 235);
+  }
+  .sticky-toolbar > * + * {
+    margin-top: 0.75rem;
   }
 }
 
