@@ -137,9 +137,21 @@ table {
 }
 thead {
   @apply bg-gradient-to-r from-gray-50 to-gray-100/50;
+  /* Sticky column headers — mam: "when i go down all header goes to
+     up". The OUTER header bar (hamburger + page name) is already
+     sticky via the Layout flex/overflow rules, but the table's own
+     <thead> row used to scroll away with the rows. Pinning it to
+     top:0 of its scroll container keeps the column labels visible
+     across every long list (Payroll, Expenses, Items, etc.). */
+  position: sticky;
+  top: 0;
+  z-index: 5;
 }
+/* Solid background on each <th> so a partly-transparent gradient
+   never lets row text show through behind the sticky header. */
 th {
   @apply px-4 py-3 text-left font-bold text-gray-500 uppercase text-[10px] tracking-wider;
+  background-color: rgb(249 250 251);    /* matches gray-50 in the gradient */
 }
 td {
   @apply px-4 py-3 border-t border-gray-50;
