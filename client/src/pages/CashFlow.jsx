@@ -127,68 +127,79 @@ export default function CashFlow() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 flex-wrap">
-        <button onClick={() => setTab('projects')} className={`btn ${tab === 'projects' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Project Finance</button>
-        <button onClick={() => setTab('daily')} className={`btn ${tab === 'daily' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Daily Cash Flow</button>
+      {/* Sticky toolbar — mam: "scroll up every thing above". Pins
+          tabs + stat cards + CRM filter + search row to the top of
+          the scroll area so she keeps context when scrolling the
+          long project list. Backdrop matches the main bg, z-index
+          sits above the thead-sticky rule (z-5). */}
+      <div className="sticky top-0 -mt-2 md:-mt-6 -mx-2 md:-mx-6 px-2 md:px-6 pt-2 md:pt-6 pb-3 bg-slate-50/95 backdrop-blur z-20 space-y-3 border-b border-gray-200 shadow-sm">
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setTab('projects')} className={`btn ${tab === 'projects' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Project Finance</button>
+          <button onClick={() => setTab('daily')} className={`btn ${tab === 'daily' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Daily Cash Flow</button>
+        </div>
+        {tab === 'projects' && (
+          <>
+            {summary && (
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <div className="card p-3 border-l-4 border-red-500"><p className="text-xs text-gray-500">Total Projects</p><p className="text-2xl font-bold">{summary.projectCount}</p></div>
+                <div className="card p-3 border-l-4 border-emerald-500"><p className="text-xs text-gray-500">Total Sale Value</p><p className="text-xl font-bold text-emerald-600">{fmtL(summary.totalSale)}</p></div>
+                <div className="card p-3 border-l-4 border-amber-500"><p className="text-xs text-gray-500">Total Received</p><p className="text-xl font-bold text-amber-600">{fmtL(summary.totalReceived)}</p></div>
+                {/* Total Value = sum of Aanchal Values across all projects.
+                    Comes from the backend already pre-multiplied to rupees. */}
+                <div className="card p-3 border-l-4 border-blue-500"><p className="text-xs text-gray-500">Total Value</p><p className="text-xl font-bold text-blue-600">{fmtL(summary.totalValue)}</p></div>
+                <div className="card p-3 border-l-4 border-red-500"><p className="text-xs text-gray-500">Total Purchase</p><p className="text-xl font-bold text-red-600">{fmtL(summary.totalPurchase)}</p></div>
+              </div>
+            )}
+            {/* CRM Filter — admin only. Non-admin CRM users see just their own projects (backend-scoped). */}
+            {isAdmin() && (
+              <div className="flex gap-2 flex-wrap items-center">
+                <button onClick={() => setCrmFilter('')} className={`btn ${!crmFilter ? 'btn-primary' : 'btn-secondary'} text-xs`}>All ({projects.length})</button>
+                {crmPersons.map(c => (
+                  <button key={c} onClick={() => setCrmFilter(c)} className={`btn ${crmFilter === c ? 'btn-primary' : 'btn-secondary'} text-xs`}>{c} ({projects.filter(p => (p.crm_person || '').toLowerCase() === c.toLowerCase()).length})</button>
+                ))}
+              </div>
+            )}
+            {/* Search + Last-Payment-Date filters row */}
+            <div className="flex flex-wrap gap-3 items-end">
+              <div className="relative flex-1 min-w-[260px]">
+                <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <input className="input pl-10" placeholder="Search project..." value={search} onChange={e => setSearch(e.target.value)} />
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase block mb-0.5">Bucket</label>
+                  <select className="select text-sm" value={pmtAgeFilter} onChange={e => setPmtAgeFilter(e.target.value)}>
+                    <option value="">All</option>
+                    <option value="recent">≤ 30 days</option>
+                    <option value="30-60">31–60 days</option>
+                    <option value="60-90">61–90 days</option>
+                    <option value="90plus">90+ days (overdue)</option>
+                    <option value="never">Never received</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase block mb-0.5">From</label>
+                  <input type="date" className="input text-sm" value={pmtFromDate} onChange={e => setPmtFromDate(e.target.value)} title="Last Payment Date — from" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase block mb-0.5">To</label>
+                  <input type="date" className="input text-sm" value={pmtToDate} onChange={e => setPmtToDate(e.target.value)} title="Last Payment Date — to" />
+                </div>
+                {(pmtAgeFilter || pmtFromDate || pmtToDate) && (
+                  <button
+                    onClick={() => { setPmtAgeFilter(''); setPmtFromDate(''); setPmtToDate(''); }}
+                    className="text-[11px] text-gray-500 hover:text-red-600 underline self-end mb-1"
+                    title="Clear all Last-Payment filters"
+                  >clear</button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {tab === 'projects' && (
         <>
-          {summary && (
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <div className="card p-3 border-l-4 border-red-500"><p className="text-xs text-gray-500">Total Projects</p><p className="text-2xl font-bold">{summary.projectCount}</p></div>
-              <div className="card p-3 border-l-4 border-emerald-500"><p className="text-xs text-gray-500">Total Sale Value</p><p className="text-xl font-bold text-emerald-600">{fmtL(summary.totalSale)}</p></div>
-              <div className="card p-3 border-l-4 border-amber-500"><p className="text-xs text-gray-500">Total Received</p><p className="text-xl font-bold text-amber-600">{fmtL(summary.totalReceived)}</p></div>
-              {/* Total Value = sum of Aanchal Values across all projects.
-                  Comes from the backend already pre-multiplied to rupees. */}
-              <div className="card p-3 border-l-4 border-blue-500"><p className="text-xs text-gray-500">Total Value</p><p className="text-xl font-bold text-blue-600">{fmtL(summary.totalValue)}</p></div>
-              <div className="card p-3 border-l-4 border-red-500"><p className="text-xs text-gray-500">Total Purchase</p><p className="text-xl font-bold text-red-600">{fmtL(summary.totalPurchase)}</p></div>
-            </div>
-          )}
-          {/* CRM Filter — admin only. Non-admin CRM users see just their own projects (backend-scoped). */}
-          {isAdmin() && (
-            <div className="flex gap-2 flex-wrap items-center">
-              <button onClick={() => setCrmFilter('')} className={`btn ${!crmFilter ? 'btn-primary' : 'btn-secondary'} text-xs`}>All ({projects.length})</button>
-              {crmPersons.map(c => (
-                <button key={c} onClick={() => setCrmFilter(c)} className={`btn ${crmFilter === c ? 'btn-primary' : 'btn-secondary'} text-xs`}>{c} ({projects.filter(p => (p.crm_person || '').toLowerCase() === c.toLowerCase()).length})</button>
-              ))}
-            </div>
-          )}
-          {/* Search + Last-Payment-Date filters row */}
-          <div className="flex flex-wrap gap-3 items-end">
-            <div className="relative flex-1 min-w-[260px]">
-              <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-              <input className="input pl-10" placeholder="Search project..." value={search} onChange={e => setSearch(e.target.value)} />
-            </div>
-            <div className="flex items-center gap-2">
-              <div>
-                <label className="text-[10px] text-gray-500 uppercase block mb-0.5">Bucket</label>
-                <select className="select text-sm" value={pmtAgeFilter} onChange={e => setPmtAgeFilter(e.target.value)}>
-                  <option value="">All</option>
-                  <option value="recent">≤ 30 days</option>
-                  <option value="30-60">31–60 days</option>
-                  <option value="60-90">61–90 days</option>
-                  <option value="90plus">90+ days (overdue)</option>
-                  <option value="never">Never received</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-[10px] text-gray-500 uppercase block mb-0.5">From</label>
-                <input type="date" className="input text-sm" value={pmtFromDate} onChange={e => setPmtFromDate(e.target.value)} title="Last Payment Date — from" />
-              </div>
-              <div>
-                <label className="text-[10px] text-gray-500 uppercase block mb-0.5">To</label>
-                <input type="date" className="input text-sm" value={pmtToDate} onChange={e => setPmtToDate(e.target.value)} title="Last Payment Date — to" />
-              </div>
-              {(pmtAgeFilter || pmtFromDate || pmtToDate) && (
-                <button
-                  onClick={() => { setPmtAgeFilter(''); setPmtFromDate(''); setPmtToDate(''); }}
-                  className="text-[11px] text-gray-500 hover:text-red-600 underline self-end mb-1"
-                  title="Clear all Last-Payment filters"
-                >clear</button>
-              )}
-            </div>
-          </div>
           <div className="card p-0 overflow-hidden">
             <div className="p-3 border-b bg-gradient-to-r from-red-50 to-amber-50 flex items-center justify-between">
               <div>
