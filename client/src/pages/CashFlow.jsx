@@ -209,8 +209,8 @@ export default function CashFlow() {
             <div className="overflow-x-auto"><table className="min-w-[1200px] text-xs cf-tracker-table">
               <thead>
                 <tr className="bg-gray-100 text-[10px] uppercase text-gray-600">
-                  <th className="px-2 py-2 sticky left-0 bg-gray-100 z-10">Sr</th>
-                  <th className="px-2 py-2 text-left sticky left-10 bg-gray-100 z-10 min-w-[200px]">Project</th>
+                  <th className="px-2 py-2 bg-gray-100">Sr</th>
+                  <th className="px-2 py-2 text-left bg-gray-100 min-w-[200px]">Project</th>
                   <th className="px-2 py-2 text-left">CRM</th>
                   <th className="px-2 py-2 text-right" title="Sale value of the project (PO amount, ex-GST)">Sale ₹</th>
                   <th className="px-2 py-2 text-right" title="Amount actually received from client so far">Received ₹</th>
@@ -231,8 +231,8 @@ export default function CashFlow() {
                 const editing = editRow === p.id;
                 return (
                 <tr key={p.id} className={`border-b transition-colors ${editing ? 'bg-amber-50' : 'bg-white hover:bg-red-50/40'}`}>
-                  <td className={`px-2 py-2 font-bold text-gray-400 sticky left-0 ${editing ? 'bg-amber-50' : 'bg-white'}`}>{p.sr_no}</td>
-                  <td className={`px-2 py-2 font-semibold text-red-700 sticky left-10 max-w-[260px] ${editing ? 'bg-amber-50' : 'bg-white'}`} title={`${cleanName(p.project_name)}${p.bb_entry_count > 1 ? ` — sum of ${p.bb_entry_count} Business Book entries` : ''}`}>
+                  <td className={`px-2 py-2 font-bold text-gray-400 ${editing ? 'bg-amber-50' : 'bg-white'}`}>{p.sr_no}</td>
+                  <td className={`px-2 py-2 font-semibold text-red-700 max-w-[260px] ${editing ? 'bg-amber-50' : 'bg-white'}`} title={`${cleanName(p.project_name)}${p.bb_entry_count > 1 ? ` — sum of ${p.bb_entry_count} Business Book entries` : ''}`}>
                     <div className="truncate">{cleanName(p.project_name)}</div>
                     {p.bb_entry_count > 1 && (
                       <span className="text-[9px] font-normal text-gray-400 normal-case">{p.bb_entry_count} BB entries summed</span>
@@ -317,7 +317,7 @@ export default function CashFlow() {
                 </tr>
               );})}</tbody>
               <tfoot><tr className="bg-gray-100 font-bold text-xs border-t-2 border-gray-300">
-                <td className="px-2 py-3 sticky left-0 bg-gray-100" colSpan="3">TOTAL · {filtered.length} project{filtered.length !== 1 ? 's' : ''}</td>
+                <td className="px-2 py-3 bg-gray-100" colSpan="3">TOTAL · {filtered.length} project{filtered.length !== 1 ? 's' : ''}</td>
                 <td className="px-2 py-3 text-right text-red-700 tabular-nums">{fmtL(filtered.reduce((s, p) => s + p.sale_amount, 0))}</td>
                 <td className="px-2 py-3 text-right text-emerald-700 tabular-nums">{fmt(filtered.reduce((s, p) => s + p.amount_received, 0))}</td>
                 <td></td>
