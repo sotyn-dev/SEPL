@@ -77,10 +77,28 @@ router.get('/sites', (req, res) => {
 });
 
 router.post('/sites', (req, res) => {
+  const db = getDb();
   const { name, address, client_name, po_id, site_engineer_id, supervisor } = req.body;
-  const r = getDb().prepare('INSERT INTO sites (name, address, client_name, po_id, site_engineer_id, supervisor) VALUES (?,?,?,?,?,?)')
-    .run(name, address, client_name, po_id, site_engineer_id, supervisor);
-  res.status(201).json({ id: r.lastInsertRowid });
+  // Auto-resolve business_book_id so the new site is wired to BOQ items
+  // out of the box. Tries: (1) po_id → purchase_orders.business_book_id,
+  // (2) business_book.project_name matching site name. Without this the
+  // site sits orphan and DPR can't surface any BOQ items.
+  let bbId = null;
+  if (po_id) {
+    const poRow = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(po_id);
+    if (poRow?.business_book_id) bbId = poRow.business_book_id;
+  }
+  if (!bbId && name) {
+    const byProject = db.prepare(`SELECT id FROM business_book
+      WHERE TRIM(LOWER(project_name)) = TRIM(LOWER(?))
+         OR TRIM(LOWER(client_name)) = TRIM(LOWER(?))
+         OR TRIM(LOWER(company_name)) = TRIM(LOWER(?))
+      LIMIT 1`).get(name, name, name);
+    if (byProject?.id) bbId = byProject.id;
+  }
+  const r = db.prepare('INSERT INTO sites (name, address, client_name, po_id, business_book_id, site_engineer_id, supervisor) VALUES (?,?,?,?,?,?,?)')
+    .run(name, address, client_name, po_id, bbId, site_engineer_id, supervisor);
+  res.status(201).json({ id: r.lastInsertRowid, business_book_id: bbId });
 });
 
 router.put('/sites/:id', (req, res) => {
@@ -273,22 +291,53 @@ router.get('/sites/:site_id/staff-cost', (req, res) => {
 });
 
 // Get PO items for a site - fetches ALL PO items for that company/site name.
-// Mam: "in dpr all data is not fetch from order to planning item fetch". Now
-// joins item_master so every available field flows through (item_code,
-// specification, size, hsn, gst, type), explicitly lists labour_rate +
-// labour_amount, and returns a diagnostic explaining empty results.
+// Mam: "in dpr all not see boq item which i upload in order to planning".
+// The site row might not have business_book_id (especially when it was
+// created via DPR's /sites endpoint), so we walk EVERY known path to
+// discover business_book_ids that own BOQ items for this site:
+//   1. The site's own business_book_id
+//   2. Other sites with the same name (covers same-project, multi-phase)
+//   3. The site's po_id → purchase_orders.business_book_id
+//   4. Any purchase_orders / business_book whose project_name OR
+//      po_number / lead_no matches the site name
+// then UNION the resulting set so every BOQ item the user uploaded in
+// Orders/Planning surfaces in DPR, regardless of which way the BB was
+// linked. Diagnostic message names whichever paths found nothing.
 router.get('/sites/:site_id/po-items', (req, res) => {
   const db = getDb();
-  const site = db.prepare('SELECT name, po_id, business_book_id FROM sites WHERE id=?').get(req.params.site_id);
+  const site = db.prepare('SELECT id, name, po_id, business_book_id FROM sites WHERE id=?').get(req.params.site_id);
   if (!site) return res.status(404).json({ items: [], diagnostic: { reason: 'no_site', message: 'Site row not found.' } });
 
-  // 1. Find every business_book lead with the same site name (one client
-  //    can span multiple POs / phases — pool the items).
-  const allBBIds = db.prepare(`SELECT DISTINCT s.business_book_id FROM sites s
-                                WHERE s.name = ? AND s.business_book_id IS NOT NULL`).all(site.name);
+  // Path 1+2: site's own bb_id + same-name sites with bb_id.
+  const sameNameBB = db.prepare(`SELECT DISTINCT s.business_book_id FROM sites s
+                                  WHERE s.name = ? AND s.business_book_id IS NOT NULL`).all(site.name);
+
+  // Path 3: site.po_id → purchase_orders.business_book_id.
+  let poBbId = null;
+  if (site.po_id) {
+    const poRow = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(site.po_id);
+    if (poRow?.business_book_id) poBbId = poRow.business_book_id;
+  }
+
+  // Path 4a: any purchase_orders whose business_book has project_name matching site name.
+  const bbByProject = db.prepare(`SELECT id FROM business_book WHERE TRIM(LOWER(project_name)) = TRIM(LOWER(?))`).all(site.name);
+
+  // Path 4b: order_planning rows whose business_book.project_name matches — covers cases where the BB has a different project_name but planning was done.
+  const opBBs = db.prepare(`
+    SELECT DISTINCT op.business_book_id AS bb_id
+      FROM order_planning op
+      JOIN business_book bb ON bb.id = op.business_book_id
+     WHERE TRIM(LOWER(bb.project_name)) = TRIM(LOWER(?))
+        OR TRIM(LOWER(bb.client_name)) = TRIM(LOWER(?))
+        OR TRIM(LOWER(bb.company_name)) = TRIM(LOWER(?))
+  `).all(site.name, site.name, site.name);
+
   const bbIds = Array.from(new Set([
-    ...allBBIds.map(r => r.business_book_id),
     ...(site.business_book_id ? [site.business_book_id] : []),
+    ...sameNameBB.map(r => r.business_book_id),
+    ...(poBbId ? [poBbId] : []),
+    ...bbByProject.map(r => r.id),
+    ...opBBs.map(r => r.bb_id),
   ].filter(Boolean)));
 
   if (!bbIds.length) {
@@ -296,7 +345,7 @@ router.get('/sites/:site_id/po-items', (req, res) => {
       items: [],
       diagnostic: {
         reason: 'no_business_book',
-        message: 'This site has no linked Business Book record. Open Business Book, create / edit the lead for this site, then create the PO so its BOQ items can flow into DPR.',
+        message: `This DPR site (name="${site.name}") couldn't be linked to a Business Book record by name, by site.business_book_id, by its PO, or by project_name match. Open Business Book, find the lead for this project, and either rename the project to match the DPR site name OR rename the DPR site to match the project.`,
       },
     });
   }

@@ -2377,6 +2377,48 @@ function initializeDatabase() {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
 
+  // ─── One-time data backfill: link sites to business_book ──────────
+  // Mam: "in dpr all not see boq item which i upload in order to
+  // planning". Older DPR sites were inserted with business_book_id =
+  // NULL, so the po_items lookup walked off a cliff. Backfill any
+  // sites where bb id is missing by matching:
+  //   1. site.po_id → purchase_orders.business_book_id
+  //   2. site.name matched against business_book.project_name /
+  //      client_name / company_name (case-insensitive, trimmed)
+  // Idempotent — only updates rows where business_book_id IS NULL.
+  try {
+    const fixed1 = db.prepare(`
+      UPDATE sites SET business_book_id = (
+        SELECT po.business_book_id FROM purchase_orders po
+         WHERE po.id = sites.po_id AND po.business_book_id IS NOT NULL
+         LIMIT 1
+      )
+      WHERE business_book_id IS NULL AND po_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM purchase_orders po WHERE po.id = sites.po_id AND po.business_book_id IS NOT NULL)
+    `).run();
+    const fixed2 = db.prepare(`
+      UPDATE sites SET business_book_id = (
+        SELECT bb.id FROM business_book bb
+         WHERE TRIM(LOWER(bb.project_name)) = TRIM(LOWER(sites.name))
+            OR TRIM(LOWER(bb.client_name))  = TRIM(LOWER(sites.name))
+            OR TRIM(LOWER(bb.company_name)) = TRIM(LOWER(sites.name))
+         LIMIT 1
+      )
+      WHERE business_book_id IS NULL
+        AND EXISTS (
+          SELECT 1 FROM business_book bb
+           WHERE TRIM(LOWER(bb.project_name)) = TRIM(LOWER(sites.name))
+              OR TRIM(LOWER(bb.client_name))  = TRIM(LOWER(sites.name))
+              OR TRIM(LOWER(bb.company_name)) = TRIM(LOWER(sites.name))
+        )
+    `).run();
+    if ((fixed1.changes || 0) + (fixed2.changes || 0) > 0) {
+      console.log(`[backfill] sites.business_book_id: linked ${fixed1.changes} via po_id + ${fixed2.changes} via name match`);
+    }
+  } catch (e) {
+    console.warn('[backfill] sites.business_book_id link failed:', e.message);
+  }
+
   // ─── PERFORMANCE INDEXES on hot tables (fast page loads) ───────────
   // Runs AFTER migrations so columns added by ALTER TABLE above are
   // already present. Each index is guarded individually — if a column
