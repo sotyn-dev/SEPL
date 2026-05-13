@@ -1,6 +1,49 @@
 import { useState, useRef, useEffect } from 'react';
 import api from '../api';
-import { FiX, FiSend, FiAlertCircle } from 'react-icons/fi';
+import { FiX, FiSend, FiAlertCircle, FiVolume2, FiVolumeX } from 'react-icons/fi';
+
+// ─── Text-to-Speech helpers (browser Web Speech API) ─────────────────
+// Free, offline-capable, supports Hindi via the OS-provided voice list
+// (Chrome / Edge: Microsoft Heera or Google हिन्दी; Android: Google
+// Hindi; iOS / macOS: Lekha or Rishi). We strip markdown, detect
+// Devanagari to pick a Hindi voice, fall back to en-IN, then en-US.
+const hasDevanagari = (s) => /[ऀ-ॿ]/.test(String(s || ''));
+// Best Hindi-ish voice we can find on this device. Picked once per
+// speak() call so we honour any voices added after the page loaded.
+function pickVoice(forHindi) {
+  if (typeof window === 'undefined' || !window.speechSynthesis) return null;
+  const voices = window.speechSynthesis.getVoices() || [];
+  if (!voices.length) return null;
+  if (forHindi) {
+    // Prefer exact hi-IN, then any voice whose lang starts with "hi".
+    return voices.find(v => v.lang === 'hi-IN')
+      || voices.find(v => /^hi/i.test(v.lang))
+      || voices.find(v => /hindi/i.test(v.name))
+      // Indian-English fallback so foreign-language English voices don't read Hinglish weirdly.
+      || voices.find(v => v.lang === 'en-IN')
+      || voices.find(v => /^en/i.test(v.lang))
+      || voices[0];
+  }
+  return voices.find(v => v.lang === 'en-IN')
+    || voices.find(v => /^en/i.test(v.lang))
+    || voices[0];
+}
+// Strip markdown so the TTS doesn't say "double asterisk" etc. Keeps
+// the prose readable when spoken.
+function plainTextForSpeech(md) {
+  return String(md || '')
+    .replace(/```[\s\S]*?```/g, ' ')        // code fences
+    .replace(/`([^`]+)`/g, '$1')             // inline code
+    .replace(/\*\*([^*]+)\*\*/g, '$1')       // bold
+    .replace(/__([^_]+)__/g, '$1')           // alt bold
+    .replace(/(^|\s)\*([^*\s][^*]*?)\*/g, '$1$2')  // italics
+    .replace(/^#{1,6}\s+/gm, '')             // headings
+    .replace(/^\s*[-*+]\s+/gm, '• ')         // bullets
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
+    .replace(/\n{2,}/g, '. ')                // paragraph breaks → pause
+    .replace(/\s+/g, ' ')                    // collapse whitespace
+    .trim();
+}
 
 // Tiny robot-head SVG used for the floating chat bubble. Steel head,
 // glowing antenna, cyan eyes that blink, and a subtle smile. Sized via
@@ -57,6 +100,62 @@ export default function AIAgentChat() {
   const [messages, setMessages] = useState([]); // { role, content, sql_runs? }
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
+  // TTS state — index of the message currently being spoken (-1 = none).
+  // autoSpeak persists in localStorage so mam's preference survives reloads.
+  const [speakingIdx, setSpeakingIdx] = useState(-1);
+  const [autoSpeak, setAutoSpeak] = useState(() => {
+    try { return localStorage.getItem('ai_chat_autospeak') === '1'; } catch { return false; }
+  });
+  const ttsSupported = typeof window !== 'undefined' && !!window.speechSynthesis;
+
+  // Speak (or stop) a specific message. Picks a Hindi voice when the
+  // text contains Devanagari, so a Hindi training answer comes out in
+  // the right accent. Stops any in-flight utterance first.
+  const speak = (idx, text) => {
+    if (!ttsSupported) return;
+    const synth = window.speechSynthesis;
+    if (speakingIdx === idx) { synth.cancel(); setSpeakingIdx(-1); return; }
+    synth.cancel();
+    const plain = plainTextForSpeech(text);
+    if (!plain) return;
+    const utt = new SpeechSynthesisUtterance(plain);
+    const hindi = hasDevanagari(plain);
+    const v = pickVoice(hindi);
+    if (v) utt.voice = v;
+    utt.lang = hindi ? 'hi-IN' : 'en-IN';
+    utt.rate = 0.95;
+    utt.pitch = 1;
+    utt.onend = () => setSpeakingIdx(s => (s === idx ? -1 : s));
+    utt.onerror = () => setSpeakingIdx(s => (s === idx ? -1 : s));
+    setSpeakingIdx(idx);
+    synth.speak(utt);
+  };
+
+  // Persist auto-speak toggle.
+  useEffect(() => {
+    try { localStorage.setItem('ai_chat_autospeak', autoSpeak ? '1' : '0'); } catch (_) {}
+  }, [autoSpeak]);
+
+  // Stop any in-flight speech when the panel closes or component unmounts.
+  useEffect(() => {
+    if (!open && ttsSupported) { try { window.speechSynthesis.cancel(); } catch (_) {} setSpeakingIdx(-1); }
+  }, [open, ttsSupported]);
+  useEffect(() => () => {
+    if (ttsSupported) { try { window.speechSynthesis.cancel(); } catch (_) {} }
+  }, [ttsSupported]);
+
+  // Some browsers (Chrome) lazy-load the voice list — touch it once so
+  // the first speak() doesn't fall back to the OS default.
+  useEffect(() => {
+    if (!ttsSupported) return;
+    const synth = window.speechSynthesis;
+    const prime = () => synth.getVoices();
+    prime();
+    if (typeof synth.addEventListener === 'function') {
+      synth.addEventListener('voiceschanged', prime);
+      return () => synth.removeEventListener('voiceschanged', prime);
+    }
+  }, [ttsSupported]);
 
   // Poll status on mount + when opening (so admin enabling it shows up
   // without a full page reload).
@@ -98,7 +197,16 @@ export default function AIAgentChat() {
       if (data?.error) {
         setMessages([...next, { role: 'assistant', content: `⚠️ ${data.error}`, error: true }]);
       } else {
-        setMessages([...next, { role: 'assistant', content: data.answer || '(no answer)', sql_runs: data.sql_runs || [] }]);
+        const answer = data.answer || '(no answer)';
+        const newMessages = [...next, { role: 'assistant', content: answer, sql_runs: data.sql_runs || [] }];
+        setMessages(newMessages);
+        // Auto-speak: if mam turned on the speaker icon in the header,
+        // immediately read the new answer aloud (Hindi voice if it's
+        // Devanagari, else en-IN).
+        if (autoSpeak && ttsSupported && !data.error) {
+          // setTimeout so DOM has rendered the bubble (better UX).
+          setTimeout(() => speak(newMessages.length - 1, answer), 50);
+        }
       }
     } catch (err) {
       const msg = err.response?.data?.error || err.message || 'Request failed';
@@ -143,7 +251,20 @@ export default function AIAgentChat() {
               <div className="font-semibold text-sm">Ask ERP</div>
               <div className="text-[10px] text-red-100 -mt-0.5">AI assistant · reads your data</div>
             </div>
-            <button onClick={() => setOpen(false)} className="hover:bg-white/10 rounded p-1"><FiX size={18} /></button>
+            <div className="flex items-center gap-1">
+              {/* Auto-speak toggle — when on, every new AI reply is read
+                  aloud in Hindi or English depending on the answer text. */}
+              {ttsSupported && (
+                <button
+                  onClick={() => setAutoSpeak(v => !v)}
+                  className={`rounded p-1.5 ${autoSpeak ? 'bg-white/20' : 'hover:bg-white/10'}`}
+                  title={autoSpeak ? 'Auto-speak ON — new replies will be read aloud' : 'Auto-speak OFF — click to enable'}
+                >
+                  {autoSpeak ? <FiVolume2 size={16} /> : <FiVolumeX size={16} />}
+                </button>
+              )}
+              <button onClick={() => setOpen(false)} className="hover:bg-white/10 rounded p-1"><FiX size={18} /></button>
+            </div>
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 bg-gray-50">
@@ -178,6 +299,26 @@ export default function AIAgentChat() {
                 }`}>
                   {m.error && <FiAlertCircle className="inline mr-1 -mt-0.5" size={14} />}
                   {m.content}
+                  {/* Per-message speak / stop button. Only on assistant
+                      replies, only when TTS is supported. Highlights
+                      while playing so mam can tell which message is
+                      being read. */}
+                  {m.role === 'assistant' && !m.error && ttsSupported && (
+                    <div className="mt-1.5 flex items-center gap-1">
+                      <button
+                        onClick={() => speak(i, m.content)}
+                        className={`text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded border ${
+                          speakingIdx === i
+                            ? 'bg-red-100 border-red-300 text-red-700'
+                            : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-red-50 hover:border-red-200 hover:text-red-700'
+                        }`}
+                        title={speakingIdx === i ? 'Stop' : (hasDevanagari(m.content) ? 'Hindi me suno' : 'Read aloud')}
+                      >
+                        {speakingIdx === i ? <FiVolumeX size={11} /> : <FiVolume2 size={11} />}
+                        {speakingIdx === i ? 'Stop' : (hasDevanagari(m.content) ? 'Hindi me suno' : 'Speak')}
+                      </button>
+                    </div>
+                  )}
                   {m.sql_runs?.length > 0 && (
                     <details className="mt-2 text-[10px] text-gray-500">
                       <summary className="cursor-pointer hover:text-gray-700">
