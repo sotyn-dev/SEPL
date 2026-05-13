@@ -559,7 +559,12 @@ export default function DPR() {
                   <div className="md:col-span-4">BOQ Item</div><div className="md:col-span-1">Qty</div><div className="md:col-span-2">Location</div><div className="md:col-span-2">Rate (Rs)</div><div className="md:col-span-2">Amount (Rs)</div><div></div>
                 </div>
                 {workItems.map((w, i) => (
-                  <div key={i} className="grid grid-cols-12 gap-1 mb-1.5 items-start bg-white rounded p-1">
+                  // Mobile-friendly row layout — mam: "qty is very small not
+                  // showing peroper when we enter". Mobile splits each work
+                  // item into 3 readable rows; desktop keeps the compact 12-
+                  // col grid. Each input gets its own mobile-only label so
+                  // the user always knows what they're typing into.
+                  <div key={i} className="grid grid-cols-12 gap-1 mb-3 md:mb-1.5 items-start bg-white rounded p-2 md:p-1 border md:border-0 border-gray-100">
                     <div className="col-span-12 md:col-span-4">
                       <SearchableSelect
                         options={poItemsForSite.map(item => {
@@ -587,8 +592,10 @@ export default function DPR() {
                         onChange={(item) => selectWorkItem(i, item?.id || '')}
                       />
                     </div>
-                    <div className="col-span-3 md:col-span-1">
-                      <input className="input text-sm text-center w-full" type="number" placeholder="Qty" max={w.remaining_qty || w.boq_qty || 999999} value={w.qty || ''} onChange={e => {
+                    {/* Qty — col-span-4 on mobile (~33% width, room for 4–5 digits) */}
+                    <div className="col-span-4 md:col-span-1">
+                      <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Qty</div>
+                      <input className="input text-sm w-full" type="number" placeholder="Qty" max={w.remaining_qty || w.boq_qty || 999999} value={w.qty || ''} onChange={e => {
                         const val = +e.target.value;
                         const maxQty = w.remaining_qty ?? w.boq_qty ?? 999999;
                         if (val > maxQty) { toast.error(`Max qty: ${maxQty} (BOQ: ${w.boq_qty}, Already filled: ${w.filled_qty || 0})`); return; }
@@ -603,10 +610,25 @@ export default function DPR() {
                         </div>
                       )}
                     </div>
-                    <input className="input col-span-3 md:col-span-2 text-sm" placeholder="Loc (GF/1F)" value={w.location || ''} onChange={e => updateWork(i, 'location', e.target.value)} />
-                    <input className="input col-span-3 md:col-span-2 text-sm" type="number" placeholder="Rate" value={w.rate || ''} onChange={e => updateWork(i, 'rate', +e.target.value)} />
-                    <div className="col-span-2 md:col-span-2 text-sm font-bold text-right pr-2">Rs {(w.amount || 0).toLocaleString()}</div>
-                    <button type="button" onClick={() => removeWorkItem(i)} className="col-span-1 p-1 text-red-400 hover:text-red-600 flex justify-center"><FiTrash2 size={13} /></button>
+                    {/* Location — col-span-8 mobile (rest of the qty row) */}
+                    <div className="col-span-8 md:col-span-2">
+                      <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Location</div>
+                      <input className="input text-sm w-full" placeholder="Loc (GF/1F)" value={w.location || ''} onChange={e => updateWork(i, 'location', e.target.value)} />
+                    </div>
+                    {/* Rate — col-span-6 mobile (half of new row) */}
+                    <div className="col-span-6 md:col-span-2">
+                      <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Rate (Rs)</div>
+                      <input className="input text-sm w-full" type="number" placeholder="Rate" value={w.rate || ''} onChange={e => updateWork(i, 'rate', +e.target.value)} />
+                    </div>
+                    {/* Amount — col-span-5 mobile */}
+                    <div className="col-span-5 md:col-span-2">
+                      <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Amount</div>
+                      <div className="text-sm font-bold text-right pr-2 pt-2 md:pt-0">Rs {(w.amount || 0).toLocaleString()}</div>
+                    </div>
+                    {/* Trash — col-span-1 (just enough for the icon) */}
+                    <div className="col-span-1 flex justify-center pt-2 md:pt-0">
+                      <button type="button" onClick={() => removeWorkItem(i)} className="p-1 text-red-400 hover:text-red-600"><FiTrash2 size={14} /></button>
+                    </div>
                   </div>
                 ))}
                 {workItems.length === 0 && <p className="text-xs text-gray-400 text-center py-3">Click "+ Add Item" for items installed today</p>}

@@ -68,6 +68,40 @@ body {
   .label {
     @apply block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5;
   }
+
+  /* Compact variant — use inside narrow grid cells (qty / rate / amount
+     columns in BOQ tables) so the input never disappears under padding.
+     Pair with `.input-compact` instead of `.input`. */
+  .input-compact {
+    @apply w-full min-w-0 px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 transition-all bg-white;
+  }
+}
+
+/* Global protection for number inputs styled with `.input` — mam: "qty
+   is very small not showing peroper when we enter". Without this, a
+   number input inside a col-span-1 grid cell ends up with ~25px width
+   minus 28px of horizontal padding = negative usable area, and the
+   typed value visually disappears.
+   - min-width guarantees readable space (~3 digits visible).
+   - Right-align matches number-entry convention.
+   - Reduced horizontal padding makes the digits hug the right edge so
+     they stay in view even when the column is tight. */
+input[type="number"].input,
+input[type="number"].input-compact,
+input.input[inputmode="decimal"],
+input.input[inputmode="numeric"] {
+  text-align: right;
+  min-width: 60px;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  -moz-appearance: textfield;
+}
+input[type="number"].input::-webkit-outer-spin-button,
+input[type="number"].input::-webkit-inner-spin-button,
+input[type="number"].input-compact::-webkit-outer-spin-button,
+input[type="number"].input-compact::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 table {

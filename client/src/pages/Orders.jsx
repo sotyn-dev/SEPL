@@ -446,13 +446,18 @@ export default function Orders() {
                   labour rates in order to planning") and "not delete
                   labour rate column" — so we keep this table clean and
                   let Planning own the labour workflow. */}
-              <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-gray-500 px-1">
+              {/* Desktop header — hidden on mobile where each row is a stacked card */}
+              <div className="hidden md:grid grid-cols-12 gap-2 text-xs font-semibold text-gray-500 px-1">
                 <div>SN</div><div className="col-span-3">Description</div><div>Qty</div><div>Unit</div><div className="col-span-2">Rate (SITC)</div><div className="col-span-2">Amount</div><div></div>
               </div>
               {poItems.map((item, i) => (
-                <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                  <div className="text-xs text-center font-bold text-gray-500">{item.sr_no || i + 1}</div>
-                  <div className="col-span-3">
+                <div key={i} className="grid grid-cols-12 gap-2 items-center mb-3 md:mb-0 p-2 md:p-0 border md:border-0 border-gray-100 rounded">
+                  {/* SN — full-width small label on mobile */}
+                  <div className="col-span-12 md:col-span-1 text-xs font-bold text-gray-500 md:text-center">
+                    <span className="md:hidden text-[10px] uppercase text-gray-400">Row </span>{item.sr_no || i + 1}
+                  </div>
+                  <div className="col-span-12 md:col-span-3">
+                    <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Description</div>
                     {item.description && !item.item_master_id ? (
                       <div className="input text-xs bg-red-50 font-medium text-red-800 truncate" title={item.description}>{item.description}</div>
                     ) : (
@@ -474,13 +479,28 @@ export default function Orders() {
                       />
                     )}
                   </div>
-                  <input className="input text-sm" type="number" value={item.quantity} onChange={e => updateItem(i, 'quantity', +e.target.value)} />
-                  <select className="select text-sm" value={item.unit} onChange={e => updateItem(i, 'unit', e.target.value)}>
-                    <option>Nos</option><option>nos</option><option>mtr</option><option>kg</option><option>sqm</option><option>rft</option><option>set</option><option>lot</option><option>pair</option><option>pc</option><option>pcs</option><option>No</option>
-                  </select>
-                  <input className="input col-span-2 text-sm" type="number" value={item.rate} onChange={e => updateItem(i, 'rate', +e.target.value)} />
-                  <div className="col-span-2 text-sm font-medium text-gray-700 px-2">Rs {(item.amount || 0).toLocaleString()}</div>
-                  <button type="button" onClick={() => removeItem(i)} className="p-1 text-red-400 hover:text-red-600">{poItems.length > 1 && <FiTrash2 size={14} />}</button>
+                  {/* Qty — wider on mobile so digits fit */}
+                  <div className="col-span-4 md:col-span-1">
+                    <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Qty</div>
+                    <input className="input text-sm" type="number" value={item.quantity} onChange={e => updateItem(i, 'quantity', +e.target.value)} />
+                  </div>
+                  <div className="col-span-3 md:col-span-1">
+                    <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Unit</div>
+                    <select className="select text-sm" value={item.unit} onChange={e => updateItem(i, 'unit', e.target.value)}>
+                      <option>Nos</option><option>nos</option><option>mtr</option><option>kg</option><option>sqm</option><option>rft</option><option>set</option><option>lot</option><option>pair</option><option>pc</option><option>pcs</option><option>No</option>
+                    </select>
+                  </div>
+                  <div className="col-span-5 md:col-span-2">
+                    <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Rate (SITC)</div>
+                    <input className="input text-sm" type="number" value={item.rate} onChange={e => updateItem(i, 'rate', +e.target.value)} />
+                  </div>
+                  <div className="col-span-10 md:col-span-2">
+                    <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Amount</div>
+                    <div className="text-sm font-bold text-gray-700 md:px-2 md:font-medium">Rs {(item.amount || 0).toLocaleString('en-IN')}</div>
+                  </div>
+                  <div className="col-span-2 md:col-span-1 flex md:block justify-end">
+                    <button type="button" onClick={() => removeItem(i)} className="p-1 text-red-400 hover:text-red-600">{poItems.length > 1 && <FiTrash2 size={14} />}</button>
+                  </div>
                 </div>
               ))}
             </div>
