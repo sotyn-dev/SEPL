@@ -2126,6 +2126,26 @@ function initializeDatabase() {
     // Bill / Tax Invoice (templates require these in the Bill To block).
     ['business_book', 'gstin TEXT'],
     ['business_book', 'state_code TEXT'],
+    // Item Master pricing audit — MD's Phase 1: "Right now Price is
+    // just a number — no date, no vendor, no bill. We can't trust it
+    // for tenders." Adds vendor link, source provenance (PO / Quote /
+    // Manual / Online), bill / PO number + date, captured-at and
+    // captured-by so every price has full traceability and an age
+    // (green ≤30d, yellow 31-60d, red 60+d).
+    ['item_master', 'vendor_id INTEGER REFERENCES vendors(id)'],
+    ['item_master', 'source_type TEXT'],                       // PO / Quote / Manual / Online
+    ['item_master', 'bill_po_number TEXT'],
+    ['item_master', 'bill_po_date DATE'],
+    ['item_master', 'priced_at DATETIME'],                     // when current price was captured
+    ['item_master', 'priced_by INTEGER REFERENCES users(id)'],
+    // item_price_history exists for BOQ-row rates already; extend so a
+    // full Master-page edit also lands here with the same provenance
+    // fields the master row carries. Older rows keep null in these.
+    ['item_price_history', 'vendor_id INTEGER REFERENCES vendors(id)'],
+    ['item_price_history', 'source_type TEXT'],
+    ['item_price_history', 'bill_po_number TEXT'],
+    ['item_price_history', 'bill_po_date DATE'],
+
     // Labour rate per BOQ line — mam: "upload labour rate sheet and
     // when upload below match BOQ item labour rate come next column of
     // rate(SITC)". Populated either manually inline or via the Labour
