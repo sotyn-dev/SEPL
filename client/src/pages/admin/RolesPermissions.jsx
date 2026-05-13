@@ -10,6 +10,7 @@ import { FiPlus, FiEdit2, FiTrash2, FiShield, FiCheck, FiX } from 'react-icons/f
 const ALL_MODULES = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'cashflow', label: 'Cash Flow' },
+  { key: 'cheques', label: 'Cheque FMS' },
   { key: 'payment_required', label: 'Payment Required' },
   { key: 'attendance', label: 'Attendance' },
   { key: 'collections', label: 'Collection Engine' },
