@@ -197,8 +197,12 @@ export default function Quotations() {
           </div>
           {boqItems.map((item, i) => (
             <div key={i} className="space-y-2 border border-gray-100 rounded p-2 bg-gray-50">
+              {/* Mobile-first layout: stacks on phone, single-row on desktop.
+                  Was qty/unit/rate at col-span-1/1/2 of 12 → all three
+                  fields disappeared on phone. */}
               <div className="grid grid-cols-12 gap-2">
-                <div className="col-span-5">
+                <div className="col-span-12 md:col-span-5">
+                  <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">BOQ Item</div>
                   <SearchableSelect
                     options={itemOptions}
                     value={item.item_id}
@@ -208,15 +212,27 @@ export default function Quotations() {
                     onChange={opt => pickItem(i, opt)}
                   />
                 </div>
-                <input className="input col-span-3" placeholder="Description (auto-filled or free text)"
-                  value={item.description}
-                  onChange={e => { const n = [...boqItems]; n[i].description = e.target.value; setBoqItems(n); }} />
-                <input className="input col-span-1" type="number" placeholder="Qty" value={item.quantity}
-                  onChange={e => { const n = [...boqItems]; n[i].quantity = +e.target.value; setBoqItems(n); }} />
-                <input className="input col-span-1" placeholder="Unit" value={item.unit}
-                  onChange={e => { const n = [...boqItems]; n[i].unit = e.target.value; setBoqItems(n); }} />
-                <input className="input col-span-2" type="number" placeholder="Rate" value={item.rate}
-                  onChange={e => { const n = [...boqItems]; n[i].rate = +e.target.value; setBoqItems(n); }} />
+                <div className="col-span-12 md:col-span-3">
+                  <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Description</div>
+                  <input className="input" placeholder="Description (auto-filled or free text)"
+                    value={item.description}
+                    onChange={e => { const n = [...boqItems]; n[i].description = e.target.value; setBoqItems(n); }} />
+                </div>
+                <div className="col-span-4 md:col-span-1">
+                  <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Qty</div>
+                  <input className="input" type="number" placeholder="Qty" value={item.quantity}
+                    onChange={e => { const n = [...boqItems]; n[i].quantity = +e.target.value; setBoqItems(n); }} />
+                </div>
+                <div className="col-span-3 md:col-span-1">
+                  <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Unit</div>
+                  <input className="input" placeholder="Unit" value={item.unit}
+                    onChange={e => { const n = [...boqItems]; n[i].unit = e.target.value; setBoqItems(n); }} />
+                </div>
+                <div className="col-span-5 md:col-span-2">
+                  <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Rate</div>
+                  <input className="input" type="number" placeholder="Rate" value={item.rate}
+                    onChange={e => { const n = [...boqItems]; n[i].rate = +e.target.value; setBoqItems(n); }} />
+                </div>
               </div>
               {item.suggestion && (item.suggestion.last_for_client || item.suggestion.last_overall) && (
                 <RateSuggestion data={item.suggestion} onUse={r => useSuggestedRate(i, r)} />

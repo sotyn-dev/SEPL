@@ -104,6 +104,34 @@ input[type="number"].input-compact::-webkit-inner-spin-button {
   margin: 0;
 }
 
+/* Mobile tap-target enhancements — many action buttons across the ERP
+   use text-[10px] with very tight padding. On phones (<= 640px) bump
+   the min-height to comfortably hit with a fingertip and ensure the
+   text is readable. Targets all .btn variants in one place so we don't
+   have to touch every page. */
+@media (max-width: 640px) {
+  .btn {
+    min-height: 36px;
+    padding-top: 0.4rem;
+    padding-bottom: 0.4rem;
+  }
+  /* Lift any utility-class 10px button text to 11px on phone */
+  .btn.text-\[10px\] {
+    font-size: 11px;
+    line-height: 1.1;
+  }
+  /* Same for inline tap targets that aren't .btn but use 10px (badges
+     that double as buttons, small action chips in tables, etc.) */
+  button.text-\[10px\],
+  a.text-\[10px\] {
+    font-size: 11px;
+    line-height: 1.1;
+  }
+  /* Make table cells slightly more touch-friendly on phone — small
+     padding bump improves tap accuracy on row-level actions. */
+  td { padding-top: 0.7rem; padding-bottom: 0.7rem; }
+}
+
 table {
   @apply w-full text-sm;
 }
