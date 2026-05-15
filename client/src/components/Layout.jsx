@@ -57,9 +57,11 @@ const menuItems = [
 
 const adminItems = [
   // TOC v3 role dashboards — top of the admin menu so MD/CMD can hit
-  // them first thing on login.  COO/Sales/Finance variants will be
-  // added as their layouts come in from MD's spec.
-  { path: '/dashboard/cmd', label: 'CMD Dashboard', icon: FiTrendingUp, module: 'users' },
+  // them first thing on login.  Stage 1 = Operating Console (today's
+  // pulse + funnel + ops + cash).  Stage 2 = TOC View (binding
+  // constraint + 3 moves).  Both pulled from /api/dashboards/cmd-detail.
+  { path: '/dashboard/cmd',     label: 'CMD · Operating Console', icon: FiTrendingUp, module: 'users' },
+  { path: '/dashboard/cmd-toc', label: 'CMD · TOC View',          icon: FiTrendingUp, module: 'users' },
   { path: '/admin/users', label: 'User Management', icon: FiSettings, module: 'users' },
   { path: '/admin/roles', label: 'Roles & Permissions', icon: FiShield, module: 'users' },
   { path: '/admin/word-count', label: 'Daily Activity', icon: FiBarChart2, module: 'users' },

@@ -51,6 +51,7 @@ import CRMFunnel from './pages/CRMFunnel';
 import ChequeFMS from './pages/ChequeFMS';
 import EmailSettings from './pages/EmailSettings';
 import DashboardCMD from './pages/DashboardCMD';
+import DashboardCMDToc from './pages/DashboardCMDToc';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -96,6 +97,7 @@ export default function App() {
             style.  COO / Sales / Finance variants will land as their
             HTML specs come in from MD. */}
         <Route path="dashboard/cmd" element={<AdminRoute><DashboardCMD /></AdminRoute>} />
+        <Route path="dashboard/cmd-toc" element={<AdminRoute><DashboardCMDToc /></AdminRoute>} />
         {/* 4 Critical Systems */}
         <Route path="cashflow" element={<ModuleRoute module="cashflow"><CashFlow /></ModuleRoute>} />
         <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />

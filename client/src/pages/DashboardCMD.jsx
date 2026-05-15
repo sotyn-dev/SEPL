@@ -1,287 +1,525 @@
-// CMD Dashboard — TOC v3 spec, dark-navy style mam approved on
-// 2026-05-15 (reference screenshot of the Support Team Slide
-// Dashboard).  All numbers come from one fetch of
-// /api/dashboards/kpi which under the hood calls the same compute
-// function as the external /audit/kpi endpoint — single source of
-// truth for the 09:00 email and these in-app pages.
+// CMD Dashboard — Stage 1 (Operating Console)
+// Mirrors mam's HTML spec SEPL_CMD_Single_Page_Dashboard_v2.html
+// section-by-section, wired to /api/dashboards/cmd-detail.
 //
-// Layout:
-//   Row 1 — six KPI tiles (CCC, DSO, DPO, AR Outstanding, Bank,
-//           WIP Unbilled) with green/red trend hints
-//   Row 2 — three half-gauges (On-time Milestone %, Lead→PO %,
-//           Quote Lead Time) + AR aging donut on the right
-//   Row 3 — three charts (Revenue per FTE bars, AR aging stack,
-//           Project margin variance — worst 5)
+// Reading order documented at the bottom of the page (same as spec):
+//   Pulse 8 → Escalation → Funnel + Vertical + Source →
+//   Sales (booking trend, top customers, pipeline) →
+//   Site execution (snags, DPR, aging) →
+//   Procurement (top vendors, inventory exceptions) →
+//   Cash (AR aging, top debtors, position) →
+//   People (headcount, attendance, KPI top/bottom, risk) →
+//   Customer (complaints, AMC, predictive flags) →
+//   Decisions (3 levers today)
 
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../api';
+import toast from 'react-hot-toast';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell,
-  PieChart, Pie, AreaChart, Area, RadialBarChart, RadialBar,
+  PieChart, Pie, LineChart, Line, AreaChart, Area, CartesianGrid,
 } from 'recharts';
-import { FiTrendingUp, FiTrendingDown, FiRefreshCw, FiDownload } from 'react-icons/fi';
-import toast from 'react-hot-toast';
+import {
+  C, fmtINR, fmtNum, fmtPct,
+  PageHeader, SectionHead, KpiTile, Card, MiniStat, Pill,
+  FunnelBar, TicksList, HBar, Row, ConstraintBanner, StageTabs, DataGap,
+} from '../components/cmdDashboardUi';
 
-const fmtINR = (v) => {
-  if (v == null || isNaN(v)) return '—';
-  if (Math.abs(v) >= 1e7) return `₹${(v / 1e7).toFixed(2)}Cr`;
-  if (Math.abs(v) >= 1e5) return `₹${(v / 1e5).toFixed(2)}L`;
-  if (Math.abs(v) >= 1000) return `₹${(v / 1000).toFixed(1)}K`;
-  return `₹${Math.round(v).toLocaleString('en-IN')}`;
+const tooltipStyle = {
+  contentStyle: { background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, color: C.ink, fontSize: 11 },
+  labelStyle: { color: C.ink2 }, itemStyle: { color: C.ink },
 };
 
-const fmtNum = (v) => (v == null || isNaN(v) ? '—' : v.toLocaleString('en-IN'));
-
-// Tile — large value, small label, optional trend arrow.  Color
-// semantics: red for "lower is better but going up" (CCC, DSO),
-// emerald for "higher is better" (Bank, Free Inventory).
-function Tile({ label, value, sublabel, accent = 'sky' }) {
-  const accentMap = {
-    sky: 'border-sky-500',
-    red: 'border-red-500',
-    amber: 'border-amber-500',
-    emerald: 'border-emerald-500',
-    purple: 'border-purple-500',
-    rose: 'border-rose-500',
-  };
-  return (
-    <div className={`rounded-xl bg-slate-800/60 border-l-4 ${accentMap[accent] || accentMap.sky} p-4 shadow-lg`}>
-      <div className="text-[10px] font-semibold tracking-wider uppercase text-slate-400 mb-1">{label}</div>
-      <div className="text-3xl font-extrabold text-white tabular-nums leading-none">{value}</div>
-      {sublabel ? <div className="text-[11px] text-slate-400 mt-2">{sublabel}</div> : null}
-    </div>
-  );
-}
-
-// Half-gauge using RadialBarChart.  Value clamped 0–100.
-function Gauge({ label, value, max = 100, unit = '%', accent = '#38bdf8' }) {
-  const v = Math.max(0, Math.min(max, value ?? 0));
-  const data = [{ name: label, value: v, fill: accent }];
-  return (
-    <div className="rounded-xl bg-slate-800/60 p-4 shadow-lg flex flex-col">
-      <div className="text-[10px] font-semibold tracking-wider uppercase text-slate-400 mb-2">{label}</div>
-      <div className="relative flex-1" style={{ minHeight: 140 }}>
-        <ResponsiveContainer>
-          <RadialBarChart cx="50%" cy="100%" innerRadius="100%" outerRadius="180%"
-            barSize={18} data={data} startAngle={180} endAngle={0}>
-            <RadialBar background={{ fill: '#1e293b' }} dataKey="value" cornerRadius={9} />
-          </RadialBarChart>
-        </ResponsiveContainer>
-        <div className="absolute inset-0 flex items-end justify-center pb-2">
-          <div className="text-center">
-            <div className="text-3xl font-extrabold text-white tabular-nums">{value == null ? '—' : value}</div>
-            <div className="text-[10px] text-slate-400 -mt-1">{unit}</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function DashboardCMD() {
-  const [kpi, setKpi] = useState(null);
-  const [days, setDays] = useState(30);
+  const nav = useNavigate();
+  const [data, setData] = useState(null);
+  const [days, setDays] = useState(90);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
 
   const load = async (d = days) => {
     setLoading(true); setErr(null);
     try {
-      const r = await api.get(`/dashboards/kpi?days=${d}`);
-      setKpi(r.data);
+      const r = await api.get(`/dashboards/cmd-detail?days=${d}`);
+      setData(r.data);
     } catch (e) {
       setErr(e.response?.data?.error || e.message);
-      toast.error('Could not load KPI feed — admin role required');
-    } finally {
-      setLoading(false);
-    }
+      toast.error('Could not load CMD dashboard');
+    } finally { setLoading(false); }
   };
   useEffect(() => { load(); }, []);
 
-  if (err && !kpi) {
+  if (err && !data) {
     return (
-      <div className="bg-slate-900 text-slate-100 rounded-2xl p-8 -mx-2 md:-mx-6 -mt-2 md:-mt-6 min-h-screen">
-        <h1 className="text-2xl font-bold">CMD Dashboard</h1>
-        <p className="mt-4 text-red-300">Failed to load: {err}</p>
+      <div style={{ background: C.bg, color: C.ink, padding: 24, margin: -8, minHeight: '100vh' }}>
+        <h1 style={{ fontSize: 18, fontWeight: 700 }}>CMD Dashboard</h1>
+        <p style={{ color: C.red, marginTop: 12 }}>Failed to load: {err}</p>
       </div>
     );
   }
-  if (!kpi) {
+  if (!data) {
     return (
-      <div className="bg-slate-900 text-slate-100 rounded-2xl p-8 -mx-2 md:-mx-6 -mt-2 md:-mt-6 min-h-screen flex items-center justify-center">
-        <div className="text-slate-400">Loading dashboard…</div>
+      <div style={{ background: C.bg, color: C.ink, padding: 32, margin: -8, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: C.ink2 }}>Loading dashboard…</div>
       </div>
     );
   }
 
-  const ccc = kpi.cash_conversion_cycle;
-  const ar = kpi.ar;
-  const ap = kpi.ap;
-  const inv = kpi.inventory;
-  const sales = kpi.sales;
-  const bank = kpi.bank;
-  const wip = kpi.wip;
-  const funnel = kpi.funnel;
-  const rpf = kpi.revenue_per_fte;
-  const margin = kpi.project_margin_variance;
+  const { pulse, cash, sales, operations, inventory, procurement, people, customer, data_quality } = data;
 
+  // Chart series prep
   const arAgingChart = [
-    { name: '0-30',   value: ar.aging.bucket_0_30,    fill: '#10b981' },
-    { name: '31-60',  value: ar.aging.bucket_31_60,   fill: '#fbbf24' },
-    { name: '61-90',  value: ar.aging.bucket_61_90,   fill: '#fb923c' },
-    { name: '90+',    value: ar.aging.bucket_90_plus, fill: '#ef4444' },
+    { name: '0-30d',  value: Math.round(cash.ar_aging.bucket_0_30 / 100000),  fill: C.green },
+    { name: '31-60d', value: Math.round(cash.ar_aging.bucket_31_60 / 100000), fill: C.amber },
+    { name: '61-90d', value: Math.round(cash.ar_aging.bucket_61_90 / 100000), fill: C.orange },
+    { name: '>90d',   value: Math.round(cash.ar_aging.bucket_90_plus / 100000), fill: C.red },
   ];
-
-  const deptChart = (rpf.by_department || []).map(r => ({
-    name: r.department,
-    rev_per_fte: r.rev_per_fte || 0,
-    fte: r.fte,
+  const verticalChart = sales.vertical_mix.map((v, i) => ({
+    name: v.category || '—', value: v.value,
+    fill: [C.blue, C.amber, C.teal, C.violet, C.pink, C.orange][i % 6],
   }));
-
-  const worstMargins = (margin.worst_5 || []).map(r => ({
-    name: r.client?.slice(0, 16) || r.po_number || '—',
-    variance: r.variance,
+  const leadSourceChart = sales.lead_source_mix.map((v, i) => ({
+    name: v.source, value: v.cnt,
+    fill: [C.violet, C.blue, C.teal, C.amber, C.pink][i % 5],
   }));
+  const snagsChart = operations.snags_by_priority.map((s, i) => ({
+    name: s.priority || 'unset', value: s.cnt,
+    fill: { critical: C.red, high: C.orange, medium: C.amber, low: C.green }[s.priority] || C.ink3,
+  }));
+  const dprChart = [
+    { name: 'On time', value: operations.dpr.on_time, fill: C.green },
+    { name: 'Missed',  value: operations.dpr.missed,  fill: C.red },
+  ];
+  const pipelineChart = sales.pipeline_by_stage.map((s, i) => ({
+    name: s.stage, value: Math.round(s.value / 100000),
+    fill: [C.blue, C.blue2, C.orange, C.amber, C.red, C.green][i % 6],
+  }));
+  const cashForecastChart = cash.cash_forecast_30d;
 
   return (
-    <div className="bg-slate-900 text-slate-100 rounded-2xl p-6 -mx-2 md:-mx-6 -mt-2 md:-mt-6 min-h-screen">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
-        <div>
-          <h1 className="text-3xl font-extrabold tracking-tight">CMD Dashboard</h1>
-          <p className="text-xs text-slate-400 mt-0.5">
-            {kpi.window.from} → {kpi.window.to} · last {kpi.window.days} days · refreshed {new Date(kpi.generated_at).toLocaleTimeString('en-IN')}
-          </p>
-        </div>
-        <div className="flex gap-2 items-center">
+    <div style={{ background: C.bg, color: C.ink, margin: '-8px -8px -8px -8px', minHeight: '100vh', fontFamily: 'Inter, -apple-system, sans-serif', fontSize: 12 }}>
+      <PageHeader
+        title="SEPL Operating Console" tag="CMD VIEW"
+        subtitle={`Secured Engineers Pvt Ltd · MEPF + Solar EPC · ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} · ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} IST`}
+        rightTop={<>
           <select value={days} onChange={e => { setDays(+e.target.value); load(+e.target.value); }}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm">
-            <option value={7}>7 days</option>
+            style={{ background: C.panel, color: C.ink, border: `1px solid ${C.line}`, padding: '4px 10px', borderRadius: 4, fontSize: 11 }}>
             <option value={30}>30 days</option>
             <option value={90}>90 days</option>
             <option value={180}>6 months</option>
             <option value={365}>1 year</option>
           </select>
-          <button onClick={() => load(days)} disabled={loading}
-            className="bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg px-3 py-1.5 text-sm flex items-center gap-1.5">
-            <FiRefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
-          </button>
-        </div>
-      </div>
+          <span style={{ marginLeft: 8 }}>Refresh: 7:30 AM daily · Data: securederp.in</span>
+        </>}
+        rightSub="Path: 12 → 50 → 150 → 400 → 1000 → 2000 → 10,000 cr"
+      />
+      <StageTabs active="op" onChange={(t) => t === 'toc' && nav('/dashboard/cmd-toc')} />
 
-      {/* Row 1 — 6 KPI tiles */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
-        <Tile label="Cash Conversion Cycle"     value={ccc.ccc != null ? `${ccc.ccc}d` : '—'} sublabel={`DSO ${ccc.dso ?? '—'} + DIO ${ccc.dio ?? '—'} − DPO ${ccc.dpo ?? '—'}`} accent={ccc.ccc != null && ccc.ccc > 60 ? 'red' : 'emerald'} />
-        <Tile label="AR Outstanding"             value={fmtINR(ar.outstanding_total)} sublabel={`${fmtINR(ar.aging.bucket_90_plus)} overdue 90+`} accent="amber" />
-        <Tile label="AP Outstanding"             value={fmtINR(ap.outstanding_total)} sublabel={`vs ${fmtINR(ap.purchases_in_window)} purchases`} accent="rose" />
-        <Tile label="Bank Closing"               value={bank ? fmtINR(bank.closing_balance) : '—'} sublabel={bank ? `as of ${bank.date}` : 'no cash_flow_daily row'} accent="emerald" />
-        <Tile label="WIP Unbilled"               value={fmtINR(wip.unbilled)} sublabel={`${fmtINR(wip.billed)} billed of ${fmtINR(wip.book_value)}`} accent="purple" />
-        <Tile label="Free Inventory"             value={fmtINR(inv.free_to_use_value)} sublabel={`of ${fmtINR(inv.total_value)} total`} accent="sky" />
-      </div>
+      <div style={{ padding: 14, display: 'grid', gap: 12, maxWidth: 1500, margin: '0 auto' }}>
 
-      {/* Row 2 — 3 gauges + AR aging donut */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
-        <Gauge label="On-Time Milestone %"  value={kpi.on_time_milestone_pct}    accent="#10b981" />
-        <Gauge label="Lead → PO %"           value={funnel.lead_to_po_pct}        accent="#38bdf8" />
-        <Gauge label="Quote Lead Time"       value={funnel.quote_lead_time_days_avg} unit="days" max={30} accent="#fb923c" />
+        {/* ============ PULSE 8 ============ */}
+        <SectionHead first>Pulse · 8 numbers that decide today</SectionHead>
+        <Row cols="strip">
+          <KpiTile label="Bank balance" value={fmtINR(pulse.bank_balance)} accent="amber"
+            sub={pulse.runway_days != null ? `Runway ${pulse.runway_days}d` : 'no burn data'} />
+          <KpiTile label="Order book" value={fmtINR(pulse.order_book)} accent="red"
+            sub={`${pulse.order_book_count} PO · ${operations.active_sites} active sites`} />
+          <KpiTile label="Revenue MTD" value={fmtINR(pulse.revenue_mtd)} accent="blue"
+            sub="vs MTD target — set in EmailSettings" />
+          <KpiTile label="CCC days" value={pulse.ccc != null ? `${pulse.ccc}d` : '—'} accent="violet"
+            sub={`DSO ${pulse.dso ?? '—'} + DIO ${pulse.dio ?? '—'} − DPO ${pulse.dpo ?? '—'}`} />
+          <KpiTile label="DPR adherence" value={fmtPct(pulse.dpr_adherence_pct)} accent={pulse.dpr_adherence_pct >= 80 ? 'green' : 'red'}
+            sub={`${operations.active_sites - operations.dpr.on_time} sites missed today`} />
+          <KpiTile label="Open snags" value={fmtNum(pulse.open_snags)} accent="amber"
+            sub={pulse.oldest_snag_days ? `oldest ${pulse.oldest_snag_days}d` : 'none open'} />
+          <KpiTile label="Free inventory" value={fmtINR(pulse.free_inventory)} accent="teal"
+            sub={`of ${fmtINR(inventory.total)} total`} />
+          <KpiTile label="Lead → PO" value={fmtPct(pulse.lead_to_po_pct)} accent={pulse.lead_to_po_pct >= 40 ? 'green' : 'red'}
+            sub={`${sales.funnel.leads} leads / ${sales.funnel.in_execution} executing`} />
+        </Row>
 
-        {/* AR aging donut */}
-        <div className="rounded-xl bg-slate-800/60 p-4 shadow-lg">
-          <div className="text-[10px] font-semibold tracking-wider uppercase text-slate-400 mb-1">AR Aging Mix</div>
-          <div className="text-xs text-slate-500 mb-1">{fmtINR(ar.outstanding_total)} total</div>
-          <div style={{ height: 140 }}>
-            <ResponsiveContainer>
-              <PieChart>
-                <Pie data={arAgingChart} dataKey="value" nameKey="name" innerRadius={32} outerRadius={56} paddingAngle={2}>
-                  {arAgingChart.map((d, i) => <Cell key={i} fill={d.fill} />)}
-                </Pie>
-                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' }} formatter={(v) => fmtINR(v)} />
-              </PieChart>
-            </ResponsiveContainer>
+        {/* ============ ESCALATION BANNER ============ */}
+        {(data_quality.junk_pos.length > 0 || cash.cost_of_inaction_daily > 0) && (
+          <div style={{
+            background: 'linear-gradient(90deg, rgba(229,72,77,.18) 0%, rgba(229,72,77,.05) 100%)',
+            border: '1px solid rgba(229,72,77,.4)', borderLeft: `3px solid ${C.red}`,
+            borderRadius: 6, padding: '9px 14px', fontSize: 11.5, color: '#FFCDCB',
+          }}>
+            <strong style={{ color: C.red }}>ESCALATION: </strong>
+            Cost-of-inaction ≈ <strong>{fmtINR(cash.cost_of_inaction_daily)}/day</strong>
+            {data_quality.junk_pos.length > 0 ? (
+              <> · {data_quality.junk_pos.length} junk PO numbers totalling <strong>{fmtINR(data_quality.junk_po_total)}</strong> ({data_quality.junk_pos.map(p => p.po_number).join(' · ')})</>
+            ) : null}
           </div>
-          <div className="grid grid-cols-2 gap-1 text-[10px] mt-1">
-            {arAgingChart.map((d, i) => (
-              <div key={i} className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full" style={{ background: d.fill }} />
-                <span className="text-slate-300">{d.name}</span>
-                <span className="text-slate-500 ml-auto">{fmtINR(d.value)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+        )}
 
-      {/* Row 3 — Revenue per FTE bars + AR aging stacked + worst margin */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-        <div className="rounded-xl bg-slate-800/60 p-4 shadow-lg">
-          <div className="text-[10px] font-semibold tracking-wider uppercase text-slate-400 mb-1">Revenue per FTE — by Department</div>
-          <div className="text-xs text-slate-500 mb-2">overall {fmtINR(rpf.overall)} · {rpf.active_employees} FTE</div>
-          <div style={{ height: 220 }}>
-            <ResponsiveContainer>
-              <BarChart data={deptChart} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => fmtINR(v)} />
-                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' }} formatter={(v) => fmtINR(v)} />
-                <Bar dataKey="rev_per_fte" radius={[6, 6, 0, 0]}>
-                  {deptChart.map((_, i) => (
-                    <Cell key={i} fill={['#38bdf8','#10b981','#fb923c','#f472b6','#a78bfa','#fbbf24'][i % 6]} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="rounded-xl bg-slate-800/60 p-4 shadow-lg">
-          <div className="text-[10px] font-semibold tracking-wider uppercase text-slate-400 mb-1">AR Outstanding by Bucket</div>
-          <div className="text-xs text-slate-500 mb-2">red &gt;= 60 days collection risk</div>
-          <div style={{ height: 220 }}>
-            <ResponsiveContainer>
-              <BarChart data={arAgingChart} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => fmtINR(v)} />
-                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' }} formatter={(v) => fmtINR(v)} />
-                <Bar dataKey="value" radius={[6, 6, 0, 0]}>
-                  {arAgingChart.map((d, i) => <Cell key={i} fill={d.fill} />)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="rounded-xl bg-slate-800/60 p-4 shadow-lg">
-          <div className="text-[10px] font-semibold tracking-wider uppercase text-slate-400 mb-1">Worst-5 Project Margins</div>
-          <div className="text-xs text-slate-500 mb-2">avg variance {margin.avg_variance_pct ?? '—'}% · n={margin.sample_size}</div>
-          {worstMargins.length === 0 ? (
-            <div className="text-slate-500 text-sm py-8 text-center">No margin variance data yet — needs DPR cost_b and BB actual_margin_pct on the same PO.</div>
-          ) : (
-            <div style={{ height: 220 }}>
+        {/* ============ FUNNEL + VERTICAL + LEAD SOURCE ============ */}
+        <SectionHead>Business cycle · Lead → Quote → PO → Site → Bill → Cash</SectionHead>
+        <Row cols="3">
+          <Card title="Full lead-to-cash funnel" meta={`last ${days} days`}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 4 }}>
+              {[
+                ['Leads received', sales.funnel.leads, 100, C.blue, '#fff', null],
+                ['Qualified', sales.funnel.qualified, 78, C.blue2, '#fff', null],
+                ['Quotes sent', sales.funnel.quoted, 54, '#7896E8', null, null],
+                ['POs received', sales.funnel.pos, 32, C.amber, null, null],
+                ['In execution', sales.funnel.in_execution, 21, C.orange, '#fff', null],
+                ['Billed', sales.funnel.billed, 11, C.red, '#fff', null],
+                ['Cash collected', sales.funnel.collected, 6, C.green, '#fff', null],
+              ].map(([lbl, val, w, color, txt], i, arr) => {
+                const prev = i > 0 ? arr[i - 1][1] : null;
+                const drop = prev > 0 && val < prev ? `−${Math.round((1 - val / prev) * 100)}%` : '·';
+                return <FunnelBar key={lbl} label={lbl} value={val} drop={drop} width={w} color={color} textColor={txt} />;
+              })}
+            </div>
+            <div style={{ fontSize: 10.5, color: C.ink2, marginTop: 10, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+              <strong style={{ color: C.red }}>Biggest leak: Bill → Cash ·</strong>
+              {' '}AR &gt; 90d {fmtINR(cash.ar_aging.bucket_90_plus)} · Collection Engine RED.
+            </div>
+          </Card>
+          <Card title="Vertical mix" meta={`order book ${fmtINR(pulse.order_book)}`}>
+            <div style={{ height: 180 }}>
               <ResponsiveContainer>
-                <BarChart data={worstMargins} layout="vertical" margin={{ top: 5, right: 10, left: 60, bottom: 5 }}>
-                  <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
-                  <YAxis type="category" dataKey="name" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} width={80} />
-                  <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' }} formatter={(v) => `${v}% variance`} />
-                  <Bar dataKey="variance" fill="#ef4444" radius={[0, 6, 6, 0]} />
+                <PieChart>
+                  <Pie data={verticalChart} dataKey="value" nameKey="name" innerRadius={45} outerRadius={75} paddingAngle={2}>
+                    {verticalChart.map((d, i) => <Cell key={i} fill={d.fill} />)}
+                  </Pie>
+                  <Tooltip {...tooltipStyle} formatter={(v) => fmtINR(v)} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ display: 'grid', gap: 4, marginTop: 8 }}>
+              {verticalChart.slice(0, 4).map((d, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 2, background: d.fill }} />
+                  <span style={{ color: C.ink2 }}>{d.name} — {fmtINR(d.value)}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+          <Card title="Lead source mix" meta={`last ${days} days`}>
+            <div style={{ height: 180 }}>
+              <ResponsiveContainer>
+                <PieChart>
+                  <Pie data={leadSourceChart} dataKey="value" nameKey="name" outerRadius={75}>
+                    {leadSourceChart.map((d, i) => <Cell key={i} fill={d.fill} />)}
+                  </Pie>
+                  <Tooltip {...tooltipStyle} formatter={(v) => `${v} leads`} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ display: 'grid', gap: 4, marginTop: 8 }}>
+              {leadSourceChart.map((d, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 2, background: d.fill }} />
+                  <span style={{ color: C.ink2 }}>{d.name} · {d.value}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </Row>
+
+        {/* ============ SALES & ORDER BOOK ============ */}
+        <SectionHead>Sales · Order Book · Customers</SectionHead>
+        <Row cols="3">
+          <Card title="Booking trend" meta="last 12 weeks · ₹ L">
+            <div style={{ height: 180 }}>
+              <ResponsiveContainer>
+                <AreaChart data={sales.booking_trend_12w} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
+                  <defs>
+                    <linearGradient id="g-mepf" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={C.blue} stopOpacity={0.6} />
+                      <stop offset="100%" stopColor={C.blue} stopOpacity={0.1} />
+                    </linearGradient>
+                    <linearGradient id="g-solar" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={C.amber} stopOpacity={0.6} />
+                      <stop offset="100%" stopColor={C.amber} stopOpacity={0.1} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke={C.line} vertical={false} />
+                  <XAxis dataKey="week" stroke={C.ink3} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis stroke={C.ink3} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <Tooltip {...tooltipStyle} />
+                  <Area type="monotone" dataKey="mepf" stroke={C.blue} fill="url(#g-mepf)" strokeWidth={2} />
+                  <Area type="monotone" dataKey="solar" stroke={C.amber} fill="url(#g-solar)" strokeWidth={2} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+          <Card title="Top 5 customers" meta="share of order book">
+            {sales.top_customers.length === 0 ? <DataGap note="No business_book rows with po_amount > 0 yet." /> : (() => {
+              const max = sales.top_customers[0]?.total_order || 1;
+              return sales.top_customers.map((c, i) => (
+                <HBar key={i} label={(c.client || c.company || '—').slice(0, 14)}
+                  value={fmtINR(c.total_order)} max={max} color={[C.blue, C.blue2, C.amber, C.teal, C.violet][i]} />
+              ));
+            })()}
+            <div style={{ fontSize: 10.5, color: C.ink2, marginTop: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+              Top 2 concentration: <strong>{(sales.top_customers[0]?.share_pct || 0) + (sales.top_customers[1]?.share_pct || 0)}%</strong>
+            </div>
+          </Card>
+          <Card title="Pipeline by stage" meta="value ₹ L">
+            <div style={{ height: 180 }}>
+              <ResponsiveContainer>
+                <BarChart data={pipelineChart} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
+                  <CartesianGrid stroke={C.line} vertical={false} />
+                  <XAxis dataKey="name" stroke={C.ink3} tick={{ fontSize: 9 }} axisLine={false} tickLine={false} />
+                  <YAxis stroke={C.ink3} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <Tooltip {...tooltipStyle} formatter={(v) => `₹${v}L`} />
+                  <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                    {pipelineChart.map((d, i) => <Cell key={i} fill={d.fill} />)}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          )}
-        </div>
-      </div>
+          </Card>
+        </Row>
 
-      {/* Funnel + revenue summary footer */}
-      <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-        <div className="rounded-xl bg-slate-800/40 p-3 flex items-center justify-between">
-          <span className="text-slate-400 uppercase tracking-wider text-[10px]">Sales this window</span>
-          <span className="text-lg font-bold text-emerald-400">{fmtINR(sales.total_in_window)}</span>
-        </div>
-        <div className="rounded-xl bg-slate-800/40 p-3 flex items-center justify-between">
-          <span className="text-slate-400 uppercase tracking-wider text-[10px]">Leads → Won</span>
-          <span className="text-lg font-bold">{funnel.won_in_window} <span className="text-slate-500 text-sm">/ {funnel.leads_in_window}</span></span>
-        </div>
-        <div className="rounded-xl bg-slate-800/40 p-3 flex items-center justify-between">
-          <span className="text-slate-400 uppercase tracking-wider text-[10px]">Free Inventory</span>
-          <span className="text-lg font-bold text-sky-400">{fmtINR(inv.free_to_use_value)}</span>
+        {/* ============ SITE EXECUTION ============ */}
+        <SectionHead>Site execution · MEPF discipline split</SectionHead>
+        <Row cols="3">
+          <Card title="Snag categories" meta={`${customer.complaints_by_priority.reduce((s, r) => s + r.cnt, 0)} open`}>
+            <div style={{ height: 180 }}>
+              <ResponsiveContainer>
+                <PieChart>
+                  <Pie data={snagsChart} dataKey="value" nameKey="name" innerRadius={40} outerRadius={70}>
+                    {snagsChart.map((d, i) => <Cell key={i} fill={d.fill} />)}
+                  </Pie>
+                  <Tooltip {...tooltipStyle} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ display: 'grid', gap: 4, marginTop: 8 }}>
+              {snagsChart.map((d, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 2, background: d.fill }} />
+                  <span style={{ color: C.ink2 }}>{d.name} · {d.value}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+          <Card title="DPR adherence today" meta={`${operations.active_sites} sites live`}>
+            <div style={{ height: 180 }}>
+              <ResponsiveContainer>
+                <PieChart>
+                  <Pie data={dprChart} dataKey="value" nameKey="name" innerRadius={45} outerRadius={75}>
+                    {dprChart.map((d, i) => <Cell key={i} fill={d.fill} />)}
+                  </Pie>
+                  <Tooltip {...tooltipStyle} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginTop: 6 }}>
+              <MiniStat label="On time" value={fmtNum(operations.dpr.on_time)} color={C.green} />
+              <MiniStat label="Late" value={fmtNum(operations.dpr.late)} color={C.amber} />
+              <MiniStat label="Missed" value={fmtNum(operations.dpr.missed)} color={C.red} />
+            </div>
+          </Card>
+          <Card title="Snag aging" meta="days open">
+            <div style={{ height: 180 }}>
+              <ResponsiveContainer>
+                <BarChart data={operations.snag_aging} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
+                  <CartesianGrid stroke={C.line} vertical={false} />
+                  <XAxis dataKey="bucket" stroke={C.ink3} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis stroke={C.ink3} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <Tooltip {...tooltipStyle} />
+                  <Bar dataKey="count" radius={[3, 3, 0, 0]}>
+                    {operations.snag_aging.map((d, i) => <Cell key={i} fill={['#46A758', '#46A758', '#FFB224', '#E5484D', '#A32D2D'][i]} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+        </Row>
+
+        {/* ============ PROCUREMENT ============ */}
+        <SectionHead>Procurement · Vendors · Inventory</SectionHead>
+        <Row cols="3">
+          <Card title="Top vendors by spend" meta={`last ${days}d`}>
+            {procurement.top_vendors.length === 0 ? <DataGap note="No purchase_bills.vendor_id yet — vendor-PO flow needed first." /> : (() => {
+              const max = procurement.top_vendors[0]?.total_spend || 1;
+              return procurement.top_vendors.map((v, i) => (
+                <HBar key={v.id} label={(v.name || '—').slice(0, 14)}
+                  value={fmtINR(v.total_spend)} max={max} color={[C.green, C.red, C.blue, C.amber, C.violet][i]} />
+              ));
+            })()}
+          </Card>
+          <Card title="Cash position" meta={pulse.runway_days != null ? `runway ${pulse.runway_days}d` : ''}>
+            <div style={{ height: 180 }}>
+              <ResponsiveContainer>
+                <AreaChart data={cashForecastChart} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
+                  <defs>
+                    <linearGradient id="g-cash-no" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={C.red} stopOpacity={0.5} />
+                      <stop offset="100%" stopColor={C.red} stopOpacity={0.05} />
+                    </linearGradient>
+                    <linearGradient id="g-cash-yes" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={C.green} stopOpacity={0.5} />
+                      <stop offset="100%" stopColor={C.green} stopOpacity={0.05} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke={C.line} vertical={false} />
+                  <XAxis dataKey="day" stroke={C.ink3} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis stroke={C.ink3} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${v}L`} />
+                  <Tooltip {...tooltipStyle} formatter={(v) => `₹${v}L`} />
+                  <Area type="monotone" dataKey="no_action" stroke={C.red} fill="url(#g-cash-no)" strokeWidth={2} />
+                  <Area type="monotone" dataKey="with_actions" stroke={C.green} fill="url(#g-cash-yes)" strokeWidth={2} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+          <Card title="Inventory exceptions">
+            <TicksList items={[
+              { label: 'Free-to-use', right: <span style={{ color: C.green, fontWeight: 600 }}>{fmtINR(inventory.free_to_use)}</span> },
+              { label: 'Reserved at sites', right: <span style={{ color: C.blue, fontWeight: 600 }}>{fmtINR(inventory.reserved)}</span> },
+              { label: 'Slow-moving (180+ days)', right: <Pill kind="amber">{fmtINR(inventory.slow_moving)}</Pill> },
+              { label: 'Dead stock (365+ days)', right: <Pill kind="red">{fmtINR(inventory.dead_stock)}</Pill> },
+              { label: 'Total inventory value', right: <span style={{ fontWeight: 600 }}>{fmtINR(inventory.total)}</span> },
+              { label: 'Free / total ratio', right: <span style={{ color: C.ink2 }}>{inventory.total > 0 ? Math.round((inventory.free_to_use / inventory.total) * 100) : 0}%</span> },
+            ]} />
+          </Card>
+        </Row>
+
+        {/* ============ AR / CASH ============ */}
+        <SectionHead>Cash · AR aging · Collection</SectionHead>
+        <Row cols="3">
+          <Card title="AR aging" meta={`total ${fmtINR(cash.ar_outstanding)}`}>
+            <div style={{ height: 180 }}>
+              <ResponsiveContainer>
+                <BarChart data={arAgingChart} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
+                  <CartesianGrid stroke={C.line} vertical={false} />
+                  <XAxis dataKey="name" stroke={C.ink3} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis stroke={C.ink3} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${v}L`} />
+                  <Tooltip {...tooltipStyle} formatter={(v) => `₹${v}L`} />
+                  <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                    {arAgingChart.map((d, i) => <Cell key={i} fill={d.fill} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, marginTop: 8 }}>
+              <MiniStat label="0–30d" value={fmtINR(cash.ar_aging.bucket_0_30)} />
+              <MiniStat label="31–60" value={fmtINR(cash.ar_aging.bucket_31_60)} color={C.amber} />
+              <MiniStat label="61–90" value={fmtINR(cash.ar_aging.bucket_61_90)} color={C.orange} />
+              <MiniStat label=">90d"  value={fmtINR(cash.ar_aging.bucket_90_plus)} color={C.red} />
+            </div>
+          </Card>
+          <Card title="Top 5 debtors" meta="overdue">
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+              <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
+                <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Customer</th>
+                <th style={{ textAlign: 'right', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Outstanding</th>
+                <th style={{ textAlign: 'right', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Aging</th>
+              </tr></thead>
+              <tbody>
+                {cash.top_5_debtors.length === 0 ? (
+                  <tr><td colSpan="3" style={{ textAlign: 'center', color: C.ink3, padding: 12 }}>No outstanding receivables</td></tr>
+                ) : cash.top_5_debtors.map((d, i) => (
+                  <tr key={i} style={{ borderBottom: i === cash.top_5_debtors.length - 1 ? 'none' : `1px solid ${C.line}` }}>
+                    <td style={{ padding: '8px 5px' }}>{d.client_name?.slice(0, 18) || '—'}</td>
+                    <td style={{ padding: '8px 5px', textAlign: 'right', fontWeight: 600 }}>{fmtINR(d.amt)}</td>
+                    <td style={{ padding: '8px 5px', textAlign: 'right', color: d.days > 90 ? C.red : d.days > 60 ? C.amber : C.ink2 }}>{d.days}d</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+          <Card title="Statutory · AP · payroll" meta="next 30d">
+            <TicksList items={cash.statutory_dues.map(d => ({
+              label: d.label,
+              right: d.amount != null
+                ? <span style={{ color: C[d.status] || C.ink2, fontWeight: 600 }}>{fmtINR(d.amount)}</span>
+                : <span style={{ color: C.ink3, fontSize: 10 }}>capture needed</span>
+            }))} />
+          </Card>
+        </Row>
+
+        {/* ============ PEOPLE ============ */}
+        <SectionHead>People · Attendance · KPI</SectionHead>
+        <Row cols="4">
+          <Card title="Headcount by function">
+            <div style={{ height: 180 }}>
+              <ResponsiveContainer>
+                <BarChart data={people.headcount} layout="vertical" margin={{ top: 5, right: 5, left: 60, bottom: 5 }}>
+                  <XAxis type="number" stroke={C.ink3} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="department" stroke={C.ink3} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={80} />
+                  <Tooltip {...tooltipStyle} />
+                  <Bar dataKey="cnt" radius={[0, 3, 3, 0]}>
+                    {people.headcount.map((d, i) => <Cell key={i} fill={[C.blue, C.blue2, C.amber, C.teal, C.violet, C.pink][i % 6]} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+          <Card title="Today's attendance">
+            <div style={{ textAlign: 'center', padding: '20px 0' }}>
+              <div style={{ fontSize: 28, fontWeight: 700, color: C.green }}>
+                {people.attendance_today.total > 0
+                  ? Math.round((people.attendance_today.present / people.attendance_today.total) * 100) + '%'
+                  : '—'}
+              </div>
+              <div style={{ fontSize: 10, color: C.ink2, marginTop: 3 }}>
+                {people.attendance_today.present} of {people.attendance_today.total} present
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+              <MiniStat label="Leave" value={people.attendance_today.leave} />
+              <MiniStat label="Absent" value={people.attendance_today.absent} color={C.red} />
+              <MiniStat label="Late" value={people.attendance_today.late} color={C.amber} />
+            </div>
+          </Card>
+          <Card title="KPI hit · top & bottom">
+            <div style={{ fontSize: 10, color: C.green, fontWeight: 600, marginTop: 4 }}>TOP</div>
+            {people.kpi_top.length === 0
+              ? <DataGap note="No score_entries in last 30d." />
+              : <TicksList items={people.kpi_top.map(t => ({ label: t.user, right: <span style={{ color: C.ink2 }}>{t.pct}%</span> }))} />}
+            <div style={{ fontSize: 10, color: C.red, fontWeight: 600, marginTop: 8 }}>BOTTOM</div>
+            {people.kpi_bottom.length === 0
+              ? <div style={{ fontSize: 10, color: C.ink3, marginTop: 4 }}>—</div>
+              : <TicksList items={people.kpi_bottom.map(t => ({ label: t.user, right: <span style={{ color: C.red }}>{t.pct}%</span> }))} />}
+          </Card>
+          <Card title="Predictive flags · 14d">
+            {customer.predictive_flags.length === 0
+              ? <div style={{ fontSize: 11, color: C.ink2, padding: 12 }}>No flags raised — system clear.</div>
+              : <TicksList items={customer.predictive_flags.map(f => ({
+                  label: f.label, right: <Pill kind={f.severity}>{f.detail}</Pill>
+                }))} />}
+          </Card>
+        </Row>
+
+        {/* ============ JUNK DATA WATCH ============ */}
+        {data_quality.junk_pos.length > 0 && (
+          <>
+            <SectionHead>Data quality · Junk POs in book</SectionHead>
+            <Card title="Junk-PO list" meta={`total ${fmtINR(data_quality.junk_po_total)} affected`}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
+                  <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Lead No</th>
+                  <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Client</th>
+                  <th style={{ textAlign: 'left', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>PO Number</th>
+                  <th style={{ textAlign: 'right', color: C.ink2, fontSize: 9.5, padding: '7px 5px', textTransform: 'uppercase' }}>Amount</th>
+                </tr></thead>
+                <tbody>{data_quality.junk_pos.map((p, i) => (
+                  <tr key={i} style={{ borderBottom: `1px solid ${C.line}` }}>
+                    <td style={{ padding: '8px 5px' }}>{p.lead_no}</td>
+                    <td style={{ padding: '8px 5px' }}>{p.client_name?.slice(0, 24)}</td>
+                    <td style={{ padding: '8px 5px', fontFamily: 'monospace', color: C.red }}>{p.po_number}</td>
+                    <td style={{ padding: '8px 5px', textAlign: 'right', fontWeight: 600 }}>{fmtINR(p.po_amount)}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </Card>
+          </>
+        )}
+
+        {/* Footer */}
+        <div style={{ marginTop: 6, padding: '14px 18px', background: '#0E1116', color: C.ink3, border: `1px solid ${C.line}`, borderRadius: 8, fontSize: 10.5, lineHeight: 1.6 }}>
+          <strong style={{ color: C.ink }}>READING ORDER:</strong> Top KPI strip → Funnel + Vertical mix (1 min) → flag any RED tile → drill into the row.
+          Sections ordered by money flow: Cycle → Sales (intake) → Execution (delivery) → Procurement (cost) → Cash (output) → People (capacity) → Customer (loyalty).
+          <br /><br />
+          <strong style={{ color: C.ink }}>RULE:</strong> If a tile turns RED 2 days running, a Cost-of-Inaction line is added at top — never "looks good." ·
+          Refresh source: <code>/api/dashboards/cmd-detail</code> · spec_version {data.spec_version} · generated {new Date(data.generated_at).toLocaleString('en-IN')}.
         </div>
       </div>
     </div>

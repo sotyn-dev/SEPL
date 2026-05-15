@@ -14,6 +14,7 @@ const express = require('express');
 const { authMiddleware, adminOnly } = require('../middleware/auth');
 const { getDb } = require('../db/schema');
 const { computeKpiPayload } = require('./auditReport');
+const { computeCmdDetail } = require('../utils/cmdDashboard');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -27,6 +28,18 @@ router.get('/kpi', adminOnly, (req, res) => {
     res.json(computeKpiPayload(getDb(), req.query.days));
   } catch (e) {
     console.error('[dashboards/kpi] failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/dashboards/cmd-detail?days=N — extended payload for both
+// CMD dashboard pages (Stage 1 Operating Console, Stage 2 TOC View).
+// Single fetch feeds every section so the page loads in one round-trip.
+router.get('/cmd-detail', adminOnly, (req, res) => {
+  try {
+    res.json(computeCmdDetail(getDb(), req.query.days));
+  } catch (e) {
+    console.error('[dashboards/cmd-detail] failed:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
