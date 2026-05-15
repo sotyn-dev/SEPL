@@ -593,10 +593,13 @@ router.get('/analytics', (req, res) => {
 //   CCC = DSO + DIO − DPO   (cash conversion cycle in days)
 //
 // All money figures in raw rupees (no lakh conversion).
-router.get('/kpi', (req, res) => {
-  const db = getDb();
+//
+// Exported as `computeKpiPayload(db, days)` so the session-authed
+// /api/dashboards/kpi route can render the same JSON for the in-app
+// CMD/COO/Sales/Finance dashboards without re-implementing the SQL.
+function computeKpiPayload(db, daysRaw) {
   const started = Date.now();
-  const days = Math.min(365, Math.max(7, parseInt(req.query.days, 10) || 30));
+  const days = Math.min(365, Math.max(7, parseInt(daysRaw, 10) || 30));
   const from = daysAgo(days);
   const to = today();
 
@@ -723,7 +726,7 @@ router.get('/kpi', (req, res) => {
   `)?.c) || 0;
   const wipUnbilled = wipBookValue - wipBilled;
 
-  res.json({
+  return {
     spec_version: 'v3',
     generated_at: new Date().toISOString(),
     duration_ms: Date.now() - started,
@@ -756,7 +759,13 @@ router.get('/kpi', (req, res) => {
         .slice(0, 5)
         .map(r => ({ po_number: r.po_number, client: r.client_name, booked_pct: r.booked_pct, actual_pct: r.actual_pct, variance: r.variance })),
     },
-  });
+  };
+}
+
+// Thin route wrapper around the pure compute function.
+router.get('/kpi', (req, res) => {
+  res.json(computeKpiPayload(getDb(), req.query.days));
 });
 
 module.exports = router;
+module.exports.computeKpiPayload = computeKpiPayload;

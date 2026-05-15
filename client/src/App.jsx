@@ -50,6 +50,7 @@ import SubContractors from './pages/SubContractors';
 import CRMFunnel from './pages/CRMFunnel';
 import ChequeFMS from './pages/ChequeFMS';
 import EmailSettings from './pages/EmailSettings';
+import DashboardCMD from './pages/DashboardCMD';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -91,6 +92,10 @@ export default function App() {
       <Route path="/payroll/slip/:employee_id" element={<ProtectedRoute><SalarySlipPrint /></ProtectedRoute>} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
+        {/* TOC v3 role dashboards — admin-only for now, dark-navy CMD
+            style.  COO / Sales / Finance variants will land as their
+            HTML specs come in from MD. */}
+        <Route path="dashboard/cmd" element={<AdminRoute><DashboardCMD /></AdminRoute>} />
         {/* 4 Critical Systems */}
         <Route path="cashflow" element={<ModuleRoute module="cashflow"><CashFlow /></ModuleRoute>} />
         <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />
