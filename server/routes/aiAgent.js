@@ -517,13 +517,44 @@ router.post('/ask', requirePermission('ai_agent', 'view'), async (req, res) => {
   // attach those request params and tools.
   const supportsAdaptive = /^claude-(opus-4-[67]|sonnet-4-6)/.test(model);
 
-  const systemPrompt = `You are the AI assistant inside SEPL Engineers' internal ERP (an MEPF subcontracting business in India). The user asking is staff or admin. You have THREE tools and you are EXPECTED to use them when relevant — mam said "real ai agent which scan from all over not only from my ERP":
+  // WHO is logged in.  Without this, when the user asks "who is monika"
+  // the model has no idea SHE is monika — it just sees an ambiguous
+  // name and asks for clarification (mam, 2026-05-15).  Pulling the
+  // current user's row from the users table (no password column) and
+  // their employee record gives the model concrete identity context.
+  let currentUserBlock = '(unknown user)';
+  try {
+    const u = db.prepare('SELECT id, name, email, username, role, department, phone FROM users WHERE id=?').get(req.user.id);
+    const emp = db.prepare('SELECT designation, department, phone, email, status FROM employees WHERE LOWER(name) = LOWER(?) OR user_id=? LIMIT 1').get(u?.name || '', req.user.id);
+    if (u) {
+      const parts = [
+        `Name: ${u.name}`,
+        u.username ? `Username: ${u.username}` : null,
+        u.email ? `Email: ${u.email}` : null,
+        `Role: ${u.role}`,
+        (emp?.designation || u.department) ? `Designation/Dept: ${emp?.designation || u.department}` : null,
+      ].filter(Boolean);
+      currentUserBlock = parts.join(' · ');
+    }
+  } catch (_) {}
 
-1. query_database — read the local ERP database (leads, customers, items, quotations, POs, payments, DPR, attendance, etc.). Use this for ANY question about SEPL's own data.
+  const systemPrompt = `You are the AI assistant inside SEPL Engineers' internal ERP (an MEPF subcontracting business in India). You have THREE tools and you are EXPECTED to use them when relevant — mam said "real ai agent which scan from all over not only from my ERP":
+
+WHO IS ASKING RIGHT NOW:
+  ${currentUserBlock}
+If a question is about the asker themselves (e.g. "who am I", "kya mera salary hai", "show my attendance"), use the identity above and don't ask them to repeat it.  If a person is mentioned by first name that matches the current user, assume they mean themselves unless context says otherwise.
+
+1. query_database — read the local ERP database (leads, customers, items, quotations, POs, payments, DPR, attendance, employees, etc.). Use this for ANY question about SEPL's own data.
 
 2. web_search — search the live internet. Use this PROACTIVELY for: any question about rates / prices of materials (so you can compare our stored rate against today's market rate on IndiaMART / Justdial / cement / steel / electrical-cable industry sites), vendor news, commodity prices, GST rate lookups, supplier company details, or any fact that lives outside our database.
 
 3. get_module_guide — pull built-in step-by-step instructions for an ERP module. Use this WHENEVER the user asks "how to ...", "kaise karte hai...", "training", "guide me through ...", or asks how to submit / create / file something. Valid module keys: ${GUIDE_KEYS.join(', ')}. Always call this BEFORE saying "I don't know how" — the answer is almost always in the guide.
+
+PERSON-BY-NAME LOOKUPS — when a user asks "who is X", "tell me about X", "X kaun hai", or any question naming a person:
+  a) First check if X matches the current user identity above.  If yes, answer using that.
+  b) Otherwise call query_database with: SELECT id, name, designation, department, phone, email, status, join_date FROM employees WHERE LOWER(name) LIKE LOWER('%X%').  This covers every SEPL employee.
+  c) If still no match, try business_book.employee_assigned / .crm_person, vendors.contact_person, customers.concern_person_name — they're SEPL's external-facing contacts.
+  d) Only ask for clarification if (a), (b), AND (c) all came up empty.
 
 Default behaviour for ITEM RATE questions:
 - Always query_database for our internal rate first.
