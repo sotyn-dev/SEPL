@@ -170,6 +170,14 @@ app.use('/api/collections', require('./routes/collections'));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 
+// CMD Audit endpoint (Master Prompt v3) — lives at /audit (not /api/audit)
+// so an external scheduler can hit `securederp.in/audit` directly with a
+// bearer token, no session cookie required. Returns 12 KPI tiles, 5
+// exception lists, plus /audit/data-quality and /audit/analytics.
+// Set AUDIT_API_TOKEN in pm2 env (`pm2 set ERP:AUDIT_API_TOKEN <token>`)
+// or .env to enable; without it the endpoint replies 503.
+app.use('/audit', require('./routes/auditReport'));
+
 // File upload endpoint
 const { authMiddleware } = require('./middleware/auth');
 app.post('/api/upload', authMiddleware, upload.single('file'), (req, res) => {

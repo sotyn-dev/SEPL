@@ -287,22 +287,24 @@ export default function CashFlow() {
                     <td className="px-2 py-2 text-right tabular-nums">{p.payment_days || dash}</td>
                   )}
                   <td className="px-2 py-2 text-right font-bold text-base text-gray-800 tabular-nums">{p.total_days || dash}</td>
-                  {/* Last Payment Received Date — auto-calculated. Mam:
-                      'in here last payment rec date calculate when I update
-                      inv days, complete date, payment days'.
-                      Formula: LIVE date − Inv Days. If Inv Days isn't set,
-                      falls back to LIVE − Total Days (completion + payment).
-                      Read-only — refreshes automatically on every save. */}
+                  {/* Last Payment Date — expected last-payment receipt,
+                      projected FORWARD from LIVE.  Mam (2026-05-13):
+                      she enters Completion = 10 and expects 15 May + 10
+                      = 25 May, NOT 15 May − 10 = 5 May.  Sign flipped
+                      from the earlier "back-date" interpretation.
+                      Priority: use Inv Days when filled, else fall back
+                      to Total Days (completion + payment).  Read-only —
+                      refreshes automatically on every save. */}
                   <td className="px-2 py-2 text-center text-[11px] text-blue-700 font-semibold whitespace-nowrap">
                     {(() => {
                       const live = p.live_date ? new Date(p.live_date) : null;
                       if (!live || isNaN(live)) return dash;
-                      const daysToBack = +p.payment_investment_days > 0
+                      const daysForward = +p.payment_investment_days > 0
                         ? +p.payment_investment_days
                         : (+p.total_days > 0 ? +p.total_days : 0);
-                      if (!daysToBack) return dash;
-                      const lastPaid = new Date(live.getTime() - daysToBack * 24 * 60 * 60 * 1000);
-                      return fmtDate(lastPaid.toISOString().slice(0, 10));
+                      if (!daysForward) return dash;
+                      const expected = new Date(live.getTime() + daysForward * 24 * 60 * 60 * 1000);
+                      return fmtDate(expected.toISOString().slice(0, 10));
                     })()}
                   </td>
                   <td className="px-1 py-1 text-center">{editing ? (
