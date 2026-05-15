@@ -9,7 +9,27 @@
 import { useState, useEffect } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
-import { FiBarChart2, FiCalendar, FiRefreshCw, FiUser, FiPackage, FiAlertCircle, FiX, FiEye } from 'react-icons/fi';
+import { FiBarChart2, FiCalendar, FiRefreshCw, FiUser, FiPackage, FiAlertCircle, FiX, FiEye, FiShield } from 'react-icons/fi';
+
+// Reduce a long UA string to a short "Chrome on Windows" style hint so
+// the IP/device column stays readable.  Falls back to first 30 chars
+// of the raw UA if no known browser/OS keywords match.
+function shortUa(ua) {
+  if (!ua) return '—';
+  const s = ua.toLowerCase();
+  let browser = '?';
+  if (s.includes('edg/')) browser = 'Edge';
+  else if (s.includes('chrome')) browser = 'Chrome';
+  else if (s.includes('firefox')) browser = 'Firefox';
+  else if (s.includes('safari')) browser = 'Safari';
+  let os = '';
+  if (s.includes('android')) os = 'Android';
+  else if (s.includes('iphone') || s.includes('ipad')) os = 'iOS';
+  else if (s.includes('windows')) os = 'Windows';
+  else if (s.includes('mac os')) os = 'macOS';
+  else if (s.includes('linux')) os = 'Linux';
+  return os ? `${browser} · ${os}` : browser;
+}
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
@@ -60,6 +80,21 @@ export default function WordCount() {
   const [drillUser, setDrillUser] = useState(null); // { user_id, user_name }
   const [detail, setDetail] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
+  // Verify-user panel — when the admin suspects an attribution problem
+  // (e.g. "this user entered rows before their account was created"),
+  // pull the actual users row + audit summary + login history so the
+  // facts are visible without DB access.  Mam, 2026-05-15.
+  const [verify, setVerify] = useState(null);
+  const openVerify = async (userId) => {
+    setVerify({ loading: true });
+    try {
+      const r = await api.get(`/admin/word-count/user-check/${userId}`);
+      setVerify({ ...r.data, loading: false });
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Verify failed');
+      setVerify(null);
+    }
+  };
   // Changelog — what new systems/features were created in the ERP
   // on the picked date, sourced from git log on the deployed repo.
   const [changelog, setChangelog] = useState(null);
@@ -348,7 +383,20 @@ export default function WordCount() {
                   <span className="font-semibold text-red-700"> {fmtNum(drillUser.chars)} characters</span> · {fmtNum(drillUser.activities)} entries
                 </p>
               </div>
-              <button onClick={() => setDrillUser(null)} className="p-1 text-gray-400 hover:text-gray-700"><FiX size={18} /></button>
+              <div className="flex items-center gap-2">
+                {/* Verify user — opens a side panel with the user's account
+                    facts (created_at, role, active) plus IP/login history.
+                    Use this when you suspect a row was logged under the
+                    wrong user. */}
+                {drillUser.user_id ? (
+                  <button onClick={() => openVerify(drillUser.user_id)}
+                    className="btn btn-secondary text-xs flex items-center gap-1"
+                    title="Show account creation date, login history, and IP usage for this user">
+                    <FiShield size={13} /> Verify user
+                  </button>
+                ) : null}
+                <button onClick={() => setDrillUser(null)} className="p-1 text-gray-400 hover:text-gray-700"><FiX size={18} /></button>
+              </div>
             </div>
             <div className="overflow-y-auto p-4">
               {detailLoading ? (
@@ -357,33 +405,142 @@ export default function WordCount() {
                 <div className="text-center text-gray-400 py-12 text-sm">No activity</div>
               ) : (
                 <table className="text-xs w-full">
-                  <thead className="bg-gray-50">
+                  <thead className="bg-gray-50 sticky top-0">
                     <tr>
-                      <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-32">Time</th>
+                      <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-24" title="Full date+time on hover for each row">Time</th>
                       <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-20">Action</th>
                       <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold">Module</th>
                       <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold">Entry</th>
-                      <th className="text-right px-2 py-2 text-gray-500 uppercase font-semibold w-16">Characters</th>
+                      {/* IP + device columns — investigate who ACTUALLY made
+                          the entry. Mam, 2026-05-15.  If 66 entries share
+                          one IP that differs from the user's usual IP, that
+                          IP belongs to whoever was actually using the
+                          session. */}
+                      <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-28" title="IP address the request came from">IP</th>
+                      <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-32" title="Browser + OS as reported by the device">Device</th>
+                      <th className="text-right px-2 py-2 text-gray-500 uppercase font-semibold w-16">Chars</th>
                     </tr>
                   </thead>
                   <tbody>
                     {detail.map(d => (
                       <tr key={d.id} className="border-t hover:bg-gray-50">
-                        <td className="px-2 py-1.5 text-gray-500 font-mono text-[11px]">
+                        <td className="px-2 py-1.5 text-gray-500 font-mono text-[11px]" title={d.at}>
                           {new Date(d.at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                         </td>
                         <td className="px-2 py-1.5">
                           <span className={`px-1.5 py-0.5 rounded text-[10px] ${ACTION_COLORS[d.action] || 'bg-gray-100 text-gray-700'}`}>{d.action}</span>
                         </td>
                         <td className="px-2 py-1.5 capitalize">{String(d.module || '—').replace(/_/g, ' ').replace(/-/g, ' ')}</td>
-                        <td className="px-2 py-1.5 text-gray-600 truncate max-w-[260px]" title={d.entity_label || d.path}>
+                        <td className="px-2 py-1.5 text-gray-600 truncate max-w-[220px]" title={d.body_preview || d.entity_label || d.path}>
                           {d.entity_label || d.path || '—'}
                         </td>
+                        <td className="px-2 py-1.5 text-gray-600 font-mono text-[11px]" title={d.ip || ''}>{d.ip || '—'}</td>
+                        <td className="px-2 py-1.5 text-gray-600 text-[11px] truncate max-w-[160px]" title={d.user_agent || ''}>{shortUa(d.user_agent)}</td>
                         <td className="px-2 py-1.5 text-right font-semibold text-red-700">{fmtNum(d.chars)}{d.truncated && <span title="truncated" className="text-amber-500">*</span>}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Verify-user diagnostic panel — opens on top of the activity
+          modal, shows the actual users row + audit timeline + login
+          history so admin can confirm whether a "user did action X
+          before their account was created" complaint is a real bug
+          or just a misread timestamp / shared-session scenario. */}
+      {verify && (
+        <div className="fixed inset-0 z-[60] bg-black/50 flex items-start justify-center p-4 overflow-y-auto" onClick={() => setVerify(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full mt-12" onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b flex items-center justify-between">
+              <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                <FiShield className="text-emerald-600" /> User account check
+              </h3>
+              <button onClick={() => setVerify(null)} className="p-1 text-gray-400 hover:text-gray-700"><FiX size={18} /></button>
+            </div>
+            <div className="p-5 space-y-5 text-sm">
+              {verify.loading && <div className="text-center text-gray-400 py-6">Loading…</div>}
+              {!verify.loading && !verify.user && (
+                <div className="text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
+                  No users row with this id. The audit_log entries reference a deleted user — that's likely the source of the attribution confusion.
+                </div>
+              )}
+              {!verify.loading && verify.user && (
+                <>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-gray-500 uppercase text-[10px] mb-1">Account row</div>
+                      <div className="font-semibold text-gray-800">{verify.user.name}</div>
+                      <div className="text-gray-600">id={verify.user.id} · role={verify.user.role} · {verify.user.active ? 'active' : 'inactive'}</div>
+                      <div className="text-gray-600">{verify.user.email}{verify.user.username ? ` · @${verify.user.username}` : ''}</div>
+                      <div className="text-gray-600 mt-2"><b>Created at:</b> <span className="font-mono">{verify.user.created_at}</span></div>
+                    </div>
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <div className="text-gray-500 uppercase text-[10px] mb-1">Audit footprint</div>
+                      <div>Total actions: <b>{fmtNum(verify.audit?.total)}</b></div>
+                      <div>First action: <span className="font-mono">{verify.audit?.first_action || '—'}</span></div>
+                      <div>Last action: <span className="font-mono">{verify.audit?.last_action || '—'}</span></div>
+                      <div>Distinct IPs: <b>{verify.audit?.distinct_ips}</b> · Active days: <b>{verify.audit?.active_days}</b></div>
+                    </div>
+                  </div>
+
+                  {verify.audit?.first_action && verify.user.created_at &&
+                    new Date(verify.audit.first_action) < new Date(verify.user.created_at) && (
+                    <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-900">
+                      ⚠ <b>First audit action is BEFORE the account's created_at.</b>
+                      This means either (a) the account row was inserted via the DB / a different code path that didn't set <code>created_at</code> at row birth, OR (b) the row was deleted and reinserted, OR (c) someone else used a still-valid JWT after the user was renamed. Look at the IP / device columns in the activity table to identify who actually used the session.
+                    </div>
+                  )}
+
+                  <div>
+                    <div className="font-semibold text-gray-700 mb-1 text-xs">IPs that used this account</div>
+                    <table className="text-xs w-full">
+                      <thead className="bg-gray-50"><tr>
+                        <th className="text-left px-2 py-1">IP</th>
+                        <th className="text-right px-2 py-1">Actions</th>
+                        <th className="text-left px-2 py-1">First</th>
+                        <th className="text-left px-2 py-1">Last</th>
+                      </tr></thead>
+                      <tbody>
+                        {(verify.ips || []).map(i => (
+                          <tr key={i.ip} className="border-t">
+                            <td className="px-2 py-1 font-mono">{i.ip}</td>
+                            <td className="px-2 py-1 text-right">{fmtNum(i.c)}</td>
+                            <td className="px-2 py-1 font-mono text-[11px]">{i.first_seen}</td>
+                            <td className="px-2 py-1 font-mono text-[11px]">{i.last_seen}</td>
+                          </tr>
+                        ))}
+                        {(!verify.ips || verify.ips.length === 0) && <tr><td colSpan="4" className="text-center text-gray-400 py-3">No IP data recorded</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div>
+                    <div className="font-semibold text-gray-700 mb-1 text-xs">Recent logins (last 30)</div>
+                    <table className="text-xs w-full">
+                      <thead className="bg-gray-50"><tr>
+                        <th className="text-left px-2 py-1">When</th>
+                        <th className="text-left px-2 py-1">Action</th>
+                        <th className="text-left px-2 py-1">IP</th>
+                        <th className="text-left px-2 py-1">Device</th>
+                      </tr></thead>
+                      <tbody>
+                        {(verify.logins || []).map((l, i) => (
+                          <tr key={i} className="border-t">
+                            <td className="px-2 py-1 font-mono text-[11px]">{l.at}</td>
+                            <td className="px-2 py-1"><span className={`px-1.5 py-0.5 rounded text-[10px] ${l.action === 'LOGIN' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{l.action}</span></td>
+                            <td className="px-2 py-1 font-mono">{l.ip || '—'}</td>
+                            <td className="px-2 py-1 text-[11px]" title={l.user_agent}>{shortUa(l.user_agent)}</td>
+                          </tr>
+                        ))}
+                        {(!verify.logins || verify.logins.length === 0) && <tr><td colSpan="4" className="text-center text-gray-400 py-3">No login records yet</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </div>
           </div>

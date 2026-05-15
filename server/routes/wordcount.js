@@ -175,21 +175,69 @@ router.get('/detail', (req, res) => {
   if (user_id) { where.push('user_id = ?'); params.push(+user_id); }
 
   const rows = db.prepare(
-    `SELECT id, at, user_id, user_name, action, entity_type, entity_label, path, body_summary
+    `SELECT id, at, user_id, user_name, action, entity_type, entity_label,
+            path, body_summary, ip, user_agent
        FROM audit_log
       WHERE ${where.join(' AND ')}
       ORDER BY at DESC
       LIMIT 1000`
   ).all(...params);
 
+  // Include ip + user_agent so admin can verify WHO actually made an
+  // entry (not just whose account was logged in).  Mam (2026-05-15)
+  // saw 66 entries attributed to ashutosh BEFORE his account's
+  // created_at, suspected Ankur did them — exposing the device fields
+  // makes that kind of investigation possible without DB access.
   res.json(rows.map(r => {
     const { chars, truncated } = rowCharCount(r);
     return {
       id: r.id, at: r.at, user_id: r.user_id, user_name: r.user_name,
       action: r.action, module: r.entity_type, entity_label: r.entity_label,
       path: r.path, chars, truncated,
+      ip: r.ip || null,
+      user_agent: r.user_agent || null,
+      body_preview: r.body_summary ? r.body_summary.slice(0, 400) : null,
     };
   }));
+});
+
+// GET /api/admin/word-count/user-check/:user_id
+// Diagnostic: returns the user record + audit summary so admin can
+// see if a user's `created_at` lines up with the audit timeline.
+// Used to investigate scenarios like "this user supposedly entered
+// rows BEFORE their account existed" — turns out either the account
+// was created later from the API/DB tool, or a SHARED-SESSION case
+// (someone else using their JWT).  Mam, 2026-05-15.
+router.get('/user-check/:user_id', (req, res) => {
+  const db = getDb();
+  const id = +req.params.user_id;
+  if (!id) return res.status(400).json({ error: 'user_id required' });
+  const user = db.prepare(
+    `SELECT id, name, email, username, role, department, active, created_at
+       FROM users WHERE id=?`
+  ).get(id);
+  const audit = db.prepare(
+    `SELECT COUNT(*) total,
+            MIN(at) first_action,
+            MAX(at) last_action,
+            COUNT(DISTINCT ip) distinct_ips,
+            COUNT(DISTINCT date(at)) active_days
+       FROM audit_log WHERE user_id=?`
+  ).get(id);
+  const ips = db.prepare(
+    `SELECT ip, COUNT(*) c, MIN(at) first_seen, MAX(at) last_seen
+       FROM audit_log
+      WHERE user_id=? AND ip IS NOT NULL
+   GROUP BY ip ORDER BY c DESC LIMIT 10`
+  ).all(id);
+  const logins = db.prepare(
+    `SELECT at, ip, user_agent, status_code, action
+       FROM audit_log
+      WHERE entity_type='auth' AND user_id=?
+        AND action IN ('LOGIN','LOGIN_FAIL','FORGOT_PASSWORD_OK','FORGOT_PASSWORD_OK_EMERGENCY')
+   ORDER BY at DESC LIMIT 30`
+  ).all(id);
+  res.json({ user, audit, ips, logins });
 });
 
 module.exports = router;
