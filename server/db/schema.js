@@ -2686,6 +2686,32 @@ function initializeDatabase() {
     for (const s of seed) stmt.run(s);
   } catch (e) { /* non-fatal */ }
 
+  // One-time normalization of sales_funnel.category capitalisation so
+  // case-variants like "SOLAR" and "Solar" collapse into the canonical
+  // label from the Leads dropdown.  Mam, 2026-05-15: the By-Category
+  // pie was showing both "Solar: 118" and "SOLAR: 1" as separate
+  // slices because legacy free-text capture wasn't normalised.
+  // Guarded by an app_settings flag so it only runs once.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='sales_funnel_category_canonical_v1'").get();
+    if (!done) {
+      const canon = ['Low Voltage', 'Fire Fighting', 'Fire NOC', 'Electrical', 'SOLAR', 'MEP', 'HVAC', 'Plumbing'];
+      let total = 0;
+      for (const c of canon) {
+        try {
+          // Match anything that LOWER()s to the same string but isn't
+          // already the canonical capitalisation.
+          const r = db.prepare(
+            'UPDATE sales_funnel SET category = ? WHERE LOWER(TRIM(category)) = LOWER(?) AND category != ?'
+          ).run(c, c, c);
+          total += r.changes;
+        } catch (_) {}
+      }
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('sales_funnel_category_canonical_v1', '1')").run();
+      if (total > 0) console.log(`[migration] sales_funnel.category: ${total} rows normalised to canonical capitalisation`);
+    }
+  } catch (e) { /* non-fatal */ }
+
   // One-time normalization of CRM Funnel free-text sources to the
   // canonical 5 — so editing a legacy row doesn't fail the new
   // backend validator.  Guarded by app_settings flag.

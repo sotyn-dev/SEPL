@@ -170,7 +170,26 @@ export default function Leads() {
 
   // Chart data
   const stageChartData = dashboard?.byStage?.map(s => ({ name: STAGE_SHORT[s.current_stage]||s.current_stage, count: s.count, fill: STAGE_COLORS[s.current_stage]||'#888' })) || [];
-  const catChartData = dashboard?.byCategory?.map((c,i) => ({ name: c.category, value: c.count, fill: PIE_COLORS[i%PIE_COLORS.length] })) || [];
+
+  // Merge case-variant duplicates ("SOLAR" + "Solar" should collapse into
+  // one slice) using the canonical capitalisation from the CATEGORIES
+  // list.  Mam, 2026-05-15: the pie was showing both "Solar: 118" and
+  // "SOLAR: 1" side by side because the historical free-text capture
+  // wasn't normalised.
+  const canonicalCategory = (raw) => {
+    if (!raw) return 'Uncategorized';
+    const lower = String(raw).trim().toLowerCase();
+    return CATEGORIES.find(c => c.toLowerCase() === lower) || String(raw).trim();
+  };
+  const mergedCats = new Map();
+  (dashboard?.byCategory || []).forEach(c => {
+    const key = canonicalCategory(c.category);
+    mergedCats.set(key, (mergedCats.get(key) || 0) + c.count);
+  });
+  const catChartData = [...mergedCats.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, value], i) => ({ name, value, fill: PIE_COLORS[i % PIE_COLORS.length] }));
+
   const scChartData = dashboard?.bySC?.map((s,i) => ({ name: s.assigned_sc, count: s.count, fill: PIE_COLORS[i%PIE_COLORS.length] })) || [];
 
   // Funnel data
@@ -253,12 +272,20 @@ export default function Leads() {
               </ResponsiveContainer>
             </div>
 
-            {/* Category Pie */}
+            {/* Category Donut — inline labels removed because they
+                collide on small slices.  Counts live in the right-side
+                legend instead.  Mam, 2026-05-15. */}
             <div className="card">
               <h4 className="font-bold text-sm text-gray-700 mb-3">By Category</h4>
               <ResponsiveContainer width="100%" height={250}>
-                <PieChart><Pie data={catChartData} cx="50%" cy="50%" outerRadius={80} dataKey="value" label={({name,value})=>`${name}: ${value}`} labelLine={false}>
-                  {catChartData.map((e,i)=>(<Cell key={i} fill={e.fill}/>))}</Pie><Legend iconSize={10} wrapperStyle={{fontSize:10}}/></PieChart>
+                <PieChart>
+                  <Pie data={catChartData} cx="40%" cy="50%" innerRadius={45} outerRadius={80} dataKey="value" label={false} labelLine={false}>
+                    {catChartData.map((e,i)=>(<Cell key={i} fill={e.fill}/>))}
+                  </Pie>
+                  <Tooltip formatter={(v) => [v, 'leads']} />
+                  <Legend iconSize={10} wrapperStyle={{fontSize:11}} layout="vertical" verticalAlign="middle" align="right"
+                    formatter={(name, entry) => `${name} — ${entry?.payload?.value ?? 0}`} />
+                </PieChart>
               </ResponsiveContainer>
             </div>
 
@@ -279,12 +306,19 @@ export default function Leads() {
               })}</div>
             </div>
 
-            {/* SC Performance */}
+            {/* SC Performance — same legend-only style as the Category
+                donut so multiple SC names don't collide on the pie. */}
             <div className="card">
               <h4 className="font-bold text-sm text-gray-700 mb-3">By Sales Coordinator</h4>
               <ResponsiveContainer width="100%" height={250}>
-                <PieChart><Pie data={scChartData} cx="50%" cy="50%" innerRadius={40} outerRadius={80} dataKey="count" label={({name,count})=>`${name}: ${count}`}>
-                  {scChartData.map((e,i)=>(<Cell key={i} fill={e.fill}/>))}</Pie><Legend iconSize={10} wrapperStyle={{fontSize:10}}/></PieChart>
+                <PieChart>
+                  <Pie data={scChartData} cx="40%" cy="50%" innerRadius={40} outerRadius={80} dataKey="count" label={false} labelLine={false}>
+                    {scChartData.map((e,i)=>(<Cell key={i} fill={e.fill}/>))}
+                  </Pie>
+                  <Tooltip formatter={(v) => [v, 'leads']} />
+                  <Legend iconSize={10} wrapperStyle={{fontSize:11}} layout="vertical" verticalAlign="middle" align="right"
+                    formatter={(name, entry) => `${name} — ${entry?.payload?.count ?? 0}`} />
+                </PieChart>
               </ResponsiveContainer>
             </div>
           </div>
