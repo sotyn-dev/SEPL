@@ -206,8 +206,14 @@ export default function CashFlow() {
               </div>
               <div className="text-[11px] text-gray-500">{filtered.length} projects</div>
             </div>
-            <div className="overflow-x-auto"><table className="min-w-[1200px] text-xs cf-tracker-table">
-              <thead>
+            {/* Bounded scroll wrapper so the column header can stay
+                pinned while the user scrolls through 30+ projects.
+                Mam (2026-05-13): "look at when header is hide its not
+                good user interface".  Local to this one table — no
+                global sticky/freeze classes (those caused the layered
+                jumble that got rolled back in f8360e1). */}
+            <div className="overflow-auto max-h-[70vh] border-t border-gray-200"><table className="min-w-[1200px] text-xs cf-tracker-table">
+              <thead className="sticky top-0 z-10">
                 <tr className="bg-gray-100 text-[10px] uppercase text-gray-600">
                   <th className="px-2 py-2 bg-gray-100">Sr</th>
                   <th className="px-2 py-2 text-left bg-gray-100 min-w-[200px]">Project</th>
