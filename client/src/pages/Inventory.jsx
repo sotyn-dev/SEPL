@@ -13,7 +13,8 @@ import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import { useAuth } from '../context/AuthContext';
-import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin, FiBarChart2, FiCheck, FiCamera } from 'react-icons/fi';
+import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin, FiBarChart2, FiCheck, FiCamera, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 import BarcodeScanner from '../components/BarcodeScanner';
 
 const fmtNum = (n) => (n == null ? '0' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 }));
@@ -101,8 +102,14 @@ export default function Inventory() {
             Stock per warehouse · receive material in · issue to site or transfer between stores · full movement history.
           </p>
         </div>
-        <button onClick={() => { loadSummary(); if (tab === 'stock') loadStock(); if (tab === 'movements') loadMovements(); }}
-          className="btn btn-secondary flex items-center gap-2"><FiRefreshCw size={14} /> Refresh</button>
+        <div className="flex gap-2">
+          <button onClick={() => exportCsv('inventory-stock',
+            ['Code','Site','Item','Make','UoM','Qty','Avg Rate','Value','Reorder Level'],
+            flatStock.map(s => [s.item_code, s.site_name || s.warehouse_name, s.item_name, s.make, s.uom, s.qty, s.avg_rate, s.value, s.reorder_level]))}
+            className="btn btn-secondary flex items-center gap-2"><FiDownload size={14} /> Export Excel</button>
+          <button onClick={() => { loadSummary(); if (tab === 'stock') loadStock(); if (tab === 'movements') loadMovements(); }}
+            className="btn btn-secondary flex items-center gap-2"><FiRefreshCw size={14} /> Refresh</button>
+        </div>
       </div>
 
       {/* Top summary cards */}

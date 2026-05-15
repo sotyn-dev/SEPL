@@ -9,7 +9,8 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMonitor, FiSmartphone, FiCpu, FiUserPlus, FiCornerUpLeft, FiTool, FiArchive, FiTrash2, FiEdit2, FiSearch, FiClock } from 'react-icons/fi';
+import { FiPlus, FiMonitor, FiSmartphone, FiCpu, FiUserPlus, FiCornerUpLeft, FiTool, FiArchive, FiTrash2, FiEdit2, FiSearch, FiClock, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 const CATEGORIES = [
   'Laptop', 'Desktop', 'Mobile', 'Tablet', 'SIM Card',
@@ -143,9 +144,15 @@ export default function CompanyAssets() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><FiCpu className="text-indigo-600" /> Company Assets</h1>
           <p className="text-sm text-gray-500">Laptops, phones, SIMs, monitors and other company equipment — issue, return, maintenance log.</p>
         </div>
-        {canCreate('company_assets') && (
-          <button onClick={openAdd} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Add Asset</button>
-        )}
+        <div className="flex gap-2">
+          <button onClick={() => exportCsv('company-assets',
+            ['Asset #','Category','Name/Model','Serial/IMEI','SIM/Mobile','Issued To','Condition','Status'],
+            assets.map(a => [a.asset_no, a.category, a.name, a.serial_imei, a.sim_mobile, a.issued_to_name, a.condition, a.status]))}
+            className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
+          {canCreate('company_assets') && (
+            <button onClick={openAdd} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Add Asset</button>
+          )}
+        </div>
       </div>
 
       {stats && (

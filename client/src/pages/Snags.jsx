@@ -18,7 +18,8 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch } from 'react-icons/fi';
+import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 const STATUS_PILL = {
   open: 'bg-amber-100 text-amber-700',
@@ -155,9 +156,15 @@ export default function Snags() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><FiAlertTriangle className="text-red-600" /> Snag List</h1>
           <p className="text-sm text-gray-500">Management raises site snags · assignee uploads proof · raiser approves to close.</p>
         </div>
-        {canCreate('snags') && (
-          <button onClick={openRaise} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Snag</button>
-        )}
+        <div className="flex gap-2">
+          <button onClick={() => exportCsv('snags',
+            ['Snag #','Site','Location','Description','Priority','Status','Raised By','Assigned To','Target Date','Raised At'],
+            snags.map(s => [s.snag_no, s.site_name, s.location, s.description, s.priority, s.status, s.raised_by_name, s.assigned_to_name, s.target_date, s.raised_at]))}
+            className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
+          {canCreate('snags') && (
+            <button onClick={openRaise} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Snag</button>
+          )}
+        </div>
       </div>
 
       {stats && (

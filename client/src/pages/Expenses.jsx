@@ -4,7 +4,8 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTrash2, FiEdit2, FiRotateCcw } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiEdit2, FiRotateCcw, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 export default function Expenses() {
   const { canDelete } = useAuth();
@@ -64,7 +65,13 @@ export default function Expenses() {
       <div className="sticky-toolbar">
         <div className="flex justify-between items-center">
           <h3 className="font-semibold">Expense Management</h3>
-          <button onClick={openNew} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit Expense</button>
+          <div className="flex gap-2">
+            <button onClick={() => exportCsv('expenses',
+              ['Description','Category','Amount','Date','Submitted By','Status'],
+              expenses.map(e => [e.description || e.title, e.category, e.amount, e.expense_date, e.submitted_by_name, e.status]))}
+              className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
+            <button onClick={openNew} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit Expense</button>
+          </div>
         </div>
 
         {/* Summary Cards */}

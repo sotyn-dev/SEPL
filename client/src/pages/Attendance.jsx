@@ -4,7 +4,8 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCircle, FiPlus, FiAlertTriangle, FiTrash2, FiEdit2 } from 'react-icons/fi';
+import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCircle, FiPlus, FiAlertTriangle, FiTrash2, FiEdit2, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 export default function Attendance() {
   const { user, isAdmin, canDelete } = useAuth();
@@ -433,9 +434,15 @@ export default function Attendance() {
       {/* RECORDS TAB */}
       {tab === 'records' && (
         <>
-          <input type="date" className="input w-48" value={filterDate} onChange={e => setFilterDate(e.target.value)} />
-          <div className="card p-0"><table className="text-sm freeze-head">
-            <thead><tr><th>Name</th><th>Date</th><th>In</th><th>Out</th><th>Hours</th><th>Site</th><th>Status</th><th>In Photo</th><th>Out Photo</th><th>Actions</th></tr></thead>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <input type="date" className="input w-48" value={filterDate} onChange={e => setFilterDate(e.target.value)} />
+            <button onClick={() => exportCsv(`attendance-${filterDate || 'all'}`,
+              ['Name','Date','In','Out','Hours','Site','Status'],
+              records.map(r => [r.user_name, r.date, r.punch_in_time, r.punch_out_time, r.total_hours, r.site_name, r.status]))}
+              className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
+          </div>
+          <div className="card p-0 overflow-auto max-h-[70vh]"><table className="text-sm">
+            <thead className="sticky top-0 z-10 bg-gray-100"><tr><th>Name</th><th>Date</th><th>In</th><th>Out</th><th>Hours</th><th>Site</th><th>Status</th><th>In Photo</th><th>Out Photo</th><th>Actions</th></tr></thead>
             <tbody>{records.map(r => (
               <tr key={r.id}>
                 <td className="font-medium">{r.user_name}{r.admin_marked ? <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded font-bold" title="Admin marked — hidden from user">ADMIN</span> : null}</td><td>{r.date}</td>

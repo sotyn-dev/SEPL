@@ -3,7 +3,8 @@ import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiTrash2, FiExternalLink, FiTarget } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiExternalLink, FiTarget, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 const fmt = (n) => 'Rs ' + Math.abs(Math.round(+n || 0)).toLocaleString('en-IN');
 import { useAuth } from '../context/AuthContext';
@@ -137,9 +138,15 @@ export default function CRMFunnel() {
           <h3 className="font-semibold text-gray-800 flex items-center gap-2"><FiTarget /> CRM Sales Funnel</h3>
           <p className="text-xs text-gray-500">Flat 3-step tracker: Quotation → Negotiation → Win/Loss</p>
         </div>
-        {canCreate('crm_funnel') && (
-          <button onClick={openAdd} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Lead</button>
-        )}
+        <div className="flex gap-2">
+          <button onClick={() => exportCsv('crm-funnel',
+            ['Lead #','Client','Company','Mobile','Source','Type','Category','State','Stage','Quote Amount','Neg Status','Neg Amount','Final Status'],
+            rows.map(r => [r.lead_no, r.client_name, r.company_name, r.mobile, r.source, r.type, r.category, r.state, r.final_status || (r.quotation_submitted ? 'Negotiation' : 'Quote'), r.quotation_amount, r.negotiation_status, r.negotiation_amount, r.final_status]))}
+            className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+          {canCreate('crm_funnel') && (
+            <button onClick={openAdd} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Lead</button>
+          )}
+        </div>
       </div>
 
       {/* Step pill tabs — same visual style as the existing Sales Funnel

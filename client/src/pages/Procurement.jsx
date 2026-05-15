@@ -5,7 +5,8 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle } from 'react-icons/fi';
+import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false };
 
@@ -656,9 +657,19 @@ export default function Procurement() {
   return (
     <div className="space-y-4">
       <div className="sticky-toolbar">
-        <div className="flex gap-2 flex-wrap">{tabs.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>{t.label}</button>
-        ))}</div>
+        <div className="flex gap-2 flex-wrap items-center justify-between">
+          <div className="flex gap-2 flex-wrap">{tabs.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>{t.label}</button>
+          ))}</div>
+          {/* One Export button — exports current tab's data */}
+          <button onClick={() => {
+            if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length]));
+            if (tab === 'pos')        exportCsv('vendor-pos',      ['PO Number','PO Date','Vendor','Amount','Status'], vendorPos.map(v => [v.po_number, v.po_date, v.vendor_name, v.total_amount, v.status]));
+            if (tab === 'bills')      exportCsv('purchase-bills',  ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], purchaseBills.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
+            if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.doc_type, d.doc_number, d.po_number, d.delivery_date, d.received_by_name, d.received_on, d.status]));
+            if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], itemRates.map(r => [r.item_description, r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
+          }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
+        </div>
       </div>
 
       {tab === 'indents' && (

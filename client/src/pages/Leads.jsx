@@ -4,7 +4,8 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp } from 'react-icons/fi';
+import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 
 // Mam's 11-stage Sales Funnel spec (SEPL_Sales_Funnel_ERP_Build_Spec).
@@ -180,7 +181,13 @@ export default function Leads() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <h1 className="text-xl font-bold flex items-center gap-2"><FiTarget className="text-red-600" /> Sales Funnel</h1>
-        {canCreate('leads') && <button onClick={() => { setForm({ client_name:'',company_name:'',phone:'',email:'',category:'',address:'',source:'',assigned_sc:user?.name||'',assigned_asm:'',remarks:'' }); setModal('add'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15}/> New Lead</button>}
+        <div className="flex gap-2">
+          <button onClick={() => exportCsv('leads',
+            ['Lead No','Client','Company','Category','Location','Phone','Email','Source','Stage','Assigned SC','Assigned ASM','Date'],
+            leads.map(l => [l.lead_no, l.client_name, l.company_name, l.category, `${l.district||''} ${l.state||''}`.trim(), l.phone, l.email, l.source, l.current_stage, l.assigned_sc, l.assigned_asm, l.created_at]))}
+            className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15}/> Export Excel</button>
+          {canCreate('leads') && <button onClick={() => { setForm({ client_name:'',company_name:'',phone:'',email:'',category:'',address:'',source:'',assigned_sc:user?.name||'',assigned_asm:'',remarks:'' }); setModal('add'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15}/> New Lead</button>}
+        </div>
       </div>
 
       {/* Sales Funnel stage tabs — same pill-button style as the

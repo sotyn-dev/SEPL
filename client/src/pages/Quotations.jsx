@@ -4,7 +4,8 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiTrash2 } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 import { useAuth } from '../context/AuthContext';
 
 const blankRow = () => ({ description: '', quantity: 1, unit: 'nos', rate: 0, item_id: null, suggestion: null });
@@ -108,7 +109,13 @@ export default function Quotations() {
         <>
           <div className="flex justify-between items-center">
             <h3 className="font-semibold text-gray-800">Bill of Quantities</h3>
-            <button onClick={() => { setForm({ lead_id: '', title: '', drawing_required: false }); setBoqItems([blankRow()]); setModal('boq'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create BOQ</button>
+            <div className="flex gap-2">
+              <button onClick={() => exportCsv('boqs',
+                ['Title','Client','Drawing','Total','Status','Date'],
+                boqs.map(b => [b.title, b.client_name, b.drawing_required ? 'Yes' : 'No', b.total_amount, b.status, b.created_at]))}
+                className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+              <button onClick={() => { setForm({ lead_id: '', title: '', drawing_required: false }); setBoqItems([blankRow()]); setModal('boq'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create BOQ</button>
+            </div>
           </div>
           <div className="card p-0">
             <table className="freeze-head">
@@ -142,7 +149,13 @@ export default function Quotations() {
         <>
           <div className="flex justify-between items-center">
             <h3 className="font-semibold text-gray-800">Quotations</h3>
-            <button onClick={() => { setForm({ lead_id: '', boq_id: '', total_amount: 0, discount: 0, final_amount: 0, valid_until: '', notes: '' }); setModal('quotation'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Quotation</button>
+            <div className="flex gap-2">
+              <button onClick={() => exportCsv('quotations',
+                ['Number','Client','Total','Discount','Final','Status','Valid Until'],
+                quotations.map(q => [q.quotation_number, q.client_name, q.total_amount, q.discount, q.final_amount, q.status, q.valid_until]))}
+                className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+              <button onClick={() => { setForm({ lead_id: '', boq_id: '', total_amount: 0, discount: 0, final_amount: 0, valid_until: '', notes: '' }); setModal('quotation'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Quotation</button>
+            </div>
           </div>
           <div className="card p-0">
             <table className="freeze-head">

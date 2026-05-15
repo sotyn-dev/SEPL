@@ -3,7 +3,8 @@ import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiSettings, FiDollarSign, FiEye, FiLock, FiUnlock, FiSave } from 'react-icons/fi';
+import { FiSettings, FiDollarSign, FiEye, FiLock, FiUnlock, FiSave, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
 
 const monthNow = () => {
@@ -193,6 +194,10 @@ export default function Payroll() {
               </div>
             )}
             <div className="flex-1" />
+            <button onClick={() => exportCsv(`payroll-${month}`,
+              ['Employee','Dept','Base','Paid Days','Gross','Deductions','Net'],
+              list.map(p => [p.employee_name, p.department, p.base_salary, p.paid_days, p.gross, p.total_deductions, p.net_pay]))}
+              className="btn btn-secondary text-sm flex items-center gap-1"><FiDownload size={14} /> Export Excel</button>
             <div className="text-right">
               <p className="text-xs text-gray-500">Total Net Payout</p>
               <p className="text-2xl font-bold text-emerald-600">{fmt(total)}</p>

@@ -4,7 +4,8 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTrash2 } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 export default function Billing() {
   const { canDelete } = useAuth();
@@ -46,9 +47,18 @@ export default function Billing() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 flex-wrap">{tabs.map(t => (
-        <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>{t.label}</button>
-      ))}</div>
+      <div className="flex gap-2 flex-wrap items-center justify-between">
+        <div className="flex gap-2 flex-wrap">{tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>{t.label}</button>
+        ))}</div>
+        <button onClick={() => {
+          if (tab === 'sales')   exportCsv('sales-bills',   ['Bill No','PO','Date','Amount','GST','Total','Payment'], salesBills.map(b => [b.bill_number, b.po_number, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
+          if (tab === 'ra')      exportCsv('ra-bills',      ['Bill No','Date','Work Done','Previous','Current','Status'], raBills.map(b => [b.bill_number, b.bill_date, b.work_done_amount, b.previous_amount, b.current_amount, b.status]));
+          if (tab === 'mb')      exportCsv('mb-bills',      ['Bill No','Amount','Status'], mbBills.map(b => [b.bill_number, b.total_amount, b.status]));
+          if (tab === 'inst')    exportCsv('inst-bills',    ['Bill No','Amount','Payment'], instBills.map(b => [b.bill_number, b.amount, b.payment_status]));
+          if (tab === 'testing') exportCsv('testing',       ['Date','Type','Result','Tested By','Notes'], testing.map(t => [t.test_date, t.test_type, t.result, t.tested_by_name, t.notes]));
+        }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
+      </div>
 
       {tab === 'sales' && (
         <>

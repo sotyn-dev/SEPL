@@ -7,7 +7,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
-import { FiTrendingUp, FiCalendar, FiChevronRight } from 'react-icons/fi';
+import { FiTrendingUp, FiCalendar, FiChevronRight, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 const MODULE_LABELS = {
   delegations: 'Delegations',
@@ -99,6 +100,12 @@ export default function WeeklyScore() {
           <div className="ml-auto text-sm text-gray-700">
             <span className="font-semibold">{fmtRange(data.week_start, data.week_end)}</span> · {data.users?.length || 0} employees
           </div>
+        )}
+        {data?.users && (
+          <button onClick={() => exportCsv(`weekly-score-${weekStart}`,
+            ['Rank','Employee','Dept','Given','Done','Score %'],
+            data.users.map((u, i) => [i + 1, u.name, u.department, u.given_total, u.done_total, u.score_pct]))}
+            className="btn btn-secondary text-xs flex items-center gap-1"><FiDownload size={12} /> Export Excel</button>
         )}
       </div>
 

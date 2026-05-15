@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEye, FiSearch, FiAlertCircle, FiClock, FiCheckCircle, FiList, FiEdit2, FiTrash2 } from 'react-icons/fi';
+import { FiPlus, FiEye, FiSearch, FiAlertCircle, FiClock, FiCheckCircle, FiList, FiEdit2, FiTrash2, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 // Matches mam's "Complaint Register Form 24-25" Google Form. Categories are
 // the SEPL service lines; Customer Type is Old Site / Running Site (not
@@ -106,6 +107,10 @@ export default function Complaints() {
     <div className="space-y-4">
       <div className="flex justify-between items-center flex-wrap gap-2">
         <h1 className="text-xl font-bold text-gray-800">Complaint Register</h1>
+        <button onClick={() => exportCsv('complaints',
+          ['Complaint #','Client','Company','Mobile','Category','Problem','Status','Priority','Assigned To (Step1)','Created'],
+          list.map(c => [c.complaint_number, c.client_name, c.company_name, c.mobile_number, c.category, c.problem_detail, c.status, c.priority, c.step1_assigned_to, c.created_at]))}
+          className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={14} /> Export Excel</button>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

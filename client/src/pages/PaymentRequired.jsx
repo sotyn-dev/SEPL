@@ -5,7 +5,8 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiSearch, FiFilter, FiEye, FiCheck, FiX, FiClock, FiCheckCircle, FiXCircle, FiUpload, FiTrash2 } from 'react-icons/fi';
+import { FiPlus, FiSearch, FiFilter, FiEye, FiCheck, FiX, FiClock, FiCheckCircle, FiXCircle, FiUpload, FiTrash2, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
 
 const CATEGORIES = ['TA/DA', 'Purchase', 'Labour', 'Transport', 'Salary', 'Compliance'];
@@ -144,6 +145,10 @@ export default function PaymentRequired() {
           <p className="text-sm text-gray-500">Request payments with multi-level approval workflow</p>
         </div>
         <div className="flex gap-2">
+          <button onClick={() => exportCsv('payment-requests',
+            ['Req No','Employee','Site','Category','Amount','Purpose','Step','Status','Required By','Created'],
+            requests.map(r => [r.request_no, r.employee_name, r.site_name, r.category, r.amount, r.purpose, r.current_step, r.status, r.required_by_date, r.created_at]))}
+            className="btn btn-secondary flex items-center gap-2"><FiDownload size={16} /> Export Excel</button>
           {canCreate('payment_required') && (
             <button onClick={() => { setForm({ ...emptyForm, employee_name: user?.name || '', required_by_date: defaultRequiredByDate() }); setModal('add'); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={16} /> New Request</button>
           )}

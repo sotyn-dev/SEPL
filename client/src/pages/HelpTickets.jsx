@@ -9,7 +9,8 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiHelpCircle, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle, FiEdit2, FiTrash2, FiSearch, FiUser, FiTag } from 'react-icons/fi';
+import { FiHelpCircle, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle, FiEdit2, FiTrash2, FiSearch, FiUser, FiTag, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 const STATUS_COLORS = {
   open: 'bg-red-100 text-red-700',
@@ -119,7 +120,13 @@ export default function HelpTickets() {
           <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2"><FiHelpCircle className="text-red-600" /> Help Tickets</h3>
           <p className="text-sm text-gray-500">Raise a ticket, follow up on what you've raised, or work on what's been assigned to you.</p>
         </div>
-        <button onClick={() => setCreateModal(true)} className="btn btn-primary flex items-center gap-2"><FiPlus size={14} /> Raise New Ticket</button>
+        <div className="flex gap-2">
+          <button onClick={() => exportCsv('help-tickets',
+            ['Ticket #','Subject','Raised By','Assigned To','Priority','Status','When'],
+            tickets.map(t => [t.ticket_no, t.subject, t.raised_by_name, t.assigned_to_name, t.priority, t.status, t.created_at]))}
+            className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={14} /> Export Excel</button>
+          <button onClick={() => setCreateModal(true)} className="btn btn-primary flex items-center gap-2"><FiPlus size={14} /> Raise New Ticket</button>
+        </div>
       </div>
 
       {/* Tabs */}

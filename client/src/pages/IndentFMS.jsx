@@ -3,7 +3,8 @@ import api from '../api';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
-import { FiPlus, FiArrowRight, FiPackage } from 'react-icons/fi';
+import { FiPlus, FiArrowRight, FiPackage, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 const STAGES = [
   { key: 'indent_raised', label: 'Indent Raised', color: 'bg-gray-200' },
@@ -50,10 +51,22 @@ export default function IndentFMS() {
 
   return (
     <div className="space-y-6">
-      <div className="flex gap-2">
-        <button onClick={() => setTab('pipeline')} className={`btn ${tab === 'pipeline' ? 'btn-primary' : 'btn-secondary'}`}>Pipeline View</button>
-        <button onClick={() => setTab('tracker')} className={`btn ${tab === 'tracker' ? 'btn-primary' : 'btn-secondary'}`}>Indent Tracker</button>
-        <button onClick={() => setTab('grn')} className={`btn ${tab === 'grn' ? 'btn-primary' : 'btn-secondary'}`}>GRN</button>
+      <div className="flex gap-2 items-center justify-between flex-wrap">
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setTab('pipeline')} className={`btn ${tab === 'pipeline' ? 'btn-primary' : 'btn-secondary'}`}>Pipeline View</button>
+          <button onClick={() => setTab('tracker')} className={`btn ${tab === 'tracker' ? 'btn-primary' : 'btn-secondary'}`}>Indent Tracker</button>
+          <button onClick={() => setTab('grn')} className={`btn ${tab === 'grn' ? 'btn-primary' : 'btn-secondary'}`}>GRN</button>
+        </div>
+        <button onClick={() => {
+          if (tab === 'grn') {
+            exportCsv('grns', ['GRN #','Date','Received By','Status'],
+              grns.map(g => [g.grn_number, g.grn_date, g.received_by_name, g.status]));
+          } else {
+            exportCsv('indent-tracker',
+              ['Indent #','Date','Created By','Status','Current Stage'],
+              tracker.map(t => [t.indent_number, t.indent_date, t.created_by_name, t.status, t.currentStage]));
+          }
+        }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
       </div>
 
       {tab === 'pipeline' && (

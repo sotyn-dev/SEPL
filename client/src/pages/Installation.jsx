@@ -4,7 +4,8 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2 } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 export default function Installation() {
   const { canDelete } = useAuth();
@@ -34,7 +35,13 @@ export default function Installation() {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h3 className="font-semibold">Installations</h3>
-        <button onClick={() => { setEditing(null); setForm({ po_id: '', site_address: '', start_date: '', end_date: '', assigned_to: '', notes: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Installation</button>
+        <div className="flex gap-2">
+          <button onClick={() => exportCsv('installations',
+            ['PO','Site Address','Start','End','Assigned To','Status'],
+            installations.map(i => [i.po_number, i.site_address, i.start_date, i.end_date, i.assigned_to_name, i.status]))}
+            className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+          <button onClick={() => { setEditing(null); setForm({ po_id: '', site_address: '', start_date: '', end_date: '', assigned_to: '', notes: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Installation</button>
+        </div>
       </div>
       <div className="card p-0"><table className="freeze-head">
         <thead><tr><th>PO</th><th>Site Address</th><th>Start</th><th>End</th><th>Assigned To</th><th>Status</th><th>Actions</th></tr></thead>

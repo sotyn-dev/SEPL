@@ -8,7 +8,8 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiCalendar } from 'react-icons/fi';
+import { FiPlus, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiCalendar, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 export default function PMSTasks() {
   const { user, isAdmin, canCreate } = useAuth();
@@ -197,9 +198,15 @@ export default function PMSTasks() {
           <h3 className="text-xl font-bold text-gray-800">PMS Tasks</h3>
           <p className="text-sm text-gray-500">Project Management tasks by CRM — pick a project, CRM auto-fills from the latest Client PO.</p>
         </div>
-        {canCreate('pms_tasks') && (
-          <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center"><FiPlus /> New PMS Task</button>
-        )}
+        <div className="flex gap-2">
+          <button onClick={() => exportCsv('pms-tasks',
+            ['Task ID','Project','Created By','Description','Assigned To','Due','Status'],
+            tasks.map(t => [t.task_id, t.project_name, t.created_by_name, t.description, t.assigned_to_name, t.due_date, t.status]))}
+            className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+          {canCreate('pms_tasks') && (
+            <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 justify-center"><FiPlus /> New PMS Task</button>
+          )}
+        </div>
       </div>
 
       {/* Mam wants PMS scoped to the logged-in user (like Delegations) —

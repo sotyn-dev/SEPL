@@ -3,7 +3,8 @@ import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiTrash2, FiPhone, FiMapPin } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiPhone, FiMapPin, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 import { useAuth } from '../context/AuthContext';
 import { STATES, DISTRICTS_BY_STATE, CONTRACTOR_TYPES } from '../data/indiaLocations';
 
@@ -106,9 +107,15 @@ export default function SubContractors() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-semibold text-gray-800">Sub-Contractors</h3>
-        <button onClick={openAdd} className="btn btn-primary flex items-center gap-2">
-          <FiPlus /> Add Sub-Contractor
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => exportCsv('sub-contractors',
+            ['Name','Type','Contact','District','State','Experience','Manpower','Tools','GST','Rate','Status'],
+            rows.map(c => [c.name, c.contractor_type, c.contact_number, c.district, c.state, c.experience_years, c.manpower_strength, c.tools_owned, c.gst_number, c.rate_vs_budget, c.status]))}
+            className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+          <button onClick={openAdd} className="btn btn-primary flex items-center gap-2">
+            <FiPlus /> Add Sub-Contractor
+          </button>
+        </div>
       </div>
 
       <div className="card p-3 grid grid-cols-1 sm:grid-cols-4 gap-2">

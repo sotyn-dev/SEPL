@@ -3,7 +3,8 @@ import api from '../api';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
-import { FiPlus, FiTrash2, FiUpload, FiEdit2, FiExternalLink, FiEye } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiUpload, FiEdit2, FiExternalLink, FiEye, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 import SearchableSelect from '../components/SearchableSelect';
 import { useAuth } from '../context/AuthContext';
 
@@ -198,6 +199,10 @@ export default function Orders() {
                 <button onClick={() => setPoFilter('')} className="text-xs text-gray-500 hover:text-red-600 px-2" title="Clear">×</button>
               )}
             </div>
+            <button onClick={() => exportCsv('purchase-orders',
+              ['PO Number','Lead No','Client','Project','Category','Date','Amount','Advance','Status','Site Engineer','CRM'],
+              pos.map(p => [p.po_number, p.lead_no, p.client_name, p.project_name, p.category, p.po_date, p.total_amount, p.advance_amount, p.status, p.site_engineer_name, p.crm_name]))}
+              className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
             <button onClick={() => {
               setEditingPO(null);
               setForm({ business_book_id: '', po_number: '', po_date: '', total_amount: 0, advance_amount: 0, po_copy_link: '', boq_file_link: '', pt_advance: '', pt_delivery: '', pt_installation: '', pt_commissioning: '', pt_retention: '', site_engineer_ids: [], crm_name: '' });

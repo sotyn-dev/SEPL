@@ -5,7 +5,8 @@ import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle } from 'react-icons/fi';
+import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 const SYSTEMS = ['Electrical', 'Fire Fighting', 'Fire Alarm', 'CCTV', 'Access Control', 'PA System', 'Plumbing', 'HVAC', 'Solar', 'Networking', 'Combined'];
 const EQUIPMENT_LIST = ['Welding Machine', 'Pipe Threading Machine', 'Drill Machine', 'Grinder', 'Ladder', 'Scaffolding', 'Pipe Bending Machine', 'Cable Pulling Machine', 'Multimeter', 'Megger', 'Earth Tester', 'Hydro Test Pump', 'Generator', 'Compressor'];
@@ -347,20 +348,26 @@ export default function DPR() {
           )}
           <div className="flex flex-wrap items-center justify-between gap-4">
             <input type="date" className="input w-48" value={filterDate} onChange={e => { setFilterDate(e.target.value); setDateTouched(true); }} />
-            <button onClick={() => {
-              setForm({ site_id: '', report_date: filterDate, weather: 'clear', overall_status: 'on_track', system_type: '', shift: 'day', contractor_name: '', contractor_manpower: 0, mb_sheet_no: '', safety_toolbox_talk: false, safety_ppe_compliance: false, safety_incidents: '', next_day_plan: '', hindrances: '', hindrance_category: '', remarks: '' });
-              setWorkItems([]); setPoItemsForSite([]);
-              setCosts([
-                { type: 'Skilled Manpower', qty: 0, rate: 800, amount: 0, fixed: true },
-                { type: 'Helper', qty: 0, rate: 500, amount: 0, fixed: true },
-                { type: 'Rental Cost', qty: 0, rate: 0, amount: 0 },
-                { type: 'Staff Cost', qty: 1, rate: 0, amount: 0, auto: true, engineer_count: 0 },
-                { type: 'TA/DA', qty: 1, rate: 0, amount: 0, auto: true, ta_da_count: 0 },
-              ]);
-              setMachinery([{ equipment: '', quantity: 1, hours_used: 0, condition: 'working' }]);
-              setContractors(Array.from({ length: 5 }, () => ({ name: '', manpower: 0 })));
-              setModal(true);
-            }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit DPR</button>
+            <div className="flex gap-2">
+              <button onClick={() => exportCsv('dpr-reports',
+                ['Site','Date','Shift','Submitted By','Status','Total A','Cost B','P/L','Approval'],
+                dprs.map(d => [d.site_name, d.report_date, d.shift, d.submitted_by_name, d.overall_status, d.grand_total_a, d.grand_total_b, d.profit_loss, d.approval_status]))}
+                className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+              <button onClick={() => {
+                setForm({ site_id: '', report_date: filterDate, weather: 'clear', overall_status: 'on_track', system_type: '', shift: 'day', contractor_name: '', contractor_manpower: 0, mb_sheet_no: '', safety_toolbox_talk: false, safety_ppe_compliance: false, safety_incidents: '', next_day_plan: '', hindrances: '', hindrance_category: '', remarks: '' });
+                setWorkItems([]); setPoItemsForSite([]);
+                setCosts([
+                  { type: 'Skilled Manpower', qty: 0, rate: 800, amount: 0, fixed: true },
+                  { type: 'Helper', qty: 0, rate: 500, amount: 0, fixed: true },
+                  { type: 'Rental Cost', qty: 0, rate: 0, amount: 0 },
+                  { type: 'Staff Cost', qty: 1, rate: 0, amount: 0, auto: true, engineer_count: 0 },
+                  { type: 'TA/DA', qty: 1, rate: 0, amount: 0, auto: true, ta_da_count: 0 },
+                ]);
+                setMachinery([{ equipment: '', quantity: 1, hours_used: 0, condition: 'working' }]);
+                setContractors(Array.from({ length: 5 }, () => ({ name: '', manpower: 0 })));
+                setModal(true);
+              }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit DPR</button>
+            </div>
           </div>
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Site</th><th>Date</th><th>Shift</th><th>By</th><th>Status</th><th>Total(A)</th><th>Cost(B)</th><th>P/L</th><th>Approval</th><th>Actions</th></tr></thead>

@@ -9,7 +9,8 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiHome, FiPlus, FiEdit2, FiTrash2, FiSearch, FiAlertCircle, FiUserCheck, FiLogOut, FiCalendar, FiUsers, FiDollarSign } from 'react-icons/fi';
+import { FiHome, FiPlus, FiEdit2, FiTrash2, FiSearch, FiAlertCircle, FiUserCheck, FiLogOut, FiCalendar, FiUsers, FiDollarSign, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
 
 const STATUS_PILL = {
@@ -169,12 +170,19 @@ export default function Rentals() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><FiHome className="text-orange-600" /> Room Rentals</h1>
           <p className="text-sm text-gray-500">Raise monthly rent requests with landlord details + photo + bank/UPI proof.</p>
         </div>
-        {canCreate('rentals') && tab === 'payments' && (
-          <button onClick={() => { setPaymentForm({ period_month: monthNow(), paid_via: 'Bank' }); setPaymentModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Record Payment</button>
-        )}
-        {canCreate('rentals') && tab === 'requests' && (
-          <button onClick={() => { setRequestForm({ rent_month: monthNow(), arrange_for: 'SEPL', pay_by_day: 10, payment_mode: 'Bank' }); setRequestModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Rent</button>
-        )}
+        <div className="flex gap-2">
+          <button onClick={() => {
+            if (tab === 'payments') exportCsv('rental-payments', ['Period','Property','Occupant','Amount','Paid Via','Date'], payments.map(p => [p.period_month, p.property_name, p.occupant_name, p.amount, p.paid_via, p.paid_on]));
+            else if (tab === 'bookings') exportCsv('rental-bookings', ['Status','Occupant','Property','City','Site','Check-in','Check-out','Rent Share'], bookings.map(b => [b.status, b.occupant_name || b.occupant_user_name, b.property_name, b.city, b.site_name, b.check_in, b.check_out, b.rent_share]));
+            else exportCsv('rental-requests', ['Req #','Month','Site','Arrange For','Owner','Pay Mode','Amount','Status'], requests.map(r => [r.request_no, r.rent_month, r.site_name, r.arrange_for, r.owner_name, r.payment_mode, r.amount, r.status]));
+          }} className="btn btn-secondary flex items-center gap-1 text-sm"><FiDownload size={14} /> Export Excel</button>
+          {canCreate('rentals') && tab === 'payments' && (
+            <button onClick={() => { setPaymentForm({ period_month: monthNow(), paid_via: 'Bank' }); setPaymentModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Record Payment</button>
+          )}
+          {canCreate('rentals') && tab === 'requests' && (
+            <button onClick={() => { setRequestForm({ rent_month: monthNow(), arrange_for: 'SEPL', pay_by_day: 10, payment_mode: 'Bank' }); setRequestModal(true); }} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> Raise Rent</button>
+          )}
+        </div>
       </div>
 
       <div className="flex gap-2 flex-wrap text-sm">

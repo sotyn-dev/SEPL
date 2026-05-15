@@ -4,7 +4,8 @@ import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2, FiCalendar, FiCheckCircle, FiUser, FiFileText, FiAward } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiCalendar, FiCheckCircle, FiUser, FiFileText, FiAward, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 const candidateStatuses = ['lead','called','qualified','interview_scheduled','interview_done','offer_sent','accepted','onboarded','rejected'];
 const sources = ['facebook','naukri','linkedin','reference','other'];
@@ -218,7 +219,13 @@ export default function HR() {
               <h3 className="font-semibold">Hiring Pipeline</h3>
               <p className="text-[11px] text-gray-500">5 stages: Lead → Schedule Interview → Interview Decision → MD Round → Offer & Onboarding</p>
             </div>
-            <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', source: 'naukri', position: '', notes: '' }); setModal('candidate'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Candidate</button>
+            <div className="flex gap-2">
+              <button onClick={() => exportCsv('candidates',
+                ['Name','Phone','Email','Position','Source','Stage','Notes'],
+                candidates.map(c => [c.name, c.phone, c.email, c.position, c.source, c.current_stage, c.notes]))}
+                className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+              <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', source: 'naukri', position: '', notes: '' }); setModal('candidate'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Candidate</button>
+            </div>
           </div>
 
           <div className="card p-0 overflow-x-auto">

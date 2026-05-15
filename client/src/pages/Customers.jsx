@@ -3,7 +3,8 @@ import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiUpload, FiUsers } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiUpload, FiUsers, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 const CATEGORIES = ['FF', 'ELE', 'LV', 'Solar', 'HVAC', 'INTERIOR', 'Govt', 'Private', 'OTHER'];
 const CAT_COLORS = {
@@ -127,6 +128,10 @@ export default function Customers() {
             <button onClick={() => fileRef.current?.click()} disabled={uploading} className="btn btn-secondary flex items-center gap-2 text-sm">
               <FiUpload size={15} /> {uploading ? 'Importing...' : 'Excel Import'}
             </button>
+            <button onClick={() => exportCsv('customers',
+              ['Code','Category','Company','Sub Company','Address','Contact','Email','Concern Person','Concern Email'],
+              filtered.map(c => [c.customer_code, c.category, c.company_name, c.sub_company_name, c.company_registration_address, c.contact_no, c.email, c.concern_person_name, c.concern_person_email]))}
+              className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export Excel</button>
             <button onClick={openAdd} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15} /> New Customer</button>
           </>
         )}

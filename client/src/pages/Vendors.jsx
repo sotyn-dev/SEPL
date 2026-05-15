@@ -4,7 +4,8 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiTruck } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiTruck, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 const CATEGORIES = ['FF', 'ELE', 'LV', 'Solar', 'HVAC', 'INTERIOR', 'OTHER'];
 const TYPES = ['Distributor', 'Trader', 'Manufacture', 'Direct Company', 'Stockist'];
@@ -79,6 +80,10 @@ export default function Vendors() {
 
           <div className="flex gap-3">
             <div className="relative flex-1"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input className="input pl-10" placeholder="Search vendor name, deals in, code, district..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+            <button onClick={() => exportCsv('vendors',
+              ['Code','Name','Firm','Category','Deals In','Type','Phone','Email','District','State','Authorized Dealer','Turnover'],
+              filtered.map(v => [v.vendor_code, v.name, v.firm_name, v.category, v.deals_in, v.type, v.phone, v.email, v.district, v.state, v.authorized_dealer, v.turnover]))}
+              className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export Excel</button>
             {canCreate('vendors') && <button onClick={() => { setEditing(null); setForm({}); setModal('vendor'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15} /> Add Vendor</button>}
           </div>
 

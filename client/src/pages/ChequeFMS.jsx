@@ -3,7 +3,8 @@ import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2, FiClock, FiCheck, FiAlertTriangle, FiPaperclip, FiEye } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiClock, FiCheck, FiAlertTriangle, FiPaperclip, FiEye, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 // Cheque FMS — 3-stage cheque workflow.
 //   Stage 1: raise/issue a cheque (this page's "+ Issue Cheque" button)
@@ -173,11 +174,17 @@ export default function ChequeFMS() {
               Issue a cheque, then log its outcome (clear / hold / bounce / stopped) once the cheque date arrives. Hold cheques get a follow-up action on the next date.
             </p>
           </div>
-          {canCreate('cheques') && (
-            <button onClick={openIssue} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center">
-              <FiPlus /> Issue Cheque
-            </button>
-          )}
+          <div className="flex gap-2">
+            <button onClick={() => exportCsv('cheques',
+              ['Cheque #','Payee','Bank','Date','Amount','Status','Hold Until','Raised By'],
+              cheques.map(c => [c.cheque_number, c.payee_to, c.bank_name || c.bank_other, c.cheque_date, c.amount, c.current_status, c.hold_until, c.raised_by_name]))}
+              className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
+            {canCreate('cheques') && (
+              <button onClick={openIssue} className="btn btn-primary flex items-center gap-2 justify-center">
+                <FiPlus /> Issue Cheque
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Tabs / counts */}

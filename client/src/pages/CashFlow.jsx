@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
-import { FiPlus, FiTrendingUp, FiTrendingDown, FiCalendar, FiTrash2, FiSearch, FiEdit2, FiCheck, FiX } from 'react-icons/fi';
+import { FiPlus, FiTrendingUp, FiTrendingDown, FiCalendar, FiTrash2, FiSearch, FiEdit2, FiCheck, FiX, FiDownload } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 import { useAuth } from '../context/AuthContext';
+import { exportCsv } from '../utils/exportCsv';
 
 export default function CashFlow() {
   const { isAdmin } = useAuth();
@@ -131,9 +132,24 @@ export default function CashFlow() {
           scrolling the project list. Styles live in `.sticky-toolbar`
           (index.css) so every page can opt in with one class. */}
       <div className="sticky-toolbar">
-        <div className="flex gap-2 flex-wrap">
-          <button onClick={() => setTab('projects')} className={`btn ${tab === 'projects' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Project Finance</button>
-          <button onClick={() => setTab('daily')} className={`btn ${tab === 'daily' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Daily Cash Flow</button>
+        <div className="flex gap-2 flex-wrap items-center justify-between">
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={() => setTab('projects')} className={`btn ${tab === 'projects' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Project Finance</button>
+            <button onClick={() => setTab('daily')} className={`btn ${tab === 'daily' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Daily Cash Flow</button>
+          </div>
+          {/* Export current tab to CSV (opens in Excel).  Project tab
+              dumps the tracker; Daily tab dumps today's entries. */}
+          <button onClick={() => {
+            if (tab === 'projects') {
+              exportCsv('cashflow-projects',
+                ['Sr','Project','CRM','Sale','Received','Milestone','Aanchal','Purchase','Velocity','Live','Inv Days','Compl','Pmt','Total'],
+                filtered.map(p => [p.sr_no, p.project_name, p.crm_person, p.sale_amount, p.amount_received, p.milestone_name, p.aanchal_value, p.purchase_value, p.cash_velocity, p.live_date, p.payment_investment_days, p.completion_days, p.payment_days, p.total_days]));
+            } else {
+              exportCsv(`cashflow-entries-${selectedDate}`,
+                ['Type','Category','Description','Party','Amount'],
+                entries.map(e => [e.type, e.category, e.description, e.party_name, e.amount]));
+            }
+          }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
         </div>
         {tab === 'projects' && (
           <>

@@ -5,7 +5,8 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiExternalLink } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiExternalLink, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 export default function Checklists() {
   const { user, canDelete, isAdmin } = useAuth();
@@ -69,9 +70,15 @@ export default function Checklists() {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h3 className="font-semibold">Checklists & Recurring Tasks</h3>
-        {isAdmin() && (
-          <button onClick={() => { setEditing(null); setForm({ description: '', frequency: 'monthly', due_date: '', due_time: '', assigned_to: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Checklist</button>
-        )}
+        <div className="flex gap-2">
+          <button onClick={() => exportCsv('checklists',
+            ['Description','Frequency','Due Date','Due Time','Assigned To','Status'],
+            checklists.map(c => [c.description || c.title, c.frequency, c.due_date, c.due_time, c.assigned_to_name, c.status]))}
+            className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+          {isAdmin() && (
+            <button onClick={() => { setEditing(null); setForm({ description: '', frequency: 'monthly', due_date: '', due_time: '', assigned_to: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Checklist</button>
+          )}
+        </div>
       </div>
       {!isAdmin() && (
         <p className="text-xs text-gray-500 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">

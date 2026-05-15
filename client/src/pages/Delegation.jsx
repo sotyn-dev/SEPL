@@ -4,7 +4,8 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMic, FiMicOff, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiClock, FiCalendar } from 'react-icons/fi';
+import { FiPlus, FiMic, FiMicOff, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiClock, FiCalendar, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 // Web Speech API — available as SpeechRecognition in Chromium-based browsers
 const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
@@ -288,8 +289,12 @@ export default function Delegation() {
                 className={`px-3 py-1.5 ${view === 'dashboard' ? 'bg-red-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>Dashboard</button>
             </div>
           )}
+          <button onClick={() => exportCsv('delegations',
+            ['Task ID','Description','Project','Assigned To','Due','Status'],
+            tasks.map(t => [t.task_id, t.description, t.project_name, t.assigned_to_name, t.due_date, t.status]))}
+            className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {isAdmin() && view === 'list' && (
-            <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 w-full sm:w-auto justify-center"><FiPlus /> New Task</button>
+            <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 justify-center"><FiPlus /> New Task</button>
           )}
         </div>
       </div>

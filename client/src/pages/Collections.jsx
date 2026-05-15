@@ -4,7 +4,8 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiPhoneCall, FiAlertTriangle, FiRefreshCw, FiTrash2 } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiPhoneCall, FiAlertTriangle, FiRefreshCw, FiTrash2, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
 
 export default function Collections() {
@@ -184,7 +185,13 @@ export default function Collections() {
           ))}
           <button onClick={refreshAgeing} className="btn btn-secondary text-xs flex items-center gap-1"><FiRefreshCw size={12} /> Refresh Ageing</button>
         </div>
-        <button onClick={() => { setForm({ client_name: '', project_name: '', invoice_number: '', invoice_date: '', invoice_amount: 0, due_date: '', owner_id: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Receivable</button>
+        <div className="flex gap-2">
+          <button onClick={() => exportCsv('receivables',
+            ['Client','Project','Invoice #','Invoice Date','Invoice Amount','Received','Outstanding','Due Date','Ageing','Bucket','Status','Follow-up Status','Owner'],
+            receivables.map(r => [r.client_name, r.project_name, r.invoice_number, r.invoice_date, r.invoice_amount, r.received_amount, r.outstanding_amount, r.due_date, r.ageing_days, r.ageing_bucket, r.status, r.follow_up_status, r.owner_name]))}
+            className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+          <button onClick={() => { setForm({ client_name: '', project_name: '', invoice_number: '', invoice_date: '', invoice_amount: 0, due_date: '', owner_id: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Receivable</button>
+        </div>
       </div>
 
       {/* Payment Target vs Received (with Ageing) — top-line numbers
