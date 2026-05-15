@@ -26,6 +26,11 @@ export default function Delegation() {
   const [assigneeFilter, setAssigneeFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  // Free-text search across Task ID and Description (mam, 2026-05-15:
+  // "give option to filter for search option for example if i wtite
+  // task or task id").  Applied client-side over the already-filtered
+  // tasks array so it composes with status / assignee / date filters.
+  const [search, setSearch] = useState('');
   const [createModal, setCreateModal] = useState(false);
   const [editModal, setEditModal] = useState(null); // task being edited (admin / assigner)
   const [editForm, setEditForm] = useState({});
@@ -289,9 +294,17 @@ export default function Delegation() {
                 className={`px-3 py-1.5 ${view === 'dashboard' ? 'bg-red-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>Dashboard</button>
             </div>
           )}
-          <button onClick={() => exportCsv('delegations',
-            ['Task ID','Description','Project','Assigned To','Due','Status'],
-            tasks.map(t => [t.task_id, t.description, t.project_name, t.assigned_to_name, t.due_date, t.status]))}
+          <button onClick={() => {
+            // Export respects the active search filter so admin can
+            // download exactly what's visible on screen.
+            const q = search.trim().toLowerCase();
+            const rows = q
+              ? tasks.filter(t => (t.task_id || '').toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q))
+              : tasks;
+            exportCsv('delegations',
+              ['Task ID','Description','Project','Assigned To','Due','Status'],
+              rows.map(t => [t.task_id, t.description, t.project_name, t.assigned_to_name, t.due_date, t.status]));
+          }}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {isAdmin() && view === 'list' && (
             <button onClick={openCreate} className="btn btn-primary flex items-center gap-2 justify-center"><FiPlus /> New Task</button>
@@ -380,6 +393,21 @@ export default function Delegation() {
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
         </select>
+        {/* Free-text search — matches Task ID OR Description (case-insensitive).
+            Empty input = no filter. */}
+        <div className="relative flex-1 min-w-[200px] max-w-[320px]">
+          <input
+            type="text"
+            className="input text-sm pr-7"
+            placeholder="Search task ID or description…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          {search && (
+            <button onClick={() => setSearch('')} title="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 text-sm leading-none">×</button>
+          )}
+        </div>
         {/* Assignee filter — only useful on 'All tasks' (filtering by
             'self' on My Tasks adds nothing), so still admin-scoped. */}
         {scope === 'all' && (
@@ -429,8 +457,20 @@ export default function Delegation() {
             </tr>
           </thead>
           <tbody>
-            {tasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">No tasks</td></tr>}
-            {tasks.map((t, idx) => {
+            {(() => {
+              // Apply the free-text search filter here so the same
+              // visibleTasks array drives the table, the mobile card
+              // list, and the Export Excel button below.  Match Task
+              // ID OR description, case-insensitive.
+              const q = search.trim().toLowerCase();
+              const visibleTasks = q
+                ? tasks.filter(t =>
+                    (t.task_id || '').toLowerCase().includes(q) ||
+                    (t.description || '').toLowerCase().includes(q))
+                : tasks;
+              return (<>
+                {visibleTasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
+                {visibleTasks.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
               const canEditProject = isAdmin() || isAssigner;
@@ -534,6 +574,8 @@ export default function Delegation() {
                 </tr>
               );
             })}
+              </>);
+            })()}
           </tbody>
         </table>
       </div>
