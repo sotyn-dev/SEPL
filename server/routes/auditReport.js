@@ -577,4 +577,186 @@ router.get('/analytics', (req, res) => {
   });
 });
 
+// --- /audit/kpi -----------------------------------------------------
+// TOC v3 P0 KPI feeds for CMD / COO / Sales / Finance dashboards.
+// Single endpoint returns every operating-cycle metric MD asked for
+// so the same JSON can power four role-specific views + the 9:00 AM
+// audit email + the scheduled 7:30 AM snapshot job.
+//
+// Definitions used here:
+//   DSO = Days Sales Outstanding
+//       = (avg outstanding receivables / sales in window) × window_days
+//   DIO = Days Inventory Outstanding
+//       = (avg inventory value / COGS in window) × window_days
+//   DPO = Days Payable Outstanding
+//       = (avg outstanding to vendors / purchases in window) × window_days
+//   CCC = DSO + DIO − DPO   (cash conversion cycle in days)
+//
+// All money figures in raw rupees (no lakh conversion).
+router.get('/kpi', (req, res) => {
+  const db = getDb();
+  const started = Date.now();
+  const days = Math.min(365, Math.max(7, parseInt(req.query.days, 10) || 30));
+  const from = daysAgo(days);
+  const to = today();
+
+  // ── Sales / receivables ─────────────────────────────────────────
+  const salesInWindow = (safeGet(db,
+    `SELECT COALESCE(SUM(total_amount),0) c FROM sales_bills WHERE date(bill_date) >= ?`, from)?.c) || 0;
+  const arOutstanding = (safeGet(db,
+    `SELECT COALESCE(SUM(outstanding_amount),0) c FROM receivables`)?.c) || 0;
+  const dso = salesInWindow > 0 ? Math.round((arOutstanding / salesInWindow) * days) : null;
+
+  // AR aging buckets — Finance-Head dashboard
+  const arAging = {
+    bucket_0_30:  (safeGet(db, `SELECT COALESCE(SUM(outstanding_amount),0) c FROM receivables WHERE ageing_bucket='0-30'`)?.c) || 0,
+    bucket_31_60: (safeGet(db, `SELECT COALESCE(SUM(outstanding_amount),0) c FROM receivables WHERE ageing_bucket='31-60'`)?.c) || 0,
+    bucket_61_90: (safeGet(db, `SELECT COALESCE(SUM(outstanding_amount),0) c FROM receivables WHERE ageing_bucket='61-90'`)?.c) || 0,
+    bucket_90_plus: (safeGet(db, `SELECT COALESCE(SUM(outstanding_amount),0) c FROM receivables WHERE ageing_bucket='90+'`)?.c) || 0,
+  };
+
+  // ── Purchases / AP ───────────────────────────────────────────────
+  const purchasesInWindow = (safeGet(db,
+    `SELECT COALESCE(SUM(total_amount),0) c FROM purchase_bills WHERE date(bill_date) >= ?`, from)?.c) || 0;
+  const apOutstanding = (safeGet(db,
+    `SELECT COALESCE(SUM(total_amount),0) c FROM purchase_bills WHERE payment_status IN ('pending','partial')`)?.c) || 0;
+  const dpo = purchasesInWindow > 0 ? Math.round((apOutstanding / purchasesInWindow) * days) : null;
+
+  // ── Inventory ────────────────────────────────────────────────────
+  // Free-to-use = stock value not reserved to a specific site.  In our
+  // schema a stock row "belongs to" a site warehouse; inventory at the
+  // central office warehouse (type='office') is the free pool.
+  const inventoryFree = (safeGet(db, `
+    SELECT COALESCE(SUM(s.quantity * s.avg_rate), 0) c
+    FROM stock_balance s
+    JOIN warehouses w ON s.warehouse_id = w.id
+    WHERE w.type = 'office' AND s.quantity > 0
+  `)?.c) || 0;
+  const inventoryTotal = (safeGet(db, `
+    SELECT COALESCE(SUM(quantity * avg_rate), 0) c FROM stock_balance WHERE quantity > 0
+  `)?.c) || 0;
+  const cogsInWindow = purchasesInWindow; // proxy — refine later with DPR material cost
+  const dio = cogsInWindow > 0 ? Math.round((inventoryTotal / cogsInWindow) * days) : null;
+
+  const ccc = (dso != null && dio != null && dpo != null) ? (dso + dio - dpo) : null;
+
+  // ── Quote lead time (RFQ to quote-sent) ────────────────────────
+  // Lead.created_at → first quotation row for that lead.
+  const quoteLT = safeAll(db, `
+    SELECT (julianday(q.created_at) - julianday(l.created_at)) days_to_quote
+    FROM leads l JOIN quotations q ON q.lead_id = l.id
+    WHERE l.created_at IS NOT NULL AND q.created_at IS NOT NULL
+      AND date(q.created_at) >= ?
+  `, from).map(r => r.days_to_quote).filter(x => x != null);
+  const quoteLeadTimeAvg = quoteLT.length
+    ? Math.round((quoteLT.reduce((a, b) => a + b, 0) / quoteLT.length) * 10) / 10
+    : null;
+
+  // ── Lead → PO conversion % ────────────────────────────────────
+  const leadsInWindow = safeCount(db, `SELECT COUNT(*) c FROM leads WHERE date(created_at) >= ?`, from);
+  const wonLeadsInWindow = safeCount(db, `SELECT COUNT(*) c FROM leads WHERE date(created_at) >= ? AND status='won'`, from);
+  const leadToPoPct = leadsInWindow > 0 ? Math.round((wonLeadsInWindow / leadsInWindow) * 1000) / 10 : null;
+
+  // ── Revenue per FTE ─────────────────────────────────────────────
+  // Group by department so Sales-Head and COO see their own slice.
+  const activeFte = safeCount(db, `SELECT COUNT(*) c FROM employees WHERE status='active'`);
+  const totalRevWindow = salesInWindow;
+  const revPerFteOverall = activeFte > 0 ? Math.round(totalRevWindow / activeFte) : null;
+  const revPerFteByDept = safeAll(db, `
+    SELECT department, COUNT(*) fte
+    FROM employees WHERE status='active' AND department IS NOT NULL
+    GROUP BY department ORDER BY fte DESC
+  `).map(r => ({
+    department: r.department, fte: r.fte,
+    rev_per_fte: r.fte > 0 ? Math.round(totalRevWindow / r.fte) : null,
+  }));
+
+  // ── Project on-time milestone % ────────────────────────────────
+  // Until milestone tracking lands (TOC v3 P0 #4), proxy with DPR
+  // overall_status='on_track' over the last `days` window.
+  const dprStatus = safeAll(db, `
+    SELECT overall_status, COUNT(*) c FROM dpr
+    WHERE date(report_date) >= ? GROUP BY overall_status
+  `, from);
+  const dprTotal = dprStatus.reduce((s, r) => s + r.c, 0);
+  const dprOnTrack = dprStatus.find(r => r.overall_status === 'on_track')?.c || 0;
+  const onTimeMilestonePct = dprTotal > 0 ? Math.round((dprOnTrack / dprTotal) * 1000) / 10 : null;
+
+  // ── Project margin variance % ──────────────────────────────────
+  // For each PO with sales bills + DPR cost rolled up, compare actual
+  // margin vs the booked margin (business_book.actual_margin_pct).
+  const marginRows = safeAll(db, `
+    SELECT
+      po.id po_id, po.po_number, bb.client_name, bb.actual_margin_pct booked_pct,
+      COALESCE((SELECT SUM(total_amount) FROM sales_bills sb WHERE sb.po_id=po.id), 0) revenue,
+      COALESCE((SELECT SUM(grand_total_b) FROM dpr d JOIN sites s ON d.site_id=s.id WHERE s.po_id=po.id), 0) cost
+    FROM purchase_orders po
+    JOIN business_book bb ON po.business_book_id = bb.id
+    WHERE po.status IN ('in_progress','completed')
+    ORDER BY po.id DESC LIMIT 50
+  `).map(r => {
+    const actual_pct = r.revenue > 0 ? Math.round(((r.revenue - r.cost) / r.revenue) * 1000) / 10 : null;
+    const variance = (actual_pct != null && r.booked_pct != null) ? Math.round((actual_pct - r.booked_pct) * 10) / 10 : null;
+    return { ...r, actual_pct, variance };
+  });
+  const marginVariances = marginRows.map(r => r.variance).filter(v => v != null);
+  const avgMarginVariance = marginVariances.length
+    ? Math.round((marginVariances.reduce((a, b) => a + b, 0) / marginVariances.length) * 10) / 10
+    : null;
+
+  // ── Bank position ───────────────────────────────────────────────
+  // Latest cash_flow_daily row's closing_balance is the running bank.
+  const bank = safeGet(db,
+    `SELECT date, closing_balance FROM cash_flow_daily ORDER BY date DESC LIMIT 1`);
+
+  // ── WIP (work-in-progress) ──────────────────────────────────────
+  // PO total amount where status='in_progress' minus already-billed.
+  const wipBookValue = (safeGet(db, `
+    SELECT COALESCE(SUM(po.total_amount), 0) c
+    FROM purchase_orders po WHERE po.status='in_progress'
+  `)?.c) || 0;
+  const wipBilled = (safeGet(db, `
+    SELECT COALESCE(SUM(sb.total_amount), 0) c
+    FROM sales_bills sb
+    JOIN purchase_orders po ON sb.po_id = po.id
+    WHERE po.status='in_progress'
+  `)?.c) || 0;
+  const wipUnbilled = wipBookValue - wipBilled;
+
+  res.json({
+    spec_version: 'v3',
+    generated_at: new Date().toISOString(),
+    duration_ms: Date.now() - started,
+    window: { from, to, days },
+    cash_conversion_cycle: { dso, dio, dpo, ccc },
+    ar: { outstanding_total: arOutstanding, aging: arAging },
+    ap: { outstanding_total: apOutstanding, purchases_in_window: purchasesInWindow },
+    inventory: { total_value: inventoryTotal, free_to_use_value: inventoryFree },
+    sales: { total_in_window: salesInWindow },
+    bank: bank || null,
+    wip: { book_value: wipBookValue, billed: wipBilled, unbilled: wipUnbilled },
+    funnel: {
+      leads_in_window: leadsInWindow,
+      won_in_window: wonLeadsInWindow,
+      lead_to_po_pct: leadToPoPct,
+      quote_lead_time_days_avg: quoteLeadTimeAvg,
+    },
+    revenue_per_fte: {
+      overall: revPerFteOverall,
+      active_employees: activeFte,
+      by_department: revPerFteByDept,
+    },
+    on_time_milestone_pct: onTimeMilestonePct,
+    project_margin_variance: {
+      avg_variance_pct: avgMarginVariance,
+      sample_size: marginVariances.length,
+      worst_5: marginRows
+        .filter(r => r.variance != null)
+        .sort((a, b) => a.variance - b.variance)
+        .slice(0, 5)
+        .map(r => ({ po_number: r.po_number, client: r.client_name, booked_pct: r.booked_pct, actual_pct: r.actual_pct, variance: r.variance })),
+    },
+  });
+});
+
 module.exports = router;

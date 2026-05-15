@@ -110,6 +110,81 @@ under a few hundred KB even on a problematic dataset.
 
 ---
 
+## `GET /audit/kpi?days=N` — TOC v3 KPI feed
+
+Single endpoint that returns every operating-cycle metric the MD's
+TOC v3 spec calls for. Same JSON powers the four role dashboards
+(CMD / COO / Sales / Finance), the 9 AM CMD email, and the 7:30 AM
+snapshot writer.
+
+Default window is **30 days**; clamp 7–365 via `?days=N`.
+
+```jsonc
+{
+  "spec_version": "v3",
+  "generated_at": "...",
+  "window": { "from": "2026-04-15", "to": "2026-05-15", "days": 30 },
+  "cash_conversion_cycle": {
+    "dso": 47,    // (AR / sales_window) × window_days
+    "dio": 31,    // (inventory_value / cogs_window) × window_days
+    "dpo": 22,    // (AP / purchases_window) × window_days
+    "ccc": 56     // DSO + DIO − DPO  (days)
+  },
+  "ar": {
+    "outstanding_total": 4380000,
+    "aging": {
+      "bucket_0_30":   1200000,
+      "bucket_31_60":   850000,
+      "bucket_61_90":   780000,
+      "bucket_90_plus": 1550000
+    }
+  },
+  "ap": { "outstanding_total": 1850000, "purchases_in_window": 2400000 },
+  "inventory": { "total_value": 3100000, "free_to_use_value": 720000 },
+  "sales":     { "total_in_window": 5200000 },
+  "bank":      { "date": "2026-05-15", "closing_balance": 1834000 },
+  "wip":       { "book_value": 8200000, "billed": 4100000, "unbilled": 4100000 },
+  "funnel": {
+    "leads_in_window": 24,
+    "won_in_window": 6,
+    "lead_to_po_pct": 25.0,
+    "quote_lead_time_days_avg": 4.2
+  },
+  "revenue_per_fte": {
+    "overall": 123809,           // sales_window / active_FTE
+    "active_employees": 42,
+    "by_department": [
+      { "department": "Sales", "fte": 6, "rev_per_fte": 866666 },
+      { "department": "Site",  "fte": 22, "rev_per_fte": 236363 }
+    ]
+  },
+  "on_time_milestone_pct": 78.2,  // proxy: DPR overall_status='on_track' %
+  "project_margin_variance": {
+    "avg_variance_pct": -3.4,
+    "sample_size": 18,
+    "worst_5": [
+      { "po_number": "PO-2026-00042", "client": "Hero Homes",
+        "booked_pct": 18.0, "actual_pct": 9.2, "variance": -8.8 }
+    ]
+  }
+}
+```
+
+### Definitions
+
+- **DSO** = Days Sales Outstanding = `(outstanding receivables ÷ sales in window) × window_days`. Lower is better; bills are getting collected faster.
+- **DIO** = Days Inventory Outstanding = `(inventory value ÷ COGS in window) × window_days`. Lower is better.
+- **DPO** = Days Payable Outstanding = `(outstanding to vendors ÷ purchases in window) × window_days`. Higher is better; we're financing ourselves on supplier credit.
+- **CCC** = `DSO + DIO − DPO`. Days of cash tied up in the operating cycle. **Lower is better.**
+- **Free-to-use inventory ₹** = stock value at the central `type='office'` warehouse — not pre-allocated to any site.
+- **Quote lead time** = avg `(quotations.created_at − leads.created_at)` for quotes sent in the window.
+- **Lead→PO %** = `won leads ÷ leads_created_in_window × 100`.
+- **Revenue per FTE** = `sales_window ÷ active employees`, also rolled up by `employees.department` for COO / Sales-Head views.
+- **On-time milestone %** *(proxy until TOC v3 P0 #4 lands)* = % of DPR rows in window with `overall_status='on_track'`.
+- **Project margin variance** = `(actual_revenue − DPR.cost_b) / actual_revenue × 100` − `business_book.actual_margin_pct`, averaged across the last 50 POs with status in (`in_progress`, `completed`). Negative = we're earning less than booked.
+
+---
+
 ## `GET /audit/data-quality`
 
 Per-table null-rate scorecard. Lets CMD see which entities are well-

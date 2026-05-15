@@ -110,6 +110,18 @@ if (!process.env.ERP_DISABLE_BACKUP_SCHEDULER) {
   }
 }
 
+// Daily 07:30 AM audit JSON snapshot — TOC v3 P0 #5.  Writes the same
+// JSON the /audit endpoints return into data/audit-snapshots/<date>/
+// so the CMD's 09:00 email and the four role dashboards can render
+// from a fixed "as of this morning" file.  Skip via
+// ERP_DISABLE_AUDIT_SNAPSHOT=1 (dev / local runs).
+try {
+  const { scheduleDailyAuditSnapshot } = require('./scripts/dailyAuditSnapshot');
+  scheduleDailyAuditSnapshot();
+} catch (e) {
+  console.warn('[audit-snapshot] Scheduler not started:', e.message);
+}
+
 // Audit middleware — runs before the routes so every mutating request
 // (POST/PUT/PATCH/DELETE) is logged on response finish. Reads req.user set
 // by authMiddleware inside each router. Fire-and-forget so it can't slow
