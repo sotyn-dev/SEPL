@@ -259,10 +259,11 @@ export default function PMSTasks() {
         </div>
       </div>
 
-      {/* Desktop table */}
-      <div className="card p-0 hidden md:block">
-        <table className="text-sm freeze-head">
-          <thead>
+      {/* Desktop table — bounded scroll + sticky thead so columns stay
+          pinned while scrolling.  Mam, 2026-05-13. */}
+      <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block">
+        <table className="text-sm">
+          <thead className="sticky top-0 z-10 bg-gray-100">
             <tr>
               <th className="w-12 text-center">S.No.</th>
               <th>Task ID</th>

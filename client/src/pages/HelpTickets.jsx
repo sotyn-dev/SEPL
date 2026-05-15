@@ -147,10 +147,10 @@ export default function HelpTickets() {
         </div>
       </div>
 
-      {/* Tickets list */}
-      <div className="card p-0">
-        <table className="text-sm w-full freeze-head">
-          <thead className="bg-gray-50">
+      {/* Tickets list — bounded scroll + sticky thead.  Mam, 2026-05-13. */}
+      <div className="card p-0 overflow-auto max-h-[70vh]">
+        <table className="text-sm w-full">
+          <thead className="sticky top-0 z-10 bg-gray-50">
             <tr>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Ticket</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Subject</th>

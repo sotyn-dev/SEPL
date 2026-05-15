@@ -405,9 +405,11 @@ export default function Delegation() {
           Due / Status / Upload Proof / Extension / Actions.
           Shown on ALL screen sizes per mam's request (2026-04-23). On phones
           the parent scrolls horizontally so every column stays accessible. */}
-      <div className="card p-0">
-        <table className="text-sm min-w-[1100px] freeze-head">
-          <thead>
+      {/* Bounded scroll + sticky thead so the column header stays
+          pinned while the user scrolls through tasks (mam, 2026-05-13). */}
+      <div className="card p-0 overflow-auto max-h-[70vh]">
+        <table className="text-sm min-w-[1100px]">
+          <thead className="sticky top-0 z-10 bg-gray-100">
             <tr>
               <th className="w-12 text-center">S.No.</th>
               <th>Task ID</th>

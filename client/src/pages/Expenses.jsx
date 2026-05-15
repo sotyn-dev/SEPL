@@ -83,8 +83,11 @@ export default function Expenses() {
         </div>
       </div>
 
-      <div className="card p-0"><table className="freeze-head">
-        <thead><tr><th>Description</th><th>Category</th><th>Amount</th><th>Date</th><th>Submitted By</th><th>Status</th><th>Actions</th></tr></thead>
+      {/* Bounded scroll + sticky thead — same one-table freeze pattern
+          as Cash Flow's project tracker.  Mam: "thats nice please go
+          do same as in expense, delegation, pms, helpticket". */}
+      <div className="card p-0 overflow-auto max-h-[70vh]"><table>
+        <thead className="sticky top-0 z-10 bg-gray-100"><tr><th>Description</th><th>Category</th><th>Amount</th><th>Date</th><th>Submitted By</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>
           {expenses.map(e => (
             <tr key={e.id}>
