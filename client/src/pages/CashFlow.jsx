@@ -237,7 +237,7 @@ export default function CashFlow() {
                   <th className="px-2 py-2 text-right" title="Sale value of the project (PO amount, ex-GST)">Sale ₹</th>
                   <th className="px-2 py-2 text-right" title="Amount actually received from client so far">Received ₹</th>
                   <th className="px-2 py-2 text-center" title="Current milestone — handover / delivery / etc.">Milestone</th>
-                  <th className="px-2 py-2 text-right" title="Aanchal value (manual ₹ in lakhs × 1,00,000)">Aanchal ₹</th>
+                  <th className="px-2 py-2 text-right" title="Aanchal value — enter the exact rupee figure (no lakhs conversion)">Aanchal ₹</th>
                   <th className="px-2 py-2 text-right" title="Total purchase / cost spent on this project">Purchase ₹</th>
                   <th className="px-2 py-2 text-right" title="Cash velocity = received ÷ purchase. ≥1 means we're cash-positive">Velocity</th>
                   <th className="px-2 py-2 text-center" title="Project go-live date">Live</th>
@@ -271,13 +271,19 @@ export default function CashFlow() {
                   {editing ? (<>
                     <td className="px-1 py-1"><input className="input text-xs w-24" type="number" value={editForm.amount_received||''} onChange={e=>setEditForm({...editForm,amount_received:+e.target.value})} /></td>
                     <td className="px-1 py-1"><select className="input text-xs w-24" value={editForm.milestone_name||''} onChange={e=>setEditForm({...editForm,milestone_name:e.target.value})}><option value="">—</option><option>milestone</option><option>handover</option><option>delivery</option></select></td>
-                    <td className="px-1 py-1"><input className="input text-xs w-20" type="number" step="0.01" value={editForm.aanchal_value||''} onChange={e=>setEditForm({...editForm,aanchal_value:+e.target.value})} placeholder="lakhs" /></td>
+                    <td className="px-1 py-1"><input className="input text-xs w-20" type="number" value={editForm.aanchal_value||''} onChange={e=>setEditForm({...editForm,aanchal_value:+e.target.value})} placeholder="₹ amount" /></td>
                   </>) : (<>
                     <td className="px-2 py-2 text-right font-medium text-emerald-700 tabular-nums">{p.amount_received > 0 ? fmt(p.amount_received) : dash}</td>
                     <td className="px-2 py-2 text-center">{p.milestone_name ? (
                       <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">{p.milestone_name}</span>
                     ) : dash}</td>
-                    <td className="px-2 py-2 text-right font-semibold tabular-nums">{p.aanchal_value > 0 ? fmt(p.aanchal_value * 100000) : dash}</td>
+                    {/* Aanchal — stored as raw rupees from 2026-05-15 onwards.
+                        Mam: "if i enter 10 then 10". Multiplier × 1,00,000
+                        was removed so input and display match 1:1.  Any
+                        historical rows that were stored in lakhs will look
+                        small now; mam can re-edit them with the actual
+                        rupee figure. */}
+                    <td className="px-2 py-2 text-right font-semibold tabular-nums">{p.aanchal_value > 0 ? fmt(p.aanchal_value) : dash}</td>
                   </>)}
                   {editing ? (
                     <td className="px-1 py-1"><input className="input text-xs w-24" type="number" value={editForm.manual_purchase_value||''} onChange={e=>setEditForm({...editForm,manual_purchase_value:+e.target.value})} /></td>
@@ -345,7 +351,7 @@ export default function CashFlow() {
                 <td className="px-2 py-3 text-right text-red-700 tabular-nums">{fmtL(filtered.reduce((s, p) => s + p.sale_amount, 0))}</td>
                 <td className="px-2 py-3 text-right text-emerald-700 tabular-nums">{fmt(filtered.reduce((s, p) => s + p.amount_received, 0))}</td>
                 <td></td>
-                <td className="px-2 py-3 text-right tabular-nums">{fmt(filtered.reduce((s, p) => s + p.aanchal_value, 0) * 100000)}</td>
+                <td className="px-2 py-3 text-right tabular-nums">{fmt(filtered.reduce((s, p) => s + (p.aanchal_value || 0), 0))}</td>
                 <td className="px-2 py-3 text-right text-red-700 tabular-nums">{fmtL(filtered.reduce((s, p) => s + p.purchase_value, 0))}</td>
                 <td colSpan="8"></td>
               </tr></tfoot>

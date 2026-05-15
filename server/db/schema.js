@@ -2676,6 +2676,22 @@ function initializeDatabase() {
     }
   } catch (e) { /* non-fatal */ }
 
+  // One-time data fix: project_finance.aanchal_value and manual_purchase_value
+  // were historically stored as LAKHS (10 meant ₹10,00,000).  Mam (2026-05-15)
+  // asked for 1:1 input/display ("if i enter 10 then 10").  Multiply the
+  // existing rows by 1,00,000 so the rupee figure is preserved after the
+  // frontend/backend stop applying the × 100000 conversion.  Guarded by a
+  // flag so it only runs once.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='pf_amounts_raw_rupees_v1'").get();
+    if (!done) {
+      const r1 = db.prepare("UPDATE project_finance SET aanchal_value = aanchal_value * 100000 WHERE aanchal_value IS NOT NULL AND aanchal_value > 0").run();
+      const r2 = db.prepare("UPDATE project_finance SET manual_purchase_value = manual_purchase_value * 100000 WHERE manual_purchase_value IS NOT NULL AND manual_purchase_value > 0").run();
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('pf_amounts_raw_rupees_v1', '1')").run();
+      console.log(`[migration] project_finance: aanchal × 1,00,000 on ${r1.changes} rows; manual_purchase × 1,00,000 on ${r2.changes} rows (lakhs → rupees)`);
+    }
+  } catch (e) { /* non-fatal */ }
+
   // One-time seed of mam's auto-mark-present allow-list. Guarded by an
   // app_settings key so toggling someone OFF via the UI doesn't get
   // reverted on the next server restart.

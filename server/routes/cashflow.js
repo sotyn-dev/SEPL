@@ -90,9 +90,13 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
     const amountReceived = received?.total || 0;
     const purchaseAmt = purchaseValue?.total || 0;
 
-    // Get manual fields from project_finance
+    // Get manual fields from project_finance.
+    // aanchal_value and manual_purchase_value are stored as RAW RUPEES
+    // (post pf_amounts_raw_rupees_v1 migration, 2026-05-15).  Mam wanted
+    // 1:1 input/display, so we no longer apply a × 1,00,000 lakh-to-rupee
+    // conversion.
     const pf = db.prepare('SELECT * FROM project_finance WHERE business_book_id=?').get(p.id);
-    const aanchalValue = (pf?.aanchal_value || 0) * 100000; // in Rs (aanchal stored in lakhs)
+    const aanchalValue = pf?.aanchal_value || 0;
     const paymentInvestDays = pf?.payment_investment_days || 0;
     const manualPaymentDays = pf?.payment_days || 0;
 
@@ -112,7 +116,10 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
     const totalDays = effCompletion + paymentDays; // R: Total = P (effective) + Q
 
     // Cash Velocity = (J - K) / R = (Aanchal Value - Purchase Value) / Total Days
-    const effPurchase = pf?.manual_purchase_value != null ? pf.manual_purchase_value * 100000 : purchaseAmt;
+    // Both aanchalValue and effPurchase are in raw rupees post-migration.
+    // The /100000 still appears in the formula so the displayed number stays
+    // in "lakhs/day" units (mam's spreadsheet shows 1.50 / 0.05 / etc.).
+    const effPurchase = pf?.manual_purchase_value != null ? pf.manual_purchase_value : purchaseAmt;
     const cashVelocity = totalDays > 0 ? Math.round(((aanchalValue - effPurchase) / totalDays / 100000) * 100) / 100 : 0;
 
     return {
@@ -127,8 +134,8 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
       po_amount: totalPO?.total || p.po_amount || 0,
       amount_received: pf?.amount_received || amountReceived, // H: Tally (manual)
       milestone_name: pf?.milestone_name || '',  // I: Milestone (manual)
-      aanchal_value: pf?.aanchal_value || 0,  // J: Aanchal Value (in lakhs, manual)
-      purchase_value: pf?.manual_purchase_value != null ? pf.manual_purchase_value * 100000 : purchaseAmt, // K: Purchase Value (auto from FMS)
+      aanchal_value: pf?.aanchal_value || 0,  // J: Aanchal Value (raw rupees, manual)
+      purchase_value: pf?.manual_purchase_value != null ? pf.manual_purchase_value : purchaseAmt, // K: Purchase Value (manual raw rupees, else auto from FMS)
       cash_velocity: cashVelocity,  // M: (J-K)/R
       live_date: today,  // N: Today
       payment_investment_days: paymentInvestDays,  // O: Manual by Nitin ji
@@ -144,10 +151,9 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
   const totalSale = result.reduce((s, r) => s + r.sale_amount, 0);
   const totalReceived = result.reduce((s, r) => s + r.amount_received, 0);
   const totalPurchase = result.reduce((s, r) => s + r.purchase_value, 0);
-  // Total Value = sum of Aanchal Values (manual entry, stored in lakhs).
-  // Multiply by 100,000 so the dashboard shows full rupees consistent with
-  // the rest of the cards.
-  const totalValue = result.reduce((s, r) => s + (r.aanchal_value || 0), 0) * 100000;
+  // Total Value = sum of Aanchal Values (raw rupees post pf_amounts_raw_rupees_v1
+  // migration — no × 1,00,000 conversion needed).
+  const totalValue = result.reduce((s, r) => s + (r.aanchal_value || 0), 0);
 
   res.json({ projects: result, summary: { totalSale, totalReceived, totalValue, totalPurchase, projectCount: result.length } });
 });
