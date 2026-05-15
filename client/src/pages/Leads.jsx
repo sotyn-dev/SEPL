@@ -91,7 +91,7 @@ const GATE_STAGES = new Set(['pricing_review', 'contract_signed']);
 // Sales-funnel category list — exactly mam's 7-option spec (Section 3 of 7
 // of her form): Low Voltage, Fire Fighting, Electrical, SOLAR, MEP, HVAC,
 // Plumbing. Order and casing kept verbatim per mam's screenshot.
-const CATEGORIES = ['Low Voltage','Fire Fighting','Electrical','SOLAR','MEP','HVAC','Plumbing'];
+const CATEGORIES = ['Low Voltage','Fire Fighting','Fire NOC','Electrical','SOLAR','MEP','HVAC','Plumbing'];
 const PIE_COLORS = ['#3b82f6','#6366f1','#8b5cf6','#f59e0b','#f97316','#06b6d4','#10b981','#ef4444','#ec4899'];
 
 export default function Leads() {
