@@ -1,6 +1,7 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { validatePoNumber } = require('../utils/validate');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -76,6 +77,14 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
 
   if (!b.client_name || !String(b.client_name).trim()) {
     return res.status(400).json({ error: 'Client name is required' });
+  }
+
+  // PO number regex / junk-blocklist guard per TOC v3 P0 #1.
+  // BB rows can be created without a PO (lead stage), so only validate
+  // when a PO number is actually entered.
+  if (b.po_number !== undefined && b.po_number !== null && String(b.po_number).trim() !== '') {
+    const poErr = validatePoNumber(b.po_number);
+    if (poErr) return res.status(400).json({ error: poErr });
   }
 
   try {
@@ -187,6 +196,11 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
 // PUT update
 router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
   const b = req.body;
+  // Same PO regex guard on edit so historical junk can't be re-saved.
+  if (b.po_number !== undefined && b.po_number !== null && String(b.po_number).trim() !== '') {
+    const poErr = validatePoNumber(b.po_number);
+    if (poErr) return res.status(400).json({ error: poErr });
+  }
   const computedBalance = b.balance_amount !== undefined ? b.balance_amount : (b.po_amount || 0) - (b.advance_received || 0);
 
   getDb().prepare(`UPDATE business_book SET

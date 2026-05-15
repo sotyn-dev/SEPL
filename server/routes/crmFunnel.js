@@ -10,6 +10,7 @@ const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { nextSequence } = require('../db/nextSequence');
+const { validateFunnelSource } = require('../utils/validate');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -71,6 +72,10 @@ router.post('/', requirePermission('crm_funnel', 'create'), boqUpload.single('bo
   if (!b.client_name || !String(b.client_name).trim()) {
     return res.status(400).json({ error: 'Client name is required' });
   }
+  // Block free-text lead sources per TOC v3 P0 #2.  Allowed values:
+  // Tenders / Referral / Direct / Website / Channel.  Blank = OK (legacy rows).
+  const srcErr = validateFunnelSource(b.source);
+  if (srcErr) return res.status(400).json({ error: srcErr });
   const db = getDb();
   const leadNo = nextSequence(db, 'crm_funnel', 'lead_no', 'CRM-', { startFrom: 0, pad: 4 });
   const leadType = ALLOWED_LEAD_TYPES.includes(b.lead_type) ? b.lead_type : null;
@@ -101,6 +106,12 @@ router.post('/', requirePermission('crm_funnel', 'create'), boqUpload.single('bo
 
 router.put('/:id', requirePermission('crm_funnel', 'edit'), boqUpload.single('boq_file'), (req, res) => {
   const b = req.body || {};
+  // Same source enforcement on edit so historical rows can't be saved
+  // with a free-text source value.
+  if (b.source !== undefined) {
+    const srcErr = validateFunnelSource(b.source);
+    if (srcErr) return res.status(400).json({ error: srcErr });
+  }
   const db = getDb();
   const existing = db.prepare('SELECT * FROM crm_funnel WHERE id=?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Not found' });

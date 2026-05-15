@@ -17,7 +17,10 @@ import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 // Negotiation Status, Amount, Win/Loss, Reason if Loss.
 
 const CATEGORIES = ['Hospital', 'Hotel', 'Office', 'Industrial', 'Residential', 'Retail', 'Educational', 'Government', 'Other'];
-const SOURCES = ['Reference', 'Website', 'Existing Client', 'Cold Call', 'Tender Portal', 'Walk-in', 'Other'];
+// MD's TOC v3 spec (2026-05-15): canonical 5 lead sources — block free
+// text and any legacy label.  The backend validator enforces the same
+// whitelist server-side via validateFunnelSource().
+const SOURCES = ['Tenders', 'Referral', 'Direct', 'Website', 'Channel'];
 const TYPES = ['Private', 'Government'];
 const NEG_STATUSES = [
   { v: 'in_progress', l: 'In Progress' },

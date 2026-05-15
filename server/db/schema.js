@@ -2676,6 +2676,45 @@ function initializeDatabase() {
     }
   } catch (e) { /* non-fatal */ }
 
+  // Seed the canonical 5 lead-source values per MD's TOC v3 spec.
+  // INSERT OR IGNORE so re-runs don't duplicate or overwrite custom
+  // sources added by hand.  Free-text source entry is blocked in the
+  // route layer; the master list lives here.
+  try {
+    const seed = ['Tenders', 'Referral', 'Direct', 'Website', 'Channel'];
+    const stmt = db.prepare('INSERT OR IGNORE INTO lead_sources (name) VALUES (?)');
+    for (const s of seed) stmt.run(s);
+  } catch (e) { /* non-fatal */ }
+
+  // One-time normalization of CRM Funnel free-text sources to the
+  // canonical 5 — so editing a legacy row doesn't fail the new
+  // backend validator.  Guarded by app_settings flag.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='crm_funnel_canonical_sources_v1'").get();
+    if (!done) {
+      const remap = [
+        ['Reference', 'Referral'],
+        ['Tender Portal', 'Tenders'],
+        ['Cold Call', 'Direct'],
+        ['Walk-in', 'Direct'],
+        ['Existing Client', 'Direct'],
+      ];
+      let total = 0;
+      for (const [oldV, newV] of remap) {
+        try {
+          const r = db.prepare('UPDATE crm_funnel SET source=? WHERE source=?').run(newV, oldV);
+          total += r.changes;
+        } catch (_) {}
+      }
+      try {
+        const r = db.prepare("UPDATE crm_funnel SET source=NULL WHERE source='Other'").run();
+        total += r.changes;
+      } catch (_) {}
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('crm_funnel_canonical_sources_v1', '1')").run();
+      if (total > 0) console.log(`[migration] crm_funnel sources normalized: ${total} rows mapped to canonical 5`);
+    }
+  } catch (e) { /* non-fatal */ }
+
   // One-time data fix: project_finance.aanchal_value and manual_purchase_value
   // were historically stored as LAKHS (10 meant ₹10,00,000).  Mam (2026-05-15)
   // asked for 1:1 input/display ("if i enter 10 then 10").  Multiply the

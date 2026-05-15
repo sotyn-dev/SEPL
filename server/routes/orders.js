@@ -4,6 +4,7 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
+const { validatePoNumber } = require('../utils/validate');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -111,6 +112,11 @@ router.post('/po', (req, res) => {
   const { business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, crm_name, items } = req.body;
   const db = getDb();
 
+  // PO number regex / junk-blocklist guard per TOC v3 P0 #1 — stops
+  // historical junk like "5252525", "141414", "1111111111", "00".
+  const poErr = validatePoNumber(po_number);
+  if (poErr) return res.status(400).json({ error: poErr });
+
   // Normalize engineer IDs: accept array (preferred) or single legacy id
   const engIds = Array.isArray(site_engineer_ids)
     ? site_engineer_ids.map(x => parseInt(x, 10)).filter(Boolean)
@@ -168,6 +174,11 @@ router.post('/po', (req, res) => {
 
 router.put('/po/:id', (req, res) => {
   const { po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, status, site_engineer_id, site_engineer_ids, crm_name } = req.body;
+  // Same regex guard on edit — junk PO numbers can't be re-saved.
+  if (po_number !== undefined && po_number !== null && String(po_number).trim() !== '') {
+    const poErr = validatePoNumber(po_number);
+    if (poErr) return res.status(400).json({ error: poErr });
+  }
   const engIds = Array.isArray(site_engineer_ids)
     ? site_engineer_ids.map(x => parseInt(x, 10)).filter(Boolean)
     : (site_engineer_id ? [parseInt(site_engineer_id, 10)].filter(Boolean) : []);
