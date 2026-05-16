@@ -14,12 +14,23 @@
 // upsell generation all land in subsequent PRs.
 
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
 
 const router = express.Router();
 router.use(authMiddleware);
+
+// Bulk-import uploads.  Reuses the same data/uploads dir + 10 MB
+// limit as customers.js / orders.js so admin only has one path to
+// clear/rotate.
+const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const upload = multer({ dest: uploadDir, limits: { fileSize: 10 * 1024 * 1024 } });
 
 // ── Stage helpers (pure functions; will move to lib/ in PR3) ────
 // Maps days-to-expiry → expected stage.  Used by both the manual
@@ -279,6 +290,175 @@ router.post('/cycles', requirePermission('fire_noc', 'create'), (req, res) => {
     console.error('[fire-noc/cycles POST]', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ── GET /api/fire-noc/cycles/import/template ────────────────────
+// Mam (2026-05-16): "for import bulk data give option excel".  This
+// returns an .xlsx template with the expected column headers (+ a
+// sample row) so users don't have to guess the schema.  Required
+// columns marked with *; everything else optional.
+router.get('/cycles/import/template', requirePermission('fire_noc', 'view'), (req, res) => {
+  const headers = [
+    'state*', 'building_type*', 'expiry_date* (YYYY-MM-DD)',
+    'building_name', 'address', 'pincode',
+    'decision_maker_name', 'decision_maker_phone', 'decision_maker_email',
+    'ticket_size_band', 'source',
+  ];
+  const sample = [
+    'Rajasthan', 'hospital', '2026-12-15',
+    'M/s Apollo Hospital — Jaipur', 'Plot 12, JLN Marg, Jaipur', '302017',
+    'Dr. Sharma', '9876543210', 'sharma@apollo.in',
+    'medium', 'manual',
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
+  ws['!cols'] = headers.map(h => ({ wch: Math.max(20, h.length + 2) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Fire NOC Cycles');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="fire-noc-cycles-template.xlsx"');
+  res.send(buf);
+});
+
+// ── POST /api/fire-noc/cycles/import ────────────────────────────
+// Bulk import cycles from an uploaded .xlsx / .xls / .csv file.
+// Each row becomes a property + cycle + stage_history entry in a
+// single transaction.  Partial-success model: if any row fails
+// validation, that row is skipped and reported in the response,
+// but valid rows still import successfully.
+//
+// Accepted column names (case-insensitive, * = required):
+//   state*, building_type*, expiry_date* (Excel date OR YYYY-MM-DD)
+//   building_name, address, pincode,
+//   decision_maker_name, decision_maker_phone, decision_maker_email,
+//   ticket_size_band, source
+const ALLOWED_BUILDINGS = ['hospital','school','commercial','industrial','residential','hotel','mall','other'];
+
+// Excel stores dates as serial numbers (days since 1900-01-01).
+// Convert if numeric; otherwise pass through assuming YYYY-MM-DD.
+function normalizeDate(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') {
+    // Excel epoch quirk: 1900-01-00 + serial days, 1-indexed
+    const d = XLSX.SSF.parse_date_code(v);
+    if (!d) return null;
+    return `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`;
+  }
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // Try parsing things like "15/12/2026" or "15-Dec-2026"
+  const dd = new Date(s);
+  if (!isNaN(dd)) return dd.toISOString().slice(0, 10);
+  return null;
+}
+
+router.post('/cycles/import', requirePermission('fire_noc', 'create'), upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const db = getDb();
+  let wb, rows;
+  try {
+    wb = XLSX.readFile(req.file.path);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+  } catch (e) {
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
+    return res.status(400).json({ error: 'Could not parse the file. Expected .xlsx / .xls / .csv', detail: e.message });
+  }
+  try { fs.unlinkSync(req.file.path); } catch (_) {}
+
+  if (!rows.length) {
+    return res.status(400).json({ error: 'No data rows found. The first row must be column headers; data starts on row 2.' });
+  }
+
+  // Normalize header keys — strip *, anything in parens, lowercase, trim
+  const cleanKey = (k) => String(k || '')
+    .toLowerCase()
+    .replace(/\*/g, '')
+    .replace(/\(.*?\)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const created = [];
+  const failed = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const raw = rows[i];
+    const r = {};
+    Object.entries(raw).forEach(([k, v]) => { r[cleanKey(k)] = typeof v === 'string' ? v.trim() : v; });
+
+    const state = r['state'];
+    const building_type = String(r['building_type'] || '').toLowerCase();
+    const expiry_date = normalizeDate(r['expiry_date']);
+
+    if (!state || !building_type || !expiry_date) {
+      failed.push({ row: i + 2, reason: 'Missing required field (state / building_type / expiry_date)', raw });
+      continue;
+    }
+    if (!ALLOWED_BUILDINGS.includes(building_type)) {
+      failed.push({ row: i + 2, reason: `building_type "${building_type}" not in allowed list: ${ALLOWED_BUILDINGS.join(', ')}`, raw });
+      continue;
+    }
+
+    try {
+      const txn = db.transaction(() => {
+        const propRes = db.prepare(`
+          INSERT INTO fire_noc_property (
+            customer_id, state, building_type, building_name, address, pincode,
+            decision_maker_name, decision_maker_phone, decision_maker_email,
+            ticket_size_band, source, created_by, updated_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          null, state, building_type,
+          r['building_name'] || null, r['address'] || null, r['pincode'] || null,
+          r['decision_maker_name'] || null, r['decision_maker_phone'] || null,
+          r['decision_maker_email'] || null, r['ticket_size_band'] || null,
+          r['source'] || 'bulk_import', req.user.id, req.user.id,
+        );
+        const propertyId = propRes.lastInsertRowid;
+        const daysToExpiry = Math.ceil((new Date(expiry_date) - new Date()) / 86400000);
+        const startStage = stageForDays(daysToExpiry);
+        const cycRes = db.prepare(`
+          INSERT INTO fire_noc_cycle (
+            property_id, cycle_no, expiry_date, current_stage,
+            status, owner_user_id
+          ) VALUES (?, 1, ?, ?, 'active', ?)
+        `).run(propertyId, expiry_date, startStage, req.user.id);
+        const cycleId = cycRes.lastInsertRowid;
+        db.prepare(`
+          INSERT INTO fire_noc_stage_history (cycle_id, from_stage, to_stage, triggered_by, notes)
+          VALUES (?, NULL, ?, ?, 'cycle created via bulk import')
+        `).run(cycleId, startStage, String(req.user.id));
+        return { propertyId, cycleId, startStage };
+      });
+      const out = txn();
+      created.push({
+        row: i + 2,
+        cycle_id: out.cycleId,
+        property_id: out.propertyId,
+        stage: out.startStage,
+        building: r['building_name'] || `${state} · ${building_type}`,
+      });
+    } catch (e) {
+      failed.push({ row: i + 2, reason: e.message, raw });
+    }
+  }
+
+  // Single audit log entry for the whole batch (saves DB churn vs one
+  // event per row).
+  logAuditEvent({
+    user: req.user,
+    action: 'BULK_IMPORT', entity_type: 'fire_noc_cycle',
+    entity_label: `${created.length} created, ${failed.length} failed`,
+    method: 'POST', path: '/api/fire-noc/cycles/import',
+    body: { rows_total: rows.length, created: created.length, failed: failed.length },
+  });
+
+  res.json({
+    total_rows: rows.length,
+    created_count: created.length,
+    failed_count: failed.length,
+    created, failed,
+  });
 });
 
 // ── POST /api/fire-noc/cycles/:id/advance ───────────────────────

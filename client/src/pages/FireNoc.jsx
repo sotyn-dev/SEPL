@@ -16,7 +16,7 @@ import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import {
-  FiTarget, FiPlus, FiDownload, FiRefreshCw, FiEye, FiCalendar,
+  FiTarget, FiPlus, FiDownload, FiUpload, FiRefreshCw, FiEye, FiCalendar,
   FiAlertTriangle, FiCheckCircle, FiClock,
 } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
@@ -92,6 +92,53 @@ export default function FireNoc() {
   });
   const [saving, setSaving] = useState(false);
 
+  // Bulk import (mam, 2026-05-16: "for import bulk data give option
+  // excel").  importResult holds the parsed server response so we can
+  // show how many rows succeeded / failed without auto-dismissing —
+  // mam needs to see the failures to fix them in the next batch.
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+
+  const downloadTemplate = async () => {
+    try {
+      const r = await api.get('/fire-noc/cycles/import/template', { responseType: 'blob' });
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'fire-noc-cycles-template.xlsx';
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error('Could not download template');
+    }
+  };
+
+  const handleImportFile = async (e) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';  // reset input so picking same file again re-triggers
+    if (!f) return;
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      const r = await api.post('/fire-noc/cycles/import', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setImportResult(r.data);
+      const { created_count, failed_count, total_rows } = r.data;
+      if (failed_count === 0) {
+        toast.success(`Imported ${created_count}/${total_rows} cycles`);
+      } else {
+        toast(`Imported ${created_count}/${total_rows} · ${failed_count} skipped — see details`, { icon: '⚠️' });
+      }
+      loadDashboard(); loadCycles();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Import failed');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const loadDashboard = async () => {
     setLoading(true);
     try { setDashboard((await api.get('/fire-noc/dashboard')).data); }
@@ -139,7 +186,7 @@ export default function FireNoc() {
             T-180 → T+30 auto-pilot funnel · state-aware cycle rules · maker-checker on quotes
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button onClick={() => exportCsv('fire-noc-cycles',
             ['Building','Customer','State','Type','Expiry','Days Left','Stage','Status'],
             cycles.map(c => [c.building_name, c.customer_name, c.state, c.building_type, c.expiry_date, c.days_to_expiry, c.current_stage, c.status]))}
@@ -147,9 +194,21 @@ export default function FireNoc() {
             <FiDownload size={14} /> Export Excel
           </button>
           {canCreate('fire_noc') && (
-            <button onClick={() => setCreateModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
-              <FiPlus size={14} /> New Cycle
-            </button>
+            <>
+              <button onClick={downloadTemplate}
+                className="btn btn-secondary flex items-center gap-2 text-sm"
+                title="Download .xlsx template with required columns + sample row">
+                <FiDownload size={14} /> Template
+              </button>
+              <label className={`btn btn-secondary flex items-center gap-2 text-sm cursor-pointer ${importing ? 'opacity-50 pointer-events-none' : ''}`}
+                title="Bulk import cycles from an Excel file">
+                <FiUpload size={14} /> {importing ? 'Importing…' : 'Import Excel'}
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} className="hidden" />
+              </label>
+              <button onClick={() => setCreateModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
+                <FiPlus size={14} /> New Cycle
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -421,6 +480,63 @@ export default function FireNoc() {
           </div>
         </form>
       </Modal>
+
+      {/* Bulk import result — opens automatically when the import POST
+          returns.  Shows total / created / failed counts plus the
+          first 50 failed rows so mam can fix and re-upload.  Does
+          NOT auto-dismiss: failures need attention. */}
+      {importResult && (
+        <Modal isOpen={true} onClose={() => setImportResult(null)} title="Import result" wide>
+          <div className="space-y-3 text-sm">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-gray-50 border border-gray-200 rounded p-3 text-center">
+                <div className="text-2xl font-bold text-gray-700">{importResult.total_rows}</div>
+                <div className="text-[10px] uppercase text-gray-500 mt-1">Total rows</div>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-200 rounded p-3 text-center">
+                <div className="text-2xl font-bold text-emerald-700">{importResult.created_count}</div>
+                <div className="text-[10px] uppercase text-emerald-600 mt-1">Created</div>
+              </div>
+              <div className="bg-red-50 border border-red-200 rounded p-3 text-center">
+                <div className="text-2xl font-bold text-red-700">{importResult.failed_count}</div>
+                <div className="text-[10px] uppercase text-red-600 mt-1">Failed</div>
+              </div>
+            </div>
+
+            {importResult.failed_count > 0 && (
+              <div>
+                <div className="text-xs font-semibold text-red-700 mb-1">Failed rows (first 50)</div>
+                <div className="overflow-x-auto border rounded">
+                  <table className="w-full text-xs">
+                    <thead className="bg-red-50 text-red-700">
+                      <tr>
+                        <th className="px-2 py-1.5 text-left">Excel Row</th>
+                        <th className="px-2 py-1.5 text-left">Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importResult.failed.slice(0, 50).map((f, i) => (
+                        <tr key={i} className="border-t">
+                          <td className="px-2 py-1.5 font-mono">{f.row}</td>
+                          <td className="px-2 py-1.5">{f.reason}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <p className="text-[10px] text-gray-500">
+              Fix the failed rows in the same Excel and upload again — the successful rows already created
+              won't be touched. Use the <strong>Template</strong> button for the exact column format.
+            </p>
+            <div className="flex justify-end">
+              <button onClick={() => setImportResult(null)} className="btn btn-primary text-sm">Done</button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
