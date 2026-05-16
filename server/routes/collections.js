@@ -1,29 +1,13 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
+const {
+  calculateAgeing, getStatusColor,
+  syncSalesBillPaymentStatus, ensureTodayCashFlowDaily,
+  refreshAllAgeing,
+} = require('../lib/cashSync');
 const router = express.Router();
 router.use(authMiddleware);
-
-// Helper: calculate ageing and bucket
-function calculateAgeing(dueDate) {
-  if (!dueDate) return { days: 0, bucket: '0-30' };
-  const now = new Date();
-  const due = new Date(dueDate);
-  const days = Math.max(0, Math.floor((now - due) / (1000 * 60 * 60 * 24)));
-  let bucket = '0-30';
-  if (days > 90) bucket = '90+';
-  else if (days > 60) bucket = '61-90';
-  else if (days > 30) bucket = '31-60';
-  return { days, bucket };
-}
-
-// Helper: determine status color
-function getStatusColor(outstandingAmount, ageingDays) {
-  if (outstandingAmount <= 0) return 'green';
-  if (ageingDays > 60) return 'red';
-  if (ageingDays > 30) return 'yellow';
-  return 'green';
-}
 
 // Get all receivables with filters. Now also returns:
 //   - pms_tasks_count : how many PMS tasks were raised for this site
@@ -449,14 +433,16 @@ router.post('/:id/collect', (req, res) => {
   db.prepare('UPDATE receivables SET received_amount=?, outstanding_amount=?, ageing_days=?, ageing_bucket=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
     .run(newReceived, Math.max(0, newOutstanding), days, bucket, statusColor, req.params.id);
 
-  // AUTO-LINK: Add to Cash Flow as inflow
+  // A9 — sync sales_bills.payment_status if this receivable is
+  // linked to a sales bill (via invoice_number = bill_number).
+  // Quietly no-ops when no bill is linked.
+  const billSync = syncSalesBillPaymentStatus(db, req.params.id);
+
+  // AUTO-LINK + A14 — Add to Cash Flow as inflow; ensureTodayCashFlowDaily
+  // creates today's row with opening = yesterday closing if missing.
   const today = collection_date || new Date().toISOString().split('T')[0];
-  let daily = db.prepare('SELECT id FROM cash_flow_daily WHERE date=?').get(today);
-  if (!daily) {
-    const prev = db.prepare('SELECT closing_balance FROM cash_flow_daily WHERE date < ? ORDER BY date DESC LIMIT 1').get(today);
-    const r2 = db.prepare('INSERT INTO cash_flow_daily (date, opening_balance, closing_balance) VALUES (?,?,?)').run(today, prev?.closing_balance || 0, prev?.closing_balance || 0);
-    daily = { id: r2.lastInsertRowid };
-  }
+  const dailyRes = ensureTodayCashFlowDaily(db, today);
+  const daily = { id: dailyRes.id };
   db.prepare('INSERT INTO cash_flow_entries (daily_id, date, type, category, description, amount, payment_mode, party_name, reference_type, reference_id, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
     .run(daily.id, today, 'inflow', 'Collection', `Collection from ${rec.client_name} - ${rec.invoice_number || ''}`, amount, payment_mode, rec.client_name, 'collection', req.params.id, req.user.id);
 
@@ -467,20 +453,18 @@ router.post('/:id/collect', (req, res) => {
   db.prepare('UPDATE cash_flow_daily SET total_inflows=?, total_outflows=?, closing_balance=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
     .run(inflows.t, outflows.t, (opening?.opening_balance || 0) + inflows.t - outflows.t, daily.id);
 
-  res.status(201).json({ message: 'Collection recorded & linked to Cash Flow', new_outstanding: Math.max(0, newOutstanding) });
+  res.status(201).json({
+    message: 'Collection recorded & linked to Cash Flow',
+    new_outstanding: Math.max(0, newOutstanding),
+    sales_bill_synced: billSync.synced > 0 ? billSync : null,
+  });
 });
 
-// Refresh all ageing (run daily or on demand)
+// Refresh all ageing (run daily or on demand).  Same code path as
+// the 01:00 cron in scripts/cashFidelityCron.js — shared helper.
 router.post('/refresh-ageing', (req, res) => {
-  const db = getDb();
-  const receivables = db.prepare('SELECT * FROM receivables WHERE outstanding_amount > 0').all();
-  for (const r of receivables) {
-    const { days, bucket } = calculateAgeing(r.due_date);
-    const statusColor = getStatusColor(r.outstanding_amount, days);
-    db.prepare('UPDATE receivables SET ageing_days=?, ageing_bucket=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
-      .run(days, bucket, statusColor, r.id);
-  }
-  res.json({ message: `Ageing refreshed for ${receivables.length} receivables` });
+  const r = refreshAllAgeing(getDb());
+  res.json({ message: `Ageing refreshed for ${r.updated} receivables` });
 });
 
 module.exports = router;

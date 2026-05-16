@@ -133,6 +133,18 @@ try {
   console.warn('[dpr-prompt] Scheduler not started:', e.message);
 }
 
+// Cash fidelity cron — audit items A7 + A14.  Daily 00:00 rolls over
+// cash_flow_daily (so runway numbers don't drift on no-collection
+// days); daily 01:00 recomputes receivables ageing across the board
+// (replaces the manual "Refresh Ageing" button as primary truth).
+// Skip via ERP_DISABLE_CASH_CRON=1.
+try {
+  const { scheduleCashFidelity } = require('./scripts/cashFidelityCron');
+  scheduleCashFidelity();
+} catch (e) {
+  console.warn('[cash-fidelity] Scheduler not started:', e.message);
+}
+
 // Audit middleware — runs before the routes so every mutating request
 // (POST/PUT/PATCH/DELETE) is logged on response finish. Reads req.user set
 // by authMiddleware inside each router. Fire-and-forget so it can't slow
