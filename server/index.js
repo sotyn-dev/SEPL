@@ -159,7 +159,12 @@ try {
 
 // Admin-triggered CMD email — sends the same daily summary on
 // demand so mam can verify SMTP + content without waiting for 9 AM.
-app.post('/api/admin/cmd-email/send-now', authMiddleware, (req, res) => {
+// authMiddleware is required inline here because the original require
+// is further down the file (line ~244) — using it earlier hit the
+// const TDZ on boot. Idempotent: the second require below is a
+// cache-hit, no double load.
+const { authMiddleware: _authMw } = require('./middleware/auth');
+app.post('/api/admin/cmd-email/send-now', _authMw, (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   try {
     const { runOnce } = require('./scripts/dailyCmdEmail');
