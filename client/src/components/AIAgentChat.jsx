@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import api from '../api';
 import { FiX, FiSend, FiAlertCircle, FiVolume2, FiVolumeX } from 'react-icons/fi';
+import useDraggableFab from '../hooks/useDraggableFab';
 
 // ─── Text-to-Speech helpers (browser Web Speech API) ─────────────────
 // Free, offline-capable, supports Hindi via the OS-provided voice list
@@ -107,6 +108,12 @@ export default function AIAgentChat() {
     try { return localStorage.getItem('ai_chat_autospeak') === '1'; } catch { return false; }
   });
   const ttsSupported = typeof window !== 'undefined' && !!window.speechSynthesis;
+
+  // Draggable FAB — mam's request 2026-05-16. Persists position under
+  // 'fab-ai-robot' so the robot stays wherever she parks it. Default
+  // sits 80 px above the Help button (matches the old bottom-24
+  // anchor relative to a 56 px Help button + 24 px gap).
+  const aiFab = useDraggableFab('fab-ai-robot', { offsetRight: 24, offsetBottom: 104 });
 
   // Speak (or stop) a specific message. Picks a Hindi voice when the
   // text contains Devanagari, so a Hindi training answer comes out in
@@ -228,9 +235,11 @@ export default function AIAgentChat() {
           and pulses an outer ring to look "alive". */}
       {!open && (
         <button
-          onClick={() => setOpen(true)}
-          title="Ask ERP — AI Assistant"
-          className="ai-robot-btn fixed bottom-24 right-6 z-30 w-16 h-16 rounded-2xl bg-gradient-to-b from-slate-700 via-slate-800 to-slate-900 text-white shadow-xl shadow-cyan-900/30 ring-1 ring-cyan-400/30 flex items-center justify-center hover:scale-110 transition-transform"
+          {...aiFab.handlers}
+          onClick={aiFab.onClickGuard(() => setOpen(true))}
+          title="Ask ERP — AI Assistant (drag to move)"
+          style={{ ...aiFab.style, zIndex: 30 }}
+          className="ai-robot-btn w-16 h-16 rounded-2xl bg-gradient-to-b from-slate-700 via-slate-800 to-slate-900 text-white shadow-xl shadow-cyan-900/30 ring-1 ring-cyan-400/30 flex items-center justify-center hover:scale-110 transition-transform cursor-grab active:cursor-grabbing"
         >
           {/* Outer glow ring — slow pulse */}
           <span aria-hidden="true" className="ai-robot-ring absolute inset-0 rounded-2xl ring-2 ring-cyan-400/40" />

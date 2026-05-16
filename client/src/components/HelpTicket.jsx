@@ -5,6 +5,7 @@ import SearchableSelect from './SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiHelpCircle, FiBook, FiX, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle } from 'react-icons/fi';
+import useDraggableFab from '../hooks/useDraggableFab';
 
 const GUIDES = [
   { title: 'How to Add a Business Book Entry', steps: ['Go to Business Book page', 'Click "New Entry"', 'Fill client, company, project details', 'Select category (FF/Electrical/etc)', 'Save - auto creates Site + Order Planning'] },
@@ -28,6 +29,12 @@ export default function HelpTicket() {
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [adminResponse, setAdminResponse] = useState('');
   const [reassign, setReassign] = useState('');
+
+  // Draggable FAB — mam's request 2026-05-16.  Position persists in
+  // localStorage under 'fab-help' so it stays put across reloads.
+  // offsetBottom = 24 so the default position matches the old
+  // bottom-6 right-6 anchor for first-time users.
+  const helpFab = useDraggableFab('fab-help', { offsetRight: 24, offsetBottom: 24 });
 
   const isAdmin = user?.role === 'admin';
 
@@ -76,10 +83,15 @@ export default function HelpTicket() {
 
   return (
     <>
-      {/* Floating Help Button */}
-      <button onClick={() => setOpen(true)}
-        className="fixed bottom-6 right-6 z-30 w-14 h-14 rounded-full bg-gradient-to-br from-red-600 to-red-600 text-white shadow-xl shadow-red-500/40 flex items-center justify-center hover:scale-110 transition-transform"
-        title="Help & Support">
+      {/* Floating Help Button — draggable (mam, 2026-05-16). The
+          inline z-30 lives on the style now since `fixed bottom-X
+          right-X` was replaced with the hook's dynamic position. */}
+      <button
+        {...helpFab.handlers}
+        onClick={helpFab.onClickGuard(() => setOpen(true))}
+        style={{ ...helpFab.style, zIndex: 30 }}
+        className="w-14 h-14 rounded-full bg-gradient-to-br from-red-600 to-red-600 text-white shadow-xl shadow-red-500/40 flex items-center justify-center hover:scale-110 transition-transform cursor-grab active:cursor-grabbing"
+        title="Help & Support (drag to move)">
         <FiHelpCircle size={24} />
       </button>
 
