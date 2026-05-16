@@ -496,6 +496,107 @@ router.post('/cycles/:id/advance', requirePermission('fire_noc', 'create'), (req
   res.json({ id, current_stage: to_stage });
 });
 
+// ── PATCH /api/fire-noc/cycles/:id ──────────────────────────────
+// Partial update for the cycle detail drawer (PR5-lite, mam asked
+// for it on 2026-05-16 after seeing bulk-imported cycles with no
+// place to act).  Accepts any subset of:
+//   { status, owner_user_id, decision_maker_name, decision_maker_phone,
+//     decision_maker_email, ticket_size_band }
+// Property-level fields update fire_noc_property; cycle-level fields
+// update fire_noc_cycle.  Every change is mirrored into stage_history
+// as a note so the timeline shows what changed and when.
+router.patch('/cycles/:id', requirePermission('fire_noc', 'edit'), (req, res) => {
+  const db = getDb();
+  const id = +req.params.id;
+  const b = req.body || {};
+  const cycle = db.prepare('SELECT c.*, p.id property_id FROM fire_noc_cycle c JOIN fire_noc_property p ON c.property_id=p.id WHERE c.id=?').get(id);
+  if (!cycle) return res.status(404).json({ error: 'Cycle not found' });
+
+  const allowedStatuses = ['active', 'lost', 'renewed', 'lapsed'];
+  const changes = [];
+  const txn = db.transaction(() => {
+    if (b.status !== undefined) {
+      if (!allowedStatuses.includes(b.status)) {
+        throw new Error(`status must be one of: ${allowedStatuses.join(', ')}`);
+      }
+      if (b.status !== cycle.status) {
+        db.prepare(`UPDATE fire_noc_cycle SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(b.status, id);
+        changes.push(`status: ${cycle.status} → ${b.status}`);
+      }
+    }
+    if (b.owner_user_id !== undefined) {
+      const newOwnerId = b.owner_user_id ? +b.owner_user_id : null;
+      if (newOwnerId !== cycle.owner_user_id) {
+        db.prepare(`UPDATE fire_noc_cycle SET owner_user_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(newOwnerId, id);
+        const newName = newOwnerId ? (db.prepare('SELECT name FROM users WHERE id=?').get(newOwnerId)?.name || `user#${newOwnerId}`) : '—';
+        changes.push(`owner → ${newName}`);
+      }
+    }
+    // Property-level edits
+    const propFields = ['decision_maker_name', 'decision_maker_phone', 'decision_maker_email', 'ticket_size_band'];
+    const propUpdates = [];
+    const propParams = [];
+    propFields.forEach(f => {
+      if (b[f] !== undefined && b[f] !== cycle[f]) {
+        propUpdates.push(`${f}=?`);
+        propParams.push(b[f] || null);
+        changes.push(`${f}: ${cycle[f] || '—'} → ${b[f] || '—'}`);
+      }
+    });
+    if (propUpdates.length) {
+      propParams.push(cycle.property_id);
+      db.prepare(`UPDATE fire_noc_property SET ${propUpdates.join(', ')}, updated_at=CURRENT_TIMESTAMP, updated_by=? WHERE id=?`)
+        .run(...propParams.slice(0, -1), req.user.id, propParams[propParams.length - 1]);
+    }
+    // Timeline note so the change is visible in the drawer
+    if (changes.length) {
+      try {
+        db.prepare(`INSERT INTO fire_noc_stage_history (cycle_id, from_stage, to_stage, triggered_by, notes) VALUES (?, ?, ?, ?, ?)`)
+          .run(id, cycle.current_stage, cycle.current_stage, String(req.user.id), `EDIT · ${changes.join(' · ')}`);
+      } catch (e) {
+        if (!String(e.message).includes('UNIQUE')) throw e;
+      }
+    }
+  });
+
+  try {
+    txn();
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+
+  logAuditEvent({
+    user: req.user, action: 'UPDATE', entity_type: 'fire_noc_cycle',
+    entity_id: id, method: 'PATCH', path: '/api/fire-noc/cycles/:id',
+    body: { changes },
+  });
+  res.json({ id, changes });
+});
+
+// ── POST /api/fire-noc/cycles/:id/note ──────────────────────────
+// Free-text note that lands in stage_history without changing the
+// stage — for "called customer, will revert next week" type entries.
+router.post('/cycles/:id/note', requirePermission('fire_noc', 'edit'), (req, res) => {
+  const db = getDb();
+  const id = +req.params.id;
+  const note = (req.body?.note || '').trim();
+  if (!note) return res.status(400).json({ error: 'note is required' });
+  const cycle = db.prepare('SELECT current_stage FROM fire_noc_cycle WHERE id=?').get(id);
+  if (!cycle) return res.status(404).json({ error: 'Cycle not found' });
+  try {
+    db.prepare(`INSERT INTO fire_noc_stage_history (cycle_id, from_stage, to_stage, triggered_by, notes) VALUES (?, ?, ?, ?, ?)`)
+      .run(id, cycle.current_stage, cycle.current_stage, String(req.user.id), `NOTE · ${note}`);
+  } catch (e) {
+    if (!String(e.message).includes('UNIQUE')) throw e;
+  }
+  logAuditEvent({
+    user: req.user, action: 'CREATE', entity_type: 'fire_noc_cycle_note',
+    entity_id: id, method: 'POST', path: '/api/fire-noc/cycles/:id/note',
+    body: { note: note.slice(0, 200) },
+  });
+  res.json({ id });
+});
+
 // ── GET /api/fire-noc/state-rules ───────────────────────────────
 router.get('/state-rules', requirePermission('fire_noc', 'view'), (req, res) => {
   const rows = getDb().prepare(

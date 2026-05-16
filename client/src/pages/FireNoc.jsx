@@ -99,6 +99,83 @@ export default function FireNoc() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
 
+  // Cycle detail drawer (mam, 2026-05-16: "if we take action on it
+  // where see").  Opens on row click, shows full cycle detail +
+  // timeline + action buttons (status change, owner reassign,
+  // stage advance, free-text note).  PR5-lite — full Quote /
+  // Inspection / Document panes still pending.
+  const [drawerCycle, setDrawerCycle] = useState(null); // full detail object
+  const [drawerLoading, setDrawerLoading] = useState(false);
+  const [drawerSaving, setDrawerSaving] = useState(false);
+  const [usersList, setUsersList] = useState([]);
+  const [noteText, setNoteText] = useState('');
+
+  const openCycleDrawer = async (id) => {
+    setDrawerLoading(true);
+    setDrawerCycle({ id, loading: true });
+    try {
+      const r = await api.get(`/fire-noc/cycles/${id}`);
+      setDrawerCycle(r.data);
+      // Lazy-load users list once for the owner dropdown
+      if (usersList.length === 0) {
+        try { setUsersList((await api.get('/auth/users')).data.filter(u => u.active !== 0)); } catch {}
+      }
+    } catch (e) {
+      toast.error('Could not load cycle');
+      setDrawerCycle(null);
+    } finally {
+      setDrawerLoading(false);
+    }
+  };
+  const closeDrawer = () => { setDrawerCycle(null); setNoteText(''); };
+
+  const patchCycle = async (patch) => {
+    if (!drawerCycle?.id) return;
+    setDrawerSaving(true);
+    try {
+      const r = await api.patch(`/fire-noc/cycles/${drawerCycle.id}`, patch);
+      if (r.data.changes?.length) toast.success(r.data.changes.join(' · '));
+      else toast('No changes', { icon: 'ℹ️' });
+      await openCycleDrawer(drawerCycle.id);  // refresh
+      loadCycles();  // refresh table behind
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Save failed');
+    } finally {
+      setDrawerSaving(false);
+    }
+  };
+
+  const advanceStage = async (toStage) => {
+    if (!drawerCycle?.id) return;
+    setDrawerSaving(true);
+    try {
+      await api.post(`/fire-noc/cycles/${drawerCycle.id}/advance`, { to_stage: toStage });
+      toast.success(`Stage → ${toStage}`);
+      await openCycleDrawer(drawerCycle.id);
+      loadCycles();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Advance failed');
+    } finally {
+      setDrawerSaving(false);
+    }
+  };
+
+  const addNote = async () => {
+    const n = noteText.trim();
+    if (!n) return;
+    setDrawerSaving(true);
+    try {
+      await api.post(`/fire-noc/cycles/${drawerCycle.id}/note`, { note: n });
+      toast.success('Note added');
+      setNoteText('');
+      await openCycleDrawer(drawerCycle.id);
+    } catch (e) {
+      toast.error('Could not add note');
+    } finally {
+      setDrawerSaving(false);
+    }
+  };
+
   const downloadTemplate = async () => {
     try {
       const r = await api.get('/fire-noc/cycles/import/template', { responseType: 'blob' });
@@ -362,15 +439,18 @@ export default function FireNoc() {
                   {filters.q || filters.state || filters.stage ? 'No cycles match these filters.' : 'No cycles yet — click "New Cycle" to add one.'}
                 </td></tr>
               ) : cycles.map(c => (
-                <tr key={c.id}>
-                  <td className="font-medium">{c.building_name || '—'}</td>
+                <tr key={c.id}
+                    onClick={() => openCycleDrawer(c.id)}
+                    className="cursor-pointer hover:bg-red-50/40"
+                    title="Click to view / edit this cycle">
+                  <td className="font-medium text-blue-700 hover:underline">{c.building_name || '—'}</td>
                   <td className="text-xs">{c.customer_name || '—'}</td>
                   <td className="text-xs">{c.state}</td>
                   <td className="text-xs uppercase">{c.building_type}</td>
                   <td className="text-xs font-mono">{c.expiry_date}</td>
                   <td className={`text-xs font-bold ${c.days_to_expiry < 0 ? 'text-red-600' : c.days_to_expiry < 30 ? 'text-amber-600' : 'text-gray-700'}`}>{c.days_to_expiry}d</td>
                   <td><span className={`badge ${STAGE_COLOR[c.current_stage] || 'bg-gray-100'}`}>{STAGE_LABEL[c.current_stage] || c.current_stage}</span></td>
-                  <td><span className="badge badge-gray">{c.status}</span></td>
+                  <td><span className={`badge ${c.status === 'active' ? 'badge-gray' : c.status === 'lost' ? 'bg-red-100 text-red-700' : c.status === 'renewed' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{c.status}</span></td>
                   <td className="text-xs">{c.owner_name || '—'}</td>
                 </tr>
               ))}
@@ -480,6 +560,119 @@ export default function FireNoc() {
           </div>
         </form>
       </Modal>
+
+      {/* ============ CYCLE DETAIL DRAWER ============
+          Slides in from the right on row click.  Action surface for
+          a single cycle: change status, reassign owner, advance
+          stage, add timeline note, see history. */}
+      {drawerCycle && (
+        <>
+          <div className="fixed inset-0 bg-black/30 z-40" onClick={closeDrawer}></div>
+          <div className="fixed top-0 right-0 h-full w-full sm:w-[520px] bg-white shadow-2xl z-50 overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-red-700 to-red-900 text-white p-4 flex items-center justify-between">
+              <div className="min-w-0">
+                <div className="text-xs opacity-80 uppercase tracking-wider">Fire NOC Cycle #{drawerCycle.id}</div>
+                <div className="font-semibold truncate" title={drawerCycle.building_name}>{drawerCycle.building_name || drawerCycle.state + ' · ' + drawerCycle.building_type}</div>
+              </div>
+              <button onClick={closeDrawer} className="p-2 hover:bg-white/10 rounded text-xl">×</button>
+            </div>
+
+            {drawerLoading || drawerCycle.loading ? (
+              <div className="p-8 text-center text-gray-400">Loading…</div>
+            ) : (
+              <div className="p-4 space-y-4">
+                {/* Snapshot card */}
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="bg-gray-50 border rounded p-2">
+                    <div className="text-gray-500 uppercase text-[10px]">Expiry</div>
+                    <div className="font-mono font-semibold">{drawerCycle.expiry_date}</div>
+                    <div className={`${drawerCycle.days_to_expiry < 0 ? 'text-red-600' : drawerCycle.days_to_expiry < 30 ? 'text-amber-600' : 'text-gray-700'} font-bold`}>{drawerCycle.days_to_expiry}d</div>
+                  </div>
+                  <div className="bg-gray-50 border rounded p-2">
+                    <div className="text-gray-500 uppercase text-[10px]">Current Stage</div>
+                    <div className="font-semibold">{STAGE_LABEL[drawerCycle.current_stage] || drawerCycle.current_stage}</div>
+                  </div>
+                  <div className="bg-gray-50 border rounded p-2 col-span-2">
+                    <div className="text-gray-500 uppercase text-[10px]">Property</div>
+                    <div>{drawerCycle.address || '—'}</div>
+                    <div className="text-gray-500">{drawerCycle.state} · {drawerCycle.building_type} · {drawerCycle.pincode || ''}</div>
+                  </div>
+                  <div className="bg-gray-50 border rounded p-2 col-span-2">
+                    <div className="text-gray-500 uppercase text-[10px]">Decision Maker</div>
+                    <div>{drawerCycle.decision_maker_name || '—'} · {drawerCycle.decision_maker_phone || '—'}</div>
+                    <div className="text-gray-500">{drawerCycle.decision_maker_email || ''}</div>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="border rounded p-3 space-y-3">
+                  <div className="text-xs font-semibold text-gray-700 uppercase">Actions</div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <label className="space-y-1">
+                      <span className="text-gray-600">Status</span>
+                      <select className="select w-full" value={drawerCycle.status || 'active'} disabled={drawerSaving}
+                              onChange={e => patchCycle({ status: e.target.value })}>
+                        <option value="active">Active</option>
+                        <option value="lost">Lost</option>
+                        <option value="renewed">Renewed</option>
+                        <option value="lapsed">Lapsed</option>
+                      </select>
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-gray-600">Owner</span>
+                      <select className="select w-full" value={drawerCycle.owner_user_id || ''} disabled={drawerSaving}
+                              onChange={e => patchCycle({ owner_user_id: e.target.value || null })}>
+                        <option value="">— Unassigned —</option>
+                        {usersList.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="space-y-1 col-span-2">
+                      <span className="text-gray-600">Advance to stage</span>
+                      <select className="select w-full" value="" disabled={drawerSaving}
+                              onChange={e => { if (e.target.value) advanceStage(e.target.value); }}>
+                        <option value="">— Pick a stage —</option>
+                        {STAGE_ORDER.map(s => <option key={s} value={s} disabled={s === drawerCycle.current_stage}>{STAGE_LABEL[s] || s}{s === drawerCycle.current_stage ? ' · current' : ''}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-xs text-gray-600">Add note (free text)</span>
+                    <div className="flex gap-2">
+                      <input type="text" className="input flex-1 text-xs" value={noteText} placeholder="e.g. called customer, will revert next week"
+                             onChange={e => setNoteText(e.target.value)}
+                             onKeyDown={e => { if (e.key === 'Enter') addNote(); }} disabled={drawerSaving} />
+                      <button onClick={addNote} disabled={drawerSaving || !noteText.trim()} className="btn btn-secondary text-xs">Add</button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Timeline */}
+                <div>
+                  <div className="text-xs font-semibold text-gray-700 uppercase mb-2">Timeline ({drawerCycle.history?.length || 0})</div>
+                  {(!drawerCycle.history || drawerCycle.history.length === 0) ? (
+                    <div className="text-xs text-gray-400 text-center py-4">No history yet</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {[...drawerCycle.history].reverse().map(h => (
+                        <div key={h.id} className="border-l-2 border-red-300 pl-3 py-1 text-xs">
+                          <div className="text-gray-500 text-[10px]">{new Date(h.entered_at).toLocaleString('en-IN')}</div>
+                          <div className="font-medium">
+                            {h.from_stage === h.to_stage
+                              ? <span className="text-gray-600">{h.notes || `stayed at ${h.to_stage}`}</span>
+                              : <><span className="text-gray-400">{h.from_stage || '—'} → </span><span className="text-red-700">{h.to_stage}</span></>
+                            }
+                          </div>
+                          {h.from_stage !== h.to_stage && h.notes && <div className="text-gray-500 italic">{h.notes}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       {/* Bulk import result — opens automatically when the import POST
           returns.  Shows total / created / failed counts plus the
