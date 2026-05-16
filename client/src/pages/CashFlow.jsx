@@ -31,6 +31,26 @@ export default function CashFlow() {
   const [editRow, setEditRow] = useState(null);
   const [editForm, setEditForm] = useState({});
 
+  // Project breakdown drawer — mam (2026-05-16): "look business book
+  // sardareshahar total amount and cash flow amount check correct
+  // this error".  Click the "N BB entries summed" badge on any row
+  // to see the exact BB rows feeding into that project's totals.
+  // Lets her spot accidental client_name collisions before they
+  // distort the dashboard.
+  const [breakdownFor, setBreakdownFor] = useState(null);
+  const [breakdownData, setBreakdownData] = useState(null);
+  const openBreakdown = async (companyName) => {
+    setBreakdownFor(companyName);
+    setBreakdownData(null);
+    try {
+      const r = await api.get('/cashflow/project-breakdown', { params: { company_name: companyName } });
+      setBreakdownData(r.data);
+    } catch (e) {
+      toast.error('Failed to load breakdown');
+      setBreakdownFor(null);
+    }
+  };
+
   const load = () => {
     api.get('/cashflow/projects').then(r => { setProjects(r.data.projects); setSummary(r.data.summary); }).catch(() => {});
     api.get('/cashflow/summary', { params: { date: selectedDate } }).then(r => setDailySummary(r.data)).catch(() => {});
@@ -257,7 +277,14 @@ export default function CashFlow() {
                   <td className={`px-2 py-2 font-semibold text-red-700 max-w-[260px] ${editing ? 'bg-amber-50' : 'bg-white'}`} title={`${cleanName(p.project_name)}${p.bb_entry_count > 1 ? ` — sum of ${p.bb_entry_count} Business Book entries` : ''}`}>
                     <div className="truncate">{cleanName(p.project_name)}</div>
                     {p.bb_entry_count > 1 && (
-                      <span className="text-[9px] font-normal text-gray-400 normal-case">{p.bb_entry_count} BB entries summed</span>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); openBreakdown(p.project_name); }}
+                        className="text-[9px] font-normal text-blue-600 hover:text-blue-800 underline normal-case"
+                        title="Click to see which BB rows feed this total"
+                      >
+                        {p.bb_entry_count} BB entries summed → drill-down
+                      </button>
                     )}
                   </td>
                   {editing ? (
@@ -443,6 +470,71 @@ export default function CashFlow() {
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Add</button></div>
         </form>
       </Modal>
+
+      {/* BB Breakdown modal — opens when mam clicks "N BB entries summed"
+          on a Cash Flow project row.  Lists every BB row that contributes
+          to that project's totals, with sale + PO amounts + client +
+          lead_no.  Flags rows where client_name differs across the
+          rollup (the "company_name collides distinct clients" case
+          that mam caught on SAEL today). */}
+      {breakdownFor && (
+        <Modal
+          isOpen={true}
+          onClose={() => { setBreakdownFor(null); setBreakdownData(null); }}
+          title={`Breakdown · ${breakdownFor}`}
+        >
+          {!breakdownData ? (
+            <div className="text-center py-8 text-gray-400">Loading…</div>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-gray-700">
+                <strong>{breakdownData.row_count} BB row{breakdownData.row_count !== 1 ? 's' : ''}</strong> roll up into this Cash Flow project.
+                {breakdownData.distinct_clients > 1 && (
+                  <span className="ml-2 px-2 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-semibold uppercase">
+                    {breakdownData.distinct_clients} distinct clients — collision
+                  </span>
+                )}
+                <div className="mt-1 text-gray-500">
+                  Sale {fmt(breakdownData.totals.sale)} · PO {fmt(breakdownData.totals.po)} · Adv {fmt(breakdownData.totals.advance)}
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border">
+                  <thead className="bg-gray-100 text-gray-600">
+                    <tr>
+                      <th className="px-2 py-1.5 text-left">Lead</th>
+                      <th className="px-2 py-1.5 text-left">Client</th>
+                      <th className="px-2 py-1.5 text-right">Sale (no GST)</th>
+                      <th className="px-2 py-1.5 text-right">PO Amt</th>
+                      <th className="px-2 py-1.5 text-right">Advance</th>
+                      <th className="px-2 py-1.5 text-left">CRM</th>
+                      <th className="px-2 py-1.5 text-left">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {breakdownData.rows.map(r => (
+                      <tr key={r.id} className="border-t hover:bg-blue-50/40">
+                        <td className="px-2 py-1.5 font-mono">{r.lead_no || '—'}</td>
+                        <td className="px-2 py-1.5">{r.client_name || '—'}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">{fmt(r.sale_amount_without_gst)}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">{fmt(r.po_amount)}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">{fmt(r.advance_received)}</td>
+                        <td className="px-2 py-1.5 text-[10px]">{r.employee_assigned || '—'}</td>
+                        <td className="px-2 py-1.5 text-[10px]">{r.status || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[10px] text-gray-500 leading-relaxed">
+                Cash Flow groups BB rows by <code className="bg-gray-100 px-1">company_name</code>. If these rows look like
+                <em> different </em> projects rather than one, edit them in Business Book to give each a unique company_name
+                — Cash Flow will then show them as separate rows and the Sale Total mismatch goes away.
+              </p>
+            </div>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }

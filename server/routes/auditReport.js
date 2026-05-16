@@ -420,6 +420,57 @@ function findSchemaDrift(db) {
   return out;
 }
 
+// --- Exception list 6: Cash Flow ↔ Business Book reconciliation -----
+// Mam (2026-05-16) noticed Cash Flow showed Rs 2.80 cr for "M/s
+// Sardarshahar Agri Energy Pvt Ltd (SAEL)" while filtering BB for
+// "sar" showed only Rs 1.66 cr.  Root cause: Cash Flow groups BB
+// rows by `company_name` and sums sale_amount_without_gst, but
+// distinct *client_names* often share the same company_name (e.g.
+// "1572663", "Manish Kumar" both filed under SAEL).  That's not a
+// data-integrity bug per se, but it surprises users — they expect
+// one project per company.  This audit flags any company_name where
+// >1 distinct client_name rolls up, and where the rollup sum
+// materially differs from any single client's contribution.  Mam
+// can then decide: rename company_name to disambiguate, OR confirm
+// the rollup is intentional.
+function findCashFlowReconciliation(db) {
+  const out = [];
+  const rows = safeAll(db, `
+    SELECT TRIM(company_name) as company_name,
+           COUNT(*) as bb_row_count,
+           COUNT(DISTINCT LOWER(TRIM(COALESCE(client_name,'')))) as distinct_clients,
+           SUM(COALESCE(sale_amount_without_gst,0)) as total_sale,
+           GROUP_CONCAT(id) as bb_ids,
+           GROUP_CONCAT(DISTINCT TRIM(COALESCE(client_name,''))) as client_list,
+           GROUP_CONCAT(lead_no) as leads
+    FROM business_book
+    WHERE company_name IS NOT NULL AND TRIM(company_name) != ''
+    GROUP BY TRIM(company_name)
+    HAVING distinct_clients > 1
+  `);
+  rows.forEach(r => {
+    // Severity: critical when >₹50 L is grouped under one company
+    // with >2 distinct clients (likely accidental collision); warning
+    // otherwise (could be a parent-company arrangement that's
+    // intentional).
+    const severity = (r.total_sale > 5000000 && r.distinct_clients > 2) ? 'critical' : 'warning';
+    out.push({
+      table: 'business_book',
+      kind: 'company_name_client_collision',
+      company_name: r.company_name,
+      bb_row_count: r.bb_row_count,
+      distinct_clients: r.distinct_clients,
+      total_sale: Math.round(r.total_sale),
+      client_list: (r.client_list || '').split(',').filter(Boolean).slice(0, 10),
+      bb_ids: r.bb_ids,
+      leads: r.leads,
+      severity,
+      hint: 'Cash Flow tracker sums all rows sharing this company_name. If these are separate projects, rename company_name to disambiguate or split them.',
+    });
+  });
+  return out;
+}
+
 // --- /audit (main) --------------------------------------------------
 router.get('/', (req, res) => {
   const db = getDb();
@@ -441,6 +492,7 @@ router.get('/', (req, res) => {
     missing_required:  { description: 'Critical fields blank on otherwise-valid rows',          items: findMissingRequired(db) },
     stale_records:     { description: 'Open work-items past their expected SLA',                 items: findStaleRecords(db) },
     schema_drift:      { description: 'Columns expected by code but absent from the database',  items: findSchemaDrift(db) },
+    cashflow_recon:    { description: 'Cash Flow project aggregation collides distinct clients under one company_name', items: findCashFlowReconciliation(db) },
   };
   Object.values(exceptions).forEach(e => { e.count = e.items.length; });
 

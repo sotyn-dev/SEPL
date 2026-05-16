@@ -223,6 +223,51 @@ router.post('/projects/:id/update', requirePermission('cashflow', 'edit'), (req,
   res.json({ message: 'Updated', last_payment_target_date: lockedTarget });
 });
 
+// ============= PROJECT-LEVEL DIAGNOSTIC =============
+//
+// Breakdown of which BB rows feed into a single Cash Flow project
+// row.  Mam (2026-05-16): "look business book sardareshahar total
+// amount and cash flow amount check correct this error".  The Cash
+// Flow tracker groups BB rows by `company_name` and sums their
+// sale_amount_without_gst — when distinct clients share one company
+// name (e.g. SAEL hosts 1572663, Manish Kumar, ...) the rollup can
+// surprise users by reporting a much larger total than any single
+// BB list filter would show.
+//
+// This endpoint returns every BB row that contributes to one
+// company_name's roll-up, with id / lead_no / client / sale /
+// po amounts / status, so mam can see EXACTLY which rows are in
+// the sum and decide whether to split or rename.
+//
+// URL: /api/cashflow/project-breakdown?company_name=M%2Fs%20Sardarshahar%20...
+router.get('/project-breakdown', requirePermission('cashflow', 'view'), (req, res) => {
+  const { company_name } = req.query;
+  if (!company_name) return res.status(400).json({ error: 'company_name is required' });
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT id, lead_no, lead_type, client_name, project_name, company_name,
+           category, status, sale_amount_without_gst, po_amount,
+           advance_received, balance_amount, employee_assigned,
+           committed_start_date, committed_completion_date, created_at
+    FROM business_book
+    WHERE TRIM(company_name) = TRIM(?)
+    ORDER BY created_at DESC
+  `).all(company_name);
+  const totals = rows.reduce((acc, r) => {
+    acc.sale += +r.sale_amount_without_gst || 0;
+    acc.po += +r.po_amount || 0;
+    acc.advance += +r.advance_received || 0;
+    return acc;
+  }, { sale: 0, po: 0, advance: 0 });
+  res.json({
+    company_name,
+    row_count: rows.length,
+    distinct_clients: new Set(rows.map(r => (r.client_name || '').toLowerCase().trim())).size,
+    totals,
+    rows,
+  });
+});
+
 // ============= DAILY CASH FLOW (existing) =============
 
 router.get('/daily', (req, res) => {
