@@ -108,11 +108,13 @@ function buildHtml(snapshot, db) {
       ${audit.summary ? `
       <div style="margin-top:24px;font-size:11px;color:#4A4F57;text-transform:uppercase;letter-spacing:1px;font-weight:700;">Data quality exceptions</div>
       <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;">
-        ${exceptionRow('Duplicates',        audit.exceptions?.duplicates?.count ?? 0)}
-        ${exceptionRow('Arithmetic errors', audit.exceptions?.arithmetic_errors?.count ?? 0)}
-        ${exceptionRow('Missing required',  audit.exceptions?.missing_required?.count ?? 0)}
-        ${exceptionRow('Stale records',     audit.exceptions?.stale_records?.count ?? 0)}
-        ${exceptionRow('Schema drift',      audit.exceptions?.schema_drift?.count ?? 0)}
+        ${exceptionRow('Duplicates',                audit.exceptions?.duplicates?.count ?? 0)}
+        ${exceptionRow('Arithmetic errors',         audit.exceptions?.arithmetic_errors?.count ?? 0)}
+        ${exceptionRow('Missing required',          audit.exceptions?.missing_required?.count ?? 0)}
+        ${exceptionRow('Stale records',             audit.exceptions?.stale_records?.count ?? 0)}
+        ${exceptionRow('Schema drift',              audit.exceptions?.schema_drift?.count ?? 0)}
+        ${exceptionRow('Cash Flow ↔ BB client collisions', audit.exceptions?.cashflow_recon?.count ?? 0)}
+        ${exceptionRow('Cash Flow Sale drift vs BB',       audit.exceptions?.cashflow_sale_drift?.count ?? 0)}
         ${row('Total exceptions',    `<strong>${audit.summary.total_exceptions}</strong>`)}
         ${row('Critical',            `<strong style="color:#D33A2C">${audit.summary.critical_exceptions}</strong>`)}
       </table>` : ''}

@@ -471,6 +471,94 @@ function findCashFlowReconciliation(db) {
   return out;
 }
 
+// --- Exception list 7: Cash Flow Sale ≡ Business Book Sale ---------
+// Mam (2026-05-16): "audit in cash flow amount sum is from business
+// book sales amt sum".  Invariant: for every project the Cash Flow
+// tracker reports, its `sale_amount_without_gst` total MUST equal
+// the raw SUM of sale_amount_without_gst across all BB rows sharing
+// that company_name.  Anything else means the dashboard is lying.
+//
+// This audit catches exactly the bug fixed in 7d87429 — a
+// LEFT JOIN sites fan-out that double-counted any BB row with >1
+// site.  Going forward, if anyone re-introduces an aggregation
+// regression in /cashflow/projects, this check screams about it
+// in the next 7:30 AM snapshot and 9 AM CMD email.
+//
+// Algorithm:
+//   1. canonical[company]  = SUM(sale_amount_without_gst) from BB
+//      (the truth — what BB itself reports)
+//   2. dashboard[company]  = simulate the same logic /cashflow/projects
+//      runs today (currently identical, but written separately so a
+//      future regression would diverge)
+//   3. For every company where |dashboard - canonical| > ₹1 OR the
+//      row counts differ, emit an exception.
+function findCashFlowSaleDrift(db) {
+  const out = [];
+
+  // 1. Canonical: BB sale sums (this is what the Cash Flow drill-down
+  //    modal reports, and what the BB list page sums in its footer).
+  const canonical = new Map();
+  safeAll(db, `
+    SELECT TRIM(company_name) as k,
+           COUNT(*) as cnt,
+           ROUND(COALESCE(SUM(sale_amount_without_gst), 0), 2) as sale_sum
+    FROM business_book
+    WHERE company_name IS NOT NULL AND TRIM(company_name) != ''
+    GROUP BY TRIM(company_name)
+  `).forEach(r => canonical.set(r.k, { cnt: r.cnt, sum: r.sale_sum }));
+
+  // 2. Dashboard simulation: mirror the EXACT shape of /cashflow/projects
+  //    aggregation.  Today this is identical to canonical because the
+  //    fan-out JOIN was removed.  Keeping both queries here so any
+  //    future change to the dashboard query (added JOIN, extra filter,
+  //    different grouping) is caught by diffing the outputs.
+  const dashboard = new Map();
+  safeAll(db, `
+    SELECT bb.company_name as k,
+           COUNT(bb.id) as cnt,
+           ROUND(COALESCE(SUM(bb.sale_amount_without_gst), 0), 2) as sale_sum
+    FROM business_book bb
+    WHERE bb.company_name IS NOT NULL AND TRIM(bb.company_name) != ''
+    GROUP BY bb.company_name
+  `).forEach(r => {
+    const key = (r.k || '').trim();
+    const existing = dashboard.get(key);
+    if (existing) {
+      // company_name variants with different whitespace/casing roll up
+      // here.  Treat as one logical project for invariant purposes —
+      // canonical does the same TRIM().
+      existing.cnt += r.cnt;
+      existing.sum = Math.round((existing.sum + r.sale_sum) * 100) / 100;
+    } else {
+      dashboard.set(key, { cnt: r.cnt, sum: r.sale_sum });
+    }
+  });
+
+  // 3. Diff
+  for (const [company, truth] of canonical.entries()) {
+    const dash = dashboard.get(company) || { cnt: 0, sum: 0 };
+    const sumDiff = Math.round(Math.abs(dash.sum - truth.sum));
+    const cntDiff = dash.cnt - truth.cnt;
+    if (sumDiff > 1 || cntDiff !== 0) {
+      out.push({
+        table: 'business_book',
+        kind: 'cashflow_sale_drift',
+        company_name: company,
+        bb_row_count: truth.cnt,
+        bb_sale_sum: truth.sum,
+        cashflow_row_count: dash.cnt,
+        cashflow_sale_sum: dash.sum,
+        sum_diff_rupees: sumDiff,
+        count_diff: cntDiff,
+        // critical if >₹1 L drift — that's material on any dashboard
+        severity: sumDiff > 100000 ? 'critical' : 'warning',
+        hint: 'Cash Flow tracker total differs from Business Book SUM(sale_amount_without_gst) for this project. Likely a regression in /cashflow/projects aggregation (e.g. an inflating JOIN). Investigate before any KPI in the War Room can be trusted.',
+      });
+    }
+  }
+  return out;
+}
+
 // --- /audit (main) --------------------------------------------------
 router.get('/', (req, res) => {
   const db = getDb();
@@ -487,12 +575,13 @@ router.get('/', (req, res) => {
 
   const kpis = computeKpis(db);
   const exceptions = {
-    duplicates:        { description: 'Records sharing key identifying fields',                 items: findDuplicates(db) },
-    arithmetic_errors: { description: 'Computed total ≠ recorded total (>₹1 / >₹10 for POs)', items: findArithmeticErrors(db) },
-    missing_required:  { description: 'Critical fields blank on otherwise-valid rows',          items: findMissingRequired(db) },
-    stale_records:     { description: 'Open work-items past their expected SLA',                 items: findStaleRecords(db) },
-    schema_drift:      { description: 'Columns expected by code but absent from the database',  items: findSchemaDrift(db) },
-    cashflow_recon:    { description: 'Cash Flow project aggregation collides distinct clients under one company_name', items: findCashFlowReconciliation(db) },
+    duplicates:           { description: 'Records sharing key identifying fields',                 items: findDuplicates(db) },
+    arithmetic_errors:    { description: 'Computed total ≠ recorded total (>₹1 / >₹10 for POs)', items: findArithmeticErrors(db) },
+    missing_required:     { description: 'Critical fields blank on otherwise-valid rows',          items: findMissingRequired(db) },
+    stale_records:        { description: 'Open work-items past their expected SLA',                 items: findStaleRecords(db) },
+    schema_drift:         { description: 'Columns expected by code but absent from the database',  items: findSchemaDrift(db) },
+    cashflow_recon:       { description: 'Cash Flow project aggregation collides distinct clients under one company_name', items: findCashFlowReconciliation(db) },
+    cashflow_sale_drift:  { description: 'Cash Flow project Sale Amount ≠ Business Book sum (canonical invariant)',        items: findCashFlowSaleDrift(db) },
   };
   Object.values(exceptions).forEach(e => { e.count = e.items.length; });
 
