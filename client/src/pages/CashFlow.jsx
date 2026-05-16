@@ -408,7 +408,35 @@ export default function CashFlow() {
           </div>
           <div><label className="label">Description *</label><input className="input" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} required /></div>
           <div className="grid grid-cols-2 gap-4">
-            <div><label className="label">Party Name</label><input className="input" value={form.party_name} onChange={e => setForm({ ...form, party_name: e.target.value })} /></div>
+            {/* Party Name — dropdown sourced from Business Book project /
+                client names so every cash entry links back to a known
+                project. Mam (2026-05-16): "so that last last we can
+                integrate everything". Implemented as a combobox
+                (input + datalist) so users can either pick from the
+                list OR type free-text for non-project parties like
+                Salary / Rent / Tax / Landlord. Project names are
+                de-duped + sorted; sourced from the same /cashflow/projects
+                feed that powers the Projects tab. */}
+            <div>
+              <label className="label">Party Name</label>
+              <input
+                className="input"
+                list="cf-party-options"
+                value={form.party_name}
+                onChange={e => setForm({ ...form, party_name: e.target.value })}
+                placeholder="Pick project or type…"
+                autoComplete="off"
+              />
+              <datalist id="cf-party-options">
+                {Array.from(new Set(
+                  projects
+                    .map(p => cleanName(p.project_name || p.client_name))
+                    .filter(Boolean)
+                )).sort((a, b) => a.localeCompare(b)).map(name => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+            </div>
             <div><label className="label">Payment Mode</label><select className="select" value={form.payment_mode} onChange={e => setForm({ ...form, payment_mode: e.target.value })}><option value="">Select</option><option>Cash</option><option>Bank Transfer</option><option>UPI</option><option>Cheque</option><option>NEFT</option></select></div>
           </div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Add</button></div>
