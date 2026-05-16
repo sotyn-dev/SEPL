@@ -21,6 +21,7 @@ const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { logAuditEvent } = require('../middleware/audit');
+const { syncCycle, expectedStageAndStatus, daysToExpiry } = require('../lib/fireNocSync');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -415,20 +416,27 @@ router.post('/cycles/import', requirePermission('fire_noc', 'create'), upload.si
           r['source'] || 'bulk_import', req.user.id, req.user.id,
         );
         const propertyId = propRes.lastInsertRowid;
-        const daysToExpiry = Math.ceil((new Date(expiry_date) - new Date()) / 86400000);
-        const startStage = stageForDays(daysToExpiry);
+        // AUTO-STATUS at create time — past-expiry rows come in as
+        // 'lapsed' / LOST_POOL instead of 'active' / CYCLE_CLOSE
+        // (mam, 2026-05-16: do the work automatically, don't make
+        // me click).  Falls back to the legacy values if the helper
+        // returns null (terminal status — can't happen on create
+        // but defensive).
+        const days = daysToExpiry(expiry_date);
+        const exp = expectedStageAndStatus(days, 'active') || { stage: stageForDays(days), status: 'active' };
         const cycRes = db.prepare(`
           INSERT INTO fire_noc_cycle (
             property_id, cycle_no, expiry_date, current_stage,
             status, owner_user_id
-          ) VALUES (?, 1, ?, ?, 'active', ?)
-        `).run(propertyId, expiry_date, startStage, req.user.id);
+          ) VALUES (?, 1, ?, ?, ?, ?)
+        `).run(propertyId, expiry_date, exp.stage, exp.status, req.user.id);
         const cycleId = cycRes.lastInsertRowid;
         db.prepare(`
           INSERT INTO fire_noc_stage_history (cycle_id, from_stage, to_stage, triggered_by, notes)
-          VALUES (?, NULL, ?, ?, 'cycle created via bulk import')
-        `).run(cycleId, startStage, String(req.user.id));
-        return { propertyId, cycleId, startStage };
+          VALUES (?, NULL, ?, ?, ?)
+        `).run(cycleId, exp.stage, String(req.user.id),
+               `cycle created via bulk import · days_to_expiry=${days}${exp.status === 'lapsed' ? ' · auto-flagged lapsed' : ''}`);
+        return { propertyId, cycleId, startStage: exp.stage };
       });
       const out = txn();
       created.push({

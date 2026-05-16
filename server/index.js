@@ -145,6 +145,19 @@ try {
   console.warn('[cash-fidelity] Scheduler not started:', e.message);
 }
 
+// Fire NOC auto-pilot — mam (2026-05-16): "i need easy to user for
+// update but automatically things which you can done".  Backfills
+// existing rows once on boot (idempotent via app_settings flag),
+// then runs every hour to keep stages + statuses in sync with the
+// passing days.  Skip via ERP_DISABLE_FIRE_NOC_CRON=1.
+try {
+  const { scheduleFireNocCron, backfillOnceOnBoot } = require('./scripts/fireNocCron');
+  backfillOnceOnBoot();
+  scheduleFireNocCron();
+} catch (e) {
+  console.warn('[fire-noc-cron] Scheduler not started:', e.message);
+}
+
 // Daily 09:00 CMD audit email — audit item B20 + TOC v3 P0 #5.
 // Reads the 07:30 snapshot JSON (falls back to live /audit/kpi if
 // the snapshot folder is missing) and emails the director address
