@@ -3143,6 +3143,17 @@ function initializeDatabase() {
     console.log('Seeded 10 Business Book entries with sites (POs to be entered by user)');
   }
 
+  // Fire NOC Renewal Module — PR1 of 7 (migrations + data model).
+  // Self-contained schema lives in db/fireNocSchema.js for readability;
+  // re-runs are idempotent (CREATE IF NOT EXISTS + app_settings-guarded
+  // seed).  Full module plan: docs/FIRE_NOC.md.
+  try {
+    const { runFireNocMigrations } = require('./fireNocSchema');
+    runFireNocMigrations(db);
+  } catch (e) {
+    console.warn('[fire_noc] migrations skipped (non-fatal):', e.message);
+  }
+
   console.log('Database initialized successfully');
   return db;
 }
