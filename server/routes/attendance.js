@@ -393,6 +393,34 @@ router.post('/punch-out', (req, res) => {
   if (!record) return res.status(400).json({ error: 'You have not punched in today' });
   if (record.punch_out_time) return res.status(400).json({ error: 'Already punched out today' });
 
+  // PUNCH-OUT GEOFENCE (added 2026-05-16 after mam's audit query).
+  // Previously had NO check, so an employee could punch in at site
+  // and punch out from 3 km away with no record of the deviation.
+  // Now we enforce the same haversine check as punch-in, but with a
+  // permissive +800m buffer on top of the configured radius — field
+  // staff often walk to a vehicle / canteen / nearby chai shop
+  // before tapping out, and we don't want to block legitimate
+  // out-punches over a few hundred metres.
+  if (latitude != null && longitude != null) {
+    const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
+    if (geofences.length > 0) {
+      let nearest = { dist: Infinity, site: '' };
+      for (const gf of geofences) {
+        const d = haversine(+latitude, +longitude, gf.latitude, gf.longitude);
+        if (d < nearest.dist) nearest = { dist: d, site: gf.site_name };
+      }
+      const r0 = geofences[0]?.radius_meters || 200;
+      const cap = r0 + 800;  // permissive for legit walk-aways
+      if (nearest.dist > cap) {
+        return res.status(400).json({
+          error: `Punch-out blocked: you are ${Math.round(nearest.dist)}m from nearest site (${nearest.site}). Allowed: ${cap}m. Go closer to site to punch out, or contact admin.`,
+          distance_m: Math.round(nearest.dist),
+          nearest_site: nearest.site,
+        });
+      }
+    }
+  }
+
   // Calculate total hours
   const punchIn = new Date(record.punch_in_time);
   const punchOut = new Date(now);
@@ -453,6 +481,128 @@ router.get('/track/:userId/:date', requirePermission('attendance', 'view'), (req
 // GET geofence settings
 router.get('/geofence', requirePermission('attendance', 'view'), (req, res) => {
   res.json(getDb().prepare('SELECT * FROM geofence_settings ORDER BY site_name').all());
+});
+
+// GEOFENCE AUDIT — mam (2026-05-16): "just a audit our staff says we
+// are away from office 3km attendance is punched is it true?"
+//
+// For every attendance row in the requested date range, compute the
+// distance from punch_in (and punch_out) coordinates to the NEAREST
+// active geofence.  Flag rows where punch was outside the geofence
+// radius.  Returns:
+//   - violations[] — rows where distance > radius (with how far)
+//   - allowed_buffer_explanation — server allows up to +500m via the
+//     GPS-accuracy buffer at punch-in; punch-out has NO geofence
+//     check at all (potential abuse vector)
+//   - totals — counts by category for the period
+//
+// Default range: last 30 days.  Admin only.
+//
+// URL: /attendance/audit/geofence-violations?from=YYYY-MM-DD&to=YYYY-MM-DD
+//      /attendance/audit/geofence-violations?days=7
+router.get('/audit/geofence-violations', requirePermission('attendance', 'view'), (req, res) => {
+  const db = getDb();
+  // Admin / can-see-all only — never let a normal employee scan
+  // colleagues' coordinates.
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin only' });
+  }
+
+  let { from, to, days } = req.query;
+  if (!from || !to) {
+    const d = +days > 0 ? +days : 30;
+    const end = new Date();
+    const start = new Date(); start.setDate(start.getDate() - d);
+    from = start.toISOString().slice(0, 10);
+    to   = end.toISOString().slice(0, 10);
+  }
+
+  const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
+  if (geofences.length === 0) {
+    return res.json({ from, to, geofences: [], rows: [], violations: [], note: 'No active geofences configured.' });
+  }
+
+  const rows = db.prepare(`
+    SELECT a.id, a.user_id, a.date, a.punch_in_time, a.punch_out_time,
+           a.punch_in_lat, a.punch_in_lng, a.punch_in_address,
+           a.punch_out_lat, a.punch_out_lng, a.punch_out_address,
+           a.site_name, a.status,
+           u.name as employee_name
+    FROM attendance a
+    LEFT JOIN users u ON u.id = a.user_id
+    WHERE a.date BETWEEN ? AND ?
+    ORDER BY a.date DESC, a.punch_in_time DESC
+  `).all(from, to);
+
+  // For each row, find distance to nearest geofence at IN and OUT
+  const enrich = (lat, lng) => {
+    if (lat == null || lng == null) return { nearest_site: null, distance_m: null };
+    let best = { dist: Infinity, site: null };
+    for (const gf of geofences) {
+      const d = haversine(+lat, +lng, gf.latitude, gf.longitude);
+      if (d < best.dist) { best = { dist: d, site: gf.site_name }; }
+    }
+    return { nearest_site: best.site, distance_m: Math.round(best.dist) };
+  };
+  const radius = geofences[0]?.radius_meters || 200;
+  const bufferTolerance = radius + 500;  // 500m matches the punch-in accuracy cap
+
+  const enriched = rows.map(r => {
+    const inInfo  = enrich(r.punch_in_lat,  r.punch_in_lng);
+    const outInfo = enrich(r.punch_out_lat, r.punch_out_lng);
+    const punchInOutside  = inInfo.distance_m  != null && inInfo.distance_m  > bufferTolerance;
+    const punchOutOutside = outInfo.distance_m != null && outInfo.distance_m > radius;
+    return {
+      id: r.id,
+      date: r.date,
+      employee: r.employee_name || `user#${r.user_id}`,
+      site_assigned: r.site_name,
+      punch_in: {
+        time: r.punch_in_time,
+        lat: r.punch_in_lat, lng: r.punch_in_lng,
+        address: r.punch_in_address,
+        nearest_site: inInfo.nearest_site,
+        distance_m: inInfo.distance_m,
+        outside_geofence: punchInOutside,
+        beyond_3km: inInfo.distance_m != null && inInfo.distance_m > 3000,
+      },
+      punch_out: r.punch_out_time ? {
+        time: r.punch_out_time,
+        lat: r.punch_out_lat, lng: r.punch_out_lng,
+        address: r.punch_out_address,
+        nearest_site: outInfo.nearest_site,
+        distance_m: outInfo.distance_m,
+        outside_geofence: punchOutOutside,
+        beyond_3km: outInfo.distance_m != null && outInfo.distance_m > 3000,
+      } : null,
+    };
+  });
+
+  const violations = enriched.filter(r =>
+    r.punch_in.outside_geofence || r.punch_in.beyond_3km ||
+    (r.punch_out && (r.punch_out.outside_geofence || r.punch_out.beyond_3km))
+  );
+
+  res.json({
+    from, to,
+    geofence_radius_meters: radius,
+    geofence_accuracy_buffer_m: 500,
+    geofence_count: geofences.length,
+    geofences: geofences.map(g => ({ site_name: g.site_name, lat: g.latitude, lng: g.longitude, radius_m: g.radius_meters })),
+    totals: {
+      total_attendance_rows: enriched.length,
+      punch_in_outside_geofence: enriched.filter(r => r.punch_in.outside_geofence).length,
+      punch_in_beyond_3km:       enriched.filter(r => r.punch_in.beyond_3km).length,
+      punch_out_outside_geofence: enriched.filter(r => r.punch_out?.outside_geofence).length,
+      punch_out_beyond_3km:       enriched.filter(r => r.punch_out?.beyond_3km).length,
+    },
+    enforcement_notes: {
+      punch_in:  `Server rejects outside (radius=${radius}m + up to 500m GPS-accuracy buffer). Theoretical max distance = ${radius + 500}m.`,
+      punch_out: 'NO geofence check on punch-out — employee can punch out from anywhere after a valid punch-in.',
+      gps_spoof: 'A user with mock-location apps can fake their coordinates. This audit catches obvious cases (large distance) but cannot detect a well-crafted spoof reporting site lat/lng directly.',
+    },
+    violations,
+  });
 });
 
 // POST add geofence

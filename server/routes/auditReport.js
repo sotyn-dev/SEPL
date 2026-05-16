@@ -559,6 +559,80 @@ function findCashFlowSaleDrift(db) {
   return out;
 }
 
+// --- Exception list 8: Attendance geofence violations --------------
+// Mam (2026-05-16): "just a audit our staff says we are away from
+// office 3km attendance is punched is it true?"  Look at the past
+// 30 days of attendance records: compute the haversine distance
+// from each punch's stored lat/lng to the NEAREST active geofence;
+// flag anything beyond a generous tolerance (geofence radius +
+// 800m).  We don't try to be perfect — GPS noise can shift a pin
+// 100-300m in either direction — but anything beyond ~1km is
+// almost certainly a real violation (spoofed coords / colleague
+// punching for someone / the previously-unenforced punch-out).
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+function findGeofenceViolations(db) {
+  const out = [];
+  let geofences;
+  try { geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all(); } catch { return out; }
+  if (!geofences || geofences.length === 0) return out;
+
+  const radius = geofences[0].radius_meters || 200;
+  const buffer = 800;        // generous GPS-noise tolerance
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
+  const cutoffDate = cutoff.toISOString().slice(0, 10);
+
+  const rows = safeAll(db, `
+    SELECT a.id, a.user_id, a.date, a.punch_in_time, a.punch_out_time,
+           a.punch_in_lat, a.punch_in_lng, a.punch_out_lat, a.punch_out_lng,
+           a.site_name, u.name as employee_name
+    FROM attendance a
+    LEFT JOIN users u ON u.id = a.user_id
+    WHERE a.date >= ?
+  `, [cutoffDate]);
+
+  for (const r of rows) {
+    const check = (lat, lng, which) => {
+      if (lat == null || lng == null) return null;
+      let best = { dist: Infinity, site: '' };
+      for (const gf of geofences) {
+        const d = haversineMeters(+lat, +lng, gf.latitude, gf.longitude);
+        if (d < best.dist) best = { dist: d, site: gf.site_name };
+      }
+      if (best.dist > radius + buffer) {
+        return {
+          which, distance_m: Math.round(best.dist),
+          nearest_site: best.site,
+          beyond_3km: best.dist > 3000,
+        };
+      }
+      return null;
+    };
+    const inV  = check(r.punch_in_lat, r.punch_in_lng, 'punch_in');
+    const outV = check(r.punch_out_lat, r.punch_out_lng, 'punch_out');
+    if (inV || outV) {
+      const farthest = Math.max(inV?.distance_m || 0, outV?.distance_m || 0);
+      out.push({
+        table: 'attendance', kind: 'geofence_violation',
+        attendance_id: r.id, date: r.date,
+        employee: r.employee_name || `user#${r.user_id}`,
+        site_assigned: r.site_name,
+        punch_in_violation: inV,
+        punch_out_violation: outV,
+        farthest_meters: farthest,
+        // critical when >3km — that's mam's threshold from the audit request
+        severity: farthest > 3000 ? 'critical' : 'warning',
+      });
+    }
+  }
+  return out;
+}
+
 // --- /audit (main) --------------------------------------------------
 router.get('/', (req, res) => {
   const db = getDb();
@@ -582,6 +656,7 @@ router.get('/', (req, res) => {
     schema_drift:         { description: 'Columns expected by code but absent from the database',  items: findSchemaDrift(db) },
     cashflow_recon:       { description: 'Cash Flow project aggregation collides distinct clients under one company_name', items: findCashFlowReconciliation(db) },
     cashflow_sale_drift:  { description: 'Cash Flow project Sale Amount ≠ Business Book sum (canonical invariant)',        items: findCashFlowSaleDrift(db) },
+    geofence_violations:  { description: 'Attendance punches recorded outside the configured site geofence',               items: findGeofenceViolations(db) },
   };
   Object.values(exceptions).forEach(e => { e.count = e.items.length; });
 

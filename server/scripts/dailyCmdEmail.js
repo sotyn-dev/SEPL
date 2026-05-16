@@ -115,6 +115,7 @@ function buildHtml(snapshot, db) {
         ${exceptionRow('Schema drift',              audit.exceptions?.schema_drift?.count ?? 0)}
         ${exceptionRow('Cash Flow ↔ BB client collisions', audit.exceptions?.cashflow_recon?.count ?? 0)}
         ${exceptionRow('Cash Flow Sale drift vs BB',       audit.exceptions?.cashflow_sale_drift?.count ?? 0)}
+        ${exceptionRow('Attendance geofence violations',   audit.exceptions?.geofence_violations?.count ?? 0)}
         ${row('Total exceptions',    `<strong>${audit.summary.total_exceptions}</strong>`)}
         ${row('Critical',            `<strong style="color:#D33A2C">${audit.summary.critical_exceptions}</strong>`)}
       </table>` : ''}
