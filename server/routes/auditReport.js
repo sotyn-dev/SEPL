@@ -583,7 +583,13 @@ function findGeofenceViolations(db) {
   if (!geofences || geofences.length === 0) return out;
 
   const radius = geofences[0].radius_meters || 200;
-  const buffer = 800;        // generous GPS-noise tolerance
+  // Same strict rule as the live punch endpoints (mam, 2026-05-16:
+  // "out attendance no no punch out is also need according to
+  // geofencing this is blunder").  We allow only the +500m GPS-noise
+  // tolerance the server itself uses — same number, so the audit
+  // matches what the server enforces and we don't flag legit on-site
+  // punches.
+  const buffer = 500;
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
   const cutoffDate = cutoff.toISOString().slice(0, 10);
 

@@ -393,31 +393,36 @@ router.post('/punch-out', (req, res) => {
   if (!record) return res.status(400).json({ error: 'You have not punched in today' });
   if (record.punch_out_time) return res.status(400).json({ error: 'Already punched out today' });
 
-  // PUNCH-OUT GEOFENCE (added 2026-05-16 after mam's audit query).
-  // Previously had NO check, so an employee could punch in at site
-  // and punch out from 3 km away with no record of the deviation.
-  // Now we enforce the same haversine check as punch-in, but with a
-  // permissive +800m buffer on top of the configured radius — field
-  // staff often walk to a vehicle / canteen / nearby chai shop
-  // before tapping out, and we don't want to block legitimate
-  // out-punches over a few hundred metres.
-  if (latitude != null && longitude != null) {
+  // PUNCH-OUT GEOFENCE — STRICT (mam, 2026-05-16: "out attendance no
+  // no punch out is also need according to geofencing this is
+  // blunder").  Same rules as punch-in: must be inside the configured
+  // site radius after applying the same GPS-accuracy buffer (capped
+  // at 500m so junk accuracy values can't auto-pass).  No permissive
+  // walk-away allowance — if staff want to step off-site they must
+  // punch out FIRST, then leave.
+  if (latitude == null || longitude == null) {
+    return res.status(400).json({ error: 'Location required to punch out.' });
+  }
+  {
     const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
-    if (geofences.length > 0) {
-      let nearest = { dist: Infinity, site: '' };
-      for (const gf of geofences) {
-        const d = haversine(+latitude, +longitude, gf.latitude, gf.longitude);
-        if (d < nearest.dist) nearest = { dist: d, site: gf.site_name };
-      }
-      const r0 = geofences[0]?.radius_meters || 200;
-      const cap = r0 + 800;  // permissive for legit walk-aways
-      if (nearest.dist > cap) {
-        return res.status(400).json({
-          error: `Punch-out blocked: you are ${Math.round(nearest.dist)}m from nearest site (${nearest.site}). Allowed: ${cap}m. Go closer to site to punch out, or contact admin.`,
-          distance_m: Math.round(nearest.dist),
-          nearest_site: nearest.site,
-        });
-      }
+    if (geofences.length === 0) {
+      return res.status(400).json({ error: 'No site locations configured. Contact admin.' });
+    }
+    const acc = +req.body?.accuracy > 0 ? Math.min(+req.body.accuracy, 500) : 0;
+    let inside = false;
+    let nearest = { dist: Infinity, site: '' };
+    for (const gf of geofences) {
+      const d = haversine(+latitude, +longitude, gf.latitude, gf.longitude);
+      if (d < nearest.dist) nearest = { dist: d, site: gf.site_name };
+      if (d - acc <= gf.radius_meters) { inside = true; break; }
+    }
+    if (!inside) {
+      const accNote = acc > 50 ? ` (GPS accuracy ±${Math.round(acc)}m — try moving outdoors for a better fix)` : '';
+      return res.status(400).json({
+        error: `Punch-out blocked: you are ${Math.round(nearest.dist)}m from nearest site (${nearest.site}). Go back to site to punch out.${accNote}`,
+        distance_m: Math.round(nearest.dist),
+        nearest_site: nearest.site,
+      });
     }
   }
 
@@ -550,8 +555,10 @@ router.get('/audit/geofence-violations', requirePermission('attendance', 'view')
   const enriched = rows.map(r => {
     const inInfo  = enrich(r.punch_in_lat,  r.punch_in_lng);
     const outInfo = enrich(r.punch_out_lat, r.punch_out_lng);
+    // Both IN and OUT now follow the strict rule (radius + 500m
+    // GPS-accuracy cap), matching the live punch endpoints.
     const punchInOutside  = inInfo.distance_m  != null && inInfo.distance_m  > bufferTolerance;
-    const punchOutOutside = outInfo.distance_m != null && outInfo.distance_m > radius;
+    const punchOutOutside = outInfo.distance_m != null && outInfo.distance_m > bufferTolerance;
     return {
       id: r.id,
       date: r.date,
@@ -598,7 +605,7 @@ router.get('/audit/geofence-violations', requirePermission('attendance', 'view')
     },
     enforcement_notes: {
       punch_in:  `Server rejects outside (radius=${radius}m + up to 500m GPS-accuracy buffer). Theoretical max distance = ${radius + 500}m.`,
-      punch_out: 'NO geofence check on punch-out — employee can punch out from anywhere after a valid punch-in.',
+      punch_out: `STRICT (from 2026-05-16). Same rule as punch-in: radius=${radius}m + up to 500m GPS-accuracy buffer. Theoretical max distance = ${radius + 500}m. Server rejects with 400 if outside.`,
       gps_spoof: 'A user with mock-location apps can fake their coordinates. This audit catches obvious cases (large distance) but cannot detect a well-crafted spoof reporting site lat/lng directly.',
     },
     violations,
