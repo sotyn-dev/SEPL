@@ -33,6 +33,19 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
   // order"). Now SUMs across every BB row sharing the same project
   // name so totals are correct. Same for PO / Advance / Balance.
   // Dates: take earliest start and latest completion across rows.
+  // CRITICAL FIX 2026-05-16 — was previously `LEFT JOIN sites s ON
+  // s.business_book_id = bb.id`.  That JOIN multiplied each BB row
+  // by its number of attached sites, so SUM(sale_amount) and
+  // COUNT(bb.id) BOTH inflated for any BB row with >1 site.
+  //
+  // Concrete case mam caught: SEPL20073 (M/s Sardarshahar... Rs 1.14
+  // cr) had 2 sites linked → Cash Flow reported "6 BB entries" and
+  // Rs 2.80 cr when the truth was 5 entries / Rs 1.66 cr.
+  //
+  // Fix: drop the JOIN entirely.  site_name is now fetched per
+  // project in the result.map() loop below (cheap — one extra
+  // SELECT per project, same shape as the existing PO / purchase
+  // lookups).
   let sql = `SELECT MIN(bb.id) as id,
     MAX(bb.lead_no) as lead_no,
     bb.company_name as project_name,
@@ -47,10 +60,8 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
     MIN(bb.committed_start_date) as committed_start_date,
     MAX(bb.committed_completion_date) as committed_completion_date,
     MIN(bb.created_at) as created_at,
-    MAX(s.name) as site_name,
     COUNT(bb.id) as bb_entry_count
-    FROM business_book bb
-    LEFT JOIN sites s ON s.business_book_id=bb.id`;
+    FROM business_book bb`;
   const params = [];
   if (!canSeeAll) {
     const fullName = (req.user.name || '').trim();
@@ -62,6 +73,18 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
   const projects = db.prepare(sql).all(...params);
 
   const result = projects.map((p, idx) => {
+    // site_name — fetched here instead of via LEFT JOIN to avoid the
+    // sum-inflation bug fixed above.  Picks any one site linked to a
+    // BB row sharing this company_name; cheap enough at our row
+    // counts.  Null when no site exists.
+    const siteRow = db.prepare(
+      `SELECT s.name FROM sites s
+       JOIN business_book bb ON s.business_book_id = bb.id
+       WHERE bb.company_name = ? AND s.name IS NOT NULL
+       LIMIT 1`
+    ).get(p.project_name);
+    p.site_name = siteRow?.name || null;
+
     // Amount received (from cash flow inflows for this client)
     const received = db.prepare("SELECT COALESCE(SUM(amount),0) as total FROM cash_flow_entries WHERE type='inflow' AND party_name LIKE ?").get(`%${p.client_name}%`);
 

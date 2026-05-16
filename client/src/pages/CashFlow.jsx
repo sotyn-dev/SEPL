@@ -487,6 +487,12 @@ export default function CashFlow() {
             <div className="text-center py-8 text-gray-400">Loading…</div>
           ) : (
             <div className="space-y-4">
+              {/* Mam (2026-05-16): "dont add po amount only business
+                  order sales amt sum here".  Only the Sale total is
+                  surfaced in the summary; PO / Advance columns dropped
+                  from the row table too so this view stays focused on
+                  what mam is reconciling — the Business Book sale
+                  amount sum that feeds Cash Flow's Sale Value. */}
               <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-gray-700">
                 <strong>{breakdownData.row_count} BB row{breakdownData.row_count !== 1 ? 's' : ''}</strong> roll up into this Cash Flow project.
                 {breakdownData.distinct_clients > 1 && (
@@ -494,8 +500,8 @@ export default function CashFlow() {
                     {breakdownData.distinct_clients} distinct clients — collision
                   </span>
                 )}
-                <div className="mt-1 text-gray-500">
-                  Sale {fmt(breakdownData.totals.sale)} · PO {fmt(breakdownData.totals.po)} · Adv {fmt(breakdownData.totals.advance)}
+                <div className="mt-1 text-gray-900 font-semibold">
+                  Sale Total: {fmt(breakdownData.totals.sale)}
                 </div>
               </div>
               <div className="overflow-x-auto">
@@ -505,8 +511,6 @@ export default function CashFlow() {
                       <th className="px-2 py-1.5 text-left">Lead</th>
                       <th className="px-2 py-1.5 text-left">Client</th>
                       <th className="px-2 py-1.5 text-right">Sale (no GST)</th>
-                      <th className="px-2 py-1.5 text-right">PO Amt</th>
-                      <th className="px-2 py-1.5 text-right">Advance</th>
                       <th className="px-2 py-1.5 text-left">CRM</th>
                       <th className="px-2 py-1.5 text-left">Status</th>
                     </tr>
@@ -516,13 +520,16 @@ export default function CashFlow() {
                       <tr key={r.id} className="border-t hover:bg-blue-50/40">
                         <td className="px-2 py-1.5 font-mono">{r.lead_no || '—'}</td>
                         <td className="px-2 py-1.5">{r.client_name || '—'}</td>
-                        <td className="px-2 py-1.5 text-right tabular-nums">{fmt(r.sale_amount_without_gst)}</td>
-                        <td className="px-2 py-1.5 text-right tabular-nums">{fmt(r.po_amount)}</td>
-                        <td className="px-2 py-1.5 text-right tabular-nums">{fmt(r.advance_received)}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{fmt(r.sale_amount_without_gst)}</td>
                         <td className="px-2 py-1.5 text-[10px]">{r.employee_assigned || '—'}</td>
                         <td className="px-2 py-1.5 text-[10px]">{r.status || '—'}</td>
                       </tr>
                     ))}
+                    <tr className="border-t-2 bg-gray-50 font-bold">
+                      <td className="px-2 py-1.5" colSpan="2">TOTAL · {breakdownData.row_count} row{breakdownData.row_count !== 1 ? 's' : ''}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-red-700">{fmt(breakdownData.totals.sale)}</td>
+                      <td className="px-2 py-1.5" colSpan="2"></td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
