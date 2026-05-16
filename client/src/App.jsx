@@ -53,6 +53,7 @@ import EmailSettings from './pages/EmailSettings';
 import DashboardCMD from './pages/DashboardCMD';
 import DashboardCMDToc from './pages/DashboardCMDToc';
 import DashboardWarRoom from './pages/DashboardWarRoom';
+import FireNoc from './pages/FireNoc';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -100,6 +101,7 @@ export default function App() {
         <Route path="dashboard/cmd" element={<AdminRoute><DashboardCMD /></AdminRoute>} />
         <Route path="dashboard/cmd-toc" element={<AdminRoute><DashboardCMDToc /></AdminRoute>} />
         <Route path="dashboard/war-room" element={<AdminRoute><DashboardWarRoom /></AdminRoute>} />
+        <Route path="fire-noc" element={<ModuleRoute module="fire_noc"><FireNoc /></ModuleRoute>} />
         {/* 4 Critical Systems */}
         <Route path="cashflow" element={<ModuleRoute module="cashflow"><CashFlow /></ModuleRoute>} />
         <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />

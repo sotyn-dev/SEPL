@@ -28,6 +28,7 @@ const menuItems = [
   { path: '/pms-tasks', label: 'PMS Tasks', icon: FiLayers, module: 'pms_tasks' },
   { path: '/leads', label: 'Sales Funnel', icon: FiTarget, module: 'leads' },
   { path: '/crm-funnel', label: 'CRM Sales Funnel', icon: FiTarget, module: 'crm_funnel' },
+  { path: '/fire-noc', label: 'Fire NOC Renewal', icon: FiTarget, module: 'fire_noc' },
   { path: '/quotations', label: 'BOQ & Quotations', icon: FiFileText, module: 'quotations' },
   { path: '/business-book', label: 'Business Book', icon: FiBook, module: 'business_book' },
   { path: '/item-master', label: 'Item Master', icon: FiGrid, module: 'item_master' },
