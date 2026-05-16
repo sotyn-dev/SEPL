@@ -74,20 +74,31 @@ function canApprove(db, userId) {
 // ── GET /api/rental-tools/dashboard ────────────────────────────
 router.get('/dashboard', requirePermission('rental_tools', 'view'), (req, res) => {
   const db = getDb();
-  const counts = {};
-  ['enquiry','rate_finalised','material_received','returned'].forEach(s => {
-    counts[s] = db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry WHERE current_stage=? AND status='open'`).get(s).c;
-  });
+  // Per-stage counts.  enquiry / rate_finalised / material_received
+  // are reported for OPEN status only (so cancelled enquiries don't
+  // inflate the in-flight numbers).  'returned' counts all returned
+  // (status=closed) for the running historical total.  Cancelled is
+  // its own bucket so the Lost-style chip can show it.
+  const counts = {
+    enquiry:           db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry WHERE current_stage='enquiry' AND status='open'`).get().c,
+    rate_finalised:    db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry WHERE current_stage='rate_finalised' AND status='open'`).get().c,
+    material_received: db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry WHERE current_stage='material_received' AND status='open'`).get().c,
+    returned:          db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry WHERE current_stage='returned'`).get().c,
+    cancelled:         db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry WHERE status='cancelled'`).get().c,
+    all:               db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry`).get().c,
+  };
   const now = new Date().toISOString();
   const breaches = {
     stage1_overdue: db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry WHERE current_stage='enquiry' AND stage1_target_at < ?`).get(now).c,
     stage2_overdue: db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry WHERE current_stage='rate_finalised' AND stage2_target_at < ?`).get(now).c,
     stage3_overdue: db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry WHERE current_stage='material_received' AND DATE(return_target_date) < DATE('now')`).get().c,
   };
-  const open_total = Object.values(counts).reduce((s, v) => s + v, 0) - counts.returned;
+  const open_total = counts.enquiry + counts.rate_finalised + counts.material_received;
   const total_value = db.prepare(`SELECT COALESCE(SUM(vendor_rate * days_required),0) v FROM rental_tool_enquiry WHERE status='open' AND vendor_rate IS NOT NULL`).get().v;
+  // This-month enquiry count
+  const thisMonth = db.prepare(`SELECT COUNT(*) c FROM rental_tool_enquiry WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')`).get().c;
   res.json({
-    counts, breaches, open_total, total_value,
+    counts, breaches, open_total, total_value, this_month: thisMonth,
     approver_user_id: getApproverId(db),
   });
 });
@@ -107,7 +118,15 @@ router.get('/enquiries', requirePermission('rental_tools', 'view'), (req, res) =
     WHERE 1=1
   `;
   const params = [];
-  if (stage)  { sql += ' AND e.current_stage = ?'; params.push(stage); }
+  // Special chip "cancelled" filters by status; everything else
+  // filters by current_stage.  Open-status enquiries default into
+  // their stage chip, cancelled ones live in the Cancelled chip.
+  if (stage === 'cancelled') {
+    sql += " AND e.status = 'cancelled'";
+  } else if (stage) {
+    sql += ' AND e.current_stage = ? AND e.status != ?';
+    params.push(stage, 'cancelled');
+  }
   if (status) { sql += ' AND e.status = ?'; params.push(status); }
   if (q) {
     sql += ' AND (e.site_name LIKE ? OR e.enquiry_no LIKE ? OR e.tool_description LIKE ? OR e.vendor_name LIKE ?)';

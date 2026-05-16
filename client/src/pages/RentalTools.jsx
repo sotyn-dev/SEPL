@@ -21,10 +21,16 @@ import {
 import { exportCsv } from '../utils/exportCsv';
 
 const STAGE_LABEL = {
+  enquiry:            'Stage 1 — Enquiry Raised',
+  rate_finalised:     'Stage 2 — Rate Finalised',
+  material_received:  'Stage 3 — Material at Site',
+  returned:           'Stage 4 — Returned · Closed',
+};
+const STAGE_LABEL_SHORT = {
   enquiry:            'Enquiry raised',
   rate_finalised:     'Rate finalised',
   material_received:  'Material at site',
-  returned:           'Returned · closed',
+  returned:           'Returned',
 };
 const STAGE_COLOR = {
   enquiry:            'bg-blue-100 text-blue-700',
@@ -32,6 +38,15 @@ const STAGE_COLOR = {
   material_received:  'bg-amber-100 text-amber-700',
   returned:           'bg-emerald-100 text-emerald-700',
 };
+// Chip badge background per stage — matches Sales Funnel aesthetic.
+const STAGE_CHIP_BG = {
+  enquiry:            'bg-blue-500',
+  rate_finalised:     'bg-violet-500',
+  material_received:  'bg-amber-500',
+  returned:           'bg-emerald-500',
+  cancelled:          'bg-red-500',
+};
+const STAGE_ORDER = ['enquiry', 'rate_finalised', 'material_received', 'returned'];
 
 const fmt = (n) => `₹${(n || 0).toLocaleString('en-IN')}`;
 const fmtDt = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
@@ -211,11 +226,6 @@ export default function RentalTools() {
             className="btn btn-secondary flex items-center gap-2 text-sm">
             <FiDownload size={14} /> Export Excel
           </button>
-          {user?.role === 'admin' && (
-            <button onClick={() => setTab('settings')} className="btn btn-secondary flex items-center gap-2 text-sm">
-              <FiSettings size={14} /> Settings
-            </button>
-          )}
           {canCreate('rental_tools') && (
             <button onClick={() => setCreateModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
               <FiPlus size={14} /> Raise Enquiry
@@ -224,25 +234,80 @@ export default function RentalTools() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-2">
-        {[{ id: 'dashboard', label: 'Dashboard' }, { id: 'enquiries', label: 'Enquiries' }].map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`px-4 py-1.5 text-sm rounded ${tab === t.id ? 'bg-red-600 text-white' : 'bg-white border'}`}>{t.label}</button>
-        ))}
+      {/* Stage tabs — chip layout matches Sales Funnel (mam, 2026-05-16:
+          "i need this type stages").  Each stage chip shows its current
+          live count; clicking jumps to the Enquiries list pre-filtered
+          to that stage.  Cancelled gets its own chip on the right
+          (parallel to Sales Funnel's "Lost"). */}
+      <div className="flex gap-2 flex-wrap items-center">
+        <button onClick={() => { setTab('dashboard'); setFilters({ ...filters, stage: '', status: '' }); }}
+          className={`btn ${tab === 'dashboard' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}>
+          Dashboard
+        </button>
+        <button onClick={() => { setTab('enquiries'); setFilters({ ...filters, stage: '', status: '' }); }}
+          className={`btn ${tab === 'enquiries' && !filters.stage ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}>
+          All Enquiries
+          <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center ${tab === 'enquiries' && !filters.stage ? 'bg-white/30 text-white' : 'bg-gray-400 text-white'}`}>
+            {dashboard?.counts?.all ?? 0}
+          </span>
+        </button>
+        {STAGE_ORDER.map(s => {
+          const isActive = tab === 'enquiries' && filters.stage === s;
+          return (
+            <button key={s}
+              onClick={() => { setTab('enquiries'); setFilters({ ...filters, stage: s, status: '' }); }}
+              className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}
+              title={STAGE_LABEL[s]}>
+              {STAGE_LABEL[s]}
+              <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center ${isActive ? 'bg-white/30 text-white' : `${STAGE_CHIP_BG[s]} text-white`}`}>
+                {dashboard?.counts?.[s] ?? 0}
+              </span>
+            </button>
+          );
+        })}
+        <button
+          onClick={() => { setTab('enquiries'); setFilters({ ...filters, stage: 'cancelled', status: '' }); }}
+          className={`btn ${tab === 'enquiries' && filters.stage === 'cancelled' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}>
+          Cancelled
+          <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center ${tab === 'enquiries' && filters.stage === 'cancelled' ? 'bg-white/30 text-white' : 'bg-red-500 text-white'}`}>
+            {dashboard?.counts?.cancelled ?? 0}
+          </span>
+        </button>
+        {user?.role === 'admin' && (
+          <button onClick={() => setTab('settings')}
+            className={`btn ${tab === 'settings' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}>
+            <FiSettings size={12} /> Settings
+          </button>
+        )}
       </div>
 
-      {/* ============ DASHBOARD ============ */}
+      {/* ============ DASHBOARD ============
+          Tile layout mirrors Sales Funnel for visual consistency. */}
       {tab === 'dashboard' && dashboard && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {['enquiry','rate_finalised','material_received','returned'].map(s => (
-              <div key={s} className="card p-3 text-center">
-                <div className="text-3xl font-bold text-red-700">{dashboard.counts[s]}</div>
-                <div className="text-xs text-gray-500 mt-1 uppercase tracking-wider">{STAGE_LABEL[s]}</div>
-              </div>
-            ))}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div className="card p-4 border-l-4 border-red-500">
+              <p className="text-[10px] text-gray-500 font-bold uppercase">Total Enquiries</p>
+              <p className="text-3xl font-extrabold text-red-600">{dashboard.counts?.all ?? 0}</p>
+            </div>
+            <div className="card p-4 border-l-4 border-purple-500">
+              <p className="text-[10px] text-gray-500 font-bold uppercase">This Month</p>
+              <p className="text-3xl font-extrabold text-purple-600">{dashboard.this_month ?? 0}</p>
+            </div>
+            <div className="card p-4 border-l-4 border-emerald-500">
+              <p className="text-[10px] text-gray-500 font-bold uppercase">Closed (Returned)</p>
+              <p className="text-3xl font-extrabold text-emerald-600">{dashboard.counts?.returned ?? 0}</p>
+            </div>
+            <div className="card p-4 border-l-4 border-red-500">
+              <p className="text-[10px] text-gray-500 font-bold uppercase">Cancelled</p>
+              <p className="text-3xl font-extrabold text-red-600">{dashboard.counts?.cancelled ?? 0}</p>
+            </div>
+            <div className="card p-4 border-l-4 border-amber-500">
+              <p className="text-[10px] text-gray-500 font-bold uppercase">Open Value</p>
+              <p className="text-xl font-extrabold text-amber-600">{fmt(dashboard.total_value)}</p>
+            </div>
           </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="card p-3 border-l-4 border-amber-500">
               <div className="text-2xl font-bold text-amber-700">{dashboard.breaches.stage1_overdue}</div>
@@ -257,34 +322,29 @@ export default function RentalTools() {
               <div className="text-xs text-gray-600">Return overdue past target date</div>
             </div>
           </div>
-          <div className="card p-3 bg-amber-50 border border-amber-200 text-xs text-gray-700">
-            Open rental commitment value: <strong>{fmt(dashboard.total_value)}</strong>
-            {!dashboard.approver_user_id && user?.role === 'admin' && (
-              <span className="ml-3 px-2 py-0.5 bg-red-100 text-red-700 rounded text-[10px] uppercase font-semibold">
-                Action: set Ajmer as approver in Settings
-              </span>
-            )}
-          </div>
+
+          {!dashboard.approver_user_id && user?.role === 'admin' && (
+            <div className="card p-3 bg-amber-50 border border-amber-200 text-xs text-gray-700">
+              <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded text-[10px] uppercase font-semibold mr-2">Action needed</span>
+              No rental approver (Ajmer) configured yet. Open the <button onClick={() => setTab('settings')} className="text-red-700 underline font-semibold">Settings</button> tab to set one.
+            </div>
+          )}
         </div>
       )}
 
       {/* ============ ENQUIRIES LIST ============ */}
       {tab === 'enquiries' && (<>
-        <div className="card p-3">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-            <input className="input text-sm" placeholder="Search enquiry / site / vendor / tool…" value={filters.q} onChange={e => setFilters({ ...filters, q: e.target.value })} />
-            <select className="select text-sm" value={filters.stage} onChange={e => setFilters({ ...filters, stage: e.target.value })}>
-              <option value="">All stages</option>
-              {Object.entries(STAGE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
-            <select className="select text-sm" value={filters.status} onChange={e => setFilters({ ...filters, status: e.target.value })}>
-              <option value="">All status</option>
-              <option value="open">Open</option>
-              <option value="closed">Closed</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
+        <div className="card p-3 flex items-center gap-2">
+          <input className="input text-sm flex-1" placeholder="Search enquiry / site / vendor / tool…" value={filters.q} onChange={e => setFilters({ ...filters, q: e.target.value })} />
+          {filters.stage && (
+            <span className="text-xs text-gray-500">
+              Showing <strong>{STAGE_LABEL[filters.stage] || (filters.stage === 'cancelled' ? 'Cancelled' : filters.stage)}</strong>
+              {' '}({enquiries.length})
+            </span>
+          )}
+          {(filters.q || filters.stage) && (
             <button onClick={() => setFilters({ stage: '', status: '', q: '' })} className="btn btn-secondary text-sm">Clear</button>
-          </div>
+          )}
         </div>
         <div className="card p-0 overflow-x-auto">
           <table className="w-full text-sm">
@@ -319,7 +379,7 @@ export default function RentalTools() {
                     </>) : '—'}
                   </td>
                   <td className="px-3 py-2 font-mono text-xs">{e.po_number || '—'}</td>
-                  <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-xs ${STAGE_COLOR[e.current_stage]}`}>{STAGE_LABEL[e.current_stage]}</span></td>
+                  <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-xs ${STAGE_COLOR[e.current_stage]}`}>{STAGE_LABEL_SHORT[e.current_stage] || e.current_stage}</span></td>
                   <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-xs ${e.status === 'open' ? 'bg-gray-100 text-gray-700' : e.status === 'closed' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{e.status}</span></td>
                 </tr>
               ))}
@@ -378,7 +438,7 @@ export default function RentalTools() {
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="bg-gray-50 border rounded p-2">
                   <div className="text-gray-500 uppercase text-[10px]">Stage</div>
-                  <div><span className={`px-2 py-0.5 rounded text-xs ${STAGE_COLOR[drawerEnq.current_stage]}`}>{STAGE_LABEL[drawerEnq.current_stage]}</span></div>
+                  <div><span className={`px-2 py-0.5 rounded text-xs ${STAGE_COLOR[drawerEnq.current_stage]}`}>{STAGE_LABEL_SHORT[drawerEnq.current_stage] || drawerEnq.current_stage}</span></div>
                 </div>
                 <div className="bg-gray-50 border rounded p-2">
                   <div className="text-gray-500 uppercase text-[10px]">Status</div>
