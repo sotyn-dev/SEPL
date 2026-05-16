@@ -418,7 +418,7 @@ export default function CashFlow() {
                 de-duped + sorted; sourced from the same /cashflow/projects
                 feed that powers the Projects tab. */}
             <div>
-              <label className="label">Party Name</label>
+              <label className="label">Party Name *</label>
               <input
                 className="input"
                 list="cf-party-options"
@@ -426,6 +426,7 @@ export default function CashFlow() {
                 onChange={e => setForm({ ...form, party_name: e.target.value })}
                 placeholder="Pick project or type…"
                 autoComplete="off"
+                required
               />
               <datalist id="cf-party-options">
                 {Array.from(new Set(

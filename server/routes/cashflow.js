@@ -280,7 +280,12 @@ router.get('/summary', (req, res) => {
 
 router.post('/entry', (req, res) => {
   const { date, type, category, description, amount, payment_mode, party_name } = req.body;
-  if (!date || !type || !category || !description || !amount) return res.status(400).json({ error: 'All fields required' });
+  // Party name made mandatory 2026-05-16 — mam wants every cash entry
+  // tied to a known counterparty so audits + future BB linking aren't
+  // crippled by anonymous "₹40,000 outflow" rows.
+  if (!date || !type || !category || !description || !amount || !party_name) {
+    return res.status(400).json({ error: 'All fields required (incl. party name)' });
+  }
   const db = getDb();
   let daily = db.prepare('SELECT id FROM cash_flow_daily WHERE date = ?').get(date);
   if (!daily) {
