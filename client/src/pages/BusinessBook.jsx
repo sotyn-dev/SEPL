@@ -9,6 +9,8 @@ import {
   FiX, FiBook, FiTrendingUp, FiClock, FiUpload
 } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
+import SearchableSelect from '../components/SearchableSelect';
+import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 
 const STATUSES = ['booked', 'advance_received', 'planning', 'execution', 'completed'];
 const CATEGORIES = ['Low Voltage', 'Fire Fighting', 'Fire NOC', 'Fire Alarm', 'CCTV', 'Access Control', 'PA System', 'Networking', 'Solar', 'Other'];
@@ -319,8 +321,24 @@ export default function BusinessBook() {
           {/* 2. Location */}
           <FSection title="Location & Address" color="gray">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              <Inp label="District" value={form.district} onChange={v => F('district', v)} />
-              <Inp label="State" value={form.state} onChange={v => F('state', v)} />
+              <div>
+                <label className="label">State</label>
+                <SearchableSelect
+                  options={STATES.map(s => ({ value: s, label: s }))}
+                  value={form.state} valueKey="value" displayKey="label"
+                  placeholder="Pick state"
+                  onChange={(opt) => { F('state', opt?.value || ''); F('district', ''); }}
+                />
+              </div>
+              <div>
+                <label className="label">District</label>
+                <SearchableSelect
+                  options={(form.state ? (DISTRICTS_BY_STATE[form.state] || []) : []).map(d => ({ value: d, label: d }))}
+                  value={form.district} valueKey="value" displayKey="label"
+                  placeholder={form.state ? 'Pick district' : 'Pick a state first'}
+                  onChange={(opt) => F('district', opt?.value || '')}
+                />
+              </div>
               <Inp label="State Code" value={form.state_code} onChange={v => F('state_code', v)} placeholder="e.g. 03" />
               {/* GSTIN feeds into the auto-generated Sales Bill / Tax
                   Invoice. Punjab GSTINs start with 03; verify the format

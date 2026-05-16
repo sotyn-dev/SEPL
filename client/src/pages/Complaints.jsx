@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEye, FiSearch, FiAlertCircle, FiClock, FiCheckCircle, FiList, FiEdit2, FiTrash2, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { STATES } from '../data/indiaLocations';
 
 // Matches mam's "Complaint Register Form 24-25" Google Form. Categories are
 // the SEPL service lines; Customer Type is Old Site / Running Site (not
@@ -237,7 +238,12 @@ export default function Complaints() {
                 {CATEGORY_OPTIONS.map(c => <option key={c}>{c}</option>)}
               </select>
             </Field>
-            <Field label="State *"><input required value={form.state} onChange={e=>setForm({...form, state:e.target.value})} className="inp" placeholder="e.g. Maharashtra" /></Field>
+            <Field label="State *">
+              <select required value={form.state} onChange={e=>setForm({...form, state:e.target.value})} className="inp">
+                <option value="">Pick state</option>
+                {STATES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </Field>
             <Field label="EMP Name"><input value={form.emp_name} onChange={e=>setForm({...form, emp_name:e.target.value})} className="inp" placeholder="Who received the complaint" /></Field>
             <Field label="Complaint Type *">
               <div className="flex gap-2">

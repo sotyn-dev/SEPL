@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiTruck, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 
 const CATEGORIES = ['FF', 'ELE', 'LV', 'Solar', 'HVAC', 'INTERIOR', 'OTHER'];
 const TYPES = ['Distributor', 'Trader', 'Manufacture', 'Direct Company', 'Stockist'];
@@ -199,8 +200,24 @@ export default function Vendors() {
             <div><label className="label">Authorized Dealer</label><input className="input" value={form.authorized_dealer || ''} onChange={e => setForm({...form, authorized_dealer: e.target.value})} /></div>
             <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} /></div>
             <div><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} /></div>
-            <div><label className="label">District</label><input className="input" value={form.district || ''} onChange={e => setForm({...form, district: e.target.value})} /></div>
-            <div><label className="label">State</label><input className="input" value={form.state || ''} onChange={e => setForm({...form, state: e.target.value})} /></div>
+            <div>
+              <label className="label">State</label>
+              <SearchableSelect
+                options={STATES.map(s => ({ value: s, label: s }))}
+                value={form.state || ''} valueKey="value" displayKey="label"
+                placeholder="Pick state"
+                onChange={(opt) => setForm({ ...form, state: opt?.value || '', district: '' })}
+              />
+            </div>
+            <div>
+              <label className="label">District</label>
+              <SearchableSelect
+                options={(form.state ? (DISTRICTS_BY_STATE[form.state] || []) : []).map(d => ({ value: d, label: d }))}
+                value={form.district || ''} valueKey="value" displayKey="label"
+                placeholder={form.state ? 'Pick district' : 'Pick a state first'}
+                onChange={(opt) => setForm({ ...form, district: opt?.value || '' })}
+              />
+            </div>
             <div><label className="label">GST Number</label><input className="input" value={form.gst_number || ''} onChange={e => setForm({...form, gst_number: e.target.value})} /></div>
             <div><label className="label">Payment Terms</label><select className="select" value={form.payment_terms || ''} onChange={e => setForm({...form, payment_terms: e.target.value})}><option value="">Select</option><option>Advance</option><option>Credit</option><option>PDC</option><option>COD</option></select></div>
             <div><label className="label">Credit Days</label><input className="input" value={form.credit_days || ''} onChange={e => setForm({...form, credit_days: e.target.value})} /></div>

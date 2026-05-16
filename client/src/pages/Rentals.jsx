@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiHome, FiPlus, FiEdit2, FiTrash2, FiSearch, FiAlertCircle, FiUserCheck, FiLogOut, FiCalendar, FiUsers, FiDollarSign, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { STATES } from '../data/indiaLocations';
 import { LuIndianRupee } from 'react-icons/lu';
 
 const STATUS_PILL = {
@@ -674,7 +675,12 @@ export default function Rentals() {
             <div className="col-span-2"><label className="label">Name *</label><input className="input" required value={propForm.name || ''} onChange={e => setPropForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Andheri Mumbai 3BHK Flat" /></div>
             <div className="col-span-2"><label className="label">Address</label><input className="input" value={propForm.address || ''} onChange={e => setPropForm(f => ({ ...f, address: e.target.value }))} /></div>
             <div><label className="label">City</label><input className="input" value={propForm.city || ''} onChange={e => setPropForm(f => ({ ...f, city: e.target.value }))} /></div>
-            <div><label className="label">State</label><input className="input" value={propForm.state || ''} onChange={e => setPropForm(f => ({ ...f, state: e.target.value }))} /></div>
+            <div><label className="label">State</label>
+              <select className="select" value={propForm.state || ''} onChange={e => setPropForm(f => ({ ...f, state: e.target.value }))}>
+                <option value="">Pick state</option>
+                {STATES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
             <div><label className="label">Pincode</label><input className="input" value={propForm.pincode || ''} onChange={e => setPropForm(f => ({ ...f, pincode: e.target.value }))} /></div>
             <div>
               <label className="label">Linked Site (optional)</label>

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
+import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload } from 'react-icons/fi';
@@ -695,8 +696,24 @@ export default function Leads() {
             <div className="md:col-span-2"><label className="label">Project Name {modal!=='edit' && '*'}</label><input className="input" value={form.project_name||''} onChange={e=>F('project_name',e.target.value)} required={modal!=='edit'}/></div>
             <div><label className="label">PIN Code</label><input className="input" value={form.pin_code||''} onChange={e=>F('pin_code',e.target.value)} maxLength="6"/></div>
             <div className="md:col-span-3"><label className="label">Project Location</label><input className="input" value={form.project_location||''} onChange={e=>F('project_location',e.target.value)} placeholder="Site address / city"/></div>
-            <div><label className="label">District</label><input className="input" value={form.district||''} onChange={e=>F('district',e.target.value)}/></div>
-            <div><label className="label">State</label><input className="input" value={form.state||''} onChange={e=>F('state',e.target.value)}/></div>
+            <div>
+              <label className="label">State</label>
+              <SearchableSelect
+                options={STATES.map(s => ({ value: s, label: s }))}
+                value={form.state || ''} valueKey="value" displayKey="label"
+                placeholder="Pick state"
+                onChange={(opt) => { F('state', opt?.value || ''); F('district', ''); }}
+              />
+            </div>
+            <div>
+              <label className="label">District</label>
+              <SearchableSelect
+                options={(form.state ? (DISTRICTS_BY_STATE[form.state] || []) : []).map(d => ({ value: d, label: d }))}
+                value={form.district || ''} valueKey="value" displayKey="label"
+                placeholder={form.state ? 'Pick district' : 'Pick a state first'}
+                onChange={(opt) => F('district', opt?.value || '')}
+              />
+            </div>
             <div><label className="label">Estimated Value (₹)</label><input className="input" type="number" min="0" value={form.estimated_value||0} onChange={e=>F('estimated_value',+e.target.value)}/></div>
             <div className="md:col-span-3"><label className="label">Tentative Timeline</label><input className="input" value={form.tentative_timeline||''} onChange={e=>F('tentative_timeline',e.target.value)} placeholder="e.g. 4 months / Q3 2026"/></div>
           </div>

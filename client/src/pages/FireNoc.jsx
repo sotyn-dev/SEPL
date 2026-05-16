@@ -20,6 +20,8 @@ import {
   FiAlertTriangle, FiCheckCircle, FiClock,
 } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import SearchableSelect from '../components/SearchableSelect';
+import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 
 const STAGE_ORDER = [
   'T-180','T-150','T-120','RESPONSE_CHECK','REENGAGE',
@@ -83,7 +85,7 @@ export default function FireNoc() {
   const [loading, setLoading] = useState(false);
   const [createModal, setCreateModal] = useState(false);
   const [form, setForm] = useState({
-    state: '', building_type: 'commercial', building_name: '', address: '',
+    state: '', district: '', building_type: 'commercial', building_name: '', address: '',
     pincode: '', expiry_date: '', source: 'manual',
     decision_maker_name: '', decision_maker_phone: '', decision_maker_email: '',
     ticket_size_band: '',
@@ -346,13 +348,27 @@ export default function FireNoc() {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label">State *</label>
-              <input className="input" required value={form.state} onChange={e => setForm({ ...form, state: e.target.value })} placeholder="e.g. Uttar Pradesh" />
+              <SearchableSelect
+                options={STATES.map(s => ({ value: s, label: s }))}
+                value={form.state} valueKey="value" displayKey="label"
+                placeholder="Pick state"
+                onChange={(opt) => setForm({ ...form, state: opt?.value || '', district: '' })}
+              />
             </div>
             <div>
               <label className="label">Building type *</label>
               <select className="select" required value={form.building_type} onChange={e => setForm({ ...form, building_type: e.target.value })}>
                 {BUILDING_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
+            </div>
+            <div>
+              <label className="label">District</label>
+              <SearchableSelect
+                options={(form.state ? (DISTRICTS_BY_STATE[form.state] || []) : []).map(d => ({ value: d, label: d }))}
+                value={form.district || ''} valueKey="value" displayKey="label"
+                placeholder={form.state ? 'Pick district' : 'Pick a state first'}
+                onChange={(opt) => setForm({ ...form, district: opt?.value || '' })}
+              />
             </div>
             <div>
               <label className="label">Building name</label>
