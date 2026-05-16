@@ -54,9 +54,15 @@ function expectedStageAndStatus(days, currentStatus) {
   else if (days > -30) stage = 'T+30';        // grace period — still chase
   else                 stage = 'LOST_POOL';   // >30 days past expiry → win-back pool
 
-  // Status: 'lapsed' once expired (so dashboards can split active vs
-  // lapsed renewal funnels); 'active' while still in the runway.
-  const status = days < 0 ? 'lapsed' : 'active';
+  // Status: 'archived' once expired (so dashboards can split active
+  // vs lapsed renewal funnels); 'active' while still in the runway.
+  // Note: 'archived' is the schema-allowed status for "past renewal
+  // window but kept for win-back".  The CHECK constraint on
+  // fire_noc_cycle.status is ('active','lost','renewed','archived')
+  // — initial implementation used 'lapsed' which is more readable
+  // but rejected by the constraint.  UI translates 'archived' →
+  // "Lapsed" for users; the storage value stays 'archived'.
+  const status = days < 0 ? 'archived' : 'active';
 
   return { stage, status };
 }

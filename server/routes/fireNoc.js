@@ -435,7 +435,7 @@ router.post('/cycles/import', requirePermission('fire_noc', 'create'), upload.si
           INSERT INTO fire_noc_stage_history (cycle_id, from_stage, to_stage, triggered_by, notes)
           VALUES (?, NULL, ?, ?, ?)
         `).run(cycleId, exp.stage, String(req.user.id),
-               `cycle created via bulk import · days_to_expiry=${days}${exp.status === 'lapsed' ? ' · auto-flagged lapsed' : ''}`);
+               `cycle created via bulk import · days_to_expiry=${days}${exp.status === 'archived' ? ' · auto-archived (past expiry)' : ''}`);
         return { propertyId, cycleId, startStage: exp.stage };
       });
       const out = txn();
@@ -520,7 +520,9 @@ router.patch('/cycles/:id', requirePermission('fire_noc', 'edit'), (req, res) =>
   const cycle = db.prepare('SELECT c.*, p.id property_id FROM fire_noc_cycle c JOIN fire_noc_property p ON c.property_id=p.id WHERE c.id=?').get(id);
   if (!cycle) return res.status(404).json({ error: 'Cycle not found' });
 
-  const allowedStatuses = ['active', 'lost', 'renewed', 'lapsed'];
+  // Matches the CHECK constraint on fire_noc_cycle.status.  UI may
+  // display 'archived' as "Lapsed" — storage stays 'archived'.
+  const allowedStatuses = ['active', 'lost', 'renewed', 'archived'];
   const changes = [];
   const txn = db.transaction(() => {
     if (b.status !== undefined) {

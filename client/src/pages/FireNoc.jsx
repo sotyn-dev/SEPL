@@ -456,7 +456,7 @@ export default function FireNoc() {
                   <td className="text-xs font-mono">{c.expiry_date}</td>
                   <td className={`text-xs font-bold ${c.days_to_expiry < 0 ? 'text-red-600' : c.days_to_expiry < 30 ? 'text-amber-600' : 'text-gray-700'}`}>{c.days_to_expiry}d</td>
                   <td><span className={`badge ${STAGE_COLOR[c.current_stage] || 'bg-gray-100'}`}>{STAGE_LABEL[c.current_stage] || c.current_stage}</span></td>
-                  <td><span className={`badge ${c.status === 'active' ? 'badge-gray' : c.status === 'lost' ? 'bg-red-100 text-red-700' : c.status === 'renewed' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{c.status}</span></td>
+                  <td><span className={`badge ${c.status === 'active' ? 'badge-gray' : c.status === 'lost' ? 'bg-red-100 text-red-700' : c.status === 'renewed' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{c.status === 'archived' ? 'lapsed' : c.status}</span></td>
                   <td className="text-xs">{c.owner_name || '—'}</td>
                 </tr>
               ))}
@@ -621,7 +621,7 @@ export default function FireNoc() {
                         <option value="active">Active</option>
                         <option value="lost">Lost</option>
                         <option value="renewed">Renewed</option>
-                        <option value="lapsed">Lapsed</option>
+                        <option value="archived">Lapsed (past expiry)</option>
                       </select>
                     </label>
                     <label className="space-y-1">
