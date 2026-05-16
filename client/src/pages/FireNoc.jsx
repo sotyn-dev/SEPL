@@ -30,23 +30,29 @@ const STAGE_ORDER = [
   'T-15','T-0','T+30','CYCLE_CLOSE',
 ];
 
+// Stage labels — mam (2026-05-16): "t is time t-30 mean required 30
+// days dont mention t-30".  Renamed every T-XX / T+XX stage to plain
+// "<N> days before/after · <action>" so users see the time meaning
+// directly without decoding "T-30".  Internal stage codes (the keys
+// here) stay as T-180 etc. — they're the DB enum and changing them
+// would need a migration; only the human-facing labels changed.
 const STAGE_LABEL = {
-  'T-180': 'T-180 · Auto Alert',
-  'T-150': 'T-150 · Qualify',
-  'T-120': 'T-120 · Quote v1',
+  'T-180': '180 days before · Auto Alert',
+  'T-150': '150 days before · Qualify',
+  'T-120': '120 days before · Quote v1',
   'RESPONSE_CHECK': 'Response Check',
   'REENGAGE': 'Re-Engage',
-  'T-90':  'T-90 · Site Visit',
+  'T-90':  '90 days before · Site Visit',
   'CONVERT_CHECK': 'Convert?',
   'LOST_POOL': 'Lost · Win-Back',
-  'T-60':  'T-60 · PO + 30%',
-  'T-45':  'T-45 · Dept Filing',
-  'T-30':  'T-30 · Inspection',
+  'T-60':  '60 days before · PO + 30%',
+  'T-45':  '45 days before · Dept Filing',
+  'T-30':  '30 days before · Inspection',
   'INSPECTION_CHECK': 'Inspection?',
   'COMPLIANCE_FIX':   'Compliance Fix',
-  'T-15':  'T-15 · NOC Issued',
-  'T-0':   'T-0  · Final Pay',
-  'T+30':  'T+30 · Upsell',
+  'T-15':  '15 days before · NOC Issued',
+  'T-0':   'Expiry day · Final Pay',
+  'T+30':  '30 days after · Upsell',
   'CYCLE_CLOSE': 'Closed',
 };
 
@@ -260,7 +266,7 @@ export default function FireNoc() {
             <FiTarget className="text-red-600" /> Fire NOC Renewal
           </h1>
           <p className="text-xs text-gray-500 mt-1">
-            T-180 → T+30 auto-pilot funnel · state-aware cycle rules · maker-checker on quotes
+            180 days before → 30 days after · auto-pilot funnel · state-aware cycle rules · maker-checker on quotes
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -552,7 +558,7 @@ export default function FireNoc() {
             </div>
           </div>
           <div className="text-[11px] text-gray-500 italic bg-amber-50 border border-amber-200 rounded p-2">
-            Cycle starts at the stage matching its days-to-expiry: T-180 if &gt;150d, T-150 if 121-150d, T-120 if 91-120d, etc.
+            Cycle starts at the stage matching its days-to-expiry: 180-days-before stage if &gt;150d, 150-days-before if 121-150d, 120-days-before if 91-120d, etc.
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={() => setCreateModal(false)} className="btn btn-secondary">Cancel</button>
