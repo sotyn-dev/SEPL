@@ -315,16 +315,21 @@ export default function CashFlow() {
                     <td className="px-2 py-2 text-right tabular-nums">{p.payment_days || dash}</td>
                   )}
                   <td className="px-2 py-2 text-right font-bold text-base text-gray-800 tabular-nums">{p.total_days || dash}</td>
-                  {/* Last Payment Date — expected last-payment receipt,
-                      projected FORWARD from LIVE.  Mam (2026-05-13):
-                      she enters Completion = 10 and expects 15 May + 10
-                      = 25 May, NOT 15 May − 10 = 5 May.  Sign flipped
-                      from the earlier "back-date" interpretation.
-                      Priority: use Inv Days when filled, else fall back
-                      to Total Days (completion + payment).  Read-only —
-                      refreshes automatically on every save. */}
+                  {/* Last Payment Date — FROZEN on entry (Option A,
+                      mam's pick 2026-05-15).  Stored as
+                      project_finance.last_payment_target_date in the
+                      backend; locked the moment Compl + Pmt days are
+                      saved and never auto-shifts with the calendar.
+                      Only recomputes when mam re-edits Compl/Pmt days.
+                      Falls back to legacy inline compute for legacy
+                      rows missing the column (one-time backfill on
+                      first load via GET /projects/dashboard). */}
                   <td className="px-2 py-2 text-center text-[11px] text-blue-700 font-semibold whitespace-nowrap">
                     {(() => {
+                      if (p.last_payment_target_date) {
+                        return fmtDate(p.last_payment_target_date);
+                      }
+                      // Legacy fallback (should rarely fire — backend backfills on read)
                       const live = p.live_date ? new Date(p.live_date) : null;
                       if (!live || isNaN(live)) return dash;
                       const daysForward = +p.payment_investment_days > 0

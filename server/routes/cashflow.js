@@ -99,6 +99,15 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
     const aanchalValue = pf?.aanchal_value || 0;
     const paymentInvestDays = pf?.payment_investment_days || 0;
     const manualPaymentDays = pf?.payment_days || 0;
+    // OPTION A — locked last-payment target date.  Once mam enters
+    // Compl / Pmt days, the system computes today + total_days
+    // ONE TIME and writes it to project_finance.last_payment_target_date.
+    // After that the value is read straight from the column — it
+    // doesn't auto-shift as the calendar moves forward.  On the FIRST
+    // read after this column lands (existing rows have NULL), we
+    // backfill the lock from current days so legacy entries also stop
+    // drifting.  See backfill below after totalDays is known.
+    const lockedTarget = pf?.last_payment_target_date || null;
 
     // Days calculation
     const startDate = p.committed_start_date ? new Date(p.committed_start_date) : new Date(p.created_at);
@@ -122,6 +131,21 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
     const effPurchase = pf?.manual_purchase_value != null ? pf.manual_purchase_value : purchaseAmt;
     const cashVelocity = totalDays > 0 ? Math.round(((aanchalValue - effPurchase) / totalDays / 100000) * 100) / 100 : 0;
 
+    // OPTION A backfill — if project has days entered but no locked
+    // target date yet, lock it ONCE from today + totalDays and save.
+    // From this point on, the date stays put regardless of calendar
+    // movement, until mam edits the row again (the POST handler
+    // recomputes-and-locks on every save).
+    let effLockedTarget = lockedTarget;
+    if (!effLockedTarget && pf && totalDays > 0) {
+      try {
+        const t = new Date(); t.setDate(t.getDate() + totalDays);
+        effLockedTarget = t.toISOString().slice(0, 10);
+        try { db.exec('ALTER TABLE project_finance ADD COLUMN last_payment_target_date DATE'); } catch (_) {}
+        db.prepare('UPDATE project_finance SET last_payment_target_date=? WHERE business_book_id=?').run(effLockedTarget, p.id);
+      } catch (_) { /* non-fatal */ }
+    }
+
     return {
       sr_no: idx + 1,
       id: p.id,
@@ -142,6 +166,11 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
       completion_days: effCompletion,  // P: manual override OR computed from dates
       payment_days: paymentDays,  // Q: Manual
       total_days: totalDays,  // R: effective P + Q (now consistent with displayed P + Q)
+      // OPTION A — locked Last Pmt Date.  Set ONCE at edit time
+      // (today + total_days) and never auto-shifts after.  Frontend
+      // displays this directly; falls back to legacy compute only if
+      // null (which shouldn't happen post-backfill).
+      last_payment_target_date: effLockedTarget,
       committed_start: p.committed_start_date,
       committed_completion: p.committed_completion_date,
     };
@@ -162,16 +191,36 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
 router.post('/projects/:id/update', requirePermission('cashflow', 'edit'), (req, res) => {
   const { crm_person, amount_received, milestone_name, aanchal_value, payment_investment_days, payment_days, manual_purchase_value, manual_completion_days } = req.body;
   const db = getDb();
-  // Add payment_days column if missing
+  // Add payment_days column if missing (defensive — same pattern as
+  // the other late-added columns; safe to re-run, throws and we swallow).
   try { db.exec('ALTER TABLE project_finance ADD COLUMN payment_days INTEGER DEFAULT 0'); } catch(e) {}
   try { db.exec('ALTER TABLE project_finance ADD COLUMN manual_purchase_value REAL'); } catch(e) {}
   try { db.exec('ALTER TABLE project_finance ADD COLUMN manual_completion_days INTEGER'); } catch(e) {}
+  // OPTION A — locked target date for "Last Pmt Date".  Mam, 2026-05-16:
+  // "i want days never increase when days are not edited".  We re-lock
+  // the date HERE on every save (today + new total_days).  The dashboard
+  // GET reads this column verbatim — no auto-recompute as the calendar
+  // moves forward.
+  try { db.exec('ALTER TABLE project_finance ADD COLUMN last_payment_target_date DATE'); } catch(e) {}
   if (crm_person !== undefined) {
     db.prepare('UPDATE business_book SET employee_assigned=? WHERE id=?').run(crm_person, req.params.id);
   }
-  db.prepare('INSERT OR REPLACE INTO project_finance (business_book_id, amount_received, milestone_name, aanchal_value, payment_investment_days, payment_days, manual_purchase_value, manual_completion_days, updated_at) VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)')
-    .run(req.params.id, amount_received || 0, milestone_name, aanchal_value || 0, payment_investment_days || 0, payment_days || 0, manual_purchase_value ?? null, manual_completion_days ?? null);
-  res.json({ message: 'Updated' });
+  // Compute the fresh target date.  Falls back to existing locked
+  // value when the user updated something OTHER than days (so a
+  // milestone-only edit doesn't reset the lock).
+  let lockedTarget = null;
+  const totalDays = (Number(manual_completion_days) || 0) + (Number(payment_days) || 0);
+  if (totalDays > 0) {
+    const t = new Date(); t.setDate(t.getDate() + totalDays);
+    lockedTarget = t.toISOString().slice(0, 10);
+  } else {
+    // Preserve previous lock if no days change
+    const prev = db.prepare('SELECT last_payment_target_date FROM project_finance WHERE business_book_id=?').get(req.params.id);
+    lockedTarget = prev?.last_payment_target_date || null;
+  }
+  db.prepare('INSERT OR REPLACE INTO project_finance (business_book_id, amount_received, milestone_name, aanchal_value, payment_investment_days, payment_days, manual_purchase_value, manual_completion_days, last_payment_target_date, updated_at) VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)')
+    .run(req.params.id, amount_received || 0, milestone_name, aanchal_value || 0, payment_investment_days || 0, payment_days || 0, manual_purchase_value ?? null, manual_completion_days ?? null, lockedTarget);
+  res.json({ message: 'Updated', last_payment_target_date: lockedTarget });
 });
 
 // ============= DAILY CASH FLOW (existing) =============
