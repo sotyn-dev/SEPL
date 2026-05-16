@@ -145,6 +145,31 @@ try {
   console.warn('[cash-fidelity] Scheduler not started:', e.message);
 }
 
+// Daily 09:00 CMD audit email — audit item B20 + TOC v3 P0 #5.
+// Reads the 07:30 snapshot JSON (falls back to live /audit/kpi if
+// the snapshot folder is missing) and emails the director address
+// configured in Admin → Email Settings.  Skip via
+// ERP_DISABLE_CMD_EMAIL=1.  Sunday off.
+try {
+  const { scheduleDailyCmdEmail } = require('./scripts/dailyCmdEmail');
+  scheduleDailyCmdEmail();
+} catch (e) {
+  console.warn('[cmd-email] Scheduler not started:', e.message);
+}
+
+// Admin-triggered CMD email — sends the same daily summary on
+// demand so mam can verify SMTP + content without waiting for 9 AM.
+app.post('/api/admin/cmd-email/send-now', authMiddleware, (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  try {
+    const { runOnce } = require('./scripts/dailyCmdEmail');
+    runOnce().catch(e => console.error('[cmd-email manual]', e.message));
+    res.json({ message: 'CMD email fired — check pm2 logs for delivery confirmation' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Audit middleware — runs before the routes so every mutating request
 // (POST/PUT/PATCH/DELETE) is logged on response finish. Reads req.user set
 // by authMiddleware inside each router. Fire-and-forget so it can't slow
