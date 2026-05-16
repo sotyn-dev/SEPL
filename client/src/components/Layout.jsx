@@ -60,6 +60,7 @@ const adminItems = [
   // them first thing on login.  Stage 1 = Operating Console (today's
   // pulse + funnel + ops + cash).  Stage 2 = TOC View (binding
   // constraint + 3 moves).  Both pulled from /api/dashboards/cmd-detail.
+  { path: '/dashboard/war-room',label: 'Director\'s War Room',    icon: FiTrendingUp, module: 'users' },
   { path: '/dashboard/cmd',     label: 'CMD · Operating Console', icon: FiTrendingUp, module: 'users' },
   { path: '/dashboard/cmd-toc', label: 'CMD · TOC View',          icon: FiTrendingUp, module: 'users' },
   { path: '/admin/users', label: 'User Management', icon: FiSettings, module: 'users' },

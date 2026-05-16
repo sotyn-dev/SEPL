@@ -52,6 +52,7 @@ import ChequeFMS from './pages/ChequeFMS';
 import EmailSettings from './pages/EmailSettings';
 import DashboardCMD from './pages/DashboardCMD';
 import DashboardCMDToc from './pages/DashboardCMDToc';
+import DashboardWarRoom from './pages/DashboardWarRoom';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -98,6 +99,7 @@ export default function App() {
             HTML specs come in from MD. */}
         <Route path="dashboard/cmd" element={<AdminRoute><DashboardCMD /></AdminRoute>} />
         <Route path="dashboard/cmd-toc" element={<AdminRoute><DashboardCMDToc /></AdminRoute>} />
+        <Route path="dashboard/war-room" element={<AdminRoute><DashboardWarRoom /></AdminRoute>} />
         {/* 4 Critical Systems */}
         <Route path="cashflow" element={<ModuleRoute module="cashflow"><CashFlow /></ModuleRoute>} />
         <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />
