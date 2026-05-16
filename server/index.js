@@ -243,6 +243,7 @@ app.use('/api/crm-funnel', require('./routes/crmFunnel'));
 app.use('/api/cheques', require('./routes/cheques'));
 app.use('/api/dashboards', require('./routes/dashboards'));
 app.use('/api/fire-noc', require('./routes/fireNoc'));
+app.use('/api/rental-tools', require('./routes/rentalTools'));
 
 // 4 Critical Systems
 app.use('/api/cashflow', require('./routes/cashflow'));

@@ -3154,6 +3154,15 @@ function initializeDatabase() {
     console.warn('[fire_noc] migrations skipped (non-fatal):', e.message);
   }
 
+  // Rental Tools Module — mam, 2026-05-16: 3-stage enquiry → rate →
+  // material → return flow with business-hour SLAs.
+  try {
+    const { runRentalToolsMigrations } = require('./rentalToolsSchema');
+    runRentalToolsMigrations(db);
+  } catch (e) {
+    console.warn('[rental_tools] migrations skipped (non-fatal):', e.message);
+  }
+
   console.log('Database initialized successfully');
   return db;
 }

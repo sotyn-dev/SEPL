@@ -1,0 +1,587 @@
+// Rental Tools Module — mam (2026-05-16) spec:
+//   Stage 0 · Enquiry (site eng raises)
+//   Stage 1 · Rate Finalised — Ajmer locks vendor + rate, auto-PO created
+//   Stage 2 · Material Received at site — site eng uploads live photo + GPS
+//   Stage 3 · Returned to vendor — Ajmer signs off
+//
+// Business-hour SLAs (Sundays + after-5PM rolled forward):
+//   - Stage 1 target = enquiry + 5 biz hours
+//   - Stage 2 target = date_of_requirement + 1 biz day
+//   - Stage 3 target = material_received + days_required (biz days)
+
+import { useState, useEffect, useRef } from 'react';
+import api from '../api';
+import Modal from '../components/Modal';
+import toast from 'react-hot-toast';
+import { useAuth } from '../context/AuthContext';
+import {
+  FiTool, FiPlus, FiDownload, FiCamera, FiCheckCircle,
+  FiAlertTriangle, FiFileText, FiXCircle, FiSettings,
+} from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
+
+const STAGE_LABEL = {
+  enquiry:            'Enquiry raised',
+  rate_finalised:     'Rate finalised',
+  material_received:  'Material at site',
+  returned:           'Returned · closed',
+};
+const STAGE_COLOR = {
+  enquiry:            'bg-blue-100 text-blue-700',
+  rate_finalised:     'bg-violet-100 text-violet-700',
+  material_received:  'bg-amber-100 text-amber-700',
+  returned:           'bg-emerald-100 text-emerald-700',
+};
+
+const fmt = (n) => `₹${(n || 0).toLocaleString('en-IN')}`;
+const fmtDt = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+const fmtD  = (iso) => iso ? new Date(iso).toLocaleDateString('en-IN', { dateStyle: 'medium' }) : '—';
+
+export default function RentalTools() {
+  const { user, canCreate } = useAuth();
+  const [tab, setTab] = useState('dashboard');
+  const [dashboard, setDashboard] = useState(null);
+  const [enquiries, setEnquiries] = useState([]);
+  const [filters, setFilters] = useState({ stage: '', status: 'open', q: '' });
+  const [createModal, setCreateModal] = useState(false);
+  const [vendors, setVendors] = useState([]);
+  const [usersList, setUsersList] = useState([]);
+  const [form, setForm] = useState({
+    site_name: '', tool_description: '', date_of_requirement: '',
+    days_required: 1, site_engineer_id: '', site_engineer_name: '',
+  });
+  const [drawerEnq, setDrawerEnq] = useState(null);
+  const [rateForm, setRateForm] = useState({
+    vendor_id: '', vendor_name: '', vendor_rate: '', vendor_rate_unit: 'per_day',
+    po_number: '', po_date: new Date().toISOString().slice(0, 10),
+    total_amount: '', advance_amount: '',
+    pt_advance: 0, pt_delivery: 0, pt_installation: 0, pt_commissioning: 0, pt_retention: 0,
+    crm_name: '', po_copy_link: '',
+  });
+  const [returnNotes, setReturnNotes] = useState('');
+  const fileInputRef = useRef(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  const loadDashboard = async () => {
+    try { setDashboard((await api.get('/rental-tools/dashboard')).data); }
+    catch { /* admin gate handled in nav */ }
+  };
+  const loadEnquiries = async () => {
+    try {
+      const params = new URLSearchParams();
+      Object.entries(filters).forEach(([k, v]) => v && params.set(k, v));
+      setEnquiries((await api.get(`/rental-tools/enquiries?${params}`)).data);
+    } catch (e) { toast.error('Could not load enquiries'); }
+  };
+  const loadLookups = async () => {
+    try { setVendors((await api.get('/vendors')).data || []); } catch {}
+    try { setUsersList((await api.get('/auth/users')).data.filter(u => u.active !== 0)); } catch {}
+  };
+
+  useEffect(() => { loadDashboard(); loadEnquiries(); loadLookups(); }, []);
+  useEffect(() => { loadEnquiries(); }, [filters]);
+
+  const isApprover = dashboard?.approver_user_id ? user?.id === dashboard.approver_user_id : false;
+
+  // === Raise enquiry ===
+  const createEnquiry = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post('/rental-tools/enquiries', form);
+      toast.success('Enquiry raised');
+      setCreateModal(false);
+      setForm({ site_name: '', tool_description: '', date_of_requirement: '', days_required: 1, site_engineer_id: '', site_engineer_name: '' });
+      loadDashboard(); loadEnquiries();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not create');
+    }
+  };
+
+  // === Drawer ===
+  const openDrawer = async (id) => {
+    try {
+      const r = await api.get(`/rental-tools/enquiries/${id}`);
+      setDrawerEnq(r.data);
+      // Pre-fill rate form with sensible defaults
+      setRateForm({
+        vendor_id: r.data.vendor_id || '',
+        vendor_name: r.data.vendor_name || '',
+        vendor_rate: r.data.vendor_rate || '',
+        vendor_rate_unit: r.data.vendor_rate_unit || 'per_day',
+        po_number: r.data.po_number || `RT-PO-${Date.now().toString().slice(-6)}`,
+        po_date: new Date().toISOString().slice(0, 10),
+        total_amount: r.data.vendor_rate ? (+r.data.vendor_rate * +r.data.days_required).toFixed(2) : '',
+        advance_amount: '',
+        crm_name: r.data.created_by_name || '',
+        po_copy_link: '',
+      });
+    } catch { toast.error('Could not load enquiry'); }
+  };
+  const closeDrawer = () => { setDrawerEnq(null); setReturnNotes(''); };
+
+  const finaliseRate = async () => {
+    try {
+      const payload = { ...rateForm };
+      // Auto-compute total if blank
+      if (!payload.total_amount && payload.vendor_rate) {
+        payload.total_amount = (+payload.vendor_rate * +drawerEnq.days_required).toFixed(2);
+      }
+      await api.post(`/rental-tools/enquiries/${drawerEnq.id}/finalise-rate`, payload);
+      toast.success('Rate finalised · PO created');
+      await openDrawer(drawerEnq.id);
+      loadDashboard(); loadEnquiries();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed');
+    }
+  };
+
+  const captureAndUploadPhoto = async () => {
+    if (!fileInputRef.current) return;
+    fileInputRef.current.click();
+  };
+  const onPhotoPicked = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!navigator.geolocation) {
+      toast.error('Browser does not support GPS');
+      return;
+    }
+    setUploadingPhoto(true);
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      try {
+        const fd = new FormData();
+        fd.append('photo', file);
+        fd.append('latitude', pos.coords.latitude);
+        fd.append('longitude', pos.coords.longitude);
+        await api.post(`/rental-tools/enquiries/${drawerEnq.id}/material-received`, fd, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        toast.success('Material marked received');
+        await openDrawer(drawerEnq.id);
+        loadDashboard(); loadEnquiries();
+      } catch (err) {
+        toast.error(err.response?.data?.error || 'Upload failed');
+      } finally {
+        setUploadingPhoto(false);
+      }
+    }, (err) => {
+      toast.error('GPS denied — allow location and try again');
+      setUploadingPhoto(false);
+    }, { enableHighAccuracy: true, timeout: 15000 });
+  };
+
+  const signReturn = async () => {
+    try {
+      await api.post(`/rental-tools/enquiries/${drawerEnq.id}/return`, { notes: returnNotes });
+      toast.success('Return signed · enquiry closed');
+      await openDrawer(drawerEnq.id);
+      loadDashboard(); loadEnquiries();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed');
+    }
+  };
+
+  const cancelEnquiry = async () => {
+    if (!confirm('Cancel this enquiry?')) return;
+    try {
+      await api.post(`/rental-tools/enquiries/${drawerEnq.id}/cancel`);
+      toast.success('Cancelled');
+      closeDrawer();
+      loadDashboard(); loadEnquiries();
+    } catch (e) { toast.error('Failed'); }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+        <div>
+          <h1 className="text-xl font-bold flex items-center gap-2">
+            <FiTool className="text-red-600" /> Rental Tools
+          </h1>
+          <p className="text-xs text-gray-500 mt-1">
+            Enquiry → Rate Finalised → Material at Site → Returned · business-hour SLAs (after 5 PM rolls next day · Sunday rolls Monday)
+          </p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => exportCsv('rental-tools-enquiries',
+            ['Enquiry','Site','Tool','Days','Site Eng','Stage','Status','Vendor','Rate','PO'],
+            enquiries.map(e => [e.enquiry_no, e.site_name, e.tool_description, e.days_required, e.site_engineer_name, e.current_stage, e.status, e.vendor_name, e.vendor_rate, e.po_number]))}
+            className="btn btn-secondary flex items-center gap-2 text-sm">
+            <FiDownload size={14} /> Export Excel
+          </button>
+          {user?.role === 'admin' && (
+            <button onClick={() => setTab('settings')} className="btn btn-secondary flex items-center gap-2 text-sm">
+              <FiSettings size={14} /> Settings
+            </button>
+          )}
+          {canCreate('rental_tools') && (
+            <button onClick={() => setCreateModal(true)} className="btn btn-primary flex items-center gap-2 text-sm">
+              <FiPlus size={14} /> Raise Enquiry
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-2">
+        {[{ id: 'dashboard', label: 'Dashboard' }, { id: 'enquiries', label: 'Enquiries' }].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={`px-4 py-1.5 text-sm rounded ${tab === t.id ? 'bg-red-600 text-white' : 'bg-white border'}`}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* ============ DASHBOARD ============ */}
+      {tab === 'dashboard' && dashboard && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {['enquiry','rate_finalised','material_received','returned'].map(s => (
+              <div key={s} className="card p-3 text-center">
+                <div className="text-3xl font-bold text-red-700">{dashboard.counts[s]}</div>
+                <div className="text-xs text-gray-500 mt-1 uppercase tracking-wider">{STAGE_LABEL[s]}</div>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="card p-3 border-l-4 border-amber-500">
+              <div className="text-2xl font-bold text-amber-700">{dashboard.breaches.stage1_overdue}</div>
+              <div className="text-xs text-gray-600">Rate not finalised within 5 biz hrs</div>
+            </div>
+            <div className="card p-3 border-l-4 border-amber-500">
+              <div className="text-2xl font-bold text-amber-700">{dashboard.breaches.stage2_overdue}</div>
+              <div className="text-xs text-gray-600">Material not received within 1 biz day of req date</div>
+            </div>
+            <div className="card p-3 border-l-4 border-red-500">
+              <div className="text-2xl font-bold text-red-700">{dashboard.breaches.stage3_overdue}</div>
+              <div className="text-xs text-gray-600">Return overdue past target date</div>
+            </div>
+          </div>
+          <div className="card p-3 bg-amber-50 border border-amber-200 text-xs text-gray-700">
+            Open rental commitment value: <strong>{fmt(dashboard.total_value)}</strong>
+            {!dashboard.approver_user_id && user?.role === 'admin' && (
+              <span className="ml-3 px-2 py-0.5 bg-red-100 text-red-700 rounded text-[10px] uppercase font-semibold">
+                Action: set Ajmer as approver in Settings
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ============ ENQUIRIES LIST ============ */}
+      {tab === 'enquiries' && (<>
+        <div className="card p-3">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+            <input className="input text-sm" placeholder="Search enquiry / site / vendor / tool…" value={filters.q} onChange={e => setFilters({ ...filters, q: e.target.value })} />
+            <select className="select text-sm" value={filters.stage} onChange={e => setFilters({ ...filters, stage: e.target.value })}>
+              <option value="">All stages</option>
+              {Object.entries(STAGE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            <select className="select text-sm" value={filters.status} onChange={e => setFilters({ ...filters, status: e.target.value })}>
+              <option value="">All status</option>
+              <option value="open">Open</option>
+              <option value="closed">Closed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <button onClick={() => setFilters({ stage: '', status: '', q: '' })} className="btn btn-secondary text-sm">Clear</button>
+          </div>
+        </div>
+        <div className="card p-0 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="bg-gray-50 text-xs uppercase text-gray-600">
+              <th className="text-left px-3 py-2">Enquiry</th>
+              <th className="text-left px-3 py-2">Site / Tool</th>
+              <th className="text-left px-3 py-2">Req Date</th>
+              <th className="text-right px-3 py-2">Days</th>
+              <th className="text-left px-3 py-2">Site Eng</th>
+              <th className="text-left px-3 py-2">Vendor / Rate</th>
+              <th className="text-left px-3 py-2">PO</th>
+              <th className="text-left px-3 py-2">Stage</th>
+              <th className="text-left px-3 py-2">Status</th>
+            </tr></thead>
+            <tbody>
+              {enquiries.length === 0 ? (
+                <tr><td colSpan="9" className="text-center text-gray-400 py-8">No enquiries — click "Raise Enquiry"</td></tr>
+              ) : enquiries.map(e => (
+                <tr key={e.id} onClick={() => openDrawer(e.id)} className="cursor-pointer hover:bg-red-50/40 border-b">
+                  <td className="px-3 py-2 font-mono text-xs text-blue-700 hover:underline">{e.enquiry_no}</td>
+                  <td className="px-3 py-2">
+                    <div className="font-medium">{e.site_name}</div>
+                    {e.tool_description && <div className="text-xs text-gray-500">{e.tool_description}</div>}
+                  </td>
+                  <td className="px-3 py-2 text-xs">{fmtD(e.date_of_requirement)}</td>
+                  <td className="px-3 py-2 text-right font-semibold">{e.days_required}</td>
+                  <td className="px-3 py-2 text-xs">{e.site_engineer_name || '—'}</td>
+                  <td className="px-3 py-2 text-xs">
+                    {e.vendor_name ? (<>
+                      <div>{e.vendor_name}</div>
+                      <div className="text-gray-500">{fmt(e.vendor_rate)} / {e.vendor_rate_unit?.replace('per_', '')}</div>
+                    </>) : '—'}
+                  </td>
+                  <td className="px-3 py-2 font-mono text-xs">{e.po_number || '—'}</td>
+                  <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-xs ${STAGE_COLOR[e.current_stage]}`}>{STAGE_LABEL[e.current_stage]}</span></td>
+                  <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-xs ${e.status === 'open' ? 'bg-gray-100 text-gray-700' : e.status === 'closed' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{e.status}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </>)}
+
+      {/* ============ SETTINGS (admin) ============ */}
+      {tab === 'settings' && user?.role === 'admin' && (
+        <SettingsPanel dashboard={dashboard} usersList={usersList} reload={loadDashboard} />
+      )}
+
+      {/* ============ RAISE ENQUIRY MODAL ============ */}
+      <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="Raise Rental Tool Enquiry">
+        <form onSubmit={createEnquiry} className="space-y-3 text-sm">
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="label">Site Name *</label><input className="input" required value={form.site_name} onChange={e => setForm({ ...form, site_name: e.target.value })} placeholder="M/s ABC Project — Jaipur" /></div>
+            <div><label className="label">Tool / Machine</label><input className="input" value={form.tool_description} onChange={e => setForm({ ...form, tool_description: e.target.value })} placeholder="Scissor lift 12m" /></div>
+            <div><label className="label">Date of Requirement *</label><input className="input" type="date" required value={form.date_of_requirement} onChange={e => setForm({ ...form, date_of_requirement: e.target.value })} /></div>
+            <div><label className="label">Days Required *</label><input className="input" type="number" min="1" required value={form.days_required} onChange={e => setForm({ ...form, days_required: +e.target.value })} /></div>
+            <div className="col-span-2">
+              <label className="label">Site Engineer *</label>
+              <select className="select" value={form.site_engineer_id} onChange={e => {
+                const u = usersList.find(x => x.id === +e.target.value);
+                setForm({ ...form, site_engineer_id: e.target.value, site_engineer_name: u?.name || '' });
+              }}>
+                <option value="">— Select —</option>
+                {usersList.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="text-[11px] text-gray-500 italic bg-amber-50 border border-amber-200 rounded p-2">
+            Once raised, Ajmer has <strong>5 business hours</strong> to finalise vendor + rate. After 5 PM rolls to next morning · Sunday rolls to Monday.
+          </div>
+          <div className="flex justify-end gap-3"><button type="button" onClick={() => setCreateModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Raise Enquiry</button></div>
+        </form>
+      </Modal>
+
+      {/* ============ ENQUIRY DETAIL DRAWER ============ */}
+      {drawerEnq && (
+        <>
+          <div className="fixed inset-0 bg-black/30 z-40" onClick={closeDrawer}></div>
+          <div className="fixed top-0 right-0 h-full w-full sm:w-[560px] bg-white shadow-2xl z-50 overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-red-700 to-red-900 text-white p-4 flex items-center justify-between">
+              <div className="min-w-0">
+                <div className="text-xs opacity-80 uppercase tracking-wider">{drawerEnq.enquiry_no}</div>
+                <div className="font-semibold truncate">{drawerEnq.site_name}</div>
+                <div className="text-xs opacity-80">{drawerEnq.tool_description || '—'} · {drawerEnq.days_required} days</div>
+              </div>
+              <button onClick={closeDrawer} className="p-2 hover:bg-white/10 rounded text-xl">×</button>
+            </div>
+
+            <div className="p-4 space-y-4">
+              {/* Snapshot */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="bg-gray-50 border rounded p-2">
+                  <div className="text-gray-500 uppercase text-[10px]">Stage</div>
+                  <div><span className={`px-2 py-0.5 rounded text-xs ${STAGE_COLOR[drawerEnq.current_stage]}`}>{STAGE_LABEL[drawerEnq.current_stage]}</span></div>
+                </div>
+                <div className="bg-gray-50 border rounded p-2">
+                  <div className="text-gray-500 uppercase text-[10px]">Status</div>
+                  <div className="capitalize font-semibold">{drawerEnq.status}</div>
+                </div>
+                <div className="bg-gray-50 border rounded p-2 col-span-2">
+                  <div className="text-gray-500 uppercase text-[10px]">Req Date / Site Engineer</div>
+                  <div>{fmtD(drawerEnq.date_of_requirement)} · {drawerEnq.site_engineer_name || '—'}</div>
+                </div>
+                {drawerEnq.stage1_target_at && (
+                  <div className={`border rounded p-2 col-span-2 ${drawerEnq.stage1_breached ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
+                    <div className="text-gray-500 uppercase text-[10px]">Stage 1 target (rate finalisation)</div>
+                    <div className="text-xs">{fmtDt(drawerEnq.stage1_target_at)}{drawerEnq.stage1_breached ? ' · BREACHED' : ''}</div>
+                  </div>
+                )}
+                {drawerEnq.return_target_date && (
+                  <div className={`border rounded p-2 col-span-2 ${drawerEnq.stage3_breached ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                    <div className="text-gray-500 uppercase text-[10px]">Return target date</div>
+                    <div className="text-xs">{fmtD(drawerEnq.return_target_date)}{drawerEnq.stage3_breached ? ' · OVERDUE' : ''}</div>
+                  </div>
+                )}
+              </div>
+
+              {/* === STAGE 1: Finalise Rate (Ajmer only) === */}
+              {drawerEnq.current_stage === 'enquiry' && (
+                <div className="border rounded p-3 space-y-3">
+                  <div className="text-xs font-semibold uppercase text-gray-700 flex items-center gap-2">
+                    <FiFileText /> Stage 1 · Finalise Rate + Create PO
+                  </div>
+                  {!isApprover && dashboard?.approver_user_id && (
+                    <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                      Only the designated approver (Ajmer) can finalise. Logged in as {user?.name}.
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <label className="space-y-1 col-span-2">
+                      <span className="text-gray-600">Vendor *</span>
+                      <select className="select w-full" value={rateForm.vendor_id} onChange={e => {
+                        const v = vendors.find(x => x.id === +e.target.value);
+                        setRateForm({ ...rateForm, vendor_id: e.target.value, vendor_name: v?.name || '' });
+                      }}>
+                        <option value="">— Select vendor —</option>
+                        {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-gray-600">Rate (₹) *</span>
+                      <input className="input w-full" type="number" step="0.01" value={rateForm.vendor_rate} onChange={e => {
+                        const total = e.target.value ? (+e.target.value * +drawerEnq.days_required).toFixed(2) : '';
+                        setRateForm({ ...rateForm, vendor_rate: e.target.value, total_amount: total });
+                      }} />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-gray-600">Per</span>
+                      <select className="select w-full" value={rateForm.vendor_rate_unit} onChange={e => setRateForm({ ...rateForm, vendor_rate_unit: e.target.value })}>
+                        <option value="per_day">per day</option>
+                        <option value="per_hour">per hour</option>
+                        <option value="lumpsum">lump sum</option>
+                      </select>
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-gray-600">PO Number *</span>
+                      <input className="input w-full" value={rateForm.po_number} onChange={e => setRateForm({ ...rateForm, po_number: e.target.value })} />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-gray-600">PO Date *</span>
+                      <input className="input w-full" type="date" value={rateForm.po_date} onChange={e => setRateForm({ ...rateForm, po_date: e.target.value })} />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-gray-600">Total Amount (₹) *</span>
+                      <input className="input w-full" type="number" step="0.01" value={rateForm.total_amount} onChange={e => setRateForm({ ...rateForm, total_amount: e.target.value })} />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-gray-600">Advance (₹)</span>
+                      <input className="input w-full" type="number" step="0.01" value={rateForm.advance_amount} onChange={e => setRateForm({ ...rateForm, advance_amount: e.target.value })} />
+                    </label>
+                    <label className="space-y-1 col-span-2">
+                      <span className="text-gray-600">PO Copy Link (optional)</span>
+                      <input className="input w-full" value={rateForm.po_copy_link} onChange={e => setRateForm({ ...rateForm, po_copy_link: e.target.value })} placeholder="https://…" />
+                    </label>
+                    <label className="space-y-1 col-span-2">
+                      <span className="text-gray-600">CRM Name</span>
+                      <input className="input w-full" value={rateForm.crm_name} onChange={e => setRateForm({ ...rateForm, crm_name: e.target.value })} />
+                    </label>
+                  </div>
+                  <button onClick={finaliseRate} disabled={!isApprover && !!dashboard?.approver_user_id}
+                          className="btn btn-primary w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50">
+                    <FiCheckCircle /> Finalise Rate & Create PO
+                  </button>
+                </div>
+              )}
+
+              {/* === STAGE 2: Material Received (site eng) === */}
+              {drawerEnq.current_stage === 'rate_finalised' && (
+                <div className="border rounded p-3 space-y-3">
+                  <div className="text-xs font-semibold uppercase text-gray-700 flex items-center gap-2">
+                    <FiCamera /> Stage 2 · Material Received at Site
+                  </div>
+                  <div className="text-xs bg-gray-50 border rounded p-2 space-y-1">
+                    <div><strong>Vendor:</strong> {drawerEnq.vendor_name} · {fmt(drawerEnq.vendor_rate)}/{drawerEnq.vendor_rate_unit?.replace('per_', '')}</div>
+                    <div><strong>PO:</strong> {drawerEnq.po_number || '—'}</div>
+                    <div className="text-gray-500">Site engineer takes a live photo + allows GPS when material lands at site.</div>
+                  </div>
+                  <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={onPhotoPicked} className="hidden" />
+                  <button onClick={captureAndUploadPhoto} disabled={uploadingPhoto}
+                          className="btn btn-primary w-full text-sm flex items-center justify-center gap-2">
+                    <FiCamera /> {uploadingPhoto ? 'Uploading…' : 'Take Photo & Mark Received'}
+                  </button>
+                </div>
+              )}
+
+              {/* === STAGE 3: Return (Ajmer) === */}
+              {drawerEnq.current_stage === 'material_received' && (
+                <div className="border rounded p-3 space-y-3">
+                  <div className="text-xs font-semibold uppercase text-gray-700 flex items-center gap-2">
+                    <FiCheckCircle /> Stage 3 · Return to Vendor
+                  </div>
+                  <div className="text-xs bg-gray-50 border rounded p-2 space-y-1">
+                    <div><strong>Material received:</strong> {fmtDt(drawerEnq.material_received_at)}</div>
+                    {drawerEnq.material_received_photo && <div><a href={drawerEnq.material_received_photo} target="_blank" rel="noreferrer" className="text-blue-600 underline">View receipt photo</a></div>}
+                    <div><strong>Return target:</strong> {fmtD(drawerEnq.return_target_date)}</div>
+                  </div>
+                  {!isApprover && dashboard?.approver_user_id && (
+                    <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                      Only Ajmer can sign the return.
+                    </div>
+                  )}
+                  <label className="space-y-1 text-xs block">
+                    <span className="text-gray-600">Notes (optional)</span>
+                    <input className="input w-full" value={returnNotes} onChange={e => setReturnNotes(e.target.value)} placeholder="e.g. one drum dented, ₹500 deduction" />
+                  </label>
+                  <button onClick={signReturn} disabled={!isApprover && !!dashboard?.approver_user_id}
+                          className="btn btn-primary w-full text-sm flex items-center justify-center gap-2 disabled:opacity-50">
+                    <FiCheckCircle /> Sign Return & Close
+                  </button>
+                </div>
+              )}
+
+              {/* === Done === */}
+              {drawerEnq.current_stage === 'returned' && (
+                <div className="border-2 border-emerald-200 bg-emerald-50 rounded p-3 text-center text-emerald-700 font-semibold text-sm">
+                  <FiCheckCircle size={24} className="mx-auto mb-1" />
+                  Returned & closed · {fmtDt(drawerEnq.returned_at)}
+                </div>
+              )}
+
+              {/* Cancel link */}
+              {drawerEnq.status === 'open' && (
+                <button onClick={cancelEnquiry} className="text-xs text-red-600 hover:underline flex items-center gap-1">
+                  <FiXCircle size={12} /> Cancel this enquiry
+                </button>
+              )}
+
+              {/* Timeline */}
+              <div>
+                <div className="text-xs font-semibold uppercase text-gray-700 mb-2">Timeline ({drawerEnq.history?.length || 0})</div>
+                {(!drawerEnq.history || !drawerEnq.history.length) ? (
+                  <div className="text-xs text-gray-400 text-center py-3">No history yet</div>
+                ) : (
+                  <div className="space-y-2">
+                    {[...drawerEnq.history].reverse().map(h => (
+                      <div key={h.id} className="border-l-2 border-red-300 pl-3 py-1 text-xs">
+                        <div className="text-gray-500 text-[10px]">{new Date(h.entered_at).toLocaleString('en-IN')}</div>
+                        <div className="font-medium">
+                          {h.from_stage === h.to_stage ? <span className="text-gray-600">{h.notes}</span> :
+                            <><span className="text-gray-400">{h.from_stage || 'new'} → </span><span className="text-red-700">{STAGE_LABEL[h.to_stage] || h.to_stage}</span></>
+                          }
+                        </div>
+                        {h.from_stage !== h.to_stage && h.notes && <div className="text-gray-500 italic">{h.notes}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SettingsPanel({ dashboard, usersList, reload }) {
+  const [picked, setPicked] = useState(dashboard?.approver_user_id || '');
+  const save = async () => {
+    try {
+      await api.put('/rental-tools/settings/approver', { user_id: picked || null });
+      toast.success('Saved');
+      reload();
+    } catch { toast.error('Save failed'); }
+  };
+  return (
+    <div className="card p-4 max-w-md space-y-3">
+      <h2 className="font-semibold">Rental approver (Ajmer)</h2>
+      <p className="text-xs text-gray-500">
+        Only this user can finalise rates (Stage 1) and sign returns (Stage 3). Set once,
+        change when Ajmer is on leave.
+      </p>
+      <select className="select" value={picked} onChange={e => setPicked(e.target.value)}>
+        <option value="">— Anyone with approve permission —</option>
+        {usersList.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+      </select>
+      <button onClick={save} className="btn btn-primary text-sm">Save</button>
+    </div>
+  );
+}
