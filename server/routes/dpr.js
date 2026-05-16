@@ -924,4 +924,18 @@ router.get('/payment-check/:site_id', (req, res) => {
     message: dpr ? 'DPR submitted - payment can proceed' : 'NO DPR submitted today - payment NOT allowed' });
 });
 
+// Admin-triggered DPR auto-prompt — same code path as the 18:00
+// scheduler, exposed so mam can verify the push reaches engineers
+// without waiting for evening.  Per TOC v3 P1 #4.
+router.post('/admin/trigger-prompt', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  try {
+    const { runOnce } = require('../scripts/dprAutoPrompt');
+    runOnce().then(() => {}).catch(e => console.error('[dpr-prompt manual]', e.message));
+    res.json({ message: 'DPR prompt fired — check pm2 logs for the adherence rollup line' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

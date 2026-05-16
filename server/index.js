@@ -122,6 +122,17 @@ try {
   console.warn('[audit-snapshot] Scheduler not started:', e.message);
 }
 
+// Daily 18:00 DPR auto-prompt — TOC v3 P1 #4.  Pushes a notification
+// to every site engineer who hasn't submitted today's DPR for their
+// active site(s).  Sunday off.  Sends a rollup to admins when overall
+// adherence is below 50%.  Skip via ERP_DISABLE_DPR_PROMPT=1.
+try {
+  const { scheduleDprAutoPrompt } = require('./scripts/dprAutoPrompt');
+  scheduleDprAutoPrompt();
+} catch (e) {
+  console.warn('[dpr-prompt] Scheduler not started:', e.message);
+}
+
 // Audit middleware — runs before the routes so every mutating request
 // (POST/PUT/PATCH/DELETE) is logged on response finish. Reads req.user set
 // by authMiddleware inside each router. Fire-and-forget so it can't slow
