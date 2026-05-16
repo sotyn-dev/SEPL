@@ -16,7 +16,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import {
   FiTool, FiPlus, FiDownload, FiCamera, FiCheckCircle,
-  FiAlertTriangle, FiFileText, FiXCircle, FiSettings,
+  FiAlertTriangle, FiFileText, FiXCircle, FiSettings, FiEye,
 } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
@@ -61,6 +61,11 @@ export default function RentalTools() {
   const [createModal, setCreateModal] = useState(false);
   const [vendors, setVendors] = useState([]);
   const [usersList, setUsersList] = useState([]);
+  // Business Book site list — mam (2026-05-16): "site name from
+  // business book".  Cleaned + deduped + alpha-sorted so the
+  // dropdown stays tight.  Reused for both the Raise Enquiry modal
+  // AND the search field's datalist if mam wants free-typing later.
+  const [bbSites, setBbSites] = useState([]);
   const [form, setForm] = useState({
     site_name: '', tool_description: '', date_of_requirement: '',
     days_required: 1, site_engineer_id: '', site_engineer_name: '',
@@ -70,8 +75,7 @@ export default function RentalTools() {
     vendor_id: '', vendor_name: '', vendor_rate: '', vendor_rate_unit: 'per_day',
     po_number: '', po_date: new Date().toISOString().slice(0, 10),
     total_amount: '', advance_amount: '',
-    pt_advance: 0, pt_delivery: 0, pt_installation: 0, pt_commissioning: 0, pt_retention: 0,
-    crm_name: '', po_copy_link: '',
+    crm_name: '',
   });
   const [returnNotes, setReturnNotes] = useState('');
   const fileInputRef = useRef(null);
@@ -91,6 +95,20 @@ export default function RentalTools() {
   const loadLookups = async () => {
     try { setVendors((await api.get('/vendors')).data || []); } catch {}
     try { setUsersList((await api.get('/auth/users')).data.filter(u => u.active !== 0)); } catch {}
+    // Business Book → distinct project / company names for site dropdown
+    try {
+      const r = await api.get('/business-book');
+      const cleanName = (s) => (s || '')
+        .replace(/^[\s"'`]+|[\s"'`]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const set = new Set();
+      (r.data?.entries || r.data || []).forEach(bb => {
+        const name = cleanName(bb.project_name || bb.company_name || bb.client_name);
+        if (name) set.add(name);
+      });
+      setBbSites([...set].sort((a, b) => a.localeCompare(b)));
+    } catch {}
   };
 
   useEffect(() => { loadDashboard(); loadEnquiries(); loadLookups(); }, []);
@@ -128,7 +146,6 @@ export default function RentalTools() {
         total_amount: r.data.vendor_rate ? (+r.data.vendor_rate * +r.data.days_required).toFixed(2) : '',
         advance_amount: '',
         crm_name: r.data.created_by_name || '',
-        po_copy_link: '',
       });
     } catch { toast.error('Could not load enquiry'); }
   };
@@ -358,10 +375,11 @@ export default function RentalTools() {
               <th className="text-left px-3 py-2">PO</th>
               <th className="text-left px-3 py-2">Stage</th>
               <th className="text-left px-3 py-2">Status</th>
+              <th className="text-center px-3 py-2">Action</th>
             </tr></thead>
             <tbody>
               {enquiries.length === 0 ? (
-                <tr><td colSpan="9" className="text-center text-gray-400 py-8">No enquiries — click "Raise Enquiry"</td></tr>
+                <tr><td colSpan="10" className="text-center text-gray-400 py-8">No enquiries — click "Raise Enquiry"</td></tr>
               ) : enquiries.map(e => (
                 <tr key={e.id} onClick={() => openDrawer(e.id)} className="cursor-pointer hover:bg-red-50/40 border-b">
                   <td className="px-3 py-2 font-mono text-xs text-blue-700 hover:underline">{e.enquiry_no}</td>
@@ -381,6 +399,18 @@ export default function RentalTools() {
                   <td className="px-3 py-2 font-mono text-xs">{e.po_number || '—'}</td>
                   <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-xs ${STAGE_COLOR[e.current_stage]}`}>{STAGE_LABEL_SHORT[e.current_stage] || e.current_stage}</span></td>
                   <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-xs ${e.status === 'open' ? 'bg-gray-100 text-gray-700' : e.status === 'closed' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{e.status}</span></td>
+                  {/* Eye-button action (mam, 2026-05-16: "i need action eye
+                      button").  Whole row is also clickable so this is the
+                      explicit affordance for anyone who doesn't realise
+                      the row is interactive.  stopPropagation isn't needed
+                      since both paths open the same drawer. */}
+                  <td className="px-3 py-2 text-center">
+                    <button onClick={(ev) => { ev.stopPropagation(); openDrawer(e.id); }}
+                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                            title="View / act on this enquiry">
+                      <FiEye size={16} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -397,7 +427,26 @@ export default function RentalTools() {
       <Modal isOpen={createModal} onClose={() => setCreateModal(false)} title="Raise Rental Tool Enquiry">
         <form onSubmit={createEnquiry} className="space-y-3 text-sm">
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="label">Site Name *</label><input className="input" required value={form.site_name} onChange={e => setForm({ ...form, site_name: e.target.value })} placeholder="M/s ABC Project — Jaipur" /></div>
+            {/* Site Name — dropdown from Business Book master (mam,
+                2026-05-16: "site name from business book").  Combobox
+                so user can type to filter and still type a free-text
+                site if it isn't in BB yet (one-off rental that
+                won't get a BB entry). */}
+            <div>
+              <label className="label">Site Name *</label>
+              <input
+                className="input"
+                list="rental-site-options"
+                required
+                value={form.site_name}
+                onChange={e => setForm({ ...form, site_name: e.target.value })}
+                placeholder="Pick from Business Book or type…"
+                autoComplete="off"
+              />
+              <datalist id="rental-site-options">
+                {bbSites.map(name => <option key={name} value={name} />)}
+              </datalist>
+            </div>
             <div><label className="label">Tool / Machine</label><input className="input" value={form.tool_description} onChange={e => setForm({ ...form, tool_description: e.target.value })} placeholder="Scissor lift 12m" /></div>
             <div><label className="label">Date of Requirement *</label><input className="input" type="date" required value={form.date_of_requirement} onChange={e => setForm({ ...form, date_of_requirement: e.target.value })} /></div>
             <div><label className="label">Days Required *</label><input className="input" type="number" min="1" required value={form.days_required} onChange={e => setForm({ ...form, days_required: +e.target.value })} /></div>
@@ -515,10 +564,12 @@ export default function RentalTools() {
                       <span className="text-gray-600">Advance (₹)</span>
                       <input className="input w-full" type="number" step="0.01" value={rateForm.advance_amount} onChange={e => setRateForm({ ...rateForm, advance_amount: e.target.value })} />
                     </label>
-                    <label className="space-y-1 col-span-2">
-                      <span className="text-gray-600">PO Copy Link (optional)</span>
-                      <input className="input w-full" value={rateForm.po_copy_link} onChange={e => setRateForm({ ...rateForm, po_copy_link: e.target.value })} placeholder="https://…" />
-                    </label>
+                    {/* PO Copy Link removed (mam, 2026-05-16: "if po is
+                        create in it why here need po link") — the PO is
+                        being CREATED by this form, so a copy link makes
+                        no sense.  The newly-created PO record is
+                        linked to this enquiry via po_id and visible in
+                        the standard Purchase Orders module. */}
                     <label className="space-y-1 col-span-2">
                       <span className="text-gray-600">CRM Name</span>
                       <input className="input w-full" value={rateForm.crm_name} onChange={e => setRateForm({ ...rateForm, crm_name: e.target.value })} />

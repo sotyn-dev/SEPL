@@ -236,15 +236,17 @@ router.post('/enquiries/:id/finalise-rate', requirePermission('rental_tools', 'c
   const stage2Target = addBusinessHours(reqDate, 8);  // 1 working day
 
   const txn = db.transaction(() => {
-    // Auto-create draft PO
+    // Auto-create PO — mam (2026-05-16): the PO IS the artifact
+    // created here, so po_copy_link is null (no external copy to
+    // link to).  business_book_id stays NULL since rentals are
+    // operational expenses, not tied to a sale.
     const poRes = db.prepare(`
       INSERT INTO purchase_orders (
         business_book_id, po_number, po_date, total_amount, advance_amount,
         po_copy_link, boq_file_link, crm_name, created_by
-      ) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (NULL, ?, ?, ?, ?, NULL, NULL, ?, ?)
     `).run(
       b.po_number, b.po_date, +b.total_amount, +(b.advance_amount || 0),
-      b.po_copy_link || null, b.boq_file_link || null,
       b.crm_name || req.user.name || 'Rental', req.user.id,
     );
     const poId = poRes.lastInsertRowid;
