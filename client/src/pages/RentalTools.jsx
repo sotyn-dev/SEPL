@@ -95,7 +95,10 @@ export default function RentalTools() {
     } catch (e) { toast.error('Could not load enquiries'); }
   };
   const loadLookups = async () => {
-    try { setVendors((await api.get('/vendors')).data || []); } catch {}
+    // Vendor master is mounted under /api/procurement/vendors — same
+    // dropdown other modules (POs, indents) use, so any vendor mam
+    // adds in Procurement → Vendors is instantly available here.
+    try { setVendors((await api.get('/procurement/vendors')).data || []); } catch {}
     try { setUsersList((await api.get('/auth/users')).data.filter(u => u.active !== 0)); } catch {}
     // Business Book → distinct project / company names for site dropdown
     try {
