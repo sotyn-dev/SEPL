@@ -20,18 +20,20 @@ import {
 } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
-const STAGE_LABEL = {
+// Hard-coded fallbacks — replaced at runtime by labels coming from
+// /api/rental-tools/dashboard (mam-editable via Settings).  Keeping
+// them here so the page renders sensibly during the first
+// dashboard fetch.
+const DEFAULT_STAGE_LABEL = {
   enquiry:            'Stage 1 — Enquiry Raised',
   rate_finalised:     'Stage 2 — Rate Finalised',
   material_received:  'Stage 3 — Material at Site',
   returned:           'Stage 4 — Returned · Closed',
+  cancelled:          'Cancelled',
 };
-const STAGE_LABEL_SHORT = {
-  enquiry:            'Enquiry raised',
-  rate_finalised:     'Rate finalised',
-  material_received:  'Material at site',
-  returned:           'Returned',
-};
+// Short version — derive by stripping "Stage N — " prefix so admin's
+// rename automatically propagates to the in-row badge.
+const shortify = (label) => (label || '').replace(/^Stage\s*\d+\s*—\s*/i, '');
 const STAGE_COLOR = {
   enquiry:            'bg-blue-100 text-blue-700',
   rate_finalised:     'bg-violet-100 text-violet-700',
@@ -115,6 +117,13 @@ export default function RentalTools() {
   useEffect(() => { loadEnquiries(); }, [filters]);
 
   const isApprover = dashboard?.approver_user_id ? user?.id === dashboard.approver_user_id : false;
+  // Stage labels — admin-renamable from Settings.  Falls back to the
+  // hard-coded English defaults while the dashboard request is in
+  // flight or if the override hasn't been saved.
+  const STAGE_LABEL = dashboard?.stage_labels || DEFAULT_STAGE_LABEL;
+  const STAGE_LABEL_SHORT = Object.fromEntries(
+    Object.entries(STAGE_LABEL).map(([k, v]) => [k, shortify(v)])
+  );
 
   // === Raise enquiry ===
   const createEnquiry = async (e) => {
@@ -285,7 +294,7 @@ export default function RentalTools() {
         <button
           onClick={() => { setTab('enquiries'); setFilters({ ...filters, stage: 'cancelled', status: '' }); }}
           className={`btn ${tab === 'enquiries' && filters.stage === 'cancelled' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5 text-sm`}>
-          Cancelled
+          {STAGE_LABEL.cancelled}
           <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[18px] text-center ${tab === 'enquiries' && filters.stage === 'cancelled' ? 'bg-white/30 text-white' : 'bg-red-500 text-white'}`}>
             {dashboard?.counts?.cancelled ?? 0}
           </span>
@@ -674,25 +683,107 @@ export default function RentalTools() {
 
 function SettingsPanel({ dashboard, usersList, reload }) {
   const [picked, setPicked] = useState(dashboard?.approver_user_id || '');
-  const save = async () => {
+  const saveApprover = async () => {
     try {
       await api.put('/rental-tools/settings/approver', { user_id: picked || null });
-      toast.success('Saved');
+      toast.success('Approver saved');
       reload();
     } catch { toast.error('Save failed'); }
   };
+
+  // Stage-label rename — admin-only section (mam, 2026-05-16: "i
+  // need in setting all stages name and show only admin").  Loads
+  // defaults + current overrides from /settings/stage-labels so
+  // the admin sees both the live values and the originals for
+  // reference.
+  const [stageLabels, setStageLabels] = useState(null);
+  const [defaults, setDefaults] = useState(null);
+  const [savingLabels, setSavingLabels] = useState(false);
+  useEffect(() => {
+    api.get('/rental-tools/settings/stage-labels').then(r => {
+      setDefaults(r.data.defaults);
+      setStageLabels(r.data.current);
+    }).catch(() => {});
+  }, []);
+  const saveLabels = async () => {
+    if (!stageLabels) return;
+    setSavingLabels(true);
+    try {
+      await api.put('/rental-tools/settings/stage-labels', stageLabels);
+      toast.success('Stage names saved');
+      reload();
+    } catch (e) {
+      toast.error('Save failed');
+    } finally {
+      setSavingLabels(false);
+    }
+  };
+  const resetOne = (key) => setStageLabels(prev => ({ ...prev, [key]: defaults[key] }));
+  const resetAll = () => setStageLabels({ ...defaults });
+
   return (
-    <div className="card p-4 max-w-md space-y-3">
-      <h2 className="font-semibold">Rental approver (Ajmer)</h2>
-      <p className="text-xs text-gray-500">
-        Only this user can finalise rates (Stage 1) and sign returns (Stage 3). Set once,
-        change when Ajmer is on leave.
-      </p>
-      <select className="select" value={picked} onChange={e => setPicked(e.target.value)}>
-        <option value="">— Anyone with approve permission —</option>
-        {usersList.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-      </select>
-      <button onClick={save} className="btn btn-primary text-sm">Save</button>
+    <div className="space-y-6 max-w-2xl">
+      {/* ── Section 1 · Rental approver (existing) ──────────── */}
+      <div className="card p-4 space-y-3">
+        <h2 className="font-semibold">Rental approver (Ajmer)</h2>
+        <p className="text-xs text-gray-500">
+          Only this user can finalise rates (Stage 1) and sign returns (Stage 3). Set once,
+          change when Ajmer is on leave.
+        </p>
+        <select className="select" value={picked} onChange={e => setPicked(e.target.value)}>
+          <option value="">— Anyone with approve permission —</option>
+          {usersList.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+        </select>
+        <button onClick={saveApprover} className="btn btn-primary text-sm">Save Approver</button>
+      </div>
+
+      {/* ── Section 2 · Stage names (new, admin-only) ───────── */}
+      <div className="card p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="font-semibold">Stage names</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Rename any stage to match your team's language. Changes show everywhere
+              (chips, badges, drawer, exports) for every user.
+            </p>
+          </div>
+          {defaults && (
+            <button onClick={resetAll} className="text-xs text-gray-600 hover:text-red-600 underline">
+              Reset all to defaults
+            </button>
+          )}
+        </div>
+        {!stageLabels || !defaults ? (
+          <div className="text-xs text-gray-400 text-center py-4">Loading…</div>
+        ) : (
+          <div className="space-y-2">
+            {Object.keys(defaults).map(key => (
+              <div key={key} className="grid grid-cols-12 gap-2 items-center">
+                <code className="col-span-3 text-[11px] text-gray-500 font-mono break-all">{key}</code>
+                <input
+                  className="input col-span-7 text-sm"
+                  value={stageLabels[key] || ''}
+                  onChange={e => setStageLabels({ ...stageLabels, [key]: e.target.value })}
+                  placeholder={defaults[key]}
+                  maxLength={80}
+                />
+                <button
+                  onClick={() => resetOne(key)}
+                  disabled={stageLabels[key] === defaults[key]}
+                  className="col-span-2 text-[10px] text-gray-500 hover:text-red-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                  title={`Reset to "${defaults[key]}"`}>
+                  Reset
+                </button>
+              </div>
+            ))}
+            <div className="pt-2">
+              <button onClick={saveLabels} disabled={savingLabels} className="btn btn-primary text-sm">
+                {savingLabels ? 'Saving…' : 'Save Stage Names'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

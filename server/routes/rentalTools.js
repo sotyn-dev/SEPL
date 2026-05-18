@@ -57,6 +57,29 @@ function getApproverId(db) {
   return row?.value ? parseInt(row.value, 10) : null;
 }
 
+// Stage labels — admin-editable (mam, 2026-05-16: "i need in setting
+// all stages name and show only admin").  Stored as a single JSON
+// blob in app_settings; falls back to the hard-coded English
+// defaults if unset.  Keys must match the DB enum exactly:
+// enquiry / rate_finalised / material_received / returned / cancelled.
+const DEFAULT_STAGE_LABELS = {
+  enquiry:            'Stage 1 — Enquiry Raised',
+  rate_finalised:     'Stage 2 — Rate Finalised',
+  material_received:  'Stage 3 — Material at Site',
+  returned:           'Stage 4 — Returned · Closed',
+  cancelled:          'Cancelled',
+};
+function getStageLabels(db) {
+  try {
+    const row = db.prepare(`SELECT value FROM app_settings WHERE key='rental_tools_stage_labels'`).get();
+    if (!row?.value) return DEFAULT_STAGE_LABELS;
+    const saved = JSON.parse(row.value);
+    return { ...DEFAULT_STAGE_LABELS, ...saved };  // override only what's set
+  } catch (_) {
+    return DEFAULT_STAGE_LABELS;
+  }
+}
+
 // Gate Stage 1 + Stage 3 to Ajmer (if configured) or to anyone with
 // can_approve on the module.
 function canApprove(db, userId) {
@@ -100,7 +123,38 @@ router.get('/dashboard', requirePermission('rental_tools', 'view'), (req, res) =
   res.json({
     counts, breaches, open_total, total_value, this_month: thisMonth,
     approver_user_id: getApproverId(db),
+    stage_labels: getStageLabels(db),
   });
+});
+
+// ── GET / PUT /api/rental-tools/settings/stage-labels ──────────
+router.get('/settings/stage-labels', requirePermission('rental_tools', 'view'), (req, res) => {
+  res.json({
+    defaults: DEFAULT_STAGE_LABELS,
+    current: getStageLabels(getDb()),
+  });
+});
+
+router.put('/settings/stage-labels', requirePermission('rental_tools', 'edit'), (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const db = getDb();
+  const body = req.body || {};
+  // Whitelist keys so a malicious payload can't poison the JSON
+  const cleaned = {};
+  Object.keys(DEFAULT_STAGE_LABELS).forEach(k => {
+    if (typeof body[k] === 'string' && body[k].trim()) {
+      cleaned[k] = body[k].trim().slice(0, 80);  // 80 char cap
+    }
+  });
+  db.prepare(`INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)`)
+    .run('rental_tools_stage_labels', JSON.stringify(cleaned));
+  logAuditEvent({
+    user: req.user, action: 'UPDATE', entity_type: 'app_settings',
+    entity_label: 'rental_tools_stage_labels',
+    method: 'PUT', path: '/api/rental-tools/settings/stage-labels',
+    body: cleaned,
+  });
+  res.json({ current: getStageLabels(db) });
 });
 
 // ── GET /api/rental-tools/enquiries ────────────────────────────
