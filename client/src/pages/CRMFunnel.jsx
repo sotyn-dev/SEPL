@@ -49,6 +49,70 @@ export default function CRMFunnel() {
   // Read-only view modal (mam, 2026-05-16: "action as eye" on the
   // CRM funnel list).  Holds the row being inspected; null = closed.
   const [viewRow, setViewRow] = useState(null);
+  // Stage-aware quick-update form inside the view modal.  Pre-fills
+  // from viewRow when the modal opens; Save patches just these
+  // fields via the existing PUT /crm-funnel/:id endpoint so the
+  // user doesn't have to open the full edit modal for routine
+  // stage advancement.
+  const [stageForm, setStageForm] = useState({});
+  const [stageSaving, setStageSaving] = useState(false);
+
+  // Current step inference — mirrors stepBadge's logic so the view
+  // modal shows the right action panel.
+  const currentStep = (r) => {
+    if (!r) return null;
+    if (r.final_status === 'win' || r.final_status === 'loss') return 'done';
+    if (r.quotation_submitted) return 'step2';
+    return 'step1';
+  };
+
+  // Quick-save just the stage fields.  Uses the same PUT endpoint as
+  // the full edit form — we just don't touch fields the user hasn't
+  // changed.
+  const saveStage = async () => {
+    if (!viewRow?.id) return;
+    setStageSaving(true);
+    try {
+      const fd = new FormData();
+      // Carry the row's existing data so the backend doesn't null-out
+      // unrelated fields.  Then overlay the stage-form changes.
+      Object.entries(viewRow).forEach(([k, v]) => {
+        if (v === null || v === undefined) return;
+        if (typeof v === 'boolean') fd.append(k, v ? '1' : '0');
+        else fd.append(k, v);
+      });
+      Object.entries(stageForm).forEach(([k, v]) => {
+        if (v === null || v === undefined) return;
+        if (typeof v === 'boolean') fd.set(k, v ? '1' : '0');
+        else fd.set(k, v);
+      });
+      await api.put(`/crm-funnel/${viewRow.id}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success('Stage updated');
+      setViewRow(null);
+      setStageForm({});
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Update failed');
+    } finally {
+      setStageSaving(false);
+    }
+  };
+
+  // Reset stage form whenever a different lead is opened in the
+  // view modal — prevents leaked state across rows.
+  useEffect(() => {
+    if (viewRow) {
+      setStageForm({
+        quotation_amount: viewRow.quotation_amount || '',
+        quotation_submitted: !!viewRow.quotation_submitted,
+        negotiation_status: viewRow.negotiation_status || '',
+        negotiation_amount: viewRow.negotiation_amount || '',
+        negotiation_remarks: viewRow.negotiation_remarks || '',
+        final_status: viewRow.final_status || '',
+        loss_reason: viewRow.loss_reason || '',
+      });
+    }
+  }, [viewRow?.id]);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(blank());
   const [saving, setSaving] = useState(false);
@@ -467,13 +531,121 @@ export default function CRMFunnel() {
               <Field label="Loss Reason"><span className="text-red-700">{viewRow.loss_reason}</span></Field>
             )}
             {viewRow.notes && <Field label="Notes">{viewRow.notes}</Field>}
+
+            {/* ─── Stage-aware quick-update card ────────────────────
+                Shows only the fields relevant to the current step so
+                the team can advance leads from the eye modal without
+                opening the full edit form.  Mam (2026-05-16): "when
+                eye open update according to stage". */}
+            {canEdit('crm_funnel') && currentStep(viewRow) && (
+              <div className="border-2 border-blue-200 bg-blue-50/40 rounded p-3 space-y-3">
+                <div className="text-xs font-semibold uppercase text-blue-700 flex items-center gap-2">
+                  <FiTarget size={12} /> Stage Action — {currentStep(viewRow) === 'step1' ? 'Step 1 · Quotation' : currentStep(viewRow) === 'step2' ? 'Step 2 · Negotiation' : 'Step 3 · Win / Loss'}
+                </div>
+
+                {/* STEP 1 → STEP 2 · submit quotation */}
+                {currentStep(viewRow) === 'step1' && (
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="space-y-1">
+                      <label className="text-gray-600">Quotation Amount (₹)</label>
+                      <input type="number" className="input w-full" value={stageForm.quotation_amount || ''}
+                        onChange={e => setStageForm({ ...stageForm, quotation_amount: e.target.value })}
+                        placeholder="e.g. 5143320" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-gray-600">Quotation submitted?</label>
+                      <select className="select w-full" value={stageForm.quotation_submitted ? '1' : '0'}
+                        onChange={e => setStageForm({ ...stageForm, quotation_submitted: e.target.value === '1' })}>
+                        <option value="0">No — still preparing</option>
+                        <option value="1">Yes — submitted (move to Step 2)</option>
+                      </select>
+                    </div>
+                    <p className="col-span-2 text-[10px] text-gray-500">
+                      Marking <strong>Yes</strong> here moves the lead to Step 2 · Negotiation. The submit date is stamped automatically.
+                    </p>
+                  </div>
+                )}
+
+                {/* STEP 2 · negotiation */}
+                {currentStep(viewRow) === 'step2' && (
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="space-y-1">
+                      <label className="text-gray-600">Negotiation status</label>
+                      <select className="select w-full" value={stageForm.negotiation_status || ''}
+                        onChange={e => setStageForm({ ...stageForm, negotiation_status: e.target.value })}>
+                        <option value="">— Pick —</option>
+                        {NEG_STATUSES.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-gray-600">Negotiation Amount (₹)</label>
+                      <input type="number" className="input w-full" value={stageForm.negotiation_amount || ''}
+                        onChange={e => setStageForm({ ...stageForm, negotiation_amount: e.target.value })}
+                        placeholder="Counter-offered / agreed amount" />
+                    </div>
+                    <div className="col-span-2 space-y-1">
+                      <label className="text-gray-600">Negotiation remarks</label>
+                      <input className="input w-full" value={stageForm.negotiation_remarks || ''}
+                        onChange={e => setStageForm({ ...stageForm, negotiation_remarks: e.target.value })}
+                        placeholder="Notes from last call / meeting…" />
+                    </div>
+                    <div className="col-span-2 space-y-1 pt-2 border-t border-blue-200">
+                      <label className="text-gray-600 font-semibold">Outcome — set when deal is closed</label>
+                      <div className="flex gap-2">
+                        <select className="select flex-1" value={stageForm.final_status || ''}
+                          onChange={e => setStageForm({ ...stageForm, final_status: e.target.value })}>
+                          <option value="">— Still in negotiation —</option>
+                          <option value="win">Won 🎉</option>
+                          <option value="loss">Lost</option>
+                        </select>
+                        {stageForm.final_status === 'loss' && (
+                          <input className="input flex-1" value={stageForm.loss_reason || ''}
+                            onChange={e => setStageForm({ ...stageForm, loss_reason: e.target.value })}
+                            placeholder="Loss reason (price / timeline / scope…)" />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* STEP 3 · closed — read-only summary, with option to re-open */}
+                {currentStep(viewRow) === 'done' && (
+                  <div className="text-xs space-y-2">
+                    <div className={`px-3 py-2 rounded font-semibold text-center ${viewRow.final_status === 'win' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-700'}`}>
+                      {viewRow.final_status === 'win'
+                        ? `Won — Rs ${(+viewRow.negotiation_amount || +viewRow.quotation_amount || 0).toLocaleString('en-IN')}`
+                        : `Lost — ${viewRow.loss_reason || 'no reason given'}`}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select className="select" value={stageForm.final_status || ''}
+                        onChange={e => setStageForm({ ...stageForm, final_status: e.target.value })}>
+                        <option value="">Re-open (move back to Step 2)</option>
+                        <option value="win">Keep as Won</option>
+                        <option value="loss">Keep as Lost</option>
+                      </select>
+                      {stageForm.final_status === 'loss' && (
+                        <input className="input" value={stageForm.loss_reason || ''}
+                          onChange={e => setStageForm({ ...stageForm, loss_reason: e.target.value })}
+                          placeholder="Loss reason" />
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <button onClick={saveStage} disabled={stageSaving}
+                  className="btn btn-primary text-sm w-full">
+                  {stageSaving ? 'Saving…' : 'Save Stage Update'}
+                </button>
+              </div>
+            )}
+
             <div className="flex items-center justify-between pt-3 border-t text-xs text-gray-500">
               <span>Created {viewRow.created_at?.slice(0, 10) || ''} {viewRow.created_by_name ? `· by ${viewRow.created_by_name}` : ''}</span>
               <div className="flex gap-2">
                 <button onClick={() => setViewRow(null)} className="btn btn-secondary text-sm">Close</button>
                 {canEdit('crm_funnel') && (
                   <button onClick={() => { const r = viewRow; setViewRow(null); openEdit(r); }} className="btn btn-primary text-sm flex items-center gap-1.5">
-                    <FiEdit2 size={12} /> Edit
+                    <FiEdit2 size={12} /> Full Edit
                   </button>
                 )}
               </div>
