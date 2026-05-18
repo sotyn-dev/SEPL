@@ -3,7 +3,7 @@ import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiTrash2, FiExternalLink, FiTarget, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiEye, FiTrash2, FiExternalLink, FiTarget, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
 const fmt = (n) => 'Rs ' + Math.abs(Math.round(+n || 0)).toLocaleString('en-IN');
@@ -46,6 +46,9 @@ export default function CRMFunnel() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({ q: '', step: 'all', state: '', type: '' });
   const [modal, setModal] = useState(false);
+  // Read-only view modal (mam, 2026-05-16: "action as eye" on the
+  // CRM funnel list).  Holds the row being inspected; null = closed.
+  const [viewRow, setViewRow] = useState(null);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(blank());
   const [saving, setSaving] = useState(false);
@@ -243,6 +246,12 @@ export default function CRMFunnel() {
                 <td className="text-xs text-gray-600 max-w-[180px] truncate" title={r.loss_reason}>{r.loss_reason || '-'}</td>
                 <td>
                   <div className="flex gap-1">
+                    {/* View (eye) — works for everyone with view
+                        access, including roles that can't edit.
+                        Mam wanted a consistent eye-button shape
+                        across CRM Funnel, Sales Funnel, BB,
+                        Rental, etc. */}
+                    <button onClick={() => setViewRow(r)} className="p-1 text-gray-400 hover:text-red-600" title="View lead"><FiEye size={14} /></button>
                     {canEdit('crm_funnel') && <button onClick={() => openEdit(r)} className="p-1 text-gray-500 hover:text-red-600" title="Edit"><FiEdit2 size={14} /></button>}
                     {canDelete('crm_funnel') && <button onClick={() => remove(r)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
                   </div>
@@ -427,6 +436,63 @@ export default function CRMFunnel() {
           </div>
         </form>
       </Modal>
+
+      {/* ─── Read-only view modal (eye button) ─────────────────
+          Same layout as the edit modal, but with disabled fields
+          so users without edit permission can still inspect a
+          lead's full data + loss reason.  Switch to Edit button
+          at the bottom for users who do have edit rights. */}
+      {viewRow && (
+        <Modal isOpen={true} onClose={() => setViewRow(null)} title={`Lead · ${viewRow.lead_no || viewRow.client_name || '—'}`} wide>
+          <div className="space-y-3 text-sm">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <Field label="Lead #">{viewRow.lead_no || '—'}</Field>
+              <Field label="Client">{viewRow.client_name || '—'}</Field>
+              <Field label="Company">{viewRow.company_name || '—'}</Field>
+              <Field label="Mobile">{viewRow.mobile || '—'}</Field>
+              <Field label="Source">{viewRow.source || '—'}</Field>
+              <Field label="Type">{viewRow.type || '—'}</Field>
+              <Field label="Category">{viewRow.category || '—'}</Field>
+              <Field label="Lead Type">{viewRow.lead_type || '—'}</Field>
+              <Field label="State">{viewRow.state || '—'}</Field>
+              <Field label="District">{viewRow.district || '—'}</Field>
+              <Field label="BOQ">{viewRow.boq_status || '—'}</Field>
+              <Field label="Quote">{viewRow.quote_status || '—'}</Field>
+              <Field label="Qty Amount">{viewRow.qty_amount ? `Rs ${(+viewRow.qty_amount).toLocaleString('en-IN')}` : '—'}</Field>
+              <Field label="Neg Status">{NEG_STATUSES.find(s => s.v === viewRow.negotiation_status)?.l || '—'}</Field>
+              <Field label="Neg Amount">{viewRow.negotiation_amount ? `Rs ${(+viewRow.negotiation_amount).toLocaleString('en-IN')}` : '—'}</Field>
+              <Field label="Final Status">{viewRow.final_status || '—'}</Field>
+            </div>
+            {viewRow.loss_reason && (
+              <Field label="Loss Reason"><span className="text-red-700">{viewRow.loss_reason}</span></Field>
+            )}
+            {viewRow.notes && <Field label="Notes">{viewRow.notes}</Field>}
+            <div className="flex items-center justify-between pt-3 border-t text-xs text-gray-500">
+              <span>Created {viewRow.created_at?.slice(0, 10) || ''} {viewRow.created_by_name ? `· by ${viewRow.created_by_name}` : ''}</span>
+              <div className="flex gap-2">
+                <button onClick={() => setViewRow(null)} className="btn btn-secondary text-sm">Close</button>
+                {canEdit('crm_funnel') && (
+                  <button onClick={() => { const r = viewRow; setViewRow(null); openEdit(r); }} className="btn btn-primary text-sm flex items-center gap-1.5">
+                    <FiEdit2 size={12} /> Edit
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// Tiny read-only field renderer for the view modal.  Kept local to
+// this file because it's only used here and reads better than
+// inline grid markup at every cell.
+function Field({ label, children }) {
+  return (
+    <div className="bg-gray-50 border rounded p-2">
+      <div className="text-[10px] uppercase tracking-wider text-gray-500">{label}</div>
+      <div className="font-medium break-words">{children}</div>
     </div>
   );
 }
