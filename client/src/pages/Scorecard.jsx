@@ -476,7 +476,39 @@ function TemplateKpiEditor({ templateId, onChange }) {
               <td className="p-2"><input className="input text-xs" defaultValue={k.group_name} onBlur={e => updateKpi(k, { group_name: e.target.value })} /></td>
               <td className="p-2"><input className="input text-xs" defaultValue={k.metric_name} onBlur={e => updateKpi(k, { metric_name: e.target.value })} /></td>
               <td className="p-2"><input type="number" className="input text-xs text-center" defaultValue={k.weightage} onBlur={e => updateKpi(k, { weightage: +e.target.value })} /></td>
-              <td className="p-2"><input type="number" step="0.1" className="input text-xs text-center" defaultValue={k.default_planned || 0} onBlur={e => updateKpi(k, { default_planned: +e.target.value })} title="Fixed weekly Planned target" /></td>
+              {/* Target column — auto-locked when the data source pulls
+                  the planned value from live ERP data (mam, 2026-05-16:
+                  "delegation plan pick from delegation task give by
+                  days same in every where").  Same treatment applied to
+                  every auto:* source whose computeAutoCount returns a
+                  non-null `given` — only auto:dpr_profit_by_user keeps
+                  the manual target editable (its given=null pattern). */}
+              <td className="p-2">
+                {(() => {
+                  const isAuto = k.data_source && k.data_source.startsWith('auto:');
+                  // Auto sources whose `given` is null in computeAutoCount —
+                  // for those the admin's default_planned is still used.
+                  const AUTO_KEEPS_MANUAL_TARGET = ['auto:dpr_profit_by_user'];
+                  const autoLocksTarget = isAuto && !AUTO_KEEPS_MANUAL_TARGET.includes(k.data_source);
+                  if (autoLocksTarget) {
+                    return (
+                      <div className="text-center text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-1 py-1 cursor-help"
+                           title={`Target is computed live from ${k.data_source.replace('auto:', '')} — count of items given to the user in the scoring period. Editing here has no effect for auto sources.`}>
+                        auto
+                      </div>
+                    );
+                  }
+                  return (
+                    <input
+                      type="number" step="0.1"
+                      className="input text-xs text-center"
+                      defaultValue={k.default_planned || 0}
+                      onBlur={e => updateKpi(k, { default_planned: +e.target.value })}
+                      title="Fixed weekly Planned target"
+                    />
+                  );
+                })()}
+              </td>
               <td className="p-2">
                 <select className="select text-xs" defaultValue={k.direction} onChange={e => updateKpi(k, { direction: e.target.value })}>
                   <option value="higher_better">↑ higher</option>
