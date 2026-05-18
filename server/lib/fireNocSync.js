@@ -124,7 +124,10 @@ function syncCycle(db, cycleId, opts = {}) {
 }
 
 // Bulk pass.  Skips terminal-status cycles via WHERE clause so the
-// cron doesn't even read them.  Returns { scanned, changed, by_change }.
+// cron doesn't even read them.  Each cycle runs in an isolated
+// try/catch so one bad row (e.g. an out-of-range expiry_date)
+// can't bring down the whole backfill — failures are recorded
+// and reported, valid rows still get corrected.
 function syncAllActiveCycles(db, opts = {}) {
   const ids = db.prepare(`
     SELECT id FROM fire_noc_cycle
@@ -132,14 +135,25 @@ function syncAllActiveCycles(db, opts = {}) {
   `).all().map(r => r.id);
   let changed = 0;
   const changes = [];
+  const errors = [];
   for (const id of ids) {
-    const r = syncCycle(db, id, opts);
-    if (r.changed) {
-      changed++;
-      changes.push(r);
+    try {
+      const r = syncCycle(db, id, opts);
+      if (r.changed) {
+        changed++;
+        changes.push(r);
+      }
+    } catch (e) {
+      errors.push({ cycle_id: id, error: e.message });
     }
   }
-  return { scanned: ids.length, changed, sample_changes: changes.slice(0, 25) };
+  return {
+    scanned: ids.length,
+    changed,
+    failed: errors.length,
+    sample_changes: changes.slice(0, 25),
+    sample_errors: errors.slice(0, 10),
+  };
 }
 
 module.exports = {

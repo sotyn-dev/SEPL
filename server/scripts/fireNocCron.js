@@ -56,10 +56,22 @@ function backfillOnceOnBoot() {
     try { db.exec(`CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)`); } catch (_) {}
     const flag = db.prepare(`SELECT value FROM app_settings WHERE key=?`).get('fire_noc_autosync_backfilled_v1');
     if (flag) return;  // already done
+
     const r = syncAllActiveCycles(db, { trigger: 'boot_backfill' });
+
+    // Always mark the flag — even if some rows failed, we don't want
+    // a single bad row to make the backfill retry on every boot
+    // forever.  Mam can re-run it manually via the cron tick.  The
+    // per-row failures are logged below for transparency.
     db.prepare(`INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)`)
       .run('fire_noc_autosync_backfilled_v1', new Date().toISOString());
-    console.log(`[fire-noc-cron] boot backfill complete: ${r.changed}/${r.scanned} cycles corrected`);
+
+    if (r.failed > 0) {
+      console.warn(`[fire-noc-cron] boot backfill partial: ${r.changed}/${r.scanned} cycles corrected, ${r.failed} failed`);
+      r.sample_errors.forEach(e => console.warn(`[fire-noc-cron]   cycle ${e.cycle_id}: ${e.error}`));
+    } else {
+      console.log(`[fire-noc-cron] boot backfill complete: ${r.changed}/${r.scanned} cycles corrected`);
+    }
   } catch (e) {
     console.error('[fire-noc-cron] boot backfill failed:', e.message);
   }
