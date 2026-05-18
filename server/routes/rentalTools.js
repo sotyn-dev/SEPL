@@ -200,7 +200,14 @@ router.get('/enquiries/:id', requirePermission('rental_tools', 'view'), (req, re
            ap.name as rate_finalised_by_name,
            rb.name as return_signed_by_name,
            se.name as site_engineer_user_name,
-           v.name as vendor_official_name
+           v.name as vendor_official_name,
+           v.firm_name   as vendor_firm_name,
+           v.contact_person as vendor_contact_person,
+           v.phone       as vendor_phone,
+           v.email       as vendor_email,
+           v.address     as vendor_address,
+           v.district    as vendor_district,
+           v.state       as vendor_state
     FROM rental_tool_enquiry e
     LEFT JOIN users u   ON e.created_by = u.id
     LEFT JOIN users ap  ON e.rate_finalised_by = ap.id
@@ -214,7 +221,14 @@ router.get('/enquiries/:id', requirePermission('rental_tools', 'view'), (req, re
     SELECT id, from_stage, to_stage, triggered_by, notes, entered_at
     FROM rental_tool_history WHERE enquiry_id = ? ORDER BY entered_at ASC
   `).all(id);
-  res.json({ ...enquiry, history });
+  // Linked PO record (auto-created at Stage 1 rate finalisation).
+  // Used by the rental PO print page so we have one fetch instead
+  // of two from the print view.
+  let po = null;
+  if (enquiry.po_id) {
+    po = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(enquiry.po_id) || null;
+  }
+  res.json({ ...enquiry, history, po });
 });
 
 // ── POST /api/rental-tools/enquiries ───────────────────────────

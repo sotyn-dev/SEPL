@@ -521,6 +521,22 @@ export default function RentalTools() {
                     <div className="text-xs">{fmtD(drawerEnq.return_target_date)}{drawerEnq.stage3_breached ? ' · OVERDUE' : ''}</div>
                   </div>
                 )}
+                {/* Always-on PO card — once Stage 1 finalises, the PO
+                    is downloadable from here regardless of which
+                    stage the enquiry is currently in (mam, 2026-05-16:
+                    "where can is pdf of po after create"). */}
+                {drawerEnq.po_number && (
+                  <div className="border rounded p-2 col-span-2 bg-emerald-50 border-emerald-200 flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-gray-500 uppercase text-[10px]">Purchase Order</div>
+                      <div className="text-xs font-mono">{drawerEnq.po_number}</div>
+                    </div>
+                    <a href={`/rental-po/${drawerEnq.id}/print`} target="_blank" rel="noopener noreferrer"
+                       className="btn btn-secondary text-xs flex items-center gap-1.5">
+                      <FiFileText size={12} /> View / Print PO
+                    </a>
+                  </div>
+                )}
               </div>
 
               {/* === STAGE 1: Finalise Rate (Ajmer only) === */}
@@ -602,7 +618,15 @@ export default function RentalTools() {
                   </div>
                   <div className="text-xs bg-gray-50 border rounded p-2 space-y-1">
                     <div><strong>Vendor:</strong> {drawerEnq.vendor_name} · {fmt(drawerEnq.vendor_rate)}/{drawerEnq.vendor_rate_unit?.replace('per_', '')}</div>
-                    <div><strong>PO:</strong> {drawerEnq.po_number || '—'}</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div><strong>PO:</strong> {drawerEnq.po_number || '—'}</div>
+                      {drawerEnq.po_number && (
+                        <a href={`/rental-po/${drawerEnq.id}/print`} target="_blank" rel="noopener noreferrer"
+                           className="text-red-600 hover:text-red-800 underline text-[11px] flex items-center gap-1">
+                          <FiFileText size={12} /> View / Print PO
+                        </a>
+                      )}
+                    </div>
                     <div className="text-gray-500">Site engineer takes a live photo + allows GPS when material lands at site.</div>
                   </div>
                   <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={onPhotoPicked} className="hidden" />
