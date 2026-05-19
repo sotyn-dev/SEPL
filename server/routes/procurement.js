@@ -1357,6 +1357,41 @@ router.delete('/delivery-notes/:id', (req, res) => {
 //   → po_items.business_book_id
 // Returns the po_items in the order they were entered. Client-side falls
 // back to vendor_po_items if nothing comes back.
+// Resolve "Bill To" client info for a Vendor PO — used by the
+// Create Sales Bill modal to pre-fill the customer block.  Same
+// chain the print endpoint uses (vendor_pos → indents →
+// order_planning → business_book) plus the linked client PO if any.
+// Mam (2026-05-16): "no client / bill-to block" was issue #1 on
+// the modal review.
+router.get('/vendor-pos/:id/bill-to', (req, res) => {
+  const db = getDb();
+  const r = db.prepare(`
+    SELECT bb.id as business_book_id, bb.lead_no,
+           bb.company_name AS client_company,
+           bb.client_name  AS client_person_name,
+           bb.project_name,
+           bb.client_contact AS client_phone, bb.client_email,
+           bb.billing_address AS client_address,
+           bb.shipping_address AS site_address,
+           bb.state AS client_state,
+           bb.district AS client_district,
+           bb.gstin AS client_gstin,
+           bb.state_code AS client_state_code,
+           po.po_number AS client_po_number, po.po_date AS client_po_date,
+           v.name AS vendor_name, vp.po_number AS vendor_po_no,
+           COALESCE(NULLIF(TRIM(ind.site_name), ''), bb.project_name) AS site_name
+    FROM vendor_pos vp
+    LEFT JOIN vendors v ON vp.vendor_id = v.id
+    LEFT JOIN indents ind ON vp.indent_id = ind.id
+    LEFT JOIN order_planning op ON ind.planning_id = op.id
+    LEFT JOIN business_book bb ON bb.id = op.business_book_id
+    LEFT JOIN purchase_orders po ON op.po_id = po.id
+    WHERE vp.id = ?
+  `).get(req.params.id);
+  if (!r) return res.status(404).json({ error: 'Vendor PO not found' });
+  res.json(r);
+});
+
 router.get('/vendor-pos/:id/client-po-items', (req, res) => {
   const db = getDb();
   const rows = db.prepare(`

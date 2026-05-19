@@ -82,6 +82,10 @@ export default function Procurement() {
   const [dispatchItems, setDispatchItems] = useState([]);
   const [dispatchItemsLoading, setDispatchItemsLoading] = useState(false);
   const [dispatchItemsSource, setDispatchItemsSource] = useState('po_items'); // 'po_items' | 'vendor_po' | 'empty'
+  // Bill-To preview for Sales Bill modal — mam (2026-05-16):
+  // critical fix #1 from the modal review.  Fetched from
+  // /vendor-pos/:id/bill-to whenever a Vendor PO is picked.
+  const [dispatchBillTo, setDispatchBillTo] = useState(null);
   // When set, the Raise Indent modal is in EDIT mode for this indent id —
   // saveIndent will PUT instead of POST. Used by the Edit pencil action
   // (mam: 'site eng is on training, if they fill wrong indent can edit').
@@ -1300,32 +1304,52 @@ export default function Procurement() {
           });
           setDispatchItems([]);
           setDispatchItemsSource('empty');
+          setDispatchBillTo(null);
           setModal('delivery');
-          // Pull Client PO items so the editable Sales Bill table is
-          // pre-filled with the selling price. Falls back to vendor_po
-          // items if no Client PO chain exists.
           if (po?.id) {
             setDispatchItemsLoading(true);
-            api.get(`/procurement/vendor-pos/${po.id}/client-po-items`)
-              .then(r => {
-                const rows = (r.data?.items || []).map(it => ({
-                  include: true,
-                  description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
-                  hsn: it.hsn_code || it.gst_text || '',
-                  unit: it.unit || '',
-                  quantity: +it.quantity || 0,
-                  rate: +it.rate || 0,
-                  disc_pct: 0,
-                  item_code: it.item_code || '',
-                  specification: it.specification || '',
-                  size: it.size || '',
-                  item_name: it.item_name || '',
-                }));
-                setDispatchItems(rows);
-                setDispatchItemsSource(r.data?.source || 'po_items');
-              })
-              .catch(() => { setDispatchItems([]); setDispatchItemsSource('empty'); })
-              .finally(() => setDispatchItemsLoading(false));
+            // Fire both fetches in parallel — items + bill-to.
+            // Items come from Client PO (selling price) with vendor PO
+            // fallback.  Bill-To comes from the same BB chain.
+            Promise.all([
+              api.get(`/procurement/vendor-pos/${po.id}/client-po-items`).catch(() => ({ data: { items: [], source: 'empty' } })),
+              api.get(`/procurement/vendor-pos/${po.id}/bill-to`).catch(() => ({ data: null })),
+            ]).then(([itemsRes, billRes]) => {
+              const rawRows = (itemsRes.data?.items || []).map(it => ({
+                include: true,
+                description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
+                hsn: it.hsn_code || '',  // gst_text was misnamed — drop it (it's the rate, not HSN)
+                unit: it.unit || '',
+                quantity: +it.quantity || 0,
+                rate: +it.rate || 0,
+                disc_pct: 0,
+                item_code: it.item_code || '',
+                specification: it.specification || '',
+                size: it.size || '',
+                item_name: it.item_name || '',
+              }));
+              // Filter out ghost rows — anything with no description AND
+              // (zero qty or zero rate) is junk that confuses mam (was
+              // showing as "Item descrip · 0 · nos · 0 · 0" placeholders).
+              const rows = rawRows.filter(r => {
+                if (r.description && r.description.trim()) return true;
+                return (+r.quantity > 0) || (+r.rate > 0);
+              });
+              setDispatchItems(rows);
+              setDispatchItemsSource(rows.length ? (itemsRes.data?.source || 'po_items') : 'empty');
+              setDispatchBillTo(billRes.data || null);
+              // Pre-fill GST defaults from the bill-to state (intra
+              // vs inter-state).  Punjab = CGST/SGST 9% each.
+              const sameState = (billRes.data?.client_state || '').toLowerCase() === 'punjab';
+              setForm(f => ({
+                ...f,
+                cgst_pct: f.cgst_pct ?? (sameState ? 9 : 0),
+                sgst_pct: f.sgst_pct ?? (sameState ? 9 : 0),
+                igst_pct: f.igst_pct ?? (sameState ? 0 : 18),
+                place_of_supply: f.place_of_supply || billRes.data?.client_state || '',
+                state_code: f.state_code || billRes.data?.client_state_code || '',
+              }));
+            }).finally(() => setDispatchItemsLoading(false));
           }
         };
         const openMarkReceived = (d) => {
@@ -1915,7 +1939,57 @@ export default function Procurement() {
         <form onSubmit={saveDeliveryNote} className="space-y-4">
           {form.vendor_po_number && (
             <div className="bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-xs text-emerald-700">
-              Linked to Vendor PO <b>{form.vendor_po_number}</b>. Once this dispatch is recorded, the PO moves off the "Ready to Dispatch" list.
+              Linked to <strong>source Vendor PO</strong> <b>{form.vendor_po_number}</b>. Once this dispatch is recorded, the PO moves off the "Ready to Dispatch" list.
+            </div>
+          )}
+
+          {/* BILL TO block — mam (2026-05-16): "no client / bill-to block"
+              was issue #1.  Surfaces every field a tax invoice needs:
+              client name + address + GSTIN + state + state code +
+              linked client PO.  Pulled live when a Vendor PO is
+              selected.  Yellow warning when any critical field is
+              missing so mam knows to fix BB before saving. */}
+          {form.document_type === 'sales_bill' && (
+            <div className="border-2 border-blue-200 bg-blue-50/40 rounded p-3 space-y-2 text-xs">
+              <div className="text-[10px] font-bold uppercase text-blue-700">Bill To · Customer</div>
+              {!dispatchBillTo ? (
+                <div className="text-gray-400 italic">Pick a Vendor PO to load client details…</div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <div className="font-bold text-sm">{dispatchBillTo.client_company || <span className="text-amber-700">— client_company missing in BB —</span>}</div>
+                      {dispatchBillTo.client_person_name && <div className="text-gray-600">Attn: {dispatchBillTo.client_person_name}</div>}
+                      {dispatchBillTo.client_address && <div className="text-gray-600 mt-1">{dispatchBillTo.client_address}</div>}
+                      <div className="text-gray-600">
+                        {[dispatchBillTo.client_district, dispatchBillTo.client_state].filter(Boolean).join(', ')}
+                      </div>
+                      {(dispatchBillTo.client_phone || dispatchBillTo.client_email) && (
+                        <div className="text-gray-600 mt-1">
+                          {dispatchBillTo.client_phone && <>📞 {dispatchBillTo.client_phone}</>}
+                          {dispatchBillTo.client_phone && dispatchBillTo.client_email && ' · '}
+                          {dispatchBillTo.client_email}
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-0.5">
+                      <div><span className="text-gray-500">GSTIN:</span> <span className="font-mono font-semibold">{dispatchBillTo.client_gstin || <span className="text-amber-700">— not set —</span>}</span></div>
+                      <div><span className="text-gray-500">State Code:</span> <span className="font-mono">{dispatchBillTo.client_state_code || <span className="text-amber-700">—</span>}</span></div>
+                      <div><span className="text-gray-500">Lead:</span> <span className="font-mono">{dispatchBillTo.lead_no || '—'}</span></div>
+                      <div><span className="text-gray-500">Client PO:</span> <span className="font-mono">{dispatchBillTo.client_po_number || '—'}</span></div>
+                      <div><span className="text-gray-500">Site:</span> {dispatchBillTo.site_name || '—'}</div>
+                    </div>
+                  </div>
+                  {(!dispatchBillTo.client_company || !dispatchBillTo.client_gstin) && (
+                    <div className="text-[10px] bg-amber-100 text-amber-800 border border-amber-200 rounded px-2 py-1 mt-1">
+                      ⚠ Customer details incomplete in Business Book. Fix BB row before saving — a tax invoice without
+                      {!dispatchBillTo.client_company && ' a client name'}
+                      {!dispatchBillTo.client_company && !dispatchBillTo.client_gstin && ' /'}
+                      {!dispatchBillTo.client_gstin && ' GSTIN'} is not legally valid.
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
           <div>
@@ -1939,7 +2013,7 @@ export default function Procurement() {
           </div>
           {!form.vendor_po_number && (
             <div>
-              <label className="label">Vendor PO</label>
+              <label className="label">Source Vendor PO <span className="text-[10px] text-gray-400 font-normal">(supply — items came from this PO)</span></label>
               <SearchableSelect
                 options={vendorPos.map(v => ({ ...v, label: v.po_number + ' — ' + (v.vendor_name || '') }))}
                 value={form.vendor_po_id || null}
@@ -2074,22 +2148,54 @@ export default function Procurement() {
                     );
                   })}
                 </tbody>
-                {!isChallan && dispatchItems.some(it => it.include !== false) && (
-                  <tfoot>
-                    <tr className="border-t-2 border-red-300 font-semibold">
-                      <td colSpan={subtotalLabelColspan} className="px-2 py-1 text-right text-red-800">Sub-total (taxable)</td>
-                      <td className="px-1 py-1 text-right font-mono text-red-800">
-                        {dispatchItems.filter(it => it.include !== false).reduce((s, it) => {
-                          const qty = +it.quantity || 0;
-                          const rate = +it.rate || 0;
-                          const discPct = +it.disc_pct || 0;
-                          return s + qty * rate * (1 - discPct / 100);
-                        }, 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
-                )}
+                {!isChallan && dispatchItems.some(it => it.include !== false) && (() => {
+                  // Compute live tax preview — mam (2026-05-16): "no
+                  // GST preview before save".  Subtotal × form rates,
+                  // shown right under the table so the grand total is
+                  // visible while the user is still editing items.
+                  const subtotal = dispatchItems.filter(it => it.include !== false).reduce((s, it) => {
+                    const qty = +it.quantity || 0;
+                    const rate = +it.rate || 0;
+                    const discPct = +it.disc_pct || 0;
+                    return s + qty * rate * (1 - discPct / 100);
+                  }, 0);
+                  const cgst = subtotal * (+form.cgst_pct || 0) / 100;
+                  const sgst = subtotal * (+form.sgst_pct || 0) / 100;
+                  const igst = subtotal * (+form.igst_pct || 0) / 100;
+                  const freight = +form.freight_amount || 0;
+                  const roundOff = +form.round_off_amount || 0;
+                  const grand = subtotal + cgst + sgst + igst + freight + roundOff;
+                  const fmt2 = (n) => (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                  return (
+                    <tfoot>
+                      <tr className="border-t-2 border-red-300 font-semibold">
+                        <td colSpan={subtotalLabelColspan} className="px-2 py-1 text-right text-red-800">Sub-total (taxable)</td>
+                        <td className="px-1 py-1 text-right font-mono text-red-800">{fmt2(subtotal)}</td>
+                        <td></td>
+                      </tr>
+                      {cgst > 0 && (
+                        <tr><td colSpan={subtotalLabelColspan} className="px-2 py-0.5 text-right text-gray-600 text-[10px]">CGST @ {form.cgst_pct}%</td><td className="px-1 py-0.5 text-right font-mono text-gray-700">{fmt2(cgst)}</td><td></td></tr>
+                      )}
+                      {sgst > 0 && (
+                        <tr><td colSpan={subtotalLabelColspan} className="px-2 py-0.5 text-right text-gray-600 text-[10px]">SGST @ {form.sgst_pct}%</td><td className="px-1 py-0.5 text-right font-mono text-gray-700">{fmt2(sgst)}</td><td></td></tr>
+                      )}
+                      {igst > 0 && (
+                        <tr><td colSpan={subtotalLabelColspan} className="px-2 py-0.5 text-right text-gray-600 text-[10px]">IGST @ {form.igst_pct}%</td><td className="px-1 py-0.5 text-right font-mono text-gray-700">{fmt2(igst)}</td><td></td></tr>
+                      )}
+                      {freight > 0 && (
+                        <tr><td colSpan={subtotalLabelColspan} className="px-2 py-0.5 text-right text-gray-600 text-[10px]">Freight</td><td className="px-1 py-0.5 text-right font-mono text-gray-700">{fmt2(freight)}</td><td></td></tr>
+                      )}
+                      {roundOff !== 0 && (
+                        <tr><td colSpan={subtotalLabelColspan} className="px-2 py-0.5 text-right text-gray-600 text-[10px]">Round-off</td><td className="px-1 py-0.5 text-right font-mono text-gray-700">{fmt2(roundOff)}</td><td></td></tr>
+                      )}
+                      <tr className="border-t-2 border-red-400 font-extrabold bg-red-100/40">
+                        <td colSpan={subtotalLabelColspan} className="px-2 py-1.5 text-right text-red-900 text-sm">GRAND TOTAL</td>
+                        <td className="px-1 py-1.5 text-right font-mono text-red-900 text-sm">₹ {fmt2(grand)}</td>
+                        <td></td>
+                      </tr>
+                    </tfoot>
+                  );
+                })()}
               </table>
                 );
               })()}
