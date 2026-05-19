@@ -479,6 +479,111 @@ router.get('/summary', (req, res) => {
   res.json({ activeSites: activeSites.c, todaySubmissions: todayDprs.c, pendingApproval: pendingApproval.c, billingReady: billingReady.c, missingSites, recentVariance: variance });
 });
 
+// ─── Weekly DPR Planning ───────────────────────────────────────
+// Mam (2026-05-16): "i want site eng fill full week planning one
+// day fill 7 days plaaning and actual per day according to that".
+//
+// Workflow:
+//   1. Site eng picks a site + week-start date + clicks "Plan Week"
+//   2. Fills 7 rows (one per day): planned work description, planned
+//      manpower count, planned cost.
+//   3. POST /api/dpr/plan-week creates 7 dpr rows with is_planned_template=1
+//      and only the planned_* fields populated.
+//   4. Each day, site eng opens the existing row for that date and
+//      fills the actual (grand_total_a, manpower, etc.) — the daily
+//      submit endpoint UPDATEs the row instead of inserting a new one.
+//
+// Idempotent ALTER TABLE (safe to re-run; SQLite throws if column
+// exists, swallowed by try/catch).
+try { getDb().exec(`ALTER TABLE dpr ADD COLUMN planned_description TEXT`); } catch (_) {}
+try { getDb().exec(`ALTER TABLE dpr ADD COLUMN planned_manpower INTEGER DEFAULT 0`); } catch (_) {}
+try { getDb().exec(`ALTER TABLE dpr ADD COLUMN is_planned_template INTEGER DEFAULT 0`); } catch (_) {}
+try { getDb().exec(`ALTER TABLE dpr ADD COLUMN week_plan_locked_at DATETIME`); } catch (_) {}
+try { getDb().exec(`ALTER TABLE dpr ADD COLUMN week_plan_locked_by INTEGER REFERENCES users(id)`); } catch (_) {}
+
+// Returns Mon-Sun (or any 7 consecutive days starting at week_start)
+// for one site, blending planned + actual fields.  If the row
+// doesn't exist for a date, returns a stub with only the date so
+// the UI can render the empty slot.
+router.get('/week-view', requirePermission('dpr', 'view'), (req, res) => {
+  const { site_id, week_start } = req.query;
+  if (!site_id || !week_start) return res.status(400).json({ error: 'site_id and week_start required' });
+  const db = getDb();
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(week_start);
+    d.setDate(d.getDate() + i);
+    days.push(d.toISOString().slice(0, 10));
+  }
+  const placeholders = days.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT d.*, u.name as planned_by_name, ap.name as approved_by_name, sb.name as submitted_by_name
+    FROM dpr d
+    LEFT JOIN users u  ON d.week_plan_locked_by = u.id
+    LEFT JOIN users ap ON d.approved_by = ap.id
+    LEFT JOIN users sb ON d.submitted_by = sb.id
+    WHERE d.site_id = ? AND d.report_date IN (${placeholders})
+  `).all(site_id, ...days);
+  const byDate = Object.fromEntries(rows.map(r => [r.report_date, r]));
+  res.json({
+    site_id: +site_id,
+    week_start,
+    days: days.map(date => byDate[date] || { report_date: date, is_planned_template: 0, site_id: +site_id }),
+  });
+});
+
+// Upsert the 7-day plan for a site/week.  For each day, if a dpr
+// row exists for (site_id, date), UPDATE its planned_* fields.
+// Otherwise INSERT a stub row with is_planned_template=1.  The
+// daily actuals get filled in later via PUT /api/dpr/:id.
+router.post('/plan-week', requirePermission('dpr', 'create'), (req, res) => {
+  const { site_id, week_start, days } = req.body || {};
+  if (!site_id || !week_start || !Array.isArray(days) || days.length === 0) {
+    return res.status(400).json({ error: 'site_id, week_start, and days[] are required' });
+  }
+  const db = getDb();
+  const out = { created: 0, updated: 0, dates: [] };
+
+  const findRow  = db.prepare(`SELECT id FROM dpr WHERE site_id = ? AND report_date = ?`);
+  const updateRow = db.prepare(`
+    UPDATE dpr SET planned_description = ?, planned_manpower = ?, grand_total_b = ?,
+                   week_plan_locked_at = CURRENT_TIMESTAMP, week_plan_locked_by = ?
+    WHERE id = ?
+  `);
+  const insertRow = db.prepare(`
+    INSERT INTO dpr (
+      site_id, report_date, submitted_by, planned_description, planned_manpower,
+      grand_total_b, is_planned_template, week_plan_locked_at, week_plan_locked_by
+    ) VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, ?)
+  `);
+
+  const txn = db.transaction(() => {
+    for (const d of days) {
+      const date = d.date || d.report_date;
+      if (!date) continue;
+      const desc = (d.planned_description || '').trim() || null;
+      const mp   = +d.planned_manpower || 0;
+      const cost = +d.planned_grand_total_b || +d.planned_cost || 0;
+      const existing = findRow.get(site_id, date);
+      if (existing) {
+        updateRow.run(desc, mp, cost, req.user.id, existing.id);
+        out.updated++;
+      } else {
+        insertRow.run(site_id, date, req.user.id, desc, mp, cost, req.user.id);
+        out.created++;
+      }
+      out.dates.push(date);
+    }
+  });
+  try {
+    txn();
+    res.json(out);
+  } catch (e) {
+    console.error('[dpr/plan-week]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Submit MEPF DPR
 router.post('/', (req, res) => {
   const { site_id, report_date, weather, overall_status, shift, contractor_name, contractor_manpower, mb_sheet_no,
@@ -505,16 +610,40 @@ router.post('/', (req, res) => {
   const db = getDb();
 
   try {
-  const r = db.prepare(`INSERT INTO dpr (site_id, report_date, submitted_by, submission_time, weather, overall_status,
-    shift, contractor_name, contractor_manpower, mb_sheet_no, grand_total_a, grand_total_b, profit_loss,
-    floor_zone, system_type, safety_toolbox_talk, safety_ppe_compliance, safety_incidents,
-    next_day_plan, hindrances, hindrance_category, remarks) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(site_id, report_date, req.user.id, weather || 'clear', overall_status || 'on_track',
-      shift || 'day', contractor_name, contractor_manpower || 0, mb_sheet_no,
-      grand_total_a || 0, grand_total_b || 0, profit_loss || 0,
-      floor_zone, system_type, safety_toolbox_talk ? 1 : 0, safety_ppe_compliance ? 1 : 0,
-      safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks);
-  const dprId = r.lastInsertRowid;
+  // If a weekly-plan stub already exists for (site_id, report_date),
+  // UPDATE it with the actual data instead of inserting a duplicate
+  // (mam, 2026-05-16: "actual per day according to that").  Otherwise
+  // INSERT a fresh row.  Either way, dprId is the row we just wrote.
+  let dprId;
+  const existing = db.prepare(`SELECT id, is_planned_template FROM dpr WHERE site_id = ? AND report_date = ?`).get(site_id, report_date);
+  if (existing) {
+    db.prepare(`UPDATE dpr SET
+        submitted_by = ?, submission_time = CURRENT_TIMESTAMP, weather = ?, overall_status = ?,
+        shift = ?, contractor_name = ?, contractor_manpower = ?, mb_sheet_no = ?,
+        grand_total_a = ?, grand_total_b = ?, profit_loss = ?,
+        floor_zone = ?, system_type = ?, safety_toolbox_talk = ?, safety_ppe_compliance = ?,
+        safety_incidents = ?, next_day_plan = ?, hindrances = ?, hindrance_category = ?, remarks = ?,
+        is_planned_template = 0
+      WHERE id = ?`)
+      .run(req.user.id, weather || 'clear', overall_status || 'on_track',
+        shift || 'day', contractor_name, contractor_manpower || 0, mb_sheet_no,
+        grand_total_a || 0, grand_total_b || 0, profit_loss || 0,
+        floor_zone, system_type, safety_toolbox_talk ? 1 : 0, safety_ppe_compliance ? 1 : 0,
+        safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks,
+        existing.id);
+    dprId = existing.id;
+  } else {
+    const r = db.prepare(`INSERT INTO dpr (site_id, report_date, submitted_by, submission_time, weather, overall_status,
+      shift, contractor_name, contractor_manpower, mb_sheet_no, grand_total_a, grand_total_b, profit_loss,
+      floor_zone, system_type, safety_toolbox_talk, safety_ppe_compliance, safety_incidents,
+      next_day_plan, hindrances, hindrance_category, remarks) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(site_id, report_date, req.user.id, weather || 'clear', overall_status || 'on_track',
+        shift || 'day', contractor_name, contractor_manpower || 0, mb_sheet_no,
+        grand_total_a || 0, grand_total_b || 0, profit_loss || 0,
+        floor_zone, system_type, safety_toolbox_talk ? 1 : 0, safety_ppe_compliance ? 1 : 0,
+        safety_incidents, next_day_plan, hindrances, hindrance_category || null, remarks);
+    dprId = r.lastInsertRowid;
+  }
 
   // Multi-contractor rows (mam's "at least 5 contractor" ask). Skip empty
   // rows so the table only carries real entries. Legacy single contractor

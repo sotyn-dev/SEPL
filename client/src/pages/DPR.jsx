@@ -5,7 +5,7 @@ import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
 const SYSTEMS = ['Electrical', 'Fire Fighting', 'Fire Alarm', 'CCTV', 'Access Control', 'PA System', 'Plumbing', 'HVAC', 'Solar', 'Networking', 'Combined'];
@@ -23,6 +23,80 @@ export default function DPR() {
   const [modal, setModal] = useState(false);
   const [siteModal, setSiteModal] = useState(false);
   const [detailModal, setDetailModal] = useState(false);
+
+  // Weekly planning modal (mam, 2026-05-16: "i want site eng fill
+  // full week planning one day fill 7 days plaaning and actual per
+  // day according to that").  Site eng picks site + Monday-of-week,
+  // fills 7 rows of planned work/manpower/cost in one go.  Backend
+  // creates 7 dpr stub rows; daily DPR submission then updates the
+  // matching row by date.
+  const [planModal, setPlanModal] = useState(false);
+  const [planSiteId, setPlanSiteId] = useState('');
+  const [planWeekStart, setPlanWeekStart] = useState(() => {
+    // Default to next Monday so today's plan stays untouched.
+    const d = new Date();
+    const day = d.getDay();             // 0=Sun, 1=Mon, …, 6=Sat
+    const daysUntilMon = day === 0 ? 1 : (8 - day);
+    d.setDate(d.getDate() + daysUntilMon);
+    return d.toISOString().slice(0, 10);
+  });
+  const [planDays, setPlanDays] = useState([]); // 7-row array
+  const [planSaving, setPlanSaving] = useState(false);
+
+  // Rebuild the 7-row scaffold whenever the week-start changes.
+  // Pre-loads any existing planned values via the week-view endpoint
+  // so re-opening the modal shows what's already saved.
+  const openPlanWeek = async (siteId, weekStartIso) => {
+    setPlanSiteId(siteId || '');
+    setPlanWeekStart(weekStartIso || planWeekStart);
+    setPlanModal(true);
+    // Build 7 day slots
+    const slots = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekStartIso || planWeekStart);
+      d.setDate(d.getDate() + i);
+      const date = d.toISOString().slice(0, 10);
+      slots.push({ date, planned_description: '', planned_manpower: 0, planned_grand_total_b: 0 });
+    }
+    setPlanDays(slots);
+    if (siteId) {
+      try {
+        const r = await api.get('/dpr/week-view', { params: { site_id: siteId, week_start: weekStartIso || planWeekStart } });
+        const byDate = Object.fromEntries((r.data?.days || []).map(d => [d.report_date, d]));
+        setPlanDays(slots.map(s => {
+          const existing = byDate[s.date];
+          if (existing && (existing.planned_description || existing.planned_manpower || existing.grand_total_b)) {
+            return {
+              date: s.date,
+              planned_description: existing.planned_description || '',
+              planned_manpower: existing.planned_manpower || 0,
+              planned_grand_total_b: existing.grand_total_b || 0,
+            };
+          }
+          return s;
+        }));
+      } catch { /* fall back to empty slots */ }
+    }
+  };
+
+  const updatePlanDay = (i, patch) => {
+    setPlanDays(prev => prev.map((d, idx) => idx === i ? { ...d, ...patch } : d));
+  };
+
+  const savePlanWeek = async () => {
+    if (!planSiteId) { toast.error('Pick a site first'); return; }
+    setPlanSaving(true);
+    try {
+      const r = await api.post('/dpr/plan-week', { site_id: planSiteId, week_start: planWeekStart, days: planDays });
+      toast.success(`Week plan saved · ${r.data.created} created, ${r.data.updated} updated`);
+      setPlanModal(false);
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Save failed');
+    } finally {
+      setPlanSaving(false);
+    }
+  };
   const [selectedDpr, setSelectedDpr] = useState(null);
   const [form, setForm] = useState({});
   // Table A: Installation items from PO
@@ -353,6 +427,13 @@ export default function DPR() {
                 ['Site','Date','Shift','Submitted By','Status','Total A','Cost B','P/L','Approval'],
                 dprs.map(d => [d.site_name, d.report_date, d.shift, d.submitted_by_name, d.overall_status, d.grand_total_a, d.grand_total_b, d.profit_loss, d.approval_status]))}
                 className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+              {/* Weekly planning entry-point (mam, 2026-05-16). Pre-fills
+                  default site = the one in the daily form's site_id if
+                  picked, else empty.  Default week-start = next Monday
+                  so site eng files NEXT week's plan, not the current
+                  one in flight. */}
+              <button onClick={() => openPlanWeek(form.site_id || '', planWeekStart)}
+                className="btn btn-secondary flex items-center gap-2"><FiCalendar /> Plan Week</button>
               <button onClick={() => {
                 setForm({ site_id: '', report_date: filterDate, weather: 'clear', overall_status: 'on_track', system_type: '', shift: 'day', contractor_name: '', contractor_manpower: 0, mb_sheet_no: '', safety_toolbox_talk: false, safety_ppe_compliance: false, safety_incidents: '', next_day_plan: '', hindrances: '', hindrance_category: '', remarks: '' });
                 setWorkItems([]); setPoItemsForSite([]);
@@ -876,6 +957,94 @@ export default function DPR() {
             {selectedDpr.remarks && <div className="text-sm"><strong>Remarks:</strong> {selectedDpr.remarks}</div>}
           </div>
         )}
+      </Modal>
+
+      {/* ─── Weekly Plan Modal ─────────────────────────────────────
+          Site eng picks a site + week-start, fills 7 rows of planned
+          work / manpower / cost in one go.  Saves create or update
+          the matching dpr rows (one per day) with planned fields
+          populated and actuals left blank. */}
+      <Modal isOpen={planModal} onClose={() => setPlanModal(false)} title="Plan This Week — 7-Day DPR Plan" wide>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Site *</label>
+              <select className="select" value={planSiteId}
+                      onChange={e => { setPlanSiteId(e.target.value); openPlanWeek(e.target.value, planWeekStart); }}>
+                <option value="">— Pick site —</option>
+                {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Week Starting (Mon) *</label>
+              <input type="date" className="input" value={planWeekStart}
+                     onChange={e => { setPlanWeekStart(e.target.value); openPlanWeek(planSiteId, e.target.value); }} />
+            </div>
+          </div>
+
+          <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[11px] text-gray-700">
+            Fill the planned work, manpower, and budgeted cost for each day. The site engineer can update the
+            <strong> actual </strong> values daily via the Submit DPR form — the row for that date will be filled in,
+            not duplicated.
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="px-2 py-1.5 text-left">#</th>
+                  <th className="px-2 py-1.5 text-left">Day</th>
+                  <th className="px-2 py-1.5 text-left">Date</th>
+                  <th className="px-2 py-1.5 text-left">Planned Work</th>
+                  <th className="px-2 py-1.5 text-right w-24">Manpower</th>
+                  <th className="px-2 py-1.5 text-right w-32">Planned Cost (₹)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {planDays.map((d, i) => {
+                  const dayName = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d.date).getDay()];
+                  const isSunday = dayName === 'Sun';
+                  return (
+                    <tr key={d.date} className={`border-t ${isSunday ? 'bg-gray-50 text-gray-500' : ''}`}>
+                      <td className="px-2 py-1.5">{i + 1}</td>
+                      <td className="px-2 py-1.5 font-semibold">{dayName}{isSunday ? ' · off' : ''}</td>
+                      <td className="px-2 py-1.5 font-mono text-[11px]">{d.date}</td>
+                      <td className="px-2 py-1.5">
+                        <input className="input text-xs w-full" value={d.planned_description}
+                               onChange={e => updatePlanDay(i, { planned_description: e.target.value })}
+                               placeholder={isSunday ? 'Weekly off (or write planned overtime)' : 'e.g. Conduit laying floor 3 east wing'} />
+                      </td>
+                      <td className="px-2 py-1.5 text-right">
+                        <input type="number" min="0" className="input text-xs text-right w-full"
+                               value={d.planned_manpower}
+                               onChange={e => updatePlanDay(i, { planned_manpower: +e.target.value })} />
+                      </td>
+                      <td className="px-2 py-1.5 text-right">
+                        <input type="number" min="0" step="100" className="input text-xs text-right w-full"
+                               value={d.planned_grand_total_b}
+                               onChange={e => updatePlanDay(i, { planned_grand_total_b: +e.target.value })} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot className="bg-gray-50 font-semibold">
+                <tr>
+                  <td colSpan="4" className="px-2 py-2 text-right">Week Totals →</td>
+                  <td className="px-2 py-2 text-right">{planDays.reduce((s, d) => s + (+d.planned_manpower || 0), 0)} men-days</td>
+                  <td className="px-2 py-2 text-right">Rs {planDays.reduce((s, d) => s + (+d.planned_grand_total_b || 0), 0).toLocaleString('en-IN')}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <button onClick={() => setPlanModal(false)} className="btn btn-secondary">Cancel</button>
+            <button onClick={savePlanWeek} disabled={planSaving || !planSiteId} className="btn btn-primary">
+              {planSaving ? 'Saving…' : 'Save Week Plan'}
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );
