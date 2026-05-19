@@ -321,11 +321,16 @@ router.put('/:id', (req, res) => {
   if (b.next_planned_date !== undefined) set('next_planned_date', b.next_planned_date || null);
   if (b.last_discussion !== undefined)   set('last_discussion', b.last_discussion || null);
 
-  if (b.invoice_amount !== undefined) {
-    const amt = +b.invoice_amount;
-    const recv = +cur.received_amount || 0;
-    set('invoice_amount', amt);
-    set('outstanding_amount', Math.max(0, amt - recv));
+  // Resolve effective amount + received for the outstanding recompute.
+  // Mam (2026-05-16): "can edit here payment rec." — received_amount
+  // is now a directly-editable field on the Edit Receivable form.
+  // We accept it on PUT and recompute outstanding_amount accordingly.
+  const effInvoiceAmt = b.invoice_amount !== undefined ? +b.invoice_amount : +cur.invoice_amount;
+  const effReceived   = b.received_amount !== undefined ? Math.max(0, +b.received_amount) : +cur.received_amount;
+  if (b.invoice_amount !== undefined)  set('invoice_amount', effInvoiceAmt);
+  if (b.received_amount !== undefined) set('received_amount', effReceived);
+  if (b.invoice_amount !== undefined || b.received_amount !== undefined) {
+    set('outstanding_amount', Math.max(0, effInvoiceAmt - effReceived));
   }
 
   // Recompute ageing if due_date or invoice_amount changed

@@ -342,19 +342,38 @@ export default function Collections() {
       <Modal isOpen={!!editModal} onClose={() => { setEditModal(null); setEditForm({}); }} title={editModal ? `Edit Receivable #${editModal.id}` : 'Edit Receivable'} wide>
         {editModal && (
           <form onSubmit={saveEdit} className="space-y-4">
-            {/* SITE + CRM */}
+            {/* SITE + CRM — site is locked when editing an existing
+                row (mam, 2026-05-16: "every time ask enter to site
+                name where it will auto fetch").  Editing a
+                receivable shouldn't reassign it to a different site;
+                that's a delete-and-recreate.  Shown as read-only
+                text + a "Change site" link for the rare case. */}
             <div className="card p-3 bg-gray-50/60">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="label">Site Name <span className="text-red-500">*</span></label>
-                  <SearchableSelect
-                    options={sites.map(s => ({ ...s, label: s.name }))}
-                    value={editForm.site_name || null}
-                    valueKey="name" displayKey="label"
-                    placeholder="Pick site (unique from your sites/POs)"
-                    onChange={onPickSite}
-                  />
-                  <p className="text-[10px] text-gray-400 mt-0.5">Auto-fills CRM + suggests target from the latest PO of this site.</p>
+                  <label className="label">Site Name</label>
+                  {editForm._allowSiteEdit ? (
+                    <SearchableSelect
+                      options={sites.map(s => ({ ...s, label: s.name }))}
+                      value={editForm.site_name || null}
+                      valueKey="name" displayKey="label"
+                      placeholder="Pick site (unique from your sites/POs)"
+                      onChange={onPickSite}
+                    />
+                  ) : (
+                    <div className="input bg-white text-gray-800 font-medium flex items-center justify-between">
+                      <span>{editForm.site_name || <span className="text-gray-400 italic">— not set —</span>}</span>
+                      <button type="button" onClick={() => setEditForm(f => ({ ...f, _allowSiteEdit: true }))}
+                              className="text-[10px] text-blue-600 hover:text-blue-800 underline">
+                        Change
+                      </button>
+                    </div>
+                  )}
+                  <p className="text-[10px] text-gray-400 mt-0.5">
+                    {editForm._allowSiteEdit
+                      ? 'Pick a different site to re-assign this receivable.'
+                      : 'Locked to this row. Click "Change" only if the original entry was wrong.'}
+                  </p>
                 </div>
                 <div>
                   <label className="label">CRM Name <span className="text-[10px] text-gray-400 font-normal">(auto from PO)</span></label>
@@ -373,14 +392,28 @@ export default function Collections() {
                   <p className="text-[10px] text-gray-400 mt-0.5">From your PDF / latest PO.</p>
                 </div>
                 <div>
-                  <label className="label">Received So Far <span className="text-[10px] text-gray-400 font-normal">(auto-sum)</span></label>
-                  <input className="input text-right tabular-nums bg-gray-50" type="number" value={editModal.received_amount || 0} disabled />
-                  <p className="text-[10px] text-gray-400 mt-0.5">Use the ₹ button on the row to add an installment.</p>
+                  {/* Mam (2026-05-16): "can edit here payment rec." —
+                      Received So Far is now editable.  Use the ₹ button
+                      on the row for proper installment tracking
+                      (preferred path), but this field lets mam correct
+                      historical mistakes without rebuilding payment
+                      history. */}
+                  <label className="label">Received So Far <span className="text-[10px] text-amber-700 font-normal">(direct edit)</span></label>
+                  <input
+                    className="input text-right tabular-nums"
+                    type="number" step="any" min="0"
+                    value={editForm.received_amount ?? editModal.received_amount ?? 0}
+                    onChange={e => setEditForm(f => ({ ...f, received_amount: +e.target.value }))}
+                  />
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    Use the ₹ button on the row to add a tracked installment.
+                    Editing here overrides the auto-sum.
+                  </p>
                 </div>
                 <div>
                   <label className="label">Outstanding</label>
                   <div className="input text-right tabular-nums bg-red-50 border-red-200 text-red-700 font-bold">
-                    Rs {Math.max(0, (+editForm.invoice_amount || 0) - (+editModal.received_amount || 0)).toLocaleString('en-IN')}
+                    Rs {Math.max(0, (+editForm.invoice_amount || 0) - (+(editForm.received_amount ?? editModal.received_amount) || 0)).toLocaleString('en-IN')}
                   </div>
                 </div>
                 <div>
