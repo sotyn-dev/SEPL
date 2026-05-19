@@ -921,13 +921,22 @@ function isoMinusOneDay(iso) {
 // the UI can show a streak badge and a 3+ days alert highlight.
 router.get('/loss-dashboard', (req, res) => {
   const db = getDb();
+  // Resolve the Site Clearance owner — falls back through:
+  //   1. business_book.employee_assigned (CRM on the BB row for this site)
+  //   2. sites.supervisor (legacy text field)
+  //   3. NULL if neither is set
+  // Mam (2026-05-16) wants this name surfaced so the Loss Reasons
+  // dashboard shows WHO is on the hook for each category of hindrance.
   const rows = db.prepare(`SELECT d.id, d.site_id, d.report_date, d.profit_loss, d.grand_total_a,
                                   d.grand_total_b, d.hindrance_category, d.hindrances,
                                   d.loss_addressed, d.loss_addressed_at, d.loss_addressed_note,
-                                  s.name AS site_name, s.client_name,
+                                  d.loss_addressed_proof_url,
+                                  s.name AS site_name, s.client_name, s.supervisor,
+                                  bb.employee_assigned AS site_crm_name,
                                   u.name AS submitted_by_name, au.name AS addressed_by_name
                            FROM dpr d
                            LEFT JOIN sites s ON d.site_id=s.id
+                           LEFT JOIN business_book bb ON s.business_book_id = bb.id
                            LEFT JOIN users u ON d.submitted_by=u.id
                            LEFT JOIN users au ON d.loss_addressed_by=au.id
                            WHERE d.profit_loss < 0
@@ -942,17 +951,24 @@ router.get('/loss-dashboard', (req, res) => {
   res.json(rows);
 });
 
-// Mark a loss as followed-up / addressed.
+// Proof-of-resolution column (mam, 2026-05-16: "on address click proof
+// so that problem can solve and identify").  Idempotent ALTER TABLE.
+try { getDb().exec(`ALTER TABLE dpr ADD COLUMN loss_addressed_proof_url TEXT`); } catch (_) {}
+
+// Mark a loss as followed-up / addressed.  Optional proof_url (a
+// file URL from POST /api/upload) stored so management can later
+// click through to verify the issue was actually fixed.
 router.patch('/:id/loss-addressed', (req, res) => {
   const db = getDb();
-  const { addressed, note } = req.body || {};
+  const { addressed, note, proof_url } = req.body || {};
   const next = addressed ? 1 : 0;
-  const r = db.prepare(`UPDATE dpr SET loss_addressed=?, loss_addressed_by=?, loss_addressed_at=?, loss_addressed_note=?
+  const r = db.prepare(`UPDATE dpr SET loss_addressed=?, loss_addressed_by=?, loss_addressed_at=?, loss_addressed_note=?, loss_addressed_proof_url=?
                         WHERE id=?`).run(
     next,
     next ? req.user.id : null,
     next ? new Date().toISOString() : null,
     next ? (note || null) : null,
+    next ? (proof_url || null) : null,
     req.params.id,
   );
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });

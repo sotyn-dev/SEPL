@@ -1132,10 +1132,33 @@ export default function DPR() {
 // the engineer filled in, plus a "consecutive loss days" streak. Rows
 // with streak >= 3 are highlighted red because they trigger the automatic
 // email to director@securedengineers.com.
+// Category-to-owner map (mam, 2026-05-16: "if manpower then ruksana,
+// material then raj kumar, money then aanchal, machine then ajmer,
+// site clearance crm as per site name").  Site Clearance falls back
+// to the row's CRM resolved server-side (sites.business_book →
+// employee_assigned).  Stored as a constant so future re-assignments
+// only need a code change here.
+const HINDRANCE_OWNERS = {
+  Manpower: 'Ruksana',
+  Material: 'Raj Kumar',
+  Money: 'Aanchal',
+  Machine: 'Ajmer',
+};
+const ownerFor = (row) => {
+  if (row.hindrance_category === 'Site Clearance') {
+    return row.site_crm_name || row.supervisor || '—';
+  }
+  return HINDRANCE_OWNERS[row.hindrance_category] || '—';
+};
+
 function LossReasonsTab() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all'); // 'all' | 'streak3' | 'pending'
+  // Proof-attach modal (mam: "on address click proof so that problem
+  // can solve and identify").  null = closed; { row, note, file,
+  // uploading } when open.
+  const [addressModal, setAddressModal] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -1145,14 +1168,46 @@ function LossReasonsTab() {
   };
   useEffect(load, []);
 
-  const toggleAddressed = async (row, addressed) => {
-    let note = '';
-    if (addressed) {
-      note = prompt('Add a note about how this was followed up (optional)') || '';
+  // Open the proof-attach modal instead of a bare prompt
+  const openAddressModal = (row) => setAddressModal({ row, note: '', file: null, uploading: false });
+
+  // Save: optional file → /api/upload → use returned URL as proof_url.
+  // PATCH /dpr/:id/loss-addressed with the note + proof_url.
+  const submitAddressed = async () => {
+    if (!addressModal) return;
+    setAddressModal(a => ({ ...a, uploading: true }));
+    let proof_url = null;
+    if (addressModal.file) {
+      try {
+        const fd = new FormData();
+        fd.append('file', addressModal.file);
+        const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        proof_url = r.data?.url || null;
+      } catch {
+        toast.error('Proof upload failed — submitting without file');
+      }
     }
     try {
-      await api.patch(`/dpr/${row.id}/loss-addressed`, { addressed, note });
-      toast.success(addressed ? 'Marked as addressed' : 'Unmarked');
+      await api.patch(`/dpr/${addressModal.row.id}/loss-addressed`, {
+        addressed: true,
+        note: addressModal.note || null,
+        proof_url,
+      });
+      toast.success('Marked as addressed');
+      setAddressModal(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+      setAddressModal(a => ({ ...a, uploading: false }));
+    }
+  };
+
+  // Reverse: unmark (no modal, simple confirm)
+  const unmarkAddressed = async (row) => {
+    if (!confirm('Re-open this loss row as pending follow-up?')) return;
+    try {
+      await api.patch(`/dpr/${row.id}/loss-addressed`, { addressed: false });
+      toast.success('Re-opened');
       load();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed');
@@ -1194,23 +1249,37 @@ function LossReasonsTab() {
         <table>
           <thead>
             <tr>
-              <th>Site</th><th>Date</th><th>Loss (P/L)</th><th>Hindrance</th><th>Reason filled by engineer</th>
+              <th>Site</th><th>Date</th><th>Loss (P/L)</th><th>Hindrance</th>
+              <th>Assigned To</th>
+              <th>Reason filled by engineer</th>
               <th>Streak</th><th>Submitted By</th><th>Followed Up?</th>
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan="8" className="text-center py-8 text-gray-400">Loading…</td></tr>}
+            {loading && <tr><td colSpan="9" className="text-center py-8 text-gray-400">Loading…</td></tr>}
             {!loading && filtered.length === 0 && (
-              <tr><td colSpan="8" className="text-center py-8 text-gray-400">
+              <tr><td colSpan="9" className="text-center py-8 text-gray-400">
                 {filter === 'all' ? 'No loss DPRs — every site is on track 🎉' : 'Nothing matches this filter.'}
               </td></tr>
             )}
-            {filtered.map(r => (
+            {filtered.map(r => {
+              const owner = ownerFor(r);
+              return (
               <tr key={r.id} className={(r.consecutive_loss_days || 0) >= 3 && !r.loss_addressed ? 'bg-red-50/60' : ''}>
                 <td className="font-medium">{r.site_name || `Site #${r.site_id}`}</td>
                 <td>{r.report_date}</td>
                 <td className="font-bold text-red-700">Rs {Math.abs(Math.round(+r.profit_loss || 0)).toLocaleString('en-IN')}</td>
                 <td>{r.hindrance_category || <span className="text-gray-400">-</span>}</td>
+                {/* Auto-resolved owner per category.  Mam: fixed mapping for
+                    Manpower/Material/Money/Machine; Site Clearance =
+                    site's CRM. */}
+                <td>
+                  {owner === '—' ? (
+                    <span className="text-gray-400">-</span>
+                  ) : (
+                    <span className="text-xs font-semibold text-gray-800 bg-amber-100 px-2 py-0.5 rounded">{owner}</span>
+                  )}
+                </td>
                 <td className="max-w-[320px] text-xs text-gray-700 whitespace-normal break-words" title={r.hindrances}>{r.hindrances || <span className="text-gray-400">-</span>}</td>
                 <td>
                   {(r.consecutive_loss_days || 0) >= 3
@@ -1221,20 +1290,63 @@ function LossReasonsTab() {
                 <td>
                   {r.loss_addressed ? (
                     <div className="space-y-0.5">
-                      <button onClick={() => toggleAddressed(r, false)} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200" title={r.loss_addressed_note || ''}>
+                      <button onClick={() => unmarkAddressed(r)} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200" title={r.loss_addressed_note || ''}>
                         <FiCheck size={10} /> Done by {r.addressed_by_name || '-'}
                       </button>
+                      {r.loss_addressed_proof_url && (
+                        <a href={r.loss_addressed_proof_url} target="_blank" rel="noopener noreferrer"
+                           className="block text-[10px] text-blue-600 hover:text-blue-800 underline">
+                          View proof
+                        </a>
+                      )}
                       {r.loss_addressed_note && <div className="text-[10px] text-gray-500 max-w-[180px] truncate" title={r.loss_addressed_note}>{r.loss_addressed_note}</div>}
                     </div>
                   ) : (
-                    <button onClick={() => toggleAddressed(r, true)} className="text-xs btn btn-secondary py-0.5 px-2">Mark addressed</button>
+                    <button onClick={() => openAddressModal(r)} className="text-xs btn btn-secondary py-0.5 px-2">Mark addressed</button>
                   )}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
+
+      {/* Proof-of-resolution modal */}
+      {addressModal && (
+        <Modal isOpen={true} onClose={() => !addressModal.uploading && setAddressModal(null)} title="Mark loss as addressed">
+          <div className="space-y-3 text-sm">
+            <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-gray-700">
+              <div><strong>Site:</strong> {addressModal.row.site_name}</div>
+              <div><strong>Date:</strong> {addressModal.row.report_date}</div>
+              <div><strong>Issue:</strong> {addressModal.row.hindrance_category} — {addressModal.row.hindrances}</div>
+              <div><strong>Owner:</strong> {ownerFor(addressModal.row)}</div>
+            </div>
+            <div>
+              <label className="label">How was it resolved?</label>
+              <textarea className="input" rows="3"
+                        value={addressModal.note}
+                        onChange={e => setAddressModal(a => ({ ...a, note: e.target.value }))}
+                        placeholder="e.g. Extra 4 helpers arranged from Mohali, deployed 17 May 7 AM" />
+            </div>
+            <div>
+              <label className="label">Attach proof (photo / PDF / receipt)</label>
+              <input type="file" accept="image/*,application/pdf"
+                     onChange={e => setAddressModal(a => ({ ...a, file: e.target.files?.[0] || null }))}
+                     className="text-xs" />
+              <p className="text-[10px] text-gray-500 mt-1">
+                e.g. site photo showing resolution, vendor invoice, delivery challan, signed clearance email — anything that lets management verify the problem is actually solved.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <button onClick={() => setAddressModal(null)} disabled={addressModal.uploading} className="btn btn-secondary">Cancel</button>
+              <button onClick={submitAddressed} disabled={addressModal.uploading} className="btn btn-primary">
+                {addressModal.uploading ? 'Saving…' : 'Mark Addressed'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
