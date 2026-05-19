@@ -228,17 +228,22 @@ export default function VendorPOPrint() {
                   <td className="border-b border-r border-gray-800 print:border-black px-2 py-1.5 w-1/2"><span className="text-red-700 font-semibold">Voucher No.:</span> <span className="font-bold">SEPL-{po.id}</span></td>
                   <td className="border-b border-gray-800 print:border-black px-2 py-1.5 w-1/2"><span className="text-red-700 font-semibold">Date :</span> <span className="font-bold">{fmtDate(po.po_date || po.created_at)}</span></td>
                 </tr>
+                {/* Auto-filled fields (mam, 2026-05-16) —
+                    Vendor Code from vendors.vendor_code,
+                    Contact Person + Contact No from vendor master,
+                    SEPL Lead No from business_book linked by site
+                    name. Typo "Vender Code" preserved → "Vendor Code". */}
                 <tr>
                   <td className="border-b border-r border-gray-800 print:border-black px-2 py-1.5"><span className="text-red-700 font-semibold">SEPL PO No.:</span> <span className="font-bold">{po.po_number || ''}</span></td>
-                  <td className="border-b border-gray-800 print:border-black px-2 py-1.5"><span className="text-gray-500">Vender Code:</span></td>
+                  <td className="border-b border-gray-800 print:border-black px-2 py-1.5"><span className="text-gray-500">Vendor Code:</span> <span className="font-mono">{po.vendor_code || ''}</span></td>
                 </tr>
                 <tr>
                   <td className="border-b border-r border-gray-800 print:border-black px-2 py-1.5"><span className="text-red-700 font-semibold">SEPL Indent No.:</span> <span className="font-bold">{po.indent_number || ''}</span></td>
-                  <td className="border-b border-gray-800 print:border-black px-2 py-1.5"><span className="text-gray-500">Contact Person:</span> {po.contact_person || ''}</td>
+                  <td className="border-b border-gray-800 print:border-black px-2 py-1.5"><span className="text-gray-500">Contact Person:</span> <span className="font-medium">{po.contact_person || ''}</span></td>
                 </tr>
                 <tr>
-                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-1.5"><span className="text-gray-500">SEPL Lead No.:</span></td>
-                  <td className="border-b border-gray-800 print:border-black px-2 py-1.5"><span className="text-gray-500">Contact No.:</span> {po.vendor_phone || ''}</td>
+                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-1.5"><span className="text-gray-500">SEPL Lead No.:</span> <span className="font-medium">{po.sepl_lead_no || ''}</span></td>
+                  <td className="border-b border-gray-800 print:border-black px-2 py-1.5"><span className="text-gray-500">Contact No.:</span> <span className="font-medium">{po.vendor_phone || ''}</span></td>
                 </tr>
                 <tr>
                   <td colSpan="2" className="px-2 py-1.5"><span className="text-gray-500">Ref Quote No.:</span></td>
@@ -264,8 +269,21 @@ export default function VendorPOPrint() {
           <div className="p-3 text-[11px] bg-emerald-50/30">
             <div className="text-[10px] uppercase tracking-wider font-bold text-emerald-700 mb-1">Consignee (Ship to)</div>
             <div className="font-extrabold text-[13px]">{po.site_name || COMPANY.name}</div>
+            {/* Bonus context from BB lookup (mam, 2026-05-16) —
+                shows the linked SEPL Lead No / client name so the
+                vendor knows which project this PO belongs to. */}
+            {(po.sepl_lead_no || po.client_name_bb) && (
+              <div className="text-[10px] text-gray-700 mt-1">
+                {po.sepl_lead_no && <>Lead: <span className="font-mono font-semibold">{po.sepl_lead_no}</span></>}
+                {po.sepl_lead_no && po.client_name_bb && ' · '}
+                {po.client_name_bb && <>Client: <span className="font-semibold">{po.client_name_bb}</span></>}
+              </div>
+            )}
+            {/* Defensive — only print the site-engineer note if it
+                looks like a real name (has letters), not numeric
+                junk like "54.0" that leaked in from a bad import. */}
             <div className="text-[10px] text-gray-600 mt-2 italic">
-              Ship to the site mentioned above. For exact address coordinate with the site engineer{po.raised_by_name ? ` — ${po.raised_by_name}` : ''}.
+              Ship to the site mentioned above. For exact address coordinate with the site engineer{po.raised_by_name && /[a-zA-Z]/.test(String(po.raised_by_name)) ? ` — ${po.raised_by_name}` : ''}.
             </div>
           </div>
         </div>

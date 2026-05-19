@@ -775,8 +775,14 @@ router.get('/vendor-po/:id/print', (req, res) => {
   // print page falls back to "Authorized Signatory" when the creator
   // can't be looked up. Indent.created_by is available via the indent
   // join below if mam ever wants the raiser's name on the PO instead.
+  // Mam (2026-05-16): the print page must auto-fill Vendor Code,
+  // Contact Person, Contact No, and SEPL Lead No from existing
+  // masters — NOT leave them blank.  Added v.vendor_code to the
+  // SELECT; lead_no resolved via a separate BB lookup below
+  // because indents store site_name as free text (no FK).
   const po = db.prepare(`
-    SELECT vp.*, v.name as vendor_name, v.firm_name, v.contact_person,
+    SELECT vp.*, v.name as vendor_name, v.firm_name, v.vendor_code,
+           v.contact_person,
            v.phone as vendor_phone, v.email as vendor_email,
            v.gst_number, v.address as vendor_address,
            v.district, v.state, v.payment_terms as vendor_payment_terms,
@@ -787,6 +793,28 @@ router.get('/vendor-po/:id/print', (req, res) => {
      WHERE vp.id = ?
   `).get(req.params.id);
   if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
+
+  // SEPL Lead No. lookup — match indent.site_name against the
+  // business_book project_name (preferred) or company_name (fallback).
+  // Case + whitespace insensitive so "M/s SAEL" matches " m/s sael ".
+  // Takes the most recent match — older BB rows for the same site
+  // share the lead_no anyway.
+  if (po.site_name) {
+    try {
+      const bb = db.prepare(`
+        SELECT lead_no, project_name, company_name, client_name
+        FROM business_book
+        WHERE LOWER(TRIM(COALESCE(project_name, ''))) = LOWER(TRIM(?))
+           OR LOWER(TRIM(COALESCE(company_name, ''))) = LOWER(TRIM(?))
+        ORDER BY id DESC LIMIT 1
+      `).get(po.site_name, po.site_name);
+      if (bb) {
+        po.sepl_lead_no = bb.lead_no || null;
+        po.project_name_bb = bb.project_name || bb.company_name || null;
+        po.client_name_bb = bb.client_name || null;
+      }
+    } catch (_) { /* non-fatal */ }
+  }
 
   const items = db.prepare(`
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.terms, vpi.credit_days,
