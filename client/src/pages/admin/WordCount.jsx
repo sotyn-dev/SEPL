@@ -424,8 +424,15 @@ export default function WordCount() {
                   <tbody>
                     {detail.map(d => (
                       <tr key={d.id} className="border-t hover:bg-gray-50">
-                        <td className="px-2 py-1.5 text-gray-500 font-mono text-[11px]" title={d.at}>
-                          {new Date(d.at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                        <td className="px-2 py-1.5 text-gray-500 font-mono text-[11px]" title={`${d.at} (UTC) · IST display below`}>
+                          {/* Mam (2026-05-16): "it showing wrong time" — the
+                              audit log stores UTC timestamps but the previous
+                              render used the BROWSER's local timezone.  On
+                              VPS machines (or browsers stuck on UTC) that
+                              showed UTC time, not IST.  Explicit timeZone
+                              forces Asia/Kolkata (+5:30) regardless of where
+                              the user is browsing from. */}
+                          {new Date(d.at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
                         </td>
                         <td className="px-2 py-1.5">
                           <span className={`px-1.5 py-0.5 rounded text-[10px] ${ACTION_COLORS[d.action] || 'bg-gray-100 text-gray-700'}`}>{d.action}</span>

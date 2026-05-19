@@ -124,7 +124,10 @@ export default function AuditLog() {
           <tbody>
             {rows.map(r => (
               <tr key={r.id} className="border-b hover:bg-gray-50 cursor-pointer" onClick={() => setSelected(r)}>
-                <td className="px-2 py-1.5 whitespace-nowrap">{new Date(r.at).toLocaleString()}</td>
+                {/* IST forced — the server stores UTC, but mam (2026-05-16):
+                    "it showing wrong time" was seeing UTC because the
+                    browser's local timezone was wrong. */}
+                <td className="px-2 py-1.5 whitespace-nowrap">{new Date(r.at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</td>
                 <td className="px-2 py-1.5 whitespace-nowrap"><FiUser className="inline mr-1 text-gray-400" size={11} />{r.user_name || <span className="text-gray-300">anon</span>}{r.user_role && <span className="text-[10px] text-gray-400 ml-1">[{r.user_role}]</span>}</td>
                 <td className="px-2 py-1.5"><span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${actionClass(r.action)}`}>{r.action}</span></td>
                 <td className="px-2 py-1.5 whitespace-nowrap">{r.entity_type || <span className="text-gray-300">—</span>}{r.entity_id ? <span className="text-gray-400 ml-1">#{r.entity_id}</span> : ''}</td>
@@ -158,7 +161,7 @@ export default function AuditLog() {
             <div className="flex justify-between items-center p-4 border-b sticky top-0 bg-white">
               <div>
                 <h4 className="font-bold text-lg">Audit Entry #{selected.id}</h4>
-                <p className="text-xs text-gray-500"><FiCalendar className="inline mr-1" size={11} /> {new Date(selected.at).toLocaleString()}</p>
+                <p className="text-xs text-gray-500"><FiCalendar className="inline mr-1" size={11} /> {new Date(selected.at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} <span className="text-[10px] text-gray-400">IST</span></p>
               </div>
               <button onClick={() => setSelected(null)} className="p-2 hover:bg-gray-100 rounded"><FiX /></button>
             </div>
