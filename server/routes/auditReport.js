@@ -300,6 +300,27 @@ function findMissingRequired(db) {
     LIMIT 100
   `).forEach(r => push('vendors', r.id, r.name, ['phone', 'email']));
 
+  // Mam (2026-05-16): "please correct vendor master sheet according
+  // to firm name autofetch address from whole net and gst number
+  // also and contact person also".  Vendors with no GST / no
+  // address / no contact-person can't be used to print a clean PO,
+  // so surface them here so mam knows which masters need filling.
+  safeAll(db, `
+    SELECT id, name, gst_number, address, contact_person
+    FROM vendors
+    WHERE (active IS NULL OR active = 1)
+      AND ((gst_number IS NULL OR gst_number = '')
+        OR (address IS NULL OR address = '')
+        OR (contact_person IS NULL OR contact_person = ''))
+    LIMIT 200
+  `).forEach(r => {
+    const m = [];
+    if (!r.gst_number) m.push('gst_number');
+    if (!r.address) m.push('address');
+    if (!r.contact_person) m.push('contact_person');
+    if (m.length) push('vendors', r.id, r.name, m);
+  });
+
   safeAll(db, `
     SELECT id, company_name, contact_no, email FROM customers
     WHERE (contact_no IS NULL OR contact_no='') AND (email IS NULL OR email='')

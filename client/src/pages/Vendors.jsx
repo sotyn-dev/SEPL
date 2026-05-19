@@ -12,6 +12,34 @@ const CATEGORIES = ['FF', 'ELE', 'LV', 'Solar', 'HVAC', 'INTERIOR', 'OTHER'];
 const TYPES = ['Distributor', 'Trader', 'Manufacture', 'Direct Company', 'Stockist'];
 const CAT_COLORS = { FF: 'bg-red-100 text-red-700', ELE: 'bg-amber-100 text-amber-700', LV: 'bg-red-100 text-red-700', Solar: 'bg-emerald-100 text-emerald-700', HVAC: 'bg-cyan-100 text-cyan-700', INTERIOR: 'bg-purple-100 text-purple-700' };
 
+// GSTIN format: 2-digit state code + 10-char PAN + 1-digit entity + Z + 1-digit checksum.
+// Mam (2026-05-16) asked for GST auto-fetch.  We can't pull the
+// full address without an API key, but we can parse the GSTIN
+// itself to extract State, PAN, and validate the format — saves
+// 3 fields of manual entry whenever the GSTIN is keyed in.
+const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+const GST_STATE_CODES = {
+  '01': 'Jammu and Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh',
+  '05': 'Uttarakhand', '06': 'Haryana', '07': 'Delhi', '08': 'Rajasthan', '09': 'Uttar Pradesh',
+  '10': 'Bihar', '11': 'Sikkim', '12': 'Arunachal Pradesh', '13': 'Nagaland', '14': 'Manipur',
+  '15': 'Mizoram', '16': 'Tripura', '17': 'Meghalaya', '18': 'Assam', '19': 'West Bengal',
+  '20': 'Jharkhand', '21': 'Odisha', '22': 'Chhattisgarh', '23': 'Madhya Pradesh',
+  '24': 'Gujarat', '25': 'Daman and Diu', '26': 'Dadra and Nagar Haveli',
+  '27': 'Maharashtra', '28': 'Andhra Pradesh', '29': 'Karnataka', '30': 'Goa',
+  '31': 'Lakshadweep', '32': 'Kerala', '33': 'Tamil Nadu', '34': 'Puducherry',
+  '35': 'Andaman and Nicobar Islands', '36': 'Telangana', '37': 'Andhra Pradesh',
+  '38': 'Ladakh',
+};
+const parseGstin = (gstin) => {
+  const v = String(gstin || '').toUpperCase().trim();
+  if (!v) return { valid: null };
+  const valid = GSTIN_RE.test(v);
+  const stateCode = v.slice(0, 2);
+  const state = GST_STATE_CODES[stateCode] || null;
+  const pan = valid ? v.slice(2, 12) : null;
+  return { valid, stateCode, state, pan, normalized: v };
+};
+
 export default function Vendors() {
   const { canCreate, canEdit, canDelete } = useAuth();
   const [vendors, setVendors] = useState([]);
@@ -194,7 +222,25 @@ export default function Vendors() {
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             <div><label className="label">Vendor Code</label><input className="input" value={form.vendor_code || ''} onChange={e => setForm({...form, vendor_code: e.target.value})} placeholder="Auto if empty" /></div>
             <div><label className="label">Vendor Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({...form, name: e.target.value})} required /></div>
-            <div><label className="label">Firm Name</label><input className="input" value={form.firm_name || ''} onChange={e => setForm({...form, firm_name: e.target.value})} /></div>
+            {/* Firm Name + Search Web (mam, 2026-05-16: "autofetch
+                address from whole net and gst number also and contact
+                person also").  No fully-free auto-fetch exists; the
+                pragmatic helper is a Google-search button that
+                pre-builds a query for address / GST / contact info. */}
+            <div>
+              <label className="label flex items-center justify-between">
+                <span>Firm Name</span>
+                {form.firm_name && (
+                  <a target="_blank" rel="noreferrer"
+                     href={`https://www.google.com/search?q=${encodeURIComponent(`${form.firm_name} ${form.district || ''} GST address contact`)}`}
+                     className="text-[10px] text-blue-600 hover:text-blue-800 underline font-normal normal-case"
+                     title="Open Google search for this firm's GST / address / contact in a new tab. Copy back what you need.">
+                    🌐 search web
+                  </a>
+                )}
+              </label>
+              <input className="input" value={form.firm_name || ''} onChange={e => setForm({...form, firm_name: e.target.value})} />
+            </div>
             <div><label className="label">Category</label><select className="select" value={form.category || ''} onChange={e => setForm({...form, category: e.target.value})}><option value="">Select</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></div>
             <div><label className="label">Type</label><select className="select" value={form.type || ''} onChange={e => setForm({...form, type: e.target.value})}><option value="">Select</option>{TYPES.map(t => <option key={t}>{t}</option>)}</select></div>
             <div><label className="label">Deals In</label><input className="input" value={form.deals_in || ''} onChange={e => setForm({...form, deals_in: e.target.value})} /></div>
@@ -224,7 +270,37 @@ export default function Vendors() {
                 onChange={(opt) => setForm({ ...form, district: opt?.value || '' })}
               />
             </div>
-            <div><label className="label">GST Number</label><input className="input" value={form.gst_number || ''} onChange={e => setForm({...form, gst_number: e.target.value})} /></div>
+            {/* GSTIN — auto-extracts State from the 2-digit prefix
+                and shows ✓/✗ format validity (mam, 2026-05-16:
+                "gst number also").  Full address lookup needs a
+                paid API; this gets you the state field for free. */}
+            <div>
+              <label className="label flex items-center justify-between">
+                <span>GST Number</span>
+                {(() => {
+                  const g = parseGstin(form.gst_number);
+                  if (g.valid === null) return null;
+                  return g.valid
+                    ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-mono">✓ valid · {g.state || g.stateCode}</span>
+                    : <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-mono">✗ bad format</span>;
+                })()}
+              </label>
+              <input
+                className="input font-mono"
+                value={form.gst_number || ''}
+                placeholder="03AAAAA0000A1Z5"
+                onChange={e => {
+                  const v = e.target.value.toUpperCase().slice(0, 15);
+                  const patch = { gst_number: v };
+                  const g = parseGstin(v);
+                  // Auto-fill State if a valid state code and the field is empty
+                  if (g.state && !form.state) {
+                    patch.state = g.state;
+                  }
+                  setForm({ ...form, ...patch });
+                }}
+              />
+            </div>
             <div><label className="label">Payment Terms</label><select className="select" value={form.payment_terms || ''} onChange={e => setForm({...form, payment_terms: e.target.value})}><option value="">Select</option><option>Advance</option><option>Credit</option><option>PDC</option><option>COD</option></select></div>
             <div><label className="label">Credit Days</label><input className="input" value={form.credit_days || ''} onChange={e => setForm({...form, credit_days: e.target.value})} /></div>
             <div><label className="label">Sub Category</label><input className="input" value={form.sub_category || ''} onChange={e => setForm({...form, sub_category: e.target.value})} /></div>
