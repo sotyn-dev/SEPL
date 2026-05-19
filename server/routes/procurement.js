@@ -759,9 +759,42 @@ router.get('/indents/:id', (req, res) => {
 
 // Vendor PO
 // GET returns the extra upload fields (po_date, file_path, remarks) too.
+// GET /vendor-po list
+// Mam (2026-05-16): "look at actual amount and 2. photo what show" —
+// PO print page showed Rs 3,05,208 but the Follow-up: POs awaiting
+// Purchase Bill table showed Rs 4,34,043 for the SAME PO.  Root
+// cause: vendor_pos.total_amount can drift from the actual sum of
+// line items (saved at create time; not auto-updated if items were
+// edited).  The print page recomputes live from items + GST, so it's
+// always right; the list endpoint was naively returning the stale
+// header value.
+//
+// Fix: compute display_total live from vendor_po_items + 18% GST
+// (matches the print logic).  Store side-by-side with the original
+// total_amount so admins can see drift.  Frontend uses display_total
+// for the Amount column.  Drift > ₹1 also surfaces in /audit later
+// as its own exception type (TODO).
 router.get('/vendor-po', (req, res) => {
-  res.json(getDb().prepare(`SELECT vp.*, v.name as vendor_name FROM vendor_pos vp
-    LEFT JOIN vendors v ON vp.vendor_id=v.id ORDER BY vp.created_at DESC`).all());
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT vp.*, v.name as vendor_name,
+           COALESCE((
+             SELECT ROUND(SUM(vpi.amount) * 1.18, 2)
+             FROM vendor_po_items vpi
+             WHERE vpi.vendor_po_id = vp.id
+           ), vp.total_amount) as display_total
+    FROM vendor_pos vp
+    LEFT JOIN vendors v ON vp.vendor_id = v.id
+    ORDER BY vp.created_at DESC
+  `).all();
+  // Surface drift so the frontend can show a small warning chip if
+  // the stored header total disagrees with the items sum.
+  for (const r of rows) {
+    const stored = +r.total_amount || 0;
+    const live = +r.display_total || 0;
+    r.total_amount_drift = Math.round(Math.abs(stored - live));
+  }
+  res.json(rows);
 });
 
 // Full Vendor PO payload for the print/share page — includes vendor

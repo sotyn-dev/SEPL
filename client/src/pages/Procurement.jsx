@@ -1210,7 +1210,19 @@ export default function Procurement() {
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center">{chip}</td>
-                          <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">Rs {po.total_amount?.toLocaleString()}</td>
+                          {/* Show the LIVE computed total (items × 1.18 GST)
+                              from display_total — matches what the PO print
+                              shows.  Mam, 2026-05-16: header total drifted from
+                              the line items.  Drift chip warns when the stored
+                              total disagrees with the items sum. */}
+                          <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
+                            Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
+                            {+po.total_amount_drift > 1 && (
+                              <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + 18% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
+                                ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
+                              </div>
+                            )}
+                          </td>
                           <td className="px-2 py-1.5 text-center">
                             {/* Always show "View PO" — opens the ERP-generated
                                 print page (PDF-able). If a Tally / signed scan
@@ -1357,7 +1369,14 @@ export default function Procurement() {
                         <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
                         <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
                         <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
-                        <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">Rs {po.total_amount?.toLocaleString()}</td>
+                        <td className="px-2 py-1.5 text-right font-semibold whitespace-nowrap">
+                          Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}
+                          {+po.total_amount_drift > 1 && (
+                            <div className="text-[9px] text-amber-700 font-normal" title={`Stored: Rs ${(+po.total_amount).toLocaleString('en-IN')} · Items sum + 18% GST: Rs ${(+po.display_total).toLocaleString('en-IN')}`}>
+                              ⚠ drift Rs {(+po.total_amount_drift).toLocaleString('en-IN')}
+                            </div>
+                          )}
+                        </td>
                         <td className="px-2 py-1.5">
                           <button onClick={() => openAddDispatch(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap">Dispatch</button>
                         </td>
