@@ -500,6 +500,12 @@ try { getDb().exec(`ALTER TABLE dpr ADD COLUMN planned_manpower INTEGER DEFAULT 
 try { getDb().exec(`ALTER TABLE dpr ADD COLUMN is_planned_template INTEGER DEFAULT 0`); } catch (_) {}
 try { getDb().exec(`ALTER TABLE dpr ADD COLUMN week_plan_locked_at DATETIME`); } catch (_) {}
 try { getDb().exec(`ALTER TABLE dpr ADD COLUMN week_plan_locked_by INTEGER REFERENCES users(id)`); } catch (_) {}
+// BOQ-item driven planning (mam, 2026-05-16: "planning giving as per
+// boq items").  Each planning day can be tied to a specific PO line
+// item + planned quantity; planned_description is auto-formatted
+// from the item details when both are set.
+try { getDb().exec(`ALTER TABLE dpr ADD COLUMN planned_po_item_id INTEGER REFERENCES po_items(id)`); } catch (_) {}
+try { getDb().exec(`ALTER TABLE dpr ADD COLUMN planned_qty REAL DEFAULT 0`); } catch (_) {}
 
 // Returns Mon-Sun (or any 7 consecutive days starting at week_start)
 // for one site, blending planned + actual fields.  If the row
@@ -517,11 +523,14 @@ router.get('/week-view', requirePermission('dpr', 'view'), (req, res) => {
   }
   const placeholders = days.map(() => '?').join(',');
   const rows = db.prepare(`
-    SELECT d.*, u.name as planned_by_name, ap.name as approved_by_name, sb.name as submitted_by_name
+    SELECT d.*, u.name as planned_by_name, ap.name as approved_by_name, sb.name as submitted_by_name,
+           pi.item_name as planned_item_name, pi.specification as planned_item_spec,
+           pi.unit as planned_item_unit, pi.quantity as planned_item_boq_qty
     FROM dpr d
     LEFT JOIN users u  ON d.week_plan_locked_by = u.id
     LEFT JOIN users ap ON d.approved_by = ap.id
     LEFT JOIN users sb ON d.submitted_by = sb.id
+    LEFT JOIN po_items pi ON d.planned_po_item_id = pi.id
     WHERE d.site_id = ? AND d.report_date IN (${placeholders})
   `).all(site_id, ...days);
   const byDate = Object.fromEntries(rows.map(r => [r.report_date, r]));
@@ -547,29 +556,44 @@ router.post('/plan-week', requirePermission('dpr', 'create'), (req, res) => {
   const findRow  = db.prepare(`SELECT id FROM dpr WHERE site_id = ? AND report_date = ?`);
   const updateRow = db.prepare(`
     UPDATE dpr SET planned_description = ?, planned_manpower = ?, grand_total_b = ?,
+                   planned_po_item_id = ?, planned_qty = ?,
                    week_plan_locked_at = CURRENT_TIMESTAMP, week_plan_locked_by = ?
     WHERE id = ?
   `);
   const insertRow = db.prepare(`
     INSERT INTO dpr (
       site_id, report_date, submitted_by, planned_description, planned_manpower,
-      grand_total_b, is_planned_template, week_plan_locked_at, week_plan_locked_by
-    ) VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, ?)
+      grand_total_b, planned_po_item_id, planned_qty,
+      is_planned_template, week_plan_locked_at, week_plan_locked_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, ?)
   `);
+  // Used to auto-format planned_description from the BOQ item when
+  // the caller hasn't supplied free text but did pick an item.
+  const findPoItem = db.prepare(`SELECT item_name, specification, unit, quantity FROM po_items WHERE id = ?`);
 
   const txn = db.transaction(() => {
     for (const d of days) {
       const date = d.date || d.report_date;
       if (!date) continue;
-      const desc = (d.planned_description || '').trim() || null;
+      let desc = (d.planned_description || '').trim() || null;
       const mp   = +d.planned_manpower || 0;
       const cost = +d.planned_grand_total_b || +d.planned_cost || 0;
+      const poItemId = d.planned_po_item_id ? +d.planned_po_item_id : null;
+      const qty = +d.planned_qty || 0;
+      // Auto-format description if BOQ item picked and no free text
+      if (poItemId && !desc) {
+        const item = findPoItem.get(poItemId);
+        if (item) {
+          const bits = [item.item_name, item.specification].filter(Boolean).join(' · ');
+          desc = qty > 0 ? `${bits} · ${qty} ${item.unit || ''}`.trim() : bits;
+        }
+      }
       const existing = findRow.get(site_id, date);
       if (existing) {
-        updateRow.run(desc, mp, cost, req.user.id, existing.id);
+        updateRow.run(desc, mp, cost, poItemId, qty, req.user.id, existing.id);
         out.updated++;
       } else {
-        insertRow.run(site_id, date, req.user.id, desc, mp, cost, req.user.id);
+        insertRow.run(site_id, date, req.user.id, desc, mp, cost, poItemId, qty, req.user.id);
         out.created++;
       }
       out.dates.push(date);
