@@ -69,13 +69,29 @@ export default function PaymentRequired() {
 
   const openRoutingModal = async () => {
     setRoutingModal(true);
+    setRoutingMatrix(null);
     try {
-      const [m, u] = await Promise.all([
-        api.get('/payment-required/approval-routing'),
-        api.get('/auth/users'),
-      ]);
-      setRoutingMatrix(m.data?.matrix || {});
-      setRoutingUsers((u.data || []).filter(x => x.active !== 0));
+      // Load matrix and users in parallel.  Split error handling so a
+      // failure on one call doesn't blank the other half.
+      let matrix = null, users = [];
+      try {
+        const m = await api.get('/payment-required/approval-routing');
+        matrix = m.data?.matrix || {};
+      } catch (e1) {
+        toast.error(`Routing endpoint failed: ${e1.response?.data?.error || e1.message}`);
+      }
+      try {
+        const u = await api.get('/auth/users');
+        users = (u.data || []).filter(x => x.active !== 0);
+      } catch (e2) {
+        toast.error(`Users endpoint failed: ${e2.response?.data?.error || e2.message}`);
+      }
+      // Even if users failed we still want to show the matrix (admin
+      // can at least see current assignments).  Default to empty
+      // matrix when the route is missing entirely so the modal
+      // doesn't sit forever on "Loading…".
+      setRoutingMatrix(matrix || {});
+      setRoutingUsers(users);
     } catch (e) {
       toast.error('Failed to load routing');
     }

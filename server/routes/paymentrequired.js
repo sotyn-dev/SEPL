@@ -404,39 +404,69 @@ router.patch('/:id/proof', requirePermission('payment_required', 'view'), (req, 
 // Returns the full matrix of categories × steps with current
 // assignee (override if set, else NULL = role-based fallback).
 // Used by the admin UI to render the routing table.
+// Helper: make sure the override table exists.  Module-load CREATE
+// can race with DB init on fresh boots, so we self-heal here.
+function ensureOverrideTable(db) {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS payment_approval_overrides (
+        category TEXT NOT NULL,
+        step INTEGER NOT NULL,
+        user_id INTEGER REFERENCES users(id),
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_by INTEGER REFERENCES users(id),
+        PRIMARY KEY (category, step)
+      )
+    `);
+  } catch (_) { /* fine — table already exists or db locked momentarily */ }
+}
+
 router.get('/approval-routing', (req, res) => {
-  const db = getDb();
-  const overrides = db.prepare(`
-    SELECT o.category, o.step, o.user_id, u.name as user_name
-    FROM payment_approval_overrides o
-    LEFT JOIN users u ON o.user_id = u.id
-  `).all();
-  const map = {};
-  for (const o of overrides) {
-    map[`${o.category}_${o.step}`] = { user_id: o.user_id, user_name: o.user_name };
+  try {
+    const db = getDb();
+    ensureOverrideTable(db);
+    let overrides = [];
+    try {
+      overrides = db.prepare(`
+        SELECT o.category, o.step, o.user_id, u.name as user_name
+        FROM payment_approval_overrides o
+        LEFT JOIN users u ON o.user_id = u.id
+      `).all();
+    } catch (e) {
+      // Table genuinely missing (fresh DB) — fall through with empty map
+      console.warn('[payment-required/approval-routing] overrides table read failed:', e.message);
+    }
+    const map = {};
+    for (const o of overrides) {
+      map[`${o.category}_${o.step}`] = { user_id: o.user_id, user_name: o.user_name };
+    }
+    // Build the response by walking the static WORKFLOW so admin sees
+    // every step that exists per category, with the current assignee
+    // (override > NULL).
+    const matrix = {};
+    for (const [category, steps] of Object.entries(WORKFLOW)) {
+      matrix[category] = steps.map(s => {
+        const o = map[`${category}_${s.step}`];
+        return {
+          step: s.step,
+          name: s.name,
+          role_default: s.approver_role,
+          override_user_id: o?.user_id || null,
+          override_user_name: o?.user_name || null,
+        };
+      });
+    }
+    res.json({ matrix });
+  } catch (e) {
+    console.error('[payment-required/approval-routing GET] failed:', e.message);
+    res.status(500).json({ error: e.message });
   }
-  // Build the response by walking the static WORKFLOW so admin sees
-  // every step that exists per category, with the current assignee
-  // (override > NULL).
-  const matrix = {};
-  for (const [category, steps] of Object.entries(WORKFLOW)) {
-    matrix[category] = steps.map(s => {
-      const o = map[`${category}_${s.step}`];
-      return {
-        step: s.step,
-        name: s.name,
-        role_default: s.approver_role,
-        override_user_id: o?.user_id || null,
-        override_user_name: o?.user_name || null,
-      };
-    });
-  }
-  res.json({ matrix });
 });
 
 router.put('/approval-routing', (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
   const db = getDb();
+  ensureOverrideTable(db);
   const { category, step, user_id } = req.body || {};
   if (!category || !step) return res.status(400).json({ error: 'category and step required' });
   if (!WORKFLOW[category]) return res.status(400).json({ error: 'unknown category' });
