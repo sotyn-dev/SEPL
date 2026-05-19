@@ -172,6 +172,7 @@ export default function Vendors() {
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               <div><span className="text-gray-400 text-xs">Deals In:</span><br/><span className="font-medium">{viewData.deals_in || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Authorized:</span><br/><span className="font-medium">{viewData.authorized_dealer || '-'}</span></div>
+              <div><span className="text-gray-400 text-xs">Contact Person:</span><br/><span className="font-medium">{viewData.contact_person || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Sub Category:</span><br/><span className="font-medium">{viewData.sub_category || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Phone:</span><br/><span className="font-medium">{viewData.phone || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Email:</span><br/><span className="font-medium">{viewData.email || '-'}</span></div>
@@ -198,6 +199,11 @@ export default function Vendors() {
             <div><label className="label">Type</label><select className="select" value={form.type || ''} onChange={e => setForm({...form, type: e.target.value})}><option value="">Select</option>{TYPES.map(t => <option key={t}>{t}</option>)}</select></div>
             <div><label className="label">Deals In</label><input className="input" value={form.deals_in || ''} onChange={e => setForm({...form, deals_in: e.target.value})} /></div>
             <div><label className="label">Authorized Dealer</label><input className="input" value={form.authorized_dealer || ''} onChange={e => setForm({...form, authorized_dealer: e.target.value})} /></div>
+            {/* Contact Person — mam (2026-05-16): "contact person name
+                add here and fill in po".  Already in the vendors
+                schema (contact_person column) and the Vendor PO print
+                page reads it, but the form was missing the input. */}
+            <div><label className="label">Contact Person</label><input className="input" value={form.contact_person || ''} onChange={e => setForm({...form, contact_person: e.target.value})} placeholder="Name of person to call" /></div>
             <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} /></div>
             <div><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} /></div>
             <div>
