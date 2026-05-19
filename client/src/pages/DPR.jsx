@@ -56,18 +56,19 @@ export default function DPR() {
     setPlanWeekStart(weekStartIso || planWeekStart);
     setPlanModal(true);
     setPlanBoqItems([]);
-    // Build 7 day slots
+    // Build 7 day slots.  `items` is the per-day list of BOQ
+    // line plans (multi-item, mam 2026-05-16: "in one day multiple
+    // boq item have").  Each entry: { po_item_id, planned_qty }.
     const slots = [];
     for (let i = 0; i < 7; i++) {
       const d = new Date(weekStartIso || planWeekStart);
       d.setDate(d.getDate() + i);
       const date = d.toISOString().slice(0, 10);
-      slots.push({ date, planned_description: '', planned_manpower: 0, planned_grand_total_b: 0, planned_po_item_id: '', planned_qty: 0 });
+      slots.push({ date, planned_manpower: 0, planned_grand_total_b: 0, items: [] });
     }
     setPlanDays(slots);
     if (siteId) {
       // Load BOQ items for this site so each row can pick from them.
-      // Response is either an array (legacy) or { items, diagnostic }.
       try {
         const r = await api.get(`/dpr/sites/${siteId}/po-items`);
         const items = Array.isArray(r.data) ? r.data : (r.data?.items || []);
@@ -79,21 +80,28 @@ export default function DPR() {
         const byDate = Object.fromEntries((r.data?.days || []).map(d => [d.report_date, d]));
         setPlanDays(slots.map(s => {
           const existing = byDate[s.date];
-          if (existing && (existing.planned_description || existing.planned_manpower || existing.grand_total_b || existing.planned_po_item_id)) {
-            return {
-              date: s.date,
-              planned_description: existing.planned_description || '',
-              planned_manpower: existing.planned_manpower || 0,
-              planned_grand_total_b: existing.grand_total_b || 0,
-              planned_po_item_id: existing.planned_po_item_id || '',
-              planned_qty: existing.planned_qty || 0,
-            };
-          }
-          return s;
+          if (!existing) return s;
+          return {
+            date: s.date,
+            planned_manpower: existing.planned_manpower || 0,
+            planned_grand_total_b: existing.grand_total_b || 0,
+            items: (existing.items || []).map(it => ({
+              po_item_id: it.po_item_id,
+              planned_qty: it.planned_qty || 0,
+            })),
+          };
         }));
       } catch { /* fall back to empty slots */ }
     }
   };
+
+  // Helpers for the multi-item rows
+  const addPlanItem = (dayIdx) => setPlanDays(prev => prev.map((d, i) =>
+    i === dayIdx ? { ...d, items: [...(d.items || []), { po_item_id: '', planned_qty: 0 }] } : d));
+  const removePlanItem = (dayIdx, itemIdx) => setPlanDays(prev => prev.map((d, i) =>
+    i === dayIdx ? { ...d, items: d.items.filter((_, j) => j !== itemIdx) } : d));
+  const updatePlanItem = (dayIdx, itemIdx, patch) => setPlanDays(prev => prev.map((d, i) =>
+    i === dayIdx ? { ...d, items: d.items.map((it, j) => j === itemIdx ? { ...it, ...patch } : it) } : d));
 
   const updatePlanDay = (i, patch) => {
     setPlanDays(prev => prev.map((d, idx) => idx === i ? { ...d, ...patch } : d));
@@ -1011,88 +1019,100 @@ export default function DPR() {
             )}
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs border">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="px-2 py-1.5 text-left">#</th>
-                  <th className="px-2 py-1.5 text-left">Day</th>
-                  <th className="px-2 py-1.5 text-left">Date</th>
-                  <th className="px-2 py-1.5 text-left">BOQ Item</th>
-                  <th className="px-2 py-1.5 text-right w-24">Planned Qty</th>
-                  <th className="px-2 py-1.5 text-right w-24">Manpower</th>
-                  <th className="px-2 py-1.5 text-right w-32">Cost (₹)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {planDays.map((d, i) => {
-                  const dayName = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d.date).getDay()];
-                  const isSunday = dayName === 'Sun';
-                  // Find picked BOQ item for unit display + remaining-qty warning
-                  const item = planBoqItems.find(it => +it.id === +d.planned_po_item_id);
-                  const remaining = item ? Math.max(0, (+item.quantity || 0) - (+item.executed_quantity || 0)) : null;
-                  const exceedsRemaining = item && +d.planned_qty > remaining;
-                  return (
-                    <tr key={d.date} className={`border-t ${isSunday ? 'bg-gray-50 text-gray-500' : ''}`}>
-                      <td className="px-2 py-1.5">{i + 1}</td>
-                      <td className="px-2 py-1.5 font-semibold">{dayName}{isSunday ? ' · off' : ''}</td>
-                      <td className="px-2 py-1.5 font-mono text-[11px]">{d.date}</td>
-                      <td className="px-2 py-1.5">
-                        {planBoqItems.length > 0 ? (
-                          <select className="select text-xs w-full"
-                                  value={d.planned_po_item_id || ''}
-                                  onChange={e => updatePlanDay(i, { planned_po_item_id: e.target.value, planned_description: '' })}>
-                            <option value="">— Pick BOQ item or skip —</option>
-                            {planBoqItems.map(it => (
-                              <option key={it.id} value={it.id}>
-                                {it.item_name}{it.specification ? ` · ${it.specification}` : ''}{it.unit ? ` (${it.unit})` : ''}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input className="input text-xs w-full" value={d.planned_description}
-                                 onChange={e => updatePlanDay(i, { planned_description: e.target.value })}
-                                 placeholder={isSunday ? 'Weekly off (or planned OT)' : 'e.g. Conduit laying floor 3'} />
-                        )}
-                        {item && (
-                          <div className="text-[10px] text-gray-500 mt-0.5">
-                            BOQ qty: {item.quantity} {item.unit} · already planned/done: {item.executed_quantity || 0}{remaining !== null && <> · remaining: <strong className={remaining < 0 ? 'text-red-600' : ''}>{remaining}</strong></>}
-                          </div>
-                        )}
-                        {exceedsRemaining && (
-                          <div className="text-[10px] text-red-600 font-semibold mt-0.5">
-                            ⚠ planned qty exceeds BOQ remaining
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-2 py-1.5 text-right">
-                        <input type="number" min="0" step="0.01" className="input text-xs text-right w-full"
-                               value={d.planned_qty || ''}
-                               onChange={e => updatePlanDay(i, { planned_qty: +e.target.value })}
-                               disabled={!d.planned_po_item_id} />
-                      </td>
-                      <td className="px-2 py-1.5 text-right">
-                        <input type="number" min="0" className="input text-xs text-right w-full"
-                               value={d.planned_manpower}
-                               onChange={e => updatePlanDay(i, { planned_manpower: +e.target.value })} />
-                      </td>
-                      <td className="px-2 py-1.5 text-right">
-                        <input type="number" min="0" step="100" className="input text-xs text-right w-full"
-                               value={d.planned_grand_total_b}
-                               onChange={e => updatePlanDay(i, { planned_grand_total_b: +e.target.value })} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot className="bg-gray-50 font-semibold">
-                <tr>
-                  <td colSpan="5" className="px-2 py-2 text-right">Week Totals →</td>
-                  <td className="px-2 py-2 text-right">{planDays.reduce((s, d) => s + (+d.planned_manpower || 0), 0)} men-days</td>
-                  <td className="px-2 py-2 text-right">Rs {planDays.reduce((s, d) => s + (+d.planned_grand_total_b || 0), 0).toLocaleString('en-IN')}</td>
-                </tr>
-              </tfoot>
-            </table>
+          {/* Per-day cards.  Each day has a header row (day, date,
+              manpower, cost) and a nested table of BOQ items the
+              user can add / remove / edit. */}
+          <div className="space-y-3">
+            {planDays.map((d, i) => {
+              const dayName = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d.date).getDay()];
+              const isSunday = dayName === 'Sun';
+              return (
+                <div key={d.date} className={`border rounded ${isSunday ? 'bg-gray-50' : 'bg-white'}`}>
+                  <div className="grid grid-cols-12 gap-2 items-center px-3 py-2 border-b bg-gray-50/50 text-xs">
+                    <div className="col-span-1 font-semibold">{i + 1}</div>
+                    <div className="col-span-2 font-semibold">{dayName}{isSunday ? ' · off' : ''}</div>
+                    <div className="col-span-3 font-mono text-[11px]">{d.date}</div>
+                    <div className="col-span-2 text-right text-gray-600">Manpower</div>
+                    <div className="col-span-2">
+                      <input type="number" min="0" className="input text-xs text-right w-full"
+                             value={d.planned_manpower}
+                             onChange={e => updatePlanDay(i, { planned_manpower: +e.target.value })} />
+                    </div>
+                    <div className="col-span-2">
+                      <input type="number" min="0" step="100" className="input text-xs text-right w-full"
+                             placeholder="Cost (₹)"
+                             value={d.planned_grand_total_b}
+                             onChange={e => updatePlanDay(i, { planned_grand_total_b: +e.target.value })} />
+                    </div>
+                  </div>
+
+                  <div className="px-3 py-2">
+                    {planBoqItems.length === 0 && !isSunday && (
+                      <div className="text-[11px] text-amber-700">No BOQ items found for this site's PO — upload BOQ via Orders & Planning to enable item-level planning.</div>
+                    )}
+                    {planBoqItems.length > 0 && (
+                      <>
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="text-gray-500">
+                              <th className="text-left py-1">BOQ Item</th>
+                              <th className="text-right py-1 w-32">Planned Qty</th>
+                              <th className="w-8"></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(d.items || []).map((it, j) => {
+                              const boq = planBoqItems.find(b => +b.id === +it.po_item_id);
+                              return (
+                                <tr key={j} className="border-t">
+                                  <td className="py-1 pr-2">
+                                    <select className="select text-xs w-full"
+                                            value={it.po_item_id || ''}
+                                            onChange={e => updatePlanItem(i, j, { po_item_id: e.target.value })}>
+                                      <option value="">— Pick BOQ item —</option>
+                                      {planBoqItems.map(b => (
+                                        <option key={b.id} value={b.id}>
+                                          {b.description || `Item #${b.id}`}{b.unit ? ` (${b.unit})` : ''}{b.quantity ? ` · BOQ qty: ${b.quantity}` : ''}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </td>
+                                  <td className="py-1 text-right">
+                                    <input type="number" min="0" step="0.01" className="input text-xs text-right w-full"
+                                           value={it.planned_qty || ''}
+                                           onChange={e => updatePlanItem(i, j, { planned_qty: +e.target.value })}
+                                           disabled={!it.po_item_id}
+                                           placeholder={boq?.unit || 'qty'} />
+                                  </td>
+                                  <td className="py-1 text-center">
+                                    <button type="button" onClick={() => removePlanItem(i, j)}
+                                            className="text-gray-400 hover:text-red-600 text-lg leading-none px-1"
+                                            title="Remove item">×</button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        <button type="button" onClick={() => addPlanItem(i)}
+                                className="text-[11px] text-red-600 hover:text-red-800 underline mt-1">
+                          + Add BOQ item to this day
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="bg-gray-50 border rounded px-3 py-2 text-xs font-semibold flex justify-between">
+            <span>Week Totals</span>
+            <span>
+              {planDays.reduce((s, d) => s + (+d.planned_manpower || 0), 0)} men-days
+              {'  ·  Rs '}
+              {planDays.reduce((s, d) => s + (+d.planned_grand_total_b || 0), 0).toLocaleString('en-IN')}
+            </span>
           </div>
 
           <div className="flex justify-end gap-2 pt-2 border-t">

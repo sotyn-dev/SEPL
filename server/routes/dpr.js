@@ -508,9 +508,10 @@ try { getDb().exec(`ALTER TABLE dpr ADD COLUMN planned_po_item_id INTEGER REFERE
 try { getDb().exec(`ALTER TABLE dpr ADD COLUMN planned_qty REAL DEFAULT 0`); } catch (_) {}
 
 // Returns Mon-Sun (or any 7 consecutive days starting at week_start)
-// for one site, blending planned + actual fields.  If the row
-// doesn't exist for a date, returns a stub with only the date so
-// the UI can render the empty slot.
+// for one site, blending planned + actual fields.  Multi-item per
+// day comes back as `items: [{ id, po_item_id, description, unit,
+// planned_qty, actual_qty }]` so the UI can render the full plan.
+// Mam, 2026-05-16: "in one day multiple boq item have".
 router.get('/week-view', requirePermission('dpr', 'view'), (req, res) => {
   const { site_id, week_start } = req.query;
   if (!site_id || !week_start) return res.status(400).json({ error: 'site_id and week_start required' });
@@ -523,21 +524,36 @@ router.get('/week-view', requirePermission('dpr', 'view'), (req, res) => {
   }
   const placeholders = days.map(() => '?').join(',');
   const rows = db.prepare(`
-    SELECT d.*, u.name as planned_by_name, ap.name as approved_by_name, sb.name as submitted_by_name,
-           pi.item_name as planned_item_name, pi.specification as planned_item_spec,
-           pi.unit as planned_item_unit, pi.quantity as planned_item_boq_qty
+    SELECT d.*, u.name as planned_by_name, ap.name as approved_by_name, sb.name as submitted_by_name
     FROM dpr d
     LEFT JOIN users u  ON d.week_plan_locked_by = u.id
     LEFT JOIN users ap ON d.approved_by = ap.id
     LEFT JOIN users sb ON d.submitted_by = sb.id
-    LEFT JOIN po_items pi ON d.planned_po_item_id = pi.id
     WHERE d.site_id = ? AND d.report_date IN (${placeholders})
   `).all(site_id, ...days);
-  const byDate = Object.fromEntries(rows.map(r => [r.report_date, r]));
+  // Pull per-day work items.  dpr_work_items.description /
+  // po_item_id / planned_qty / actual_qty cover both phases of the
+  // plan-actual lifecycle.
+  const itemsByDpr = {};
+  if (rows.length) {
+    const dprIds = rows.map(r => r.id);
+    const placeholders2 = dprIds.map(() => '?').join(',');
+    const items = db.prepare(`
+      SELECT wi.*, pi.description as po_item_description, pi.unit as po_item_unit,
+             pi.quantity as po_item_boq_qty
+      FROM dpr_work_items wi
+      LEFT JOIN po_items pi ON wi.po_item_id = pi.id
+      WHERE wi.dpr_id IN (${placeholders2})
+    `).all(...dprIds);
+    items.forEach(it => {
+      (itemsByDpr[it.dpr_id] = itemsByDpr[it.dpr_id] || []).push(it);
+    });
+  }
+  const byDate = Object.fromEntries(rows.map(r => [r.report_date, { ...r, items: itemsByDpr[r.id] || [] }]));
   res.json({
     site_id: +site_id,
     week_start,
-    days: days.map(date => byDate[date] || { report_date: date, is_planned_template: 0, site_id: +site_id }),
+    days: days.map(date => byDate[date] || { report_date: date, is_planned_template: 0, site_id: +site_id, items: [] }),
   });
 });
 
@@ -554,48 +570,84 @@ router.post('/plan-week', requirePermission('dpr', 'create'), (req, res) => {
   const out = { created: 0, updated: 0, dates: [] };
 
   const findRow  = db.prepare(`SELECT id FROM dpr WHERE site_id = ? AND report_date = ?`);
+  // Day-level planned fields. Single planned_po_item_id is kept for
+  // legacy callers but the multi-item flow lives in dpr_work_items.
   const updateRow = db.prepare(`
     UPDATE dpr SET planned_description = ?, planned_manpower = ?, grand_total_b = ?,
-                   planned_po_item_id = ?, planned_qty = ?,
                    week_plan_locked_at = CURRENT_TIMESTAMP, week_plan_locked_by = ?
     WHERE id = ?
   `);
   const insertRow = db.prepare(`
     INSERT INTO dpr (
       site_id, report_date, submitted_by, planned_description, planned_manpower,
-      grand_total_b, planned_po_item_id, planned_qty,
-      is_planned_template, week_plan_locked_at, week_plan_locked_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, ?)
+      grand_total_b, is_planned_template, week_plan_locked_at, week_plan_locked_by
+    ) VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, ?)
   `);
-  // Used to auto-format planned_description from the BOQ item when
-  // the caller hasn't supplied free text but did pick an item.
-  const findPoItem = db.prepare(`SELECT item_name, specification, unit, quantity FROM po_items WHERE id = ?`);
+  // BOQ item metadata used to auto-format the planned summary text.
+  const findPoItem = db.prepare(`SELECT description, unit, quantity, rate FROM po_items WHERE id = ?`);
+  // Day-level work items.  We REPLACE all items for the (dpr_id) on
+  // each save so re-saving the planning modal doesn't accumulate
+  // ghosts.  Existing actuals (actual_qty) on rows already filled
+  // would be wiped — to avoid that, the daily-submit endpoint
+  // updates actual_qty in place rather than going through plan-week.
+  const deleteItems = db.prepare(`DELETE FROM dpr_work_items WHERE dpr_id = ?`);
+  const insertItem  = db.prepare(`
+    INSERT INTO dpr_work_items (dpr_id, po_item_id, description, unit, boq_qty, rate, planned_qty)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
 
   const txn = db.transaction(() => {
     for (const d of days) {
       const date = d.date || d.report_date;
       if (!date) continue;
-      let desc = (d.planned_description || '').trim() || null;
       const mp   = +d.planned_manpower || 0;
       const cost = +d.planned_grand_total_b || +d.planned_cost || 0;
-      const poItemId = d.planned_po_item_id ? +d.planned_po_item_id : null;
-      const qty = +d.planned_qty || 0;
-      // Auto-format description if BOQ item picked and no free text
-      if (poItemId && !desc) {
-        const item = findPoItem.get(poItemId);
-        if (item) {
-          const bits = [item.item_name, item.specification].filter(Boolean).join(' · ');
-          desc = qty > 0 ? `${bits} · ${qty} ${item.unit || ''}`.trim() : bits;
-        }
+      // Items array (multi-BOQ-per-day).  Falls back to single-item
+      // shape from older callers ({ planned_po_item_id, planned_qty })
+      // so the JS clients that haven't updated still work.
+      const rawItems = Array.isArray(d.items) ? d.items
+                     : (d.planned_po_item_id ? [{ po_item_id: d.planned_po_item_id, planned_qty: d.planned_qty }] : []);
+      const cleanedItems = rawItems
+        .filter(it => it && it.po_item_id)
+        .map(it => ({ po_item_id: +it.po_item_id, planned_qty: +it.planned_qty || 0 }));
+
+      // Build a human-readable summary string from picked items so
+      // legacy parts of the UI that read planned_description still
+      // show something sensible.
+      let desc = (d.planned_description || '').trim() || null;
+      if (!desc && cleanedItems.length) {
+        desc = cleanedItems.map(it => {
+          const pi = findPoItem.get(it.po_item_id);
+          if (!pi) return null;
+          return `${pi.description}${it.planned_qty > 0 ? ` · ${it.planned_qty} ${pi.unit || ''}`.trim() : ''}`;
+        }).filter(Boolean).join(' | ') || null;
       }
+
+      // Upsert the daily row, then re-write its work items.
       const existing = findRow.get(site_id, date);
+      let dprId;
       if (existing) {
-        updateRow.run(desc, mp, cost, poItemId, qty, req.user.id, existing.id);
+        updateRow.run(desc, mp, cost, req.user.id, existing.id);
+        dprId = existing.id;
         out.updated++;
       } else {
-        insertRow.run(site_id, date, req.user.id, desc, mp, cost, poItemId, qty, req.user.id);
+        const r = insertRow.run(site_id, date, req.user.id, desc, mp, cost, req.user.id);
+        dprId = r.lastInsertRowid;
         out.created++;
       }
+
+      // Replace the items list for this day.  Carry rate from BOQ so
+      // the dpr_work_items row has enough context for later reporting.
+      deleteItems.run(dprId);
+      for (const it of cleanedItems) {
+        const pi = findPoItem.get(it.po_item_id);
+        if (!pi) continue;
+        insertItem.run(
+          dprId, it.po_item_id, pi.description, pi.unit || 'nos',
+          +pi.quantity || 0, +pi.rate || 0, it.planned_qty,
+        );
+      }
+
       out.dates.push(date);
     }
   });
