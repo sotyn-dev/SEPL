@@ -86,21 +86,22 @@ function runCleanup(db) {
   } catch (_) { /* fall through */ }
 
   const txn = db.transaction(() => {
-    // Pass 1+2: normalise unit + spelling on every row
-    const rows = db.prepare(`SELECT id, item_name, specification, make, unit FROM item_master`).all();
+    // Pass 1+2: normalise unit + spelling on every row.  Column name
+    // is `uom` (not `unit`) — verified against the actual schema.
+    const rows = db.prepare(`SELECT id, item_name, specification, make, uom FROM item_master`).all();
     stats.scanned = rows.length;
-    const updateRow = db.prepare(`UPDATE item_master SET item_name=?, specification=?, make=?, unit=? WHERE id=?`);
+    const updateRow = db.prepare(`UPDATE item_master SET item_name=?, specification=?, make=?, uom=? WHERE id=?`);
     for (const r of rows) {
       const newName  = normaliseText(r.item_name);
       const newSpec  = normaliseText(r.specification);
       const newMake  = normaliseText(r.make);
-      const newUnit  = normaliseUnit(r.unit);
+      const newUom   = normaliseUnit(r.uom);
       const textChanged = newName !== r.item_name || newSpec !== r.specification || newMake !== r.make;
-      const unitChanged = newUnit !== r.unit;
-      if (textChanged || unitChanged) {
-        updateRow.run(newName, newSpec, newMake, newUnit, r.id);
+      const uomChanged  = newUom !== r.uom;
+      if (textChanged || uomChanged) {
+        updateRow.run(newName, newSpec, newMake, newUom, r.id);
         if (textChanged) stats.text_changed++;
-        if (unitChanged) stats.units_changed++;
+        if (uomChanged)  stats.units_changed++;
       }
     }
 

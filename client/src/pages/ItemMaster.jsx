@@ -231,6 +231,11 @@ export default function ItemMaster() {
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Dept</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Item / Spec / Size</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Make</th>
+            {/* UOM column added per mam, 2026-05-16: "SHOW HERE UOM".
+                Surfaces the cleanup script's normalised unit (MTR /
+                LTR / PCS / KG / SET / etc.) so users always see how
+                rates are quoted. */}
+            <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">UOM</th>
             <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Rate (₹)</th>
             <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Price Age</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Vendor</th>
@@ -253,6 +258,13 @@ export default function ItemMaster() {
                   </td>
                   <td className="px-3 py-2 text-sm">
                     {missingMake ? <span className="text-[10px] text-purple-700 italic">— blank —</span> : i.make}
+                  </td>
+                  <td className="px-3 py-2 text-center text-xs">
+                    {i.uom ? (
+                      <span className="inline-flex px-2 py-0.5 rounded font-mono uppercase font-medium bg-gray-100 text-gray-700">{i.uom}</span>
+                    ) : (
+                      <span className="text-[10px] text-gray-400 italic">—</span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right font-semibold text-sm">
                     Rs {(+i.current_price || 0).toLocaleString('en-IN')}
@@ -277,7 +289,7 @@ export default function ItemMaster() {
                 </tr>
               );
             })}
-            {items.length === 0 && <tr><td colSpan="9" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>No items found</p></td></tr>}
+            {items.length === 0 && <tr><td colSpan="10" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>No items found</p></td></tr>}
           </tbody>
         </table>
       </div>
