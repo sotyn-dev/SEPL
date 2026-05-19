@@ -147,19 +147,70 @@ function runCleanup(db) {
   return { skipped: false, ...stats };
 }
 
+// Propagation pass — separate idempotency flag so it runs once even
+// if v1 was already applied on an earlier deploy.  Mam (2026-05-16):
+// "please correct previous uom according to item wise master sheet".
+// Touches:
+//   - po_items.unit       when po_items.item_master_id is set
+//   - indent_items.unit   when indent_items.item_master_id is set
+function runUnitPropagation(db) {
+  try { db.exec(`CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)`); } catch (_) {}
+  const already = db.prepare(`SELECT value FROM app_settings WHERE key=?`).get('item_master_uom_propagation_v1');
+  if (already) return { skipped: true, reason: 'already_ran' };
+
+  const stats = { po_items_unit_updated: 0, indent_items_unit_updated: 0 };
+  const hasTable = (name) => {
+    try { return !!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(name); }
+    catch (_) { return false; }
+  };
+
+  const txn = db.transaction(() => {
+    if (hasTable('po_items')) {
+      const r = db.prepare(`
+        UPDATE po_items
+        SET unit = LOWER((SELECT uom FROM item_master WHERE item_master.id = po_items.item_master_id))
+        WHERE item_master_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM item_master WHERE item_master.id = po_items.item_master_id AND uom IS NOT NULL)
+      `).run();
+      stats.po_items_unit_updated = r.changes;
+    }
+    if (hasTable('indent_items')) {
+      const r = db.prepare(`
+        UPDATE indent_items
+        SET unit = LOWER((SELECT uom FROM item_master WHERE item_master.id = indent_items.item_master_id))
+        WHERE item_master_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM item_master WHERE item_master.id = indent_items.item_master_id AND uom IS NOT NULL)
+      `).run();
+      stats.indent_items_unit_updated = r.changes;
+    }
+    db.prepare(`INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)`)
+      .run('item_master_uom_propagation_v1', new Date().toISOString());
+  });
+  txn();
+  return { skipped: false, ...stats };
+}
+
 function runOnce() {
   if (process.env.ERP_DISABLE_ITEM_CLEANUP === '1') return;
   try {
     const db = getDb();
     const r = runCleanup(db);
     if (r.skipped) {
-      console.log(`[item-master-cleanup] skipped: ${r.reason}`);
+      console.log(`[item-master-cleanup] cleanup skipped: ${r.reason}`);
     } else {
       console.log(`[item-master-cleanup] scanned ${r.scanned} rows · units fixed: ${r.units_changed} · text fixed: ${r.text_changed} · dupes deleted: ${r.dupes_deleted}`);
+    }
+    // Separate propagation pass — runs the first time even if v1
+    // already ran on an earlier deploy.
+    const p = runUnitPropagation(db);
+    if (p.skipped) {
+      console.log(`[item-master-cleanup] uom propagation skipped: ${p.reason}`);
+    } else {
+      console.log(`[item-master-cleanup] uom propagation done · po_items: ${p.po_items_unit_updated} · indent_items: ${p.indent_items_unit_updated}`);
     }
   } catch (e) {
     console.error('[item-master-cleanup] failed:', e.message);
   }
 }
 
-module.exports = { runOnce, runCleanup, normaliseUnit, normaliseText };
+module.exports = { runOnce, runCleanup, runUnitPropagation, normaliseUnit, normaliseText };

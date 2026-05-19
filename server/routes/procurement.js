@@ -562,6 +562,11 @@ router.post('/indents', (req, res) => {
       if (m) {
         itemType = m.type || itemType;
         if (!make && m.make) make = m.make;
+        // Item Master UOM is the authoritative unit (mam, 2026-05-16:
+        // "automatic uom pick from itemwise master as per subitem").
+        // Overrides whatever the BOQ row said because the master sheet
+        // is the source of truth post-cleanup.
+        if (m.uom) unit = String(m.uom).toLowerCase();
       }
     }
 
@@ -665,6 +670,11 @@ router.put('/indents/:id', (req, res) => {
           if (m) {
             itemType = m.type || itemType;
             if (!make && m.make) make = m.make;
+            // Item Master UOM wins (mam, 2026-05-16: "automatic uom
+            // pick from itemwise master as per subitem").  Same rule
+            // as POST handler — only override if the user explicitly
+            // typed a different unit on this edit, else use master's.
+            if (m.uom && !i.unit) unit = String(m.uom).toLowerCase();
           }
         }
 
