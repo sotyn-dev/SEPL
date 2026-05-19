@@ -326,19 +326,43 @@ export default function PaymentRequired() {
           <div className="space-y-4 max-h-[70vh] overflow-y-auto">
             <div className="flex items-center justify-between bg-gradient-to-r from-orange-50 to-amber-50 p-4 rounded-lg">
               <div><h3 className="text-lg font-bold text-orange-800">{viewData.request_no}</h3><p className="text-sm text-orange-600">{viewData.category} - {viewData.purpose}</p></div>
-              <div className="text-right"><p className="text-2xl font-bold text-orange-700">{fmt(viewData.amount)}</p><StatusBadge status={viewData.status} /></div>
+              <div className="text-right">
+                <p className="text-2xl font-bold text-orange-700">{fmt(viewData.amount)}</p>
+                <StatusBadge status={viewData.status} />
+                {isAdmin && (
+                  <button onClick={openRoutingModal}
+                          className="block ml-auto mt-2 text-[10px] text-blue-600 hover:text-blue-800 underline"
+                          title="Re-assign HR / Accountant / Release steps to specific users (e.g. HR → Aanchal)">
+                    Manage step approvers…
+                  </button>
+                )}
+              </div>
             </div>
 
-            {/* Approval Progress */}
+            {/* Approval Progress — each step shows a "Re-assign"
+                pencil for admin (mam, 2026-05-16: "i told you now hr
+                approval give aanchal how can i change i need it
+                dynamic to change").  Clicking opens the routing
+                modal pre-focused on this category+step. */}
             <div className="flex gap-1">
               {(viewData.workflow || (viewData.category === 'TA/DA' ? TADA_STEPS : STEPS)).map(s => {
                 const approval = viewData.approvals?.find(a => a.step === s.step);
                 const isCurrent = viewData.current_step === s.step && viewData.status !== 'final_approved' && viewData.status !== 'rejected';
                 return (
-                  <div key={s.step} className={`flex-1 text-center p-2 rounded text-[11px] font-medium ${approval?.action === 'approved' ? 'bg-emerald-100 text-emerald-700' : approval?.action === 'rejected' ? 'bg-red-100 text-red-700' : isCurrent ? 'bg-amber-100 text-amber-700 ring-2 ring-amber-400' : 'bg-gray-100 text-gray-400'}`}>
+                  <div key={s.step} className={`flex-1 text-center p-2 rounded text-[11px] font-medium relative ${approval?.action === 'approved' ? 'bg-emerald-100 text-emerald-700' : approval?.action === 'rejected' ? 'bg-red-100 text-red-700' : isCurrent ? 'bg-amber-100 text-amber-700 ring-2 ring-amber-400' : 'bg-gray-100 text-gray-400'}`}>
                     <div className="font-bold">Step {s.step}</div>
                     <div className="text-[10px]">{s.name}</div>
                     {approval && <div className="text-[9px] mt-1">{approval.approved_by_name}</div>}
+                    {/* Inline re-assign — admin only, hides on already-actioned steps */}
+                    {isAdmin && !approval && s.step !== 3 && s.step !== 4 && (
+                      <button
+                        onClick={openRoutingModal}
+                        className="absolute top-1 right-1 text-[9px] px-1 py-0.5 rounded bg-white/80 hover:bg-white border border-gray-300 hover:border-red-400 text-gray-600 hover:text-red-700"
+                        title={`Re-assign ${s.name} to a specific user (e.g. Aanchal)`}
+                      >
+                        re-assign
+                      </button>
+                    )}
                   </div>
                 );
               })}
