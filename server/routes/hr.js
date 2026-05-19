@@ -475,8 +475,17 @@ router.get('/checklists/my-today', (req, res) => {
   res.json(out);
 });
 
+// Approval columns — mam (2026-05-16): "after need to approval".
+// Idempotent ALTER TABLE.  approval_status defaults to 'pending'
+// so every new completion shows up in the admin's approval queue.
+try { getDb().exec(`ALTER TABLE checklist_completions ADD COLUMN approval_status TEXT DEFAULT 'pending'`); } catch (_) {}
+try { getDb().exec(`ALTER TABLE checklist_completions ADD COLUMN approved_by INTEGER REFERENCES users(id)`); } catch (_) {}
+try { getDb().exec(`ALTER TABLE checklist_completions ADD COLUMN approved_at DATETIME`); } catch (_) {}
+try { getDb().exec(`ALTER TABLE checklist_completions ADD COLUMN approval_note TEXT`); } catch (_) {}
+
 // Mark a checklist as done for today (with optional proof_url + notes).
-// Uses UPSERT so re-submitting overwrites the proof.
+// Uses UPSERT so re-submitting overwrites the proof.  Resets the
+// approval status to 'pending' on re-submit so the admin re-reviews.
 router.post('/checklists/:id/complete', (req, res) => {
   const { proof_url, notes } = req.body;
   const today = new Date().toISOString().split('T')[0];
@@ -484,14 +493,65 @@ router.post('/checklists/:id/complete', (req, res) => {
   const c = db.prepare('SELECT id FROM checklists WHERE id=?').get(req.params.id);
   if (!c) return res.status(404).json({ error: 'Checklist not found' });
   db.prepare(
-    `INSERT INTO checklist_completions (checklist_id, user_id, completion_date, proof_url, notes)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO checklist_completions (checklist_id, user_id, completion_date, proof_url, notes, approval_status)
+     VALUES (?, ?, ?, ?, ?, 'pending')
      ON CONFLICT(checklist_id, user_id, completion_date) DO UPDATE SET
        proof_url = excluded.proof_url,
        notes = excluded.notes,
-       submitted_at = CURRENT_TIMESTAMP`
+       submitted_at = CURRENT_TIMESTAMP,
+       approval_status = 'pending',
+       approved_by = NULL, approved_at = NULL, approval_note = NULL`
   ).run(req.params.id, req.user.id, today, proof_url || null, notes || null);
-  res.json({ message: 'Checklist marked complete for today' });
+  res.json({ message: 'Checklist marked complete for today — pending admin approval' });
+});
+
+// ── GET /hr/checklists/by-date?date=YYYY-MM-DD ──────────────────
+// Mam (2026-05-16): "where i can check as per daily and previous
+// check list done or not done".  Returns every checklist active
+// on that date with its completion status (if any), proof URL,
+// and approval status.  Admin sees all; non-admin sees only their
+// own assignments.
+router.get('/checklists/by-date', (req, res) => {
+  const db = getDb();
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  const isAdmin = req.user.role === 'admin';
+  const scope = isAdmin ? '' : 'AND c.assigned_to = ?';
+  const params = [date];
+  if (!isAdmin) params.push(req.user.id);
+  const rows = db.prepare(`
+    SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
+           c.assigned_to, u.name as assigned_to_name,
+           comp.id as completion_id,
+           comp.proof_url, comp.notes, comp.submitted_at,
+           comp.approval_status, comp.approved_at, comp.approval_note,
+           au.name as approved_by_name
+    FROM checklists c
+    LEFT JOIN users u  ON c.assigned_to = u.id
+    LEFT JOIN checklist_completions comp
+      ON comp.checklist_id = c.id AND comp.user_id = c.assigned_to AND comp.completion_date = ?
+    LEFT JOIN users au ON comp.approved_by = au.id
+    WHERE 1=1 ${scope}
+    ORDER BY u.name, c.description
+  `).all(date, ...params);
+  res.json({ date, rows });
+});
+
+// ── POST /hr/checklists/completions/:id/decision (admin only) ───
+// Approve or reject a checklist completion.  Body: { status, note }.
+router.post('/checklists/completions/:id/decision', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const { status, note } = req.body || {};
+  if (status !== 'approved' && status !== 'rejected') {
+    return res.status(400).json({ error: 'status must be "approved" or "rejected"' });
+  }
+  const db = getDb();
+  const r = db.prepare(`
+    UPDATE checklist_completions
+    SET approval_status = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP, approval_note = ?
+    WHERE id = ?
+  `).run(status, req.user.id, note || null, req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Completion not found' });
+  res.json({ message: `Marked ${status}` });
 });
 
 module.exports = router;

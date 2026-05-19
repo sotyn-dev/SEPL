@@ -5,7 +5,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiExternalLink, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiExternalLink, FiDownload, FiCalendar, FiCheck, FiX, FiClock } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
 export default function Checklists() {
@@ -19,6 +19,44 @@ export default function Checklists() {
   // Today's completions keyed by checklist_id — lets us mark rows green + show proof link inline
   const [todayDone, setTodayDone] = useState({});
   const [uploadingId, setUploadingId] = useState(null);
+
+  // History / approval tab — mam (2026-05-16): "where i can check as
+  // per daily and previous check list done or not done proof and
+  // after need to approval".  Switching to 'by-date' loads the
+  // /hr/checklists/by-date endpoint with completion + approval data.
+  const [view, setView] = useState('current'); // 'current' | 'by-date'
+  const [historyDate, setHistoryDate] = useState(new Date().toISOString().slice(0, 10));
+  const [historyRows, setHistoryRows] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const loadHistory = async (d) => {
+    setHistoryLoading(true);
+    try {
+      const r = await api.get('/hr/checklists/by-date', { params: { date: d || historyDate } });
+      setHistoryRows(r.data?.rows || []);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed to load history');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  // Admin approve / reject a completion.  Optional note via prompt
+  // (will swap to a proper modal if mam asks for richer UX later).
+  const decideCompletion = async (compId, status) => {
+    let note = '';
+    if (status === 'rejected') {
+      note = prompt('Why rejected? (visible to the assignee)') || '';
+      if (!note.trim()) { toast.error('Reason required for rejection'); return; }
+    }
+    try {
+      await api.post(`/hr/checklists/completions/${compId}/decision`, { status, note });
+      toast.success(`Marked ${status}`);
+      loadHistory();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed');
+    }
+  };
 
   const load = () => {
     api.get('/hr/checklists').then(r => setChecklists(r.data));
@@ -86,9 +124,134 @@ export default function Checklists() {
         </p>
       )}
 
+      {/* View toggle — "Current" = standard live list,
+          "By Date" = historical / per-day view with proof + approval. */}
+      <div className="flex gap-2 flex-wrap items-center">
+        <button onClick={() => setView('current')}
+                className={`btn ${view === 'current' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
+          Current
+        </button>
+        <button onClick={() => { setView('by-date'); loadHistory(historyDate); }}
+                className={`btn ${view === 'by-date' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
+          <FiCalendar size={13} /> By Date · Approve / Reject
+        </button>
+        {view === 'by-date' && (
+          <>
+            <input type="date" className="input text-sm w-44" value={historyDate}
+                   onChange={e => { setHistoryDate(e.target.value); loadHistory(e.target.value); }} />
+            <button onClick={() => { const y = new Date(); y.setDate(y.getDate() - 1); const iso = y.toISOString().slice(0, 10); setHistoryDate(iso); loadHistory(iso); }}
+                    className="btn btn-secondary text-xs">Yesterday</button>
+            <button onClick={() => { const iso = new Date().toISOString().slice(0, 10); setHistoryDate(iso); loadHistory(iso); }}
+                    className="btn btn-secondary text-xs">Today</button>
+            <span className="text-xs text-gray-500 ml-2">
+              {historyLoading ? 'loading…' : `${historyRows.length} row${historyRows.length === 1 ? '' : 's'} · ${historyRows.filter(r => r.completion_id).length} done · ${historyRows.filter(r => r.approval_status === 'pending').length} pending approval`}
+            </span>
+          </>
+        )}
+      </div>
 
-      {/* Admin-only filter by assignee (regular users only see their own anyway) */}
-      {isAdmin() && (
+      {/* ─── BY-DATE / APPROVAL view ─────────────────────────────── */}
+      {view === 'by-date' && (
+        <div className="card p-0 overflow-x-auto">
+          <table className="freeze-head">
+            <thead>
+              <tr>
+                <th>Person</th>
+                <th>Task</th>
+                <th>Frequency</th>
+                <th>Done?</th>
+                <th>Proof</th>
+                <th>Approval</th>
+                <th>Submitted</th>
+                {isAdmin() && <th>Actions</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {historyRows.length === 0 && !historyLoading && (
+                <tr><td colSpan={isAdmin() ? 8 : 7} className="text-center py-6 text-gray-400">
+                  No checklists for this date.
+                </td></tr>
+              )}
+              {historyRows.map(r => {
+                const done = !!r.completion_id;
+                const apStat = r.approval_status || (done ? 'pending' : '—');
+                const apBadge = apStat === 'approved' ? 'bg-emerald-100 text-emerald-700'
+                              : apStat === 'rejected' ? 'bg-red-100 text-red-700'
+                              : apStat === 'pending' ? 'bg-amber-100 text-amber-700'
+                              : 'bg-gray-100 text-gray-500';
+                return (
+                  <tr key={r.id} className={done ? '' : 'bg-gray-50/50'}>
+                    <td className="text-xs font-medium">{r.assigned_to_name || '—'}</td>
+                    <td className="font-medium max-w-md"><div className="line-clamp-2">{r.description || r.title}</div></td>
+                    <td className="capitalize text-xs">{r.frequency}</td>
+                    <td>
+                      {done ? (
+                        <span className="text-emerald-700 font-bold inline-flex items-center gap-1 text-xs"><FiCheck size={12} /> Done</span>
+                      ) : (
+                        <span className="text-red-700 font-bold inline-flex items-center gap-1 text-xs"><FiX size={12} /> Not done</span>
+                      )}
+                    </td>
+                    <td className="text-xs">
+                      {r.proof_url ? (
+                        <a href={r.proof_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:text-blue-800 underline inline-flex items-center gap-1">
+                          <FiExternalLink size={11} /> View
+                        </a>
+                      ) : <span className="text-gray-400">—</span>}
+                    </td>
+                    <td>
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-semibold uppercase ${apBadge}`}>{apStat}</span>
+                      {r.approval_note && (
+                        <div className="text-[10px] text-gray-500 italic mt-0.5" title={r.approval_note}>
+                          {r.approval_note.slice(0, 40)}{r.approval_note.length > 40 ? '…' : ''}
+                        </div>
+                      )}
+                      {r.approved_by_name && (
+                        <div className="text-[10px] text-gray-500">by {r.approved_by_name}</div>
+                      )}
+                    </td>
+                    <td className="text-xs text-gray-500 font-mono">
+                      {r.submitted_at ? new Date(r.submitted_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '—'}
+                    </td>
+                    {isAdmin() && (
+                      <td>
+                        {done && apStat === 'pending' ? (
+                          <div className="flex gap-1">
+                            <button onClick={() => decideCompletion(r.completion_id, 'approved')}
+                                    className="px-2 py-1 text-[10px] bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded font-semibold inline-flex items-center gap-1">
+                              <FiCheck size={10} /> Approve
+                            </button>
+                            <button onClick={() => decideCompletion(r.completion_id, 'rejected')}
+                                    className="px-2 py-1 text-[10px] bg-red-100 text-red-700 hover:bg-red-200 rounded font-semibold inline-flex items-center gap-1">
+                              <FiX size={10} /> Reject
+                            </button>
+                          </div>
+                        ) : done && apStat === 'rejected' ? (
+                          <button onClick={() => decideCompletion(r.completion_id, 'approved')}
+                                  className="px-2 py-1 text-[10px] bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded font-semibold inline-flex items-center gap-1">
+                            <FiCheck size={10} /> Reverse to Approved
+                          </button>
+                        ) : done && apStat === 'approved' ? (
+                          <button onClick={() => decideCompletion(r.completion_id, 'rejected')}
+                                  className="text-[10px] text-gray-500 hover:text-red-600 underline">
+                            Re-reject
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-gray-400 italic">No submission</span>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+
+      {/* Admin-only filter by assignee (regular users only see their own anyway).
+          Hidden in the by-date / approval view since that has its own date picker. */}
+      {view === 'current' && isAdmin() && (
         <div className="flex items-center gap-2">
           <label className="text-xs text-gray-500 font-semibold uppercase">Filter by person:</label>
           <select className="select text-sm max-w-xs" value={personFilter} onChange={e => setPersonFilter(e.target.value)}>
@@ -99,10 +262,10 @@ export default function Checklists() {
         </div>
       )}
 
-      {groupOrder.length === 0 && (
+      {view === 'current' && groupOrder.length === 0 && (
         <div className="card text-center py-8 text-gray-400">No checklists yet</div>
       )}
-      {groupOrder.map(personName => (
+      {view === 'current' && groupOrder.map(personName => (
         <div key={personName} className="card p-0 overflow-x-auto">
           <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
             <h4 className="font-bold text-gray-700 text-sm flex items-center gap-2">
