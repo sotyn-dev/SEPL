@@ -5,7 +5,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiSearch, FiFilter, FiEye, FiCheck, FiX, FiClock, FiCheckCircle, FiXCircle, FiUpload, FiTrash2, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiSearch, FiFilter, FiEye, FiCheck, FiX, FiClock, FiCheckCircle, FiXCircle, FiUpload, FiTrash2, FiDownload, FiSettings } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
 
@@ -56,6 +56,49 @@ export default function PaymentRequired() {
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({ status: '', category: '' });
   const [uploading, setUploading] = useState(false);
+
+  // Approval routing — admin-only (mam, 2026-05-16: "i want hr
+  // approval will give to anchal how can be it dynamic all steps").
+  // Loads on demand when the Settings modal opens to avoid an extra
+  // request on every page load.
+  const [routingModal, setRoutingModal] = useState(false);
+  const [routingMatrix, setRoutingMatrix] = useState(null);
+  const [routingUsers, setRoutingUsers] = useState([]);
+  const [routingSaving, setRoutingSaving] = useState({});
+  const isAdmin = user?.role === 'admin';
+
+  const openRoutingModal = async () => {
+    setRoutingModal(true);
+    try {
+      const [m, u] = await Promise.all([
+        api.get('/payment-required/approval-routing'),
+        api.get('/auth/users'),
+      ]);
+      setRoutingMatrix(m.data?.matrix || {});
+      setRoutingUsers((u.data || []).filter(x => x.active !== 0));
+    } catch (e) {
+      toast.error('Failed to load routing');
+    }
+  };
+  const saveRouting = async (category, step, user_id) => {
+    const key = `${category}_${step}`;
+    setRoutingSaving(s => ({ ...s, [key]: true }));
+    try {
+      await api.put('/payment-required/approval-routing', { category, step, user_id });
+      // Optimistically update the local matrix so the modal reflects the change immediately
+      setRoutingMatrix(prev => ({
+        ...prev,
+        [category]: prev[category].map(s => s.step === step
+          ? { ...s, override_user_id: user_id || null, override_user_name: user_id ? routingUsers.find(u => +u.id === +user_id)?.name || null : null }
+          : s),
+      }));
+      toast.success('Routing updated');
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Failed');
+    } finally {
+      setRoutingSaving(s => ({ ...s, [key]: false }));
+    }
+  };
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -149,6 +192,12 @@ export default function PaymentRequired() {
             ['Req No','Employee','Site','Category','Amount','Purpose','Step','Status','Required By','Created'],
             requests.map(r => [r.request_no, r.employee_name, r.site_name, r.category, r.amount, r.purpose, r.current_step, r.status, r.required_by_date, r.created_at]))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload size={16} /> Export Excel</button>
+          {isAdmin && (
+            <button onClick={openRoutingModal} className="btn btn-secondary flex items-center gap-2"
+                    title="Re-assign approval steps to specific users (HR → Aanchal, etc.)">
+              <FiSettings size={16} /> Approval Routing
+            </button>
+          )}
           {canCreate('payment_required') && (
             <button onClick={() => { setForm({ ...emptyForm, employee_name: user?.name || '', required_by_date: defaultRequiredByDate() }); setModal('add'); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={16} /> New Request</button>
           )}
@@ -714,6 +763,73 @@ export default function PaymentRequired() {
             <button type="submit" className="btn btn-primary" disabled={requiredProofsMissing(form).length > 0}>Submit Request</button>
           </div>
         </form>
+      </Modal>
+
+      {/* ─── Approval Routing modal (admin) ────────────────────────
+          Matrix of every (category × step) with a per-row user
+          dropdown.  Picking a user overrides the default role-based
+          routing — only that user (or admin) can approve that step.
+          Choosing "— Default (by role) —" clears the override. */}
+      <Modal isOpen={routingModal} onClose={() => setRoutingModal(false)} title="Approval Routing — Re-assign Steps" wide>
+        {!routingMatrix ? (
+          <div className="py-8 text-center text-gray-400">Loading…</div>
+        ) : (
+          <div className="space-y-4">
+            <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-gray-700 leading-relaxed">
+              <strong>How this works:</strong> Each payment category has fixed steps (HR → Accountant → Release, etc.).
+              By default, anyone holding the matching role can approve. Pick a specific user here to <strong>override</strong> —
+              from then on, only that user (or admin) can clear that step. Set back to "— Default —" to revert to role-based routing.
+              <br />Example: <em>TA/DA · HR Approval → pick Aanchal</em> means only Aanchal (or admin) can approve HR step on TA/DA requests, regardless of who holds "HR Manager" role.
+            </div>
+            {Object.entries(routingMatrix).map(([category, steps]) => (
+              <div key={category} className="card p-3">
+                <h3 className="font-semibold text-sm mb-2 text-red-700">{category}</h3>
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left px-2 py-1.5 w-12">Step</th>
+                      <th className="text-left px-2 py-1.5">Stage</th>
+                      <th className="text-left px-2 py-1.5">Default Role</th>
+                      <th className="text-left px-2 py-1.5">Assigned To (override)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {steps.map(s => {
+                      const key = `${category}_${s.step}`;
+                      const saving = !!routingSaving[key];
+                      return (
+                        <tr key={s.step} className="border-t">
+                          <td className="px-2 py-1.5 font-mono">{s.step}</td>
+                          <td className="px-2 py-1.5 font-medium">{s.name}</td>
+                          <td className="px-2 py-1.5 text-gray-500">{s.role_default}</td>
+                          <td className="px-2 py-1.5">
+                            <select
+                              className="select w-full text-xs"
+                              disabled={saving || s.role_default === 'System'}
+                              value={s.override_user_id || ''}
+                              onChange={e => saveRouting(category, s.step, e.target.value || null)}
+                            >
+                              <option value="">— Default (by role) —</option>
+                              {routingUsers.map(u => (
+                                <option key={u.id} value={u.id}>{u.name}</option>
+                              ))}
+                            </select>
+                            {s.role_default === 'System' && (
+                              <p className="text-[10px] text-gray-400 mt-0.5">Auto-step — no manual approver.</p>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+            <div className="flex justify-end pt-2 border-t">
+              <button onClick={() => setRoutingModal(false)} className="btn btn-primary">Done</button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

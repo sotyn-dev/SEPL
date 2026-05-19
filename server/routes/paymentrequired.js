@@ -63,6 +63,31 @@ const WORKFLOW = {
   ],
 };
 
+// Per-step approver override table (mam, 2026-05-16: "i want hr
+// approval will give to anchal how can be it dynamic all steps").
+// Idempotent migration — admin can now route any (category, step)
+// to a specific user, bypassing the role-based default.  Empty row
+// or no row at all = fall back to role-based check (old behaviour).
+try {
+  getDb().exec(`
+    CREATE TABLE IF NOT EXISTS payment_approval_overrides (
+      category TEXT NOT NULL,
+      step INTEGER NOT NULL,
+      user_id INTEGER REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_by INTEGER REFERENCES users(id),
+      PRIMARY KEY (category, step)
+    )
+  `);
+} catch (_) {}
+
+function getApprovalRoutingFor(db, category, step) {
+  try {
+    const row = db.prepare(`SELECT user_id FROM payment_approval_overrides WHERE category=? AND step=?`).get(category, step);
+    return row?.user_id || null;
+  } catch (_) { return null; }
+}
+
 function canUserApproveStep(db, userId, category, step) {
   const workflow = WORKFLOW[category];
   if (!workflow) return false;
@@ -70,6 +95,14 @@ function canUserApproveStep(db, userId, category, step) {
   if (!stepInfo) return false;
   const user = db.prepare('SELECT role FROM users WHERE id=?').get(userId);
   if (user?.role === 'admin') return true;
+  // Explicit override wins.  Only the assigned user (or admin) can
+  // approve when an override is set.  No fallback to role-based —
+  // that's the point of the override.
+  const overrideUserId = getApprovalRoutingFor(db, category, step);
+  if (overrideUserId) {
+    return overrideUserId === userId;
+  }
+  // No override → role-based fallback (the original behaviour).
   const userRoles = db.prepare(`SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id=r.id WHERE ur.user_id=?`).all(userId);
   return userRoles.some(r => r.name === stepInfo.approver_role);
 }
@@ -365,6 +398,65 @@ router.patch('/:id/proof', requirePermission('payment_required', 'view'), (req, 
   }
   db.prepare(`UPDATE payment_requests SET ${field} = ? WHERE id = ?`).run(url, req.params.id);
   res.json({ message: 'Proof attached', field, url });
+});
+
+// ── GET / PUT approval routing ─────────────────────────────────
+// Returns the full matrix of categories × steps with current
+// assignee (override if set, else NULL = role-based fallback).
+// Used by the admin UI to render the routing table.
+router.get('/approval-routing', (req, res) => {
+  const db = getDb();
+  const overrides = db.prepare(`
+    SELECT o.category, o.step, o.user_id, u.name as user_name
+    FROM payment_approval_overrides o
+    LEFT JOIN users u ON o.user_id = u.id
+  `).all();
+  const map = {};
+  for (const o of overrides) {
+    map[`${o.category}_${o.step}`] = { user_id: o.user_id, user_name: o.user_name };
+  }
+  // Build the response by walking the static WORKFLOW so admin sees
+  // every step that exists per category, with the current assignee
+  // (override > NULL).
+  const matrix = {};
+  for (const [category, steps] of Object.entries(WORKFLOW)) {
+    matrix[category] = steps.map(s => {
+      const o = map[`${category}_${s.step}`];
+      return {
+        step: s.step,
+        name: s.name,
+        role_default: s.approver_role,
+        override_user_id: o?.user_id || null,
+        override_user_name: o?.user_name || null,
+      };
+    });
+  }
+  res.json({ matrix });
+});
+
+router.put('/approval-routing', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const db = getDb();
+  const { category, step, user_id } = req.body || {};
+  if (!category || !step) return res.status(400).json({ error: 'category and step required' });
+  if (!WORKFLOW[category]) return res.status(400).json({ error: 'unknown category' });
+  if (!WORKFLOW[category].find(s => s.step === +step)) return res.status(400).json({ error: 'unknown step for that category' });
+
+  // user_id = null clears the override (returns to role-based)
+  if (user_id == null || user_id === '' || user_id === 0) {
+    db.prepare(`DELETE FROM payment_approval_overrides WHERE category=? AND step=?`).run(category, +step);
+    return res.json({ cleared: true });
+  }
+  // Validate user exists
+  const u = db.prepare(`SELECT id, name FROM users WHERE id=?`).get(+user_id);
+  if (!u) return res.status(400).json({ error: 'unknown user_id' });
+  db.prepare(`
+    INSERT INTO payment_approval_overrides (category, step, user_id, updated_at, updated_by)
+    VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+    ON CONFLICT(category, step) DO UPDATE SET user_id=excluded.user_id,
+      updated_at=CURRENT_TIMESTAMP, updated_by=excluded.updated_by
+  `).run(category, +step, +user_id, req.user.id);
+  res.json({ category, step: +step, user_id: u.id, user_name: u.name });
 });
 
 module.exports = router;
