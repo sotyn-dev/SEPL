@@ -82,6 +82,11 @@ export default function Procurement() {
   const [dispatchItems, setDispatchItems] = useState([]);
   const [dispatchItemsLoading, setDispatchItemsLoading] = useState(false);
   const [dispatchItemsSource, setDispatchItemsSource] = useState('po_items'); // 'po_items' | 'vendor_po' | 'empty'
+  // Rate-source diagnostic — mam (2026-05-16): "if sales bill we
+  // enter BOQ SITC rate".  When the backend can't supply BOQ
+  // rates (no client PO, all zero rates, etc.) we surface a red
+  // warning instead of silently falling back to vendor cost.
+  const [dispatchRateInfo, setDispatchRateInfo] = useState({ source: null, warning: null, rated: 0, total: 0 });
   // Bill-To preview for Sales Bill modal — mam (2026-05-16):
   // critical fix #1 from the modal review.  Fetched from
   // /vendor-pos/:id/bill-to whenever a Vendor PO is picked.
@@ -1309,10 +1314,14 @@ export default function Procurement() {
           if (po?.id) {
             setDispatchItemsLoading(true);
             // Fire both fetches in parallel — items + bill-to.
-            // Items come from Client PO (selling price) with vendor PO
-            // fallback.  Bill-To comes from the same BB chain.
+            // Pass doc_type so the backend can refuse vendor-cost
+            // fallback for sales_bill (mam, 2026-05-16: "if sales
+            // bill we enter BOQ SITC rate").  openAddDispatch is
+            // always called from a "create sales bill" path, so the
+            // default is sales_bill; user can flip to challan in the
+            // modal and we'll respect either way.
             Promise.all([
-              api.get(`/procurement/vendor-pos/${po.id}/client-po-items`).catch(() => ({ data: { items: [], source: 'empty' } })),
+              api.get(`/procurement/vendor-pos/${po.id}/client-po-items`, { params: { doc_type: 'sales_bill' } }).catch(() => ({ data: { items: [], source: 'empty' } })),
               api.get(`/procurement/vendor-pos/${po.id}/bill-to`).catch(() => ({ data: null })),
             ]).then(([itemsRes, billRes]) => {
               const rawRows = (itemsRes.data?.items || []).map(it => ({
@@ -1337,6 +1346,12 @@ export default function Procurement() {
               });
               setDispatchItems(rows);
               setDispatchItemsSource(rows.length ? (itemsRes.data?.source || 'po_items') : 'empty');
+              setDispatchRateInfo({
+                source: itemsRes.data?.rate_source || null,
+                warning: itemsRes.data?.warning || null,
+                rated: +itemsRes.data?.rated_count || 0,
+                total: +itemsRes.data?.total_count || rows.length,
+              });
               setDispatchBillTo(billRes.data || null);
               // Pre-fill GST defaults from the bill-to state (intra
               // vs inter-state).  Punjab = CGST/SGST 9% each.
@@ -2063,10 +2078,19 @@ export default function Procurement() {
                 <div className="text-[10px] font-bold uppercase text-red-700">Line Items</div>
                 <div className="text-[10px] text-gray-500">
                   {dispatchItemsLoading ? 'Loading from Client PO…'
-                   : dispatchItemsSource === 'po_items' ? 'Pre-filled from Client PO line items (selling price). Tweak qty / rate / disc % if needed, or uncheck rows you\'re not dispatching today.'
-                   : dispatchItemsSource === 'vendor_po' ? 'No Client PO items found — falling back to Vendor PO items (vendor cost). Verify rates before saving.'
-                   : 'No items pre-filled. Add rows manually below.'}
+                   : form.document_type === 'challan'
+                     ? 'Delivery Challan — no rate column (FOC / RGP, not billable). Uncheck items you\'re not dispatching today.'
+                     : dispatchItemsSource === 'po_items'
+                       ? <>Rate column = <strong className="text-emerald-700">BOQ SITC selling rate</strong> from Client PO. Tweak qty / disc % if needed, or uncheck rows you\'re not billing today.{dispatchRateInfo.rated < dispatchRateInfo.total && <span className="text-amber-700"> ⚠ {dispatchRateInfo.total - dispatchRateInfo.rated} of {dispatchRateInfo.total} BOQ rows have ₹0 rate — fill them in or skip.</span>}</>
+                       : dispatchItemsSource === 'vendor_po' ? 'No Client PO items found — falling back to Vendor PO items (vendor cost). Verify rates before saving.'
+                       : 'No items pre-filled. Add rows manually below.'}
                 </div>
+                {/* Hard warning when BOQ rates are missing on a Sales Bill — mam (2026-05-16) */}
+                {form.document_type === 'sales_bill' && !dispatchItemsLoading && dispatchRateInfo.warning && (
+                  <div className="text-[11px] bg-red-100 border border-red-300 text-red-800 rounded p-2 mt-1">
+                    ❌ <strong>BOQ SITC rates missing.</strong> {dispatchRateInfo.warning}
+                  </div>
+                )}
               </div>
               <button
                 type="button"

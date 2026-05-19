@@ -1394,6 +1394,12 @@ router.get('/vendor-pos/:id/bill-to', (req, res) => {
 
 router.get('/vendor-pos/:id/client-po-items', (req, res) => {
   const db = getDb();
+  // Sales Bill must always quote the BOQ SITC rate (mam, 2026-05-16:
+  // "if sales bill we enter BOQ SITC rate which you can now according
+  // BOQ rate").  Pass ?doc_type=sales_bill to disable the vendor-cost
+  // fallback — better empty + clear warning than wrong rate billed.
+  const docType = String(req.query.doc_type || '').toLowerCase();
+  const isSalesBill = docType === 'sales_bill';
   const rows = db.prepare(`
     SELECT pi.id, pi.description, pi.quantity, pi.unit, pi.rate, pi.amount,
            pi.hsn_code,
@@ -1410,24 +1416,43 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
      ORDER BY pi.id
   `).all(req.params.id);
 
-  // If no Client PO items found (rare — e.g. FOC challan from a stand-alone
-  // indent), surface the vendor_po lines as a fallback so the modal still
-  // has something to show. We mark them so the UI knows the rate column
-  // is vendor cost, not selling price.
-  if (!rows.length) {
-    const vpRows = db.prepare(`
-      SELECT vpi.id, ii.description, vpi.quantity, ii.unit, vpi.rate, vpi.amount,
-             NULL AS hsn_code,
-             im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name
-        FROM vendor_po_items vpi
-        LEFT JOIN indent_items ii ON vpi.indent_item_id = ii.id
-        LEFT JOIN item_master im ON ii.item_master_id = im.id
-       WHERE vpi.vendor_po_id = ?
-       ORDER BY vpi.id
-    `).all(req.params.id);
-    return res.json({ items: vpRows, source: 'vendor_po' });
+  if (rows.length) {
+    // Count rows with usable rates — surfaces a warning when BOQ was
+    // uploaded but rates are all zero (i.e. BOQ stub, not priced yet).
+    const ratedCount = rows.filter(r => +r.rate > 0).length;
+    return res.json({
+      items: rows,
+      source: 'po_items',
+      rate_source: 'boq_sitc',
+      rated_count: ratedCount,
+      total_count: rows.length,
+    });
   }
-  res.json({ items: rows, source: 'po_items' });
+
+  // No Client PO items found.  For Sales Bill we refuse to fall
+  // back to vendor cost — that would be billing the wrong amount.
+  // Return empty + a clear reason so the UI can show a red warning.
+  if (isSalesBill) {
+    return res.json({
+      items: [],
+      source: 'empty',
+      rate_source: null,
+      warning: 'No Client PO / BOQ items linked to this Vendor PO. Sales Bill needs BOQ SITC rates — upload the Client PO with BOQ first, OR add rows manually with the right selling rate.',
+    });
+  }
+
+  // Challan (or other non-billable doc) — vendor PO fallback is fine.
+  const vpRows = db.prepare(`
+    SELECT vpi.id, ii.description, vpi.quantity, ii.unit, vpi.rate, vpi.amount,
+           NULL AS hsn_code,
+           im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name
+      FROM vendor_po_items vpi
+      LEFT JOIN indent_items ii ON vpi.indent_item_id = ii.id
+      LEFT JOIN item_master im ON ii.item_master_id = im.id
+     WHERE vpi.vendor_po_id = ?
+     ORDER BY vpi.id
+  `).all(req.params.id);
+  res.json({ items: vpRows, source: 'vendor_po', rate_source: 'vendor_cost' });
 });
 
 // Print-page renderer for a dispatch row. Returns a self-contained HTML
