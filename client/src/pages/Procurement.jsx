@@ -10,6 +10,27 @@ import { exportCsv } from '../utils/exportCsv';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false };
 
+// Client-side unit display normaliser (mam, 2026-05-16: "not change
+// according to itemwise" — stale "Each" / "Metre" / "Mtrs" values
+// leaked through when there's no master link).  Aligns with the
+// server-side cleanup map so the UI never shows non-standard UoMs
+// even if the row hasn't been backfilled yet.
+const UNIT_DISPLAY_MAP = {
+  each: 'nos', pieces: 'nos', piece: 'nos', nos: 'nos',
+  metre: 'mtr', metres: 'mtr', meter: 'mtr', meters: 'mtr', mtrs: 'mtr', mt: 'mtr', m: 'mtr',
+  litre: 'ltr', litres: 'ltr', liter: 'ltr', liters: 'ltr', ltr: 'ltr', l: 'ltr',
+  kgs: 'kg', kilogram: 'kg', kilograms: 'kg',
+  sets: 'set',
+  packets: 'packet', pkt: 'packet', pack: 'packet',
+  feet: 'ft',
+  watts: 'watt', w: 'watt',
+};
+const cleanUnit = (u) => {
+  if (!u) return '';
+  const v = String(u).trim().toLowerCase();
+  return UNIT_DISPLAY_MAP[v] || v;
+};
+
 // Standard units used across MEP / civil indents. Mam asked for a
 // dropdown because the Item Master's stored UoM is often wrong and
 // the user has to override it manually almost every time.
@@ -861,7 +882,7 @@ export default function Procurement() {
                           <div className="text-[9px] text-gray-400 mt-0.5 italic">merged from {r.indent_item_ids.length} BOQ rows</div>
                         )}
                       </td>
-                      <td className="px-2 py-2 text-center font-semibold whitespace-nowrap">{r.qty} {r.unit}</td>
+                      <td className="px-2 py-2 text-center font-semibold whitespace-nowrap">{r.qty} {cleanUnit(r.uom || r.unit)}</td>
                       {[1,2,3].map(n => (
                         <Fragment key={n}>
                           <td className="px-1 py-1" style={{ minWidth: '200px', width: '200px' }}>
@@ -956,7 +977,7 @@ export default function Procurement() {
                       <div className="font-medium text-red-700 text-xs">{r.indent_number}</div>
                       {r.item_code && <div className="text-[10px] font-mono text-gray-500">[{r.item_code}]</div>}
                       <div className="text-sm font-medium line-clamp-2">{[r.master_name || r.description, r.specification, r.size].filter(Boolean).join(' / ')}</div>
-                      <div className="text-[10px] text-gray-400">{r.site_name} · {r.qty} {r.unit}{r.make ? ` · ${r.make}` : ''}</div>
+                      <div className="text-[10px] text-gray-400">{r.site_name} · {r.qty} {cleanUnit(r.uom || r.unit)}{r.make ? ` · ${r.make}` : ''}</div>
                       {r.indent_item_ids.length > 1 && (
                         <div className="text-[9px] text-gray-400 italic mt-0.5">merged from {r.indent_item_ids.length} BOQ rows</div>
                       )}

@@ -1874,7 +1874,15 @@ router.get('/item-rates', (req, res) => {
   // "BOQ: <parent description>" as a sub-category above the actual
   // sub-item — mam wants both visible per row.
   const rows = db.prepare(
-    `SELECT ii.id as indent_item_id, ii.description, ii.make, ii.quantity as qty, ii.unit,
+    // Mam (2026-05-16): "not change according to itemwise" — UOM
+    // was showing the stale stored ii.unit ("Each", "Metre", etc.)
+    // even when the linked item_master had a clean uom.  The SELECT
+    // now exposes both: `unit` is the effective UOM (master.uom
+    // wins, falling back to ii.unit when no master link), `unit_raw`
+    // is the original ii.unit preserved for any audit needs.
+    `SELECT ii.id as indent_item_id, ii.description, ii.make, ii.quantity as qty,
+            LOWER(COALESCE(NULLIF(TRIM(im.uom), ''), NULLIF(TRIM(ii.unit), ''), 'nos')) as unit,
+            ii.unit as unit_raw,
             ii.item_type, ii.item_master_id, ii.po_item_id,
             im.item_code, im.item_name as master_name, im.specification, im.size, im.uom,
             poi.description as boq_description, poi.quantity as boq_qty,
