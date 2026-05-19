@@ -60,6 +60,30 @@ export default function Vendors() {
 
   const saveVendor = async (e) => {
     e.preventDefault();
+    // Mam (2026-05-16): "credit days and sub category not mandatory
+    // all other are mandatory".  Native required catches text/select
+    // fields, but SearchableSelect (state / district) and the GST
+    // valid-format check need an explicit guard before submit.
+    const missing = [];
+    if (!form.name || !String(form.name).trim()) missing.push('Vendor Name');
+    if (!form.firm_name || !String(form.firm_name).trim()) missing.push('Firm Name');
+    if (!form.category) missing.push('Category');
+    if (!form.type) missing.push('Type');
+    if (!form.deals_in || !String(form.deals_in).trim()) missing.push('Deals In');
+    if (!form.authorized_dealer || !String(form.authorized_dealer).trim()) missing.push('Authorized Dealer');
+    if (!form.contact_person || !String(form.contact_person).trim()) missing.push('Contact Person');
+    if (!form.phone || !String(form.phone).trim()) missing.push('Phone');
+    if (!form.email || !String(form.email).trim()) missing.push('Email');
+    if (!form.state) missing.push('State');
+    if (!form.district) missing.push('District');
+    if (!form.gst_number || !String(form.gst_number).trim()) missing.push('GST Number');
+    else if (!parseGstin(form.gst_number).valid) missing.push('GST Number (invalid format)');
+    if (!form.payment_terms) missing.push('Payment Terms');
+    if (!form.address || !String(form.address).trim()) missing.push('Address');
+    if (missing.length) {
+      toast.error(`Required: ${missing.join(', ')}`);
+      return;
+    }
     try {
       if (editing) { await api.put(`/procurement/vendors/${editing.id}`, form); }
       else { await api.post('/procurement/vendors', form); }
@@ -229,7 +253,7 @@ export default function Vendors() {
                 pre-builds a query for address / GST / contact info. */}
             <div>
               <label className="label flex items-center justify-between">
-                <span>Firm Name</span>
+                <span>Firm Name <span className="text-red-500">*</span></span>
                 {form.firm_name && (
                   <a target="_blank" rel="noreferrer"
                      href={`https://www.google.com/search?q=${encodeURIComponent(`${form.firm_name} ${form.district || ''} GST address contact`)}`}
@@ -239,21 +263,21 @@ export default function Vendors() {
                   </a>
                 )}
               </label>
-              <input className="input" value={form.firm_name || ''} onChange={e => setForm({...form, firm_name: e.target.value})} />
+              <input className="input" value={form.firm_name || ''} onChange={e => setForm({...form, firm_name: e.target.value})} required />
             </div>
-            <div><label className="label">Category</label><select className="select" value={form.category || ''} onChange={e => setForm({...form, category: e.target.value})}><option value="">Select</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></div>
-            <div><label className="label">Type</label><select className="select" value={form.type || ''} onChange={e => setForm({...form, type: e.target.value})}><option value="">Select</option>{TYPES.map(t => <option key={t}>{t}</option>)}</select></div>
-            <div><label className="label">Deals In</label><input className="input" value={form.deals_in || ''} onChange={e => setForm({...form, deals_in: e.target.value})} /></div>
-            <div><label className="label">Authorized Dealer</label><input className="input" value={form.authorized_dealer || ''} onChange={e => setForm({...form, authorized_dealer: e.target.value})} /></div>
+            <div><label className="label">Category <span className="text-red-500">*</span></label><select className="select" value={form.category || ''} onChange={e => setForm({...form, category: e.target.value})} required><option value="">Select</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></div>
+            <div><label className="label">Type <span className="text-red-500">*</span></label><select className="select" value={form.type || ''} onChange={e => setForm({...form, type: e.target.value})} required><option value="">Select</option>{TYPES.map(t => <option key={t}>{t}</option>)}</select></div>
+            <div><label className="label">Deals In <span className="text-red-500">*</span></label><input className="input" value={form.deals_in || ''} onChange={e => setForm({...form, deals_in: e.target.value})} required /></div>
+            <div><label className="label">Authorized Dealer <span className="text-red-500">*</span></label><input className="input" value={form.authorized_dealer || ''} onChange={e => setForm({...form, authorized_dealer: e.target.value})} required /></div>
             {/* Contact Person — mam (2026-05-16): "contact person name
                 add here and fill in po".  Already in the vendors
                 schema (contact_person column) and the Vendor PO print
                 page reads it, but the form was missing the input. */}
-            <div><label className="label">Contact Person</label><input className="input" value={form.contact_person || ''} onChange={e => setForm({...form, contact_person: e.target.value})} placeholder="Name of person to call" /></div>
-            <div><label className="label">Phone</label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} /></div>
-            <div><label className="label">Email</label><input className="input" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} /></div>
+            <div><label className="label">Contact Person <span className="text-red-500">*</span></label><input className="input" value={form.contact_person || ''} onChange={e => setForm({...form, contact_person: e.target.value})} placeholder="Name of person to call" required /></div>
+            <div><label className="label">Phone <span className="text-red-500">*</span></label><input className="input" value={form.phone || ''} onChange={e => setForm({...form, phone: e.target.value})} required /></div>
+            <div><label className="label">Email <span className="text-red-500">*</span></label><input className="input" type="email" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} required /></div>
             <div>
-              <label className="label">State</label>
+              <label className="label">State <span className="text-red-500">*</span></label>
               <SearchableSelect
                 options={STATES.map(s => ({ value: s, label: s }))}
                 value={form.state || ''} valueKey="value" displayKey="label"
@@ -262,7 +286,7 @@ export default function Vendors() {
               />
             </div>
             <div>
-              <label className="label">District</label>
+              <label className="label">District <span className="text-red-500">*</span></label>
               <SearchableSelect
                 options={(form.state ? (DISTRICTS_BY_STATE[form.state] || []) : []).map(d => ({ value: d, label: d }))}
                 value={form.district || ''} valueKey="value" displayKey="label"
@@ -276,7 +300,7 @@ export default function Vendors() {
                 paid API; this gets you the state field for free. */}
             <div>
               <label className="label flex items-center justify-between">
-                <span>GST Number</span>
+                <span>GST Number <span className="text-red-500">*</span></span>
                 {(() => {
                   const g = parseGstin(form.gst_number);
                   if (g.valid === null) return null;
@@ -289,6 +313,7 @@ export default function Vendors() {
                 className="input font-mono"
                 value={form.gst_number || ''}
                 placeholder="03AAAAA0000A1Z5"
+                required
                 onChange={e => {
                   const v = e.target.value.toUpperCase().slice(0, 15);
                   const patch = { gst_number: v };
@@ -301,11 +326,11 @@ export default function Vendors() {
                 }}
               />
             </div>
-            <div><label className="label">Payment Terms</label><select className="select" value={form.payment_terms || ''} onChange={e => setForm({...form, payment_terms: e.target.value})}><option value="">Select</option><option>Advance</option><option>Credit</option><option>PDC</option><option>COD</option></select></div>
-            <div><label className="label">Credit Days</label><input className="input" value={form.credit_days || ''} onChange={e => setForm({...form, credit_days: e.target.value})} /></div>
-            <div><label className="label">Sub Category</label><input className="input" value={form.sub_category || ''} onChange={e => setForm({...form, sub_category: e.target.value})} /></div>
+            <div><label className="label">Payment Terms <span className="text-red-500">*</span></label><select className="select" value={form.payment_terms || ''} onChange={e => setForm({...form, payment_terms: e.target.value})} required><option value="">Select</option><option>Advance</option><option>Credit</option><option>PDC</option><option>COD</option></select></div>
+            <div><label className="label">Credit Days <span className="text-[10px] text-gray-400 font-normal normal-case">(optional)</span></label><input className="input" value={form.credit_days || ''} onChange={e => setForm({...form, credit_days: e.target.value})} /></div>
+            <div><label className="label">Sub Category <span className="text-[10px] text-gray-400 font-normal normal-case">(optional)</span></label><input className="input" value={form.sub_category || ''} onChange={e => setForm({...form, sub_category: e.target.value})} /></div>
           </div>
-          <div><label className="label">Address</label><textarea className="input" rows="2" value={form.address || ''} onChange={e => setForm({...form, address: e.target.value})} /></div>
+          <div><label className="label">Address <span className="text-red-500">*</span></label><textarea className="input" rows="2" value={form.address || ''} onChange={e => setForm({...form, address: e.target.value})} required /></div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Create'}</button></div>
         </form>
       </Modal>
