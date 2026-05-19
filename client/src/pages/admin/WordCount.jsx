@@ -404,10 +404,46 @@ export default function WordCount() {
               ) : detail.length === 0 ? (
                 <div className="text-center text-gray-400 py-12 text-sm">No activity</div>
               ) : (
+                <>
+                {/* Burst-detector summary (mam, 2026-05-16: "how can it
+                    possible" — 8 checklists in 4 minutes).  Counts how
+                    many actions had <60s gap from the previous.  Surfaces
+                    the count + the largest burst window so suspicious
+                    rapid-fire patterns are visible without scrolling. */}
+                {(() => {
+                  let rapidCount = 0;
+                  let curRun = 1, longestRun = 1, longestRunModule = '';
+                  for (let i = detail.length - 2; i >= 0; i--) {
+                    const gap = (new Date(detail[i].at) - new Date(detail[i + 1].at)) / 1000;
+                    if (gap < 60) {
+                      rapidCount++;
+                      curRun++;
+                      if (curRun > longestRun) { longestRun = curRun; longestRunModule = detail[i].module || ''; }
+                    } else {
+                      curRun = 1;
+                    }
+                  }
+                  if (rapidCount === 0) return null;
+                  return (
+                    <div className="mb-3 p-2 bg-red-50 border border-red-200 rounded text-[11px] text-red-800 flex items-center justify-between">
+                      <div>
+                        ⚠ <strong>{rapidCount}</strong> rapid-fire action{rapidCount === 1 ? '' : 's'} (&lt;60s gap){longestRun >= 3 ? <> · longest streak: <strong>{longestRun} actions</strong> on <code className="bg-red-100 px-1">{longestRunModule || 'mixed'}</code></> : null}
+                      </div>
+                      <span className="text-[10px] text-red-600">batch-click or automation pattern</span>
+                    </div>
+                  );
+                })()}
                 <table className="text-xs w-full">
                   <thead className="bg-gray-50 sticky top-0">
                     <tr>
                       <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-24" title="Full date+time on hover for each row">Time</th>
+                      {/* Δ Gap — time since the previous action.  Mam
+                          (2026-05-16): "how can it possible" looking at
+                          8 checklists in 4 minutes.  Red <60s = suspiciously
+                          fast (rubber-stamp / batch click-through), amber
+                          1-5 min, green >5 min normal.  Helps spot bot/
+                          spoofing patterns at a glance. */}
+                      <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-16" title="Time between this action and the previous one">Δ Gap</th>
                       <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold w-20">Action</th>
                       <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold">Module</th>
                       <th className="text-left px-2 py-2 text-gray-500 uppercase font-semibold">Entry</th>
@@ -422,9 +458,25 @@ export default function WordCount() {
                     </tr>
                   </thead>
                   <tbody>
-                    {detail.map(d => (
+                    {detail.map((d, idx) => {
+                      // Compute gap from the previous (newer-listed)
+                      // entry.  detail is ordered newest-first, so
+                      // detail[idx + 1] is the action that came
+                      // BEFORE the current row chronologically.
+                      const prev = detail[idx + 1];
+                      const gapSec = prev ? Math.round((new Date(d.at) - new Date(prev.at)) / 1000) : null;
+                      const gapLabel = gapSec == null ? '—'
+                        : gapSec < 60 ? `${gapSec}s`
+                        : gapSec < 3600 ? `${Math.round(gapSec / 60)}m`
+                        : gapSec < 86400 ? `${Math.round(gapSec / 3600)}h`
+                        : `${Math.round(gapSec / 86400)}d`;
+                      const gapClass = gapSec == null ? 'text-gray-300'
+                        : gapSec < 60 ? 'text-red-700 font-bold bg-red-50'
+                        : gapSec < 300 ? 'text-amber-700 font-semibold bg-amber-50'
+                        : 'text-gray-500';
+                      return (
                       <tr key={d.id} className="border-t hover:bg-gray-50">
-                        <td className="px-2 py-1.5 text-gray-500 font-mono text-[11px]" title={`${d.at} (UTC) · IST display below`}>
+                        <td className="px-2 py-1.5 text-gray-500 font-mono text-[11px]" title={`${d.at} (UTC)`}>
                           {/* Mam (2026-05-16): "it showing wrong time" — the
                               audit log stores UTC timestamps but the previous
                               render used the BROWSER's local timezone.  On
@@ -433,6 +485,9 @@ export default function WordCount() {
                               forces Asia/Kolkata (+5:30) regardless of where
                               the user is browsing from. */}
                           {new Date(d.at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
+                        </td>
+                        <td className={`px-2 py-1.5 font-mono text-[11px] text-center ${gapClass}`} title={gapSec == null ? 'First action in window' : `${gapSec} seconds since previous action`}>
+                          {gapLabel}
                         </td>
                         <td className="px-2 py-1.5">
                           <span className={`px-1.5 py-0.5 rounded text-[10px] ${ACTION_COLORS[d.action] || 'bg-gray-100 text-gray-700'}`}>{d.action}</span>
@@ -445,9 +500,11 @@ export default function WordCount() {
                         <td className="px-2 py-1.5 text-gray-600 text-[11px] truncate max-w-[160px]" title={d.user_agent || ''}>{shortUa(d.user_agent)}</td>
                         <td className="px-2 py-1.5 text-right font-semibold text-red-700">{fmtNum(d.chars)}{d.truncated && <span title="truncated" className="text-amber-500">*</span>}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
+                </>
               )}
             </div>
           </div>
