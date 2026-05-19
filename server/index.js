@@ -145,6 +145,17 @@ try {
   console.warn('[cash-fidelity] Scheduler not started:', e.message);
 }
 
+// Item Master cleanup — mam (2026-05-16): "correct item wise master
+// sheet unit as per market if our wrong and no need duplicacy and
+// correct the spelling".  One-shot, idempotent via
+// app_settings.item_master_cleanup_v1.  Skip via
+// ERP_DISABLE_ITEM_CLEANUP=1.
+try {
+  require('./scripts/itemMasterCleanup').runOnce();
+} catch (e) {
+  console.warn('[item-master-cleanup] failed to start:', e.message);
+}
+
 // Fire NOC auto-pilot — mam (2026-05-16): "i need easy to user for
 // update but automatically things which you can done".  Backfills
 // existing rows once on boot (idempotent via app_settings flag),
