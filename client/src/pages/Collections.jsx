@@ -37,7 +37,12 @@ export default function Collections() {
 
   const createReceivable = async (e) => {
     e.preventDefault();
-    if (!form.site_name && !form.client_name) return toast.error('Pick a site / enter client name');
+    // Mam (2026-05-20): "site name is required from business book
+    // company name unique".  Hard-require a BB-picked site — free-text
+    // fallback (`client_name only`) used to slip through.
+    if (!form.site_name || !String(form.site_name).trim()) {
+      return toast.error('Pick a site from Business Book (Site Name is mandatory)');
+    }
     if (!(+form.invoice_amount > 0)) return toast.error('Target amount must be greater than 0');
     try {
       await api.post('/collections', form);

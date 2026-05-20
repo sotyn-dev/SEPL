@@ -184,58 +184,82 @@ router.get('/md-dashboard', (req, res) => {
 // project name is used to auto-fill CRM + suggest target payment.
 router.get('/sites', (req, res) => {
   const db = getDb();
-  // Mam (2026-05-16): "here site from business book please".
-  // The Site Name dropdown is the single source of truth from BB.
-  // Older implementation grouped only by project_name and skipped
-  // rows where project_name was blank — but in practice most BB
-  // entries fill company_name first, leaving project_name empty,
-  // so the dropdown came back empty.
+  // Mam (2026-05-20): "site name is required from business book
+  // company name unique".  Explicit rule: dedupe by COMPANY_NAME
+  // only.  Previous COALESCE(project_name, company_name) approach
+  // surfaced project labels for rows that had both set — mam wants
+  // the company name as the canonical identifier across the ERP.
   //
-  // Fix: build the effective key as COALESCE(project_name,
-  // company_name) and group by that.  Result: every BB row with
-  // EITHER field set shows up exactly once.
+  // BB rows missing company_name (rare — usually CSV-import junk)
+  // fall back to project_name so we don't drop their existing
+  // receivables, but the dropdown labels them with project_name
+  // and tags them as "(no company set)" so mam can fix them in BB.
   const rows = db.prepare(`
     SELECT MIN(bb.id) as business_book_id,
-           COALESCE(NULLIF(TRIM(bb.project_name), ''), NULLIF(TRIM(bb.company_name), '')) as effective_name,
+           TRIM(bb.company_name) as company_name,
            GROUP_CONCAT(DISTINCT bb.client_name)  as client_names,
-           GROUP_CONCAT(DISTINCT bb.company_name) as company_names,
            GROUP_CONCAT(DISTINCT bb.project_name) as project_names,
            MIN(bb.lead_no) as lead_no,
            (SELECT po.crm_name FROM purchase_orders po
-              WHERE po.business_book_id = MIN(bb.id)
+              JOIN business_book bb2 ON po.business_book_id = bb2.id
+              WHERE TRIM(bb2.company_name) = TRIM(bb.company_name)
                 AND po.crm_name IS NOT NULL AND po.crm_name <> ''
               ORDER BY po.created_at DESC LIMIT 1) as crm_name,
            (SELECT COALESCE(SUM(po.total_amount), 0) FROM purchase_orders po
-              WHERE po.business_book_id IN (
-                SELECT id FROM business_book bb2
-                 WHERE COALESCE(NULLIF(TRIM(bb2.project_name), ''), NULLIF(TRIM(bb2.company_name), ''))
-                       = COALESCE(NULLIF(TRIM(bb.project_name), ''), NULLIF(TRIM(bb.company_name), ''))
-              )) as latest_po_value,
+              JOIN business_book bb2 ON po.business_book_id = bb2.id
+              WHERE TRIM(bb2.company_name) = TRIM(bb.company_name)) as latest_po_value,
            (SELECT po.po_number FROM purchase_orders po
-              WHERE po.business_book_id = MIN(bb.id)
+              JOIN business_book bb2 ON po.business_book_id = bb2.id
+              WHERE TRIM(bb2.company_name) = TRIM(bb.company_name)
               ORDER BY po.created_at DESC LIMIT 1) as latest_po_number
       FROM business_book bb
-     WHERE (bb.project_name IS NOT NULL AND TRIM(bb.project_name) <> '')
-        OR (bb.company_name IS NOT NULL AND TRIM(bb.company_name) <> '')
-     GROUP BY COALESCE(NULLIF(TRIM(bb.project_name), ''), NULLIF(TRIM(bb.company_name), ''))
-     ORDER BY effective_name
+     WHERE bb.company_name IS NOT NULL AND TRIM(bb.company_name) <> ''
+     GROUP BY TRIM(bb.company_name)
+     ORDER BY TRIM(bb.company_name)
   `).all();
 
-  // Label = effective_name + first client_name so mam can search by
-  // either ("Pune Tower", "Hagerstone", etc.) and still pick the right site.
-  const list = rows.map(r => ({
-    business_book_id: r.business_book_id,
-    id: r.business_book_id,
-    name: r.effective_name,
-    project_name: (r.project_names || '').split(',').filter(Boolean)[0] || r.effective_name,
-    client_name: (r.client_names || '').split(',').filter(Boolean)[0] || null,
-    company_name: (r.company_names || '').split(',').filter(Boolean)[0] || r.effective_name,
-    lead_no: r.lead_no,
-    crm_name: r.crm_name,
-    latest_po_value: r.latest_po_value,
-    latest_po_number: r.latest_po_number,
-    label: [r.effective_name, (r.client_names || '').split(',').filter(Boolean)[0]].filter(Boolean).join(' · '),
-  }));
+  // Fallback rows for BB entries with no company_name but a project_name
+  // (mam asked for the dropdown to never silently drop existing data).
+  const orphans = db.prepare(`
+    SELECT MIN(id) as business_book_id,
+           TRIM(project_name) as project_name,
+           GROUP_CONCAT(DISTINCT client_name) as client_names,
+           MIN(lead_no) as lead_no
+    FROM business_book
+    WHERE (company_name IS NULL OR TRIM(company_name) = '')
+      AND project_name IS NOT NULL AND TRIM(project_name) <> ''
+    GROUP BY TRIM(project_name)
+    ORDER BY TRIM(project_name)
+  `).all();
+
+  const list = [
+    ...rows.map(r => ({
+      business_book_id: r.business_book_id,
+      id: r.business_book_id,
+      name: r.company_name,
+      project_name: (r.project_names || '').split(',').filter(Boolean)[0] || r.company_name,
+      client_name: (r.client_names || '').split(',').filter(Boolean)[0] || null,
+      company_name: r.company_name,
+      lead_no: r.lead_no,
+      crm_name: r.crm_name,
+      latest_po_value: r.latest_po_value,
+      latest_po_number: r.latest_po_number,
+      label: [r.company_name, (r.client_names || '').split(',').filter(Boolean)[0]].filter(Boolean).join(' · '),
+    })),
+    ...orphans.map(o => ({
+      business_book_id: o.business_book_id,
+      id: o.business_book_id,
+      name: o.project_name,
+      project_name: o.project_name,
+      client_name: (o.client_names || '').split(',').filter(Boolean)[0] || null,
+      company_name: null,
+      lead_no: o.lead_no,
+      crm_name: null,
+      latest_po_value: 0,
+      latest_po_number: null,
+      label: `${o.project_name} · (no company set)`,
+    })),
+  ];
   res.json(list);
 });
 
