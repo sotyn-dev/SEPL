@@ -2795,7 +2795,7 @@ function initializeDatabase() {
   const ALL_MODULES = [
     'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement','cashflow','collections','payment_required','attendance','indent_fms','dpr',
     'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags','company_assets','help_tickets',
-    'sub_contractors','ai_agent','crm_funnel','cheques'
+    'sub_contractors','ai_agent','crm_funnel','cheques','fire_noc','rental_tools','influencers'
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
@@ -2805,6 +2805,15 @@ function initializeDatabase() {
   const adminRole = db.prepare("SELECT id FROM roles WHERE name='Admin'").get();
   if (adminRole) {
     const existingPerms = db.prepare('SELECT COUNT(*) as c FROM role_permissions WHERE role_id=?').get(adminRole.id);
+    // Self-healing top-up — Admin always gets full access to every
+    // module in ALL_MODULES, even ones added after the initial seed.
+    // INSERT OR IGNORE keeps existing rows untouched; new modules
+    // (fire_noc, rental_tools, influencers, etc.) get auto-added so
+    // mam doesn't have to manually tick them in Roles & Permissions
+    // after every new feature deploy.
+    const topUpAdmin = db.prepare('INSERT OR IGNORE INTO role_permissions (role_id, module, can_view, can_create, can_edit, can_delete, can_approve) VALUES (?,?,?,?,?,?,?)');
+    for (const m of ALL_MODULES) topUpAdmin.run(adminRole.id, m, 1, 1, 1, 1, 1);
+
     if (existingPerms.c === 0) {
       const insertPerm = db.prepare('INSERT OR IGNORE INTO role_permissions (role_id, module, can_view, can_create, can_edit, can_delete, can_approve) VALUES (?,?,?,?,?,?,?)');
       // Admin gets full access

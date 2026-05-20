@@ -30,6 +30,7 @@ const menuItems = [
   { path: '/crm-funnel', label: 'CRM Sales Funnel', icon: FiTarget, module: 'crm_funnel' },
   { path: '/fire-noc', label: 'Fire NOC Renewal', icon: FiTarget, module: 'fire_noc' },
   { path: '/rental-tools', label: 'Rental Tools', icon: FiTool, module: 'rental_tools' },
+  { path: '/influencers', label: 'Influencers', icon: FiUsers, module: 'influencers' },
   { path: '/quotations', label: 'BOQ & Quotations', icon: FiFileText, module: 'quotations' },
   { path: '/business-book', label: 'Business Book', icon: FiBook, module: 'business_book' },
   { path: '/item-master', label: 'Item Master', icon: FiGrid, module: 'item_master' },
