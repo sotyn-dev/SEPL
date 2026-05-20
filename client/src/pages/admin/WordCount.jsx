@@ -189,13 +189,15 @@ export default function WordCount() {
       </div>
 
       {/* Hero card — MD wants "total characters for selected date" as
-          the headline number ("monika" = 6). Make it impossible to miss. */}
+          the headline number ("monika" = 6).  Royal-blue brand
+          (mam, 2026-05-20: "this shows red" — was red gradient,
+          now matches the rest of the brand). */}
       {data && (
-        <div className="card p-6 bg-gradient-to-br from-red-600 via-red-700 to-red-900 text-white shadow-lg">
+        <div className="card p-6 bg-gradient-to-br from-blue-700 via-blue-800 to-blue-950 text-white shadow-lg">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <div className="text-[11px] uppercase tracking-widest text-red-100/80 font-semibold">Total Characters Entered</div>
-              <div className="text-[11px] text-red-100/70 mt-0.5">
+              <div className="text-[11px] uppercase tracking-widest text-blue-100/80 font-semibold">Total Characters Entered</div>
+              <div className="text-[11px] text-blue-100/70 mt-0.5">
                 {dateTo && dateTo !== date ? `${date} → ${dateTo}` : date}
               </div>
             </div>
@@ -205,15 +207,15 @@ export default function WordCount() {
           </div>
           <div className="grid grid-cols-3 gap-4 mt-5 pt-4 border-t border-white/20">
             <div>
-              <div className="text-[10px] uppercase text-red-100/70 font-semibold">Entries</div>
+              <div className="text-[10px] uppercase text-blue-100/70 font-semibold">Entries</div>
               <div className="text-xl font-bold mt-0.5">{fmtNum(data.total_activities)}</div>
             </div>
             <div>
-              <div className="text-[10px] uppercase text-red-100/70 font-semibold">Active Users</div>
+              <div className="text-[10px] uppercase text-blue-100/70 font-semibold">Active Users</div>
               <div className="text-xl font-bold mt-0.5">{data.by_user.filter(u => u.activities > 0).length}</div>
             </div>
             <div>
-              <div className="text-[10px] uppercase text-red-100/70 font-semibold">Modules Used</div>
+              <div className="text-[10px] uppercase text-blue-100/70 font-semibold">Modules Used</div>
               <div className="text-xl font-bold mt-0.5">{data.by_module.length}</div>
             </div>
           </div>
