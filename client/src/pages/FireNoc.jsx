@@ -378,8 +378,8 @@ export default function FireNoc() {
 
         {/* Next 7 days expiries */}
         <div className="card p-0">
-          <div className="p-3 border-b bg-gradient-to-r from-red-50 to-amber-50">
-            <h4 className="font-bold text-red-800">Next 7 days expiries</h4>
+          <div className="p-3 border-b bg-gradient-to-r from-blue-50 to-amber-50">
+            <h4 className="font-bold text-blue-900">Next 7 days expiries</h4>
             <p className="text-[11px] text-gray-500">cycles whose NOC expires this week — call today</p>
           </div>
           <table>
@@ -575,7 +575,7 @@ export default function FireNoc() {
         <>
           <div className="fixed inset-0 bg-black/30 z-40" onClick={closeDrawer}></div>
           <div className="fixed top-0 right-0 h-full w-full sm:w-[520px] bg-white shadow-2xl z-50 overflow-y-auto">
-            <div className="sticky top-0 bg-gradient-to-r from-red-700 to-red-900 text-white p-4 flex items-center justify-between">
+            <div className="sticky top-0 bg-gradient-to-r from-blue-800 to-blue-950 text-white p-4 flex items-center justify-between">
               <div className="min-w-0">
                 <div className="text-xs opacity-80 uppercase tracking-wider">Fire NOC Cycle #{drawerCycle.id}</div>
                 <div className="font-semibold truncate" title={drawerCycle.building_name}>{drawerCycle.building_name || drawerCycle.state + ' · ' + drawerCycle.building_type}</div>

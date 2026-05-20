@@ -130,7 +130,7 @@ export default function Login() {
 
               <button
                 type="submit"
-                className="w-full mt-2 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 active:from-red-700 active:to-red-800 text-white font-semibold py-3.5 px-4 rounded-xl shadow-lg shadow-red-300 transition-all flex items-center justify-center gap-2 group"
+                className="w-full mt-2 bg-gradient-to-r from-blue-700 to-blue-800 hover:from-blue-600 hover:to-blue-700 active:from-blue-800 active:to-blue-900 text-white font-semibold py-3.5 px-4 rounded-xl shadow-lg shadow-blue-300 transition-all flex items-center justify-center gap-2 group"
               >
                 Sign in
                 <FiArrowRight className="group-hover:translate-x-0.5 transition-transform" size={16} />
@@ -142,8 +142,8 @@ export default function Login() {
             </p>
           </div>
 
-          {/* ─── RIGHT — Brand panel (RED half) ──────────────────── */}
-          <div className="hidden lg:flex relative bg-gradient-to-br from-red-600 via-red-700 to-red-800 items-center justify-center p-12 overflow-hidden">
+          {/* ─── RIGHT — Brand panel (royal blue half, was red) ─── */}
+          <div className="hidden lg:flex relative bg-gradient-to-br from-blue-700 via-blue-800 to-blue-950 items-center justify-center p-12 overflow-hidden">
             {/* Concentric white rings — visible against the red field */}
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="absolute w-[200px] h-[200px] rounded-full border border-white/40 animate-ping-slow" />
@@ -156,13 +156,13 @@ export default function Login() {
 
             {/* Centered logo + tagline over the rings */}
             <div className="relative z-10 text-center">
-              <div className="w-36 h-36 mx-auto mb-6 rounded-2xl overflow-hidden shadow-2xl shadow-red-950/60 ring-2 ring-white/40 flex items-center justify-center bg-white/95 backdrop-blur-sm p-3">
+              <div className="w-36 h-36 mx-auto mb-6 rounded-2xl overflow-hidden shadow-2xl shadow-blue-950/60 ring-2 ring-white/40 flex items-center justify-center bg-white/95 backdrop-blur-sm p-3">
                 <img src={SEPL_LOGO_PATH}
                 onError={(e) => { if (e.target.src !== SEPL_LOGO_FALLBACK) e.target.src = SEPL_LOGO_FALLBACK; }} alt="SEPL" className="w-full h-full object-contain" />
               </div>
               <h2 className="text-4xl font-extrabold text-white mb-3 tracking-tight drop-shadow-lg">
                 Build secure. <br />
-                <span className="bg-gradient-to-r from-white via-red-100 to-white bg-clip-text text-transparent">
+                <span className="bg-gradient-to-r from-white via-blue-100 to-white bg-clip-text text-transparent">
                   Track smart.
                 </span>
               </h2>
@@ -179,7 +179,7 @@ export default function Login() {
         <p className="text-[10px] uppercase tracking-[0.35em] text-zinc-500 mb-1">
           Crafted with <span className="text-red-500">&hearts;</span> by
         </p>
-        <p className="text-sm font-bold bg-gradient-to-r from-red-700 via-red-500 to-red-700 bg-clip-text text-transparent">
+        <p className="text-sm font-bold bg-gradient-to-r from-blue-700 via-blue-500 to-blue-700 bg-clip-text text-transparent">
           Secured Engineers Pvt Ltd
         </p>
         <div className="mt-1 flex items-center justify-center gap-2">

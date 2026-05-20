@@ -267,9 +267,9 @@ export default function BusinessBook() {
       <Modal isOpen={modal === 'view'} onClose={() => { setModal(null); setViewEntry(null); }} title={`${viewEntry?.lead_no || ''} - ${viewEntry?.client_name || ''}`} wide>
         {viewEntry && (
           <div className="space-y-4 max-h-[70vh] overflow-y-auto">
-            <div className="flex items-center justify-between bg-gradient-to-r from-red-50 to-red-50 p-4 rounded-lg">
+            <div className="flex items-center justify-between bg-gradient-to-r from-blue-50 to-blue-50 p-4 rounded-lg">
               <div>
-                <h3 className="text-lg font-bold text-red-800">{viewEntry.lead_no}</h3>
+                <h3 className="text-lg font-bold text-blue-900">{viewEntry.lead_no}</h3>
                 <p className="text-sm text-red-600">{viewEntry.project_name || viewEntry.client_name}</p>
               </div>
               <div className="text-right">

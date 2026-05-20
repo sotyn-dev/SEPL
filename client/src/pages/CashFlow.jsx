@@ -235,7 +235,7 @@ export default function CashFlow() {
       {tab === 'projects' && (
         <>
           <div className="card p-0 overflow-hidden">
-            <div className="p-3 border-b bg-gradient-to-r from-red-50 to-amber-50 flex items-center justify-between">
+            <div className="p-3 border-b bg-gradient-to-r from-blue-50 to-amber-50 flex items-center justify-between">
               <div>
                 <h4 className="font-bold text-red-800">All New Projects · Financial Tracker</h4>
                 <p className="text-[11px] text-gray-500 mt-0.5">Click any row's pencil to edit · totals auto-update at bottom</p>

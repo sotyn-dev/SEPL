@@ -203,9 +203,9 @@ export default function RolesPermissions() {
         <div className="card lg:col-span-3 p-0">
           {selectedRole ? (
             <>
-              <div className="p-4 border-b flex items-center justify-between bg-gradient-to-r from-red-50 to-white">
+              <div className="p-4 border-b flex items-center justify-between bg-gradient-to-r from-blue-50 to-white">
                 <div>
-                  <h4 className="font-semibold text-gray-800">Permissions for: <span className="text-red-600">{selectedRole.name}</span></h4>
+                  <h4 className="font-semibold text-gray-800">Permissions for: <span className="text-blue-700">{selectedRole.name}</span></h4>
                   <p className="text-xs text-gray-500 mt-1">Click checkboxes to toggle permissions. Changes are saved when you click "Save Permissions".</p>
                 </div>
                 <button onClick={savePermissions} disabled={saving} className="btn btn-primary flex items-center gap-2">

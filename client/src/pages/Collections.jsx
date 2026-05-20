@@ -204,7 +204,7 @@ export default function Collections() {
           lagging. */}
       {targetSummary && (
         <div className="card p-0 overflow-hidden">
-          <div className="px-4 py-3 border-b bg-gradient-to-r from-red-50 to-white">
+          <div className="px-4 py-3 border-b bg-gradient-to-r from-blue-50 to-white">
             <h4 className="font-semibold text-gray-700">Payment Target vs Received <span className="text-xs text-gray-400 font-normal">(with ageing)</span></h4>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 p-4">

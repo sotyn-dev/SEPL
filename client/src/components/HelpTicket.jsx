@@ -90,7 +90,7 @@ export default function HelpTicket() {
         {...helpFab.handlers}
         onClick={helpFab.onClickGuard(() => setOpen(true))}
         style={{ ...helpFab.style, zIndex: 30 }}
-        className="w-14 h-14 rounded-full bg-gradient-to-br from-red-600 to-red-600 text-white shadow-xl shadow-red-500/40 flex items-center justify-center hover:scale-110 transition-transform cursor-grab active:cursor-grabbing"
+        className="w-14 h-14 rounded-full bg-gradient-to-br from-blue-700 to-blue-800 text-white shadow-xl shadow-blue-500/40 flex items-center justify-center hover:scale-110 transition-transform cursor-grab active:cursor-grabbing"
         title="Help & Support (drag to move)">
         <FiHelpCircle size={24} />
       </button>
@@ -98,7 +98,7 @@ export default function HelpTicket() {
       {/* Help Panel */}
       {open && (
         <div className="fixed bottom-24 right-6 z-40 w-[420px] max-w-[calc(100vw-2rem)] max-h-[80vh] bg-white rounded-2xl shadow-2xl border flex flex-col">
-          <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-red-600 to-red-600 text-white rounded-t-2xl">
+          <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-blue-700 to-blue-800 text-white rounded-t-2xl">
             <div>
               <h3 className="font-bold">Help & Support</h3>
               <p className="text-xs opacity-80">We're here to help</p>

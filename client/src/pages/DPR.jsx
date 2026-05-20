@@ -312,9 +312,9 @@ export default function DPR() {
 
           {/* BOQ vs DPR-consumed progress, grouped by engineer → site → item */}
           <div className="card p-0 overflow-x-auto">
-            <div className="bg-gradient-to-r from-red-600 to-red-600 text-white px-4 py-3">
+            <div className="bg-gradient-to-r from-blue-700 to-blue-800 text-white px-4 py-3">
               <h3 className="font-bold text-base">Engineer Progress — BOQ vs DPR Consumed</h3>
-              <p className="text-xs text-red-100">Per engineer, per site, per BOQ item. Incomplete items listed first.{!isAdmin() && ' Showing only your sites.'}</p>
+              <p className="text-xs text-blue-100">Per engineer, per site, per BOQ item. Incomplete items listed first.{!isAdmin() && ' Showing only your sites.'}</p>
             </div>
             <div className="p-3 space-y-3">
               {progress.length === 0 && (
@@ -328,7 +328,7 @@ export default function DPR() {
                 const engBar = engPct >= 90 ? 'bg-emerald-500' : engPct >= 50 ? 'bg-red-500' : engPct >= 20 ? 'bg-amber-500' : 'bg-red-400';
                 return (
                 <div key={eng.engineer.id} className="border rounded-lg overflow-hidden">
-                  <div className="bg-gradient-to-r from-red-50 to-red-50 px-3 py-2 border-b flex justify-between items-center gap-3">
+                  <div className="bg-gradient-to-r from-blue-50 to-blue-50 px-3 py-2 border-b flex justify-between items-center gap-3">
                     <div className="min-w-0">
                       <div className="font-bold text-sm text-gray-800">{eng.engineer.name}</div>
                       <div className="text-[11px] text-gray-500 truncate">{eng.engineer.email} · {eng.site_count} site{eng.site_count === 1 ? '' : 's'}</div>

@@ -1445,12 +1445,13 @@ function ReportsTab({ summary, warehouses }) {
 
   return (
     <>
-      {/* Hero: total stock value across all warehouses */}
-      <div className="card p-6 bg-gradient-to-br from-red-600 via-red-700 to-red-900 text-white shadow-lg">
+      {/* Hero: total stock value across all warehouses · royal-blue brand
+          (mam, 2026-05-20).  Was red gradient. */}
+      <div className="card p-6 bg-gradient-to-br from-blue-700 via-blue-800 to-blue-950 text-white shadow-lg">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="text-[11px] uppercase tracking-widest text-red-100/80 font-semibold">Total Stock Value (All Warehouses)</div>
-            <div className="text-[11px] text-red-100/70 mt-0.5">Moving-average basis · {fmtNum(grandItems)} items in stock</div>
+            <div className="text-[11px] uppercase tracking-widest text-blue-100/80 font-semibold">Total Stock Value (All Warehouses)</div>
+            <div className="text-[11px] text-blue-100/70 mt-0.5">Moving-average basis · {fmtNum(grandItems)} items in stock</div>
           </div>
           <div className="text-4xl sm:text-5xl font-extrabold tracking-tight tabular-nums">
             {fmtMoney(grandTotal)}

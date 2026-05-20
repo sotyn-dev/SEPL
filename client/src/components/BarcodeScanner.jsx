@@ -70,7 +70,7 @@ export default function BarcodeScanner({ open, onClose, onScan }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden" onClick={e => e.stopPropagation()}>
-        <div className="px-4 py-3 bg-gradient-to-r from-red-600 to-red-700 text-white flex items-center justify-between">
+        <div className="px-4 py-3 bg-gradient-to-r from-blue-700 to-blue-800 text-white flex items-center justify-between">
           <h3 className="font-bold flex items-center gap-2"><FiCamera size={16} /> Scan Barcode / QR</h3>
           <button onClick={onClose} className="p-1 hover:bg-white/20 rounded"><FiX size={18} /></button>
         </div>

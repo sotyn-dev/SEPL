@@ -52,21 +52,22 @@ export default function CollectionsMD() {
         <button onClick={load} className="btn btn-secondary flex items-center gap-2"><FiRefreshCw size={14} /> Refresh</button>
       </div>
 
-      {/* Hero */}
-      <div className="card p-6 bg-gradient-to-br from-red-600 via-red-700 to-red-900 text-white shadow-lg">
+      {/* Hero — royal-blue brand (mam, 2026-05-20: "red here is also").
+          Was from-red-600 via-red-700 to-red-900. */}
+      <div className="card p-6 bg-gradient-to-br from-blue-700 via-blue-800 to-blue-950 text-white shadow-lg">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <div>
-            <div className="text-[10px] uppercase tracking-widest text-red-100/80 font-semibold">Sites</div>
+            <div className="text-[10px] uppercase tracking-widest text-blue-100/80 font-semibold">Sites</div>
             <div className="text-3xl font-extrabold mt-1">{fmtN(data.totals.sites)}</div>
           </div>
           <div>
-            <div className="text-[10px] uppercase tracking-widest text-red-100/80 font-semibold">Target Total</div>
+            <div className="text-[10px] uppercase tracking-widest text-blue-100/80 font-semibold">Target Total</div>
             <div className="text-3xl font-extrabold mt-1">{fmtL(data.totals.target)}</div>
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-widest text-emerald-100 font-semibold">Received</div>
             <div className="text-3xl font-extrabold mt-1">{fmtL(data.totals.received)}</div>
-            <div className="text-[10px] text-red-100/70">{data.totals.collection_pct}% collected</div>
+            <div className="text-[10px] text-blue-100/70">{data.totals.collection_pct}% collected</div>
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-widest text-amber-100 font-semibold">Outstanding</div>

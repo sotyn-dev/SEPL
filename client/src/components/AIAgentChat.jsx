@@ -255,10 +255,10 @@ export default function AIAgentChat() {
 
       {open && (
         <div className="fixed bottom-6 right-6 z-40 w-[min(90vw,400px)] h-[min(80vh,560px)] bg-white border border-gray-200 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-red-700 to-red-900 text-white">
+          <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-blue-800 to-blue-950 text-white">
             <div>
               <div className="font-semibold text-sm">Ask ERP</div>
-              <div className="text-[10px] text-red-100 -mt-0.5">AI assistant · reads your data</div>
+              <div className="text-[10px] text-blue-100 -mt-0.5">AI assistant · reads your data</div>
             </div>
             <div className="flex items-center gap-1">
               {/* Auto-speak toggle — when on, every new AI reply is read
@@ -301,7 +301,7 @@ export default function AIAgentChat() {
               <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
                   m.role === 'user'
-                    ? 'bg-red-700 text-white'
+                    ? 'bg-blue-800 text-white'
                     : m.error
                       ? 'bg-yellow-50 text-yellow-900 border border-yellow-200'
                       : 'bg-white border border-gray-200 text-gray-800'
