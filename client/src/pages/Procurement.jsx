@@ -1125,11 +1125,16 @@ export default function Procurement() {
           )}
 
           <div className="card p-0"><table className="freeze-head">
-            <thead><tr><th>PO Number</th><th>PO Date</th><th>Vendor</th><th>Amount</th><th>File</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>PO Number</th><th>Indent</th><th>PO Date</th><th>Vendor</th><th>Amount</th><th>File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {vendorPos.map(v => (
                 <tr key={v.id}>
                   <td className="font-medium">{v.po_number}</td>
+                  {/* Indent column (mam, 2026-05-20). */}
+                  <td className="text-xs">
+                    <div className="font-mono font-semibold text-blue-800">{v.indent_number || <span className="text-gray-300">—</span>}</div>
+                    {v.indent_site_name && <div className="text-[10px] text-gray-500 truncate max-w-[140px]" title={v.indent_site_name}>{v.indent_site_name}</div>}
+                  </td>
                   <td>{v.po_date || <span className="text-gray-300">—</span>}</td>
                   <td>{v.vendor_name}</td>
                   <td>Rs {v.total_amount?.toLocaleString()}</td>
@@ -1189,7 +1194,7 @@ export default function Procurement() {
                   </td>
                 </tr>
               ))}
-              {vendorPos.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No vendor POs yet — click "Create Vendor PO"</td></tr>}
+              {vendorPos.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No vendor POs yet — click "Create Vendor PO"</td></tr>}
             </tbody>
           </table></div>
         </>
@@ -1243,6 +1248,11 @@ export default function Procurement() {
                 <table className="text-xs">
                   <thead><tr className="bg-amber-100/50">
                     <th className="px-2 py-1 text-left">PO Number</th>
+                    {/* Indent column added (mam, 2026-05-20: "show here
+                        also indent number").  Carries indent_number +
+                        site sub-text so mam can trace a PO back to its
+                        raising indent without opening the row. */}
+                    <th className="px-2 py-1 text-left">Indent</th>
                     <th className="px-2 py-1 text-left">Vendor</th>
                     <th className="px-2 py-1">PO Date</th>
                     <th className="px-2 py-1">Expected Receipt</th>
@@ -1263,6 +1273,12 @@ export default function Procurement() {
                       return (
                         <tr key={po.id} className="border-b border-amber-100">
                           <td className="px-2 py-1.5 font-semibold text-red-700 whitespace-nowrap">{po.po_number}</td>
+                          <td className="px-2 py-1.5 max-w-[160px] whitespace-nowrap">
+                            <div className="font-mono text-[11px] font-semibold text-blue-800">{po.indent_number || <span className="text-gray-300">—</span>}</div>
+                            {po.indent_site_name && (
+                              <div className="text-[10px] text-gray-500 truncate" title={po.indent_site_name}>{po.indent_site_name}</div>
+                            )}
+                          </td>
                           <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>

@@ -776,8 +776,12 @@ router.get('/indents/:id', (req, res) => {
 // as its own exception type (TODO).
 router.get('/vendor-po', (req, res) => {
   const db = getDb();
+  // Mam (2026-05-20): "show here also indent number so that easily
+  // can see".  Added LEFT JOIN indents so each row carries
+  // indent_number + site_name for the Follow-up table.
   const rows = db.prepare(`
     SELECT vp.*, v.name as vendor_name,
+           ind.indent_number, ind.site_name as indent_site_name,
            COALESCE((
              SELECT ROUND(SUM(vpi.amount) * 1.18, 2)
              FROM vendor_po_items vpi
@@ -785,6 +789,7 @@ router.get('/vendor-po', (req, res) => {
            ), vp.total_amount) as display_total
     FROM vendor_pos vp
     LEFT JOIN vendors v ON vp.vendor_id = v.id
+    LEFT JOIN indents ind ON vp.indent_id = ind.id
     ORDER BY vp.created_at DESC
   `).all();
   // Surface drift so the frontend can show a small warning chip if
