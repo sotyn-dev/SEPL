@@ -91,6 +91,42 @@ export default function Procurement() {
   // critical fix #1 from the modal review.  Fetched from
   // /vendor-pos/:id/bill-to whenever a Vendor PO is picked.
   const [dispatchBillTo, setDispatchBillTo] = useState(null);
+
+  // Vendor PO edit modal (mam, 2026-05-20: "how can i edit po
+  // after creation because some time need").  Holds the PO row
+  // being edited; null = closed.  Form fields are limited to
+  // header-level safe edits (date / amount / advance / remarks)
+  // — line items + vendor change need their own flows.
+  const [editPo, setEditPo] = useState(null);
+  const [editPoForm, setEditPoForm] = useState({});
+  const [editPoSaving, setEditPoSaving] = useState(false);
+
+  const openEditVendorPo = (v) => {
+    setEditPo(v);
+    setEditPoForm({
+      po_date: v.po_date || '',
+      expected_receipt_date: v.expected_receipt_date || '',
+      total_amount: v.total_amount || 0,
+      advance_required: v.advance_required || 0,
+      remarks: v.remarks || '',
+    });
+  };
+  const saveEditVendorPo = async (e) => {
+    e.preventDefault();
+    if (!editPo?.id) return;
+    setEditPoSaving(true);
+    try {
+      await api.put(`/procurement/vendor-po/${editPo.id}`, editPoForm);
+      toast.success('PO updated');
+      setEditPo(null);
+      setEditPoForm({});
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Save failed');
+    } finally {
+      setEditPoSaving(false);
+    }
+  };
   // When set, the Raise Indent modal is in EDIT mode for this indent id —
   // saveIndent will PUT instead of POST. Used by the Edit pencil action
   // (mam: 'site eng is on training, if they fill wrong indent can edit').
@@ -1115,6 +1151,18 @@ export default function Procurement() {
                         (only when already cancelled), Delete (hard, only when
                         no bills / delivery notes block it). */}
                     <div className="flex items-center gap-1">
+                      {/* Edit (pencil) — mam (2026-05-20): "how can i
+                          edit po after creation because some time
+                          need".  Opens a modal with the safe-to-edit
+                          header fields.  Hidden once cancelled
+                          (restore first). */}
+                      {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
+                        <button onClick={() => openEditVendorPo(v)}
+                                className="p-1 text-gray-400 hover:text-blue-700"
+                                title="Edit PO (date / amount / advance / remarks)">
+                          <FiEdit2 size={14} />
+                        </button>
+                      )}
                       {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
                         <button onClick={async () => {
                           const reason = prompt(`Cancel Vendor PO "${v.po_number}"?\n\nThe PO + linked bills/notes stay visible for audit, but it disappears from active follow-ups. Items go back to "Pending for PO".\n\nReason (optional):`);
@@ -2406,6 +2454,71 @@ export default function Procurement() {
           </div>
         </form>
       </Modal>
+
+      {/* ─── Edit Vendor PO Modal ──────────────────────────────────
+          Mam (2026-05-20).  Header-level safe edits only.  Line
+          items / vendor swap need their own flow (not shipped yet).
+          Total-amount + vendor edits get blocked server-side when
+          any Purchase Bill references the PO.  Modal shows that
+          context inline so user knows why a field might fail. */}
+      {editPo && (
+        <Modal isOpen={true} onClose={() => { setEditPo(null); setEditPoForm({}); }} title={`Edit Vendor PO — ${editPo.po_number}`}>
+          <form onSubmit={saveEditVendorPo} className="space-y-3 text-sm">
+            <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-gray-700">
+              <strong>{editPo.po_number}</strong> · {editPo.vendor_name}
+              {editPo.cancelled && <span className="ml-2 text-red-700">· CANCELLED (restore first to edit)</span>}
+              <div className="text-[10px] text-gray-500 mt-0.5">
+                PO number is immutable.  Total / vendor blocked if any Purchase Bill references this PO — cancel the bill first if needed.
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">PO Date</label>
+                <input className="input" type="date"
+                       value={editPoForm.po_date || ''}
+                       onChange={e => setEditPoForm({ ...editPoForm, po_date: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Expected Receipt Date</label>
+                <input className="input" type="date"
+                       value={editPoForm.expected_receipt_date || ''}
+                       onChange={e => setEditPoForm({ ...editPoForm, expected_receipt_date: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Total Amount (₹)</label>
+                <input className="input text-right" type="number" step="0.01" min="0"
+                       value={editPoForm.total_amount ?? ''}
+                       onChange={e => setEditPoForm({ ...editPoForm, total_amount: +e.target.value })} />
+                <p className="text-[10px] text-gray-400 mt-0.5">
+                  Use only to correct typos. If items changed, recreate the PO.
+                </p>
+              </div>
+              <div>
+                <label className="label">Advance Required (₹)</label>
+                <input className="input text-right" type="number" step="0.01" min="0"
+                       value={editPoForm.advance_required ?? ''}
+                       onChange={e => setEditPoForm({ ...editPoForm, advance_required: +e.target.value })} />
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Remarks</label>
+              <textarea className="input" rows="3"
+                        value={editPoForm.remarks || ''}
+                        onChange={e => setEditPoForm({ ...editPoForm, remarks: e.target.value })}
+                        placeholder="Any notes about this PO — change reason, supplier follow-up, etc." />
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2 border-t">
+              <button type="button" onClick={() => { setEditPo(null); setEditPoForm({}); }} className="btn btn-secondary">Cancel</button>
+              <button type="submit" disabled={editPoSaving} className="btn btn-primary">
+                {editPoSaving ? 'Saving…' : 'Update PO'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   );
 }

@@ -1007,11 +1007,56 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   }
 });
 
+// PUT /vendor-po/:id  —  status / advance OR full header edit.
+// Mam (2026-05-20): "how can i edit po after creation because
+// some time need".  Same endpoint handles both legacy callers
+// (status / advance_paid only) and the new full-edit modal
+// (po_date, expected_receipt_date, total_amount, advance_required,
+// remarks, vendor_id).  po_number stays immutable.
+//
+// Guards:
+//   - Cancelled POs must be uncancelled before editing.
+//   - PO with linked Purchase Bills can edit dates / remarks but
+//     NOT total_amount / vendor_id (those would invalidate the bill).
 router.put('/vendor-po/:id', (req, res) => {
-  const { status, advance_paid } = req.body;
-  getDb().prepare('UPDATE vendor_pos SET status=?, advance_paid=? WHERE id=?')
-    .run(status, advance_paid ? 1 : 0, req.params.id);
-  res.json({ message: 'Updated' });
+  const db = getDb();
+  const id = req.params.id;
+  const b = req.body || {};
+  const cur = db.prepare('SELECT * FROM vendor_pos WHERE id=?').get(id);
+  if (!cur) return res.status(404).json({ error: 'Vendor PO not found' });
+  if (cur.cancelled) return res.status(400).json({ error: 'PO is cancelled — restore it before editing.' });
+
+  const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bills WHERE vendor_po_id=?').get(id).c;
+  const sets = []; const params = [];
+  const set = (k, v) => { sets.push(`${k}=?`); params.push(v); };
+
+  // Legacy fields (kept for backwards compat with status / advance toggle)
+  if (b.status !== undefined)        set('status', b.status);
+  if (b.advance_paid !== undefined)  set('advance_paid', b.advance_paid ? 1 : 0);
+
+  // New editable header fields (mam's full-edit modal)
+  if (b.po_date !== undefined)               set('po_date', b.po_date || null);
+  if (b.expected_receipt_date !== undefined) set('expected_receipt_date', b.expected_receipt_date || null);
+  if (b.remarks !== undefined)               set('remarks', b.remarks || null);
+  if (b.advance_required !== undefined)      set('advance_required', +b.advance_required || 0);
+
+  // High-impact edits: blocked when bills exist (would invalidate them)
+  if (b.total_amount !== undefined) {
+    if (billCount > 0) {
+      return res.status(409).json({ error: `Cannot change total_amount — ${billCount} purchase bill(s) reference this PO. Cancel the bill first or use Restore-then-recreate.` });
+    }
+    set('total_amount', +b.total_amount || 0);
+  }
+  if (b.vendor_id !== undefined) {
+    if (billCount > 0) {
+      return res.status(409).json({ error: `Cannot change vendor — ${billCount} purchase bill(s) reference this PO. Cancel the bill first.` });
+    }
+    set('vendor_id', +b.vendor_id || null);
+  }
+
+  if (sets.length === 0) return res.status(400).json({ error: 'No fields to update' });
+  db.prepare(`UPDATE vendor_pos SET ${sets.join(', ')} WHERE id=?`).run(...params, id);
+  res.json({ message: 'Updated', changed: sets.length });
 });
 
 router.delete('/vendor-po/:id', (req, res) => {
