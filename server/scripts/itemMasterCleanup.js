@@ -119,24 +119,48 @@ function runCleanup(db) {
       HAVING cnt > 1
     `).all();
 
-    // Re-point po_items.item_master_id from the deletables to the keeper,
-    // then delete.  po_items table may not exist on a fresh / partial
-    // install — guard with table_info check.
-    const hasPoItems = (() => {
-      try {
-        return db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='po_items'`).get();
-      } catch (_) { return null; }
-    })();
-    const repointStmt = hasPoItems ? db.prepare(`UPDATE po_items SET item_master_id=? WHERE item_master_id=?`) : null;
+    // Re-point ALL tables that reference item_master.id from the
+    // deletables to the keeper, then delete.  Boot log showed
+    // "FOREIGN KEY constraint failed" — earlier version only
+    // repointed po_items, but indent_items + vendor_po_items
+    // (via indent_items) ALSO reference item_master.  Each table
+    // is checked for existence first so this is safe on fresh
+    // installs or partial schemas.
+    const tableExists = (name) => {
+      try { return !!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(name); }
+      catch (_) { return false; }
+    };
+    const repointers = [];
+    if (tableExists('po_items')) {
+      repointers.push(db.prepare(`UPDATE po_items SET item_master_id=? WHERE item_master_id=?`));
+    }
+    if (tableExists('indent_items')) {
+      repointers.push(db.prepare(`UPDATE indent_items SET item_master_id=? WHERE item_master_id=?`));
+    }
+    // Surface ANY remaining FK references so the error message in the
+    // catch shows the actual offending table instead of generic "FK
+    // constraint failed".  PRAGMA foreign_key_list is read at runtime.
     const deleteStmt = db.prepare(`DELETE FROM item_master WHERE id=?`);
+    const failed = [];
     for (const g of groups) {
       const ids = String(g.ids || '').split(',').map(Number).filter(n => n !== g.keeper_id);
       for (const dupId of ids) {
-        if (repointStmt) repointStmt.run(g.keeper_id, dupId);
-        deleteStmt.run(dupId);
-        stats.dupes_deleted++;
+        for (const stmt of repointers) stmt.run(g.keeper_id, dupId);
+        try {
+          deleteStmt.run(dupId);
+          stats.dupes_deleted++;
+        } catch (e) {
+          // Don't blow up the whole transaction — collect the failure
+          // so the boot log shows which row blocked the merge, and
+          // the rest of the cleanup still applies.
+          failed.push({ id: dupId, keeper: g.keeper_id, error: e.message });
+        }
       }
       stats.dupes_merged += ids.length;
+    }
+    if (failed.length) {
+      stats.dupes_failed = failed.length;
+      stats.dupe_failures_sample = failed.slice(0, 5);
     }
 
     // Stamp the idempotency flag last so a mid-flight crash retries

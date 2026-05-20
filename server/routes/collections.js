@@ -185,41 +185,30 @@ router.get('/md-dashboard', (req, res) => {
 router.get('/sites', (req, res) => {
   const db = getDb();
   // Mam (2026-05-20): "site name is required from business book
-  // company name unique".  Explicit rule: dedupe by COMPANY_NAME
-  // only.  Previous COALESCE(project_name, company_name) approach
-  // surfaced project labels for rows that had both set — mam wants
-  // the company name as the canonical identifier across the ERP.
+  // company name unique".  Dedupe by COMPANY_NAME from BB.
   //
-  // BB rows missing company_name (rare — usually CSV-import junk)
-  // fall back to project_name so we don't drop their existing
-  // receivables, but the dropdown labels them with project_name
-  // and tags them as "(no company set)" so mam can fix them in BB.
+  // 2026-05-20 hotfix: the previous version used correlated
+  // subqueries inside a GROUP BY SELECT to pull crm_name /
+  // latest_po_value / latest_po_number per company.  SQLite threw
+  // "misuse of aggregate function MIN()" at runtime — the engine
+  // doesn't reliably support correlated subqueries against an
+  // outer grouped row.  Restructured: one simple grouped SELECT
+  // for the company list, then per-row PO lookups via prepared
+  // statements in JS (one extra SELECT per company; cheap at our
+  // row counts).
   const rows = db.prepare(`
     SELECT MIN(bb.id) as business_book_id,
            TRIM(bb.company_name) as company_name,
            GROUP_CONCAT(DISTINCT bb.client_name)  as client_names,
            GROUP_CONCAT(DISTINCT bb.project_name) as project_names,
-           MIN(bb.lead_no) as lead_no,
-           (SELECT po.crm_name FROM purchase_orders po
-              JOIN business_book bb2 ON po.business_book_id = bb2.id
-              WHERE TRIM(bb2.company_name) = TRIM(bb.company_name)
-                AND po.crm_name IS NOT NULL AND po.crm_name <> ''
-              ORDER BY po.created_at DESC LIMIT 1) as crm_name,
-           (SELECT COALESCE(SUM(po.total_amount), 0) FROM purchase_orders po
-              JOIN business_book bb2 ON po.business_book_id = bb2.id
-              WHERE TRIM(bb2.company_name) = TRIM(bb.company_name)) as latest_po_value,
-           (SELECT po.po_number FROM purchase_orders po
-              JOIN business_book bb2 ON po.business_book_id = bb2.id
-              WHERE TRIM(bb2.company_name) = TRIM(bb.company_name)
-              ORDER BY po.created_at DESC LIMIT 1) as latest_po_number
-      FROM business_book bb
-     WHERE bb.company_name IS NOT NULL AND TRIM(bb.company_name) <> ''
-     GROUP BY TRIM(bb.company_name)
-     ORDER BY TRIM(bb.company_name)
+           MIN(bb.lead_no) as lead_no
+    FROM business_book bb
+    WHERE bb.company_name IS NOT NULL AND TRIM(bb.company_name) <> ''
+    GROUP BY TRIM(bb.company_name)
+    ORDER BY TRIM(bb.company_name)
   `).all();
 
-  // Fallback rows for BB entries with no company_name but a project_name
-  // (mam asked for the dropdown to never silently drop existing data).
+  // Orphan fallback (BB with project_name but no company_name)
   const orphans = db.prepare(`
     SELECT MIN(id) as business_book_id,
            TRIM(project_name) as project_name,
@@ -232,20 +221,50 @@ router.get('/sites', (req, res) => {
     ORDER BY TRIM(project_name)
   `).all();
 
+  // Prepared statements for the per-row PO lookups
+  const getCrm = db.prepare(`
+    SELECT po.crm_name FROM purchase_orders po
+    JOIN business_book bb ON po.business_book_id = bb.id
+    WHERE TRIM(bb.company_name) = ?
+      AND po.crm_name IS NOT NULL AND po.crm_name <> ''
+    ORDER BY po.created_at DESC LIMIT 1
+  `);
+  const getTotal = db.prepare(`
+    SELECT COALESCE(SUM(po.total_amount), 0) as total FROM purchase_orders po
+    JOIN business_book bb ON po.business_book_id = bb.id
+    WHERE TRIM(bb.company_name) = ?
+  `);
+  const getLatestPo = db.prepare(`
+    SELECT po.po_number FROM purchase_orders po
+    JOIN business_book bb ON po.business_book_id = bb.id
+    WHERE TRIM(bb.company_name) = ?
+    ORDER BY po.created_at DESC LIMIT 1
+  `);
+
+  const enrich = (companyName) => {
+    if (!companyName) return { crm_name: null, latest_po_value: 0, latest_po_number: null };
+    return {
+      crm_name: getCrm.get(companyName)?.crm_name || null,
+      latest_po_value: getTotal.get(companyName)?.total || 0,
+      latest_po_number: getLatestPo.get(companyName)?.po_number || null,
+    };
+  };
+
   const list = [
-    ...rows.map(r => ({
-      business_book_id: r.business_book_id,
-      id: r.business_book_id,
-      name: r.company_name,
-      project_name: (r.project_names || '').split(',').filter(Boolean)[0] || r.company_name,
-      client_name: (r.client_names || '').split(',').filter(Boolean)[0] || null,
-      company_name: r.company_name,
-      lead_no: r.lead_no,
-      crm_name: r.crm_name,
-      latest_po_value: r.latest_po_value,
-      latest_po_number: r.latest_po_number,
-      label: [r.company_name, (r.client_names || '').split(',').filter(Boolean)[0]].filter(Boolean).join(' · '),
-    })),
+    ...rows.map(r => {
+      const enr = enrich(r.company_name);
+      return {
+        business_book_id: r.business_book_id,
+        id: r.business_book_id,
+        name: r.company_name,
+        project_name: (r.project_names || '').split(',').filter(Boolean)[0] || r.company_name,
+        client_name: (r.client_names || '').split(',').filter(Boolean)[0] || null,
+        company_name: r.company_name,
+        lead_no: r.lead_no,
+        ...enr,
+        label: [r.company_name, (r.client_names || '').split(',').filter(Boolean)[0]].filter(Boolean).join(' · '),
+      };
+    }),
     ...orphans.map(o => ({
       business_book_id: o.business_book_id,
       id: o.business_book_id,
