@@ -26,6 +26,19 @@ const ROLES = ['Decision Maker', 'Influencer', 'Recommender', 'End User'];
 const COMPANY_SIZES = ['Solo / Freelancer', '2-10', '10-50', '50-200', '200+'];
 const CONTACT_METHODS = ['Phone', 'WhatsApp', 'Email', 'In-Person', 'LinkedIn'];
 const PAYMENT_BEHAVIOR = ['Prompt', 'Delayed (30-60d)', 'Delayed (60+d)', 'Disputes Common', 'No History'];
+// Mam (2026-05-20): more dropdowns wherever the data has fixed options.
+const SOURCES = ['Referral', 'Direct Approach', 'Website Enquiry', 'Industry Event', 'Trade Show', 'Cold Outreach', 'LinkedIn', 'Social Media', 'Walk-in', 'Existing Client', 'Other'];
+const PROJECT_TYPES = ['Commercial Office', 'Hospitality / Hotel', 'Hospital / Healthcare', 'Residential High-rise', 'Residential Villa', 'Industrial / Factory', 'Retail / Mall', 'Educational', 'Mixed-use', 'Other'];
+const VALUE_RANGES = ['Below ₹10 L', '₹10 L – 50 L', '₹50 L – 2 Cr', '₹2 Cr – 10 Cr', '₹10 Cr – 50 Cr', 'Above ₹50 Cr'];
+const BEST_CALL_TIMES = ['9 AM – 12 PM', '12 PM – 3 PM', '3 PM – 6 PM', '6 PM – 9 PM', 'Anytime (working hours)', 'Avoid weekends'];
+
+// Validators — used on submit, plus inline pattern hints in the inputs.
+const MOBILE_RE = /^[6-9]\d{9}$/;            // 10-digit Indian mobile
+const PINCODE_RE = /^\d{6}$/;                 // 6-digit Indian PIN
+const URL_RE = /^https?:\/\/.+/i;              // any http/https URL
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+const CURRENT_YEAR = new Date().getFullYear();
 
 const empty = {
   salutation: '', full_name: '', date_of_birth: '', anniversary_date: '', gender: '', hometown: '',
@@ -76,8 +89,35 @@ export default function Influencers() {
   };
   const save = async (e) => {
     e.preventDefault();
-    if (!form.full_name?.trim()) return toast.error('Full Name is required');
-    if (!form.primary_mobile?.trim()) return toast.error('Primary Mobile is required');
+    // Required-field + format validation (mam, 2026-05-20: "validate
+    // data entry like if link mobile number").  Builds an error list
+    // so mam sees every issue in one toast, not one-at-a-time.
+    const errors = [];
+    if (!form.full_name?.trim()) errors.push('Full Name');
+    if (!form.primary_mobile?.trim()) errors.push('Primary Mobile');
+    else if (!MOBILE_RE.test(String(form.primary_mobile).trim())) errors.push('Primary Mobile (must be 10 digits starting 6-9)');
+    if (form.secondary_mobile && !MOBILE_RE.test(String(form.secondary_mobile).trim())) errors.push('Secondary Mobile (must be 10 digits)');
+    if (form.whatsapp_number && !MOBILE_RE.test(String(form.whatsapp_number).trim())) errors.push('WhatsApp Number (must be 10 digits)');
+    if (form.pincode && !PINCODE_RE.test(String(form.pincode).trim())) errors.push('Pincode (must be 6 digits)');
+    if (form.personal_email && !EMAIL_RE.test(String(form.personal_email).trim())) errors.push('Personal Email');
+    if (form.office_email && !EMAIL_RE.test(String(form.office_email).trim())) errors.push('Office Email');
+    if (form.gst_number && !GSTIN_RE.test(String(form.gst_number).trim().toUpperCase())) errors.push('GST Number (invalid format)');
+    if (form.year_established && (+form.year_established < 1900 || +form.year_established > CURRENT_YEAR)) errors.push(`Year Established (1900–${CURRENT_YEAR})`);
+    if (form.years_in_industry && (+form.years_in_industry < 0 || +form.years_in_industry > 80)) errors.push('Years in Industry (0–80)');
+    // Soft URL check — only flags clearly-broken URLs (no protocol AND no dot)
+    const checkUrl = (label, val) => {
+      const v = String(val || '').trim();
+      if (!v) return;
+      if (!URL_RE.test(v) && !v.includes('.')) errors.push(`${label} (looks invalid)`);
+    };
+    checkUrl('LinkedIn URL', form.linkedin_url);
+    checkUrl('Facebook URL', form.facebook_url);
+    checkUrl('YouTube Channel', form.youtube_channel);
+    checkUrl('Website', form.website);
+    if (errors.length) {
+      toast.error(`Please fix: ${errors.join(', ')}`);
+      return;
+    }
     try {
       if (editing) {
         await api.put(`/influencers/${editing.id}`, form);
@@ -283,7 +323,18 @@ export default function Influencers() {
               {form.primary_category === 'Others' && (
                 <Field label="If 'Others' — Specify" k="primary_category_other" />
               )}
-              <Field label="Years in Industry" k="years_in_industry" type="number" />
+              {/* Years in Industry — text input with numeric inputMode
+                  (number type was unreliable: mam saw values capped at
+                  single digits in Chrome).  inputMode='numeric' shows
+                  the number pad on mobile but accepts free multi-digit
+                  text entry. */}
+              <div>
+                <label className="label">Years in Industry</label>
+                <input className="input" inputMode="numeric" pattern="\d*" maxLength="2"
+                       placeholder="e.g. 12"
+                       value={form.years_in_industry || ''}
+                       onChange={e => F('years_in_industry', e.target.value.replace(/\D/g, '').slice(0, 2))} />
+              </div>
               <div>
                 <label className="label">Decision-Making Role</label>
                 <select className="select" value={form.decision_making_role || ''} onChange={e => F('decision_making_role', e.target.value)}>
@@ -307,11 +358,34 @@ export default function Influencers() {
                   {COMPANY_SIZES.map(s => <option key={s}>{s}</option>)}
                 </select>
               </div>
-              <Field label="Year Established" k="year_established" type="number" />
+              {/* Year Established — 4-digit text input.  Mam, 2026-05-20:
+                  number type was rejecting 4-digit years and showing
+                  "19" instead of "1992". */}
+              <div>
+                <label className="label">Year Established</label>
+                <input className="input" inputMode="numeric" pattern="\d*" maxLength="4"
+                       placeholder={`e.g. ${CURRENT_YEAR - 10}`}
+                       value={form.year_established || ''}
+                       onChange={e => F('year_established', e.target.value.replace(/\D/g, '').slice(0, 4))} />
+              </div>
               <Field label="Office Address" k="office_address" full />
               <Field label="City" k="city" />
-              <Field label="Pincode" k="pincode" />
-              <Field label="GST Number" k="gst_number" />
+              {/* Pincode — 6-digit numeric only */}
+              <div>
+                <label className="label">Pincode</label>
+                <input className="input" inputMode="numeric" pattern="\d{6}" maxLength="6"
+                       placeholder="e.g. 141001"
+                       value={form.pincode || ''}
+                       onChange={e => F('pincode', e.target.value.replace(/\D/g, '').slice(0, 6))} />
+              </div>
+              {/* GST Number — 15-char, auto-uppercase */}
+              <div>
+                <label className="label">GST Number</label>
+                <input className="input font-mono uppercase" maxLength="15"
+                       placeholder="e.g. 03AAAPK1234A1Z5"
+                       value={form.gst_number || ''}
+                       onChange={e => F('gst_number', e.target.value.toUpperCase().slice(0, 15))} />
+              </div>
               <Field label="Website" k="website" />
             </div>
           </div>
@@ -320,12 +394,28 @@ export default function Influencers() {
           <div className="card p-3">
             <h5 className="text-xs font-bold text-blue-800 uppercase mb-2">4 · Contact Information</h5>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* Primary Mobile — 10 digits, starts with 6-9 (Indian
+                  format).  Strips non-digits on entry so mam can paste
+                  "+91 98765 43210" and get a clean number. */}
               <div>
                 <label className="label">Primary Mobile <span className="text-red-500">*</span></label>
-                <input className="input" required value={form.primary_mobile || ''} onChange={e => F('primary_mobile', e.target.value)} />
+                <input className="input font-mono" required inputMode="numeric" pattern="[6-9]\d{9}" maxLength="10"
+                       placeholder="10-digit, starts 6-9"
+                       value={form.primary_mobile || ''}
+                       onChange={e => F('primary_mobile', e.target.value.replace(/\D/g, '').slice(0, 10))} />
               </div>
-              <Field label="Secondary Mobile" k="secondary_mobile" />
-              <Field label="WhatsApp Number" k="whatsapp_number" />
+              <div>
+                <label className="label">Secondary Mobile</label>
+                <input className="input font-mono" inputMode="numeric" pattern="[6-9]\d{9}" maxLength="10"
+                       value={form.secondary_mobile || ''}
+                       onChange={e => F('secondary_mobile', e.target.value.replace(/\D/g, '').slice(0, 10))} />
+              </div>
+              <div>
+                <label className="label">WhatsApp Number</label>
+                <input className="input font-mono" inputMode="numeric" pattern="[6-9]\d{9}" maxLength="10"
+                       value={form.whatsapp_number || ''}
+                       onChange={e => F('whatsapp_number', e.target.value.replace(/\D/g, '').slice(0, 10))} />
+              </div>
               <Field label="Office Landline" k="office_landline" />
               <Field label="Personal Email" k="personal_email" type="email" />
               <Field label="Office Email" k="office_email" type="email" />
@@ -336,7 +426,13 @@ export default function Influencers() {
                   {CONTACT_METHODS.map(m => <option key={m}>{m}</option>)}
                 </select>
               </div>
-              <Field label="Best Time to Call" k="best_time_to_call" />
+              <div>
+                <label className="label">Best Time to Call</label>
+                <select className="select" value={form.best_time_to_call || ''} onChange={e => F('best_time_to_call', e.target.value)}>
+                  <option value="">—</option>
+                  {BEST_CALL_TIMES.map(t => <option key={t}>{t}</option>)}
+                </select>
+              </div>
             </div>
           </div>
 
@@ -358,7 +454,13 @@ export default function Influencers() {
           <div className="card p-3">
             <h5 className="text-xs font-bold text-blue-800 uppercase mb-2">6 · Relationship & Business Intelligence</h5>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <Field label="Source of Contact" k="source_of_contact" />
+              <div>
+                <label className="label">Source of Contact</label>
+                <select className="select" value={form.source_of_contact || ''} onChange={e => F('source_of_contact', e.target.value)}>
+                  <option value="">—</option>
+                  {SOURCES.map(s => <option key={s}>{s}</option>)}
+                </select>
+              </div>
               <Field label="Referred By" k="referred_by" />
               <Field label="First Meeting Date" k="first_meeting_date" type="date" />
               <div>
@@ -368,11 +470,40 @@ export default function Influencers() {
                   {STAGES.map(s => <option key={s}>{s}</option>)}
                 </select>
               </div>
-              <Field label="Typical Project Type" k="typical_project_type" />
-              <Field label="Typical Project Value Range" k="typical_project_value_range" />
-              <Field label="Past Projects Count" k="past_projects_count" type="number" />
-              <Field label="Past Projects Total Value (₹)" k="past_projects_total_value" type="number" />
-              <Field label="Ongoing Projects with Us" k="ongoing_projects_with_us" type="number" />
+              <div>
+                <label className="label">Typical Project Type</label>
+                <select className="select" value={form.typical_project_type || ''} onChange={e => F('typical_project_type', e.target.value)}>
+                  <option value="">—</option>
+                  {PROJECT_TYPES.map(p => <option key={p}>{p}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">Typical Project Value Range</label>
+                <select className="select" value={form.typical_project_value_range || ''} onChange={e => F('typical_project_value_range', e.target.value)}>
+                  <option value="">—</option>
+                  {VALUE_RANGES.map(v => <option key={v}>{v}</option>)}
+                </select>
+              </div>
+              {/* Counts — text-numeric to dodge browser quirks */}
+              <div>
+                <label className="label">Past Projects Count</label>
+                <input className="input" inputMode="numeric" pattern="\d*" maxLength="4"
+                       value={form.past_projects_count || ''}
+                       onChange={e => F('past_projects_count', e.target.value.replace(/\D/g, '').slice(0, 4))} />
+              </div>
+              <div>
+                <label className="label">Past Projects Total Value (₹)</label>
+                <input className="input text-right" inputMode="numeric" pattern="\d*"
+                       placeholder="e.g. 12500000"
+                       value={form.past_projects_total_value || ''}
+                       onChange={e => F('past_projects_total_value', e.target.value.replace(/\D/g, ''))} />
+              </div>
+              <div>
+                <label className="label">Ongoing Projects with Us</label>
+                <input className="input" inputMode="numeric" pattern="\d*" maxLength="3"
+                       value={form.ongoing_projects_with_us || ''}
+                       onChange={e => F('ongoing_projects_with_us', e.target.value.replace(/\D/g, '').slice(0, 3))} />
+              </div>
               <div>
                 <label className="label">Client Payment Behavior</label>
                 <select className="select" value={form.client_payment_behavior || ''} onChange={e => F('client_payment_behavior', e.target.value)}>
