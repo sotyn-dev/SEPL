@@ -40,17 +40,25 @@ body {
     @apply bg-white rounded-2xl shadow-sm border border-gray-100/80 p-6 transition-shadow hover:shadow-md;
   }
 
+  /* Brand palette (mam, 2026-05-20: "change our theme colour our
+     change now royal blue, white grey light grey").  Royal blue
+     = blue-700 (#1d4ed8); the gradient lifts to blue-800 for
+     button hovers.  Red is preserved ONLY for semantic danger /
+     destructive states (btn-danger, validation errors).  Every
+     other place that previously used red as the brand accent
+     now uses blue. */
   .btn {
     @apply px-4 py-2 rounded-xl font-semibold text-sm transition-all duration-200 disabled:opacity-50 cursor-pointer shadow-sm;
   }
   .btn:active { @apply scale-95; }
   .btn-primary {
-    @apply bg-gradient-to-r from-red-600 to-red-700 text-white hover:from-red-700 hover:to-red-800 shadow-red-200;
+    @apply bg-gradient-to-r from-blue-700 to-blue-800 text-white hover:from-blue-800 hover:to-blue-900 shadow-blue-200;
   }
   .btn-success {
     @apply bg-gradient-to-r from-emerald-500 to-emerald-600 text-white hover:from-emerald-600 hover:to-emerald-700 shadow-emerald-200;
   }
   .btn-danger {
+    /* Semantic — destructive actions stay red regardless of brand */
     @apply bg-gradient-to-r from-red-500 to-red-600 text-white hover:from-red-600 hover:to-red-700 shadow-red-200;
   }
   .btn-secondary {
@@ -58,11 +66,11 @@ body {
   }
 
   .input {
-    @apply w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 transition-all bg-white;
+    @apply w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all bg-white;
   }
 
   .select {
-    @apply w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 transition-all;
+    @apply w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all;
   }
 
   .label {
@@ -73,7 +81,7 @@ body {
      columns in BOQ tables) so the input never disappears under padding.
      Pair with `.input-compact` instead of `.input`. */
   .input-compact {
-    @apply w-full min-w-0 px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400 transition-all bg-white;
+    @apply w-full min-w-0 px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all bg-white;
   }
 
   /* Sticky toolbar — INTENTIONALLY INERT.  Earlier iterations made this

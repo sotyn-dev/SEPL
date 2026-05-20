@@ -191,14 +191,17 @@ export default function Layout() {
       )}
 
       {/* Sidebar */}
-      <aside className={`fixed md:relative z-40 h-full bg-gradient-to-b from-red-800 to-red-900 text-white flex flex-col transition-transform duration-300 flex-shrink-0 ${isMobile ? 'w-[80vw] max-w-[260px]' : 'w-64'} ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      {/* Sidebar — royal blue brand (mam, 2026-05-20).  Was red-800→
+          red-900 gradient; now blue-800→blue-900.  All inner accents
+          (logo halo, monogram fallback) follow the same shift. */}
+      <aside className={`fixed md:relative z-40 h-full bg-gradient-to-b from-blue-800 to-blue-900 text-white flex flex-col transition-transform duration-300 flex-shrink-0 ${isMobile ? 'w-[80vw] max-w-[260px]' : 'w-64'} ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="p-4 border-b border-white/10 flex justify-between items-center">
           <div>
             <div className="flex items-center gap-2">
               {/* Real SEPL logo (served from /sepl-logo.webp). If the file
                   is missing, fall back to the 'SE' monogram so the header
                   never looks broken. */}
-              <div className="w-9 h-9 bg-white rounded-lg flex items-center justify-center shadow-lg shadow-red-900/40 overflow-hidden p-0.5">
+              <div className="w-9 h-9 bg-white rounded-lg flex items-center justify-center shadow-lg shadow-blue-900/40 overflow-hidden p-0.5">
                 <img
                   src="/sepl-logo.webp"
                   alt="SEPL"
@@ -212,7 +215,7 @@ export default function Layout() {
                     }
                   }}
                 />
-                <span className="text-red-700 font-extrabold text-xs" style={{ display: 'none' }}>SE</span>
+                <span className="text-blue-700 font-extrabold text-xs" style={{ display: 'none' }}>SE</span>
               </div>
               <div>
                 <h1 className="text-sm font-extrabold tracking-tight">SEPL ERP</h1>
@@ -289,7 +292,7 @@ export default function Layout() {
       {!sidebarOpen && !isMobile && (
         <button
           onClick={() => setSidebarOpen(true)}
-          className="fixed left-0 top-1/2 -translate-y-1/2 z-30 bg-red-700 hover:bg-red-600 text-white pl-1.5 pr-2.5 py-3 rounded-r-lg shadow-lg shadow-red-900/30 flex items-center gap-1 transition-all hover:pl-2.5 group"
+          className="fixed left-0 top-1/2 -translate-y-1/2 z-30 bg-blue-700 hover:bg-blue-600 text-white pl-1.5 pr-2.5 py-3 rounded-r-lg shadow-lg shadow-blue-900/30 flex items-center gap-1 transition-all hover:pl-2.5 group"
           title="Expand sidebar"
         >
           <FiChevronRight size={18} />
