@@ -347,13 +347,16 @@ export default function VendorPOPrint() {
                   </td>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 italic text-center text-gray-700">{dueOn}</td>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums font-bold">{(+it.quantity || 0).toLocaleString('en-IN')} {unit}</td>
+                  {/* Rate cell — shows current rate only.  Mam
+                      (2026-05-21): the audit-trail "was X · updated"
+                      badge that previously appeared here when the
+                      Vendor Rates step had a newer final_rate is
+                      removed.  This page IS the vendor-facing
+                      document — any "was X" hint leaks confidential
+                      negotiation history to the supplier.  Drift
+                      audit lives in the Vendor Rates screen instead. */}
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums">
                     {fmtMoney(liveRate)}
-                    {rateDrift && (
-                      <div className="text-[8px] text-amber-700 print:hidden font-normal not-italic">
-                        was {fmtMoney(it.rate)} · updated in Vendor Rates
-                      </div>
-                    )}
                   </td>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-center text-gray-600">{unit}</td>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right text-gray-500">{it.disc_pct ? `${it.disc_pct}%` : ''}</td>
