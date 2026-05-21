@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiMic, FiMicOff, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiClock, FiCalendar, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { compressImage } from '../utils/compressImage';
 
 // Web Speech API — available as SpeechRecognition in Chromium-based browsers
 const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
@@ -40,6 +41,13 @@ export default function Delegation() {
   const [extendModal, setExtendModal] = useState(null); // task: assignee requests more time
   const [form, setForm] = useState({});
   const [submitForm, setSubmitForm] = useState({ proof_url: '', uploading: false });
+  // Mam's MD (2026-05-21): "ERP is hang" when raising task with photo.
+  // Root cause was a silent 30-60s photo upload with no progress.  Track
+  // a saving flag + percentage so the Save button reflects what's
+  // actually happening.
+  const [saving, setSaving] = useState(false);
+  const [savePct, setSavePct] = useState(0);
+  const [proofPct, setProofPct] = useState(0);
   const [rejectReason, setRejectReason] = useState('');
   const [extendForm, setExtendForm] = useState({ requested_due_date: '', reason: '' });
   // Voice input
@@ -135,16 +143,27 @@ export default function Delegation() {
 
   const save = async (e) => {
     e.preventDefault();
+    if (saving) return;  // guard double-submit while upload is in flight
     if (!String(form.description || '').trim()) return toast.error('Description is required');
+    setSaving(true); setSavePct(0);
     try {
-      // Optional attachment — upload first (if picked) to get a stable /uploads URL,
-      // then send that URL with the task create. Keeps the task endpoint simple (JSON).
+      // Optional attachment — compress images BEFORE upload (mam's MD,
+      // 2026-05-21: "ERP is hang" when a 10-MB phone photo took 30s+
+      // on the wire).  compressImage() resizes to 1920px / JPEG 80%
+      // and lands at ~700 KB.  PDFs/docs pass through unchanged.
       let attachmentUrl = null;
       if (form.attachment_file) {
-        const fd = new FormData(); fd.append('file', form.attachment_file);
-        const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        const compressed = await compressImage(form.attachment_file);
+        const fd = new FormData(); fd.append('file', compressed);
+        const up = await api.post('/upload', fd, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          onUploadProgress: (ev) => {
+            if (ev.total) setSavePct(Math.round((ev.loaded / ev.total) * 100));
+          },
+        });
         attachmentUrl = up.data.url;
       }
+      setSavePct(100);
       await api.post('/delegations', {
         description: form.description,
         assigned_to: form.assigned_to,
@@ -154,7 +173,11 @@ export default function Delegation() {
       });
       toast.success('Task assigned');
       setCreateModal(false); load();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed to create'); }
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to create');
+    } finally {
+      setSaving(false); setSavePct(0);
+    }
   };
 
   // Inline edit — save on blur / Enter. Optimistic: update local state, roll
@@ -198,13 +221,29 @@ export default function Delegation() {
 
   // Upload proof file then submit
   const uploadProof = async (file) => {
-    const fd = new FormData(); fd.append('file', file);
     setSubmitForm(s => ({ ...s, uploading: true }));
+    setProofPct(0);
     try {
-      const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      // Compress phone photos before sending — same fix as the
+      // task-create flow.  Keeps the proof upload responsive even
+      // on a 4G connection.
+      const compressed = await compressImage(file);
+      const fd = new FormData(); fd.append('file', compressed);
+      const res = await api.post('/upload', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (ev) => {
+          if (ev.total) setProofPct(Math.round((ev.loaded / ev.total) * 100));
+        },
+      });
       setSubmitForm({ proof_url: res.data.url, uploading: false });
+      setProofPct(100);
       toast.success('File uploaded — click Submit');
-    } catch { toast.error('Upload failed'); setSubmitForm(s => ({ ...s, uploading: false })); }
+    } catch {
+      toast.error('Upload failed');
+      setSubmitForm(s => ({ ...s, uploading: false }));
+    } finally {
+      setProofPct(0);
+    }
   };
   const submitProof = async (e) => {
     e.preventDefault();
@@ -728,11 +767,28 @@ export default function Delegation() {
               accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
               onChange={e => setForm({ ...form, attachment_file: e.target.files?.[0] || null })}
             />
-            {form.attachment_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.attachment_file.name}</p>}
+            {form.attachment_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.attachment_file.name} ({(form.attachment_file.size / 1024 / 1024).toFixed(1)} MB · will compress before upload if &gt; 500 KB)</p>}
           </div>
+          {/* Upload-progress strip — keeps users from thinking the
+              modal froze (mam's MD, 2026-05-21).  Both compressing and
+              uploading drive the same bar; jumps to 100 % once the
+              POST /api/delegations finishes. */}
+          {saving && (
+            <div className="bg-blue-50 border border-blue-200 rounded p-2 text-[11px] text-blue-800">
+              <div className="flex justify-between mb-1">
+                <span>{savePct < 100 ? (form.attachment_file ? 'Uploading photo…' : 'Saving…') : 'Finalising…'}</span>
+                <span className="font-mono">{savePct}%</span>
+              </div>
+              <div className="h-1.5 bg-blue-100 rounded overflow-hidden">
+                <div className="h-full bg-blue-600 transition-all" style={{ width: `${savePct}%` }} />
+              </div>
+            </div>
+          )}
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setCreateModal(false)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">Assign Task</button>
+            <button type="button" onClick={() => setCreateModal(false)} disabled={saving} className="btn btn-secondary disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={saving} className="btn btn-primary disabled:opacity-50 flex items-center gap-1.5">
+              {saving ? `Uploading… ${savePct}%` : 'Assign Task'}
+            </button>
           </div>
         </form>
       </Modal>
@@ -807,8 +863,22 @@ export default function Delegation() {
             <label className="label">Upload proof (photo / PDF / doc)</label>
             <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" disabled={submitForm.uploading}
               onChange={e => { const f = e.target.files[0]; if (f) uploadProof(f); }}
-              className="block w-full text-sm text-gray-500 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100" />
-            {submitForm.uploading && <p className="text-xs text-red-500 mt-1">Uploading…</p>}
+              className="block w-full text-sm text-gray-500 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+            {/* Upload progress bar — replaces the silent "Uploading…"
+                line with a visible %.  Mam's MD reported phantom
+                hangs because there was no feedback on a 30-60s upload
+                of an uncompressed phone photo. */}
+            {submitForm.uploading && (
+              <div className="mt-1.5">
+                <div className="flex justify-between text-[10px] text-blue-700 mb-0.5">
+                  <span>Uploading proof…</span>
+                  <span className="font-mono">{proofPct}%</span>
+                </div>
+                <div className="h-1.5 bg-blue-100 rounded overflow-hidden">
+                  <div className="h-full bg-blue-600 transition-all" style={{ width: `${proofPct}%` }} />
+                </div>
+              </div>
+            )}
             {submitForm.proof_url && <p className="text-xs text-emerald-600 mt-1">✓ Ready to submit</p>}
           </div>
           <div className="flex justify-end gap-2">
