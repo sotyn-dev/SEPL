@@ -254,7 +254,10 @@ export default function Snags() {
                     {s.site_name || s.site_name_live || '—'}
                     {s.location && <span className="text-gray-500 font-normal text-[11px] ml-1.5">· {s.location}</span>}
                   </div>
-                  <div className="mt-1 text-[12px] text-gray-700 line-clamp-2" title={s.description}>{s.description}</div>
+                  {/* Full description — mam (2026-05-21): "i want show
+                      all task only this want".  Removed line-clamp so the
+                      complete snag text is visible without hover. */}
+                  <div className="mt-1 text-[12px] text-gray-700 whitespace-pre-wrap break-words">{s.description}</div>
                   {s.status === 'rejected' && s.reject_reason && (
                     <div className="mt-1 text-[11px] text-red-700 italic bg-red-50 border border-red-200 rounded px-2 py-1" title={s.reject_reason}>
                       ↳ Rejected: {s.reject_reason}
