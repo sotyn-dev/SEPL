@@ -543,11 +543,25 @@ export default function PMSTasks() {
             </div>
           )}
           <div>
-            <label className="label">Upload proof (photo / PDF / doc)</label>
-            <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" disabled={submitForm.uploading}
-              onChange={e => { const f = e.target.files[0]; if (f) uploadProof(f); }}
-              className="block w-full text-sm text-gray-500 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100" />
-            {submitForm.uploading && <p className="text-xs text-red-500 mt-1">Uploading…</p>}
+            <label className="label">Upload proof</label>
+            {/* MD's request (mam, 2026-05-21): "Give option of click
+                photo in attachment".  Camera-first on left, file-picker
+                fallback on right. */}
+            <div className="grid grid-cols-2 gap-2 mb-1">
+              <label className={`cursor-pointer border-2 ${submitForm.uploading ? 'border-gray-200 bg-gray-50 cursor-not-allowed' : 'border-blue-200 hover:border-blue-400 bg-blue-50/60'} rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5`}>
+                <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
+                <input type="file" accept="image/*" capture="environment" disabled={submitForm.uploading}
+                  className="hidden"
+                  onChange={e => { const f = e.target.files[0]; if (f) uploadProof(f); }} />
+              </label>
+              <label className={`cursor-pointer border-2 ${submitForm.uploading ? 'border-gray-200 bg-gray-50 cursor-not-allowed' : 'border-gray-200 hover:border-gray-400 bg-gray-50'} rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5`}>
+                <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" disabled={submitForm.uploading}
+                  className="hidden"
+                  onChange={e => { const f = e.target.files[0]; if (f) uploadProof(f); }} />
+              </label>
+            </div>
+            {submitForm.uploading && <p className="text-xs text-blue-700 mt-1">Uploading…</p>}
             {submitForm.proof_url && <p className="text-xs text-emerald-600 mt-1">✓ Ready to submit</p>}
           </div>
           <div className="flex justify-end gap-2">

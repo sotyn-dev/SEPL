@@ -314,10 +314,22 @@ export default function Snags() {
                   <button type="button" onClick={() => setForm(f => ({ ...f, photo_url: '' }))} className="text-red-500 text-xs">Remove</button>
                 </div>
               ) : (
-                <input type="file" accept="image/*" className="text-xs" onChange={async e => {
-                  const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, photo_url: url }));
-                  e.target.value = '';
-                }} />
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="cursor-pointer border-2 border-blue-200 hover:border-blue-400 bg-blue-50/60 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
+                    <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
+                    <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async e => {
+                      const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, photo_url: url }));
+                      e.target.value = '';
+                    }} />
+                  </label>
+                  <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
+                    <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
+                    <input type="file" accept="image/*" className="hidden" onChange={async e => {
+                      const url = await upload(e.target.files?.[0]); if (url) setForm(f => ({ ...f, photo_url: url }));
+                      e.target.value = '';
+                    }} />
+                  </label>
+                </div>
               )}
             </div>
             <div>
@@ -369,10 +381,22 @@ export default function Snags() {
                   <button type="button" onClick={() => setProofForm(f => ({ ...f, proof_url: '' }))} className="text-red-500 text-xs">Remove</button>
                 </div>
               ) : (
-                <input type="file" accept="image/*,.pdf" className="text-xs" onChange={async e => {
-                  const url = await upload(e.target.files?.[0]); if (url) setProofForm(f => ({ ...f, proof_url: url }));
-                  e.target.value = '';
-                }} />
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="cursor-pointer border-2 border-blue-200 hover:border-blue-400 bg-blue-50/60 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
+                    <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
+                    <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async e => {
+                      const url = await upload(e.target.files?.[0]); if (url) setProofForm(f => ({ ...f, proof_url: url }));
+                      e.target.value = '';
+                    }} />
+                  </label>
+                  <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
+                    <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
+                    <input type="file" accept="image/*,.pdf" className="hidden" onChange={async e => {
+                      const url = await upload(e.target.files?.[0]); if (url) setProofForm(f => ({ ...f, proof_url: url }));
+                      e.target.value = '';
+                    }} />
+                  </label>
+                </div>
               )}
             </div>
             <div>

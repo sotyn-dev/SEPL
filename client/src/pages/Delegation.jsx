@@ -763,13 +763,33 @@ export default function Delegation() {
           </div>
           <div>
             <label className="label">Attachment <span className="text-gray-400 font-normal">(optional — e.g. brief, drawing, photo)</span></label>
-            <input
-              className="input"
-              type="file"
-              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
-              onChange={e => setForm({ ...form, attachment_file: e.target.files?.[0] || null })}
-            />
-            {form.attachment_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.attachment_file.name} ({(form.attachment_file.size / 1024 / 1024).toFixed(1)} MB · will compress before upload if &gt; 500 KB)</p>}
+            {/* Two side-by-side affordances — mam's MD (2026-05-21):
+                "Give option of click photo in attachment".  The first
+                button (capture="environment") opens the phone's rear
+                camera directly; the second is the normal file picker
+                for desktops / picking an existing photo / PDF / doc. */}
+            <div className="grid grid-cols-2 gap-2">
+              <label className="cursor-pointer border-2 border-blue-200 hover:border-blue-400 bg-blue-50/60 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
+                <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={e => setForm({ ...form, attachment_file: e.target.files?.[0] || null })}
+                />
+              </label>
+              <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
+                <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+                  className="hidden"
+                  onChange={e => setForm({ ...form, attachment_file: e.target.files?.[0] || null })}
+                />
+              </label>
+            </div>
+            {form.attachment_file && <p className="text-[10px] text-emerald-600 mt-1">Selected: {form.attachment_file.name} ({(form.attachment_file.size / 1024 / 1024).toFixed(1)} MB · will compress before upload if &gt; 500 KB)</p>}
           </div>
           {/* Upload-progress strip — keeps users from thinking the
               modal froze (mam's MD, 2026-05-21).  Both compressing and
@@ -862,10 +882,24 @@ export default function Delegation() {
             </div>
           )}
           <div>
-            <label className="label">Upload proof (photo / PDF / doc)</label>
-            <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" disabled={submitForm.uploading}
-              onChange={e => { const f = e.target.files[0]; if (f) uploadProof(f); }}
-              className="block w-full text-sm text-gray-500 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+            <label className="label">Upload proof</label>
+            {/* MD's request (mam, 2026-05-21): "Give option of click
+                photo in attachment".  Camera-first button on the left,
+                file-picker fallback on the right. */}
+            <div className="grid grid-cols-2 gap-2 mb-1">
+              <label className={`cursor-pointer border-2 ${submitForm.uploading ? 'border-gray-200 bg-gray-50 cursor-not-allowed' : 'border-blue-200 hover:border-blue-400 bg-blue-50/60'} rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5`}>
+                <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
+                <input type="file" accept="image/*" capture="environment" disabled={submitForm.uploading}
+                  className="hidden"
+                  onChange={e => { const f = e.target.files[0]; if (f) uploadProof(f); }} />
+              </label>
+              <label className={`cursor-pointer border-2 ${submitForm.uploading ? 'border-gray-200 bg-gray-50 cursor-not-allowed' : 'border-gray-200 hover:border-gray-400 bg-gray-50'} rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5`}>
+                <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" disabled={submitForm.uploading}
+                  className="hidden"
+                  onChange={e => { const f = e.target.files[0]; if (f) uploadProof(f); }} />
+              </label>
+            </div>
             {/* Upload progress bar — replaces the silent "Uploading…"
                 line with a visible %.  Mam's MD reported phantom
                 hangs because there was no feedback on a 30-60s upload
