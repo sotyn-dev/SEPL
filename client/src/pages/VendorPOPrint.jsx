@@ -177,118 +177,103 @@ export default function VendorPOPrint() {
           </div>
         </div>
 
-        {/* Company name + Head Office + Branch Office addresses */}
-        <div className="text-center py-3 px-3 border-b-2 border-red-700 bg-gradient-to-b from-red-50/60 to-white">
-          <div className="text-[22px] font-extrabold tracking-tight text-gray-900 leading-tight">{COMPANY.name}</div>
-          <div className="text-[10.5px] text-gray-700 mt-1.5"><span className="font-semibold">Head Office:</span> {COMPANY.head_office}</div>
-          <div className="text-[10.5px] text-gray-700"><span className="font-semibold">Branch Office (Noida):</span> {COMPANY.branch_office}</div>
+        {/* Company name + Head Office + Branch Office addresses.
+            Mam (2026-05-21): the items table was sitting too far down
+            the page — compressed all the marketing rows above it. */}
+        <div className="text-center py-1.5 px-3 border-b border-red-700 bg-gradient-to-b from-red-50/60 to-white">
+          <div className="text-[19px] font-extrabold tracking-tight text-gray-900 leading-tight">{COMPANY.name}</div>
+          <div className="text-[9.5px] text-gray-700 mt-0.5 leading-snug">
+            <span className="font-semibold">Head Office:</span> {COMPANY.head_office}
+            <span className="mx-2 text-gray-400">|</span>
+            <span className="font-semibold">Branch (Noida):</span> {COMPANY.branch_office}
+          </div>
         </div>
 
-        {/* Marketing band — A LEADING ENGINEERING COMPANY OF INDIA + stats */}
-        <div className="border-b-2 border-red-700 bg-red-50/40 print:bg-red-50">
-          <div className="text-center py-1.5 text-[11px] font-extrabold tracking-[0.15em] uppercase text-red-700 border-b border-red-200">
-            A Leading Engineering Company of India
-          </div>
-          <div className="grid grid-cols-6 divide-x divide-red-200">
+        {/* Marketing band — compact one-row strip combining tagline,
+            stat chips, presence, and service lines.  Was 4 separate
+            bands taking ~120px; now a single ~28px band. */}
+        <div className="border-b border-red-700 bg-red-50/40 print:bg-red-50">
+          <div className="flex items-center justify-center gap-3 py-1 px-3 text-[9.5px] flex-wrap">
+            <span className="font-extrabold uppercase tracking-wider text-red-700">A Leading Engineering Company of India</span>
+            <span className="text-gray-400">•</span>
             {STATS.map((s, i) => (
-              <div key={i} className="text-center py-2 px-1.5">
-                <div className={`font-extrabold text-red-700 leading-none ${s.small ? 'text-[10px]' : 'text-[15px]'}`}>{s.num}</div>
-                <div className="text-[8.5px] uppercase tracking-wide text-gray-600 mt-1 whitespace-pre-line leading-tight">{s.label}</div>
-              </div>
+              <span key={i} className="whitespace-nowrap">
+                <span className="font-extrabold text-red-700">{s.num}</span>
+                <span className="text-gray-600 ml-0.5 uppercase text-[8.5px]">{s.label.replace(/\n/g, ' ')}</span>
+              </span>
             ))}
           </div>
-        </div>
-
-        {/* PAN-INDIA PRESENCE band */}
-        <div className="text-center py-1.5 text-[10.5px] font-bold tracking-wider text-gray-800 border-b border-gray-300 bg-gray-50/60 print:bg-gray-50">
-          <span className="text-red-700 uppercase">Pan-India Presence&nbsp;:&nbsp;</span>
-          <span className="font-extrabold text-gray-900 tracking-wide">LUDHIANA | NOIDA | BANGALORE | MUMBAI</span>
-        </div>
-
-        {/* Specialists band — service lines */}
-        <div className="text-center py-1.5 text-[10px] text-gray-700 border-b-2 border-gray-800 bg-white">
-          Specialists in&nbsp;<span className="font-extrabold text-red-700">ELECTRICAL | HVAC | FIRE SAFETY | PLUMBING | SOLAR | ELV</span>
-          <span className="text-gray-500"> — All-in-One Turnkey Project Solutions</span>
+          <div className="text-center text-[9px] text-gray-700 px-3 py-0.5 border-t border-red-200 leading-snug">
+            <span className="text-red-700 font-bold uppercase">Pan-India:</span>
+            <span className="font-bold text-gray-900 ml-1">LUDHIANA | NOIDA | BANGALORE | MUMBAI</span>
+            <span className="text-gray-400 mx-2">•</span>
+            <span className="text-gray-600">Specialists in </span>
+            <span className="font-extrabold text-red-700">ELECTRICAL | HVAC | FIRE SAFETY | PLUMBING | SOLAR | ELV</span>
+          </div>
         </div>
 
         {/* TWO-COLUMN HEADER: Details of Vendor (left) | Voucher meta (right).
-            Subtle blue-tinted backgrounds + red section labels for visual rhythm. */}
+            Tightened padding for the post-2026-05-21 compact layout. */}
         <div className="grid grid-cols-2 border-b border-gray-800 print:border-black">
-          <div className="border-r border-gray-800 print:border-black p-3 bg-blue-50/30">
-            <div className="text-[10px] uppercase tracking-wider font-bold text-red-700 mb-1">Details of Vendor</div>
-            <div className="font-extrabold text-[14px]">{po.vendor_name || '—'}</div>
-            {po.firm_name && po.firm_name !== po.vendor_name && <div className="text-[11px]">{po.firm_name}</div>}
-            {po.vendor_address && <div className="text-[11px] text-gray-700 whitespace-pre-line mt-1">{po.vendor_address}</div>}
-            {(po.district || po.state) && <div className="text-[11px] text-gray-700">{[po.district, po.state].filter(Boolean).join(', ')} - India</div>}
-            <div className="mt-2 text-[11px]">
-              {po.gst_number && <div><span className="text-gray-500">GSTIN/UIN&nbsp;&nbsp;:</span> <span className="font-semibold">{po.gst_number}</span></div>}
-              {po.state && <div><span className="text-gray-500">State Name :</span> {po.state}, Code : {po.state_code || ''}</div>}
-            </div>
+          <div className="border-r border-gray-800 print:border-black p-2 bg-blue-50/30 text-[10.5px] leading-snug">
+            <div className="text-[9px] uppercase tracking-wider font-bold text-red-700">Details of Vendor</div>
+            <div className="font-extrabold text-[12.5px] leading-tight">{po.vendor_name || '—'}</div>
+            {po.firm_name && po.firm_name !== po.vendor_name && <div>{po.firm_name}</div>}
+            {po.vendor_address && <div className="text-gray-700 whitespace-pre-line">{po.vendor_address}</div>}
+            {(po.district || po.state) && <div className="text-gray-700">{[po.district, po.state].filter(Boolean).join(', ')} - India</div>}
+            {po.gst_number && <div><span className="text-gray-500">GSTIN/UIN:</span> <span className="font-semibold">{po.gst_number}</span></div>}
+            {po.state && <div><span className="text-gray-500">State:</span> {po.state}{po.state_code ? `, Code ${po.state_code}` : ''}</div>}
           </div>
-          <div className="p-0 text-[11px]">
-            {/* Right-side meta block — 2-cell-per-row table layout with red labels */}
+          <div className="p-0 text-[10.5px]">
             <table className="w-full">
               <tbody>
                 <tr>
-                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-1.5 w-1/2"><span className="text-red-700 font-semibold">Voucher No.:</span> <span className="font-bold">SEPL-{po.id}</span></td>
-                  <td className="border-b border-gray-800 print:border-black px-2 py-1.5 w-1/2"><span className="text-red-700 font-semibold">Date :</span> <span className="font-bold">{fmtDate(po.po_date || po.created_at)}</span></td>
-                </tr>
-                {/* Auto-filled fields (mam, 2026-05-16) —
-                    Vendor Code from vendors.vendor_code,
-                    Contact Person + Contact No from vendor master,
-                    SEPL Lead No from business_book linked by site
-                    name. Typo "Vender Code" preserved → "Vendor Code". */}
-                <tr>
-                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-1.5"><span className="text-red-700 font-semibold">SEPL PO No.:</span> <span className="font-bold">{po.po_number || ''}</span></td>
-                  <td className="border-b border-gray-800 print:border-black px-2 py-1.5"><span className="text-gray-500">Vendor Code:</span> <span className="font-mono">{po.vendor_code || ''}</span></td>
+                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-0.5 w-1/2"><span className="text-red-700 font-semibold">Voucher No.:</span> <span className="font-bold">SEPL-{po.id}</span></td>
+                  <td className="border-b border-gray-800 print:border-black px-2 py-0.5 w-1/2"><span className="text-red-700 font-semibold">Date :</span> <span className="font-bold">{fmtDate(po.po_date || po.created_at)}</span></td>
                 </tr>
                 <tr>
-                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-1.5"><span className="text-red-700 font-semibold">SEPL Indent No.:</span> <span className="font-bold">{po.indent_number || ''}</span></td>
-                  <td className="border-b border-gray-800 print:border-black px-2 py-1.5"><span className="text-gray-500">Contact Person:</span> <span className="font-medium">{po.contact_person || ''}</span></td>
+                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-0.5"><span className="text-red-700 font-semibold">SEPL PO No.:</span> <span className="font-bold">{po.po_number || ''}</span></td>
+                  <td className="border-b border-gray-800 print:border-black px-2 py-0.5"><span className="text-gray-500">Vendor Code:</span> <span className="font-mono">{po.vendor_code || ''}</span></td>
                 </tr>
                 <tr>
-                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-1.5"><span className="text-gray-500">SEPL Lead No.:</span> <span className="font-medium">{po.sepl_lead_no || ''}</span></td>
-                  <td className="border-b border-gray-800 print:border-black px-2 py-1.5"><span className="text-gray-500">Contact No.:</span> <span className="font-medium">{po.vendor_phone || ''}</span></td>
+                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-0.5"><span className="text-red-700 font-semibold">SEPL Indent No.:</span> <span className="font-bold">{po.indent_number || ''}</span></td>
+                  <td className="border-b border-gray-800 print:border-black px-2 py-0.5"><span className="text-gray-500">Contact Person:</span> <span className="font-medium">{po.contact_person || ''}</span></td>
                 </tr>
                 <tr>
-                  <td colSpan="2" className="px-2 py-1.5"><span className="text-gray-500">Ref Quote No.:</span></td>
+                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-0.5"><span className="text-gray-500">SEPL Lead No.:</span> <span className="font-medium">{po.sepl_lead_no || ''}</span></td>
+                  <td className="border-b border-gray-800 print:border-black px-2 py-0.5"><span className="text-gray-500">Contact No.:</span> <span className="font-medium">{po.vendor_phone || ''}</span></td>
+                </tr>
+                <tr>
+                  <td colSpan="2" className="px-2 py-0.5"><span className="text-gray-500">Ref Quote No.:</span></td>
                 </tr>
               </tbody>
             </table>
           </div>
         </div>
 
-        {/* TWO-COLUMN: Supplier (Bill from) | Consignee (Ship to). Different
-            subtle bg tints to differentiate the two address blocks. */}
+        {/* TWO-COLUMN: Supplier (Bill from) | Consignee (Ship to).
+            Tightened padding 2026-05-21. */}
         <div className="grid grid-cols-2 border-b border-gray-800 print:border-black">
-          <div className="border-r border-gray-800 print:border-black p-3 text-[11px] bg-amber-50/30">
-            <div className="text-[10px] uppercase tracking-wider font-bold text-amber-700 mb-1">Supplier (Bill from)</div>
-            <div className="font-extrabold text-[13px]">{po.vendor_name || '—'}</div>
-            {po.vendor_address && <div className="whitespace-pre-line text-gray-700 mt-1">{po.vendor_address}</div>}
+          <div className="border-r border-gray-800 print:border-black p-2 text-[10.5px] bg-amber-50/30 leading-snug">
+            <div className="text-[9px] uppercase tracking-wider font-bold text-amber-700">Supplier (Bill from)</div>
+            <div className="font-extrabold text-[12px] leading-tight">{po.vendor_name || '—'}</div>
+            {po.vendor_address && <div className="whitespace-pre-line text-gray-700">{po.vendor_address}</div>}
             {(po.district || po.state) && <div className="text-gray-700">{[po.district, po.state].filter(Boolean).join(', ')} - India</div>}
-            <div className="mt-2">
-              {po.gst_number && <div><span className="text-gray-500">GSTIN/UIN&nbsp;&nbsp;:</span> <span className="font-semibold">{po.gst_number}</span></div>}
-              {po.state && <div><span className="text-gray-500">State Name :</span> {po.state}, Code : {po.state_code || ''}</div>}
-            </div>
+            {po.gst_number && <div><span className="text-gray-500">GSTIN/UIN:</span> <span className="font-semibold">{po.gst_number}</span></div>}
+            {po.state && <div><span className="text-gray-500">State:</span> {po.state}{po.state_code ? `, Code ${po.state_code}` : ''}</div>}
           </div>
-          <div className="p-3 text-[11px] bg-emerald-50/30">
-            <div className="text-[10px] uppercase tracking-wider font-bold text-emerald-700 mb-1">Consignee (Ship to)</div>
-            <div className="font-extrabold text-[13px]">{po.site_name || COMPANY.name}</div>
-            {/* Bonus context from BB lookup (mam, 2026-05-16) —
-                shows the linked SEPL Lead No / client name so the
-                vendor knows which project this PO belongs to. */}
+          <div className="p-2 text-[10.5px] bg-emerald-50/30 leading-snug">
+            <div className="text-[9px] uppercase tracking-wider font-bold text-emerald-700">Consignee (Ship to)</div>
+            <div className="font-extrabold text-[12px] leading-tight">{po.site_name || COMPANY.name}</div>
             {(po.sepl_lead_no || po.client_name_bb) && (
-              <div className="text-[10px] text-gray-700 mt-1">
+              <div className="text-[9.5px] text-gray-700">
                 {po.sepl_lead_no && <>Lead: <span className="font-mono font-semibold">{po.sepl_lead_no}</span></>}
                 {po.sepl_lead_no && po.client_name_bb && ' · '}
                 {po.client_name_bb && <>Client: <span className="font-semibold">{po.client_name_bb}</span></>}
               </div>
             )}
-            {/* Defensive — only print the site-engineer note if it
-                looks like a real name (has letters), not numeric
-                junk like "54.0" that leaked in from a bad import. */}
-            <div className="text-[10px] text-gray-600 mt-2 italic">
-              Ship to the site mentioned above. For exact address coordinate with the site engineer{po.raised_by_name && /[a-zA-Z]/.test(String(po.raised_by_name)) ? ` — ${po.raised_by_name}` : ''}.
+            <div className="text-[9px] text-gray-600 italic mt-0.5">
+              Ship to the site above. Coordinate exact address with the site engineer{po.raised_by_name && /[a-zA-Z]/.test(String(po.raised_by_name)) ? ` — ${po.raised_by_name}` : ''}.
             </div>
           </div>
         </div>
