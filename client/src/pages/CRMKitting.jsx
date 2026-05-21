@@ -254,50 +254,66 @@ export default function CRMKitting() {
 
       {/* Project picker */}
       <div className="bg-white border rounded-xl p-3 sm:p-4 mb-4 shadow-sm">
-        <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Select Project</label>
-        <div className="mt-2 relative">
-          <FiSearch className="absolute left-3 top-3 text-gray-400" />
-          <input
-            value={projectQuery}
-            onChange={e => setProjectQuery(e.target.value)}
-            placeholder="Search by company, project name, or lead number…"
-            className="w-full pl-9 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          />
-        </div>
-        {projectQuery && (
-          <div className="mt-2 max-h-80 overflow-y-auto border rounded-lg divide-y">
-            {filteredProjects.length === 0 ? (
-              <div className="p-3 text-sm text-gray-500">No matching projects.</div>
-            ) : filteredProjects.map(p => (
-              <button
-                key={p.project_key}
-                onClick={() => { setSelectedKey(p.project_key); setProjectQuery(''); }}
-                className="w-full text-left p-3 hover:bg-blue-50 transition"
-              >
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <div className="font-medium text-gray-900 flex-1 min-w-0 truncate">
-                    {p.project_name || '(unnamed project)'}
+        <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide flex items-center justify-between">
+          <span>Select Project</span>
+          <span className="text-[10px] font-normal text-gray-500 normal-case tracking-normal">
+            {projects.length} project{projects.length === 1 ? '' : 's'} from Business Book
+          </span>
+        </label>
+        {!selectedKey && (
+          <>
+            <div className="mt-2 relative">
+              <FiSearch className="absolute left-3 top-3 text-gray-400" />
+              <input
+                value={projectQuery}
+                onChange={e => setProjectQuery(e.target.value)}
+                placeholder="Search by company, project name, lead number, or CRM person…"
+                className="w-full pl-9 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <div className="mt-2 max-h-96 overflow-y-auto border rounded-lg divide-y">
+              {projects.length === 0 ? (
+                <div className="p-4 text-sm text-gray-500 text-center">
+                  No projects in Business Book yet. Add one there first.
+                </div>
+              ) : filteredProjects.length === 0 ? (
+                <div className="p-3 text-sm text-gray-500">No matching projects.</div>
+              ) : filteredProjects.map(p => (
+                <button
+                  key={p.project_key}
+                  onClick={() => { setSelectedKey(p.project_key); setProjectQuery(''); }}
+                  className="w-full text-left p-3 hover:bg-blue-50 transition"
+                >
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="font-medium text-gray-900 flex-1 min-w-0 truncate">
+                      {p.project_name || '(unnamed project)'}
+                    </div>
+                    {p.bb_entry_count > 1 && (
+                      <span className="text-[10px] font-medium text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded">
+                        {p.bb_entry_count} BB rows
+                      </span>
+                    )}
+                    {p.sale_amount_without_gst > 0 && (
+                      <span className="text-xs font-semibold text-emerald-700">
+                        {fmtINRShort(p.sale_amount_without_gst)}
+                      </span>
+                    )}
                   </div>
-                  {p.bb_entry_count > 1 && (
-                    <span className="text-[10px] font-medium text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded">
-                      {p.bb_entry_count} BB rows
-                    </span>
-                  )}
-                  {p.sale_amount_without_gst > 0 && (
-                    <span className="text-xs font-semibold text-emerald-700">
-                      {fmtINRShort(p.sale_amount_without_gst)}
-                    </span>
-                  )}
-                </div>
-                <div className="text-xs text-gray-600 mt-0.5 flex items-center gap-2 flex-wrap">
-                  {p.lead_no && <span className="font-mono">{p.lead_no}</span>}
-                  {p.client_name && p.client_name !== p.project_name && <span>· {p.client_name}</span>}
-                  {p.crm_person && <span>· CRM: {p.crm_person}</span>}
-                  {p.state && <span>· {p.state}</span>}
-                </div>
-              </button>
-            ))}
-          </div>
+                  <div className="text-xs text-gray-600 mt-0.5 flex items-center gap-2 flex-wrap">
+                    {p.lead_no && <span className="font-mono">{p.lead_no}</span>}
+                    {p.client_name && p.client_name !== p.project_name && <span>· {p.client_name}</span>}
+                    {p.crm_person && <span>· CRM: {p.crm_person}</span>}
+                    {p.state && <span>· {p.state}</span>}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {projectQuery && filteredProjects.length >= 50 && (
+              <div className="text-[10px] text-gray-500 mt-1">
+                Showing first 50 matches — refine your search to narrow further.
+              </div>
+            )}
+          </>
         )}
         {projectData?.project && (
           <div className="mt-3 flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg p-3 flex-wrap gap-2">
@@ -329,6 +345,16 @@ export default function CRMKitting() {
           </div>
         )}
       </div>
+
+      {!selectedKey && !loading && (
+        <div className="bg-white border rounded-xl p-8 text-center text-gray-500">
+          <FiPackage size={36} className="mx-auto text-blue-300 mb-2" />
+          <div className="font-medium text-gray-700">Pick a project to open its kitting checklist</div>
+          <div className="text-xs mt-1">
+            Projects come from Business Book (grouped by company name, same as Cash Flow).
+          </div>
+        </div>
+      )}
 
       {loading && (
         <div className="text-center py-10 text-gray-500">Loading checkpoints…</div>
