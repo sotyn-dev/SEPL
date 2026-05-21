@@ -208,14 +208,20 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
   });
 
   // Summary
-  const totalSale = result.reduce((s, r) => s + r.sale_amount, 0);
+  // Mam (2026-05-21): the headline "Total Sale Value" tile should
+  // match the table's Sale ₹ (with GST) column — i.e., the
+  // PO-with-GST sum (bb.po_amount), with sale × 1.18 fallback for
+  // any legacy row.  Old totalSale (sum of sale_amount_without_gst)
+  // kept under totalSaleExGst in case anything wants the raw value.
+  const totalSale = result.reduce((s, r) => s + (r.po_amount || (r.sale_amount || 0) * 1.18), 0);
+  const totalSaleExGst = result.reduce((s, r) => s + r.sale_amount, 0);
   const totalReceived = result.reduce((s, r) => s + r.amount_received, 0);
   const totalPurchase = result.reduce((s, r) => s + r.purchase_value, 0);
   // Total Value = sum of Aanchal Values (raw rupees post pf_amounts_raw_rupees_v1
   // migration — no × 1,00,000 conversion needed).
   const totalValue = result.reduce((s, r) => s + (r.aanchal_value || 0), 0);
 
-  res.json({ projects: result, summary: { totalSale, totalReceived, totalValue, totalPurchase, projectCount: result.length } });
+  res.json({ projects: result, summary: { totalSale, totalSaleExGst, totalReceived, totalValue, totalPurchase, projectCount: result.length } });
 });
 
 // POST update project manual fields (milestone, aanchal value, payment days)
