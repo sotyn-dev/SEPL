@@ -211,76 +211,94 @@ export default function Snags() {
         </div>
       </div>
 
-      <div className="card p-0">
-        <table className="freeze-head">
-          <thead>
-            <tr>
-              <th>Snag No</th><th>Raised</th><th>Site / Location</th><th>Description</th>
-              <th>Snag Photo</th><th>Assigned To</th><th>Proof</th>
-              <th>Priority</th><th>Status</th><th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {snags.length === 0 && (
-              <tr><td colSpan="10" className="text-center py-8 text-gray-400">No snags raised yet</td></tr>
-            )}
-            {snags.map(s => (
-              <tr key={s.id}>
-                <td className="font-bold text-red-700 text-xs">{s.snag_no}</td>
-                <td className="text-xs">
-                  <div>{s.raised_at ? new Date(s.raised_at).toLocaleDateString('en-IN') : '—'}</div>
-                  <div className="text-[10px] text-gray-500">{s.raised_by_name || '—'}</div>
-                </td>
-                <td className="text-xs">
-                  <div className="font-medium">{s.site_name || s.site_name_live || '—'}</div>
-                  {s.location && <div className="text-[10px] text-gray-500">{s.location}</div>}
-                </td>
-                <td className="text-xs max-w-md">
-                  <div className="line-clamp-2" title={s.description}>{s.description}</div>
+      {/* Card-row list — replaces the 10-column table (mam, 2026-05-21:
+          "show all proper task ... very difficult in look").  Each row
+          is a self-contained card with photo on the left, core info in
+          the middle, meta + actions on the right.  Color-coded left
+          border by status so OPEN / SUBMITTED / APPROVED / REJECTED
+          are scannable at a glance. */}
+      <div className="space-y-2">
+        {snags.length === 0 && (
+          <div className="card p-8 text-center text-gray-400">No snags raised yet</div>
+        )}
+        {snags.map(s => {
+          const leftBar =
+            s.status === 'approved' ? 'border-l-emerald-500' :
+            s.status === 'submitted' ? 'border-l-blue-500' :
+            s.status === 'rejected' ? 'border-l-red-500' :
+            s.priority === 'critical' ? 'border-l-red-600' :
+            s.priority === 'high' ? 'border-l-amber-500' : 'border-l-gray-300';
+          return (
+            <div key={s.id} className={`bg-white rounded-xl border border-l-4 ${leftBar} shadow-sm hover:shadow-md transition p-3`}>
+              <div className="flex gap-3 items-start">
+                {/* PHOTO — left thumbnail (or grey placeholder).  Click to enlarge. */}
+                {s.photo_url ? (
+                  <a href={s.photo_url} target="_blank" rel="noreferrer" className="flex-shrink-0">
+                    <img src={s.photo_url} alt="snag" className="w-16 h-16 sm:w-20 sm:h-20 object-cover rounded-lg border" />
+                  </a>
+                ) : (
+                  <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-lg border bg-gray-50 flex items-center justify-center text-gray-300 text-xs flex-shrink-0">No photo</div>
+                )}
+
+                {/* CORE — snag no, site, location, description */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono font-bold text-red-700 text-[12px]">{s.snag_no}</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold border ${PRIORITY_PILL[s.priority] || ''}`}>{s.priority}</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${STATUS_PILL[s.status] || ''}`}>{STATUS_LABEL[s.status] || s.status}</span>
+                    {s.raised_at && (
+                      <span className="text-[10px] text-gray-500">· raised {new Date(s.raised_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}{s.raised_by_name ? ` by ${s.raised_by_name}` : ''}</span>
+                    )}
+                  </div>
+                  <div className="mt-1 text-[13px] font-semibold text-gray-900 truncate" title={s.site_name || s.site_name_live || ''}>
+                    {s.site_name || s.site_name_live || '—'}
+                    {s.location && <span className="text-gray-500 font-normal text-[11px] ml-1.5">· {s.location}</span>}
+                  </div>
+                  <div className="mt-1 text-[12px] text-gray-700 line-clamp-2" title={s.description}>{s.description}</div>
                   {s.status === 'rejected' && s.reject_reason && (
-                    <div className="text-[10px] text-red-600 mt-0.5 italic" title={s.reject_reason}>↳ rejected: {s.reject_reason.slice(0, 60)}</div>
+                    <div className="mt-1 text-[11px] text-red-700 italic bg-red-50 border border-red-200 rounded px-2 py-1" title={s.reject_reason}>
+                      ↳ Rejected: {s.reject_reason}
+                    </div>
                   )}
-                </td>
-                <td>
-                  {s.photo_url
-                    ? <a href={s.photo_url} target="_blank" rel="noreferrer"><img src={s.photo_url} alt="" className="w-12 h-12 object-cover rounded" /></a>
-                    : <span className="text-gray-300 text-xs">—</span>}
-                </td>
-                <td className="text-xs">{s.assigned_to_user_name || s.assigned_to_name || <span className="text-gray-300">—</span>}</td>
-                <td>
-                  {s.proof_url
-                    ? <a href={s.proof_url} target="_blank" rel="noreferrer"><img src={s.proof_url} alt="" className="w-12 h-12 object-cover rounded ring-2 ring-emerald-400" /></a>
-                    : <span className="text-gray-300 text-xs">—</span>}
-                </td>
-                <td>
-                  <span className={`text-[10px] px-2 py-0.5 rounded font-bold border ${PRIORITY_PILL[s.priority] || ''}`}>{s.priority}</span>
-                </td>
-                <td>
-                  <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${STATUS_PILL[s.status] || ''}`}>{STATUS_LABEL[s.status] || s.status}</span>
-                </td>
-                <td className="whitespace-nowrap">
-                  {/* Assignee submits proof when status is open or rejected */}
-                  {(isAssignee(s) || canApprove('snags') || isAdmin()) && (s.status === 'open' || s.status === 'rejected') && (
-                    <button onClick={() => { setProofModal(s); setProofForm({}); }} className="btn btn-primary text-[10px] px-2 py-1 mr-1" title="Upload proof"><FiUploadCloud size={11} className="inline" /> {s.status === 'rejected' ? 'Resubmit' : 'Submit Proof'}</button>
+                </div>
+
+                {/* META + ACTIONS — right column on desktop, bottom on mobile */}
+                <div className="flex-shrink-0 flex flex-col items-end gap-1.5 min-w-[130px]">
+                  <div className="text-[10px] text-gray-500 text-right">Assigned to</div>
+                  <div className="text-[12px] font-semibold text-gray-800 text-right truncate max-w-[140px]" title={s.assigned_to_user_name || s.assigned_to_name || ''}>
+                    {s.assigned_to_user_name || s.assigned_to_name || <span className="text-gray-300 font-normal">— Unassigned</span>}
+                  </div>
+                  {s.proof_url && (
+                    <a href={s.proof_url} target="_blank" rel="noreferrer" className="mt-1">
+                      <img src={s.proof_url} alt="proof" className="w-12 h-12 object-cover rounded border-2 border-emerald-400" title="Proof uploaded" />
+                    </a>
                   )}
-                  {/* Raiser / approver acts on submitted proof */}
-                  {s.status === 'submitted' && canActAsApprover(s) && (
-                    <>
-                      <button onClick={() => approve(s)} className="btn btn-success text-[10px] px-2 py-1 mr-1"><FiCheckCircle size={11} className="inline" /> Approve</button>
-                      <button onClick={() => reject(s)} className="btn btn-danger text-[10px] px-2 py-1 mr-1"><FiXCircle size={11} className="inline" /> Reject</button>
-                    </>
-                  )}
-                  {(canEdit('snags') || isAdmin()) && s.status !== 'approved' && (
-                    <button onClick={() => openEdit(s)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit"><FiEdit2 size={12} /></button>
-                  )}
-                  {canDelete('snags') && (
-                    <button onClick={() => remove(s)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={12} /></button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </div>
+              </div>
+
+              {/* ACTION BAR — separated below so the row stays clean even with many buttons */}
+              <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t justify-end">
+                {(isAssignee(s) || canApprove('snags') || isAdmin()) && (s.status === 'open' || s.status === 'rejected') && (
+                  <button onClick={() => { setProofModal(s); setProofForm({}); }} className="btn btn-primary text-[11px] px-2.5 py-1 flex items-center gap-1">
+                    <FiUploadCloud size={12} /> {s.status === 'rejected' ? 'Resubmit Proof' : 'Submit Proof'}
+                  </button>
+                )}
+                {s.status === 'submitted' && canActAsApprover(s) && (
+                  <>
+                    <button onClick={() => approve(s)} className="btn btn-success text-[11px] px-2.5 py-1 flex items-center gap-1"><FiCheckCircle size={12} /> Approve</button>
+                    <button onClick={() => reject(s)} className="btn btn-danger text-[11px] px-2.5 py-1 flex items-center gap-1"><FiXCircle size={12} /> Reject</button>
+                  </>
+                )}
+                {(canEdit('snags') || isAdmin()) && s.status !== 'approved' && (
+                  <button onClick={() => openEdit(s)} className="px-2 py-1 text-gray-500 hover:text-blue-700 hover:bg-blue-50 rounded text-[11px] flex items-center gap-1" title="Edit"><FiEdit2 size={12} /> Edit</button>
+                )}
+                {canDelete('snags') && (
+                  <button onClick={() => remove(s)} className="px-2 py-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded text-[11px] flex items-center gap-1" title="Delete"><FiTrash2 size={12} /></button>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* RAISE / EDIT MODAL */}
