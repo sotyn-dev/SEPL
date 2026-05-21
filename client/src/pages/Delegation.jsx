@@ -289,9 +289,9 @@ export default function Delegation() {
           {isEA && (
             <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-sm">
               <button onClick={() => setView('list')}
-                className={`px-3 py-1.5 ${view === 'list' ? 'bg-red-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>List</button>
+                className={`px-3 py-1.5 ${view === 'list' ? 'bg-blue-800 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>List</button>
               <button onClick={() => setView('dashboard')}
-                className={`px-3 py-1.5 ${view === 'dashboard' ? 'bg-red-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>Dashboard</button>
+                className={`px-3 py-1.5 ${view === 'dashboard' ? 'bg-blue-800 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>Dashboard</button>
             </div>
           )}
           <button onClick={() => {
@@ -382,7 +382,7 @@ export default function Delegation() {
           ...(isEA ? [{ id: 'all', label: 'All tasks' }] : []),
         ].map(t => (
           <button key={t.id} onClick={() => setScope(t.id)}
-            className={`px-3 py-1.5 rounded-lg font-medium border ${scope === t.id ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
+            className={`px-3 py-1.5 rounded-lg font-medium border ${scope === t.id ? 'bg-blue-800 text-white border-blue-800' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
             {t.label}
           </button>
         ))}
