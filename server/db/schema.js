@@ -2375,22 +2375,33 @@ function initializeDatabase() {
     try { db.exec('ROLLBACK'); } catch (e2) {}
   }
 
+  // Mam (2026-05-21): CHECK constraint failed when she tried to raise
+  // a Salary payment request — the original table CHECK only allowed
+  // TA/DA / Purchase / Labour / Transport.  Earlier migration was
+  // too narrow (matched only the exact 4-item list) and silently
+  // failed on some DBs; this version matches ANY CHECK clause that
+  // mentions the category column, rebuilds without it, and logs both
+  // success and failure so we can verify from pm2 logs.
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='payment_requests'").get();
-    if (row && /CHECK\s*\(\s*category\s+IN\s*\(\s*'TA\/DA'\s*,\s*'Purchase'\s*,\s*'Labour'\s*,\s*'Transport'\s*\)\s*\)/.test(row.sql)) {
+    const hasCategoryCheck = row && /CHECK\s*\(\s*category\s+IN/i.test(row.sql);
+    if (hasCategoryCheck) {
       db.exec('BEGIN');
-      // Build new table with no CHECK on category — app layer already validates via WORKFLOW
       const newSql = row.sql
         .replace(/CREATE TABLE\s+payment_requests/i, 'CREATE TABLE payment_requests_new')
-        .replace(/CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i, '');
+        // Drop the entire CHECK(category IN (...)) clause, including any
+        // trailing comma that might immediately precede or follow it.
+        .replace(/,?\s*CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i, '');
       db.exec(newSql);
       db.exec('INSERT INTO payment_requests_new SELECT * FROM payment_requests');
       db.exec('DROP TABLE payment_requests');
       db.exec('ALTER TABLE payment_requests_new RENAME TO payment_requests');
       db.exec('COMMIT');
+      console.log('[migration] payment_requests.category CHECK dropped — Salary / Compliance / Other now allowed');
     }
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] payment_requests CHECK drop failed:', e.message);
   }
 
   // Relax attendance.status CHECK to allow 'short_day' (4-8 hours worked).
