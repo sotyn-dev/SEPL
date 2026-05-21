@@ -40,9 +40,9 @@ const STATUS_META = {
 };
 
 const STAGE_META = {
-  1: { title: 'PRE-START',  accent: 'from-blue-800 to-blue-900',     headerBg: 'bg-blue-950'   },
-  2: { title: 'EXECUTION',  accent: 'from-orange-700 to-amber-700',  headerBg: 'bg-amber-900'  },
-  3: { title: 'HANDOVER',   accent: 'from-emerald-700 to-emerald-800', headerBg: 'bg-emerald-900' },
+  1: { title: 'PRE-START',  accent: 'from-blue-800 to-blue-900',     headerBg: 'bg-blue-950',     tabBadge: 'bg-blue-500'    },
+  2: { title: 'EXECUTION',  accent: 'from-orange-700 to-amber-700',  headerBg: 'bg-amber-900',    tabBadge: 'bg-amber-500'   },
+  3: { title: 'HANDOVER',   accent: 'from-emerald-700 to-emerald-800', headerBg: 'bg-emerald-900', tabBadge: 'bg-emerald-500' },
 };
 
 // Same Cash-Flow-style ₹ formatter as before.
@@ -319,37 +319,39 @@ export default function CRMKitting() {
         </div>
       </div>
 
-      {/* Stage tabs + search */}
-      <div className="bg-white border rounded-xl p-2 sm:p-3 mb-3 shadow-sm">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-1 flex-wrap">
-            {[1, 2, 3].map(sn => {
-              const active = activeStage === sn;
-              return (
-                <button
-                  key={sn}
-                  onClick={() => setActiveStage(sn)}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${
-                    active
-                      ? `bg-gradient-to-r ${STAGE_META[sn].accent} text-white shadow`
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  Stage {sn} · {STAGE_META[sn].title}
-                  <span className="ml-1.5 text-[10px] opacity-90">({stageTotals[sn]} items)</span>
-                </button>
-              );
-            })}
-          </div>
-          <div className="relative">
-            <FiSearch className="absolute left-2.5 top-2 text-gray-400" size={14} />
-            <input
-              value={filter}
-              onChange={e => setFilter(e.target.value)}
-              placeholder="Filter projects…"
-              className="pl-8 pr-2 py-1.5 border rounded-lg text-sm w-64"
-            />
-          </div>
+      {/* Stage tabs — same Sales Funnel pill style: btn + count chip.
+          Each stage tab also gets a tiny rollup chip showing how many
+          checkpoints across ALL projects are still pending in that
+          stage, so mam sees where the work is concentrated. */}
+      <div className="flex gap-2 flex-wrap items-center mb-3">
+        {[1, 2, 3].map(sn => {
+          const active = activeStage === sn;
+          return (
+            <button
+              key={sn}
+              onClick={() => setActiveStage(sn)}
+              className={`btn ${active ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
+              title={`Stage ${sn} — ${STAGE_META[sn].title}`}
+            >
+              Stage {sn} — {STAGE_META[sn].title}
+              <span
+                className={`px-1.5 rounded-full text-[10px] font-bold min-w-[22px] text-center ${
+                  active ? 'bg-white/30 text-white' : `text-white ${STAGE_META[sn].tabBadge}`
+                }`}
+              >
+                {stageTotals[sn]}
+              </span>
+            </button>
+          );
+        })}
+        <div className="relative ml-auto">
+          <FiSearch className="absolute left-2.5 top-2 text-gray-400" size={14} />
+          <input
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+            placeholder="Filter projects…"
+            className="pl-8 pr-2 py-1.5 border rounded-lg text-sm w-64"
+          />
         </div>
       </div>
 
