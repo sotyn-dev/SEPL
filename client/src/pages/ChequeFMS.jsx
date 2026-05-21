@@ -147,13 +147,31 @@ export default function ChequeFMS() {
 
   const counts = useMemo(() => {
     const m = { pending: 0, clear: 0, hold: 0, bounce: 0, stopped: 0, cancel: 0 };
+    // Parallel amount-sum map so the Total Value tile can switch
+    // per tab (mam, 2026-05-21: "both same total value why").
+    const amt = { pending: 0, clear: 0, hold: 0, bounce: 0, stopped: 0, cancel: 0 };
     let totalAmount = 0;
     for (const row of stats.by_status) {
       m[row.current_status] = row.count;
+      amt[row.current_status] = +row.total_amount || 0;
       totalAmount += +row.total_amount || 0;
     }
-    return { m, totalAmount };
+    return { m, amt, totalAmount };
   }, [stats]);
+
+  // Total Value shown in the KPI tile — recomputes when the active
+  // tab changes so the headline number actually matches what's in
+  // the list below it.
+  const tabTotalValue = (() => {
+    switch (tab) {
+      case 'action_due': return +stats.action_due_total_amount || 0;
+      case 'pending':    return counts.amt.pending;
+      case 'hold':       return counts.amt.hold;
+      case 'clear':      return counts.amt.clear;
+      case 'bounce':     return counts.amt.bounce;
+      default:           return counts.totalAmount;  // 'all'
+    }
+  })();
 
   const tabs = [
     { id: 'action_due', label: 'Action Due', count: stats.action_due_count, color: 'red' },
@@ -187,13 +205,15 @@ export default function ChequeFMS() {
           </div>
         </div>
 
-        {/* Tabs / counts */}
+        {/* Tabs / counts — royal-blue active state (mam, 2026-05-21:
+            "actual due also why red ???").  Red previously, swept to
+            brand blue. */}
         <div className="flex gap-2 flex-wrap">
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${tab === t.id
-                ? `bg-red-700 text-white border-red-700`
-                : 'bg-white text-gray-600 border-gray-200 hover:border-red-300 hover:text-red-700'}`}>
+                ? `bg-blue-800 text-white border-blue-800`
+                : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:text-blue-700'}`}>
               {t.label}{t.count != null ? ` (${t.count})` : ''}
             </button>
           ))}
@@ -210,10 +230,18 @@ export default function ChequeFMS() {
 
         {/* Stats cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">Action Due</div><div className="text-xl font-bold text-red-700">{stats.action_due_count}</div></div>
+          <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">Action Due</div><div className="text-xl font-bold text-blue-800">{stats.action_due_count}</div></div>
           <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">On Hold</div><div className="text-xl font-bold text-amber-700">{counts.m.hold}</div></div>
           <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">Cleared</div><div className="text-xl font-bold text-emerald-700">{counts.m.clear}</div></div>
-          <div className="card p-3"><div className="text-[10px] uppercase text-gray-500">Total Value</div><div className="text-base font-bold text-gray-800">Rs {counts.totalAmount.toLocaleString('en-IN')}</div></div>
+          <div className="card p-3">
+            <div className="text-[10px] uppercase text-gray-500">
+              Total Value
+              <span className="ml-1 text-gray-400 font-normal normal-case text-[10px]">
+                ({tabs.find(t => t.id === tab)?.label || 'All'})
+              </span>
+            </div>
+            <div className="text-base font-bold text-blue-800">Rs {tabTotalValue.toLocaleString('en-IN')}</div>
+          </div>
         </div>
       </div>
 
@@ -254,7 +282,7 @@ export default function ChequeFMS() {
                         <button onClick={() => openEdit(c)} className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-50" title="Edit details"><FiEdit2 size={11} /></button>
                       )}
                       {canEdit('cheques') && !['clear', 'bounce', 'stopped', 'cancel'].includes(c.current_status) && (
-                        <button onClick={() => openAction(c)} className="text-[10px] px-2 py-0.5 rounded bg-red-700 text-white hover:bg-red-800 inline-flex items-center gap-1">
+                        <button onClick={() => openAction(c)} className="text-[10px] px-2 py-0.5 rounded bg-blue-800 text-white hover:bg-blue-900 inline-flex items-center gap-1">
                           {c.current_status === 'hold' ? <><FiClock size={10} />Hold Action</> : <><FiCheck size={10} />Take Action</>}
                         </button>
                       )}

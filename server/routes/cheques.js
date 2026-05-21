@@ -255,12 +255,22 @@ router.get('/stats/summary', requirePermission('cheques', 'view'), (req, res) =>
       FROM cheques
      GROUP BY current_status
   `).all();
-  const dueNow = db.prepare(`
-    SELECT COUNT(*) AS c FROM cheques
+  // Action-due = the only filter the per-status by_status row can't
+  // satisfy on its own (it's a date-based slice across pending + hold
+  // statuses).  Mam (2026-05-21) wants the "Total Value" tile to
+  // change when the Action Due tab is selected, so we surface the
+  // amount sum here too.
+  const due = db.prepare(`
+    SELECT COUNT(*) AS c, COALESCE(SUM(amount), 0) AS total_amount
+      FROM cheques
      WHERE (current_status = 'pending' AND DATE(cheque_date) <= DATE('now','localtime'))
         OR (current_status = 'hold' AND DATE(hold_until) <= DATE('now','localtime'))
-  `).get().c;
-  res.json({ by_status: rows, action_due_count: dueNow });
+  `).get();
+  res.json({
+    by_status: rows,
+    action_due_count: due.c,
+    action_due_total_amount: due.total_amount,
+  });
 });
 
 module.exports = router;
