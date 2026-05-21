@@ -5,6 +5,42 @@ const { validatePoNumber } = require('../utils/validate');
 const router = express.Router();
 router.use(authMiddleware);
 
+// Mam (2026-05-21): "sales without gst amount . please update of po
+// amount (with gst) all business book = sales without gst + (sales
+// without gst *18%)".  So PO_AMOUNT is always Sale × 1.18 — no other
+// values are valid.  We:
+//   1. Backfill every existing row at module load (idempotent, guarded
+//      by an app_settings sentinel so it only runs once per fresh
+//      deploy of this rule).
+//   2. Force-compute on every INSERT / UPDATE so manually typed PO
+//      values can't drift again.
+// Helper used in both places:
+const PO_GST_PCT = 18;
+const computePoAmount = (saleAmt) => {
+  const s = Number(saleAmt) || 0;
+  return Math.round(s * (1 + PO_GST_PCT / 100) * 100) / 100;  // 2-dp
+};
+
+// Idempotent backfill at module load.
+try {
+  const db = getDb();
+  db.exec(`CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)`);
+  const flag = db.prepare(`SELECT value FROM app_settings WHERE key='bb_po_eq_sale_x118_v1'`).get();
+  if (!flag) {
+    const r = db.prepare(`
+      UPDATE business_book
+      SET po_amount = ROUND(COALESCE(sale_amount_without_gst, 0) * 1.18, 2),
+          balance_amount = ROUND(COALESCE(sale_amount_without_gst, 0) * 1.18, 2) - COALESCE(advance_received, 0),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE COALESCE(sale_amount_without_gst, 0) > 0
+    `).run();
+    db.prepare(`INSERT INTO app_settings (key, value) VALUES ('bb_po_eq_sale_x118_v1', '1')`).run();
+    console.log(`[business_book] PO=Sale×1.18 backfill: ${r.changes} rows updated`);
+  }
+} catch (e) {
+  console.warn('[business_book] PO backfill skipped:', e.message);
+}
+
 // All fields from Master Business Sheet
 const ALL_FIELDS = [
   'lead_type', 'client_name', 'company_name', 'project_name', 'client_contact', 'client_email', 'email_address',
@@ -93,6 +129,10 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
   // UNIQUE-constraint collisions on the next insert.
   const { nextSequence } = require('../db/nextSequence');
   const leadNo = nextSequence(db, 'business_book', 'lead_no', 'SEPL', { startFrom: 20000, pad: 5 });
+
+  // Force PO = Sale × 1.18 (mam, 2026-05-21).  Override any value
+  // the client sent — the rule is non-negotiable.
+  b.po_amount = computePoAmount(b.sale_amount_without_gst);
   const balanceAmount = (b.po_amount || 0) - (b.advance_received || 0);
 
   const r = db.prepare(`INSERT INTO business_book (
@@ -201,6 +241,9 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
     const poErr = validatePoNumber(b.po_number);
     if (poErr) return res.status(400).json({ error: poErr });
   }
+  // Force PO = Sale × 1.18 (mam, 2026-05-21).  Override any value
+  // the client sent so edits can't drift from the rule.
+  b.po_amount = computePoAmount(b.sale_amount_without_gst);
   const computedBalance = b.balance_amount !== undefined ? b.balance_amount : (b.po_amount || 0) - (b.advance_received || 0);
 
   getDb().prepare(`UPDATE business_book SET

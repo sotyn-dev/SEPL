@@ -130,7 +130,17 @@ export default function BusinessBook() {
   const clearFilters = () => { setFilters({ status: '', category: '', order_type: '', lead_type: '' }); setSearch(''); };
   const activeFilters = Object.values(filters).filter(Boolean).length + (search ? 1 : 0);
   const fmt = (n) => `Rs ${(n || 0).toLocaleString('en-IN')}`;
-  const F = (key, val) => setForm(f => ({ ...f, [key]: val }));
+  // Mam (2026-05-21): PO Amount (with GST) is always Sale × 1.18.
+  // We force-compute on Sale Amount edits so the field can't drift.
+  // Server also re-computes on save as a final guard.
+  const F = (key, val) => setForm(f => {
+    const next = { ...f, [key]: val };
+    if (key === 'sale_amount_without_gst') {
+      const s = Number(val) || 0;
+      next.po_amount = Math.round(s * 1.18 * 100) / 100;
+    }
+    return next;
+  });
 
   return (
     <div className="space-y-6">
@@ -370,7 +380,22 @@ export default function BusinessBook() {
           <FSection title="Financial Details" color="emerald">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               <Inp label="Sale Amount (Without GST)" value={form.sale_amount_without_gst} onChange={v => F('sale_amount_without_gst', +v)} type="number" />
-              <Inp label="PO Amount (With GST)" value={form.po_amount} onChange={v => F('po_amount', +v)} type="number" />
+              {/* PO Amount auto-computes as Sale × 1.18 — display only.
+                  Mam (2026-05-21): "all business book = sales without
+                  gst + (sales without gst *18%)". */}
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">
+                  PO Amount (With GST)
+                  <span className="ml-1 normal-case font-normal text-emerald-700">· auto = Sale × 1.18</span>
+                </label>
+                <input
+                  type="number"
+                  value={form.po_amount || 0}
+                  readOnly
+                  className="w-full px-3 py-2 border border-emerald-200 bg-emerald-50 rounded-lg text-sm font-semibold text-emerald-900 cursor-not-allowed"
+                  title="Auto-computed from Sale Amount × 1.18"
+                />
+              </div>
               <Inp label="Advance Received" value={form.advance_received} onChange={v => F('advance_received', +v)} type="number" />
               <Inp label="Accessory Amount" value={form.accessory_amount} onChange={v => F('accessory_amount', +v)} type="number" />
               <Inp label="Actual Margin %" value={form.actual_margin_pct} onChange={v => F('actual_margin_pct', +v)} type="number" />
