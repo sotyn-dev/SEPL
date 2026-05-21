@@ -57,6 +57,7 @@ import DashboardWarRoom from './pages/DashboardWarRoom';
 import FireNoc from './pages/FireNoc';
 import RentalTools from './pages/RentalTools';
 import Influencers from './pages/Influencers';
+import CRMKitting from './pages/CRMKitting';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -108,6 +109,7 @@ export default function App() {
         <Route path="fire-noc" element={<ModuleRoute module="fire_noc"><FireNoc /></ModuleRoute>} />
         <Route path="rental-tools" element={<ModuleRoute module="rental_tools"><RentalTools /></ModuleRoute>} />
         <Route path="influencers" element={<ModuleRoute module="influencers"><Influencers /></ModuleRoute>} />
+        <Route path="crm-kitting" element={<ModuleRoute module="crm_kitting"><CRMKitting /></ModuleRoute>} />
         {/* 4 Critical Systems */}
         <Route path="cashflow" element={<ModuleRoute module="cashflow"><CashFlow /></ModuleRoute>} />
         <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />

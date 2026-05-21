@@ -31,6 +31,7 @@ const menuItems = [
   { path: '/fire-noc', label: 'Fire NOC Renewal', icon: FiTarget, module: 'fire_noc' },
   { path: '/rental-tools', label: 'Rental Tools', icon: FiTool, module: 'rental_tools' },
   { path: '/influencers', label: 'Influencers', icon: FiUsers, module: 'influencers' },
+  { path: '/crm-kitting', label: 'CRM Full Kitting', icon: FiPackage, module: 'crm_kitting' },
   { path: '/quotations', label: 'BOQ & Quotations', icon: FiFileText, module: 'quotations' },
   { path: '/business-book', label: 'Business Book', icon: FiBook, module: 'business_book' },
   { path: '/item-master', label: 'Item Master', icon: FiGrid, module: 'item_master' },
