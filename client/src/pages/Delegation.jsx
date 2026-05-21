@@ -477,133 +477,135 @@ export default function Delegation() {
           Due / Status / Upload Proof / Extension / Actions.
           Shown on ALL screen sizes per mam's request (2026-04-23). On phones
           the parent scrolls horizontally so every column stays accessible. */}
-      {/* Card-row layout — mam (2026-05-21) showed a Delegation row with
-          a 10-line task description spanning the entire cell, eating any
-          chance to scan the list.  Replaced the 10-column table with a
-          self-contained card per task: line-clamp description, status
-          chip + due date inline, action buttons in their own bar below.
-          Color-coded left border by status for at-a-glance pipeline view. */}
-      <div className="space-y-2 max-h-[78vh] overflow-y-auto pr-1">
-        {(() => {
-          const q = search.trim().toLowerCase();
-          const visibleTasks = q
-            ? tasks.filter(t =>
-                (t.task_id || '').toLowerCase().includes(q) ||
-                (t.description || '').toLowerCase().includes(q))
-            : tasks;
-          if (visibleTasks.length === 0) {
-            return <div className="card p-8 text-center text-gray-400">{q ? `No tasks match "${search}"` : 'No tasks'}</div>;
-          }
-          return visibleTasks.map((t, idx) => {
-            const isAssignee = t.assigned_to === user?.id;
-            const isAssigner = t.assigned_by === user?.id;
-            const canEditProject = isAdmin() || isAssigner;
-            const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
-            const leftBar =
-              t.status === 'approved' ? 'border-l-emerald-500' :
-              t.status === 'submitted' ? 'border-l-blue-500' :
-              t.status === 'rejected' ? 'border-l-red-500' : 'border-l-amber-400';
-            return (
-              <div key={t.id} className={`bg-white rounded-xl border border-l-4 ${leftBar} shadow-sm hover:shadow-md transition p-3`}>
-                {/* HEADER ROW — task#, status, due, project */}
-                <div className="flex items-center gap-2 flex-wrap mb-1.5">
-                  <span className="text-[10px] text-gray-400 font-semibold">#{idx + 1}</span>
-                  <span className="font-mono text-[11px] text-red-700">TSK-{String(t.id).padStart(4, '0')}</span>
-                  {statusBadge(t.status)}
-                  {completedDate ? (
-                    <span className="text-[11px] text-emerald-700 font-medium">Done {completedDate}</span>
-                  ) : t.due_date ? (
-                    <span className="text-[11px] text-gray-600">Due {t.due_date}</span>
-                  ) : null}
-                  {/* Project — inline editable on the right of the meta row */}
-                  <span className="ml-auto flex items-center gap-1 text-[11px] text-gray-500">
-                    <span className="text-gray-400">Project:</span>
+      {/* Reverted to the original 10-column table per mam
+          (2026-05-21: "not change delegation like previous"). */}
+      <div className="card p-0 overflow-auto max-h-[70vh]">
+        <table className="text-sm min-w-[1100px]">
+          <thead className="sticky top-0 z-10 bg-gray-100">
+            <tr>
+              <th className="w-12 text-center">S.No.</th>
+              <th>Task ID</th>
+              <th>Description</th>
+              <th>Project</th>
+              <th>Assigned To</th>
+              <th>Due / Completed</th>
+              <th>Status</th>
+              <th>Upload Proof</th>
+              <th>Extension</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(() => {
+              const q = search.trim().toLowerCase();
+              const visibleTasks = q
+                ? tasks.filter(t =>
+                    (t.task_id || '').toLowerCase().includes(q) ||
+                    (t.description || '').toLowerCase().includes(q))
+                : tasks;
+              return (<>
+                {visibleTasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
+                {visibleTasks.map((t, idx) => {
+              const isAssignee = t.assigned_to === user?.id;
+              const isAssigner = t.assigned_by === user?.id;
+              const canEditProject = isAdmin() || isAssigner;
+              const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
+              return (
+                <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
+                  <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
+                  <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
+                  <td className="align-top" style={{ minWidth: '220px', maxWidth: '420px' }}>
+                    <div className="text-gray-800 font-medium whitespace-normal break-words leading-snug">
+                      {cleanDesc(t.description || t.title)}
+                    </div>
+                    {t.attachment_url && (
+                      <a href={t.attachment_url} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline flex items-center gap-1 mt-1">
+                        <FiExternalLink size={10} /> View attachment
+                      </a>
+                    )}
+                    {t.status === 'rejected' && t.reject_reason && (
+                      <div className="text-[10px] text-red-700 mt-1 flex items-start gap-1 whitespace-normal break-words"><FiAlertTriangle size={10} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}</div>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap">
                     {canEditProject ? (
                       <input
                         type="text"
                         defaultValue={t.project_name || ''}
                         placeholder="— add —"
-                        className="bg-transparent border border-transparent hover:border-gray-200 focus:border-red-400 focus:bg-white rounded px-1.5 py-0.5 w-32 focus:outline-none text-[11px] text-gray-800"
+                        className="text-xs bg-transparent border border-transparent hover:border-gray-200 focus:border-red-400 focus:bg-white rounded px-1.5 py-0.5 w-32 focus:outline-none"
                         onBlur={e => saveProject(t, e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { e.target.value = t.project_name || ''; e.target.blur(); } }}
                         title="Click to edit project"
                       />
                     ) : (
-                      <span className="text-gray-700">{t.project_name || <span className="text-gray-300">—</span>}</span>
+                      <span className="text-xs text-gray-700">{t.project_name || <span className="text-gray-300">—</span>}</span>
                     )}
-                  </span>
-                </div>
-
-                {/* DESCRIPTION — line-clamp-2 so dense tasks don't dominate */}
-                <div className="text-[13px] text-gray-800 font-medium leading-snug line-clamp-2 break-words" title={cleanDesc(t.description || t.title)}>
-                  {cleanDesc(t.description || t.title)}
-                </div>
-                {/* Attachment + rejection reason inline below */}
-                {(t.attachment_url || (t.status === 'rejected' && t.reject_reason)) && (
-                  <div className="mt-1.5 space-y-1">
-                    {t.attachment_url && (
-                      <a href={t.attachment_url} target="_blank" rel="noreferrer" className="text-[11px] text-blue-600 hover:underline inline-flex items-center gap-1">
-                        <FiExternalLink size={11} /> View attachment
-                      </a>
-                    )}
-                    {t.status === 'rejected' && t.reject_reason && (
-                      <div className="text-[11px] text-red-700 italic bg-red-50 border border-red-200 rounded px-2 py-1 flex items-start gap-1">
-                        <FiAlertTriangle size={11} className="mt-0.5 flex-shrink-0" /> {t.reject_reason}
+                  </td>
+                  <td className="whitespace-nowrap">{t.assigned_to_name}</td>
+                  <td className="whitespace-nowrap text-xs">
+                    {completedDate
+                      ? <span className="text-emerald-700 font-medium">Done {completedDate}</span>
+                      : t.due_date
+                        ? <span className="text-gray-600">Due {t.due_date}</span>
+                        : <span className="text-gray-400">—</span>}
+                  </td>
+                  <td>{statusBadge(t.status)}</td>
+                  <td>
+                    <div className="flex flex-col gap-1">
+                      {t.proof_url && (
+                        <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View</a>
+                      )}
+                      {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
+                        <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit">
+                          <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
+                        </button>
+                      )}
+                      {!t.proof_url && !((isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected')) && (
+                        <span className="text-gray-400 text-xs">—</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="whitespace-nowrap">
+                    {t.extension_status === 'pending' && t.requested_due_date ? (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 inline-block">→ {t.requested_due_date}</span>
+                        {isAdmin() && (
+                          <div className="flex gap-1">
+                            <button onClick={() => approveExtension(t)} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
+                            <button onClick={() => rejectExtension(t)} className="text-[10px] text-red-600 font-bold hover:underline">Reject</button>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                )}
-
-                {/* META + ACTIONS — single row at the bottom */}
-                <div className="mt-2 pt-2 border-t flex items-center justify-between gap-2 flex-wrap">
-                  <div className="flex items-center gap-2 text-[11px]">
-                    <span className="text-gray-500">Assigned to</span>
-                    <span className="font-semibold text-gray-800">{t.assigned_to_name || '—'}</span>
-                    {t.extension_status === 'pending' && t.requested_due_date && (
-                      <span className="text-[10px] text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
-                        Ext requested → {t.requested_due_date}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {t.proof_url && (
-                      <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-[11px] text-emerald-700 hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View proof</a>
-                    )}
-                    {(isAssignee || isEA) && (t.status === 'pending' || t.status === 'rejected') && (
-                      <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2.5 py-1 flex items-center gap-1">
-                        <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
-                      </button>
-                    )}
-                    {/* Extension request — only if not already submitted */}
-                    {t.extension_status === 'pending' && t.requested_due_date && isAdmin() && (
-                      <>
-                        <button onClick={() => approveExtension(t)} className="text-[11px] text-emerald-700 font-bold hover:underline">Approve Ext</button>
-                        <button onClick={() => rejectExtension(t)} className="text-[11px] text-red-600 font-bold hover:underline">Reject Ext</button>
-                      </>
-                    )}
-                    {(!t.extension_status || t.extension_status === 'rejected') && isAssignee && t.status !== 'approved' && (
-                      <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }} className="text-[11px] text-gray-500 hover:text-red-600 flex items-center gap-1"><FiCalendar size={11} /> Extend</button>
-                    )}
-                    {isAdmin() && t.status === 'submitted' && (
-                      <>
-                        <button onClick={() => approve(t)} className="text-[11px] font-bold text-emerald-700 hover:underline px-2">Approve</button>
-                        <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="text-[11px] font-bold text-red-600 hover:underline px-2">Reject</button>
-                      </>
-                    )}
-                    {(isAssigner || isAdmin()) && (
-                      <button onClick={() => openEdit(t)} className="p-1 text-gray-400 hover:text-blue-600 rounded" title="Edit task">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
-                      </button>
-                    )}
-                    {(isAssigner || isAdmin()) && (
-                      <button onClick={() => del(t)} className="p-1 text-gray-400 hover:text-red-600 rounded" title="Delete"><FiTrash2 size={12} /></button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          });
-        })()}
+                    ) : isAssignee && t.status !== 'approved' ? (
+                      <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }} className="text-[11px] text-gray-500 hover:text-red-600 flex items-center gap-1"><FiCalendar size={11} /> Request</button>
+                    ) : t.extension_status === 'rejected' ? (
+                      <span className="text-[10px] text-gray-400">Rejected</span>
+                    ) : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  <td>
+                    <div className="flex gap-1 items-center">
+                      {isAdmin() && t.status === 'submitted' && (
+                        <>
+                          <button onClick={() => approve(t)} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
+                          <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="text-[10px] text-red-600 font-bold hover:underline">Reject</button>
+                        </>
+                      )}
+                      {(isAssigner || isAdmin()) && (
+                        <button onClick={() => openEdit(t)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit task">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+                        </button>
+                      )}
+                      {(isAssigner || isAdmin()) && <button onClick={() => del(t)} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={12} /></button>}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+              </>);
+            })()}
+          </tbody>
+        </table>
       </div>
 
       {/* Mobile-only card layout REMOVED — per mam's request, the desktop
