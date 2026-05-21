@@ -788,11 +788,26 @@ export default function Procurement() {
                   <td><StatusBadge status={i.status} /></td>
                   <td>
                     <div className="flex gap-1 items-center">
-                      {i.status === 'submitted' && (
+                      {/* Separation of duties — mam (2026-05-21): a user
+                          must NOT approve / reject their own indent.
+                          Only show the Approve / Reject buttons when:
+                          (a) status is 'submitted' AND
+                          (b) the viewer has procurement-approve
+                              permission (or is admin) AND
+                          (c) the viewer is NOT the creator.
+                          Backend enforces the same rule as a safety
+                          net for direct API calls. */}
+                      {i.status === 'submitted' && (canApprove('procurement') || isAdmin()) && i.created_by !== user?.id && (
                         <>
                           <button onClick={() => approveIndent(i.id, 'approved')} className="btn btn-success text-xs py-1 px-2">Approve</button>
                           <button onClick={() => approveIndent(i.id, 'rejected')} className="btn btn-danger text-xs py-1 px-2">Reject</button>
                         </>
+                      )}
+                      {/* If creator is viewing their own submitted indent,
+                          show a small "Awaiting approval" hint instead so
+                          they know what's happening. */}
+                      {i.status === 'submitted' && i.created_by === user?.id && (
+                        <span className="text-[10px] text-gray-500 italic" title="Only an approver can act on your indent">Awaiting approval</span>
                       )}
                       {i.status === 'draft' && <button onClick={() => approveIndent(i.id, 'submitted')} className="btn btn-primary text-xs py-1 px-2">Submit</button>}
                       {/* Edit — site engineers in training need to fix wrong

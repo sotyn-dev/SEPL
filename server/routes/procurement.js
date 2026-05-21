@@ -618,8 +618,23 @@ router.put('/indents/:id', (req, res) => {
   const db = getDb();
   const id = req.params.id;
 
-  // Approve / reject path — unchanged.
+  // Approve / reject path.
   if (status && !items) {
+    // Separation of duties — mam (2026-05-21): "how can if user fill
+    // that indent how can he she approved and reject their indent".
+    // Block the creator from approving / rejecting their own indent.
+    // Site engineers / data-entry users can still flip status from
+    // 'draft' → 'submitted' on their own row (that's the submit step,
+    // not an approval).  Admin bypasses (handles corner cases where
+    // mam herself raised an indent and needs to push it through).
+    if (status === 'approved' || status === 'rejected') {
+      const cur = db.prepare('SELECT created_by FROM indents WHERE id=?').get(id);
+      if (cur && cur.created_by === req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({
+          error: 'You cannot approve or reject an indent you raised yourself. Ask another approver.',
+        });
+      }
+    }
     db.prepare('UPDATE indents SET status=?, approved_by=? WHERE id=?')
       .run(status, status === 'approved' ? req.user.id : null, id);
     return res.json({ message: 'Updated' });
