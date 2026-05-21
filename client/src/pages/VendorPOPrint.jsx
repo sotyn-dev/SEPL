@@ -317,9 +317,17 @@ export default function VendorPOPrint() {
               const desc = it.master_name || it.description || '—';
               const detail = [it.size, it.specification].filter(Boolean).join(' · ');
               const make = it.im_make || it.ii_make;
-              const unit = String(it.unit || it.uom || '').toUpperCase();
+              // UOM source priority: item_master.uom is the canonical
+              // unit (mam, 2026-05-15 normalised the master); fall back
+              // to whatever the indent line was raised with.
+              const unit = String(it.uom || it.unit || '').toUpperCase();
               const amount = +it.amount || (+it.rate * +it.quantity) || 0;
-              const dueOn = fmtDate(po.expected_receipt_date || po.po_date || po.created_at);
+              // Per-item due date.  mam (2026-05-21): each line should
+              // show its OWN required-by date from the indent — not a
+              // single PO-level date stamped on every row.  Falls back
+              // to PO-level expected_receipt_date for legacy rows that
+              // pre-date the indent_items.required_date column.
+              const dueOn = fmtDate(it.required_date || po.expected_receipt_date || po.po_date || po.created_at);
               const stripeBg = idx % 2 === 1 ? 'bg-gray-50/40' : '';
               return (
                 <tr key={it.id} className={`align-top ${stripeBg}`}>

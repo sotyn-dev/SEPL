@@ -8,7 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
-const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false };
+const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
 
 // Client-side unit display normaliser (mam, 2026-05-16: "not change
 // according to itemwise" — stale "Each" / "Metre" / "Mtrs" values
@@ -1721,12 +1721,13 @@ export default function Procurement() {
                     {group.boq_id && (
                       <div className="p-2 space-y-2">
                         {/* Desktop column headers */}
-                        <div className="hidden md:grid gap-2 text-[10px] font-bold text-gray-500 uppercase px-1" style={{ gridTemplateColumns: 'repeat(13, minmax(0, 1fr)) auto' }}>
-                          <div className="col-span-5">Sub-Item (Item Master) <span className="text-red-500">*</span></div>
+                        <div className="hidden md:grid gap-2 text-[10px] font-bold text-gray-500 uppercase px-1" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr)) auto' }}>
+                          <div className="col-span-4">Sub-Item (Item Master) <span className="text-red-500">*</span></div>
                           <div className="col-span-2">Make</div>
                           <div className="col-span-2">Type</div>
                           <div className="col-span-2">Qty</div>
                           <div className="col-span-2">Unit</div>
+                          <div className="col-span-3">Required by</div>
                           <div></div>
                         </div>
 
@@ -1746,6 +1747,11 @@ export default function Procurement() {
                           );
                           const makeInput = <input className="input text-sm" placeholder="Make" value={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />;
                           const qtyInput = <input className="input text-base font-bold text-right" type="number" min="0" placeholder="Qty" value={item.quantity} onChange={e => { const n = [...indentItems]; n[i].quantity = +e.target.value; setIndentItems(n); }} />;
+                          // Per-item required-by date — mam (2026-05-21):
+                          // each row on the Vendor PO print should show
+                          // its own "DUE ON" date, not one PO-level
+                          // date stamped on every line.
+                          const reqDateInput = <input className="input text-sm" type="date" value={item.required_date || ''} onChange={e => { const n = [...indentItems]; n[i].required_date = e.target.value; setIndentItems(n); }} />;
                           // Unit dropdown — UNIT_OPTIONS covers the common cases.
                           // If the BOQ / Item Master has pre-filled a unit that
                           // isn't in the list (e.g. 'metres'), keep it as an
@@ -1790,17 +1796,21 @@ export default function Procurement() {
                                   <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Unit</label>{unitInput}</div>
                                   <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Type</label>{typeBox}</div>
                                 </div>
-                                <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Make</label>{makeInput}</div>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Make</label>{makeInput}</div>
+                                  <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Required by</label>{reqDateInput}</div>
+                                </div>
                               </div>
 
                               {/* DESKTOP — single row */}
                               <div className="hidden md:block">
-                                <div className="grid gap-2 items-center bg-white border rounded-lg p-2" style={{ gridTemplateColumns: 'repeat(13, minmax(0, 1fr)) auto' }}>
-                                  <div className="col-span-5">{masterPicker}</div>
+                                <div className="grid gap-2 items-center bg-white border rounded-lg p-2" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr)) auto' }}>
+                                  <div className="col-span-4">{masterPicker}</div>
                                   <div className="col-span-2">{makeInput}</div>
                                   <div className="col-span-2">{typeBox}</div>
                                   <div className="col-span-2">{qtyInput}</div>
                                   <div className="col-span-2">{unitInput}</div>
+                                  <div className="col-span-3" title="Required-by date for this item — shows on Vendor PO 'DUE ON' column">{reqDateInput}</div>
                                   {removeBtn}
                                 </div>
                               </div>

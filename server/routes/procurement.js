@@ -535,8 +535,8 @@ router.post('/indents', (req, res) => {
   const getMaster = db.prepare('SELECT item_name, specification, size, uom, type, make FROM item_master WHERE id=?');
   const insertItem = db.prepare(
     `INSERT INTO indent_items
-      (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+      (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool, required_date)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
   );
   for (const i of (items || [])) {
     let desc = i.description || '';
@@ -577,6 +577,7 @@ router.post('/indents', (req, res) => {
     const tool = String(itemType || '').toUpperCase() === 'RGP' ? 1 : 0;
     insertItem.run(
       r.lastInsertRowid, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool,
+      i.required_date || null,
     );
   }
   res.status(201).json({ id: r.lastInsertRowid, indent_number: indentNum });
@@ -643,8 +644,8 @@ router.put('/indents/:id', (req, res) => {
       const getMaster = db.prepare('SELECT item_name, specification, size, uom, type, make FROM item_master WHERE id=?');
       const insertItem = db.prepare(
         `INSERT INTO indent_items
-          (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+          (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool, required_date)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
       );
       for (const i of items) {
         let desc = i.description || '';
@@ -681,7 +682,7 @@ router.put('/indents/:id', (req, res) => {
         const qty = +i.quantity || 0;
         const foc = String(itemType || '').toUpperCase() === 'FOC' ? 1 : 0;
         const tool = String(itemType || '').toUpperCase() === 'RGP' ? 1 : 0;
-        insertItem.run(id, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool);
+        insertItem.run(id, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool, i.required_date || null);
       }
     });
     try {
@@ -856,7 +857,7 @@ router.get('/vendor-po/:id/print', (req, res) => {
 
   const items = db.prepare(`
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.terms, vpi.credit_days,
-           ii.description, ii.make as ii_make, ii.unit,
+           ii.description, ii.make as ii_make, ii.unit, ii.required_date,
            im.item_code, im.item_name as master_name, im.specification, im.size, im.uom, im.make as im_make,
            poi.description as boq_description
       FROM vendor_po_items vpi
@@ -877,7 +878,8 @@ router.get('/indents/:id/items-for-po', (req, res) => {
   const db = getDb();
   const rows = db.prepare(
     `SELECT ii.id as indent_item_id, ii.description, ii.make, ii.quantity, ii.unit, ii.item_type,
-            ii.item_master_id, im.item_code, im.item_name as master_name, im.specification, im.size, im.uom,
+            ii.item_master_id, ii.required_date,
+            im.item_code, im.item_name as master_name, im.specification, im.size, im.uom,
             r.final_rate, r.final_vendor_name, r.final_terms, r.final_credit_days, r.status as rate_status,
             (SELECT COUNT(*) FROM vendor_po_items vpi
               JOIN vendor_pos vp_check ON vp_check.id = vpi.vendor_po_id
