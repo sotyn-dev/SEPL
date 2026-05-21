@@ -355,15 +355,21 @@ export default function CRMKitting() {
         </div>
       </div>
 
-      {/* Matrix — split into two synchronized tables.  Left table holds
-          the fixed-width meta columns; right table holds the scrollable
-          checkpoint grid.  This avoids the colSpan / sticky-left
-          alignment headaches that single-table approaches run into:
-          long project names can't bleed into adjacent columns, section
-          bands stay aligned to their checkpoint columns, and the
-          "PROJECT INFO" header doesn't slide over CORE MAT / SITE
-          section bands on horizontal scroll. */}
-      <div className="bg-white border rounded-xl shadow-sm overflow-hidden">
+      {/* Loaded-state indicator — surfaces matrix payload at a glance.
+          Mam saw an empty render previously; this makes "did the data
+          arrive?" answerable without DevTools. */}
+      <div className="text-[11px] text-gray-500 mb-1.5 px-1">
+        {loading
+          ? 'Loading…'
+          : `${matrix.projects.length} projects · ${matrix.checkpoints.length} checkpoints loaded · showing ${filteredProjects.length} on Stage ${activeStage}`}
+      </div>
+
+      {/* Matrix — single table with `table-layout: fixed` + explicit
+          colgroup widths.  This is the most reliable layout: column
+          widths come from the colgroup (not from cell content), so
+          long project names can't expand a column and break the
+          sticky-left math for the next column over. */}
+      <div className="bg-white border rounded-xl shadow-sm overflow-auto max-h-[78vh]">
         {loading && (
           <div className="p-6 text-center text-sm text-gray-500">Loading matrix…</div>
         )}
@@ -372,145 +378,149 @@ export default function CRMKitting() {
             No projects in Business Book yet. Add one there first.
           </div>
         )}
-        {!loading && matrix.projects.length > 0 && (
-          <div className="flex max-h-[75vh] overflow-y-auto">
-            {/* ── Left fixed table — meta columns ────────────────── */}
-            <div className="flex-shrink-0 border-r-2 border-slate-300 shadow-[4px_0_6px_-2px_rgba(0,0,0,0.1)] z-10 bg-white">
-              <table className="border-collapse text-xs" style={{ tableLayout: 'fixed' }}>
-                <colgroup>
-                  <col style={{ width: 36 }} />
-                  <col style={{ width: 180 }} />
-                  <col style={{ width: 80 }} />
-                  <col style={{ width: 90 }} />
-                  <col style={{ width: 100 }} />
-                  <col style={{ width: 88 }} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th colSpan={6} className="sticky top-0 z-20 bg-slate-900 text-white text-[11px] font-semibold px-3 py-2 text-left border-b border-slate-700"
-                        style={{ height: 38 }}>
-                      PROJECT INFO
-                    </th>
-                  </tr>
-                  <tr>
-                    <th className="sticky top-[38px] z-20 bg-slate-800 text-white text-[10px] px-1 py-2 text-center border-r border-b border-slate-700" style={{ height: 120 }}>Sr</th>
-                    <th className="sticky top-[38px] z-20 bg-slate-800 text-white text-[10px] px-2 py-2 text-left border-r border-b border-slate-700">Project Name</th>
-                    <th className="sticky top-[38px] z-20 bg-slate-800 text-white text-[10px] px-1 py-2 text-center border-r border-b border-slate-700">CRM</th>
-                    <th className="sticky top-[38px] z-20 bg-slate-800 text-white text-[10px] px-1 py-2 text-center border-r border-b border-slate-700">Phase / Zone</th>
-                    <th className="sticky top-[38px] z-20 bg-slate-800 text-white text-[10px] px-1 py-2 text-center border-r border-b border-slate-700">PM Owner</th>
-                    <th className="sticky top-[38px] z-20 bg-slate-800 text-white text-[10px] px-1 py-2 text-center border-b border-slate-700">Target Start</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredProjects.map((p, idx) => {
-                    const meta = matrix.meta[p.project_key] || {};
-                    const pct = stagePctFor(p.project_key, activeStage);
-                    return (
-                      <tr key={p.project_key} className="hover:bg-blue-50/40" style={{ height: 44 }}>
-                        <td className="border-r border-b text-center text-gray-500 text-[10px]">{idx + 1}</td>
-                        <td className="border-r border-b px-2 overflow-hidden">
-                          <div className="font-medium text-gray-900 text-[11px] truncate" title={p.project_name}>{p.project_name}</div>
-                          <div className="text-[9px] text-gray-500 flex items-center gap-1 truncate">
-                            {p.lead_no && <span className="font-mono">{p.lead_no}</span>}
-                            {p.bb_entry_count > 1 && <span className="text-amber-700">· {p.bb_entry_count} BB</span>}
-                            <span className="ml-auto inline-flex items-center gap-0.5 whitespace-nowrap">
-                              <span className={`inline-block w-1.5 h-1.5 rounded-full ${pct >= 100 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-gray-300'}`} />
-                              {pct}%
-                            </span>
-                          </div>
-                        </td>
-                        <td
-                          onClick={() => editAllowed && openMeta(p)}
-                          className={`border-r border-b text-center text-[10px] px-1 ${editAllowed ? 'cursor-pointer hover:bg-blue-50' : ''}`}
-                        >
-                          {meta.crm_owner ? (
-                            <span className={`inline-block px-1.5 py-0.5 rounded ${
-                              meta.crm_owner === 'Sushila' ? 'bg-violet-100 text-violet-700' :
-                              meta.crm_owner === 'Lovely'  ? 'bg-orange-100 text-orange-700' :
-                              'bg-slate-100 text-slate-700'
-                            }`}>{meta.crm_owner}</span>
-                          ) : <span className="text-gray-300">—</span>}
-                        </td>
-                        <td
-                          onClick={() => editAllowed && openMeta(p)}
-                          className={`border-r border-b text-center text-[10px] px-1 overflow-hidden ${editAllowed ? 'cursor-pointer hover:bg-blue-50' : ''}`}
-                        >
-                          <div className="truncate" title={meta.phase_zone || ''}>
-                            {meta.phase_zone || <span className="text-gray-300">—</span>}
-                          </div>
-                        </td>
-                        <td
-                          onClick={() => editAllowed && openMeta(p)}
-                          className={`border-r border-b text-center text-[10px] px-1 overflow-hidden ${editAllowed ? 'cursor-pointer hover:bg-blue-50' : ''}`}
-                        >
-                          <div className="truncate" title={meta.pm_owner || ''}>
-                            {meta.pm_owner || <span className="text-gray-300">—</span>}
-                          </div>
-                        </td>
-                        <td
-                          onClick={() => editAllowed && openMeta(p)}
-                          className={`border-b text-center text-[10px] px-1 ${editAllowed ? 'cursor-pointer hover:bg-blue-50' : ''}`}
-                        >
-                          {meta.target_start ? fmtD(meta.target_start) : <span className="text-gray-300">—</span>}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+        {!loading && matrix.projects.length > 0 && (() => {
+          const dataCols = stageColumns[activeStage].flatMap(g => g.items);
+          // Sticky-left pixel offsets — must match the colgroup widths
+          // below exactly, otherwise sticky cells will overlap.
+          const W = { sr: 36, name: 200, crm: 80, phase: 90, pm: 110, target: 90 };
+          const L = {
+            sr:     0,
+            name:   W.sr,                                                // 36
+            crm:    W.sr + W.name,                                        // 236
+            phase:  W.sr + W.name + W.crm,                                // 316
+            pm:     W.sr + W.name + W.crm + W.phase,                      // 406
+            target: W.sr + W.name + W.crm + W.phase + W.pm,               // 516
+          };
+          // The right edge of the sticky meta area — used to anchor a
+          // shadow on the last sticky cell so the boundary is obvious.
+          const stickyShadow = 'shadow-[4px_0_6px_-2px_rgba(0,0,0,0.15)]';
+          return (
+            <table className="border-collapse text-xs" style={{ tableLayout: 'fixed' }}>
+              <colgroup>
+                <col style={{ width: W.sr }} />
+                <col style={{ width: W.name }} />
+                <col style={{ width: W.crm }} />
+                <col style={{ width: W.phase }} />
+                <col style={{ width: W.pm }} />
+                <col style={{ width: W.target }} />
+                {dataCols.map(cp => (
+                  <col key={cp.id} style={{ width: 32 }} />
+                ))}
+              </colgroup>
 
-            {/* ── Right scrollable table — checkpoint grid ────────── */}
-            <div className="flex-1 overflow-x-auto">
-              <table className="border-collapse text-xs" style={{ tableLayout: 'fixed' }}>
-                <colgroup>
-                  {stageColumns[activeStage].flatMap(g => g.items).map(cp => (
-                    <col key={cp.id} style={{ width: 32 }} />
+              <thead>
+                {/* Section band row */}
+                <tr>
+                  <th
+                    colSpan={6}
+                    className={`sticky left-0 top-0 z-40 bg-slate-900 text-white text-[11px] font-semibold px-3 py-2 text-left border-b border-slate-700 ${stickyShadow}`}
+                    style={{ height: 38 }}
+                  >
+                    PROJECT INFO
+                  </th>
+                  {stageColumns[activeStage].map((g, gi) => (
+                    <th
+                      key={gi}
+                      colSpan={g.items.length}
+                      className={`sticky top-0 z-20 ${STAGE_META[activeStage].headerBg} text-white text-[11px] font-bold px-2 text-center border-l border-r border-b border-slate-700 uppercase tracking-wide`}
+                      style={{ height: 38 }}
+                    >
+                      {g.section} <span className="text-[9px] opacity-75">({g.items.length})</span>
+                    </th>
                   ))}
-                </colgroup>
-                <thead>
-                  <tr>
-                    {stageColumns[activeStage].map((g, gi) => (
-                      <th
-                        key={gi}
-                        colSpan={g.items.length}
-                        className={`sticky top-0 z-10 ${STAGE_META[activeStage].headerBg} text-white text-[11px] font-bold px-2 text-center border-l border-r border-b border-slate-700 uppercase tracking-wide`}
-                        style={{ height: 38 }}
-                      >
-                        {g.section} <span className="text-[9px] opacity-75">({g.items.length})</span>
-                      </th>
-                    ))}
-                  </tr>
-                  <tr>
-                    {stageColumns[activeStage].flatMap(g => g.items).map(cp => (
-                      <th
-                        key={cp.id}
-                        className="sticky top-[38px] z-10 bg-slate-700 text-white text-[10px] font-medium px-0 border-r border-b border-slate-600 align-bottom overflow-hidden"
-                        style={{ height: 120, width: 32 }}
-                        title={cp.label}
-                      >
-                        <div className="rotate-180 whitespace-nowrap mx-auto py-2" style={{ writingMode: 'vertical-rl' }}>
-                          {cp.label}
-                        </div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredProjects.map((p) => (
+                </tr>
+                {/* Column label row — sticky-left for the meta block,
+                    sticky-top for the rotated checkpoint headers. */}
+                <tr>
+                  <th className="sticky top-[38px] z-30 bg-slate-800 text-white text-[10px] px-1 text-center border-r border-b border-slate-700" style={{ left: L.sr, height: 120, position: 'sticky' }}>Sr</th>
+                  <th className="sticky top-[38px] z-30 bg-slate-800 text-white text-[10px] px-2 text-left border-r border-b border-slate-700" style={{ left: L.name, height: 120, position: 'sticky' }}>Project Name</th>
+                  <th className="sticky top-[38px] z-30 bg-slate-800 text-white text-[10px] px-1 text-center border-r border-b border-slate-700" style={{ left: L.crm, height: 120, position: 'sticky' }}>CRM</th>
+                  <th className="sticky top-[38px] z-30 bg-slate-800 text-white text-[10px] px-1 text-center border-r border-b border-slate-700" style={{ left: L.phase, height: 120, position: 'sticky' }}>Phase / Zone</th>
+                  <th className="sticky top-[38px] z-30 bg-slate-800 text-white text-[10px] px-1 text-center border-r border-b border-slate-700" style={{ left: L.pm, height: 120, position: 'sticky' }}>PM Owner</th>
+                  <th className={`sticky top-[38px] z-30 bg-slate-800 text-white text-[10px] px-1 text-center border-r border-b border-slate-700 ${stickyShadow}`} style={{ left: L.target, height: 120, position: 'sticky' }}>Target Start</th>
+                  {dataCols.map(cp => (
+                    <th
+                      key={cp.id}
+                      className="sticky top-[38px] z-10 bg-slate-700 text-white text-[10px] font-medium border-r border-b border-slate-600 align-bottom overflow-hidden"
+                      style={{ height: 120 }}
+                      title={cp.label}
+                    >
+                      <div className="whitespace-nowrap mx-auto py-2" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
+                        {cp.label}
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+
+              <tbody>
+                {filteredProjects.map((p, idx) => {
+                  const meta = matrix.meta[p.project_key] || {};
+                  const pct = stagePctFor(p.project_key, activeStage);
+                  return (
                     <tr key={p.project_key} className="hover:bg-blue-50/40" style={{ height: 44 }}>
-                      {stageColumns[activeStage].flatMap(g => g.items).map(cp => (
-                        <td key={cp.id} className="border-r border-b text-center p-0.5" style={{ width: 32 }}>
+                      <td className="sticky z-10 bg-white border-r border-b text-center text-gray-500 text-[10px]" style={{ left: L.sr, position: 'sticky' }}>{idx + 1}</td>
+                      <td className="sticky z-10 bg-white border-r border-b px-2 overflow-hidden" style={{ left: L.name, position: 'sticky' }}>
+                        <div className="font-medium text-gray-900 text-[11px] truncate" title={p.project_name}>{p.project_name}</div>
+                        <div className="text-[9px] text-gray-500 flex items-center gap-1 truncate">
+                          {p.lead_no && <span className="font-mono">{p.lead_no}</span>}
+                          {p.bb_entry_count > 1 && <span className="text-amber-700">· {p.bb_entry_count} BB</span>}
+                          <span className="ml-auto inline-flex items-center gap-0.5 whitespace-nowrap">
+                            <span className={`inline-block w-1.5 h-1.5 rounded-full ${pct >= 100 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-gray-300'}`} />
+                            {pct}%
+                          </span>
+                        </div>
+                      </td>
+                      <td
+                        onClick={() => editAllowed && openMeta(p)}
+                        className={`sticky z-10 bg-white border-r border-b text-center text-[10px] px-1 ${editAllowed ? 'cursor-pointer hover:bg-blue-50' : ''}`}
+                        style={{ left: L.crm, position: 'sticky' }}
+                      >
+                        {meta.crm_owner ? (
+                          <span className={`inline-block px-1.5 py-0.5 rounded ${
+                            meta.crm_owner === 'Sushila' ? 'bg-violet-100 text-violet-700' :
+                            meta.crm_owner === 'Lovely'  ? 'bg-orange-100 text-orange-700' :
+                            'bg-slate-100 text-slate-700'
+                          }`}>{meta.crm_owner}</span>
+                        ) : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td
+                        onClick={() => editAllowed && openMeta(p)}
+                        className={`sticky z-10 bg-white border-r border-b text-center text-[10px] px-1 overflow-hidden ${editAllowed ? 'cursor-pointer hover:bg-blue-50' : ''}`}
+                        style={{ left: L.phase, position: 'sticky' }}
+                      >
+                        <div className="truncate" title={meta.phase_zone || ''}>
+                          {meta.phase_zone || <span className="text-gray-300">—</span>}
+                        </div>
+                      </td>
+                      <td
+                        onClick={() => editAllowed && openMeta(p)}
+                        className={`sticky z-10 bg-white border-r border-b text-center text-[10px] px-1 overflow-hidden ${editAllowed ? 'cursor-pointer hover:bg-blue-50' : ''}`}
+                        style={{ left: L.pm, position: 'sticky' }}
+                      >
+                        <div className="truncate" title={meta.pm_owner || ''}>
+                          {meta.pm_owner || <span className="text-gray-300">—</span>}
+                        </div>
+                      </td>
+                      <td
+                        onClick={() => editAllowed && openMeta(p)}
+                        className={`sticky z-10 bg-white border-r border-b text-center text-[10px] px-1 ${editAllowed ? 'cursor-pointer hover:bg-blue-50' : ''} ${stickyShadow}`}
+                        style={{ left: L.target, position: 'sticky' }}
+                      >
+                        {meta.target_start ? fmtD(meta.target_start) : <span className="text-gray-300">—</span>}
+                      </td>
+                      {dataCols.map(cp => (
+                        <td key={cp.id} className="border-r border-b text-center p-0.5">
                           {renderCell(p, cp)}
                         </td>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+                  );
+                })}
+              </tbody>
+            </table>
+          );
+        })()}
       </div>
 
       {/* Update modal */}
