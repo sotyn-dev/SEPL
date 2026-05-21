@@ -1,6 +1,7 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
+const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -144,6 +145,17 @@ router.post('/', (req, res) => {
   const derivedTitle = (title && title.trim()) || desc.split(/\r?\n/)[0].slice(0, 80).trim() || 'Task';
   const project = project_name && String(project_name).trim() ? String(project_name).trim() : null;
   const attachment = attachment_url && String(attachment_url).trim() ? String(attachment_url).trim() : null;
+
+  // Mam (2026-05-21): block duplicate tasks — same description + same
+  // assignee + same due-date = same task.  Toast surfaces the existing
+  // TSK code so the user can find / extend it instead of re-raising.
+  const dup = findDuplicate(db, {
+    table: 'delegations',
+    fields: { description: desc, assigned_to, due_date: due_date || null },
+    codeColumn: 'id', codePrefix: 'TSK-', codePad: 4,
+  });
+  if (sendDuplicate(res, dup, 'Task')) return;
+
   const r = db.prepare(
     `INSERT INTO delegations (title, description, assigned_by, assigned_to, due_date, project_name, attachment_url)
      VALUES (?, ?, ?, ?, ?, ?, ?)`

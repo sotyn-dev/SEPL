@@ -44,6 +44,24 @@ router.post('/', requirePermission('customers', 'create'), (req, res) => {
   const b = req.body || {};
   if (!b.company_name || !b.company_name.trim()) return res.status(400).json({ error: 'Company name required' });
   const db = getDb();
+
+  // Mam (2026-05-21): block duplicate customers — same company name
+  // = same customer.  Phone / email are additional flags caught if
+  // company_name differs by typo.
+  const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
+  const cnameDup = findDuplicate(db, {
+    table: 'customers', fields: { company_name: b.company_name },
+    codeColumn: 'customer_code',
+  });
+  if (sendDuplicate(res, cnameDup, `Customer "${b.company_name.trim()}"`)) return;
+  if (b.contact_no && String(b.contact_no).trim()) {
+    const dup = findDuplicate(db, {
+      table: 'customers', fields: { contact_no: b.contact_no },
+      codeColumn: 'customer_code',
+    });
+    if (sendDuplicate(res, dup, `Customer with phone ${b.contact_no}`)) return;
+  }
+
   const code = generateCustomerCode(db);
   const r = db.prepare(
     'INSERT INTO customers (customer_code, category, company_name, sub_company_name, company_registration_address, contact_no, email, concern_person_name, concern_person_email, concern_person_address) VALUES (?,?,?,?,?,?,?,?,?,?)'

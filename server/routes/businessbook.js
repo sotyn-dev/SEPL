@@ -125,6 +125,25 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
 
   try {
 
+  // Mam (2026-05-21): block duplicate BB entries — same client +
+  // project = same opportunity.  PO number is also caught
+  // independently so the same Tally PO can't be booked twice under
+  // different client names by mistake.
+  const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
+  if (b.po_number && String(b.po_number).trim()) {
+    const dup = findDuplicate(db, {
+      table: 'business_book', fields: { po_number: b.po_number },
+      codeColumn: 'lead_no',
+    });
+    if (sendDuplicate(res, dup, `BB entry with PO ${b.po_number}`)) return;
+  }
+  const dup = findDuplicate(db, {
+    table: 'business_book',
+    fields: { client_name: b.client_name, project_name: b.project_name || '' },
+    codeColumn: 'lead_no',
+  });
+  if (sendDuplicate(res, dup, `Business Book entry for ${b.client_name}${b.project_name ? ' · ' + b.project_name : ''}`)) return;
+
   // Auto-generate Lead No. Uses nextSequence so deletes don't cause
   // UNIQUE-constraint collisions on the next insert.
   const { nextSequence } = require('../db/nextSequence');

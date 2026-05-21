@@ -97,6 +97,28 @@ router.post('/vendors', (req, res) => {
   const b = req.body;
   if (!b.name) return res.status(400).json({ error: 'Vendor name required' });
   const db = getDb();
+
+  // Mam (2026-05-21): block duplicate vendors.  A vendor is the same
+  // entity if EITHER its phone OR its GSTIN matches an existing row.
+  // Phone-only or GST-only matches are also caught; if both blank we
+  // skip the guard (legit edge case: pre-onboarding vendors with no
+  // contact details yet).
+  const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
+  if (b.gst_number && String(b.gst_number).trim()) {
+    const dup = findDuplicate(db, {
+      table: 'vendors', fields: { gst_number: b.gst_number },
+      codeColumn: 'vendor_code',
+    });
+    if (sendDuplicate(res, dup, `Vendor with GSTIN ${b.gst_number}`)) return;
+  }
+  if (b.phone && String(b.phone).trim()) {
+    const dup = findDuplicate(db, {
+      table: 'vendors', fields: { phone: b.phone },
+      codeColumn: 'vendor_code',
+    });
+    if (sendDuplicate(res, dup, `Vendor with phone ${b.phone}`)) return;
+  }
+
   // Auto-generate vendor code if empty. Uses nextSequence so deletes don't
   // cause UNIQUE-constraint collisions.
   let code = b.vendor_code;
@@ -859,11 +881,19 @@ router.get('/vendor-po/:id/print', (req, res) => {
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.terms, vpi.credit_days,
            ii.description, ii.make as ii_make, ii.unit, ii.required_date,
            im.item_code, im.item_name as master_name, im.specification, im.size, im.uom, im.make as im_make,
-           poi.description as boq_description
+           poi.description as boq_description,
+           -- Mam (2026-05-21): "update here if i update rate in 3
+           -- vendor".  Pull the LATEST finalised rate from the
+           -- 3-vendor quote table.  Print page prefers this over the
+           -- frozen vendor_po_items.rate so editing the rate later
+           -- (in Vendor Rates step) is reflected on every fresh print.
+           ir.final_rate as latest_rate,
+           ir.final_vendor_name as latest_vendor
       FROM vendor_po_items vpi
       LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
       LEFT JOIN item_master im ON im.id = ii.item_master_id
       LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+      LEFT JOIN indent_item_rates ir ON ir.indent_item_id = vpi.indent_item_id
      WHERE vpi.vendor_po_id = ?
      ORDER BY vpi.id
   `).all(req.params.id);

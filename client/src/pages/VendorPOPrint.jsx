@@ -102,9 +102,14 @@ export default function VendorPOPrint() {
   if (!data) return <div className="min-h-screen flex items-center justify-center text-gray-400">Loading…</div>;
   const { po, items } = data;
 
-  // Subtotal across line items. Falls back to qty × rate if amount column
-  // wasn't filled when the row was saved.
-  const subtotal = items.reduce((s, it) => s + (+it.amount || (+it.rate * +it.quantity) || 0), 0);
+  // Subtotal across line items.  Uses the LIVE rate from
+  // indent_item_rates.final_rate when present (mam, 2026-05-21:
+  // "update here if i update rate in 3 vendor"), falling back to the
+  // PO-frozen rate, then to the stored amount.
+  const subtotal = items.reduce((s, it) => {
+    const r = (it.latest_rate != null && +it.latest_rate > 0) ? +it.latest_rate : +it.rate;
+    return s + (+r * +it.quantity || +it.amount || 0);
+  }, 0);
 
   // GST split. Same-state vendor → CGST 9% + SGST 9% (intra). Different
   // state → IGST 18%. Defaults to intra-state when state is missing,
@@ -321,7 +326,13 @@ export default function VendorPOPrint() {
               // unit (mam, 2026-05-15 normalised the master); fall back
               // to whatever the indent line was raised with.
               const unit = String(it.uom || it.unit || '').toUpperCase();
-              const amount = +it.amount || (+it.rate * +it.quantity) || 0;
+              // Mam (2026-05-21): "update here if i update rate in 3
+              // vendor" — prefer the latest finalised rate from the
+              // Vendor Rates step over the PO-frozen rate.  Drift
+              // shown via a small "updated" badge below.
+              const liveRate = (it.latest_rate != null && +it.latest_rate > 0) ? +it.latest_rate : +it.rate;
+              const rateDrift = +it.rate && +it.latest_rate && +it.latest_rate !== +it.rate;
+              const amount = +liveRate * +it.quantity || +it.amount || 0;
               // Per-item due date.  mam (2026-05-21): each line should
               // show its OWN required-by date from the indent — not a
               // single PO-level date stamped on every row.  Falls back
@@ -351,7 +362,14 @@ export default function VendorPOPrint() {
                   </td>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 italic text-center text-gray-700">{dueOn}</td>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums font-bold">{(+it.quantity || 0).toLocaleString('en-IN')} {unit}</td>
-                  <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums">{fmtMoney(it.rate)}</td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums">
+                    {fmtMoney(liveRate)}
+                    {rateDrift && (
+                      <div className="text-[8px] text-amber-700 print:hidden font-normal not-italic">
+                        was {fmtMoney(it.rate)} · updated in Vendor Rates
+                      </div>
+                    )}
+                  </td>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-center text-gray-600">{unit}</td>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right text-gray-500">{it.disc_pct ? `${it.disc_pct}%` : ''}</td>
                   <td className="border-r border-gray-800 print:border-black px-2 py-2 text-right tabular-nums font-bold text-gray-900">{fmtMoney(amount)}</td>

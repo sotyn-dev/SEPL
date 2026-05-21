@@ -86,6 +86,18 @@ router.post('/', requirePermission('cheques', 'create'), photoUpload.single('pho
   if (!b.cheque_number || !String(b.cheque_number).trim()) return res.status(400).json({ error: 'Cheque Number is required' });
   if (!b.payee_to || !String(b.payee_to).trim()) return res.status(400).json({ error: 'Payee is required' });
   if (!b.cheque_date) return res.status(400).json({ error: 'Cheque Date is required' });
+
+  // Mam (2026-05-21): block duplicate cheques — same cheque number
+  // from the same bank = same cheque.  Catches accidental re-entry
+  // when the same physical cheque is added twice.
+  const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
+  const dup = findDuplicate(getDb(), {
+    table: 'cheques',
+    fields: { cheque_number: b.cheque_number, bank_name: b.bank_name || '' },
+    codeColumn: 'id', codePrefix: 'CHQ-', codePad: 4,
+  });
+  if (sendDuplicate(res, dup, `Cheque #${b.cheque_number}${b.bank_name ? ' on ' + b.bank_name : ''}`)) return;
+
   const amount = +b.amount || 0;
   let photoUrl = null;
   if (req.file) {
