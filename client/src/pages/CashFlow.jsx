@@ -162,8 +162,8 @@ export default function CashFlow() {
           <button onClick={() => {
             if (tab === 'projects') {
               exportCsv('cashflow-projects',
-                ['Sr','Project','CRM','Sale','Received','Milestone','Aanchal','Purchase','Velocity','Live','Inv Days','Compl','Pmt','Total'],
-                filtered.map(p => [p.sr_no, p.project_name, p.crm_person, p.sale_amount, p.amount_received, p.milestone_name, p.aanchal_value, p.purchase_value, p.cash_velocity, p.live_date, p.payment_investment_days, p.completion_days, p.payment_days, p.total_days]));
+                ['Sr','Project','CRM','Sale','PO (with GST)','Received','Milestone','Aanchal','Purchase','Velocity','Live','Inv Days','Compl','Pmt','Total'],
+                filtered.map(p => [p.sr_no, p.project_name, p.crm_person, p.sale_amount, p.po_amount, p.amount_received, p.milestone_name, p.aanchal_value, p.purchase_value, p.cash_velocity, p.live_date, p.payment_investment_days, p.completion_days, p.payment_days, p.total_days]));
             } else {
               exportCsv(`cashflow-entries-${selectedDate}`,
                 ['Type','Category','Description','Party','Amount'],
@@ -255,6 +255,7 @@ export default function CashFlow() {
                   <th className="px-2 py-2 text-left bg-gray-100 min-w-[200px]">Project</th>
                   <th className="px-2 py-2 text-left">CRM</th>
                   <th className="px-2 py-2 text-right" title="Sale value of the project (PO amount, ex-GST)">Sale ₹</th>
+                  <th className="px-2 py-2 text-right" title="PO Amount with 18% GST — auto-computed from Sale × 1.18 in Business Book">PO (GST) ₹</th>
                   <th className="px-2 py-2 text-right" title="Amount actually received from client so far">Received ₹</th>
                   <th className="px-2 py-2 text-center" title="Current milestone — handover / delivery / etc.">Milestone</th>
                   <th className="px-2 py-2 text-right" title="Aanchal value — enter the exact rupee figure (no lakhs conversion)">Aanchal ₹</th>
@@ -295,6 +296,12 @@ export default function CashFlow() {
                     ) : dash}</td>
                   )}
                   <td className="px-2 py-2 text-right font-semibold text-red-600 tabular-nums">{p.sale_amount > 0 ? fmtL(p.sale_amount) : dash}</td>
+                  {/* PO Amount (with GST) — auto-computed in Business
+                      Book as Sale × 1.18.  Read-only here; edit on the
+                      BB page instead.  Mam (2026-05-21). */}
+                  <td className="px-2 py-2 text-right font-semibold text-blue-700 tabular-nums" title="Auto = Sale × 1.18 from Business Book">
+                    {p.po_amount > 0 ? fmtL(p.po_amount) : dash}
+                  </td>
                   {editing ? (<>
                     <td className="px-1 py-1"><input className="input text-xs w-24" type="number" value={editForm.amount_received||''} onChange={e=>setEditForm({...editForm,amount_received:+e.target.value})} /></td>
                     <td className="px-1 py-1"><select className="input text-xs w-24" value={editForm.milestone_name||''} onChange={e=>setEditForm({...editForm,milestone_name:e.target.value})}><option value="">—</option><option>milestone</option><option>handover</option><option>delivery</option></select></td>
@@ -381,6 +388,7 @@ export default function CashFlow() {
               <tfoot><tr className="bg-gray-100 font-bold text-xs border-t-2 border-gray-300">
                 <td className="px-2 py-3 bg-gray-100" colSpan="3">TOTAL · {filtered.length} project{filtered.length !== 1 ? 's' : ''}</td>
                 <td className="px-2 py-3 text-right text-red-700 tabular-nums">{fmtL(filtered.reduce((s, p) => s + p.sale_amount, 0))}</td>
+                <td className="px-2 py-3 text-right text-blue-700 tabular-nums">{fmtL(filtered.reduce((s, p) => s + (p.po_amount || 0), 0))}</td>
                 <td className="px-2 py-3 text-right text-emerald-700 tabular-nums">{fmt(filtered.reduce((s, p) => s + p.amount_received, 0))}</td>
                 <td></td>
                 <td className="px-2 py-3 text-right tabular-nums">{fmt(filtered.reduce((s, p) => s + (p.aanchal_value || 0), 0))}</td>

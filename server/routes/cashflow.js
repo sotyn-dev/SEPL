@@ -178,7 +178,15 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
       crm_person: poCrm?.crm_name || p.crm_person,
       category: p.category,
       sale_amount: p.sale_amount_without_gst || 0,
-      po_amount: totalPO?.total || p.po_amount || 0,
+      // PO Amount (With GST) — source of truth is bb.po_amount (now
+      // strictly enforced as Sale × 1.18 by businessbook.js, mam
+      // 2026-05-21).  We keep the purchase_orders sum available as a
+      // separate field for any future tile that wants client-PO
+      // upload reconciliation, but the headline PO column reads from
+      // BB so it always matches what the user sees on the Business
+      // Book page.
+      po_amount: p.po_amount || 0,
+      client_po_uploaded: totalPO?.total || 0,
       amount_received: pf?.amount_received || amountReceived, // H: Tally (manual)
       milestone_name: pf?.milestone_name || '',  // I: Milestone (manual)
       aanchal_value: pf?.aanchal_value || 0,  // J: Aanchal Value (raw rupees, manual)
