@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEye, FiSearch, FiAlertCircle, FiClock, FiCheckCircle, FiList, FiEdit2, FiTrash2, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiEye, FiSearch, FiAlertCircle, FiClock, FiCheckCircle, FiList, FiEdit2, FiTrash2, FiDownload, FiMessageSquare, FiUserCheck, FiKey, FiCopy, FiSend } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { STATES } from '../data/indiaLocations';
 
@@ -41,6 +41,17 @@ export default function Complaints() {
   const [showAdd, setShowAdd] = useState(false);
   const [viewing, setViewing] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  // OTP / WhatsApp center — per-row modal showing the assign / resolve flow.
+  // `otpCenter` is the complaint object being acted on; null = closed.
+  // `engineers` is the user list for the engineer-picker dropdown.
+  // `assignResult` caches the server response after a successful assign
+  // (carries WhatsApp links + OTP).  `otpEntry` is the digits the engineer
+  // typed when verifying.
+  const [otpCenter, setOtpCenter] = useState(null);
+  const [engineers, setEngineers] = useState([]);
+  const [assignResult, setAssignResult] = useState(null);
+  const [otpEntry, setOtpEntry] = useState('');
+  const [registerAck, setRegisterAck] = useState(null);  // wa link surfaced right after Register
 
   const load = async () => {
     const params = new URLSearchParams(Object.entries(q).filter(([,v]) => v)).toString();
@@ -56,11 +67,65 @@ export default function Complaints() {
 
   const create = async (e) => {
     e.preventDefault();
-    await api.post('/complaints', form);
+    const { data } = await api.post('/complaints', form);
     setShowAdd(false);
-    setTab('step1'); // jump to "Step 1 — Assign" tab so CRM can immediately assign the new complaint
+    // Surface the registration-ack WhatsApp link in a small banner.
+    // Mam (2026-05-21): "when complaint register send mesage to client".
+    if (data?.whatsapp_client_register?.link) {
+      setRegisterAck({ ...data.whatsapp_client_register, complaint_id: data.id, complaint_number: data.complaint_number });
+    }
+    setTab('step1');
     setForm(emptyForm);
     load();
+  };
+
+  // ── OTP / WhatsApp Center helpers ───────────────────────────────
+  const openOtpCenter = async (c) => {
+    setOtpCenter(c);
+    setAssignResult(null);
+    setOtpEntry('');
+    // Pull users for the engineer picker (only when no engineer yet)
+    if (!c.assigned_engineer_id && engineers.length === 0) {
+      try {
+        const { data } = await api.get('/users');
+        setEngineers(Array.isArray(data) ? data : (data?.users || []));
+      } catch (_) { /* admins-only endpoint — non-fatal */ }
+    }
+  };
+  const assignEngineer = async (engId) => {
+    try {
+      const { data } = await api.post(`/complaints/${otpCenter.id}/assign`, { engineer_user_id: engId });
+      setAssignResult(data);
+      toast.success(`Engineer assigned. OTP ${data.otp} sent to client.`);
+      load();
+    } catch (e) { toast.error(e.response?.data?.error || 'Assign failed'); }
+  };
+  const sendRegisterAck = async () => {
+    if (!registerAck) return;
+    window.open(registerAck.link, '_blank');
+    try { await api.post(`/complaints/${registerAck.complaint_id}/whatsapp/sent`, { kind: 'register' }); } catch (_) {}
+    setRegisterAck(null);
+  };
+  const sendWhatsapp = async (link, kind) => {
+    window.open(link, '_blank');
+    try { await api.post(`/complaints/${otpCenter.id}/whatsapp/sent`, { kind }); } catch (_) {}
+  };
+  const verifyOtp = async () => {
+    if (!/^\d{4}$/.test(otpEntry)) return toast.error('Enter the 4-digit code');
+    try {
+      await api.post(`/complaints/${otpCenter.id}/verify-otp`, { otp: otpEntry });
+      toast.success('Complaint marked resolved ✓');
+      setOtpCenter(null);
+      load();
+    } catch (e) { toast.error(e.response?.data?.error || 'Wrong OTP'); }
+  };
+  const resendOtp = async () => {
+    try {
+      const { data } = await api.post(`/complaints/${otpCenter.id}/resend-otp`);
+      setAssignResult(prev => ({ ...(prev || {}), otp: data.otp, client: data.client }));
+      toast.success(`New OTP ${data.otp} generated — send to client again`);
+      load();
+    } catch (e) { toast.error(e.response?.data?.error || 'Resend failed'); }
   };
 
   const save = async () => {
@@ -208,6 +273,13 @@ export default function Complaints() {
                     <button onClick={() => setViewing({ ...c })} className="text-red-600 hover:text-red-800" title="View"><FiEye /></button>
                     {(canEdit('complaints') || isAdmin()) && (
                       <button onClick={() => startEdit(c)} className="text-blue-600 hover:text-blue-800" title="Edit"><FiEdit2 size={14} /></button>
+                    )}
+                    {/* WhatsApp / OTP centre — assign engineer + push OTP to
+                        client + verify on resolution.  Mam (2026-05-21). */}
+                    {(canEdit('complaints') || isAdmin()) && c.status !== 'resolved' && c.status !== 'closed' && (
+                      <button onClick={() => openOtpCenter(c)} className="text-emerald-700 hover:text-emerald-900" title={c.assigned_engineer_id ? 'Verify OTP to resolve' : 'Assign engineer + send OTP'}>
+                        {c.assigned_engineer_id ? <FiKey size={14} /> : <FiUserCheck size={14} />}
+                      </button>
                     )}
                     {(canDelete('complaints') || isAdmin()) && (
                       <button onClick={() => remove(c)} className="text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>
@@ -392,7 +464,139 @@ export default function Complaints() {
         );
       })()}
 
+      {/* Register-success banner — surfaces a click-to-send WhatsApp link
+          to the client so mam can immediately fire the registration
+          acknowledgement.  Mam (2026-05-21). */}
+      {registerAck && (
+        <div className="fixed bottom-5 right-5 z-50 bg-white border-2 border-emerald-500 rounded-xl shadow-2xl p-4 max-w-md">
+          <div className="flex items-start justify-between gap-3 mb-2">
+            <div>
+              <div className="text-sm font-bold text-emerald-700 flex items-center gap-1.5"><FiMessageSquare /> Send registration ack</div>
+              <div className="text-xs text-gray-500 mt-0.5">{registerAck.complaint_number} → {registerAck.phone}</div>
+            </div>
+            <button onClick={() => setRegisterAck(null)} className="text-gray-400 hover:text-gray-700">✕</button>
+          </div>
+          <div className="text-[11px] text-gray-700 bg-gray-50 border rounded p-2 max-h-32 overflow-y-auto whitespace-pre-wrap font-mono">{registerAck.message}</div>
+          <div className="flex justify-end gap-2 mt-2">
+            <button onClick={() => setRegisterAck(null)} className="px-3 py-1.5 text-xs border rounded-lg">Skip</button>
+            <a href={registerAck.link} target="_blank" rel="noreferrer" onClick={sendRegisterAck} className="px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-lg flex items-center gap-1 hover:bg-emerald-700">
+              <FiSend size={12} /> Open WhatsApp
+            </a>
+          </div>
+        </div>
+      )}
+
+      {/* OTP / WhatsApp Center — assign engineer + push OTP + verify */}
+      {otpCenter && (
+        <Modal onClose={() => setOtpCenter(null)} title={`WhatsApp / OTP · ${otpCenter.complaint_number}`}>
+          <OtpCenter
+            complaint={otpCenter}
+            engineers={engineers}
+            assignResult={assignResult}
+            otpEntry={otpEntry}
+            setOtpEntry={setOtpEntry}
+            onAssign={assignEngineer}
+            onSendWa={sendWhatsapp}
+            onVerify={verifyOtp}
+            onResend={resendOtp}
+            onClose={() => setOtpCenter(null)}
+          />
+        </Modal>
+      )}
+
       <style>{`.inp{width:100%;border:1px solid #e5e7eb;border-radius:0.5rem;padding:0.5rem 0.75rem;font-size:0.875rem}`}</style>
+    </div>
+  );
+}
+
+// ── OTP / WhatsApp Center modal contents ──────────────────────────
+// Three states based on the complaint:
+//   1. Not yet assigned       → engineer picker
+//   2. Assigned, OTP pending  → 2 WhatsApp buttons + OTP entry
+//   3. Already resolved       → "Already resolved" view
+function OtpCenter({ complaint, engineers, assignResult, otpEntry, setOtpEntry, onAssign, onSendWa, onVerify, onResend, onClose }) {
+  const hasEng = !!complaint.assigned_engineer_id || !!assignResult;
+  const eng = assignResult?.engineer || (complaint.assigned_engineer_id ? {
+    name: complaint.assigned_engineer_name || complaint.step1_assigned_to,
+    phone: complaint.assigned_engineer_phone,
+  } : null);
+  const otp = assignResult?.otp || (complaint.resolution_otp ? '••••' : null);
+
+  if (!hasEng) {
+    // Stage 1 — pick the engineer
+    return (
+      <div className="space-y-3">
+        <div className="bg-amber-50 border border-amber-200 rounded p-2.5 text-xs text-amber-800">
+          <b>Step 1 — Assign Engineer.</b> When you pick someone, the system generates a 4-digit OTP, builds two WhatsApp messages (one to the engineer with the job details, one to the client with the engineer's contact + OTP), and surfaces both as click-to-send links on the next screen.
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-gray-600">Pick engineer</label>
+          <select className="inp mt-1" onChange={e => e.target.value && onAssign(+e.target.value)} defaultValue="">
+            <option value="" disabled>— Select —</option>
+            {engineers.map(u => (
+              <option key={u.id} value={u.id}>
+                {u.name}{u.phone ? ` · ${u.phone}` : ''}{u.department ? ` · ${u.department}` : ''}
+              </option>
+            ))}
+          </select>
+          {engineers.length === 0 && (
+            <div className="text-[11px] text-gray-500 mt-1">No engineers loaded — you may need admin access to /users.</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Stage 2 — WhatsApp send + OTP verify
+  return (
+    <div className="space-y-3">
+      <div className="bg-blue-50 border border-blue-200 rounded p-2.5 text-xs text-blue-800">
+        <b>Engineer:</b> {eng?.name}{eng?.phone ? ` · ${eng.phone}` : ''}<br />
+        <b>Client OTP:</b> {assignResult?.otp ? <span className="font-mono text-emerald-700 text-base">{assignResult.otp}</span> : <span className="italic">already generated · ask admin to resend if needed</span>}
+        <div className="text-[10px] text-blue-600 mt-1">(The engineer must obtain this 4-digit code from the client after the work is complete.)</div>
+      </div>
+
+      {/* Two WhatsApp send buttons */}
+      {assignResult?.engineer?.whatsapp?.link && (
+        <a href={assignResult.engineer.whatsapp.link} target="_blank" rel="noreferrer"
+           onClick={() => onSendWa(assignResult.engineer.whatsapp.link, 'engineer_assign')}
+           className="flex items-center justify-between gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100">
+          <span className="text-sm font-medium text-emerald-800 flex items-center gap-2"><FiSend size={14} /> Open WhatsApp · {eng?.name} ({assignResult.engineer.whatsapp.phone})</span>
+          <span className="text-[10px] text-emerald-700">Job details (no OTP)</span>
+        </a>
+      )}
+      {assignResult?.client?.whatsapp?.link && (
+        <a href={assignResult.client.whatsapp.link} target="_blank" rel="noreferrer"
+           onClick={() => onSendWa(assignResult.client.whatsapp.link, 'client_assign')}
+           className="flex items-center justify-between gap-2 px-3 py-2 bg-amber-50 border border-amber-300 rounded-lg hover:bg-amber-100">
+          <span className="text-sm font-medium text-amber-800 flex items-center gap-2"><FiSend size={14} /> Open WhatsApp · client ({assignResult.client.whatsapp.phone})</span>
+          <span className="text-[10px] text-amber-700">Engineer contact + OTP</span>
+        </a>
+      )}
+
+      {/* OTP entry */}
+      <div className="border-t pt-3">
+        <div className="text-xs font-semibold text-gray-700 mb-1.5">Verify OTP to resolve</div>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            inputMode="numeric"
+            pattern="\d{4}"
+            maxLength={4}
+            value={otpEntry}
+            onChange={e => setOtpEntry(e.target.value.replace(/\D/g, '').slice(0, 4))}
+            placeholder="4-digit code"
+            className="inp text-center text-lg tracking-[0.4em] font-mono"
+          />
+          <button onClick={onVerify} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm flex items-center gap-1.5"><FiKey size={14} /> Verify</button>
+        </div>
+        <div className="flex justify-between items-center mt-2">
+          <button onClick={onResend} className="text-[11px] text-amber-700 hover:text-amber-900 underline">
+            Regenerate OTP &amp; re-send to client
+          </button>
+          <button onClick={onClose} className="text-[11px] text-gray-500 hover:text-gray-800">Close</button>
+        </div>
+      </div>
     </div>
   );
 }
