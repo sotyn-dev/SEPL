@@ -2375,22 +2375,28 @@ function initializeDatabase() {
     try { db.exec('ROLLBACK'); } catch (e2) {}
   }
 
-  // Mam (2026-05-21): CHECK constraint failed when she tried to raise
-  // a Salary payment request — the original table CHECK only allowed
-  // TA/DA / Purchase / Labour / Transport.  Earlier migration was
-  // too narrow (matched only the exact 4-item list) and silently
-  // failed on some DBs; this version matches ANY CHECK clause that
-  // mentions the category column, rebuilds without it, and logs both
-  // success and failure so we can verify from pm2 logs.
+  // Mam (2026-05-21) STILL hit the CHECK error after the previous fix.
+  // Root cause: SQLite stores the CREATE statement as it was written —
+  // `CREATE TABLE IF NOT EXISTS payment_requests` — but my old regex
+  // matched only `CREATE TABLE payment_requests` (no "IF NOT EXISTS"),
+  // so the rename never happened, the new table couldn't be created
+  // (same name as the existing one), and the whole migration rolled
+  // back silently.  Detailed step logging this time.
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='payment_requests'").get();
     const hasCategoryCheck = row && /CHECK\s*\(\s*category\s+IN/i.test(row.sql);
     if (hasCategoryCheck) {
+      console.log('[migration] payment_requests CHECK detected, rebuilding…');
+      // Defensive cleanup — if a prior failed run left an orphan
+      // payment_requests_new table around, drop it first.
+      try { db.exec('DROP TABLE IF EXISTS payment_requests_new'); } catch (_) {}
+
       db.exec('BEGIN');
       const newSql = row.sql
-        .replace(/CREATE TABLE\s+payment_requests/i, 'CREATE TABLE payment_requests_new')
-        // Drop the entire CHECK(category IN (...)) clause, including any
-        // trailing comma that might immediately precede or follow it.
+        // Handles BOTH `CREATE TABLE payment_requests` and
+        // `CREATE TABLE IF NOT EXISTS payment_requests`.
+        .replace(/CREATE TABLE(\s+IF NOT EXISTS)?\s+payment_requests/i, 'CREATE TABLE payment_requests_new')
+        // Drop the CHECK clause + any leading comma.
         .replace(/,?\s*CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i, '');
       db.exec(newSql);
       db.exec('INSERT INTO payment_requests_new SELECT * FROM payment_requests');
@@ -2401,7 +2407,7 @@ function initializeDatabase() {
     }
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (e2) {}
-    console.error('[migration] payment_requests CHECK drop failed:', e.message);
+    console.error('[migration] payment_requests CHECK drop failed:', e.message, e.stack);
   }
 
   // Relax attendance.status CHECK to allow 'short_day' (4-8 hours worked).
@@ -2412,9 +2418,11 @@ function initializeDatabase() {
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='attendance'").get();
     if (row && !/short_day/.test(row.sql)) {
+      try { db.exec('DROP TABLE IF EXISTS attendance_new'); } catch (_) {}
       db.exec('BEGIN');
       const newSql = row.sql
-        .replace(/CREATE TABLE\s+attendance/i, 'CREATE TABLE attendance_new')
+        // Same IF-NOT-EXISTS fix as payment_requests above.
+        .replace(/CREATE TABLE(\s+IF NOT EXISTS)?\s+attendance/i, 'CREATE TABLE attendance_new')
         .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
                  "CHECK(status IN ('present','half_day','short_day','absent','late','leave','holiday'))");
       db.exec(newSql);
@@ -2438,9 +2446,11 @@ function initializeDatabase() {
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='leave_requests'").get();
     if (row && !/short_leave/.test(row.sql)) {
+      try { db.exec('DROP TABLE IF EXISTS leave_requests_new'); } catch (_) {}
       db.exec('BEGIN');
       const newSql = row.sql
-        .replace(/CREATE TABLE\s+leave_requests/i, 'CREATE TABLE leave_requests_new')
+        // Same IF-NOT-EXISTS fix as the migrations above.
+        .replace(/CREATE TABLE(\s+IF NOT EXISTS)?\s+leave_requests/i, 'CREATE TABLE leave_requests_new')
         .replace(/CHECK\s*\(\s*leave_type\s+IN\s*\([^)]*\)\s*\)/i,
                  "CHECK(leave_type IN ('casual','sick','earned','half_day','short_leave','comp_off'))");
       db.exec(newSql);
