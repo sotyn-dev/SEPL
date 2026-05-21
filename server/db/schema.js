@@ -2799,7 +2799,13 @@ function initializeDatabase() {
   const ALL_MODULES = [
     'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement','cashflow','collections','payment_required','attendance','indent_fms','dpr',
     'installation','billing','complaints','hr','employees','expenses','checklists','users','delegations','pms_tasks','inventory','snags','company_assets','help_tickets',
-    'sub_contractors','ai_agent','crm_funnel','cheques','fire_noc','rental_tools','influencers','crm_kitting'
+    'sub_contractors','ai_agent','crm_funnel','cheques','fire_noc','rental_tools','influencers','crm_kitting',
+    // Mam (2026-05-21): "add all module in roles& permission" — the
+    // four modules below existed in the sidebar / routes / permission
+    // checks but were missing from the server's seed list, so newly
+    // created roles never got role_permissions rows for them.  Now
+    // included so the top-up loop covers every module the UI exposes.
+    'payroll','scoring','tools','rentals'
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

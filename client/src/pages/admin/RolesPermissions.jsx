@@ -7,7 +7,13 @@ import { FiPlus, FiEdit2, FiTrash2, FiShield, FiCheck, FiX } from 'react-icons/f
 // Order + labels mirror the sidebar so admins recognise each module
 // at a glance. Keys (used by backend role_permissions) stay unchanged —
 // renaming 'Procurement' to 'Indent to Dispatch' is UI-only.
+// Mam (2026-05-21): "add all module in roles& permission".  Keep this
+// list in sync with server/db/schema.js ALL_MODULES — every module
+// permission-gated in the ERP needs a row here so admin can grant /
+// revoke access.  Grouped by sidebar section for readability; keys
+// (used by backend role_permissions) are unchanged.
 const ALL_MODULES = [
+  // — Finance & Daily Operations
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'cashflow', label: 'Cash Flow' },
   { key: 'cheques', label: 'Cheque FMS' },
@@ -16,24 +22,38 @@ const ALL_MODULES = [
   { key: 'collections', label: 'Collection Engine' },
   { key: 'dpr', label: 'DPR' },
   { key: 'delegations', label: 'Delegations' },
+  { key: 'pms_tasks', label: 'PMS Tasks' },
   { key: 'checklists', label: 'Checklists' },
+
+  // — Sales & CRM
   { key: 'leads', label: 'Sales Funnel' },
   { key: 'crm_funnel', label: 'CRM Sales Funnel' },
+  { key: 'fire_noc', label: 'Fire NOC Renewal' },
+  { key: 'rental_tools', label: 'Rental Tools' },
+  { key: 'influencers', label: 'Influencers' },
+  { key: 'crm_kitting', label: 'CRM Full Kitting' },
   { key: 'quotations', label: 'BOQ & Quotations' },
   { key: 'business_book', label: 'Business Book' },
+
+  // — Materials, Vendors, Procurement
   { key: 'item_master', label: 'Item Master' },
   { key: 'orders', label: 'Orders & Planning' },
   { key: 'vendors', label: 'Vendors' },
   { key: 'sub_contractors', label: 'Sub-Contractors' },
   { key: 'customers', label: 'Customers' },
   { key: 'procurement', label: 'Indent to Dispatch' },
+  { key: 'indent_fms', label: 'Indent FMS (legacy)' },
   { key: 'inventory', label: 'Inventory' },
+
+  // — Execution / Site
   { key: 'installation', label: 'Installation' },
   { key: 'billing', label: 'Billing' },
   { key: 'complaints', label: 'Complaints' },
   { key: 'snags', label: 'Snag List' },
   { key: 'company_assets', label: 'Company Assets' },
   { key: 'help_tickets', label: 'Help Tickets' },
+
+  // — HR / People
   { key: 'hr', label: 'HR & Hiring' },
   { key: 'payroll', label: 'Payroll' },
   { key: 'scoring', label: 'Weekly Score' },
@@ -41,10 +61,8 @@ const ALL_MODULES = [
   { key: 'rentals', label: 'Room Rentals' },
   { key: 'employees', label: 'Employees' },
   { key: 'expenses', label: 'Expenses' },
-  { key: 'indent_fms', label: 'Indent FMS (legacy)' },
-  { key: 'pms_tasks', label: 'PMS Tasks' },
-  // AI Agent — gates the floating "Ask ERP" chat bubble. Off by default for
-  // new roles so the chatbot only appears for staff mam explicitly enables.
+
+  // — Platform
   { key: 'ai_agent', label: 'AI Agent (Ask ERP)' },
   { key: 'users', label: 'User Management' },
 ];
