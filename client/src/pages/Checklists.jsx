@@ -140,6 +140,31 @@ export default function Checklists() {
   // returns rows as JSON, we paste them into the textarea (formatted
   // as "Task | Label | Type") so admin can review/edit before submit.
   const [excelImporting, setExcelImporting] = useState(false);
+  const [templateDownloading, setTemplateDownloading] = useState(false);
+
+  // Mam (2026-05-22): Chrome's <a download> doesn't carry the JWT, so
+  // the protected /bulk-template.xlsx route returns 401 and the browser
+  // shows "sign in to download".  Fetch via axios (which DOES attach
+  // the Bearer token), then trigger a Blob download client-side.
+  const downloadTemplate = async () => {
+    setTemplateDownloading(true);
+    try {
+      const r = await api.get('/hr/checklists/bulk-template.xlsx', { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([r.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'checklists-bulk-template.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Free the blob URL after the click has been queued.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to download template');
+    } finally {
+      setTemplateDownloading(false);
+    }
+  };
   const importExcel = async (file) => {
     if (!file) return;
     setExcelImporting(true);
@@ -944,12 +969,13 @@ Send WhatsApp report                          ← uses the shared proof name bel
             <div className="flex-1 min-w-[180px] text-[11px] text-emerald-800">
               <b>Have an Excel sheet?</b> Upload it — first column = task description, second = proof name, third = proof type.
             </div>
-            <a
-              href="/api/hr/checklists/bulk-template.xlsx"
-              download="checklists-bulk-template.xlsx"
-              className="btn btn-secondary text-[11px] py-1 px-2 flex items-center gap-1 whitespace-nowrap">
-              ⬇ Download Template
-            </a>
+            <button
+              type="button"
+              onClick={downloadTemplate}
+              disabled={templateDownloading}
+              className="btn btn-secondary text-[11px] py-1 px-2 flex items-center gap-1 whitespace-nowrap disabled:opacity-60">
+              {templateDownloading ? '⏳ Preparing…' : '⬇ Download Template'}
+            </button>
             <label className={`btn btn-primary text-[11px] py-1 px-2 flex items-center gap-1 cursor-pointer whitespace-nowrap ${excelImporting ? 'opacity-60 pointer-events-none' : ''}`}>
               {excelImporting ? '⏳ Parsing…' : '📊 Upload Excel'}
               <input type="file" accept=".xlsx,.xls,.csv" className="hidden"
