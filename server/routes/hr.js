@@ -565,13 +565,14 @@ router.get('/checklists/by-date', (req, res) => {
   const date = req.query.date || new Date().toISOString().slice(0, 10);
   const isAdmin = req.user.role === 'admin';
   const scope = isAdmin ? '' : 'AND c.assigned_to = ?';
-  const params = [date];
-  if (!isAdmin) params.push(req.user.id);
-  // Mam (2026-05-22): a checklist only "exists" on dates inside its
-  // recurrence window.  If recurrence_start_date is set and > date,
-  // skip the row.  Same for recurrence_end_date < date.  NULL bounds
-  // mean unbounded (legacy rows without a window keep showing every
-  // day, no regression).
+  // Build args in the exact order placeholders appear in the SQL.
+  // Was previously buggy (legacy `params = [date]` was duplicating the
+  // first arg → "Too many parameter values were provided").  Mam saw
+  // the error after the recurrence-window fields were added.
+  const args = [date];                          // for the JOIN ON ... = ?
+  if (!isAdmin) args.push(req.user.id);         // for the scope ... = ?
+  args.push(date, date);                        // start ≤ ? and end ≥ ?
+
   const rows = db.prepare(`
     SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
            c.department, c.recurrence_start_date, c.recurrence_end_date,
@@ -589,7 +590,7 @@ router.get('/checklists/by-date', (req, res) => {
       AND (c.recurrence_start_date IS NULL OR c.recurrence_start_date <= ?)
       AND (c.recurrence_end_date   IS NULL OR c.recurrence_end_date   >= ?)
     ORDER BY u.name, c.department, c.description
-  `).all(date, ...params, date, date);
+  `).all(...args);
   res.json({ date, rows });
 });
 
