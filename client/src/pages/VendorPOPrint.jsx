@@ -335,7 +335,13 @@ export default function VendorPOPrint() {
                         dark text colors so no inherited link color bleeds in. */}
                     <div className="flex items-baseline gap-1.5 flex-wrap">
                       {it.item_code && <span className="font-mono text-[9px] text-gray-500 bg-gray-100 px-1 py-0.5 rounded">{it.item_code}</span>}
-                      <span className="font-bold text-[11.5px] leading-snug text-gray-900" style={{ color: '#111827' }}>{desc}{unit && desc && !desc.toUpperCase().includes(unit) ? ' ' + unit : ''}</span>
+                      {/* Mam (2026-05-22): unit (MTR / KG / NOS) is
+                          already shown in the Quantity column AND the
+                          Per column — appending it to the description
+                          here was triple-printing it ("ARMOURED WIRE MTR
+                          · 300 MTR · MTR").  Description shows the name
+                          only now. */}
+                      <span className="font-bold text-[11.5px] leading-snug text-gray-900" style={{ color: '#111827' }}>{desc}</span>
                     </div>
                     {(detail || make) && (
                       <div className="text-[9.5px] text-gray-700 mt-0.5 leading-tight">
