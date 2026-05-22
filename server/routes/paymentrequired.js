@@ -170,7 +170,13 @@ router.get('/stats', requirePermission('payment_required', 'view'), (req, res) =
 });
 
 // GET single with workflow
-router.get('/:id', requirePermission('payment_required', 'view'), (req, res) => {
+router.get('/:id', requirePermission('payment_required', 'view'), (req, res, next) => {
+  // Mam (2026-05-22): a numeric-id route at /:id was greedily matching
+  // sibling routes like /approval-routing (registered later) because
+  // Express matches in registration order.  Skip to next() when the
+  // path component is clearly not a numeric ID so Express can find
+  // the right handler.
+  if (!/^\d+$/.test(String(req.params.id || ''))) return next();
   // Defensive ownership check — even if an approver-only ID leaks into
   // another user's URL, the GET must respect the scope rule.
   const db = getDb();
