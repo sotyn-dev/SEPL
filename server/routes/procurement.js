@@ -916,6 +916,77 @@ router.get('/vendor-po/:id/print', (req, res) => {
   res.json({ po, items });
 });
 
+// ── Delivery Note data for a Vendor PO (mam 2026-05-22) ──────────
+// Given a vendor_po id, returns ALL the data needed to render an
+// SEPL Delivery Note: PO + vendor + indent + business_book client
+// info + items.  Print-on-demand from the existing PO data — no
+// delivery_notes table row required.  Client renders the template
+// at /vendor-po/:id/delivery-note.
+//
+// Mam's spec — fields the DN template needs (extracted from
+// SEPL_Delivery_Note_Template.pdf she shared):
+//   Header meta:    DN No (auto-suggest), Date (today), SEPL PO No, Indent No
+//   Client block:   Company name (M/s ...), Billing address, GSTIN
+//   Site block:     Site name, Shipping address, Site engineer/contact
+//   Items table:    SL · Description / Spec / Make · HSN · Qty · UOM · Remarks
+//   Transport box:  Vehicle No · Driver Name & Mobile · LR/Challan No · Total Packages
+//                   (these are filled in by HAND at dispatch time — left blank in print)
+router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
+  const db = getDb();
+  const data = db.prepare(`
+    SELECT vp.id as po_id, vp.po_number, vp.po_date,
+           v.name as vendor_name, v.gst_number as vendor_gstin,
+           v.address as vendor_address, v.phone as vendor_phone,
+           v.contact_person as vendor_contact,
+           i.indent_number, i.site_name as indent_site_name,
+           i.raised_by_name as site_engineer_name,
+           bb.company_name as client_company,
+           bb.client_name as client_person_name,
+           bb.client_contact as client_phone, bb.client_email,
+           bb.billing_address as client_address,
+           bb.shipping_address as site_address,
+           bb.state as client_state, bb.district as client_district,
+           bb.gstin as client_gstin, bb.state_code as client_state_code,
+           bb.project_name as bb_project_name,
+           bb.lead_no as bb_lead_no
+      FROM vendor_pos vp
+      LEFT JOIN vendors v ON vp.vendor_id = v.id
+      LEFT JOIN indents i ON vp.indent_id = i.id
+      LEFT JOIN order_planning op ON op.id = i.planning_id
+      LEFT JOIN business_book bb ON bb.id = op.business_book_id
+     WHERE vp.id = ?
+  `).get(req.params.id);
+  if (!data) return res.status(404).json({ error: 'Vendor PO not found' });
+
+  // Items — only the columns the DN template shows.  Pull from
+  // indent_items via vendor_po_items (the items actually purchased
+  // under THIS PO, not the full indent).
+  const items = db.prepare(`
+    SELECT vpi.id, vpi.quantity,
+           COALESCE(NULLIF(TRIM(im.item_name), ''), ii.description) as description,
+           im.specification, im.size,
+           COALESCE(im.make, ii.make) as make,
+           COALESCE(im.uom, ii.unit) as uom,
+           im.item_code,
+           im.hsn_code, im.gst as gst_text
+      FROM vendor_po_items vpi
+      LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+     WHERE vpi.vendor_po_id = ?
+     ORDER BY vpi.id
+  `).all(req.params.id);
+
+  // Pre-compute a suggested DN number — mam can override on print
+  // but most of the time today's date + PO number is enough.
+  const today = new Date();
+  const yy = String(today.getFullYear()).slice(2);
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+  data.dn_number_suggested = `DN-${yy}${mm}${dd}-${data.po_number?.replace(/\W+/g, '') || data.po_id}`;
+
+  res.json({ po: data, items });
+});
+
 // Items of a given indent, with finalized rate info and whether each item is
 // already covered by a Vendor PO. Used to populate the item-checkbox grid in
 // the Create Vendor PO modal.

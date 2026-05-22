@@ -37,6 +37,7 @@ import PMSTasks from './pages/PMSTasks';
 import Inventory from './pages/Inventory';
 import HelpTickets from './pages/HelpTickets';
 import VendorPOPrint from './pages/VendorPOPrint';
+import DeliveryNotePrint from './pages/DeliveryNotePrint';
 import RentalPOPrint from './pages/RentalPOPrint';
 import IndentPrint from './pages/IndentPrint';
 import UserManagement from './pages/admin/UserManagement';
@@ -102,6 +103,11 @@ export default function App() {
       {/* Print routes — auth-gated but rendered WITHOUT the sidebar / header
           chrome so the document fills the viewport cleanly. */}
       <Route path="/vendor-po/:id/print" element={<ProtectedRoute><VendorPOPrint /></ProtectedRoute>} />
+      {/* Mam (2026-05-22): "delivery note make here automatically and
+          show pdf here according to po" — print-on-demand DN auto-
+          filled from the same Vendor PO data.  No delivery_notes
+          row needed. */}
+      <Route path="/vendor-po/:id/delivery-note" element={<ProtectedRoute><DeliveryNotePrint /></ProtectedRoute>} />
       <Route path="/rental-po/:id/print" element={<ProtectedRoute><RentalPOPrint /></ProtectedRoute>} />
       <Route path="/indent/:id/print" element={<ProtectedRoute><IndentPrint /></ProtectedRoute>} />
       <Route path="/payroll/slip/:employee_id" element={<ProtectedRoute><SalarySlipPrint /></ProtectedRoute>} />

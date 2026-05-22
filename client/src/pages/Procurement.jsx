@@ -1316,6 +1316,11 @@ export default function Procurement() {
                                 print page (PDF-able). If a Tally / signed scan
                                 was also uploaded, show a second link below. */}
                             <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-[11px] font-semibold whitespace-nowrap">📄 View PO</a>
+                            {/* Mam (2026-05-22): auto-generated Delivery Note
+                                per PO — opens print-ready page, no DN row
+                                needed.  Uses the SEPL template format mam
+                                shared. */}
+                            <div><a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:text-emerald-900 underline text-[11px] font-semibold whitespace-nowrap">🚚 Delivery Note</a></div>
                             {po.file_path && (
                               <div><a href={po.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-[10px]">📎 attached file</a></div>
                             )}
@@ -1483,6 +1488,7 @@ export default function Procurement() {
                         <td className="px-2 py-1.5 font-semibold text-red-700 whitespace-nowrap">
                           {po.po_number}
                           <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-red-600 hover:text-red-800 underline font-normal">📄 View PO</a>
+                          <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-emerald-700 hover:text-emerald-900 underline font-normal">🚚 Delivery Note</a>
                         </td>
                         <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
                         <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
