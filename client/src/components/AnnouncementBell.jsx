@@ -1,11 +1,31 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   FiBell, FiPlus, FiX, FiTrash2, FiBookmark, FiEdit2, FiEye,
   FiChevronDown, FiImage, FiCamera, FiPaperclip,
+  FiAlertCircle, FiCalendar, FiClock, FiAward, FiCheck,
 } from 'react-icons/fi';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
+
+// HR notification type → icon + colour (used in the Notifications tab)
+const NOTIF_TYPE_ICON = {
+  interview_reminder: FiCalendar,
+  offer_expiry:       FiClock,
+  approval_pending:   FiAlertCircle,
+  training_assigned:  FiAward,
+  scorecard_added:    FiAward,
+  generic:            FiBell,
+};
+const NOTIF_TYPE_COLOR = {
+  interview_reminder: 'text-indigo-600',
+  offer_expiry:       'text-amber-600',
+  approval_pending:   'text-rose-600',
+  training_assigned:  'text-emerald-600',
+  scorecard_added:    'text-purple-600',
+  generic:            'text-gray-600',
+};
 
 // Bell icon for the header. Shows an unread-count badge that polls every
 // 60 seconds. Clicking opens a dropdown panel listing all announcements
@@ -13,9 +33,17 @@ import { useAuth } from '../context/AuthContext';
 // Admins also see a small "+ New" button inside the panel to post directly.
 export default function AnnouncementBell() {
   const { isAdmin } = useAuth();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
-  const [unread, setUnread] = useState(0);
+  // Mam (2026-05-22): merged inbox — single bell shows both
+  // Announcements AND My Notifications.  Replaced the standalone
+  // NotificationsBell to fix "why this three button" confusion.
+  // Active tab opens to whichever has unread items.
+  const [tab, setTab] = useState('notifications');     // 'notifications' | 'announcements'
+  const [unread, setUnread] = useState(0);                       // announcements unread count
+  const [unreadNotif, setUnreadNotif] = useState(0);             // notifications unread count
   const [items, setItems] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ title: '', body: '', pinned: false, expires_at: '', attachment_url: '' });
   // Mam (2026-05-22): "upload photo option so that can check photo" —
@@ -31,12 +59,18 @@ export default function AnnouncementBell() {
 
   const loadCount = () => {
     api.get('/announcements/unread-count').then(r => setUnread(r.data?.count || 0)).catch(() => {});
+    // Mam (2026-05-22): also poll HR notifications so the merged
+    // bell badge reflects both sources.
+    api.get('/hr/my-notifications?unread=1').then(r => setUnreadNotif((r.data || []).length)).catch(() => {});
   };
   const loadItems = () => {
     api.get('/announcements').then(r => setItems(r.data || [])).catch(() => setItems([]));
   };
+  const loadNotifications = () => {
+    api.get('/hr/my-notifications').then(r => setNotifications(r.data || [])).catch(() => setNotifications([]));
+  };
 
-  // Poll the unread count every 60s so the bell badge stays current even
+  // Poll both unread counts every 60s so the bell badge stays current even
   // when the user keeps the same tab open all day.
   useEffect(() => {
     loadCount();
@@ -54,8 +88,30 @@ export default function AnnouncementBell() {
   const onOpen = async () => {
     setOpen(true);
     loadItems();
-    // Mark as seen — clears the badge once the panel opens.
+    loadNotifications();
+    // Mam (2026-05-22): open to the tab that has unread items so the
+    // user sees what matters first.  Default to Notifications because
+    // those are personal action items (interview tomorrow, offer
+    // expiring).  Announcements are passive broadcasts.
+    if (unreadNotif > 0) setTab('notifications');
+    else if (unread > 0) setTab('announcements');
+    // else keep whichever tab was last open
+    // Mark announcements as seen — clears that part of the badge.
     try { await api.post('/announcements/mark-seen'); setUnread(0); } catch {}
+  };
+
+  // ── Notification handlers (mam 2026-05-22) ────────────────────────
+  const clickNotification = async (n) => {
+    if (!n.read_at) {
+      try { await api.put(`/hr/notifications/${n.id}/read`); } catch {}
+    }
+    setOpen(false);
+    if (n.link_url) navigate(n.link_url);
+    loadNotifications();
+    loadCount();
+  };
+  const markAllNotificationsRead = async () => {
+    try { await api.post('/hr/notifications/mark-all-read'); loadNotifications(); loadCount(); } catch {}
   };
 
   const submitNew = async (e) => {
@@ -145,31 +201,66 @@ export default function AnnouncementBell() {
       <button
         onClick={() => open ? setOpen(false) : onOpen()}
         className="relative p-2 hover:bg-gray-100 rounded-lg flex-shrink-0"
-        title="Announcements"
+        title="Notifications & Announcements"
       >
         <FiBell size={20} />
-        {unread > 0 && (
+        {(unread + unreadNotif) > 0 && (
           <span className="absolute -top-0.5 -right-0.5 bg-red-600 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
-            {unread > 9 ? '9+' : unread}
+            {(unread + unreadNotif) > 9 ? '9+' : (unread + unreadNotif)}
           </span>
         )}
       </button>
 
       {open && (
         <div className="absolute right-0 mt-1 w-[92vw] sm:w-[420px] max-h-[80vh] bg-white border border-gray-200 rounded-lg shadow-xl z-50 flex flex-col">
-          <div className="px-3 py-2 border-b flex items-center justify-between bg-gradient-to-r from-blue-50 to-blue-100">
-            <h4 className="font-semibold text-sm flex items-center gap-1.5"><FiBell size={14} /> Announcements</h4>
-            <div className="flex items-center gap-1">
-              {isAdmin() && !adding && (
-                <button onClick={() => { setEditing(null); setForm({ title: '', body: '', pinned: false, expires_at: '', attachment_url: '' }); setAdding(true); }} className="text-[11px] font-semibold text-blue-700 hover:bg-white px-2 py-1 rounded flex items-center gap-1">
-                  <FiPlus size={11} /> New
-                </button>
-              )}
-              <button onClick={() => setOpen(false)} className="p-1 hover:bg-white rounded"><FiX size={14} /></button>
+          {/* Mam (2026-05-22): unified header with tabs.  Title +
+              close button on row 1, two-tab strip on row 2 with
+              per-tab unread badges. */}
+          <div className="border-b bg-gradient-to-r from-blue-50 to-blue-100">
+            <div className="px-3 py-2 flex items-center justify-between">
+              <h4 className="font-semibold text-sm flex items-center gap-1.5"><FiBell size={14}/> Inbox</h4>
+              <div className="flex items-center gap-1">
+                {tab === 'announcements' && isAdmin() && !adding && (
+                  <button onClick={() => { setEditing(null); setForm({ title: '', body: '', pinned: false, expires_at: '', attachment_url: '' }); setAdding(true); }} className="text-[11px] font-semibold text-blue-700 hover:bg-white px-2 py-1 rounded flex items-center gap-1">
+                    <FiPlus size={11}/> New
+                  </button>
+                )}
+                {tab === 'notifications' && unreadNotif > 0 && (
+                  <button onClick={markAllNotificationsRead} className="text-[11px] text-blue-700 hover:bg-white px-2 py-1 rounded flex items-center gap-1">
+                    <FiCheck size={11}/> Mark all read
+                  </button>
+                )}
+                <button onClick={() => setOpen(false)} className="p-1 hover:bg-white rounded"><FiX size={14} /></button>
+              </div>
+            </div>
+            <div className="flex">
+              {[
+                { id: 'notifications',  label: 'My Notifications', count: unreadNotif },
+                { id: 'announcements',  label: 'Announcements',     count: unread       },
+              ].map(t => {
+                const active = tab === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setTab(t.id)}
+                    className={`flex-1 px-3 py-1.5 text-[12px] font-semibold border-b-2 flex items-center justify-center gap-1.5
+                      ${active
+                        ? 'border-blue-600 text-blue-700 bg-white/60'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                  >
+                    {t.label}
+                    {t.count > 0 && (
+                      <span className="bg-red-600 text-white text-[9px] font-bold rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-1">
+                        {t.count > 9 ? '9+' : t.count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {adding && isAdmin() && (
+          {tab === 'announcements' && adding && isAdmin() && (
             <form onSubmit={submitNew} className="border-b bg-gray-50/60 p-3 space-y-2">
               <input
                 className="input text-sm"
@@ -251,6 +342,39 @@ export default function AnnouncementBell() {
             </form>
           )}
 
+          {/* ── NOTIFICATIONS TAB ── */}
+          {tab === 'notifications' && (
+            <div className="flex-1 overflow-y-auto">
+              {notifications.length === 0 && (
+                <div className="text-center text-gray-400 text-sm py-10 px-4">
+                  <FiBell size={28} className="mx-auto opacity-30 mb-2"/>
+                  No notifications yet.
+                  <div className="text-[10px] text-gray-400 mt-1">Interview reminders, offer responses and pending approvals will land here.</div>
+                </div>
+              )}
+              {notifications.map(n => {
+                const Icon = NOTIF_TYPE_ICON[n.type] || FiBell;
+                const colorCls = NOTIF_TYPE_COLOR[n.type] || 'text-gray-600';
+                return (
+                  <button
+                    key={n.id}
+                    onClick={() => clickNotification(n)}
+                    className={`w-full text-left px-3 py-2.5 border-b border-gray-100 hover:bg-gray-50 flex items-start gap-2.5 ${!n.read_at ? 'bg-blue-50/40' : ''}`}>
+                    <Icon size={16} className={`mt-0.5 ${colorCls}`}/>
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-[12.5px] ${!n.read_at ? 'font-semibold' : 'text-gray-700'} truncate`}>{n.title}</div>
+                      {n.body && <div className="text-[11px] text-gray-500 line-clamp-2">{n.body}</div>}
+                      <div className="text-[10px] text-gray-400 mt-0.5">{fmt(n.created_at)}</div>
+                    </div>
+                    {!n.read_at && <span className="w-2 h-2 rounded-full bg-blue-600 mt-1.5 flex-shrink-0"/>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── ANNOUNCEMENTS TAB ── */}
+          {tab === 'announcements' && (
           <div className="flex-1 overflow-y-auto">
             {items.length === 0 && (
               <div className="text-center text-gray-400 text-sm py-8 px-4">
@@ -350,6 +474,7 @@ export default function AnnouncementBell() {
               </div>
             ))}
           </div>
+          )}
         </div>
       )}
 

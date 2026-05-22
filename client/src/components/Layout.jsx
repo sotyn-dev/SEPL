@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import HelpTicket from './HelpTicket';
 import AnnouncementBell from './AnnouncementBell';
-import NotificationsBell from './NotificationsBell';
+// Mam (2026-05-22): standalone NotificationsBell removed — its
+// functionality is now merged into AnnouncementBell as a second tab,
+// so there's a single bell icon in the header (was confusing with 3).
 import EnablePushButton from './EnablePushButton';
 import AIAgentChat from './AIAgentChat';
 import Modal from './Modal';
@@ -330,13 +332,11 @@ export default function Layout() {
           {/* Push notification toggle — phone / laptop / desktop each
               need to be enabled separately. Mam's MD requirement. */}
           <EnablePushButton />
-          {/* HR notifications bell — mam (2026-05-22 Batch E module #15).
-              Polls /hr/my-notifications every 60s, shows unread count,
-              dropdown with interview reminders / offer expiries /
-              pending hiring-request approvals. */}
-          <NotificationsBell />
-          {/* Announcement bell — every page has it. Admin can post from the
-              dropdown panel; everyone else sees the unread badge + list. */}
+          {/* Mam (2026-05-22): unified inbox bell.  Shows BOTH HR
+              notifications (interview reminders / offer expiries /
+              pending approvals) AND company announcements as two
+              tabs inside a single dropdown — replaces the previous
+              "3 separate bells" layout that confused users. */}
           <AnnouncementBell />
         </header>
         <main className="flex-1 overflow-y-auto p-2 md:p-6 bg-slate-50">
