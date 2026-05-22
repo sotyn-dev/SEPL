@@ -12,9 +12,20 @@ router.use(authMiddleware);
 // Mam (2026-05-22): bulk Excel upload for checklists.  Re-uses the
 // /data/uploads dir + 10MB cap so behaviour matches the PO/BOQ
 // upload flow.  File is deleted after parsing to avoid junk.
+//
+// Wrap mkdir in try/catch so a bad uploads dir / perm issue can't
+// crash the whole hr.js require — that would 502 the entire ERP.
+// If the dir can't be created we fall back to multer's default
+// (OS temp dir) so the route still works.
 const checklistsExcelDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'checklists-excel');
-if (!fs.existsSync(checklistsExcelDir)) fs.mkdirSync(checklistsExcelDir, { recursive: true });
-const checklistsExcelUpload = multer({ dest: checklistsExcelDir, limits: { fileSize: 10 * 1024 * 1024 } });
+let checklistsExcelUpload;
+try {
+  if (!fs.existsSync(checklistsExcelDir)) fs.mkdirSync(checklistsExcelDir, { recursive: true });
+  checklistsExcelUpload = multer({ dest: checklistsExcelDir, limits: { fileSize: 10 * 1024 * 1024 } });
+} catch (e) {
+  console.warn('[hr] checklistsExcelDir setup failed, falling back to OS temp:', e.message);
+  checklistsExcelUpload = multer({ limits: { fileSize: 10 * 1024 * 1024 } });
+}
 
 // ── Candidate timeline helper (mam 2026-05-22 ATS spec) ─────────
 // Every status-change / decision / tag-edit / hold-toggle calls this
