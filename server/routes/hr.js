@@ -1462,6 +1462,239 @@ router.delete('/final-round-questions/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+// ═════════════════════════════════════════════════════════════════
+// INDUCTION (mam 2026-05-22 Phase 1 Batch E, module #11)
+// ═════════════════════════════════════════════════════════════════
+// Admin manages content under 5 standard sections (Founder Message /
+// Company Culture / HR Policies / IT-Security / SOPs).  Employees
+// view a read-only digest at /induction (separate page wired in App.jsx).
+
+router.get('/induction', (req, res) => {
+  const { active } = req.query;
+  let sql = `SELECT * FROM induction_items WHERE 1=1`;
+  if (active === '1') sql += ' AND is_active = 1';
+  sql += ' ORDER BY section, order_index, id';
+  res.json(getDb().prepare(sql).all());
+});
+
+router.post('/induction', (req, res) => {
+  try {
+    const { section, title, content_type, content_url, content_text, order_index } = req.body || {};
+    if (!section || !title) return res.status(400).json({ error: 'Section and title required' });
+    const ct = ['text','video','pdf','link'].includes(content_type) ? content_type : 'text';
+    const r = getDb().prepare(`
+      INSERT INTO induction_items (section, title, content_type, content_url, content_text, order_index, is_active, created_by)
+      VALUES (?,?,?,?,?,?, 1, ?)
+    `).run(section.trim(), title.trim(), ct, content_url || null, content_text || null,
+           order_index != null ? +order_index : 0, req.user.id);
+    res.status(201).json({ id: r.lastInsertRowid });
+  } catch (err) {
+    console.error('POST /hr/induction error', err);
+    res.status(500).json({ error: err.message || 'Failed to save' });
+  }
+});
+
+router.put('/induction/:id', (req, res) => {
+  const { section, title, content_type, content_url, content_text, order_index, is_active } = req.body || {};
+  getDb().prepare(`
+    UPDATE induction_items SET
+      section = COALESCE(?, section),
+      title = COALESCE(?, title),
+      content_type = COALESCE(?, content_type),
+      content_url = ?,
+      content_text = ?,
+      order_index = COALESCE(?, order_index),
+      is_active = COALESCE(?, is_active)
+    WHERE id = ?
+  `).run(
+    section || null, title || null, content_type || null,
+    content_url || null, content_text || null,
+    order_index != null ? +order_index : null,
+    is_active != null ? (is_active ? 1 : 0) : null,
+    req.params.id,
+  );
+  res.json({ message: 'Updated' });
+});
+
+router.delete('/induction/:id', (req, res) => {
+  const r = getDb().prepare('DELETE FROM induction_items WHERE id = ?').run(req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ message: 'Deleted' });
+});
+
+// ═════════════════════════════════════════════════════════════════
+// TRAINING LIBRARY + ASSIGNMENTS (mam 2026-05-22 Phase 1 Batch E, #12)
+// ═════════════════════════════════════════════════════════════════
+
+router.get('/training/videos', (req, res) => {
+  const { active, type } = req.query;
+  let sql = `SELECT v.*,
+                    (SELECT COUNT(*) FROM training_assignments a WHERE a.video_id = v.id) AS assigned_count,
+                    (SELECT COUNT(*) FROM training_assignments a WHERE a.video_id = v.id AND a.completed_at IS NOT NULL) AS completed_count
+               FROM training_videos v WHERE 1=1`;
+  const args = [];
+  if (active === '1') sql += ' AND v.is_active = 1';
+  if (type)           { sql += ' AND v.training_type = ?'; args.push(type); }
+  sql += ' ORDER BY v.created_at DESC';
+  res.json(getDb().prepare(sql).all(...args));
+});
+
+router.post('/training/videos', (req, res) => {
+  try {
+    const { title, description, video_url, training_type, duration_minutes,
+            target_dept, target_role, is_mandatory } = req.body || {};
+    if (!title || !video_url) return res.status(400).json({ error: 'Title and video URL required' });
+    const tt = ['product','process','communication','sop','other'].includes(training_type) ? training_type : 'sop';
+    const r = getDb().prepare(`
+      INSERT INTO training_videos
+        (title, description, video_url, training_type, duration_minutes,
+         target_dept, target_role, is_mandatory, is_active, created_by)
+      VALUES (?,?,?,?,?,?,?,?, 1, ?)
+    `).run(title.trim(), description || null, video_url.trim(), tt,
+           duration_minutes ? +duration_minutes : null,
+           target_dept || null, target_role || null,
+           is_mandatory ? 1 : 0, req.user.id);
+    res.status(201).json({ id: r.lastInsertRowid });
+  } catch (err) {
+    console.error('POST /hr/training/videos error', err);
+    res.status(500).json({ error: err.message || 'Failed to save' });
+  }
+});
+
+router.put('/training/videos/:id', (req, res) => {
+  const { title, description, video_url, training_type, duration_minutes,
+          target_dept, target_role, is_mandatory, is_active } = req.body || {};
+  getDb().prepare(`
+    UPDATE training_videos SET
+      title = COALESCE(?, title),
+      description = ?,
+      video_url = COALESCE(?, video_url),
+      training_type = COALESCE(?, training_type),
+      duration_minutes = ?,
+      target_dept = ?,
+      target_role = ?,
+      is_mandatory = COALESCE(?, is_mandatory),
+      is_active = COALESCE(?, is_active)
+    WHERE id = ?
+  `).run(
+    title || null, description || null, video_url || null,
+    training_type || null,
+    duration_minutes ? +duration_minutes : null,
+    target_dept || null, target_role || null,
+    is_mandatory != null ? (is_mandatory ? 1 : 0) : null,
+    is_active != null ? (is_active ? 1 : 0) : null,
+    req.params.id,
+  );
+  res.json({ message: 'Updated' });
+});
+
+router.delete('/training/videos/:id', (req, res) => {
+  const r = getDb().prepare('DELETE FROM training_videos WHERE id = ?').run(req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ message: 'Deleted' });
+});
+
+// Assign a video to one or more employees (bulk).
+// Body: { employee_ids: [...] }  → upserts (UNIQUE on employee_id+video_id)
+router.post('/training/videos/:id/assign', (req, res) => {
+  const { employee_ids } = req.body || {};
+  if (!Array.isArray(employee_ids) || employee_ids.length === 0) {
+    return res.status(400).json({ error: 'employee_ids required' });
+  }
+  const db = getDb();
+  const ins = db.prepare(`
+    INSERT OR IGNORE INTO training_assignments (employee_id, video_id, assigned_by)
+    VALUES (?,?,?)
+  `);
+  let added = 0;
+  for (const eid of employee_ids) {
+    const r = ins.run(+eid, +req.params.id, req.user.id);
+    if (r.changes) added++;
+  }
+  res.json({ assigned: added, skipped: employee_ids.length - added });
+});
+
+// Pull assignments for a specific video (admin view)
+router.get('/training/videos/:id/assignments', (req, res) => {
+  const rows = getDb().prepare(
+    `SELECT a.*, e.name AS employee_name, e.department AS employee_department
+       FROM training_assignments a
+       LEFT JOIN employees e ON e.id = a.employee_id
+      WHERE a.video_id = ?
+      ORDER BY a.assigned_at DESC`
+  ).all(req.params.id);
+  res.json(rows);
+});
+
+router.delete('/training/assignments/:id', (req, res) => {
+  const r = getDb().prepare('DELETE FROM training_assignments WHERE id = ?').run(req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ message: 'Unassigned' });
+});
+
+// "My Training" — what's assigned to the logged-in user (via their
+// employees.user_id link).  Used by the employee-facing /training page.
+router.get('/training/mine', (req, res) => {
+  const db = getDb();
+  const emp = db.prepare('SELECT id FROM employees WHERE user_id = ?').get(req.user.id);
+  if (!emp) return res.json([]);
+  const rows = db.prepare(
+    `SELECT a.*, v.title, v.description, v.video_url, v.training_type, v.duration_minutes, v.is_mandatory
+       FROM training_assignments a
+       JOIN training_videos v ON v.id = a.video_id
+      WHERE a.employee_id = ? AND v.is_active = 1
+      ORDER BY v.is_mandatory DESC, a.assigned_at DESC`
+  ).all(emp.id);
+  res.json(rows);
+});
+
+router.post('/training/assignments/:id/start', (req, res) => {
+  getDb().prepare(`UPDATE training_assignments
+                     SET started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
+                   WHERE id = ?`).run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/training/assignments/:id/complete', (req, res) => {
+  const { note } = req.body || {};
+  getDb().prepare(`UPDATE training_assignments
+                     SET completed_at = CURRENT_TIMESTAMP,
+                         completion_note = ?,
+                         started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
+                   WHERE id = ?`).run(note || null, req.params.id);
+  res.json({ ok: true });
+});
+
+// ═════════════════════════════════════════════════════════════════
+// NOTIFICATIONS (mam 2026-05-22 Phase 1 Batch E, module #15)
+// ═════════════════════════════════════════════════════════════════
+// Created by routes (manual) + the hrAutomationsCron scanner.
+// Bell-icon in the Layout polls /my-notifications every 60 sec.
+
+router.get('/my-notifications', (req, res) => {
+  const { unread } = req.query;
+  let sql = 'SELECT * FROM notifications WHERE user_id = ?';
+  if (unread === '1') sql += ' AND read_at IS NULL';
+  sql += ' ORDER BY created_at DESC LIMIT 50';
+  res.json(getDb().prepare(sql).all(req.user.id));
+});
+
+router.put('/notifications/:id/read', (req, res) => {
+  getDb().prepare(
+    `UPDATE notifications SET read_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_id = ? AND read_at IS NULL`
+  ).run(req.params.id, req.user.id);
+  res.json({ ok: true });
+});
+
+router.post('/notifications/mark-all-read', (req, res) => {
+  getDb().prepare(
+    `UPDATE notifications SET read_at = CURRENT_TIMESTAMP
+     WHERE user_id = ? AND read_at IS NULL`
+  ).run(req.user.id);
+  res.json({ ok: true });
+});
+
 // JSON helper — never throws.
 function safeParseJson(s) {
   if (!s) return null;

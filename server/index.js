@@ -169,6 +169,16 @@ try {
   console.warn('[fire-noc-cron] Scheduler not started:', e.message);
 }
 
+// HR Automations cron — mam (2026-05-22 Batch E module #15).
+// Every 30 min: scans for interview reminders, stale offers, pending
+// hiring-request approvals → creates in-app notifications + emails
+// HR users.  Skip via ERP_DISABLE_HR_CRON=1.
+try {
+  require('./scripts/hrAutomationsCron').schedule();
+} catch (e) {
+  console.warn('[hr-cron] Scheduler not started:', e.message);
+}
+
 // Daily 09:00 CMD audit email — audit item B20 + TOC v3 P0 #5.
 // Reads the 07:30 snapshot JSON (falls back to live /audit/kpi if
 // the snapshot folder is missing) and emails the director address

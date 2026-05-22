@@ -782,6 +782,75 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- HR Phase 1 Batch E (mam 2026-05-22): Induction items.
+    -- Admin manages content per section (Founder Message / Company
+    -- Culture / HR Policies / IT-Security / SOPs).  Each item is
+    -- either a video URL (YouTube/Vimeo embed), a PDF file URL, or
+    -- a plain text block (markdown-ish, rendered as preformatted).
+    CREATE TABLE IF NOT EXISTS induction_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      section TEXT NOT NULL,                 -- 'founder' | 'culture' | 'hr_policies' | 'it_security' | 'sop' | custom
+      title TEXT NOT NULL,
+      content_type TEXT CHECK(content_type IN ('text','video','pdf','link')) DEFAULT 'text',
+      content_url TEXT,                       -- URL for video/pdf/link
+      content_text TEXT,                      -- body for text content
+      order_index INTEGER DEFAULT 0,
+      is_active INTEGER DEFAULT 1,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- HR Phase 1 Batch E (mam 2026-05-22): Training videos library.
+    -- Categorised by training_type per spec: product / process /
+    -- communication / sop.  target_dept / target_role are free-text
+    -- CSV so admin can assign by team without coupling to permissions.
+    CREATE TABLE IF NOT EXISTS training_videos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT,
+      video_url TEXT NOT NULL,                -- YouTube/Vimeo embed or direct file URL
+      training_type TEXT CHECK(training_type IN ('product','process','communication','sop','other')) DEFAULT 'sop',
+      duration_minutes INTEGER,
+      target_dept TEXT,                       -- CSV; NULL = any
+      target_role TEXT,                       -- CSV; NULL = any
+      is_mandatory INTEGER DEFAULT 0,
+      is_active INTEGER DEFAULT 1,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- HR Phase 1 Batch E (mam 2026-05-22): Per-employee training
+    -- assignments + completion tracking.  Status flow:
+    -- assigned → started → completed (or skipped).
+    CREATE TABLE IF NOT EXISTS training_assignments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+      video_id INTEGER NOT NULL REFERENCES training_videos(id) ON DELETE CASCADE,
+      assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      started_at DATETIME,
+      completed_at DATETIME,
+      completion_note TEXT,
+      assigned_by INTEGER REFERENCES users(id),
+      UNIQUE(employee_id, video_id)
+    );
+
+    -- HR Phase 1 Batch E (mam 2026-05-22): In-app notifications.
+    -- Created by the hrAutomationsCron scanner + by direct admin
+    -- actions.  user_id points at the recipient (HR user, interviewer,
+    -- candidate→employee, etc.).  type drives the icon + colour.
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,                    -- 'interview_reminder' | 'offer_expiry' | 'approval_pending' | 'training_assigned' | 'generic'
+      title TEXT NOT NULL,
+      body TEXT,
+      link_url TEXT,                          -- where to send the user when they click
+      channel_sent TEXT,                      -- CSV of channels delivered: 'in_app,email'
+      dedupe_key TEXT,                        -- prevents duplicate sends from cron re-runs
+      read_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- HR Phase 1 Batch D (mam 2026-05-22): Pre-Onboarding doc checklist.
     -- One row per (candidate × doc_type).  Standard doc_type values:
     -- 'aadhaar' | 'pan' | 'resume' | 'experience' | 'bank' | 'photo' |

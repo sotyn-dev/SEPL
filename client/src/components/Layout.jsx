@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import HelpTicket from './HelpTicket';
 import AnnouncementBell from './AnnouncementBell';
+import NotificationsBell from './NotificationsBell';
 import EnablePushButton from './EnablePushButton';
 import AIAgentChat from './AIAgentChat';
 import Modal from './Modal';
@@ -56,6 +57,11 @@ const menuItems = [
   { path: '/snags', label: 'Snag List', icon: FiAlertCircle, module: 'snags' },
   { path: '/company-assets', label: 'Company Assets', icon: FiPackage, module: 'company_assets' },
   { path: '/hr', label: 'HR & Hiring', icon: FiUserPlus, module: 'hr' },
+  // Mam (2026-05-22 Batch E): Induction + Training are OPEN to all
+  // employees (module=null bypasses the canView gate) so even
+  // permission-limited users can complete their assigned training.
+  { path: '/induction', label: 'Induction', icon: FiHelpCircle, module: null },
+  { path: '/training',  label: 'My Training', icon: FiCheckSquare, module: null },
   { path: '/payroll', label: 'Payroll', icon: LuIndianRupee, module: 'payroll' },
   { path: '/scorecard', label: 'Scorecard (MIS)', icon: FiBarChart2, module: 'scoring' },
   { path: '/employees', label: 'Employees', icon: FiUsers, module: 'employees' },
@@ -324,6 +330,11 @@ export default function Layout() {
           {/* Push notification toggle — phone / laptop / desktop each
               need to be enabled separately. Mam's MD requirement. */}
           <EnablePushButton />
+          {/* HR notifications bell — mam (2026-05-22 Batch E module #15).
+              Polls /hr/my-notifications every 60s, shows unread count,
+              dropdown with interview reminders / offer expiries /
+              pending hiring-request approvals. */}
+          <NotificationsBell />
           {/* Announcement bell — every page has it. Admin can post from the
               dropdown panel; everyone else sees the unread badge + list. */}
           <AnnouncementBell />

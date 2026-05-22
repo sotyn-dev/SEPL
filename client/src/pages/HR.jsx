@@ -7,6 +7,8 @@ import JobDescriptionsTab from '../components/JobDescriptionsTab';
 import FinalRoundQuestionsTab from '../components/FinalRoundQuestionsTab';
 import ScreeningQuestionsTab from '../components/ScreeningQuestionsTab';
 import DashboardTab from '../components/DashboardTab';
+import InductionTab from '../components/InductionTab';
+import TrainingTab from '../components/TrainingTab';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -14,6 +16,8 @@ import {
   FiAward, FiDownload, FiClock, FiTag, FiPauseCircle, FiPlayCircle, FiBriefcase,
   FiAlertTriangle, FiClipboard, FiBarChart2, FiHelpCircle,
 } from 'react-icons/fi';
+// FiPlayCircle is already imported above for the Hold/Unhold button
+// — reused here for the Training Library tab icon.
 import { exportCsv } from '../utils/exportCsv';
 
 const candidateStatuses = ['lead','called','qualified','interview_scheduled','interview_done','offer_sent','accepted','onboarded','rejected'];
@@ -485,6 +489,8 @@ export default function HR() {
           { id: 'jds',             label: 'Job Descriptions',   icon: FiFileText },
           { id: 'screening',       label: 'Screening Qs',       icon: FiClipboard },
           { id: 'final-round',     label: 'Final-Round Qs',     icon: FiAward },
+          { id: 'induction',       label: 'Induction Content',  icon: FiAward },
+          { id: 'training',        label: 'Training Library',   icon: FiPlayCircle },
         ].map(t => {
           const active = tab === t.id;
           const Icon = t.icon;
@@ -508,6 +514,8 @@ export default function HR() {
       {tab === 'jds'             && <JobDescriptionsTab />}
       {tab === 'screening'       && <ScreeningQuestionsTab />}
       {tab === 'final-round'     && <FinalRoundQuestionsTab />}
+      {tab === 'induction'       && <InductionTab />}
+      {tab === 'training'        && <TrainingTab />}
 
       {tab === 'candidates' && (() => {
         // Mam (2026-05-22 ATS Phase 1 spec): 7-stage pipeline.

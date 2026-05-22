@@ -63,6 +63,8 @@ import OfferLetterPrint from './pages/OfferLetterPrint';
 import NDAPrint from './pages/NDAPrint';
 import EmploymentAgreementPrint from './pages/EmploymentAgreementPrint';
 import PublicOffer from './pages/PublicOffer';
+import Induction from './pages/Induction';
+import Training from './pages/Training';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -123,6 +125,11 @@ export default function App() {
         <Route path="influencers" element={<ModuleRoute module="influencers"><Influencers /></ModuleRoute>} />
         <Route path="crm-kitting" element={<ModuleRoute module="crm_kitting"><CRMKitting /></ModuleRoute>} />
         <Route path="hr-system" element={<ModuleRoute module="hr_system"><HRSystem /></ModuleRoute>} />
+        {/* Mam (2026-05-22 Batch E): Induction + Training are open
+            to ALL employees — no module gate so even read-only users
+            can complete their training. */}
+        <Route path="induction" element={<Induction />} />
+        <Route path="training" element={<Training />} />
         {/* 4 Critical Systems */}
         <Route path="cashflow" element={<ModuleRoute module="cashflow"><CashFlow /></ModuleRoute>} />
         <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />
