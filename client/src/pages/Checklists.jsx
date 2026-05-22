@@ -136,6 +136,43 @@ export default function Checklists() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  // Mam (2026-05-22): Excel upload for bulk — server parses the file,
+  // returns rows as JSON, we paste them into the textarea (formatted
+  // as "Task | Label | Type") so admin can review/edit before submit.
+  const [excelImporting, setExcelImporting] = useState(false);
+  const importExcel = async (file) => {
+    if (!file) return;
+    setExcelImporting(true);
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const r = await api.post('/hr/checklists/parse-excel', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const rows = r.data?.rows || [];
+      if (rows.length === 0) {
+        toast.error('No tasks found in the Excel file');
+        return;
+      }
+      // Format each row as "Description | Label | Type" — empty
+      // columns are dropped so blank labels don't produce " | | ".
+      const formatted = rows.map(row => {
+        const parts = [row.description];
+        if (row.proof_label || row.proof_type) parts.push(row.proof_label || '');
+        if (row.proof_type) parts.push(row.proof_type);
+        return parts.join(' | ');
+      }).join('\n');
+      // Append to existing textarea content (if any) so admin can
+      // upload multiple files / mix typed + imported.
+      setBulkForm(f => ({
+        ...f,
+        lines: f.lines && f.lines.trim() ? f.lines.trimEnd() + '\n' + formatted : formatted,
+      }));
+      toast.success(`Imported ${rows.length} task(s) from Excel — review and adjust before submitting`);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to parse Excel file');
+    } finally {
+      setExcelImporting(false);
+    }
+  };
+
   // Mam (2026-05-22): bulk add — POST many tasks at once.
   const submitBulk = async () => {
     const lines = String(bulkForm.lines || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
@@ -900,6 +937,26 @@ Send WhatsApp report                          ← uses the shared proof name bel
               Optional 3rd column overrides proof type: <code className="bg-white px-1 rounded">Task | Label | pdf</code>
             </div>
           </div>
+          {/* Mam (2026-05-22): Excel upload — server parses the
+              .xlsx and pastes the rows into the textarea below so
+              admin can review/edit before submitting. */}
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-center gap-2 flex-wrap">
+            <div className="flex-1 min-w-[180px] text-[11px] text-emerald-800">
+              <b>Have an Excel sheet?</b> Upload it — first column = task description, second = proof name, third = proof type.
+            </div>
+            <a
+              href="/api/hr/checklists/bulk-template.xlsx"
+              download="checklists-bulk-template.xlsx"
+              className="btn btn-secondary text-[11px] py-1 px-2 flex items-center gap-1 whitespace-nowrap">
+              ⬇ Download Template
+            </a>
+            <label className={`btn btn-primary text-[11px] py-1 px-2 flex items-center gap-1 cursor-pointer whitespace-nowrap ${excelImporting ? 'opacity-60 pointer-events-none' : ''}`}>
+              {excelImporting ? '⏳ Parsing…' : '📊 Upload Excel'}
+              <input type="file" accept=".xlsx,.xls,.csv" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) importExcel(f); e.target.value = ''; }}/>
+            </label>
+          </div>
+
           <div>
             <label className="label">Task Lines * <span className="text-gray-400 font-normal text-[10px]">(one per line · optional `| Proof Name` after each)</span></label>
             <textarea

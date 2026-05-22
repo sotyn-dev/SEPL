@@ -2,11 +2,19 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
 const { parseResume } = require('../utils/resumeParser');
 const router = express.Router();
 router.use(authMiddleware);
+
+// Mam (2026-05-22): bulk Excel upload for checklists.  Re-uses the
+// /data/uploads dir + 10MB cap so behaviour matches the PO/BOQ
+// upload flow.  File is deleted after parsing to avoid junk.
+const checklistsExcelDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'checklists-excel');
+if (!fs.existsSync(checklistsExcelDir)) fs.mkdirSync(checklistsExcelDir, { recursive: true });
+const checklistsExcelUpload = multer({ dest: checklistsExcelDir, limits: { fileSize: 10 * 1024 * 1024 } });
 
 // ── Candidate timeline helper (mam 2026-05-22 ATS spec) ─────────
 // Every status-change / decision / tag-edit / hold-toggle calls this
@@ -654,6 +662,116 @@ const adminGuard = (req, res, next) => {
 // Mam (2026-05-22): proof_type values accepted by POST + PUT.
 // Default 'photo' keeps existing rows working (column default).
 const ALLOWED_PROOF_TYPES = ['photo', 'pdf', 'file', 'text', 'none'];
+
+// ═════════════════════════════════════════════════════════════════
+// Bulk Excel upload for checklists (mam 2026-05-22)
+// ═════════════════════════════════════════════════════════════════
+// Admin uploads an .xlsx with one row per task.  Recognised columns
+// (case-insensitive, in any order, any subset):
+//
+//   Description / Task             — required, the task text
+//   Proof Name / Label             — optional friendly name
+//   Proof Type                     — optional; photo/pdf/file/text/none
+//
+// We return the parsed rows as JSON so the client can stuff them into
+// the Bulk Add modal's textarea (formatted as "Task | Label | Type")
+// for the admin to review + tweak + submit via the existing
+// /checklists/bulk endpoint.  No DB writes here.
+
+// Download a sample template the admin can fill in.
+router.get('/checklists/bulk-template.xlsx', (req, res) => {
+  const wb = XLSX.utils.book_new();
+  const aoa = [
+    ['Description',                                'Proof Name',          'Proof Type'],
+    ['File monthly GST return',                    'GST File',            'pdf'],
+    ['Daily attendance + no-show alerts',          'Attendance Report',   'photo'],
+    ['Exit checklist + Day-1 joiner verification', 'Joining Form',        'pdf'],
+    ['Send daily WhatsApp report to MD',           'Screenshot',          'photo'],
+    ['Reconcile petty cash closing',               'Cash Closing Note',   'text'],
+    ['Mark vendor master sheet reviewed',          '',                    'none'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 50 }, { wch: 24 }, { wch: 12 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Checklists');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="checklists-bulk-template.xlsx"');
+  res.send(buf);
+});
+
+// Parse an uploaded .xlsx and return the rows as JSON.
+// (Client decides whether to commit them via /checklists/bulk.)
+router.post('/checklists/parse-excel', checklistsExcelUpload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  let wb;
+  try { wb = XLSX.readFile(req.file.path); }
+  catch (e) {
+    try { fs.unlinkSync(req.file.path); } catch {}
+    return res.status(400).json({ error: 'Could not read the Excel file: ' + e.message });
+  }
+  // Clean up the temp file regardless of success — we don't keep it
+  // around once parsed (admin will edit and resubmit via /bulk).
+  const cleanup = () => { try { fs.unlinkSync(req.file.path); } catch {} };
+
+  const sheetName = wb.SheetNames[0];
+  if (!sheetName) { cleanup(); return res.status(400).json({ error: 'Excel file has no sheets' }); }
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  if (rows.length === 0) { cleanup(); return res.status(400).json({ error: 'Sheet is empty' }); }
+
+  // ── Locate the header row.  Most files put it on row 1, but some
+  // people leave 1-2 blank lines or a title at the top.  Scan the
+  // first 5 rows for any keyword we know how to map.
+  const HEADER_KEYWORDS = ['description', 'task', 'proof name', 'proof', 'name', 'label', 'type', 'proof type'];
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(5, rows.length); i++) {
+    const cells = (rows[i] || []).map(c => String(c || '').toLowerCase().trim());
+    const matches = HEADER_KEYWORDS.filter(k => cells.some(c => c === k || c.includes(k))).length;
+    if (matches >= 1) { headerIdx = i; break; }
+  }
+  // If no headers, treat row 0 as data with column order [desc, label, type]
+  let descCol = 0, labelCol = 1, typeCol = 2;
+  if (headerIdx >= 0) {
+    const headers = (rows[headerIdx] || []).map(c => String(c || '').toLowerCase().trim());
+    const findCol = (...keys) => headers.findIndex(h => keys.some(k => h === k || h.includes(k)));
+    const di = findCol('description', 'task');
+    const li = findCol('proof name', 'label');
+    const ti = findCol('proof type', 'type');
+    if (di >= 0) descCol = di;
+    if (li >= 0) labelCol = li; else labelCol = -1;
+    if (ti >= 0) typeCol = ti; else typeCol = -1;
+  } else {
+    headerIdx = -1;  // start reading from row 0
+  }
+
+  const dataStart = headerIdx >= 0 ? headerIdx + 1 : 0;
+  const parsed = [];
+  const seen = new Set();
+  for (let i = dataStart; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const description = String(row[descCol] || '').trim();
+    if (!description) continue;
+    const key = description.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const proof_label = labelCol >= 0 ? String(row[labelCol] || '').trim() || null : null;
+    const rawType = typeCol >= 0 ? String(row[typeCol] || '').trim().toLowerCase() : '';
+    const proof_type = ALLOWED_PROOF_TYPES.includes(rawType) ? rawType : null;
+    parsed.push({ description, proof_label, proof_type });
+  }
+
+  cleanup();
+  if (parsed.length === 0) {
+    return res.status(400).json({ error: 'No task rows found in the file. The first column should contain task descriptions.' });
+  }
+  res.json({
+    ok: true,
+    sheet: sheetName,
+    header_row: headerIdx >= 0 ? headerIdx + 1 : null,
+    rows: parsed,
+    count: parsed.length,
+  });
+});
 
 router.post('/checklists', adminGuard, (req, res) => {
   const { title, description, frequency, due_date, due_time, assigned_to, department,
