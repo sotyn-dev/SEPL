@@ -54,7 +54,8 @@ const ALL_MODULES = [
   { key: 'help_tickets', label: 'Help Tickets' },
 
   // — HR / People
-  { key: 'hr', label: 'HR & Hiring' },
+  { key: 'hr_system', label: 'HR System (recruitment / ATS / offers)' },
+  { key: 'hr', label: 'HR & Hiring (legacy)' },
   { key: 'payroll', label: 'Payroll' },
   { key: 'scoring', label: 'Weekly Score' },
   { key: 'tools', label: 'Tools Management' },

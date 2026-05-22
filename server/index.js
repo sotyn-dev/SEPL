@@ -257,6 +257,7 @@ app.use('/api/fire-noc', require('./routes/fireNoc'));
 app.use('/api/rental-tools', require('./routes/rentalTools'));
 app.use('/api/influencers', require('./routes/influencers'));
 app.use('/api/crm-kitting', require('./routes/crmKitting'));
+app.use('/api/hr-system', require('./routes/hrSystem'));
 
 // 4 Critical Systems
 app.use('/api/cashflow', require('./routes/cashflow'));

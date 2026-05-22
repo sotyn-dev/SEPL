@@ -2847,6 +2847,9 @@ function initializeDatabase() {
     { name: 'Data Entry', desc: 'Data entry for Business Book and orders', is_system: 0 },
     { name: 'Billing Engineer', desc: 'Approves billing and payment requests', is_system: 0 },
     { name: 'Viewer', desc: 'View-only access to all modules', is_system: 0 },
+    // Mam (2026-05-22) HR System Phase 1 roles.
+    { name: 'Hiring Manager', desc: 'Raises hiring requests, reviews candidates', is_system: 0 },
+    { name: 'Interviewer', desc: 'Conducts interviews and submits feedback', is_system: 0 },
   ];
 
   const ALL_MODULES = [
@@ -2858,7 +2861,12 @@ function initializeDatabase() {
     // checks but were missing from the server's seed list, so newly
     // created roles never got role_permissions rows for them.  Now
     // included so the top-up loop covers every module the UI exposes.
-    'payroll','scoring','tools','rentals'
+    'payroll','scoring','tools','rentals',
+    // Mam (2026-05-22): HR System Phase 1 — recruitment / ATS /
+    // interviews / offers / onboarding.  Gated behind one permission
+    // string so individual roles can be tuned (HR Manager full, Hiring
+    // Manager view + create, Interviewer view + edit feedback).
+    'hr_system'
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

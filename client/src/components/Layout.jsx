@@ -32,6 +32,7 @@ const menuItems = [
   { path: '/rental-tools', label: 'Rental Tools', icon: FiTool, module: 'rental_tools' },
   { path: '/influencers', label: 'Influencers', icon: FiUsers, module: 'influencers' },
   { path: '/crm-kitting', label: 'CRM Full Kitting', icon: FiPackage, module: 'crm_kitting' },
+  { path: '/hr-system',   label: 'HR System',        icon: FiUsers,   module: 'hr_system' },
   { path: '/quotations', label: 'BOQ & Quotations', icon: FiFileText, module: 'quotations' },
   { path: '/business-book', label: 'Business Book', icon: FiBook, module: 'business_book' },
   { path: '/item-master', label: 'Item Master', icon: FiGrid, module: 'item_master' },
