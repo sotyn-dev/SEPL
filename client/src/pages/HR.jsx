@@ -207,10 +207,10 @@ export default function HR() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2">
-        <button onClick={() => setTab('candidates')} className={`btn ${tab === 'candidates' ? 'btn-primary' : 'btn-secondary'}`}>Candidates</button>
-        <button onClick={() => setTab('contractors')} className={`btn ${tab === 'contractors' ? 'btn-primary' : 'btn-secondary'}`}>Sub-Contractors</button>
-      </div>
+      {/* Sub-Contractors tab removed (mam, 2026-05-22: "here
+          sub-contractor not required we already create different
+          module" — standalone Sub-Contractors module already lives in
+          the sidebar).  HR & Hiring is now Candidates-only. */}
 
       {tab === 'candidates' && (
         <>
