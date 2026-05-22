@@ -695,9 +695,6 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
     return res.status(400).json({ error: 'tasks array required' });
   }
   if (!assigned_to) return res.status(400).json({ error: 'Assigned To is required' });
-  // Clean: trim, drop empties, dedupe within this batch.
-  const cleaned = [...new Set(tasks.map(t => String(t || '').trim()).filter(Boolean))];
-  if (cleaned.length === 0) return res.status(400).json({ error: 'All task lines were empty' });
 
   let dept = department && String(department).trim() ? String(department).trim() : null;
   if (!dept) {
@@ -706,8 +703,36 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
       dept = u?.department || null;
     } catch (_) {}
   }
-  const pt = ALLOWED_PROOF_TYPES.includes(proof_type) ? proof_type : 'photo';
-  const pl = proof_label && String(proof_label).trim() ? String(proof_label).trim() : null;
+  const defaultPt = ALLOWED_PROOF_TYPES.includes(proof_type) ? proof_type : 'photo';
+  const defaultPl = proof_label && String(proof_label).trim() ? String(proof_label).trim() : null;
+
+  // Mam (2026-05-22): per-line overrides via pipe or tab separator:
+  //   Pay GST           | GST File
+  //   Reconcile cash    | Bank Statement | pdf
+  //   Take site photo
+  // Column 1 = description (required)
+  // Column 2 = proof_label override (optional — falls back to shared)
+  // Column 3 = proof_type override  (optional, must be in whitelist)
+  // Lines with NO separator just use the shared proof_label/proof_type.
+  const rows = [];
+  const seen = new Set();
+  for (const raw of tasks) {
+    if (raw == null) continue;
+    const line = String(raw).trim();
+    if (!line) continue;
+    // Split on tab OR pipe (Excel paste vs typed-in syntax)
+    const parts = line.split(/\s*[|\t]\s*/);
+    const description = parts[0]?.trim();
+    if (!description) continue;
+    const dupKey = description.toLowerCase();
+    if (seen.has(dupKey)) continue;
+    seen.add(dupKey);
+    const rowLabel = parts[1] && parts[1].trim() ? parts[1].trim() : defaultPl;
+    const rawType = parts[2] && parts[2].trim().toLowerCase();
+    const rowType = rawType && ALLOWED_PROOF_TYPES.includes(rawType) ? rawType : defaultPt;
+    rows.push({ description, proof_label: rowLabel, proof_type: rowType });
+  }
+  if (rows.length === 0) return res.status(400).json({ error: 'All task lines were empty' });
 
   const db = getDb();
   const ins = db.prepare(`INSERT INTO checklists
@@ -715,20 +740,20 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
        recurrence_start_date, recurrence_end_date, proof_type, proof_label, created_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
 
-  const tx = db.transaction((rows) => {
+  const tx = db.transaction((items) => {
     let added = 0;
-    for (const description of rows) {
-      const title = deriveTitle(null, description);
-      ins.run(title, description, frequency || 'monthly', due_date || null, due_time || null,
+    for (const r of items) {
+      const title = deriveTitle(null, r.description);
+      ins.run(title, r.description, frequency || 'monthly', due_date || null, due_time || null,
               assigned_to, dept,
               recurrence_start_date || null, recurrence_end_date || null,
-              pt, pl, req.user.id);
+              r.proof_type, r.proof_label, req.user.id);
       added++;
     }
     return added;
   });
-  const added = tx(cleaned);
-  res.status(201).json({ added, total: cleaned.length });
+  const added = tx(rows);
+  res.status(201).json({ added, total: rows.length });
 });
 
 router.put('/checklists/:id', adminGuard, (req, res) => {

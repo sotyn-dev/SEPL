@@ -889,22 +889,58 @@ export default function Checklists() {
           assignee / dates / proof type.  One line = one task. */}
       <Modal isOpen={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Add Checklists" wide>
         <div className="space-y-3">
-          <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
-            Paste one task per line — each becomes its own checklist with the shared settings below.
-            Empty lines and duplicates are skipped automatically.
-          </p>
+          <div className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2 space-y-1">
+            <div><b>One task per line.</b> Empty lines and duplicates are skipped.</div>
+            <div className="text-blue-900">
+              💡 <b>Different proof name per task?</b> Add it after a <code className="bg-white px-1 rounded">|</code>:
+              <pre className="font-mono text-[11px] mt-1 ml-4">{`File GST return   | GST File
+Bank recon        | Bank Statement
+Send WhatsApp report                          ← uses the shared proof name below`}</pre>
+              You can also paste 2 columns from Excel (tab-separated works the same way).<br/>
+              Optional 3rd column overrides proof type: <code className="bg-white px-1 rounded">Task | Label | pdf</code>
+            </div>
+          </div>
           <div>
-            <label className="label">Task Lines * <span className="text-gray-400 font-normal text-[10px]">(one per line)</span></label>
+            <label className="label">Task Lines * <span className="text-gray-400 font-normal text-[10px]">(one per line · optional `| Proof Name` after each)</span></label>
             <textarea
               className="input font-mono text-[12px]"
               rows="8"
               value={bulkForm.lines || ''}
               onChange={e => setBulkForm({ ...bulkForm, lines: e.target.value })}
-              placeholder={`Pay electricity bill\nReconcile petty cash\nUpdate vendor master sheet\nCheck WhatsApp Business inbox\n...`}
+              placeholder={`Attendance + no-show alerts        | Attendance Report\nExit checklist + Day-1 joiner verification | Joining Form\nDaily WhatsApp report\n...`}
             />
-            <p className="text-[10px] text-gray-500 mt-0.5">
-              {String(bulkForm.lines || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean).length} task(s) ready to create
-            </p>
+            {/* Live preview of how the lines will be split */}
+            {(() => {
+              const lines = String(bulkForm.lines || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+              if (lines.length === 0) return <p className="text-[10px] text-gray-500 mt-0.5">0 task(s) ready to create</p>;
+              const parsed = lines.map(l => {
+                const parts = l.split(/\s*[|\t]\s*/);
+                return { desc: parts[0], label: parts[1] || null, type: parts[2] || null };
+              });
+              const withCustom = parsed.filter(p => p.label).length;
+              return (
+                <div className="text-[10px] mt-1 space-y-0.5">
+                  <p className="text-gray-500">
+                    {parsed.length} task(s) ready · {withCustom} with custom proof name · {parsed.length - withCustom} using shared "{bulkForm.proof_label || (bulkForm.proof_type === 'none' ? 'no proof' : 'default')}"
+                  </p>
+                  <details className="text-gray-500">
+                    <summary className="cursor-pointer hover:text-gray-700">Show parsed preview</summary>
+                    <table className="mt-1 text-[10px] w-full border border-gray-200 rounded">
+                      <thead className="bg-gray-50"><tr><th className="text-left px-2 py-1">Task</th><th className="text-left px-2 py-1">Proof Name</th><th className="text-left px-2 py-1">Type</th></tr></thead>
+                      <tbody>
+                        {parsed.map((p, i) => (
+                          <tr key={i} className="border-t">
+                            <td className="px-2 py-0.5 truncate max-w-[280px]" title={p.desc}>{p.desc}</td>
+                            <td className="px-2 py-0.5">{p.label || <span className="text-gray-400 italic">{bulkForm.proof_label || '—'}</span>}</td>
+                            <td className="px-2 py-0.5">{p.type || <span className="text-gray-400 italic">{bulkForm.proof_type || 'photo'}</span>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </details>
+                </div>
+              );
+            })()}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -966,7 +1002,7 @@ export default function Checklists() {
           <div className="flex justify-end gap-3 pt-1">
             <button onClick={() => setBulkModal(false)} className="btn btn-secondary">Cancel</button>
             <button onClick={submitBulk} className="btn btn-primary">
-              Create {String(bulkForm.lines || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean).length || ''} Checklist(s)
+              Create {String(bulkForm.lines || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean).length || ''} Checklist{String(bulkForm.lines || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean).length === 1 ? '' : 's'}
             </button>
           </div>
         </div>
