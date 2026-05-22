@@ -1067,6 +1067,53 @@ Send WhatsApp report                          ← uses the shared proof name bel
                   value={bulkForm.proof_label || ''}
                   onChange={e => setBulkForm({ ...bulkForm, proof_label: e.target.value })}
                   placeholder="e.g. GST File, Bank Statement, Daily Cash Note"/>
+                {/* Mam (2026-05-22): detect when admin types "|" in
+                    the SHARED proof name (expecting it to split across
+                    tasks).  Suggest the correct per-line syntax + offer
+                    a one-click split that distributes the parts to the
+                    task lines. */}
+                {(() => {
+                  const sharedHasPipe = /\|/.test(bulkForm.proof_label || '');
+                  if (!sharedHasPipe) return null;
+                  const parts = String(bulkForm.proof_label || '')
+                    .split(/\s*\|+\s*/)
+                    .map(s => s.replace(/^[:\-•·]\s*/, '').trim())
+                    .filter(Boolean);
+                  const taskLines = String(bulkForm.lines || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+                  const canSplit = parts.length >= 2 && taskLines.length === parts.length;
+                  const applySplit = () => {
+                    // Rebuild each task line as "task | proofName" using
+                    // the parsed parts; clear the shared field.
+                    const newLines = taskLines.map((tl, i) => {
+                      // Strip any existing trailing "| ..." so re-running
+                      // doesn't accumulate pipes.
+                      const baseTask = tl.split(/\s*\|/)[0].trim();
+                      return `${baseTask} | ${parts[i]}`;
+                    }).join('\n');
+                    setBulkForm({ ...bulkForm, lines: newLines, proof_label: '' });
+                    toast.success(`Split into ${parts.length} per-task proof names`);
+                  };
+                  return (
+                    <div className="mt-1 text-[11px] bg-amber-50 border border-amber-200 rounded px-2 py-1.5 text-amber-900">
+                      <b>This field is one literal name applied to every task.</b> Looks like you want different proof names per task.<br/>
+                      → Put the proof name AFTER each task line using <code className="bg-white px-1 rounded">|</code>, like:<br/>
+                      <code className="block bg-white px-2 py-1 mt-1 rounded text-[10.5px]">Attendance + no-show alerts | Attendance CSV<br/>Exit checklist + Day-1 joiner verification | Signed checklist PDF</code>
+                      {canSplit && (
+                        <div className="mt-1.5">
+                          <button type="button" onClick={applySplit}
+                            className="btn btn-secondary text-[10px] py-1 px-2 bg-amber-600 text-white border-amber-600 hover:bg-amber-700">
+                            ✓ Auto-fix: split into {parts.length} per-task names
+                          </button>
+                        </div>
+                      )}
+                      {!canSplit && parts.length >= 2 && (
+                        <div className="mt-1 text-[10px] text-amber-700">
+                          Detected {parts.length} parts but you have {taskLines.length} task line(s) — auto-split needs one part per task.  Either edit the names to match the task count, or fix this manually.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
