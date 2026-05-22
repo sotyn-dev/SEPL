@@ -657,7 +657,7 @@ const ALLOWED_PROOF_TYPES = ['photo', 'pdf', 'file', 'text', 'none'];
 
 router.post('/checklists', adminGuard, (req, res) => {
   const { title, description, frequency, due_date, due_time, assigned_to, department,
-          recurrence_start_date, recurrence_end_date, proof_type } = req.body;
+          recurrence_start_date, recurrence_end_date, proof_type, proof_label } = req.body;
   const t = deriveTitle(title, description);
   const desc = String(description || '').trim();
   if (!desc && !title) return res.status(400).json({ error: 'Description is required' });
@@ -673,13 +673,14 @@ router.post('/checklists', adminGuard, (req, res) => {
     } catch (_) {}
   }
   const pt = ALLOWED_PROOF_TYPES.includes(proof_type) ? proof_type : 'photo';
+  const pl = proof_label && String(proof_label).trim() ? String(proof_label).trim() : null;
   const r = getDb().prepare(
     `INSERT INTO checklists
        (title, description, frequency, due_date, due_time, assigned_to, department,
-        recurrence_start_date, recurrence_end_date, proof_type, created_by)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+        recurrence_start_date, recurrence_end_date, proof_type, proof_label, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(t, desc, frequency, due_date, due_time || null, assigned_to, dept,
-        recurrence_start_date || null, recurrence_end_date || null, pt, req.user.id);
+        recurrence_start_date || null, recurrence_end_date || null, pt, pl, req.user.id);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
@@ -689,7 +690,7 @@ router.post('/checklists', adminGuard, (req, res) => {
 // one form fill.
 router.post('/checklists/bulk', adminGuard, (req, res) => {
   const { tasks, frequency, due_date, due_time, assigned_to, department,
-          recurrence_start_date, recurrence_end_date, proof_type } = req.body || {};
+          recurrence_start_date, recurrence_end_date, proof_type, proof_label } = req.body || {};
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return res.status(400).json({ error: 'tasks array required' });
   }
@@ -706,12 +707,13 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
     } catch (_) {}
   }
   const pt = ALLOWED_PROOF_TYPES.includes(proof_type) ? proof_type : 'photo';
+  const pl = proof_label && String(proof_label).trim() ? String(proof_label).trim() : null;
 
   const db = getDb();
   const ins = db.prepare(`INSERT INTO checklists
       (title, description, frequency, due_date, due_time, assigned_to, department,
-       recurrence_start_date, recurrence_end_date, proof_type, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+       recurrence_start_date, recurrence_end_date, proof_type, proof_label, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
 
   const tx = db.transaction((rows) => {
     let added = 0;
@@ -720,7 +722,7 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
       ins.run(title, description, frequency || 'monthly', due_date || null, due_time || null,
               assigned_to, dept,
               recurrence_start_date || null, recurrence_end_date || null,
-              pt, req.user.id);
+              pt, pl, req.user.id);
       added++;
     }
     return added;
@@ -731,7 +733,7 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
 
 router.put('/checklists/:id', adminGuard, (req, res) => {
   const { status, title, description, frequency, due_date, due_time, assigned_to, department,
-          recurrence_start_date, recurrence_end_date, proof_type } = req.body;
+          recurrence_start_date, recurrence_end_date, proof_type, proof_label } = req.body;
   const t = deriveTitle(title, description);
   if (!assigned_to) return res.status(400).json({ error: 'Assigned To is required' });
   let dept = department && String(department).trim() ? String(department).trim() : null;
@@ -742,13 +744,23 @@ router.put('/checklists/:id', adminGuard, (req, res) => {
     } catch (_) {}
   }
   const pt = ALLOWED_PROOF_TYPES.includes(proof_type) ? proof_type : null;
+  // proof_label uses COALESCE-like behaviour: passing undefined keeps
+  // existing; passing '' clears it; passing a string sets/replaces.
+  const pl = proof_label === undefined ? null
+           : proof_label && String(proof_label).trim() ? String(proof_label).trim()
+           : '';
   getDb().prepare(
     `UPDATE checklists SET status=?, title=?, description=?, frequency=?, due_date=?, due_time=?,
        assigned_to=?, department=?, recurrence_start_date=?, recurrence_end_date=?,
-       proof_type = COALESCE(?, proof_type)
+       proof_type = COALESCE(?, proof_type),
+       proof_label = CASE WHEN ? IS NULL THEN proof_label
+                          WHEN ? = '' THEN NULL
+                          ELSE ? END
      WHERE id=?`
   ).run(status, t, description, frequency, due_date, due_time || null, assigned_to, dept,
-        recurrence_start_date || null, recurrence_end_date || null, pt, req.params.id);
+        recurrence_start_date || null, recurrence_end_date || null, pt,
+        pl, pl, pl,
+        req.params.id);
   res.json({ message: 'Updated' });
 });
 

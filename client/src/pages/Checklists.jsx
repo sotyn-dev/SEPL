@@ -685,11 +685,15 @@ export default function Checklists() {
                         </span>
                       ) : (() => {
                         const pt = c.proof_type || 'photo';
+                        // Mam (2026-05-22): proof_label overrides the
+                        // generic "Photo / PDF / Proof" wording so the
+                        // button reads e.g. "Upload GST File".
+                        const friendly = c.proof_label && c.proof_label.trim() ? c.proof_label.trim() : null;
                         if (pt === 'text') {
                           return (
                             <button onClick={() => { setTextProofRow(c); setTextProofDraft(''); }}
                               className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
-                              ✍️ Mark Done (text)
+                              ✍️ {friendly ? `Add ${friendly}` : 'Mark Done (text)'}
                             </button>
                           );
                         }
@@ -704,11 +708,12 @@ export default function Checklists() {
                         const accept = pt === 'photo' ? 'image/*'
                                      : pt === 'pdf'   ? '.pdf,application/pdf'
                                      :                  '.pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx';
-                        const label = pt === 'photo' ? 'Upload Photo'
-                                    : pt === 'pdf'   ? 'Upload PDF'
-                                    :                  'Upload Proof';
+                        const genericLabel = pt === 'photo' ? 'Photo'
+                                           : pt === 'pdf'   ? 'PDF'
+                                           :                  'Proof';
+                        const label = `Upload ${friendly || genericLabel}`;
                         return (
-                          <label className={`btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 cursor-pointer ${uploadingId === c.id ? 'opacity-60 pointer-events-none' : ''}`}>
+                          <label className={`btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 cursor-pointer ${uploadingId === c.id ? 'opacity-60 pointer-events-none' : ''}`} title={friendly ? `Required: ${friendly}` : undefined}>
                             <FiUpload size={11} /> {uploadingId === c.id ? '...' : label}
                             <input type="file" accept={accept} className="hidden"
                               onChange={e => { const f = e.target.files[0]; if (f) uploadProof(c, f); e.target.value = ''; }} />
@@ -804,6 +809,38 @@ export default function Checklists() {
                 {!form.proof_type && 'Defaults to photo if not set.'}
               </p>
             </div>
+            {/* Mam (2026-05-22): "add one proof name like type gst
+                file etc" — friendly label shown on the assignee's
+                upload button so they know exactly what to attach. */}
+            {form.proof_type !== 'none' && (
+              <div>
+                <label className="label">
+                  Proof Name <span className="text-gray-400 font-normal text-[10px]">(what to attach — e.g. "GST File")</span>
+                </label>
+                <input
+                  className="input"
+                  list="checklist-proof-name-options"
+                  value={form.proof_label || ''}
+                  onChange={e => setForm({ ...form, proof_label: e.target.value })}
+                  placeholder={form.proof_type === 'text' ? 'e.g. Daily Cash Note' : 'e.g. GST File, Bank Statement, Site Photo'}
+                />
+                <datalist id="checklist-proof-name-options">
+                  <option value="GST File"/>
+                  <option value="Bank Statement"/>
+                  <option value="Salary Slip"/>
+                  <option value="Site Photo"/>
+                  <option value="Vendor Invoice"/>
+                  <option value="Cash Closing Note"/>
+                  <option value="Cheque Image"/>
+                  <option value="Petty Cash Voucher"/>
+                  <option value="Stock Register Page"/>
+                  <option value="Attendance Sheet"/>
+                </datalist>
+                <p className="text-[10px] text-gray-400 mt-0.5">
+                  Upload button will say <span className="font-semibold text-gray-600">"Upload {form.proof_label || (form.proof_type === 'photo' ? 'Photo' : form.proof_type === 'pdf' ? 'PDF' : 'Proof')}"</span>
+                </p>
+              </div>
+            )}
             {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['pending','in_progress','completed','overdue'].map(s => <option key={s} value={s}>{s.replace(/_/g,' ')}</option>)}</select></div>}
           </div>
 
@@ -904,6 +941,15 @@ export default function Checklists() {
                 <option value="none">✓ Just mark done</option>
               </select>
             </div>
+            {bulkForm.proof_type !== 'none' && (
+              <div className="sm:col-span-2">
+                <label className="label">Proof Name <span className="text-gray-400 font-normal text-[10px]">(shown on upload button — same for all tasks)</span></label>
+                <input className="input" list="checklist-proof-name-options"
+                  value={bulkForm.proof_label || ''}
+                  onChange={e => setBulkForm({ ...bulkForm, proof_label: e.target.value })}
+                  placeholder="e.g. GST File, Bank Statement, Daily Cash Note"/>
+              </div>
+            )}
           </div>
           {bulkForm.frequency !== 'once' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-blue-50/40 border border-blue-200 rounded-lg p-3">
@@ -929,10 +975,12 @@ export default function Checklists() {
       {/* ── TEXT-PROOF MODAL (mam 2026-05-22) ──
           For checklists where proof_type='text' — assignee types a
           note instead of uploading a file. */}
-      <Modal isOpen={!!textProofRow} onClose={() => setTextProofRow(null)} title={`Mark Done — ${textProofRow?.description?.slice(0, 60) || ''}`}>
+      <Modal isOpen={!!textProofRow} onClose={() => setTextProofRow(null)} title={`${textProofRow?.proof_label ? `Add ${textProofRow.proof_label}` : 'Mark Done'} — ${textProofRow?.description?.slice(0, 60) || ''}`}>
         <div className="space-y-3">
           <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
-            This checklist requires a text note (no file upload). Type what you did, then submit.
+            {textProofRow?.proof_label
+              ? <>This checklist requires a text note labelled <b>{textProofRow.proof_label}</b>. Type the details below and submit.</>
+              : 'This checklist requires a text note (no file upload). Type what you did, then submit.'}
           </p>
           <textarea
             className="input"
@@ -940,7 +988,7 @@ export default function Checklists() {
             autoFocus
             value={textProofDraft}
             onChange={e => setTextProofDraft(e.target.value)}
-            placeholder="e.g. Bank balance ₹4.32L verified against statement, no discrepancies. WhatsApp screenshot shared with mam."
+            placeholder={textProofRow?.proof_label ? `Type the ${textProofRow.proof_label.toLowerCase()} details here…` : 'e.g. Bank balance ₹4.32L verified against statement, no discrepancies.'}
           />
           <div className="flex justify-end gap-3">
             <button onClick={() => setTextProofRow(null)} className="btn btn-secondary">Cancel</button>

@@ -2612,6 +2612,12 @@ function initializeDatabase() {
     //   'text'  — text note only, no upload
     //   'none'  — no proof needed, just mark done
     ['checklists', "proof_type TEXT DEFAULT 'photo'"],
+    // Mam (2026-05-22): "add one proof name like type gst file etc"
+    // — friendly label shown ON the assignee's upload button so they
+    // know what to attach (e.g. "GST File", "Bank Statement",
+    // "Site Photo").  Optional; falls back to the generic proof_type
+    // label when blank.
+    ['checklists', 'proof_label TEXT'],
     // AI Agent: link a BOQ row back to a catalogue item so quotation
     // rates feed item_price_history and the rate-suggestion popup can
     // show last-quoted / 6-month avg-low-high for that exact item.
