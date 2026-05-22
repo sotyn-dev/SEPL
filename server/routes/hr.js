@@ -554,6 +554,105 @@ router.get('/checklists/by-date', (req, res) => {
   res.json({ date, rows });
 });
 
+// ── GET /hr/checklists/followup?back=7&forward=7 ────────────────
+// Mam (2026-05-22): "i need followup checklist where all record
+// mention previous, present, future".  Returns one row per checklist
+// task with a horizontal timeline of dates (back N → today → forward
+// N).  Each cell carries the status for that date:
+//   'done_approved' | 'done_pending' | 'done_rejected'
+//   'missed'  (past + frequency-applicable + no completion)
+//   'today'   (current day, no completion yet)
+//   'future'  (upcoming + frequency-applicable)
+//   'na'      (frequency says this task doesn't apply on that date)
+router.get('/checklists/followup', (req, res) => {
+  const db = getDb();
+  const back = Math.min(30, Math.max(0, parseInt(req.query.back || '7', 10)));
+  const forward = Math.min(30, Math.max(0, parseInt(req.query.forward || '7', 10)));
+  const isAdmin = req.user.role === 'admin';
+
+  // Build the date window (ISO YYYY-MM-DD strings, IST).
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dates = [];
+  for (let i = -back; i <= forward; i += 1) {
+    const d = new Date(today); d.setDate(d.getDate() + i);
+    dates.push(d.toISOString().slice(0, 10));
+  }
+  const fromDate = dates[0];
+  const toDate = dates[dates.length - 1];
+
+  // Pull the candidate task list (admin sees all, others only their own).
+  const taskSql = isAdmin
+    ? `SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
+              c.department, c.assigned_to, u.name AS assigned_to_name
+       FROM checklists c LEFT JOIN users u ON c.assigned_to = u.id
+       ORDER BY u.name COLLATE NOCASE, c.department, c.description`
+    : `SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
+              c.department, c.assigned_to, u.name AS assigned_to_name
+       FROM checklists c LEFT JOIN users u ON c.assigned_to = u.id
+       WHERE c.assigned_to = ?
+       ORDER BY c.department, c.description`;
+  const tasks = isAdmin ? db.prepare(taskSql).all() : db.prepare(taskSql).all(req.user.id);
+
+  // Pull ALL completions in the window (one query, then bucket
+  // client-side by checklist_id + date).
+  const compRows = db.prepare(`
+    SELECT checklist_id, user_id, completion_date, proof_url,
+           approval_status, submitted_at
+    FROM checklist_completions
+    WHERE completion_date BETWEEN ? AND ?
+  `).all(fromDate, toDate);
+  const compMap = {};
+  for (const r of compRows) {
+    compMap[`${r.checklist_id}::${r.completion_date}`] = r;
+  }
+
+  // Frequency → "does this date apply to this task?" helper.  For
+  // 'once' / 'yearly' / 'monthly' we treat every day as eligible
+  // (mam can mark done on any single day in the period).  Daily is
+  // every day.  Weekly applies on the same weekday as due_date.
+  function applies(task, dateStr) {
+    if (!task.frequency) return true;
+    const f = task.frequency.toLowerCase();
+    if (f === 'daily') return true;
+    if (f === 'weekly') {
+      if (!task.due_date) return true;
+      return new Date(task.due_date).getDay() === new Date(dateStr).getDay();
+    }
+    // monthly / quarterly / yearly / once — keep generous.
+    return true;
+  }
+
+  const rows = tasks.map(t => {
+    const cells = dates.map(d => {
+      const comp = compMap[`${t.id}::${d}`];
+      const isPast   = d < dates[back];
+      const isToday  = d === dates[back];
+      const inScope  = applies(t, d);
+      let status;
+      if (!inScope) status = 'na';
+      else if (comp) {
+        if (comp.approval_status === 'approved')      status = 'done_approved';
+        else if (comp.approval_status === 'rejected') status = 'done_rejected';
+        else                                          status = 'done_pending';
+      } else if (isPast)  status = 'missed';
+      else if (isToday)   status = 'today';
+      else                status = 'future';
+      return { date: d, status, proof_url: comp?.proof_url || null, submitted_at: comp?.submitted_at || null };
+    });
+    return {
+      id: t.id,
+      description: t.description || t.title,
+      frequency: t.frequency,
+      department: t.department,
+      assigned_to: t.assigned_to,
+      assigned_to_name: t.assigned_to_name,
+      cells,
+    };
+  });
+
+  res.json({ from: fromDate, to: toDate, dates, today_index: back, rows });
+});
+
 // ── POST /hr/checklists/completions/:id/decision (admin only) ───
 // Approve or reject a checklist completion.  Body: { status, note }.
 router.post('/checklists/completions/:id/decision', (req, res) => {

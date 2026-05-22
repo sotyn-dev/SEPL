@@ -33,6 +33,19 @@ export default function Checklists() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all'); // all | done | not_done | pending | rejected
   const [deptFilter, setDeptFilter] = useState('');
+  // Follow-up view (mam, 2026-05-22) — per-task timeline grid spanning
+  // N days back → today → N days forward.  Server returns one cell
+  // per (task, date) with status (done_approved / done_pending /
+  // done_rejected / missed / today / future / na).
+  const [followup, setFollowup] = useState(null);
+  const [followupBack, setFollowupBack] = useState(7);
+  const [followupForward, setFollowupForward] = useState(7);
+  const loadFollowup = async (back = followupBack, forward = followupForward) => {
+    try {
+      const r = await api.get('/hr/checklists/followup', { params: { back, forward } });
+      setFollowup(r.data);
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed to load follow-up'); }
+  };
 
   const loadHistory = async (d) => {
     setHistoryLoading(true);
@@ -145,6 +158,13 @@ export default function Checklists() {
         <button onClick={() => setView('current')}
                 className={`btn ${view === 'current' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
           Master Templates
+        </button>
+        {/* Mam (2026-05-22): "i need followup checklist where all
+            record mention previous, present, future" — per-task
+            timeline grid with past / today / upcoming cells. */}
+        <button onClick={() => { setView('followup'); if (!followup) loadFollowup(); }}
+                className={`btn ${view === 'followup' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
+          <FiClock size={13} /> Follow-up Timeline
         </button>
         {view === 'by-date' && (
           <>
@@ -349,6 +369,83 @@ export default function Checklists() {
         </div>
       )}
 
+      {/* ─── FOLLOW-UP TIMELINE view ─────────────────────────────── */}
+      {view === 'followup' && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="text-xs text-gray-500 font-semibold uppercase">Window:</label>
+            <select className="select text-sm" value={followupBack} onChange={e => { const v = +e.target.value; setFollowupBack(v); loadFollowup(v, followupForward); }}>
+              <option value={3}>3 days back</option>
+              <option value={7}>7 days back</option>
+              <option value={14}>14 days back</option>
+              <option value={30}>30 days back</option>
+            </select>
+            <span className="text-xs text-gray-400">→ today →</span>
+            <select className="select text-sm" value={followupForward} onChange={e => { const v = +e.target.value; setFollowupForward(v); loadFollowup(followupBack, v); }}>
+              <option value={3}>3 days forward</option>
+              <option value={7}>7 days forward</option>
+              <option value={14}>14 days forward</option>
+            </select>
+            {/* Legend */}
+            <div className="ml-auto flex items-center gap-2 text-[10px] text-gray-600">
+              <Cell s="done_approved" /> Approved
+              <Cell s="done_pending" /> Pending
+              <Cell s="done_rejected" /> Rejected
+              <Cell s="missed" /> Missed
+              <Cell s="today" /> Today
+              <Cell s="future" /> Future
+            </div>
+          </div>
+
+          {!followup && <div className="card p-6 text-center text-gray-400">Loading…</div>}
+          {followup && followup.rows.length === 0 && <div className="card p-8 text-center text-gray-400">No checklists yet</div>}
+          {followup && followup.rows.length > 0 && (
+            <div className="card p-0 overflow-x-auto">
+              <table className="text-xs border-collapse">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="text-left px-2 py-2 sticky left-0 bg-gray-50 z-10 min-w-[200px]">Task</th>
+                    <th className="text-left px-2 py-2 sticky left-[200px] bg-gray-50 z-10">Person</th>
+                    <th className="text-left px-2 py-2">Dept</th>
+                    {followup.dates.map((d, i) => {
+                      const dt = new Date(d);
+                      const isToday = i === followup.today_index;
+                      return (
+                        <th key={d} className={`px-1 py-1 text-center text-[9px] uppercase ${isToday ? 'bg-blue-100 text-blue-700 font-bold' : 'text-gray-500'}`} style={{ width: 32 }}>
+                          <div>{dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</div>
+                          <div className="font-normal opacity-60">{dt.toLocaleDateString('en-IN', { weekday: 'short' })}</div>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {followup.rows.map(r => (
+                    <tr key={r.id} className="border-t hover:bg-blue-50/30">
+                      <td className="px-2 py-1.5 sticky left-0 bg-white z-10 min-w-[200px]">
+                        <div className="font-medium text-gray-800 text-[12px] line-clamp-2" title={r.description}>{r.description}</div>
+                        <div className="text-[9px] text-gray-500 capitalize">{r.frequency}</div>
+                      </td>
+                      <td className="px-2 py-1.5 sticky left-[200px] bg-white z-10 text-[11px]">{r.assigned_to_name || '—'}</td>
+                      <td className="px-2 py-1.5">
+                        {r.department ? <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">{r.department}</span> : <span className="text-gray-300 text-[10px]">—</span>}
+                      </td>
+                      {r.cells.map(c => (
+                        <td key={c.date} className="px-0.5 py-1 text-center" style={{ width: 32 }}>
+                          {c.proof_url
+                            ? <a href={c.proof_url} target="_blank" rel="noreferrer" title={`${c.date} · ${c.status}\nClick to view proof`}><Cell s={c.status} /></a>
+                            : <span title={`${c.date} · ${c.status}`}><Cell s={c.status} /></span>}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {view === 'current' && groupOrder.length === 0 && (
         <div className="card text-center py-8 text-gray-400">No checklists yet</div>
       )}
@@ -468,4 +565,21 @@ export default function Checklists() {
       </Modal>
     </div>
   );
+}
+
+// Tiny coloured cell for the Follow-up timeline matrix.
+// Status → background colour mapping kept in one place so the legend
+// in the toolbar and the grid cells always match.
+function Cell({ s }) {
+  const map = {
+    done_approved: 'bg-emerald-500',
+    done_pending:  'bg-amber-400',
+    done_rejected: 'bg-rose-500',
+    missed:        'bg-red-200',
+    today:         'bg-blue-200 ring-2 ring-blue-500',
+    future:        'bg-gray-100',
+    na:            'bg-white border border-dashed border-gray-200',
+  };
+  const cls = map[s] || 'bg-gray-100';
+  return <span className={`inline-block w-4 h-4 rounded ${cls}`} />;
 }
