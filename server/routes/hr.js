@@ -511,15 +511,36 @@ try { getDb().exec(`ALTER TABLE checklist_completions ADD COLUMN approved_by INT
 try { getDb().exec(`ALTER TABLE checklist_completions ADD COLUMN approved_at DATETIME`); } catch (_) {}
 try { getDb().exec(`ALTER TABLE checklist_completions ADD COLUMN approval_note TEXT`); } catch (_) {}
 
-// Mark a checklist as done for today (with optional proof_url + notes).
+// Mark a checklist as done for a given date (with optional proof_url
+// + notes).  Mam (2026-05-22): users need to back-date submissions
+// — e.g. upload Monday morning the proof for the Saturday daily
+// task.  Optional body.completion_date defaults to today; admin can
+// always back-date, non-admins are clamped to the task's recurrence
+// window so they can't fabricate completions for days the task
+// didn't even apply.
+//
 // Uses UPSERT so re-submitting overwrites the proof.  Resets the
 // approval status to 'pending' on re-submit so the admin re-reviews.
 router.post('/checklists/:id/complete', (req, res) => {
   const { proof_url, notes } = req.body;
-  const today = new Date().toISOString().split('T')[0];
+  let date = req.body.completion_date && String(req.body.completion_date).trim()
+    ? String(req.body.completion_date).trim().slice(0, 10)
+    : new Date().toISOString().split('T')[0];
+
   const db = getDb();
-  const c = db.prepare('SELECT id FROM checklists WHERE id=?').get(req.params.id);
+  const c = db.prepare('SELECT * FROM checklists WHERE id=?').get(req.params.id);
   if (!c) return res.status(404).json({ error: 'Checklist not found' });
+
+  // Non-admin clamp: must be inside the recurrence window if one is set.
+  if (req.user.role !== 'admin') {
+    if (c.recurrence_start_date && date < c.recurrence_start_date) {
+      return res.status(400).json({ error: 'Date is before this task\'s Start Date' });
+    }
+    if (c.recurrence_end_date && date > c.recurrence_end_date) {
+      return res.status(400).json({ error: 'Date is after this task\'s End Date' });
+    }
+  }
+
   db.prepare(
     `INSERT INTO checklist_completions (checklist_id, user_id, completion_date, proof_url, notes, approval_status)
      VALUES (?, ?, ?, ?, ?, 'pending')
@@ -529,8 +550,8 @@ router.post('/checklists/:id/complete', (req, res) => {
        submitted_at = CURRENT_TIMESTAMP,
        approval_status = 'pending',
        approved_by = NULL, approved_at = NULL, approval_note = NULL`
-  ).run(req.params.id, req.user.id, today, proof_url || null, notes || null);
-  res.json({ message: 'Checklist marked complete for today — pending admin approval' });
+  ).run(req.params.id, req.user.id, date, proof_url || null, notes || null);
+  res.json({ message: `Checklist marked complete for ${date} — pending admin approval`, date });
 });
 
 // ── GET /hr/checklists/by-date?date=YYYY-MM-DD ──────────────────

@@ -40,6 +40,11 @@ export default function Checklists() {
   const [followup, setFollowup] = useState(null);
   const [followupBack, setFollowupBack] = useState(7);
   const [followupForward, setFollowupForward] = useState(7);
+  // Sub-view inside Follow-up: 'list' = one row per (task, date)
+  // matching mam's Google Sheet, 'timeline' = the matrix view.
+  // Mam (2026-05-22) prefers list because each row carries its own
+  // Upload Proof action.
+  const [followupSubView, setFollowupSubView] = useState('list');
   const loadFollowup = async (back = followupBack, forward = followupForward) => {
     try {
       const r = await api.get('/hr/checklists/followup', { params: { back, forward } });
@@ -382,9 +387,21 @@ export default function Checklists() {
         </div>
       )}
 
-      {/* ─── FOLLOW-UP TIMELINE view ─────────────────────────────── */}
+      {/* ─── FOLLOW-UP view ──────────────────────────────────────── */}
       {view === 'followup' && (
         <div className="space-y-2">
+          {/* Sub-toggle: List (default, one row per instance with
+              Upload Proof action) vs Timeline (matrix overview). */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={() => setFollowupSubView('list')}
+                    className={`btn ${followupSubView === 'list' ? 'btn-primary' : 'btn-secondary'} text-sm`}>
+              📋 List · Upload Proof
+            </button>
+            <button onClick={() => setFollowupSubView('timeline')}
+                    className={`btn ${followupSubView === 'timeline' ? 'btn-primary' : 'btn-secondary'} text-sm`}>
+              📅 Timeline Grid
+            </button>
+          </div>
           <div className="flex items-center gap-2 flex-wrap">
             <label className="text-xs text-gray-500 font-semibold uppercase">Window:</label>
             <select className="select text-sm" value={followupBack} onChange={e => { const v = +e.target.value; setFollowupBack(v); loadFollowup(v, followupForward); }}>
@@ -399,20 +416,130 @@ export default function Checklists() {
               <option value={7}>7 days forward</option>
               <option value={14}>14 days forward</option>
             </select>
-            {/* Legend */}
-            <div className="ml-auto flex items-center gap-2 text-[10px] text-gray-600">
-              <Cell s="done_approved" /> Approved
-              <Cell s="done_pending" /> Pending
-              <Cell s="done_rejected" /> Rejected
-              <Cell s="missed" /> Missed
-              <Cell s="today" /> Today
-              <Cell s="future" /> Future
-            </div>
+            {/* Legend — only shown on the timeline grid */}
+            {followupSubView === 'timeline' && (
+              <div className="ml-auto flex items-center gap-2 text-[10px] text-gray-600">
+                <Cell s="done_approved" /> Approved
+                <Cell s="done_pending" /> Pending
+                <Cell s="done_rejected" /> Rejected
+                <Cell s="missed" /> Missed
+                <Cell s="today" /> Today
+                <Cell s="future" /> Future
+              </div>
+            )}
           </div>
 
           {!followup && <div className="card p-6 text-center text-gray-400">Loading…</div>}
           {followup && followup.rows.length === 0 && <div className="card p-8 text-center text-gray-400">No checklists yet</div>}
-          {followup && followup.rows.length > 0 && (
+
+          {/* ─── LIST view (default) ───────────────────────────────
+              Flattens every (task × applicable date) into one row,
+              matching mam's Google Sheet (Name / Task ID / Freq /
+              Task / Planned / Status / Action).  Each pending row
+              has an Upload Proof button that calls /complete with
+              the specific date. */}
+          {followup && followupSubView === 'list' && followup.rows.length > 0 && (() => {
+            // Flatten cells → instance rows (skip na = out-of-window
+            // or wrong weekday; skip future = no point uploading yet).
+            const instances = [];
+            for (const t of followup.rows) {
+              for (const c of t.cells) {
+                if (c.status === 'na' || c.status === 'future') continue;
+                instances.push({ task: t, cell: c });
+              }
+            }
+            // Most-recent first so today + recent days surface at top
+            instances.sort((a, b) => b.cell.date.localeCompare(a.cell.date));
+            const statusBadge = {
+              done_approved: { label: '✓ Approved',     css: 'bg-emerald-100 text-emerald-700' },
+              done_pending:  { label: '⏳ Pending Appr', css: 'bg-amber-100 text-amber-700' },
+              done_rejected: { label: '✗ Rejected',     css: 'bg-rose-100 text-rose-700' },
+              missed:        { label: '✗ Missed',       css: 'bg-red-100 text-red-700' },
+              today:         { label: '○ Today',        css: 'bg-blue-100 text-blue-700' },
+            };
+            return (
+              <div className="card p-0 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-amber-50 text-gray-700 text-[10px] uppercase">
+                    <tr>
+                      <th className="px-2 py-2 text-left">Name</th>
+                      <th className="px-2 py-2 text-left">Task ID</th>
+                      <th className="px-2 py-2 text-left">Freq</th>
+                      <th className="px-2 py-2 text-left">Task</th>
+                      <th className="px-2 py-2 text-left">Planned</th>
+                      <th className="px-2 py-2 text-left">Status</th>
+                      <th className="px-2 py-2 text-left">Department</th>
+                      <th className="px-2 py-2 text-center">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {instances.map((row, idx) => {
+                      const c = row.cell;
+                      const t = row.task;
+                      const badge = statusBadge[c.status] || { label: c.status, css: 'bg-gray-100 text-gray-700' };
+                      const dateLabel = new Date(c.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+                      const canUpload = t.assigned_to === user?.id || isAdmin();
+                      const isPending = c.status === 'missed' || c.status === 'today' || c.status === 'done_rejected';
+                      const uploadingThis = uploadingId === `${t.id}-${c.date}`;
+                      return (
+                        <tr key={`${t.id}-${c.date}`} className={`border-t ${idx % 2 ? 'bg-amber-50/30' : ''} hover:bg-blue-50/40`}>
+                          <td className="px-2 py-1.5">{t.assigned_to_name || '—'}</td>
+                          <td className="px-2 py-1.5 font-mono text-[10px] text-gray-500">#{t.id}</td>
+                          <td className="px-2 py-1.5 capitalize text-[11px]">{t.frequency}</td>
+                          <td className="px-2 py-1.5 font-medium max-w-md">
+                            <div className="line-clamp-2" title={t.description}>{t.description}</div>
+                          </td>
+                          <td className="px-2 py-1.5 font-mono">{dateLabel}</td>
+                          <td className="px-2 py-1.5"><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${badge.css}`}>{badge.label}</span></td>
+                          <td className="px-2 py-1.5 text-[10px]">
+                            {t.department ? <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">{t.department}</span> : <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="px-2 py-1.5 text-center">
+                            <div className="flex gap-1 items-center justify-center flex-wrap">
+                              {c.proof_url && (
+                                <a href={c.proof_url} target="_blank" rel="noreferrer" className="text-[11px] text-blue-700 hover:underline inline-flex items-center gap-1">
+                                  <FiExternalLink size={11} /> View
+                                </a>
+                              )}
+                              {canUpload && isPending && (
+                                <label className={`btn btn-success text-[10px] px-2 py-1 cursor-pointer flex items-center gap-1 ${uploadingThis ? 'opacity-60 pointer-events-none' : ''}`}>
+                                  <FiUpload size={10} /> {uploadingThis ? '…' : (c.status === 'done_rejected' ? 'Re-upload' : 'Upload Proof')}
+                                  <input type="file" className="hidden" onChange={async (e) => {
+                                    const f = e.target.files?.[0];
+                                    if (!f) return;
+                                    setUploadingId(`${t.id}-${c.date}`);
+                                    try {
+                                      const fd = new FormData(); fd.append('file', f);
+                                      const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                                      await api.post(`/hr/checklists/${t.id}/complete`, {
+                                        proof_url: up.data.url,
+                                        completion_date: c.date,
+                                      });
+                                      toast.success(`Proof uploaded for ${dateLabel}`);
+                                      loadFollowup();
+                                    } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
+                                    setUploadingId(null);
+                                    e.target.value = '';
+                                  }} />
+                                </label>
+                              )}
+                              {!canUpload && !c.proof_url && <span className="text-gray-300 text-[10px]">—</span>}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {instances.length === 0 && (
+                      <tr><td colSpan="8" className="text-center py-8 text-gray-400">No instances in the selected window.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+
+          {/* ─── TIMELINE GRID view (toggle) ──────────────────────── */}
+          {followup && followupSubView === 'timeline' && followup.rows.length > 0 && (
             <div className="card p-0 overflow-x-auto">
               <table className="text-xs border-collapse">
                 <thead>
