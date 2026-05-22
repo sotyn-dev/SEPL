@@ -3085,6 +3085,137 @@ function initializeDatabase() {
     console.warn('[migration] checklist recurrence backfill skipped:', e.message);
   }
 
+  // HR Phase 1 Batch E (mam 2026-05-22): seed starter induction
+  // content so /induction isn't bare on day 1.  Five placeholder
+  // items — one per spec section — that mam will replace with
+  // real SEPL content (founder video, actual policies, etc.) via
+  // the Induction Content tab.  Idempotent via app_settings.
+  try {
+    const seeded = db.prepare("SELECT value FROM app_settings WHERE key='seed_induction_items_v1'").get();
+    if (!seeded) {
+      const ITEMS = [
+        {
+          section: 'founder', order_index: 0, content_type: 'text',
+          title: 'Welcome from the Managing Director',
+          content_text:
+`Dear new colleague,
+
+Welcome to Secured Engineers Pvt. Ltd. — and welcome to the team.
+
+You are joining a company that has been built brick by brick on three
+non-negotiables: quality of work, integrity with our clients, and
+care for our people. Every site we deliver, every payment we make,
+every commitment we honour — they add up to the reputation we have
+earned over the years.
+
+In your first week, focus on three things:
+  1. Understand how your role contributes to a project's success
+  2. Meet the people you will be working with — make introductions
+  3. Ask questions; nothing is silly when you are new
+
+I look forward to seeing what you build with us.
+
+— Managing Director, SEPL`,
+        },
+        {
+          section: 'culture', order_index: 0, content_type: 'text',
+          title: 'How We Work — Four Operating Principles',
+          content_text:
+`1. OWN THE OUTCOME, NOT THE TASK
+   Your job is not "I finished my part." It is "the customer got
+   what they were promised, on time, at the right quality."
+
+2. CLEAR > CLEVER
+   Plain language in WhatsApp, in DPRs, in cash-flow updates.
+   If three people read the same line and have to ask "what does
+   that mean?", rewrite it.
+
+3. RAISE THE FLAG EARLY
+   A missed deadline reported on Day 1 of slippage costs us a
+   conversation. The same slippage reported on Day 10 costs the
+   project. There is no penalty for early bad news — only for
+   late bad news.
+
+4. RESPECT EVERYONE ON SITE
+   The mason laying the floor, the vendor delivering pipes, the
+   client representative inspecting the work — every person who
+   contributes deserves the same baseline of courtesy. We hire
+   for skill; we keep people for character.`,
+        },
+        {
+          section: 'hr_policies', order_index: 0, content_type: 'text',
+          title: 'HR Policies — Overview',
+          content_text:
+`Your detailed HR handbook covers the following areas. Ask your HR
+business partner for the current version of any specific policy:
+
+  • Working hours, leave policy and holiday calendar
+  • Travel, expense claims and reimbursement timelines
+  • Performance review cycle and feedback norms
+  • Code of conduct and grievance redressal process
+  • POSH (Prevention of Sexual Harassment) policy
+  • Anti-bribery and conflict of interest declarations
+  • Probation, confirmation and exit procedures
+
+For anything not covered here, your first stop is your manager;
+your second stop is HR (hr@securedengineers.com).`,
+        },
+        {
+          section: 'it_security', order_index: 0, content_type: 'text',
+          title: 'IT &amp; Security — Do / Don\'t',
+          content_text:
+`DO
+  ✓ Use your SEPL ERP login only on company-approved devices
+  ✓ Lock your laptop / phone screen when you step away
+  ✓ Report a lost device to IT within 30 minutes
+  ✓ Use strong passwords (12+ chars, mix of cases and digits)
+  ✓ Forward suspicious emails / WhatsApp messages to IT before
+    clicking any link
+
+DON'T
+  ✗ Share your ERP password with anyone — not even your manager
+  ✗ Install pirated software on company devices
+  ✗ Save customer / vendor / employee personal data on personal
+    Google Drives, WhatsApp groups, or USB sticks
+  ✗ Click links from unknown senders, even if they look like our
+    bank or a courier company
+  ✗ Plug in unknown USB drives or chargers found in public places`,
+        },
+        {
+          section: 'sop', order_index: 0, content_type: 'text',
+          title: 'SOPs — Where to Find Them',
+          content_text:
+`Standard Operating Procedures (SOPs) live in the ERP itself, not in
+a separate document folder. The most-used ones during your first
+weeks:
+
+  • Daily Progress Report (DPR)        — module: DPR
+  • Indent → Vendor PO → Dispatch      — module: Indent to Dispatch
+  • Payment Required workflow          — module: Payment Required
+  • Snag List + Delegations            — modules: Snag List, Delegations
+  • Complaint resolution + OTP closure — module: Complaints
+  • Site checklists (daily / weekly)    — module: Checklists
+
+Your manager will walk you through the SOPs relevant to your role
+in your first week. If a process feels broken, raise a Help Ticket
+— that is how we improve the ERP, not by working around it.`,
+        },
+      ];
+      const ins = db.prepare(`INSERT INTO induction_items
+        (section, title, content_type, content_url, content_text, order_index, is_active)
+        VALUES (?,?,?,?,?,?,1)`);
+      let n = 0;
+      for (const it of ITEMS) {
+        try { ins.run(it.section, it.title, it.content_type, it.content_url || null, it.content_text || null, it.order_index); n++; }
+        catch (_) {}
+      }
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('seed_induction_items_v1', '1')").run();
+      console.log(`[seed] induction_items: inserted ${n} starter items`);
+    }
+  } catch (e) {
+    console.warn('[seed] induction_items skipped:', e.message);
+  }
+
   // HR Phase 1 Batch B (mam 2026-05-22): seed the final-round
   // question bank so the panel has a starting set on day 1.  25
   // questions across the 5 spec categories (Leadership / Ownership /
