@@ -83,36 +83,66 @@ const NAME_STOP = new Set([
 ]);
 
 // ── Text extraction per file type ──────────────────────────────
+// Returns { text, error } so callers can distinguish "module not
+// installed" from "PDF actually has no text" — mam (2026-05-22 v3)
+// hit the silent-fail case on her VPS and the UI just said "no
+// fields found" with no clue why.
 async function extractText(filePath, mimetype = '') {
   const buf = fs.readFileSync(filePath);
   const lower = (filePath || '').toLowerCase();
   // PDF
   if (mimetype.includes('pdf') || lower.endsWith('.pdf')) {
+    // Mam (2026-05-22 v3): use the inner-path require so we bypass
+    // the well-known pdf-parse init bug — its top-level index.js
+    // tries to read a test fixture at ./test/data/05-versions-space.pdf
+    // when isDebugMode is true, which crashes the require on some
+    // VPS setups (production pruning, strict file perms, etc.).
+    // The /lib/pdf-parse.js path exports the same function without
+    // the debug init.
+    let pdfParse;
+    try { pdfParse = require('pdf-parse/lib/pdf-parse.js'); }
+    catch (_) {
+      try { pdfParse = require('pdf-parse'); }
+      catch (e) {
+        const msg = `pdf-parse not installed — run 'npm install' on the server (${e.message})`;
+        console.warn('[resumeParser]', msg);
+        return { text: '', error: msg };
+      }
+    }
     try {
-      // require lazily so pages without these deps still boot
-      const pdfParse = require('pdf-parse');
       const data = await pdfParse(buf);
-      return data.text || '';
+      return { text: data.text || '', error: null };
     } catch (e) {
-      console.warn('[resumeParser] pdf-parse failed:', e.message);
-      return '';
+      const msg = `pdf-parse failed: ${e.message}`;
+      console.warn('[resumeParser]', msg);
+      return { text: '', error: msg };
     }
   }
   // DOCX
   if (mimetype.includes('word') || lower.endsWith('.docx')) {
+    let mammoth;
+    try { mammoth = require('mammoth'); }
+    catch (e) {
+      const msg = `mammoth not installed — run 'npm install' on the server (${e.message})`;
+      console.warn('[resumeParser]', msg);
+      return { text: '', error: msg };
+    }
     try {
-      const mammoth = require('mammoth');
       const { value } = await mammoth.extractRawText({ buffer: buf });
-      return value || '';
+      return { text: value || '', error: null };
     } catch (e) {
-      console.warn('[resumeParser] mammoth failed:', e.message);
-      return '';
+      const msg = `mammoth failed: ${e.message}`;
+      console.warn('[resumeParser]', msg);
+      return { text: '', error: msg };
     }
   }
-  // Legacy DOC — mammoth can't read it; tell caller.
-  if (lower.endsWith('.doc')) return '';
+  // Legacy .doc — neither library reads it.
+  if (lower.endsWith('.doc')) {
+    return { text: '', error: 'Legacy .doc not supported — please use PDF or .docx' };
+  }
   // Plain text fallback
-  try { return buf.toString('utf-8'); } catch (_) { return ''; }
+  try { return { text: buf.toString('utf-8'), error: null }; }
+  catch (_) { return { text: '', error: 'Could not read file as text' }; }
 }
 
 // Split a single text blob into "atom lines" by treating newlines AND
@@ -248,8 +278,15 @@ function cleanAddress(s) {
 // ── Master parser ──────────────────────────────────────────────
 async function parseResume(filePath, mimetype = '') {
   let text = '';
-  try { text = await extractText(filePath, mimetype); }
-  catch (e) { console.warn('[resumeParser] extract failed:', e.message); }
+  let extractError = null;
+  try {
+    const r = await extractText(filePath, mimetype);
+    text = r.text || '';
+    extractError = r.error || null;
+  } catch (e) {
+    console.warn('[resumeParser] extract threw:', e.message);
+    extractError = e.message;
+  }
 
   // Normalise — collapse extra whitespace but keep newlines for
   // line-based heuristics.
@@ -285,6 +322,18 @@ async function parseResume(filePath, mimetype = '') {
       email:   !!email,
       phone:   !!phone,
       address: !!address,
+    },
+    // Mam (2026-05-22 v3): expose diagnostics so the UI can show a
+    // specific error when extraction itself failed (e.g. pdf-parse
+    // not installed) rather than the generic "no fields found".
+    debug: {
+      text_length:        text.length,
+      lines_detected:     lines.length,
+      extraction_error:   extractError,
+      extraction_method:  /\.pdf$/i.test(filePath) ? 'pdf-parse'
+                        : /\.docx$/i.test(filePath) ? 'mammoth'
+                        : /\.doc$/i.test(filePath) ? 'unsupported'
+                        : 'plain-text',
     },
     raw_text_preview: text.slice(0, 500),
   };

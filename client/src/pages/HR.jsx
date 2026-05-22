@@ -602,8 +602,19 @@ export default function HR() {
                     }));
                     setParsedHits(p.confidence || {});
                     const hit = Object.entries(p.confidence || {}).filter(([_, v]) => v).map(([k]) => k);
-                    if (hit.length) toast.success(`Auto-filled: ${hit.join(', ')}`);
-                    else            toast('Resume saved — parser found no fields, please fill manually', { icon: 'ℹ️' });
+                    if (hit.length) {
+                      toast.success(`Auto-filled: ${hit.join(', ')}`);
+                    } else if (p.debug?.extraction_error) {
+                      // Mam (2026-05-22 v3): specific error from the
+                      // PDF/DOCX parser — usually "pdf-parse not
+                      // installed" on the VPS.  Surface it so admin
+                      // can act on it instead of guessing.
+                      toast.error(`Could not read file: ${p.debug.extraction_error}`, { duration: 9000 });
+                    } else if ((p.debug?.text_length || 0) === 0) {
+                      toast.error('Could not extract any text from this file — it may be a scanned image PDF. Please fill the form manually.', { duration: 8000 });
+                    } else {
+                      toast(`Resume saved — text extracted (${p.debug?.text_length || '?'} chars) but no recognisable fields. Please fill manually.`, { icon: 'ℹ️', duration: 7000 });
+                    }
                   } else {
                     setForm(f => ({ ...f, _file: file, resume_file: r.data?.resume_url || f.resume_file }));
                     toast('Resume saved — could not auto-parse', { icon: 'ℹ️' });
