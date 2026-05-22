@@ -2602,6 +2602,16 @@ function initializeDatabase() {
     ['checklists', 'reviewer_id INTEGER REFERENCES users(id)'],
     ['checklists', 'proof_url TEXT'],
     ['checklists', 'reject_reason TEXT'],
+    // Mam (2026-05-22): "i want to tell which type proof need for
+    // complete or text".  Per-checklist proof requirement so the
+    // Complete UI knows whether to show a file picker (photo/pdf/
+    // file), a textarea (text), or just a done button (none).
+    //   'photo' — image only (JPG/PNG) — default for backwards compat
+    //   'pdf'   — PDF file only
+    //   'file'  — any file (photo / PDF / doc)
+    //   'text'  — text note only, no upload
+    //   'none'  — no proof needed, just mark done
+    ['checklists', "proof_type TEXT DEFAULT 'photo'"],
     // AI Agent: link a BOQ row back to a catalogue item so quotation
     // rates feed item_price_history and the rate-suggestion popup can
     // show last-quoted / 6-month avg-low-high for that exact item.

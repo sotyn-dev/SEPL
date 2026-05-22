@@ -19,6 +19,14 @@ export default function Checklists() {
   // Today's completions keyed by checklist_id — lets us mark rows green + show proof link inline
   const [todayDone, setTodayDone] = useState({});
   const [uploadingId, setUploadingId] = useState(null);
+  // Mam (2026-05-22): bulk add modal — paste many task lines that
+  // share frequency / assignee / dates / proof_type.
+  const [bulkModal, setBulkModal] = useState(false);
+  const [bulkForm, setBulkForm] = useState({});
+  // Mam (2026-05-22): text-proof completion modal — opens when the
+  // user clicks Mark Done on a row whose proof_type === 'text'.
+  const [textProofRow, setTextProofRow] = useState(null);
+  const [textProofDraft, setTextProofDraft] = useState('');
 
   // History / approval tab — mam (2026-05-16): "where i can check as
   // per daily and previous check list done or not done proof and
@@ -101,13 +109,45 @@ export default function Checklists() {
   const uploadProof = async (c, file) => {
     setUploadingId(c.id);
     try {
-      const fd = new FormData(); fd.append('file', file);
-      const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      await api.post(`/hr/checklists/${c.id}/complete`, { proof_url: up.data.url });
-      toast.success(`Proof uploaded for "${c.description || c.title}"`);
+      let proofUrl = null;
+      if (file) {
+        const fd = new FormData(); fd.append('file', file);
+        const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        proofUrl = up.data.url;
+      }
+      // Mam (2026-05-22): proof_type='none' rows pass null file and
+      // backend accepts it (no enforcement).  Photo/pdf/file rows
+      // always have a file at this point.
+      await api.post(`/hr/checklists/${c.id}/complete`, { proof_url: proofUrl });
+      toast.success(file ? `Proof uploaded for "${c.description || c.title}"` : `Marked done`);
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
     setUploadingId(null);
+  };
+
+  // Mam (2026-05-22): text-proof completion — submitted via the
+  // dedicated modal so admin can type a longer note than fits inline.
+  const submitTextProof = async () => {
+    if (!textProofDraft.trim()) return toast.error('Type your note before submitting');
+    try {
+      await api.post(`/hr/checklists/${textProofRow.id}/complete`, { notes: textProofDraft });
+      toast.success('Marked done');
+      setTextProofRow(null); setTextProofDraft(''); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  // Mam (2026-05-22): bulk add — POST many tasks at once.
+  const submitBulk = async () => {
+    const lines = String(bulkForm.lines || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    if (lines.length === 0) return toast.error('Paste at least one task line');
+    if (!bulkForm.assigned_to) return toast.error('Pick an assignee for all tasks');
+    try {
+      const r = await api.post('/hr/checklists/bulk', { ...bulkForm, tasks: lines });
+      toast.success(`Added ${r.data?.added || lines.length} checklist task(s)`);
+      setBulkModal(false); load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Bulk add failed');
+    }
   };
 
   // Group checklists by assignee so the admin view shows one section per person.
@@ -153,9 +193,25 @@ export default function Checklists() {
                 description: '', frequency: 'monthly', due_date: '', due_time: '', assigned_to: '',
                 recurrence_start_date: todayIso,
                 recurrence_end_date:   '2026-12-31',
+                proof_type: 'photo',
               });
               setModal(true);
             }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Checklist</button>
+          )}
+          {/* Mam (2026-05-22): bulk add — paste many task lines that
+              share the same frequency / assignee / dates / proof type. */}
+          {isAdmin() && (
+            <button onClick={() => {
+              const today = new Date();
+              const todayIso = today.toISOString().slice(0, 10);
+              setBulkForm({
+                lines: '', frequency: 'monthly', due_date: '', due_time: '',
+                assigned_to: '', department: '',
+                recurrence_start_date: todayIso, recurrence_end_date: '2026-12-31',
+                proof_type: 'photo',
+              });
+              setBulkModal(true);
+            }} className="btn btn-secondary flex items-center gap-2"><FiPlus /> Bulk Add</button>
           )}
         </div>
       </div>
@@ -617,19 +673,48 @@ export default function Checklists() {
                   </td>
                   <td><StatusBadge status={c.status} /></td>
                   <td><div className="flex gap-1 flex-wrap items-center">
-                    {/* Inline upload-proof for the assignee. Green badge when already done today. */}
+                    {/* Inline mark-done for the assignee.  Action varies
+                        by proof_type (mam 2026-05-22):
+                          photo / pdf / file → file picker (accept= varies)
+                          text               → opens text modal
+                          none               → one-click done */}
                     {c.assigned_to === user?.id && (
                       todayDone[c.id] ? (
                         <span className="text-[10px] text-emerald-700 flex items-center gap-1 bg-emerald-50 px-2 py-1 rounded">
                           ✓ Done today {todayDone[c.id].proof_url && <a href={todayDone[c.id].proof_url} target="_blank" rel="noreferrer" className="text-emerald-800 hover:underline flex items-center gap-0.5"><FiExternalLink size={10} /> proof</a>}
                         </span>
-                      ) : (
-                        <label className={`btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 cursor-pointer ${uploadingId === c.id ? 'opacity-60 pointer-events-none' : ''}`}>
-                          <FiUpload size={11} /> {uploadingId === c.id ? '...' : 'Upload Proof'}
-                          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" className="hidden"
-                            onChange={e => { const f = e.target.files[0]; if (f) uploadProof(c, f); e.target.value = ''; }} />
-                        </label>
-                      )
+                      ) : (() => {
+                        const pt = c.proof_type || 'photo';
+                        if (pt === 'text') {
+                          return (
+                            <button onClick={() => { setTextProofRow(c); setTextProofDraft(''); }}
+                              className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                              ✍️ Mark Done (text)
+                            </button>
+                          );
+                        }
+                        if (pt === 'none') {
+                          return (
+                            <button onClick={() => uploadProof(c, null)}
+                              className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
+                              ✓ Mark Done
+                            </button>
+                          );
+                        }
+                        const accept = pt === 'photo' ? 'image/*'
+                                     : pt === 'pdf'   ? '.pdf,application/pdf'
+                                     :                  '.pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx';
+                        const label = pt === 'photo' ? 'Upload Photo'
+                                    : pt === 'pdf'   ? 'Upload PDF'
+                                    :                  'Upload Proof';
+                        return (
+                          <label className={`btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 cursor-pointer ${uploadingId === c.id ? 'opacity-60 pointer-events-none' : ''}`}>
+                            <FiUpload size={11} /> {uploadingId === c.id ? '...' : label}
+                            <input type="file" accept={accept} className="hidden"
+                              onChange={e => { const f = e.target.files[0]; if (f) uploadProof(c, f); e.target.value = ''; }} />
+                          </label>
+                        );
+                      })()
                     )}
                     {isAdmin() && <button onClick={() => { setEditing(c); setForm(c); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>}
                     {isAdmin() && canDelete('checklists') && <button onClick={async () => {
@@ -698,6 +783,27 @@ export default function Checklists() {
                 ))}
               </datalist>
             </div>
+            {/* Mam (2026-05-22): "i want to tell which type proof
+                need for complete or text" — admin tells the system
+                what the assignee must attach when marking done. */}
+            <div>
+              <label className="label">Proof Type *</label>
+              <select className="select" value={form.proof_type || 'photo'} onChange={e => setForm({ ...form, proof_type: e.target.value })}>
+                <option value="photo">📷 Photo (JPG/PNG only)</option>
+                <option value="pdf">📄 PDF only</option>
+                <option value="file">📎 Any file (photo / PDF / doc)</option>
+                <option value="text">✍️ Text note (no file)</option>
+                <option value="none">✓ Just mark done (no proof)</option>
+              </select>
+              <p className="text-[10px] text-gray-400 mt-0.5">
+                {form.proof_type === 'text'  && 'Assignee will type a note — no file upload.'}
+                {form.proof_type === 'photo' && 'Assignee must upload a photo of the work / receipt / etc.'}
+                {form.proof_type === 'pdf'   && 'Assignee must upload a PDF (e.g. signed report).'}
+                {form.proof_type === 'file'  && 'Assignee can upload any kind of file.'}
+                {form.proof_type === 'none'  && 'One-click done — no attachment needed.'}
+                {!form.proof_type && 'Defaults to photo if not set.'}
+              </p>
+            </div>
             {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['pending','in_progress','completed','overdue'].map(s => <option key={s} value={s}>{s.replace(/_/g,' ')}</option>)}</select></div>}
           </div>
 
@@ -739,6 +845,108 @@ export default function Checklists() {
           )}
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Create'}</button></div>
         </form>
+      </Modal>
+
+      {/* ── BULK ADD MODAL (mam 2026-05-22) ──
+          Paste many task lines that share the same frequency /
+          assignee / dates / proof type.  One line = one task. */}
+      <Modal isOpen={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Add Checklists" wide>
+        <div className="space-y-3">
+          <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
+            Paste one task per line — each becomes its own checklist with the shared settings below.
+            Empty lines and duplicates are skipped automatically.
+          </p>
+          <div>
+            <label className="label">Task Lines * <span className="text-gray-400 font-normal text-[10px]">(one per line)</span></label>
+            <textarea
+              className="input font-mono text-[12px]"
+              rows="8"
+              value={bulkForm.lines || ''}
+              onChange={e => setBulkForm({ ...bulkForm, lines: e.target.value })}
+              placeholder={`Pay electricity bill\nReconcile petty cash\nUpdate vendor master sheet\nCheck WhatsApp Business inbox\n...`}
+            />
+            <p className="text-[10px] text-gray-500 mt-0.5">
+              {String(bulkForm.lines || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean).length} task(s) ready to create
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="label">Frequency</label>
+              <select className="select" value={bulkForm.frequency || 'monthly'} onChange={e => setBulkForm({ ...bulkForm, frequency: e.target.value })}>
+                {['daily','weekly','monthly','quarterly','yearly','once'].map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Time of Day <span className="text-gray-400 font-normal text-[10px]">(optional)</span></label>
+              <input type="time" className="input" value={bulkForm.due_time || ''} onChange={e => setBulkForm({ ...bulkForm, due_time: e.target.value })}/>
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label">Assigned To * <span className="text-gray-400 font-normal text-[10px]">(same person gets all the tasks)</span></label>
+              <SearchableSelect
+                options={users.map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') + (u.department ? ' · ' + u.department : '') }))}
+                value={bulkForm.assigned_to || null}
+                valueKey="id" displayKey="label"
+                placeholder="Search user by name…"
+                onChange={(u) => setBulkForm({ ...bulkForm, assigned_to: u?.id || '', department: bulkForm.department || u?.department || '' })}
+              />
+            </div>
+            <div>
+              <label className="label">Department</label>
+              <input className="input" value={bulkForm.department || ''} onChange={e => setBulkForm({ ...bulkForm, department: e.target.value })} placeholder="auto-fills from assignee"/>
+            </div>
+            <div>
+              <label className="label">Proof Type *</label>
+              <select className="select" value={bulkForm.proof_type || 'photo'} onChange={e => setBulkForm({ ...bulkForm, proof_type: e.target.value })}>
+                <option value="photo">📷 Photo</option>
+                <option value="pdf">📄 PDF</option>
+                <option value="file">📎 Any file</option>
+                <option value="text">✍️ Text note</option>
+                <option value="none">✓ Just mark done</option>
+              </select>
+            </div>
+          </div>
+          {bulkForm.frequency !== 'once' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-blue-50/40 border border-blue-200 rounded-lg p-3">
+              <div>
+                <label className="label">Start Date *</label>
+                <input type="date" className="input" value={bulkForm.recurrence_start_date || ''} onChange={e => setBulkForm({ ...bulkForm, recurrence_start_date: e.target.value })}/>
+              </div>
+              <div>
+                <label className="label">End Date *</label>
+                <input type="date" className="input" value={bulkForm.recurrence_end_date || ''} onChange={e => setBulkForm({ ...bulkForm, recurrence_end_date: e.target.value })}/>
+              </div>
+            </div>
+          )}
+          <div className="flex justify-end gap-3 pt-1">
+            <button onClick={() => setBulkModal(false)} className="btn btn-secondary">Cancel</button>
+            <button onClick={submitBulk} className="btn btn-primary">
+              Create {String(bulkForm.lines || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean).length || ''} Checklist(s)
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── TEXT-PROOF MODAL (mam 2026-05-22) ──
+          For checklists where proof_type='text' — assignee types a
+          note instead of uploading a file. */}
+      <Modal isOpen={!!textProofRow} onClose={() => setTextProofRow(null)} title={`Mark Done — ${textProofRow?.description?.slice(0, 60) || ''}`}>
+        <div className="space-y-3">
+          <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
+            This checklist requires a text note (no file upload). Type what you did, then submit.
+          </p>
+          <textarea
+            className="input"
+            rows="5"
+            autoFocus
+            value={textProofDraft}
+            onChange={e => setTextProofDraft(e.target.value)}
+            placeholder="e.g. Bank balance ₹4.32L verified against statement, no discrepancies. WhatsApp screenshot shared with mam."
+          />
+          <div className="flex justify-end gap-3">
+            <button onClick={() => setTextProofRow(null)} className="btn btn-secondary">Cancel</button>
+            <button onClick={submitTextProof} className="btn btn-primary">Submit Note</button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

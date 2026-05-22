@@ -651,9 +651,13 @@ const adminGuard = (req, res, next) => {
   next();
 };
 
+// Mam (2026-05-22): proof_type values accepted by POST + PUT.
+// Default 'photo' keeps existing rows working (column default).
+const ALLOWED_PROOF_TYPES = ['photo', 'pdf', 'file', 'text', 'none'];
+
 router.post('/checklists', adminGuard, (req, res) => {
   const { title, description, frequency, due_date, due_time, assigned_to, department,
-          recurrence_start_date, recurrence_end_date } = req.body;
+          recurrence_start_date, recurrence_end_date, proof_type } = req.body;
   const t = deriveTitle(title, description);
   const desc = String(description || '').trim();
   if (!desc && !title) return res.status(400).json({ error: 'Description is required' });
@@ -668,19 +672,66 @@ router.post('/checklists', adminGuard, (req, res) => {
       dept = u?.department || null;
     } catch (_) {}
   }
+  const pt = ALLOWED_PROOF_TYPES.includes(proof_type) ? proof_type : 'photo';
   const r = getDb().prepare(
     `INSERT INTO checklists
        (title, description, frequency, due_date, due_time, assigned_to, department,
-        recurrence_start_date, recurrence_end_date, created_by)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`
+        recurrence_start_date, recurrence_end_date, proof_type, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
   ).run(t, desc, frequency, due_date, due_time || null, assigned_to, dept,
-        recurrence_start_date || null, recurrence_end_date || null, req.user.id);
+        recurrence_start_date || null, recurrence_end_date || null, pt, req.user.id);
   res.status(201).json({ id: r.lastInsertRowid });
+});
+
+// Mam (2026-05-22): "give me checklist bulk" — admin pastes many
+// task lines at once, all sharing the same frequency / assignee /
+// dept / dates / proof_type.  Reduces 30 single-task adds down to
+// one form fill.
+router.post('/checklists/bulk', adminGuard, (req, res) => {
+  const { tasks, frequency, due_date, due_time, assigned_to, department,
+          recurrence_start_date, recurrence_end_date, proof_type } = req.body || {};
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    return res.status(400).json({ error: 'tasks array required' });
+  }
+  if (!assigned_to) return res.status(400).json({ error: 'Assigned To is required' });
+  // Clean: trim, drop empties, dedupe within this batch.
+  const cleaned = [...new Set(tasks.map(t => String(t || '').trim()).filter(Boolean))];
+  if (cleaned.length === 0) return res.status(400).json({ error: 'All task lines were empty' });
+
+  let dept = department && String(department).trim() ? String(department).trim() : null;
+  if (!dept) {
+    try {
+      const u = getDb().prepare('SELECT department FROM users WHERE id=?').get(assigned_to);
+      dept = u?.department || null;
+    } catch (_) {}
+  }
+  const pt = ALLOWED_PROOF_TYPES.includes(proof_type) ? proof_type : 'photo';
+
+  const db = getDb();
+  const ins = db.prepare(`INSERT INTO checklists
+      (title, description, frequency, due_date, due_time, assigned_to, department,
+       recurrence_start_date, recurrence_end_date, proof_type, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+
+  const tx = db.transaction((rows) => {
+    let added = 0;
+    for (const description of rows) {
+      const title = deriveTitle(null, description);
+      ins.run(title, description, frequency || 'monthly', due_date || null, due_time || null,
+              assigned_to, dept,
+              recurrence_start_date || null, recurrence_end_date || null,
+              pt, req.user.id);
+      added++;
+    }
+    return added;
+  });
+  const added = tx(cleaned);
+  res.status(201).json({ added, total: cleaned.length });
 });
 
 router.put('/checklists/:id', adminGuard, (req, res) => {
   const { status, title, description, frequency, due_date, due_time, assigned_to, department,
-          recurrence_start_date, recurrence_end_date } = req.body;
+          recurrence_start_date, recurrence_end_date, proof_type } = req.body;
   const t = deriveTitle(title, description);
   if (!assigned_to) return res.status(400).json({ error: 'Assigned To is required' });
   let dept = department && String(department).trim() ? String(department).trim() : null;
@@ -690,12 +741,14 @@ router.put('/checklists/:id', adminGuard, (req, res) => {
       dept = u?.department || null;
     } catch (_) {}
   }
+  const pt = ALLOWED_PROOF_TYPES.includes(proof_type) ? proof_type : null;
   getDb().prepare(
     `UPDATE checklists SET status=?, title=?, description=?, frequency=?, due_date=?, due_time=?,
-       assigned_to=?, department=?, recurrence_start_date=?, recurrence_end_date=?
+       assigned_to=?, department=?, recurrence_start_date=?, recurrence_end_date=?,
+       proof_type = COALESCE(?, proof_type)
      WHERE id=?`
   ).run(status, t, description, frequency, due_date, due_time || null, assigned_to, dept,
-        recurrence_start_date || null, recurrence_end_date || null, req.params.id);
+        recurrence_start_date || null, recurrence_end_date || null, pt, req.params.id);
   res.json({ message: 'Updated' });
 });
 
@@ -791,6 +844,17 @@ router.post('/checklists/:id/complete', (req, res) => {
       return res.status(400).json({ error: 'Date is after this task\'s End Date' });
     }
   }
+
+  // Mam (2026-05-22): enforce proof_type on completion so admins can
+  // trust that whoever marked it done actually attached what was asked.
+  const pt = c.proof_type || 'photo';
+  if (pt === 'text' && (!notes || !String(notes).trim())) {
+    return res.status(400).json({ error: 'This checklist needs a text note to complete' });
+  }
+  if (['photo','pdf','file'].includes(pt) && !proof_url) {
+    return res.status(400).json({ error: `This checklist needs a ${pt === 'photo' ? 'photo' : pt === 'pdf' ? 'PDF' : 'file'} attached to complete` });
+  }
+  // pt === 'none' → no requirement (just mark done)
 
   db.prepare(
     `INSERT INTO checklist_completions (checklist_id, user_id, completion_date, proof_url, notes, approval_status)
