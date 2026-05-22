@@ -215,12 +215,39 @@ router.post('/:id/submit', (req, res) => {
   res.json({ message: 'Proof submitted' });
 });
 
+// Mam (2026-05-21): "if in pms task site name is sushila then she
+// need to approval why not option" — the project's CRM owner should
+// also be allowed to approve / reject, not just the assigner.  Match
+// the user's name against t.crm_name (case-insensitive, trimmed)
+// because the task only stores the CRM as a name snapshot.  Names
+// like "Sushila" / "sushila kumari" / "Sushila K" all hit because we
+// use word-token overlap.
+function isCrmOwner(t, user) {
+  if (!t?.crm_name || !user?.name) return false;
+  const taskCrm = String(t.crm_name).toLowerCase().trim();
+  const userName = String(user.name).toLowerCase().trim();
+  if (!taskCrm || !userName) return false;
+  if (taskCrm === userName) return true;
+  // First-token match — "Sushila" on the task = "Sushila Kumari" user, etc.
+  const taskFirst = taskCrm.split(/\s+/)[0];
+  const userFirst = userName.split(/\s+/)[0];
+  return !!taskFirst && taskFirst === userFirst;
+}
+
+function canApprovePmsTask(t, user) {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  if (t.assigned_by === user.id) return true;
+  if (isCrmOwner(t, user)) return true;
+  return false;
+}
+
 router.post('/:id/approve', (req, res) => {
   const db = getDb();
   const t = db.prepare('SELECT * FROM pms_tasks WHERE id=?').get(req.params.id);
   if (!t) return res.status(404).json({ error: 'Task not found' });
-  if (t.assigned_by !== req.user.id && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Only the assigner can approve' });
+  if (!canApprovePmsTask(t, req.user)) {
+    return res.status(403).json({ error: 'Only the assigner, the project CRM owner, or an admin can approve' });
   }
   if (t.status !== 'submitted') return res.status(400).json({ error: 'Task is not awaiting approval' });
   db.prepare(`UPDATE pms_tasks SET status='approved', reviewed_at=CURRENT_TIMESTAMP, reviewer_id=? WHERE id=?`)
@@ -234,8 +261,8 @@ router.post('/:id/reject', (req, res) => {
   const db = getDb();
   const t = db.prepare('SELECT * FROM pms_tasks WHERE id=?').get(req.params.id);
   if (!t) return res.status(404).json({ error: 'Task not found' });
-  if (t.assigned_by !== req.user.id && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Only the assigner can reject' });
+  if (!canApprovePmsTask(t, req.user)) {
+    return res.status(403).json({ error: 'Only the assigner, the project CRM owner, or an admin can reject' });
   }
   db.prepare(
     `UPDATE pms_tasks SET status='rejected', reject_reason=?, reviewed_at=CURRENT_TIMESTAMP, reviewer_id=? WHERE id=?`

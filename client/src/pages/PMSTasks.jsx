@@ -290,6 +290,19 @@ export default function PMSTasks() {
             {tasks.map((t, idx) => {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
+              // Mam (2026-05-21): "if in pms task site name is sushila
+              // then she need to approval why not option" — CRM owner
+              // of the project also gets approve / reject rights.
+              // Match by first-name token because t.crm_name is a snapshot
+              // ("Sushila" vs the user's full "Sushila Kumari").  Server
+              // applies the same rule as a safety net.
+              const isCrmOwner = (() => {
+                if (!t.crm_name || !user?.name) return false;
+                const c = String(t.crm_name).toLowerCase().trim();
+                const u = String(user.name).toLowerCase().trim();
+                return c === u || c.split(/\s+/)[0] === u.split(/\s+/)[0];
+              })();
+              const canActOnTask = isAssigner || isAdmin() || isCrmOwner;
               const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
@@ -364,7 +377,7 @@ export default function PMSTasks() {
                   </td>
                   <td>
                     <div className="flex gap-1 items-center">
-                      {(isAssigner || isAdmin()) && t.status === 'submitted' && (
+                      {canActOnTask && t.status === 'submitted' && (
                         <>
                           <button onClick={() => approve(t)} className="text-[10px] text-emerald-600 font-bold hover:underline">Approve</button>
                           <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="text-[10px] text-red-600 font-bold hover:underline">Reject</button>
