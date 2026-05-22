@@ -10,6 +10,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiCalendar, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { compressImage } from '../utils/compressImage';
 
 export default function PMSTasks() {
   const { user, isAdmin, canCreate } = useAuth();
@@ -34,6 +35,11 @@ export default function PMSTasks() {
   const [rejectModal, setRejectModal] = useState(null);
   const [extendModal, setExtendModal] = useState(null);
   const [form, setForm] = useState({});
+  // Upload state for the new attachment field on the create modal
+  // (mam, 2026-05-22: "give here option also upload file like take
+  // photo and upload file").
+  const [saving, setSaving] = useState(false);
+  const [savePct, setSavePct] = useState(0);
   const [submitForm, setSubmitForm] = useState({ proof_url: '', uploading: false });
   const [rejectReason, setRejectReason] = useState('');
   const [extendForm, setExtendForm] = useState({ requested_due_date: '', reason: '' });
@@ -61,7 +67,9 @@ export default function PMSTasks() {
       project_label: '',    // shown read-only next to the picker
       assigned_to: '',
       due_date: new Date().toISOString().split('T')[0],
+      attachment_file: null,
     });
+    setSavePct(0);
     setCreateModal(true);
   };
 
@@ -79,19 +87,43 @@ export default function PMSTasks() {
 
   const save = async (e) => {
     e.preventDefault();
+    if (saving) return;
     if (!String(form.description || '').trim()) return toast.error('Description is required');
     if (!form.project_id) return toast.error('Pick a project');
     if (!form.assigned_to) return toast.error('Pick an assignee');
+    setSaving(true); setSavePct(0);
     try {
+      // Optional attachment — same compress + progress pipeline that
+      // Delegations uses.  Mam's MD reported phantom hangs on large
+      // phone photos; compressImage trims a 12-MB iPhone shot to
+      // ~700 KB before it leaves the browser.
+      let attachmentUrl = null;
+      if (form.attachment_file) {
+        const compressed = await compressImage(form.attachment_file);
+        const fd = new FormData(); fd.append('file', compressed);
+        const up = await api.post('/upload', fd, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          onUploadProgress: (ev) => {
+            if (ev.total) setSavePct(Math.round((ev.loaded / ev.total) * 100));
+          },
+        });
+        attachmentUrl = up.data.url;
+      }
+      setSavePct(100);
       await api.post('/pms-tasks', {
         description: form.description,
         project_id: form.project_id,
         assigned_to: form.assigned_to,
         due_date: form.due_date,
+        attachment_url: attachmentUrl,
       });
       toast.success('PMS task created');
       setCreateModal(false); load();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed to create'); }
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to create');
+    } finally {
+      setSaving(false); setSavePct(0);
+    }
   };
 
   // Lifecycle handlers (same shape as Delegations)
@@ -501,9 +533,55 @@ export default function PMSTasks() {
               <input className="input" type="date" value={form.due_date || ''} onChange={e => setForm({ ...form, due_date: e.target.value })} />
             </div>
           </div>
+          {/* Attachment — mam (2026-05-22): "give here option also
+              upload file like take photo and upload file".  Same
+              paired Take Photo / Choose File pattern as Delegations,
+              same compression + progress pipeline. */}
+          <div>
+            <label className="label">Attachment <span className="text-gray-400 font-normal">(optional — brief / drawing / photo)</span></label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="cursor-pointer border-2 border-blue-200 hover:border-blue-400 bg-blue-50/60 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
+                <span className="text-blue-700 font-semibold text-sm">📷 Take Photo</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={e => setForm({ ...form, attachment_file: e.target.files?.[0] || null })}
+                />
+              </label>
+              <label className="cursor-pointer border-2 border-gray-200 hover:border-gray-400 bg-gray-50 rounded-lg p-2 text-center transition flex items-center justify-center gap-1.5">
+                <span className="text-gray-700 font-semibold text-sm">📂 Choose File</span>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+                  className="hidden"
+                  onChange={e => setForm({ ...form, attachment_file: e.target.files?.[0] || null })}
+                />
+              </label>
+            </div>
+            {form.attachment_file && (
+              <p className="text-[10px] text-emerald-600 mt-1">
+                Selected: {form.attachment_file.name} ({(form.attachment_file.size / 1024 / 1024).toFixed(1)} MB · will compress before upload if &gt; 500 KB)
+              </p>
+            )}
+          </div>
+          {saving && (
+            <div className="bg-blue-50 border border-blue-200 rounded p-2 text-[11px] text-blue-800">
+              <div className="flex justify-between mb-1">
+                <span>{savePct < 100 ? (form.attachment_file ? 'Uploading photo…' : 'Saving…') : 'Finalising…'}</span>
+                <span className="font-mono">{savePct}%</span>
+              </div>
+              <div className="h-1.5 bg-blue-100 rounded overflow-hidden">
+                <div className="h-full bg-blue-600 transition-all" style={{ width: `${savePct}%` }} />
+              </div>
+            </div>
+          )}
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setCreateModal(false)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary">Assign Task</button>
+            <button type="button" onClick={() => setCreateModal(false)} disabled={saving} className="btn btn-secondary disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={saving} className="btn btn-primary disabled:opacity-50">
+              {saving ? `Uploading… ${savePct}%` : 'Assign Task'}
+            </button>
           </div>
         </form>
       </Modal>

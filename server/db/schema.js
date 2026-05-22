@@ -2273,6 +2273,9 @@ function initializeDatabase() {
     // Optional attachment (brief / drawing / photo / doc) the creator can
     // attach when assigning the task. Stored as a /uploads/<name> URL.
     ['delegations', 'attachment_url TEXT'],
+    // Mam (2026-05-22): same upload affordance on the New PMS Task
+    // modal — pick a brief / drawing / photo when raising.
+    ['pms_tasks', 'attachment_url TEXT'],
     // AI Agent: link a BOQ row back to a catalogue item so quotation
     // rates feed item_price_history and the rate-suggestion popup can
     // show last-quoted / 6-month avg-low-high for that exact item.

@@ -116,7 +116,7 @@ router.get('/', (req, res) => {
 // them. Title is derived from the first line of the description.
 router.post('/', (req, res) => {
   if (!can(req.user.id, 'create')) return res.status(403).json({ error: 'Not allowed to create PMS tasks' });
-  const { description, project_id, assigned_to, due_date } = req.body;
+  const { description, project_id, assigned_to, due_date, attachment_url } = req.body;
   const desc = String(description || '').trim();
   if (!desc) return res.status(400).json({ error: 'Description is required' });
   if (!project_id) return res.status(400).json({ error: 'Project is required' });
@@ -136,11 +136,12 @@ router.post('/', (req, res) => {
   if (!proj) return res.status(400).json({ error: 'Project not found' });
 
   const derivedTitle = desc.split(/\r?\n/)[0].slice(0, 80).trim() || 'PMS Task';
+  const attachment = attachment_url && String(attachment_url).trim() ? String(attachment_url).trim() : null;
   const r = db.prepare(
     `INSERT INTO pms_tasks
-       (title, description, project_id, project_name_snapshot, crm_name, assigned_by, assigned_to, due_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(derivedTitle, desc, proj.id, proj.project_name, proj.crm_name, req.user.id, assigned_to, due_date || null);
+       (title, description, project_id, project_name_snapshot, crm_name, assigned_by, assigned_to, due_date, attachment_url)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(derivedTitle, desc, proj.id, proj.project_name, proj.crm_name, req.user.id, assigned_to, due_date || null, attachment);
 
   try {
     const { notify } = require('../lib/push');
