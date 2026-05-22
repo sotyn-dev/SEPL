@@ -1,30 +1,40 @@
 // Print-ready Offer Letter for a hired candidate.
 //
-// Mam (2026-05-22): "when here shortlisted & offer send create offer
-// letter and show pdf i will share with you format" — first cut is
-// a sensible template; mam will share final format and I'll style to
-// match.  Same pattern as VendorPOPrint / IndentPrint / SalarySlip:
-// HTML page → Ctrl+P → Save as PDF.
+// Mam (2026-05-22) shared her reference offer letter (Bhanu Pratap
+// Rana · AI Engineer) and asked to match its format.  Layout below
+// mirrors that template exactly:
+//   • "PRIVATE AND CONFIDENTIAL" pill, top-right
+//   • Date / Name / Address / Email / Subject / Mobile block
+//   • Dear [First Name]
+//   • Standard opening paragraph
+//   • CTC (With complete break-up) — 3-col table
+//   • Date of Joining / Probationary Period / Notice Period sections
+//   • Confidentiality paragraph
+//   • With Regards · Secured Engineers Pvt. Ltd. · Signature
+//
+// Same HTML→Ctrl+P→Save as PDF pattern as VendorPOPrint /
+// IndentPrint / SalarySlipPrint.
 //
 // Route: /hr/candidates/:id/offer-letter
-// Pulls live data from /hr/candidates/:id.
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import api from '../api';
-import { fmtDateIST } from '../utils/dateIST';
 
 const COMPANY = {
-  name: 'Secured Engineers Private Limited',
+  name: 'Secured Engineers Pvt. Ltd.',
   short: 'SEPL',
-  head_office: 'B.K Towers, 2480/1, Gill Rd, near Grewal Hospital, Janta Nagar, Ludhiana, Punjab 141003',
-  corp_office: '58/A/1, First Floor, Kalu Sarai, New Delhi - 110016',
   email: 'hr@securedengineers.com',
   website: 'www.securedengineers.com',
-  cin: 'U74999PB2015PTC040000',
 };
 
-const fmtINR = (n) => `Rs ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+const fmtINR = (n) => Number(n || 0).toLocaleString('en-IN');
+const fmtDateLong = (iso) => {
+  if (!iso) return '___________';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+};
 
 export default function OfferLetterPrint() {
   const { id } = useParams();
@@ -40,158 +50,136 @@ export default function OfferLetterPrint() {
   if (err) return <div className="p-6 text-red-700">{err}</div>;
   if (!c)   return <div className="p-6 text-gray-500">Loading…</div>;
 
-  const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
-  const offeredPos = c.offered_position || c.position || '___________';
-  const salaryStr  = c.offered_salary ? fmtINR(c.offered_salary) : '_______________';
-  const joiningStr = c.joining_date ? fmtDateIST(c.joining_date) : '_______________';
-  const reportingTo = c.reporting_to || '_______________';
+  const today        = fmtDateLong(new Date().toISOString().slice(0, 10));
+  const offeredPos   = c.offered_position || c.position || '___________';
+  const monthly      = +c.offered_salary || 0;
+  const annual       = monthly * 12;
+  const joiningStr   = fmtDateLong(c.joining_date);
+  const firstName    = (c.name || '').split(' ')[0] || c.name || '';
 
   return (
     <div className="bg-gray-100 min-h-screen py-6 print:bg-white print:py-0">
       {/* On-screen action bar — hidden in print */}
       <div className="max-w-[800px] mx-auto mb-4 flex justify-between items-center print:hidden">
-        <a href={`/hr`} className="text-sm text-blue-700 hover:underline">← Back to HR & Hiring</a>
+        <a href="/hr" className="text-sm text-blue-700 hover:underline">← Back to HR &amp; Hiring</a>
         <button onClick={() => window.print()} className="btn btn-primary text-sm flex items-center gap-1.5">
           🖨️ Print / Save as PDF
         </button>
       </div>
 
-      {/* The letter — A4-ish width, white card, print-safe */}
-      <div className="max-w-[800px] mx-auto bg-white shadow-lg print:shadow-none p-10 print:p-12 text-[12.5px] leading-relaxed text-gray-900">
-        {/* Letterhead */}
-        <div className="text-center border-b-2 border-blue-900 pb-3 mb-5">
-          <div className="text-[22px] font-extrabold tracking-tight text-blue-900">{COMPANY.name}</div>
-          <div className="text-[10px] text-gray-600 mt-1">
-            <div><strong>Head Office:</strong> {COMPANY.head_office}</div>
-            <div><strong>Corporate Office:</strong> {COMPANY.corp_office}</div>
-            <div className="mt-0.5">{COMPANY.email} · {COMPANY.website} · CIN: {COMPANY.cin}</div>
-          </div>
+      {/* Letter — A4 width, white card */}
+      <div className="max-w-[800px] mx-auto bg-white shadow-lg print:shadow-none p-10 print:p-12 text-[12.5px] leading-relaxed text-gray-900" style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}>
+        {/* PRIVATE AND CONFIDENTIAL */}
+        <div className="text-right text-[10.5px] italic font-bold tracking-widest text-gray-700 mb-8">
+          PRIVATE AND CONFIDENTIAL
         </div>
 
-        {/* Ref + Date */}
-        <div className="flex justify-between text-[11px] text-gray-700 mb-6">
-          <div><strong>Ref:</strong> SEPL/OL/{new Date().getFullYear()}/{String(c.id).padStart(4, '0')}</div>
+        {/* Header block — Date / Name / Address / Email / Subject / Mobile */}
+        <div className="space-y-0.5 text-[12.5px]">
           <div><strong>Date:</strong> {today}</div>
-        </div>
-
-        {/* Title */}
-        <div className="text-center text-[16px] font-bold uppercase tracking-wider mb-5 underline">
-          Offer of Employment
-        </div>
-
-        {/* To */}
-        <div className="mb-4">
-          <div><strong>To,</strong></div>
-          <div className="font-semibold">{c.name}</div>
-          {c.address && <div className="whitespace-pre-line text-gray-800">{c.address}</div>}
-          {c.phone && <div>📞 {c.phone}</div>}
-          {c.email && <div>✉ {c.email}</div>}
+          <div><strong>Name:</strong> {c.name}</div>
+          {c.address && <div><strong>Address:</strong> {c.address}</div>}
+          {c.email && <div><strong>Email:</strong> {c.email}</div>}
+          <div><strong>Subject –</strong> Offer Letter</div>
+          {c.phone && <div><strong>Mobile no -</strong> {c.phone}</div>}
         </div>
 
         {/* Salutation */}
-        <p className="mb-3">Dear {c.name.split(' ')[0]},</p>
+        <p className="mt-6 mb-3"><strong>Dear {firstName}</strong>,</p>
 
-        <p className="mb-3">
-          We are pleased to offer you the position of <strong>{offeredPos}</strong> at
-          {' '}{COMPANY.name} ("the Company"). Based on your interview and discussions
-          with our management team, we believe you will be a valuable addition to our
-          organisation.
+        {/* Opening paragraph */}
+        <p className="mb-5 text-justify">
+          On behalf of {COMPANY.name}, we are pleased to extend you an offer of
+          employment as a <strong>{offeredPos}</strong> in our organization. We urge
+          you to read this letter carefully, since it contains certain important
+          details pertaining to your employment.
         </p>
 
-        {/* Terms */}
-        <div className="mb-4">
-          <p className="font-bold mb-2">1. Terms of Employment</p>
-          <ul className="list-disc pl-6 space-y-1.5 text-[12px]">
-            <li><strong>Position:</strong> {offeredPos}</li>
-            <li><strong>Date of Joining:</strong> {joiningStr}</li>
-            <li><strong>Reporting To:</strong> {reportingTo}</li>
-            <li><strong>Place of Work:</strong> SEPL Office, Ludhiana / Project site as assigned</li>
-            <li><strong>Probation Period:</strong> 6 months from date of joining</li>
-          </ul>
-        </div>
+        {/* CTC table */}
+        <p className="font-bold mb-2">CTC (With complete break-up):</p>
+        <table className="w-full border-collapse text-[11.5px] mb-5">
+          <thead>
+            <tr className="bg-gray-100">
+              <th className="border border-gray-700 px-2 py-1.5 text-left">EARNINGS</th>
+              <th className="border border-gray-700 px-2 py-1.5 text-right">AMOUNT</th>
+              <th className="border border-gray-700 px-2 py-1.5 text-right">NET ANNUAL AMOUNT</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="border border-gray-700 px-2 py-1.5">Basic Pay</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right tabular-nums">{monthly ? fmtINR(monthly) : '___________'}</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right tabular-nums">{annual ? fmtINR(annual) : '___________'}</td>
+            </tr>
+            <tr>
+              <td className="border border-gray-700 px-2 py-1.5">Conveyance Allowance</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">As per actual</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">As per actual</td>
+            </tr>
+            <tr>
+              <td className="border border-gray-700 px-2 py-1.5">House Rent Allowance</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">Provided by company</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">Provided by company</td>
+            </tr>
+            <tr>
+              <td className="border border-gray-700 px-2 py-1.5">Adhoc Allowance</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">N/A</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">N/A</td>
+            </tr>
+            <tr>
+              <td className="border border-gray-700 px-2 py-1.5">Miscellaneous Allowance</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">As applicable</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">As applicable</td>
+            </tr>
+            <tr className="font-bold bg-gray-50">
+              <td className="border border-gray-700 px-2 py-1.5">Total Earnings</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right tabular-nums">{monthly ? fmtINR(monthly) : '___________'}</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right tabular-nums">{annual ? fmtINR(annual) : '___________'}</td>
+            </tr>
+          </tbody>
+        </table>
 
-        <div className="mb-4">
-          <p className="font-bold mb-2">2. Compensation</p>
-          <p>
-            Your gross monthly remuneration will be <strong>{salaryStr}</strong>{' '}
-            (Rupees in figures), inclusive of all statutory deductions and applicable
-            taxes. A detailed salary breakdown will be shared in your appointment letter
-            on the date of joining.
-          </p>
-        </div>
-
-        <div className="mb-4">
-          <p className="font-bold mb-2">3. Working Hours &amp; Leave</p>
-          <p>
-            Standard working hours: 9:30 AM to 6:30 PM, Monday to Saturday (2nd &amp; 4th
-            Saturdays off).  Leave entitlement and holidays as per Company policy
-            shared during induction.
-          </p>
-        </div>
-
-        <div className="mb-4">
-          <p className="font-bold mb-2">4. Confidentiality</p>
-          <p>
-            You shall keep confidential all business information, client data,
-            drawings, BOQs, rates and intellectual property of the Company both
-            during and after your employment.
-          </p>
-        </div>
-
-        <div className="mb-4">
-          <p className="font-bold mb-2">5. Documents Required on Joining</p>
-          <ul className="list-disc pl-6 space-y-0.5 text-[12px]">
-            <li>Aadhaar Card &amp; PAN Card (copy)</li>
-            <li>Last 3 months' salary slips (if applicable)</li>
-            <li>Educational certificates (10th, 12th, Graduation)</li>
-            <li>Relieving / experience letter from previous employer</li>
-            <li>Two passport-size photographs</li>
-            <li>Cancelled cheque for salary bank account</li>
-          </ul>
-        </div>
-
-        <div className="mb-5">
-          <p className="font-bold mb-2">6. Acceptance</p>
-          <p>
-            Kindly confirm your acceptance of this offer by signing and returning a
-            scanned copy of this letter to <strong>{COMPANY.email}</strong> within 7
-            days of receipt.  Failing acceptance within this period, the offer shall
-            stand withdrawn.
-          </p>
-        </div>
-
-        <p className="mb-6">
-          We look forward to welcoming you aboard and wish you a long and successful
-          career with {COMPANY.short}.
+        {/* Date of Joining */}
+        <p className="mb-3 text-justify">
+          <strong>Date of Joining:</strong> Your date of joining would be{' '}
+          <strong>{joiningStr}</strong>. If joining does not take place on the given
+          date then the offer letter will be considered invalid.
         </p>
 
-        {/* Signatures */}
-        <div className="grid grid-cols-2 gap-8 mt-12">
-          <div>
-            <div className="border-t border-gray-700 pt-1 text-center">
-              <div className="font-semibold">For {COMPANY.short}</div>
-              <div className="text-[10px] text-gray-600 mt-0.5">Authorised Signatory · HR</div>
-            </div>
-          </div>
-          <div>
-            <div className="border-t border-gray-700 pt-1 text-center">
-              <div className="font-semibold">Candidate Signature</div>
-              <div className="text-[10px] text-gray-600 mt-0.5">{c.name}</div>
-              <div className="text-[10px] text-gray-600">Date: _____________</div>
-            </div>
-          </div>
-        </div>
+        {/* Probationary Period */}
+        <p className="mb-3 text-justify">
+          <strong>Probationary Period:</strong> The probationary period of 3 months
+          needs to be served by the candidate after joining the job.
+        </p>
 
-        {/* Footer */}
-        <div className="text-center text-[9px] text-gray-400 border-t border-gray-200 pt-2 mt-10">
-          This is a computer-generated offer letter from the SEPL HR System.
-          Auto-generated content — review and customise as needed before sending to the candidate.
+        {/* Notice Period */}
+        <p className="mb-3 text-justify">
+          <strong>Notice Period:</strong> If the employee desires to leave the
+          company, he / she needs to serve the notice period of 15 days. If the
+          performance is not good then the employee can be terminated even during
+          the probation period and all salary clearance will be done after 45 days
+          even if the employee is terminated.
+        </p>
+
+        {/* Confidentiality + sign-off */}
+        <p className="mb-6 text-justify">
+          Please note that the contents of this letter are confidential and should
+          not be used as a bargaining tool for negotiating employment terms with
+          any other organization. If you have any queries, please feel free to
+          contact us.  We look forward to working with you.
+        </p>
+
+        <div className="mt-10">
+          <div><strong>With Regards,</strong></div>
+          <div><strong>{COMPANY.name}</strong></div>
+          <div className="mt-10 text-gray-700">Signature</div>
+          <div className="border-t border-gray-500 w-48 mt-1" />
         </div>
       </div>
 
       <style>{`
         @media print {
-          @page { size: A4; margin: 0; }
+          @page { size: A4; margin: 18mm; }
           body { background: white !important; }
         }
       `}</style>
