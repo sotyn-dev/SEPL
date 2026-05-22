@@ -2276,6 +2276,16 @@ function initializeDatabase() {
     // Mam (2026-05-22): same upload affordance on the New PMS Task
     // modal — pick a brief / drawing / photo when raising.
     ['pms_tasks', 'attachment_url TEXT'],
+    // Mam (2026-05-22): Checklists module needs a department tag so
+    // admin can filter / route checklists by team.  Auto-populated
+    // from the assignee's users.department when picked, editable in
+    // the modal as a dropdown sourced from the distinct user
+    // departments + a free-text fallback.
+    ['checklists', 'department TEXT'],
+    ['checklists', 'due_time TEXT'],  // 'HH:MM' for daily / time-of-day display
+    ['checklists', 'reviewer_id INTEGER REFERENCES users(id)'],
+    ['checklists', 'proof_url TEXT'],
+    ['checklists', 'reject_reason TEXT'],
     // AI Agent: link a BOQ row back to a catalogue item so quotation
     // rates feed item_price_history and the rate-suggestion popup can
     // show last-quoted / 6-month avg-low-high for that exact item.

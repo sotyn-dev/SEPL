@@ -401,22 +401,39 @@ const adminGuard = (req, res, next) => {
 };
 
 router.post('/checklists', adminGuard, (req, res) => {
-  const { title, description, frequency, due_date, due_time, assigned_to } = req.body;
+  const { title, description, frequency, due_date, due_time, assigned_to, department } = req.body;
   const t = deriveTitle(title, description);
   const desc = String(description || '').trim();
   if (!desc && !title) return res.status(400).json({ error: 'Description is required' });
   if (!assigned_to) return res.status(400).json({ error: 'Assigned To is required' });
-  const r = getDb().prepare('INSERT INTO checklists (title,description,frequency,due_date,due_time,assigned_to,created_by) VALUES (?,?,?,?,?,?,?)')
-    .run(t, desc, frequency, due_date, due_time || null, assigned_to, req.user.id);
+  // Mam (2026-05-22): if the caller didn't supply a department, fall
+  // back to the assignee's own users.department so the row is
+  // automatically tagged with the right team.
+  let dept = department && String(department).trim() ? String(department).trim() : null;
+  if (!dept) {
+    try {
+      const u = getDb().prepare('SELECT department FROM users WHERE id=?').get(assigned_to);
+      dept = u?.department || null;
+    } catch (_) {}
+  }
+  const r = getDb().prepare('INSERT INTO checklists (title,description,frequency,due_date,due_time,assigned_to,department,created_by) VALUES (?,?,?,?,?,?,?,?)')
+    .run(t, desc, frequency, due_date, due_time || null, assigned_to, dept, req.user.id);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
 router.put('/checklists/:id', adminGuard, (req, res) => {
-  const { status, title, description, frequency, due_date, due_time, assigned_to } = req.body;
+  const { status, title, description, frequency, due_date, due_time, assigned_to, department } = req.body;
   const t = deriveTitle(title, description);
   if (!assigned_to) return res.status(400).json({ error: 'Assigned To is required' });
-  getDb().prepare('UPDATE checklists SET status=?,title=?,description=?,frequency=?,due_date=?,due_time=?,assigned_to=? WHERE id=?')
-    .run(status, t, description, frequency, due_date, due_time || null, assigned_to, req.params.id);
+  let dept = department && String(department).trim() ? String(department).trim() : null;
+  if (!dept) {
+    try {
+      const u = getDb().prepare('SELECT department FROM users WHERE id=?').get(assigned_to);
+      dept = u?.department || null;
+    } catch (_) {}
+  }
+  getDb().prepare('UPDATE checklists SET status=?,title=?,description=?,frequency=?,due_date=?,due_time=?,assigned_to=?,department=? WHERE id=?')
+    .run(status, t, description, frequency, due_date, due_time || null, assigned_to, dept, req.params.id);
   res.json({ message: 'Updated' });
 });
 

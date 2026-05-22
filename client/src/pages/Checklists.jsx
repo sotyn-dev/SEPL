@@ -334,12 +334,40 @@ export default function Checklists() {
             <div>
               <label className="label">Assigned To *</label>
               <SearchableSelect
-                options={users.map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') }))}
+                options={users.map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') + (u.department ? ' · ' + u.department : '') }))}
                 value={form.assigned_to || null}
                 valueKey="id" displayKey="label"
                 placeholder="Search user by name…"
-                onChange={(u) => setForm({ ...form, assigned_to: u?.id || '' })}
+                onChange={(u) => {
+                  // Mam (2026-05-22): auto-fill department from the
+                  // assignee's user record so admin doesn't have to
+                  // re-type it.  Override is still allowed below.
+                  setForm({
+                    ...form,
+                    assigned_to: u?.id || '',
+                    department: form.department || u?.department || '',
+                  });
+                }}
               />
+            </div>
+            {/* Department — sourced from distinct users.department values
+                in the loaded user list, with a datalist so admin can
+                type a new one if needed.  Auto-populated above when an
+                assignee is picked. */}
+            <div>
+              <label className="label">Department <span className="text-gray-400 font-normal text-[10px]">(auto-fills from assignee)</span></label>
+              <input
+                list="checklist-department-options"
+                className="input"
+                value={form.department || ''}
+                onChange={e => setForm({ ...form, department: e.target.value })}
+                placeholder="e.g. Accounts, HR, Procurement…"
+              />
+              <datalist id="checklist-department-options">
+                {[...new Set(users.map(u => u.department).filter(Boolean))].sort().map(d => (
+                  <option key={d} value={d} />
+                ))}
+              </datalist>
             </div>
             {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['pending','in_progress','completed','overdue'].map(s => <option key={s} value={s}>{s.replace(/_/g,' ')}</option>)}</select></div>}
           </div>
