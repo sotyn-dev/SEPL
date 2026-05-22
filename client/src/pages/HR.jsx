@@ -104,6 +104,9 @@ export default function HR() {
   const [screeningQs, setScreeningQs] = useState([]);
   const [screeningAns, setScreeningAns] = useState({});  // { [question_id]: answer_text }
   const [screeningSubmitting, setScreeningSubmitting] = useState(false);
+  // Batch D: pre-onboarding docs modal
+  const [docsRow, setDocsRow] = useState(null);
+  const [docsList, setDocsList] = useState([]);
 
   const load = () => {
     api.get('/hr/candidates').then(r => setCandidates(r.data));
@@ -241,6 +244,69 @@ export default function HR() {
     }
   };
 
+  // ── Batch D: Pre-onboarding docs (mam 2026-05-22) ────────────────
+  const openDocs = async (row) => {
+    setDocsRow(row);
+    setDocsList([]);
+    try {
+      const r = await api.get(`/hr/candidates/${row.id}/docs`);
+      setDocsList(r.data || []);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load documents');
+    }
+  };
+  const refreshDocs = async () => {
+    try {
+      const r = await api.get(`/hr/candidates/${docsRow.id}/docs`);
+      setDocsList(r.data || []);
+    } catch (_) {}
+  };
+  const uploadDoc = async (doc, file) => {
+    if (!file) return;
+    const url = await uploadFile(file);
+    if (!url) return;
+    try {
+      await api.put(`/hr/docs/${doc.id}`, { file_url: url, status: doc.status === 'pending' ? 'received' : doc.status });
+      toast.success(`${doc.doc_label || doc.doc_type} uploaded`);
+      refreshDocs();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Upload failed');
+    }
+  };
+  const updateDocStatus = async (doc, status) => {
+    try {
+      await api.put(`/hr/docs/${doc.id}`, { status });
+      toast.success(`Marked ${status}`);
+      refreshDocs();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+    }
+  };
+  const addCustomDoc = async () => {
+    const label = prompt('Custom document label (e.g. "Driving Licence")');
+    if (!label) return;
+    const type = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30) || 'other';
+    try {
+      await api.post(`/hr/candidates/${docsRow.id}/docs`, { doc_type: type, doc_label: label });
+      refreshDocs();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+  const deleteDoc = async (doc) => {
+    if (!confirm(`Remove "${doc.doc_label || doc.doc_type}" from the checklist?`)) return;
+    try { await api.delete(`/hr/docs/${doc.id}`); refreshDocs(); }
+    catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+  };
+
+  // Copy the candidate-facing offer accept link to clipboard.
+  const copyOfferLink = (c) => {
+    if (!c.offer_token) return toast.error('No offer link — re-save the MD Decision to generate one');
+    const url = `${window.location.origin}/offer/${c.offer_token}`;
+    navigator.clipboard.writeText(url).then(
+      () => toast.success('Offer link copied — paste it into the candidate\'s email or WhatsApp'),
+      () => toast.error('Clipboard blocked — copy manually: ' + url)
+    );
+  };
+
   const submitScreening = async () => {
     setScreeningSubmitting(true);
     try {
@@ -355,6 +421,18 @@ export default function HR() {
       if (!stageForm.offered_salary)           return toast.error('Enter the offered salary');
       if (!stageForm.joining_date)             return toast.error('Pick the joining date');
     }
+    // Batch D: build the salary_breakup payload if admin filled the
+    // customizer (lines is non-empty); otherwise null so server keeps
+    // its current value / falls back to default.
+    let salaryBreakup = null;
+    const filledLines = (stageForm.breakup_lines || []).filter(r => r.name?.trim() || r.monthly || r.annual);
+    if (filledLines.length > 0) {
+      salaryBreakup = {
+        lines: filledLines.map(r => ({ name: r.name?.trim() || '', monthly: r.monthly || '', annual: r.annual || '' })),
+        total_monthly: stageForm.offered_salary ? +stageForm.offered_salary : null,
+        total_annual:  stageForm.offered_salary ? +stageForm.offered_salary * 12 : null,
+      };
+    }
     await api.post(`/hr/candidates/${stageRow.id}/md-decision`, {
       decision: stageForm.decision,
       notes: stageForm.notes,
@@ -362,6 +440,7 @@ export default function HR() {
       offered_salary:   stageForm.offered_salary,
       joining_date:     stageForm.joining_date,
       reporting_to:     stageForm.reporting_to,
+      salary_breakup:   salaryBreakup,
     });
     if (stageForm.decision === 'shortlisted') {
       toast.success('Offer ready — opening letter for review');
@@ -588,7 +667,26 @@ export default function HR() {
                             state.  Opens in a new tab; mam can print or
                             save as PDF.  Mam (2026-05-22). */}
                         {['offer_sent','accepted','onboarded'].includes(c.status) && (
-                          <a href={`/hr/candidates/${c.id}/offer-letter`} target="_blank" rel="noreferrer" className="block text-blue-700 hover:underline"><FiAward className="inline mr-1" size={11}/>Generated Letter</a>
+                          <>
+                            <a href={`/hr/candidates/${c.id}/offer-letter`} target="_blank" rel="noreferrer" className="block text-blue-700 hover:underline"><FiAward className="inline mr-1" size={11}/>Offer Letter</a>
+                            <a href={`/hr/candidates/${c.id}/nda`} target="_blank" rel="noreferrer" className="block text-purple-700 hover:underline"><FiFileText className="inline mr-1" size={11}/>NDA</a>
+                            <a href={`/hr/candidates/${c.id}/employment-agreement`} target="_blank" rel="noreferrer" className="block text-indigo-700 hover:underline"><FiFileText className="inline mr-1" size={11}/>Agreement</a>
+                            {/* Mam (2026-05-22 Batch D): public accept link */}
+                            {c.offer_token && !c.offer_accepted_at && !c.offer_declined_at && (
+                              <button
+                                onClick={() => copyOfferLink(c)}
+                                className="block text-emerald-700 hover:underline text-left"
+                                title="Copy offer accept link to share with the candidate (no login needed for them)">
+                                🔗 Copy Accept Link
+                              </button>
+                            )}
+                            {c.offer_accepted_at && (
+                              <div className="text-[10px] text-emerald-600 font-bold">✓ ACCEPTED via link</div>
+                            )}
+                            {c.offer_declined_at && (
+                              <div className="text-[10px] text-rose-600 font-bold">✗ DECLINED via link</div>
+                            )}
+                          </>
                         )}
                       </td>
                       <td className="px-3 py-2">
@@ -610,6 +708,7 @@ export default function HR() {
                             title={c.eligibility_status ? `Re-screen (current: ${c.eligibility_status})` : 'Run screening'}>
                             <FiClipboard size={14} />
                           </button>
+                          <button onClick={() => openDocs(c)} className="p-1 text-gray-400 hover:text-teal-600" title="Pre-Onboarding Docs"><FiDownload size={14} /></button>
                           <button onClick={() => openTimeline(c)} className="p-1 text-gray-400 hover:text-indigo-600" title="Activity timeline"><FiClock size={14} /></button>
                           <button
                             onClick={() => openHold(c)}
@@ -966,6 +1065,44 @@ export default function HR() {
                 format (auto-filled from these fields + the candidate's resume).
                 Press Ctrl+P → Save as PDF to share with the candidate.
               </p>
+
+              {/* Batch D: optional CTC breakup customizer */}
+              <details className="border-t border-emerald-200 pt-2">
+                <summary className="text-[11px] font-semibold text-emerald-800 cursor-pointer select-none">
+                  Customize CTC line items (optional — leave blank for SEPL default)
+                </summary>
+                <div className="mt-2 space-y-2">
+                  <p className="text-[10px] text-gray-600">
+                    Add or override the CTC rows shown on the offer letter. Leave blank to use the
+                    standard SEPL template (Basic + standard allowances).
+                  </p>
+                  {(stageForm.breakup_lines || []).map((row, i) => (
+                    <div key={i} className="grid grid-cols-12 gap-1.5 items-center">
+                      <input className="input col-span-5 text-[12px] py-1" placeholder="Line name" value={row.name || ''}
+                        onChange={e => setStageForm(f => {
+                          const next = [...(f.breakup_lines || [])]; next[i] = { ...next[i], name: e.target.value }; return { ...f, breakup_lines: next };
+                        })}/>
+                      <input className="input col-span-3 text-[12px] py-1" placeholder="Monthly" value={row.monthly || ''}
+                        onChange={e => setStageForm(f => {
+                          const next = [...(f.breakup_lines || [])]; next[i] = { ...next[i], monthly: e.target.value }; return { ...f, breakup_lines: next };
+                        })}/>
+                      <input className="input col-span-3 text-[12px] py-1" placeholder="Annual" value={row.annual || ''}
+                        onChange={e => setStageForm(f => {
+                          const next = [...(f.breakup_lines || [])]; next[i] = { ...next[i], annual: e.target.value }; return { ...f, breakup_lines: next };
+                        })}/>
+                      <button type="button" onClick={() => setStageForm(f => ({ ...f, breakup_lines: (f.breakup_lines || []).filter((_, idx) => idx !== i) }))}
+                        className="col-span-1 text-rose-500 hover:text-rose-700" title="Remove">
+                        <FiTrash2 size={14}/>
+                      </button>
+                    </div>
+                  ))}
+                  <button type="button"
+                    onClick={() => setStageForm(f => ({ ...f, breakup_lines: [...(f.breakup_lines || []), { name: '', monthly: '', annual: '' }] }))}
+                    className="text-[11px] text-emerald-700 hover:underline">
+                    + Add CTC line
+                  </button>
+                </div>
+              </details>
             </div>
           )}
           <div><label className="label">MD's Notes</label><textarea className="input" rows="2" value={stageForm.notes || ''} onChange={e => setStageForm(f => ({ ...f, notes: e.target.value }))} /></div>
@@ -1210,6 +1347,87 @@ export default function HR() {
                 {screeningSubmitting ? 'Evaluating…' : 'Submit & Evaluate'}
               </button>
             )}
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── BATCH D: PRE-ONBOARDING DOCS modal ──
+          Per-candidate checklist of standard onboarding documents.
+          Seeded with Aadhaar / PAN / Resume / Experience / Bank /
+          Photo / Education on first open; admin can add custom items.
+          Status flow: pending → received → verified (or rejected). */}
+      <Modal isOpen={!!docsRow} onClose={() => setDocsRow(null)} title={`Pre-Onboarding Docs — ${docsRow?.name || ''}`} wide>
+        <div className="space-y-3 max-h-[75vh] overflow-y-auto">
+          <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
+            Standard onboarding checklist. Upload each doc as the candidate sends it, then mark
+            <b> Verified</b> once HR has reviewed.
+          </p>
+          {(() => {
+            const total = docsList.length;
+            const received = docsList.filter(d => d.status === 'received' || d.status === 'verified').length;
+            const verified = docsList.filter(d => d.status === 'verified').length;
+            const pct = total > 0 ? Math.round((received / total) * 100) : 0;
+            return (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-[12px]">
+                <div className="flex justify-between mb-1">
+                  <span className="font-semibold text-gray-700">Progress</span>
+                  <span className="text-gray-500">{received}/{total} received · {verified} verified</span>
+                </div>
+                <div className="bg-gray-200 rounded-full h-2 overflow-hidden">
+                  <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }}/>
+                </div>
+              </div>
+            );
+          })()}
+          <div className="space-y-2">
+            {docsList.map(doc => {
+              const statusColor = doc.status === 'verified' ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                                : doc.status === 'received' ? 'bg-blue-100 text-blue-700 border-blue-200'
+                                : doc.status === 'rejected' ? 'bg-rose-100 text-rose-700 border-rose-200'
+                                :                              'bg-gray-100 text-gray-600 border-gray-200';
+              return (
+                <div key={doc.id} className="border border-gray-200 rounded-lg p-3">
+                  <div className="flex items-start gap-2 flex-wrap">
+                    <div className="flex-1 min-w-[200px]">
+                      <div className="font-medium text-gray-900 text-[13px]">{doc.doc_label || doc.doc_type}</div>
+                      {doc.file_url && (
+                        <a href={doc.file_url} target="_blank" rel="noreferrer" className="text-[11px] text-blue-700 hover:underline inline-flex items-center gap-1 mt-0.5">
+                          <FiFileText size={10}/> View uploaded file
+                        </a>
+                      )}
+                      {doc.uploaded_at && !doc.file_url && (
+                        <div className="text-[10px] text-gray-400">Uploaded: {new Date(doc.uploaded_at).toLocaleDateString('en-IN')}</div>
+                      )}
+                    </div>
+                    <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${statusColor}`}>
+                      {doc.status}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center gap-2 flex-wrap">
+                    <label className="text-[11px] text-blue-700 hover:underline cursor-pointer">
+                      📎 {doc.file_url ? 'Replace' : 'Upload'}
+                      <input type="file" className="hidden" onChange={e => uploadDoc(doc, e.target.files?.[0])} />
+                    </label>
+                    {doc.file_url && doc.status !== 'verified' && (
+                      <button onClick={() => updateDocStatus(doc, 'verified')} className="text-[11px] text-emerald-700 hover:underline">✓ Mark Verified</button>
+                    )}
+                    {doc.status !== 'rejected' && (
+                      <button onClick={() => updateDocStatus(doc, 'rejected')} className="text-[11px] text-rose-700 hover:underline">✗ Reject</button>
+                    )}
+                    {doc.status !== 'pending' && (
+                      <button onClick={() => updateDocStatus(doc, 'pending')} className="text-[11px] text-gray-500 hover:underline">↺ Reset</button>
+                    )}
+                    <button onClick={() => deleteDoc(doc)} className="text-[11px] text-gray-400 hover:text-rose-600 ml-auto" title="Remove from checklist"><FiTrash2 size={12}/></button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <button onClick={addCustomDoc} className="btn btn-secondary text-[11px] py-1 px-2 flex items-center gap-1">
+            <FiPlus size={12}/> Add Custom Document
+          </button>
+          <div className="flex justify-end pt-2">
+            <button onClick={() => setDocsRow(null)} className="btn btn-secondary">Close</button>
           </div>
         </div>
       </Modal>

@@ -782,6 +782,25 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- HR Phase 1 Batch D (mam 2026-05-22): Pre-Onboarding doc checklist.
+    -- One row per (candidate × doc_type).  Standard doc_type values:
+    -- 'aadhaar' | 'pan' | 'resume' | 'experience' | 'bank' | 'photo' |
+    -- 'education' | 'other'.  Free-text so admin can add custom items.
+    -- Status: 'pending' | 'received' | 'verified' | 'rejected'.
+    CREATE TABLE IF NOT EXISTS candidate_docs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+      doc_type TEXT NOT NULL,
+      doc_label TEXT,                          -- friendly label, optional
+      file_url TEXT,
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending','received','verified','rejected')),
+      notes TEXT,
+      uploaded_at DATETIME,
+      verified_at DATETIME,
+      verified_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- HR Phase 1 Batch C (mam 2026-05-22): Screening Questions.
     -- Per-position screening forms (hiring_request_id set) or global
     -- (hiring_request_id NULL) for HR to use during phone screening.
@@ -2219,6 +2238,22 @@ function initializeDatabase() {
     ['candidates', 'eligibility_status TEXT'],
     ['candidates', 'eligibility_reason TEXT'],   // which rule fired (for "rejected") OR which q missed (for "partial")
     ['candidates', 'screened_at DATETIME'],
+    // HR Phase 1 Batch D (mam 2026-05-22):
+    //  salary_breakup — JSON blob letting admin override the default
+    //   CTC line items on the offer letter ({basic, conveyance, hra,
+    //   adhoc, misc, total_monthly, total_annual}). NULL = use default.
+    //  offer_token    — random 32-char URL-safe string generated when
+    //   MD shortlists; candidate uses it to accept/decline the offer
+    //   via the unauthenticated /offer/:token page (no login needed).
+    //  offer_accepted_at / offer_declined_at — set when candidate
+    //   responds via the public link.  Status moves to 'accepted' or
+    //   'rejected' accordingly.
+    //  offer_response_note — optional message from the candidate.
+    ['candidates', 'salary_breakup TEXT'],
+    ['candidates', 'offer_token TEXT'],
+    ['candidates', 'offer_accepted_at DATETIME'],
+    ['candidates', 'offer_declined_at DATETIME'],
+    ['candidates', 'offer_response_note TEXT'],
     // price_requests carries the item's department (CIVIL / ELE / FF / etc.)
     // so the auto-promoted item_master row lands in the right department too.
     ['price_requests', 'department TEXT'],

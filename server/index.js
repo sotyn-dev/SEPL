@@ -224,6 +224,11 @@ app.use('/api/customers', require('./routes/customers'));
 app.use('/api/installation', require('./routes/installation'));
 app.use('/api/complaints', require('./routes/complaints'));
 app.use('/api/hr', require('./routes/hr'));
+// Mam (2026-05-22 Batch D): unauthenticated public offer-accept
+// endpoint.  Mounted as its own router (no auth middleware) so
+// candidates can accept / decline via /offer/:token without
+// logging in to the ERP.
+app.use('/api/public', require('./routes/publicHr'));
 app.use('/api/payroll', require('./routes/payroll'));
 app.use('/api/scoring', require('./routes/scoring'));
 app.use('/api/tools', require('./routes/tools'));

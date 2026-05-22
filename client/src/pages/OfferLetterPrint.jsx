@@ -65,6 +65,29 @@ export default function OfferLetterPrint() {
   const annual       = monthly * 12;
   const joiningStr   = fmtDateLong(c.joining_date);
 
+  // Mam (2026-05-22 Batch D): salary_breakup is an OPTIONAL JSON
+  // override admin can set on MD Decision.  When null, we render the
+  // default SEPL template (Basic = total, allowances as descriptive
+  // text).  When set, we render the custom lines.
+  let breakup = null;
+  if (c.salary_breakup) {
+    try { breakup = typeof c.salary_breakup === 'string' ? JSON.parse(c.salary_breakup) : c.salary_breakup; }
+    catch (_) { breakup = null; }
+  }
+  // Default breakup matches the docx reference exactly.
+  const lines = breakup?.lines && Array.isArray(breakup.lines) ? breakup.lines : [
+    { name: 'Basic Pay',                                  monthly: monthly ? fmtINR(monthly) : '___________', annual: annual ? fmtINR(annual) : '___________' },
+    { name: 'Conveyance Allowance',                       monthly: 'As per actual',     annual: 'As per actual' },
+    { name: 'House Rent Allowance',                       monthly: 'Provide by company',annual: 'Provide by company' },
+    { name: 'Adhoc Allowance / Miscellaneous Allowance',  monthly: 'N/A',               annual: 'N/A' },
+  ];
+  const totalMonthly = breakup?.total_monthly != null
+    ? fmtINR(breakup.total_monthly)
+    : (monthly ? fmtINR(monthly) : '___________');
+  const totalAnnual  = breakup?.total_annual != null
+    ? fmtINR(breakup.total_annual)
+    : (annual ? fmtINR(annual) : '___________');
+
   return (
     <div className="bg-gray-100 min-h-screen py-6 print:bg-white print:py-0">
       {/* On-screen action bar — hidden in print */}
@@ -132,30 +155,20 @@ export default function OfferLetterPrint() {
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td className="border border-gray-700 px-2 py-1.5">Basic Pay</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right tabular-nums">{monthly ? fmtINR(monthly) : '___________'}</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right tabular-nums">{annual ? fmtINR(annual) : '___________'}</td>
-            </tr>
-            <tr>
-              <td className="border border-gray-700 px-2 py-1.5">Conveyance Allowance</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">As per actual</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">As per actual</td>
-            </tr>
-            <tr>
-              <td className="border border-gray-700 px-2 py-1.5">House Rent Allowance</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">Provide by company</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">Provide by company</td>
-            </tr>
-            <tr>
-              <td className="border border-gray-700 px-2 py-1.5">Adhoc Allowance / Miscellaneous Allowance</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">N/A</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">N/A</td>
-            </tr>
+            {lines.map((row, i) => {
+              const isNumeric = (v) => v != null && !isNaN(Number(String(v).replace(/[, ]/g, '')));
+              return (
+                <tr key={i}>
+                  <td className="border border-gray-700 px-2 py-1.5">{row.name}</td>
+                  <td className={`border border-gray-700 px-2 py-1.5 text-right ${isNumeric(row.monthly) ? 'tabular-nums' : 'italic text-gray-700'}`}>{row.monthly}</td>
+                  <td className={`border border-gray-700 px-2 py-1.5 text-right ${isNumeric(row.annual) ? 'tabular-nums' : 'italic text-gray-700'}`}>{row.annual}</td>
+                </tr>
+              );
+            })}
             <tr className="font-bold bg-gray-50">
               <td className="border border-gray-700 px-2 py-1.5">Total Earnings</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right tabular-nums">{monthly ? fmtINR(monthly) : '___________'}</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right tabular-nums">{annual ? fmtINR(annual) : '___________'}</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right tabular-nums">{totalMonthly}</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right tabular-nums">{totalAnnual}</td>
             </tr>
           </tbody>
         </table>

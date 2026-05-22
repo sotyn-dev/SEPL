@@ -60,6 +60,9 @@ import Influencers from './pages/Influencers';
 import CRMKitting from './pages/CRMKitting';
 import HRSystem from './pages/HRSystem';
 import OfferLetterPrint from './pages/OfferLetterPrint';
+import NDAPrint from './pages/NDAPrint';
+import EmploymentAgreementPrint from './pages/EmploymentAgreementPrint';
+import PublicOffer from './pages/PublicOffer';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -101,6 +104,12 @@ export default function App() {
       <Route path="/indent/:id/print" element={<ProtectedRoute><IndentPrint /></ProtectedRoute>} />
       <Route path="/payroll/slip/:employee_id" element={<ProtectedRoute><SalarySlipPrint /></ProtectedRoute>} />
       <Route path="/hr/candidates/:id/offer-letter" element={<ProtectedRoute><OfferLetterPrint /></ProtectedRoute>} />
+      <Route path="/hr/candidates/:id/nda" element={<ProtectedRoute><NDAPrint /></ProtectedRoute>} />
+      <Route path="/hr/candidates/:id/employment-agreement" element={<ProtectedRoute><EmploymentAgreementPrint /></ProtectedRoute>} />
+      {/* Mam (2026-05-22 Batch D): public offer-accept page — NO
+          ProtectedRoute wrapper.  Candidate uses the token in the
+          URL as the identity; no SEPL login required. */}
+      <Route path="/offer/:token" element={<PublicOffer />} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
         {/* TOC v3 role dashboards — admin-only for now, dark-navy CMD

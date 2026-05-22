@@ -274,7 +274,8 @@ router.post('/candidates/:id/schedule-md-interview', (req, res) => {
 
 router.post('/candidates/:id/md-decision', (req, res) => {
   const { decision, notes, offer_letter_file,
-          offered_position, offered_salary, joining_date, reporting_to } = req.body;
+          offered_position, offered_salary, joining_date, reporting_to,
+          salary_breakup } = req.body;
   if (!['shortlisted','rejected'].includes(decision)) {
     return res.status(400).json({ error: 'decision must be shortlisted or rejected' });
   }
@@ -287,8 +288,17 @@ router.post('/candidates/:id/md-decision', (req, res) => {
   }
   const newStatus = decision === 'shortlisted' ? 'offer_sent' : 'rejected';
   const offerSentAt = decision === 'shortlisted' ? new Date().toISOString() : null;
+  // Mam (2026-05-22 Batch D): generate a one-shot URL-safe token so
+  // the candidate can accept / decline via the public /offer/:token
+  // page without logging in.  32 random bytes → ~43 char base64url.
+  const offerToken = decision === 'shortlisted'
+    ? require('crypto').randomBytes(32).toString('base64url')
+    : null;
   const db = getDb();
-  const before = db.prepare('SELECT status FROM candidates WHERE id=?').get(req.params.id);
+  const before = db.prepare('SELECT status, offer_token FROM candidates WHERE id=?').get(req.params.id);
+  // Preserve existing token if MD re-saves the decision (don't break
+  // already-shared accept links).
+  const finalToken = offerToken && !before?.offer_token ? offerToken : before?.offer_token;
   db.prepare(`UPDATE candidates SET
                      md_decision        = ?,
                      md_interview_notes = COALESCE(?, md_interview_notes),
@@ -298,11 +308,15 @@ router.post('/candidates/:id/md-decision', (req, res) => {
                      offered_salary     = COALESCE(?, offered_salary),
                      joining_date       = COALESCE(?, joining_date),
                      reporting_to       = COALESCE(?, reporting_to),
+                     salary_breakup     = COALESCE(?, salary_breakup),
+                     offer_token        = ?,
                      status             = ?
                    WHERE id = ?`)
     .run(decision, notes || null, offer_letter_file || null, offerSentAt,
          offered_position || null, offered_salary != null ? +offered_salary : null,
          joining_date || null, reporting_to || null,
+         salary_breakup ? (typeof salary_breakup === 'string' ? salary_breakup : JSON.stringify(salary_breakup)) : null,
+         finalToken,
          newStatus, req.params.id);
   logEvent(db, req.params.id, decision === 'shortlisted' ? 'offer_generated' : 'md_decision', {
     from_status: before?.status, to_status: newStatus,
@@ -1685,6 +1699,106 @@ router.get('/candidates/:id/screening-answers', (req, res) => {
       ORDER BY q.order_index, q.id`
   ).all(req.params.id);
   res.json(rows.map(r => ({ ...r, options: safeParseJson(r.options) })));
+});
+
+// ═════════════════════════════════════════════════════════════════
+// PRE-ONBOARDING DOCS (mam 2026-05-22 Phase 1 Batch D, module #10)
+// ═════════════════════════════════════════════════════════════════
+// Standard checklist: Aadhaar / PAN / Resume / Experience / Bank +
+// admin-added custom items.  Status flow: pending → received →
+// verified (or rejected).  File URL stored when received.
+
+// Default checklist items seeded on-demand when admin first opens
+// the docs modal for a candidate.  Idempotent — only inserts items
+// the candidate doesn't already have.
+const DEFAULT_DOC_TYPES = [
+  { type: 'aadhaar',     label: 'Aadhaar Card' },
+  { type: 'pan',         label: 'PAN Card' },
+  { type: 'resume',      label: 'Resume / CV' },
+  { type: 'experience',  label: 'Experience Letter(s)' },
+  { type: 'bank',        label: 'Cancelled Cheque / Bank Details' },
+  { type: 'photo',       label: 'Passport-size Photo' },
+  { type: 'education',   label: 'Education Certificates' },
+];
+
+router.get('/candidates/:id/docs', (req, res) => {
+  const db = getDb();
+  const cid = +req.params.id;
+  // Seed defaults if nothing exists yet for this candidate.
+  const existing = db.prepare('SELECT doc_type FROM candidate_docs WHERE candidate_id = ?').all(cid);
+  if (existing.length === 0) {
+    const ins = db.prepare(
+      `INSERT INTO candidate_docs (candidate_id, doc_type, doc_label, status)
+       VALUES (?,?,?, 'pending')`
+    );
+    for (const d of DEFAULT_DOC_TYPES) ins.run(cid, d.type, d.label);
+  }
+  // If the candidate has a resume_file on the candidate row, mark
+  // the 'resume' doc as received automatically (one-time convenience
+  // — admin can always override).
+  const cand = db.prepare('SELECT resume_file FROM candidates WHERE id=?').get(cid);
+  if (cand?.resume_file) {
+    db.prepare(
+      `UPDATE candidate_docs
+          SET file_url   = COALESCE(file_url, ?),
+              status     = CASE WHEN status = 'pending' THEN 'received' ELSE status END,
+              uploaded_at = COALESCE(uploaded_at, CURRENT_TIMESTAMP)
+        WHERE candidate_id = ? AND doc_type = 'resume'`
+    ).run(cand.resume_file, cid);
+  }
+  const rows = db.prepare(
+    `SELECT * FROM candidate_docs WHERE candidate_id = ? ORDER BY id`
+  ).all(cid);
+  res.json(rows);
+});
+
+router.post('/candidates/:id/docs', (req, res) => {
+  const { doc_type, doc_label, file_url, status, notes } = req.body || {};
+  if (!doc_type || !String(doc_type).trim()) return res.status(400).json({ error: 'doc_type is required' });
+  const st = ['pending','received','verified','rejected'].includes(status) ? status : 'pending';
+  const r = getDb().prepare(`
+    INSERT INTO candidate_docs (candidate_id, doc_type, doc_label, file_url, status, notes, uploaded_at)
+    VALUES (?,?,?,?,?,?, CASE WHEN ? IS NOT NULL THEN CURRENT_TIMESTAMP ELSE NULL END)
+  `).run(+req.params.id, doc_type.trim(), doc_label || null, file_url || null, st, notes || null, file_url || null);
+  res.status(201).json({ id: r.lastInsertRowid });
+});
+
+router.put('/docs/:id', (req, res) => {
+  const { doc_label, file_url, status, notes } = req.body || {};
+  const db = getDb();
+  const cur = db.prepare('SELECT * FROM candidate_docs WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const verifying = status === 'verified' && cur.status !== 'verified';
+  // First file upload → stamp uploaded_at
+  const willUpload = file_url && !cur.file_url;
+  db.prepare(`
+    UPDATE candidate_docs SET
+      doc_label = COALESCE(?, doc_label),
+      file_url = COALESCE(?, file_url),
+      status = COALESCE(?, status),
+      notes = ?,
+      uploaded_at = COALESCE(uploaded_at, CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END),
+      verified_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE verified_at END,
+      verified_by = CASE WHEN ? THEN ?               ELSE verified_by END
+    WHERE id = ?
+  `).run(
+    doc_label || null,
+    file_url || null,
+    status || null,
+    notes != null ? notes : null,
+    willUpload ? 1 : 0,
+    verifying ? 1 : 0,
+    verifying ? 1 : 0,
+    req.user.id,
+    req.params.id,
+  );
+  res.json({ message: 'Updated' });
+});
+
+router.delete('/docs/:id', (req, res) => {
+  const r = getDb().prepare('DELETE FROM candidate_docs WHERE id = ?').run(req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ message: 'Deleted' });
 });
 
 // ═════════════════════════════════════════════════════════════════
