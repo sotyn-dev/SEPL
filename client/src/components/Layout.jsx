@@ -32,7 +32,12 @@ const menuItems = [
   { path: '/rental-tools', label: 'Rental Tools', icon: FiTool, module: 'rental_tools' },
   { path: '/influencers', label: 'Influencers', icon: FiUsers, module: 'influencers' },
   { path: '/crm-kitting', label: 'CRM Full Kitting', icon: FiPackage, module: 'crm_kitting' },
-  { path: '/hr-system',   label: 'HR System',        icon: FiUsers,   module: 'hr_system' },
+  // Mam (2026-05-22): "you create hr system and hr & hiring this is
+  // duplicated" — HR System sidebar entry removed.  All hiring
+  // work continues in the legacy /hr page.  Route + page kept alive
+  // for direct-URL access in case mam wants to revisit individual
+  // tabs (Hiring Requests / Dashboard / Offers KPIs).
+  // { path: '/hr-system', label: 'HR System', icon: FiUsers, module: 'hr_system' },
   { path: '/quotations', label: 'BOQ & Quotations', icon: FiFileText, module: 'quotations' },
   { path: '/business-book', label: 'Business Book', icon: FiBook, module: 'business_book' },
   { path: '/item-master', label: 'Item Master', icon: FiGrid, module: 'item_master' },
