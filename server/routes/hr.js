@@ -537,6 +537,7 @@ router.get('/checklists/by-date', (req, res) => {
   if (!isAdmin) params.push(req.user.id);
   const rows = db.prepare(`
     SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
+           c.department,
            c.assigned_to, u.name as assigned_to_name,
            comp.id as completion_id,
            comp.proof_url, comp.notes, comp.submitted_at,
@@ -548,7 +549,7 @@ router.get('/checklists/by-date', (req, res) => {
       ON comp.checklist_id = c.id AND comp.user_id = c.assigned_to AND comp.completion_date = ?
     LEFT JOIN users au ON comp.approved_by = au.id
     WHERE 1=1 ${scope}
-    ORDER BY u.name, c.description
+    ORDER BY u.name, c.department, c.description
   `).all(date, ...params);
   res.json({ date, rows });
 });

@@ -24,10 +24,15 @@ export default function Checklists() {
   // per daily and previous check list done or not done proof and
   // after need to approval".  Switching to 'by-date' loads the
   // /hr/checklists/by-date endpoint with completion + approval data.
-  const [view, setView] = useState('current'); // 'current' | 'by-date'
+  // Mam (2026-05-22) shared her Google Sheet master+instances example;
+  // the by-date view IS the instance grid she wants, so default to it.
+  // 'master' = template list, 'by-date' = per-day instance grid.
+  const [view, setView] = useState('by-date');
   const [historyDate, setHistoryDate] = useState(new Date().toISOString().slice(0, 10));
   const [historyRows, setHistoryRows] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all'); // all | done | not_done | pending | rejected
+  const [deptFilter, setDeptFilter] = useState('');
 
   const loadHistory = async (d) => {
     setHistoryLoading(true);
@@ -68,6 +73,9 @@ export default function Checklists() {
     }).catch(() => setTodayDone({}));
   };
   useEffect(() => { load(); api.get('/auth/users').then(r => setUsers(r.data)); }, []);
+  // Auto-load today's instance grid on first paint so the page lands
+  // straight on the actionable view (mam's preferred mental model).
+  useEffect(() => { loadHistory(historyDate); /* eslint-disable-next-line */ }, []);
 
   // Inline "Upload Proof" — picks a file, uploads to /upload, then marks the
   // checklist complete for today with that URL. Appears only on rows assigned
@@ -124,16 +132,17 @@ export default function Checklists() {
         </p>
       )}
 
-      {/* View toggle — "Current" = standard live list,
-          "By Date" = historical / per-day view with proof + approval. */}
+      {/* Tab toggle — match mam's mental model from her Sheet:
+          "By Date" = today's instance grid (default; her Sheet 2 view),
+          "Master" = recurring-template editor (her Sheet 1 view). */}
       <div className="flex gap-2 flex-wrap items-center">
-        <button onClick={() => setView('current')}
-                className={`btn ${view === 'current' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
-          Current
-        </button>
         <button onClick={() => { setView('by-date'); loadHistory(historyDate); }}
                 className={`btn ${view === 'by-date' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
-          <FiCalendar size={13} /> By Date · Approve / Reject
+          <FiCalendar size={13} /> Today / By Date
+        </button>
+        <button onClick={() => setView('current')}
+                className={`btn ${view === 'current' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
+          Master Templates
         </button>
         {view === 'by-date' && (
           <>
@@ -143,12 +152,65 @@ export default function Checklists() {
                     className="btn btn-secondary text-xs">Yesterday</button>
             <button onClick={() => { const iso = new Date().toISOString().slice(0, 10); setHistoryDate(iso); loadHistory(iso); }}
                     className="btn btn-secondary text-xs">Today</button>
-            <span className="text-xs text-gray-500 ml-2">
-              {historyLoading ? 'loading…' : `${historyRows.length} row${historyRows.length === 1 ? '' : 's'} · ${historyRows.filter(r => r.completion_id).length} done · ${historyRows.filter(r => r.approval_status === 'pending').length} pending approval`}
-            </span>
           </>
         )}
       </div>
+
+      {/* KPI strip on by-date view — mam's master-checklist summary */}
+      {view === 'by-date' && !historyLoading && historyRows.length > 0 && (() => {
+        const totals = {
+          total:    historyRows.length,
+          done:     historyRows.filter(r => r.completion_id).length,
+          not_done: historyRows.filter(r => !r.completion_id).length,
+          pending:  historyRows.filter(r => r.approval_status === 'pending' && r.completion_id).length,
+          approved: historyRows.filter(r => r.approval_status === 'approved').length,
+          rejected: historyRows.filter(r => r.approval_status === 'rejected').length,
+        };
+        const pill = (k, label, val, color) => (
+          <button onClick={() => setStatusFilter(k)}
+            className={`card p-3 border-l-4 ${color} text-left hover:shadow ${statusFilter === k ? 'ring-2 ring-offset-1 ring-blue-400' : ''}`}>
+            <div className="text-[10px] uppercase text-gray-500">{label}</div>
+            <div className="text-2xl font-bold">{val}</div>
+          </button>
+        );
+        return (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+            {pill('all',      'Total',    totals.total,    'border-l-gray-500')}
+            {pill('done',     'Done',     totals.done,     'border-l-emerald-500')}
+            {pill('not_done', 'Not Done', totals.not_done, 'border-l-rose-500')}
+            {pill('pending',  'Pending Approval', totals.pending, 'border-l-amber-500')}
+            {pill('approved', 'Approved', totals.approved, 'border-l-emerald-600')}
+            {pill('rejected', 'Rejected', totals.rejected, 'border-l-red-600')}
+          </div>
+        );
+      })()}
+
+      {/* Department filter on by-date view */}
+      {view === 'by-date' && historyRows.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="text-xs text-gray-500 font-semibold uppercase">Department:</label>
+          <select className="select text-sm max-w-xs" value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
+            <option value="">All departments</option>
+            {[...new Set(historyRows.map(r => r.department).filter(Boolean))].sort().map(d => (
+              <option key={d} value={d}>{d}</option>
+            ))}
+          </select>
+          <span className="text-xs text-gray-400">
+            {historyLoading ? 'loading…' : (() => {
+              const filtered = historyRows.filter(r => {
+                if (deptFilter && r.department !== deptFilter) return false;
+                if (statusFilter === 'done')     return !!r.completion_id;
+                if (statusFilter === 'not_done') return !r.completion_id;
+                if (statusFilter === 'pending')  return r.approval_status === 'pending' && r.completion_id;
+                if (statusFilter === 'approved') return r.approval_status === 'approved';
+                if (statusFilter === 'rejected') return r.approval_status === 'rejected';
+                return true;
+              });
+              return `${filtered.length} row${filtered.length === 1 ? '' : 's'}`;
+            })()}
+          </span>
+        </div>
+      )}
 
       {/* ─── BY-DATE / APPROVAL view ─────────────────────────────── */}
       {view === 'by-date' && (
@@ -157,6 +219,7 @@ export default function Checklists() {
             <thead>
               <tr>
                 <th>Person</th>
+                <th>Department</th>
                 <th>Task</th>
                 <th>Frequency</th>
                 <th>Done?</th>
@@ -168,11 +231,19 @@ export default function Checklists() {
             </thead>
             <tbody>
               {historyRows.length === 0 && !historyLoading && (
-                <tr><td colSpan={isAdmin() ? 8 : 7} className="text-center py-6 text-gray-400">
+                <tr><td colSpan={isAdmin() ? 9 : 8} className="text-center py-6 text-gray-400">
                   No checklists for this date.
                 </td></tr>
               )}
-              {historyRows.map(r => {
+              {historyRows.filter(r => {
+                if (deptFilter && r.department !== deptFilter) return false;
+                if (statusFilter === 'done')     return !!r.completion_id;
+                if (statusFilter === 'not_done') return !r.completion_id;
+                if (statusFilter === 'pending')  return r.approval_status === 'pending' && r.completion_id;
+                if (statusFilter === 'approved') return r.approval_status === 'approved';
+                if (statusFilter === 'rejected') return r.approval_status === 'rejected';
+                return true;
+              }).map(r => {
                 const done = !!r.completion_id;
                 const apStat = r.approval_status || (done ? 'pending' : '—');
                 const apBadge = apStat === 'approved' ? 'bg-emerald-100 text-emerald-700'
@@ -182,6 +253,11 @@ export default function Checklists() {
                 return (
                   <tr key={r.id} className={done ? '' : 'bg-gray-50/50'}>
                     <td className="text-xs font-medium">{r.assigned_to_name || '—'}</td>
+                    <td className="text-[10px]">
+                      {r.department ? (
+                        <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">{r.department}</span>
+                      ) : <span className="text-gray-300">—</span>}
+                    </td>
                     <td className="font-medium max-w-md"><div className="line-clamp-2">{r.description || r.title}</div></td>
                     <td className="capitalize text-xs">{r.frequency}</td>
                     <td>

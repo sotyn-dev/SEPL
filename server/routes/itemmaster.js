@@ -158,6 +158,23 @@ router.patch('/:id/price', requirePermission('item_master', 'edit'), (req, res) 
 router.post('/', requirePermission('item_master', 'create'), (req, res) => {
   const b = req.body || {};
   if (!b.item_name) return res.status(400).json({ error: 'Item name required' });
+
+  // Mam (2026-05-21): same item name + size + spec = same item.  This
+  // matches the dedupe rule the master-sheet cleanup script used
+  // (server/scripts/itemMasterCleanup.js).  Catches "MS PIPE 25mm
+  // C-CLASS" being added twice with slight whitespace differences.
+  const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
+  const dup = findDuplicate(getDb(), {
+    table: 'item_master',
+    fields: {
+      item_name: b.item_name,
+      size: b.size || '',
+      specification: b.specification || '',
+    },
+    codeColumn: 'item_code',
+  });
+  if (sendDuplicate(res, dup, `Item "${b.item_name}"${b.size ? ' · ' + b.size : ''}`)) return;
+
   let code = b.item_code;
   if (!code) {
     const { nextSequence } = require('../db/nextSequence');
