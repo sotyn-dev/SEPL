@@ -401,7 +401,8 @@ const adminGuard = (req, res, next) => {
 };
 
 router.post('/checklists', adminGuard, (req, res) => {
-  const { title, description, frequency, due_date, due_time, assigned_to, department } = req.body;
+  const { title, description, frequency, due_date, due_time, assigned_to, department,
+          recurrence_start_date, recurrence_end_date } = req.body;
   const t = deriveTitle(title, description);
   const desc = String(description || '').trim();
   if (!desc && !title) return res.status(400).json({ error: 'Description is required' });
@@ -416,13 +417,19 @@ router.post('/checklists', adminGuard, (req, res) => {
       dept = u?.department || null;
     } catch (_) {}
   }
-  const r = getDb().prepare('INSERT INTO checklists (title,description,frequency,due_date,due_time,assigned_to,department,created_by) VALUES (?,?,?,?,?,?,?,?)')
-    .run(t, desc, frequency, due_date, due_time || null, assigned_to, dept, req.user.id);
+  const r = getDb().prepare(
+    `INSERT INTO checklists
+       (title, description, frequency, due_date, due_time, assigned_to, department,
+        recurrence_start_date, recurrence_end_date, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
+  ).run(t, desc, frequency, due_date, due_time || null, assigned_to, dept,
+        recurrence_start_date || null, recurrence_end_date || null, req.user.id);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
 router.put('/checklists/:id', adminGuard, (req, res) => {
-  const { status, title, description, frequency, due_date, due_time, assigned_to, department } = req.body;
+  const { status, title, description, frequency, due_date, due_time, assigned_to, department,
+          recurrence_start_date, recurrence_end_date } = req.body;
   const t = deriveTitle(title, description);
   if (!assigned_to) return res.status(400).json({ error: 'Assigned To is required' });
   let dept = department && String(department).trim() ? String(department).trim() : null;
@@ -432,8 +439,12 @@ router.put('/checklists/:id', adminGuard, (req, res) => {
       dept = u?.department || null;
     } catch (_) {}
   }
-  getDb().prepare('UPDATE checklists SET status=?,title=?,description=?,frequency=?,due_date=?,due_time=?,assigned_to=?,department=? WHERE id=?')
-    .run(status, t, description, frequency, due_date, due_time || null, assigned_to, dept, req.params.id);
+  getDb().prepare(
+    `UPDATE checklists SET status=?, title=?, description=?, frequency=?, due_date=?, due_time=?,
+       assigned_to=?, department=?, recurrence_start_date=?, recurrence_end_date=?
+     WHERE id=?`
+  ).run(status, t, description, frequency, due_date, due_time || null, assigned_to, dept,
+        recurrence_start_date || null, recurrence_end_date || null, req.params.id);
   res.json({ message: 'Updated' });
 });
 
@@ -535,9 +546,14 @@ router.get('/checklists/by-date', (req, res) => {
   const scope = isAdmin ? '' : 'AND c.assigned_to = ?';
   const params = [date];
   if (!isAdmin) params.push(req.user.id);
+  // Mam (2026-05-22): a checklist only "exists" on dates inside its
+  // recurrence window.  If recurrence_start_date is set and > date,
+  // skip the row.  Same for recurrence_end_date < date.  NULL bounds
+  // mean unbounded (legacy rows without a window keep showing every
+  // day, no regression).
   const rows = db.prepare(`
     SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
-           c.department,
+           c.department, c.recurrence_start_date, c.recurrence_end_date,
            c.assigned_to, u.name as assigned_to_name,
            comp.id as completion_id,
            comp.proof_url, comp.notes, comp.submitted_at,
@@ -549,8 +565,10 @@ router.get('/checklists/by-date', (req, res) => {
       ON comp.checklist_id = c.id AND comp.user_id = c.assigned_to AND comp.completion_date = ?
     LEFT JOIN users au ON comp.approved_by = au.id
     WHERE 1=1 ${scope}
+      AND (c.recurrence_start_date IS NULL OR c.recurrence_start_date <= ?)
+      AND (c.recurrence_end_date   IS NULL OR c.recurrence_end_date   >= ?)
     ORDER BY u.name, c.department, c.description
-  `).all(date, ...params);
+  `).all(date, ...params, date, date);
   res.json({ date, rows });
 });
 
@@ -583,11 +601,13 @@ router.get('/checklists/followup', (req, res) => {
   // Pull the candidate task list (admin sees all, others only their own).
   const taskSql = isAdmin
     ? `SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
-              c.department, c.assigned_to, u.name AS assigned_to_name
+              c.department, c.assigned_to, u.name AS assigned_to_name,
+              c.recurrence_start_date, c.recurrence_end_date
        FROM checklists c LEFT JOIN users u ON c.assigned_to = u.id
        ORDER BY u.name COLLATE NOCASE, c.department, c.description`
     : `SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
-              c.department, c.assigned_to, u.name AS assigned_to_name
+              c.department, c.assigned_to, u.name AS assigned_to_name,
+              c.recurrence_start_date, c.recurrence_end_date
        FROM checklists c LEFT JOIN users u ON c.assigned_to = u.id
        WHERE c.assigned_to = ?
        ORDER BY c.department, c.description`;
@@ -606,11 +626,13 @@ router.get('/checklists/followup', (req, res) => {
     compMap[`${r.checklist_id}::${r.completion_date}`] = r;
   }
 
-  // Frequency → "does this date apply to this task?" helper.  For
-  // 'once' / 'yearly' / 'monthly' we treat every day as eligible
-  // (mam can mark done on any single day in the period).  Daily is
-  // every day.  Weekly applies on the same weekday as due_date.
+  // Frequency → "does this date apply to this task?" helper.  Now
+  // also respects mam's (2026-05-22) start/end recurrence window:
+  // out-of-window dates ALWAYS return false so the cell renders as
+  // N/A in the grid and doesn't count as "missed".
   function applies(task, dateStr) {
+    if (task.recurrence_start_date && dateStr < task.recurrence_start_date) return false;
+    if (task.recurrence_end_date   && dateStr > task.recurrence_end_date)   return false;
     if (!task.frequency) return true;
     const f = task.frequency.toLowerCase();
     if (f === 'daily') return true;

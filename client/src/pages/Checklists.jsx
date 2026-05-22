@@ -560,6 +560,43 @@ export default function Checklists() {
             </div>
             {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{['pending','in_progress','completed','overdue'].map(s => <option key={s} value={s}>{s.replace(/_/g,' ')}</option>)}</select></div>}
           </div>
+
+          {/* Recurrence window — mam (2026-05-22): "ask start date and
+              end date according to date create checklist task daily
+              wise".  Shown only for recurring frequencies (skipped on
+              'once' since that's a single-date task and due_date
+              already covers it).  Empty bounds = open-ended. */}
+          {form.frequency !== 'once' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-blue-50/40 border border-blue-200 rounded-lg p-3">
+              <div>
+                <label className="label">Start Date *</label>
+                <input
+                  type="date"
+                  className="input"
+                  value={form.recurrence_start_date || ''}
+                  onChange={e => setForm({ ...form, recurrence_start_date: e.target.value })}
+                />
+                <p className="text-[10px] text-gray-500 mt-0.5">First date this task should appear</p>
+              </div>
+              <div>
+                <label className="label">End Date *</label>
+                <input
+                  type="date"
+                  className="input"
+                  value={form.recurrence_end_date || ''}
+                  onChange={e => setForm({ ...form, recurrence_end_date: e.target.value })}
+                />
+                <p className="text-[10px] text-gray-500 mt-0.5">Last date — task stops generating after this</p>
+              </div>
+              <div className="sm:col-span-2 text-[11px] text-blue-800 bg-blue-100/70 rounded px-2 py-1">
+                {form.frequency === 'daily'    && 'Instance created every day between Start and End.'}
+                {form.frequency === 'weekly'   && 'Instance created on the same weekday between Start and End.'}
+                {form.frequency === 'monthly'  && 'Instance created once per month between Start and End.'}
+                {form.frequency === 'quarterly'&& 'Instance created once per quarter between Start and End.'}
+                {form.frequency === 'yearly'   && 'Instance created once per year between Start and End.'}
+              </div>
+            </div>
+          )}
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Create'}</button></div>
         </form>
       </Modal>

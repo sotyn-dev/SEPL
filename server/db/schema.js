@@ -2283,6 +2283,13 @@ function initializeDatabase() {
     // departments + a free-text fallback.
     ['checklists', 'department TEXT'],
     ['checklists', 'due_time TEXT'],  // 'HH:MM' for daily / time-of-day display
+    // Mam (2026-05-22): "ask start date and end date ... create
+    // checklist task daily wise" — recurrence window so a daily
+    // task only generates instances inside [start, end].  Out-of-
+    // window dates render as N/A in the Follow-up grid and don't
+    // count as "missed" on the by-date view.
+    ['checklists', 'recurrence_start_date DATE'],
+    ['checklists', 'recurrence_end_date DATE'],
     ['checklists', 'reviewer_id INTEGER REFERENCES users(id)'],
     ['checklists', 'proof_url TEXT'],
     ['checklists', 'reject_reason TEXT'],
