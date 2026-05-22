@@ -2025,6 +2025,10 @@ function initializeDatabase() {
     ['candidates', 'offered_salary REAL'],
     ['candidates', 'joining_date DATE'],
     ['candidates', 'reporting_to TEXT'],
+    // Mam (2026-05-22): auto-parsed from the uploaded resume (PDF /
+    // DOCX) so the offer letter has full contact details.
+    ['candidates', 'address TEXT'],
+    ['candidates', 'linkedin_url TEXT'],
     // price_requests carries the item's department (CIVIL / ELE / FF / etc.)
     // so the auto-promoted item_master row lands in the right department too.
     ['price_requests', 'department TEXT'],

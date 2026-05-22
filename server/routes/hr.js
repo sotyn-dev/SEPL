@@ -1,8 +1,49 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
+const { parseResume } = require('../utils/resumeParser');
 const router = express.Router();
 router.use(authMiddleware);
+
+// Resume uploads land here so we can parse + retain.  Same /uploads
+// static handler serves them back.
+const resumeDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'hr-resumes');
+if (!fs.existsSync(resumeDir)) fs.mkdirSync(resumeDir, { recursive: true });
+const resumeUpload = multer({
+  storage: multer.diskStorage({
+    destination: resumeDir,
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname || '.pdf');
+      cb(null, `cv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
+    },
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+// ── POST /hr/candidates/parse-resume ───────────────────────────
+// Mam (2026-05-22): "when upload resume name, mobile number,
+// email-id, address, automatically fill here".  Frontend sends the
+// file BEFORE the candidate is created.  We:
+//   1. Save it under /uploads/hr-resumes/...
+//   2. Parse it (pdf-parse / mammoth / txt) via resumeParser.
+//   3. Return parsed fields + the saved file URL.
+// Frontend pre-fills the form fields and stores resume_file so when
+// admin clicks Add Candidate the URL is sent along.
+router.post('/candidates/parse-resume', resumeUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const url = `/uploads/hr-resumes/${path.basename(req.file.path)}`;
+  try {
+    const parsed = await parseResume(req.file.path, req.file.mimetype || '');
+    res.json({ ok: true, resume_url: url, parsed });
+  } catch (e) {
+    // Even if parsing failed, the file was saved — let admin proceed.
+    console.warn('[hr/parse-resume] failed:', e.message);
+    res.json({ ok: true, resume_url: url, parsed: null, error: e.message });
+  }
+});
 
 // Candidates
 router.get('/candidates', (req, res) => {
@@ -23,15 +64,19 @@ router.get('/candidates', (req, res) => {
 
 router.post('/candidates', (req, res) => {
   try {
-    const { name, phone, email, source, position, notes, resume_file } = req.body;
+    const { name, phone, email, source, position, notes, resume_file,
+            address, linkedin_url } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name is required' });
     // SQLite CHECK on source must match one of the allowed values, else the
     // row is rejected with a cryptic constraint error. Validate up-front so
     // HR sees a clean message ('Source must be one of...') instead of a 500.
     const allowedSources = ['facebook','naukri','linkedin','reference','other'];
     const src = source && allowedSources.includes(source) ? source : 'other';
-    const r = getDb().prepare('INSERT INTO candidates (name,phone,email,source,position,notes,resume_file) VALUES (?,?,?,?,?,?,?)')
-      .run(name, phone || null, email || null, src, position || null, notes || null, resume_file || null);
+    const r = getDb().prepare(
+      `INSERT INTO candidates (name, phone, email, source, position, notes, resume_file, address, linkedin_url)
+       VALUES (?,?,?,?,?,?,?,?,?)`
+    ).run(name, phone || null, email || null, src, position || null, notes || null,
+          resume_file || null, address || null, linkedin_url || null);
     res.status(201).json({ id: r.lastInsertRowid });
   } catch (err) {
     console.error('POST /hr/candidates error', err);
@@ -40,9 +85,16 @@ router.post('/candidates', (req, res) => {
 });
 
 router.put('/candidates/:id', (req, res) => {
-  const { name, phone, email, source, position, status, notes, resume_file } = req.body;
-  getDb().prepare('UPDATE candidates SET name=?,phone=?,email=?,source=?,position=?,status=?,notes=?,resume_file=COALESCE(?,resume_file) WHERE id=?')
-    .run(name, phone, email, source, position, status, notes, resume_file || null, req.params.id);
+  const { name, phone, email, source, position, status, notes, resume_file,
+          address, linkedin_url } = req.body;
+  getDb().prepare(
+    `UPDATE candidates SET name=?, phone=?, email=?, source=?, position=?, status=?, notes=?,
+       resume_file = COALESCE(?, resume_file),
+       address = COALESCE(?, address),
+       linkedin_url = COALESCE(?, linkedin_url)
+     WHERE id=?`
+  ).run(name, phone, email, source, position, status, notes,
+        resume_file || null, address || null, linkedin_url || null, req.params.id);
   res.json({ message: 'Updated' });
 });
 

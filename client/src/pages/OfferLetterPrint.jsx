@@ -83,8 +83,9 @@ export default function OfferLetterPrint() {
         <div className="mb-4">
           <div><strong>To,</strong></div>
           <div className="font-semibold">{c.name}</div>
-          {c.phone && <div>{c.phone}</div>}
-          {c.email && <div>{c.email}</div>}
+          {c.address && <div className="whitespace-pre-line text-gray-800">{c.address}</div>}
+          {c.phone && <div>📞 {c.phone}</div>}
+          {c.email && <div>✉ {c.email}</div>}
         </div>
 
         {/* Salutation */}

@@ -64,6 +64,12 @@ export default function HR() {
   const [stageForm, setStageForm] = useState({});
   const [stageRow, setStageRow] = useState(null);
   const [uploading, setUploading] = useState(false);
+  // Mam (2026-05-22): resume parsing auto-fills name/phone/email/
+  // address on pick.  parsing flag drives the spinner; parsedHits
+  // tells admin which fields the system populated vs left blank
+  // so they know what still needs manual entry.
+  const [parsingResume, setParsingResume] = useState(false);
+  const [parsedHits, setParsedHits] = useState(null);
   // Mam (2026-05-22): pill-tabs for the 5-stage pipeline, same shape
   // as CRM Full Kitting's Stage 1/2/3 row.  Filter values map to the
   // status buckets pipelineFor() returns.
@@ -98,10 +104,12 @@ export default function HR() {
     e.preventDefault();
     // Upload the resume first (if attached) and stash the URL on the
     // candidate row so the same file flows naturally into Stage 2's
-    // schedule-interview screen — no need to re-upload there.
+    // schedule-interview screen — no need to re-upload there.  If the
+    // resume parser already uploaded it (form.resume_file is set),
+    // skip the duplicate upload.
     let payload = { ...form };
     delete payload._file; // never POST the File object itself
-    if (form._file) {
+    if (form._file && !form.resume_file) {
       const url = await uploadFile(form._file);
       if (!url) return; // uploadFile shows its own error toast
       payload.resume_file = url;
@@ -275,7 +283,7 @@ export default function HR() {
                 ['Name','Phone','Email','Position','Source','Stage','Notes'],
                 candidates.map(c => [c.name, c.phone, c.email, c.position, c.source, c.current_stage, c.notes]))}
                 className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
-              <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', source: 'naukri', position: '', notes: '' }); setModal('candidate'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Candidate</button>
+              <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', source: 'naukri', position: '', notes: '', address: '' }); setParsedHits(null); setParsingResume(false); setModal('candidate'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Candidate</button>
             </div>
           </div>
 
@@ -434,19 +442,76 @@ export default function HR() {
             {editing && <div><label className="label">Status</label><select className="select" value={form.status || ''} onChange={e => setForm({...form, status: e.target.value})}>{candidateStatuses.map(s => <option key={s} value={s}>{s.replace(/_/g,' ')}</option>)}</select></div>}
           </div>
           <div>
-            <label className="label">Resume <span className="text-gray-400 font-normal text-[10px]">(optional · PDF / DOC / DOCX)</span></label>
+            <label className="label">Resume <span className="text-gray-400 font-normal text-[10px]">(PDF / DOCX — auto-parses name / phone / email / address)</span></label>
             <input
               className="input"
               type="file"
               accept=".pdf,.doc,.docx"
-              onChange={e => setForm({...form, _file: e.target.files?.[0] || null})}
+              disabled={parsingResume}
+              onChange={async e => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setForm({ ...form, _file: file });
+                setParsingResume(true); setParsedHits(null);
+                try {
+                  const fd = new FormData(); fd.append('file', file);
+                  const r = await api.post('/hr/candidates/parse-resume', fd, {
+                    headers: { 'Content-Type': 'multipart/form-data' },
+                  });
+                  const p = r.data?.parsed;
+                  if (p) {
+                    // Only fill EMPTY fields — never overwrite anything
+                    // admin already typed manually.
+                    setForm(f => ({
+                      ...f,
+                      _file: file,
+                      resume_file: r.data?.resume_url || f.resume_file,
+                      name:    f.name    || p.name    || '',
+                      phone:   f.phone   || p.phone   || '',
+                      email:   f.email   || p.email   || '',
+                      address: f.address || p.address || '',
+                      linkedin_url: f.linkedin_url || p.linkedin || '',
+                    }));
+                    setParsedHits(p.confidence || {});
+                    const hit = Object.entries(p.confidence || {}).filter(([_, v]) => v).map(([k]) => k);
+                    if (hit.length) toast.success(`Auto-filled: ${hit.join(', ')}`);
+                    else            toast('Resume saved — parser found no fields, please fill manually', { icon: 'ℹ️' });
+                  } else {
+                    setForm(f => ({ ...f, _file: file, resume_file: r.data?.resume_url || f.resume_file }));
+                    toast('Resume saved — could not auto-parse', { icon: 'ℹ️' });
+                  }
+                } catch (err) {
+                  toast.error(err.response?.data?.error || 'Resume upload failed');
+                } finally {
+                  setParsingResume(false);
+                }
+              }}
             />
+            {parsingResume && (
+              <p className="text-[11px] text-blue-700 mt-1 flex items-center gap-1.5">
+                <span className="inline-block w-3 h-3 border-2 border-blue-300 border-t-blue-700 rounded-full animate-spin" />
+                Parsing resume…
+              </p>
+            )}
+            {parsedHits && !parsingResume && (
+              <p className="text-[10px] text-gray-500 mt-1">
+                Auto-fill hits:&nbsp;
+                {['name','email','phone','address'].map(k => (
+                  <span key={k} className={`mr-1.5 ${parsedHits[k] ? 'text-emerald-700' : 'text-gray-400'}`}>
+                    {parsedHits[k] ? '✓' : '✗'} {k}
+                  </span>
+                ))}
+              </p>
+            )}
             {/* Show the existing resume link when editing — uploading a new
                 file replaces it; otherwise the existing URL is preserved. */}
             {editing && form.resume_file && !form._file && (
               <p className="text-[10px] text-emerald-600 mt-0.5">Existing: <a href={form.resume_file} target="_blank" rel="noreferrer" className="underline">view resume</a> · upload a new file to replace</p>
             )}
-            {form._file && <p className="text-[10px] text-blue-600 mt-0.5">Selected: {form._file.name}</p>}
+            {form._file && !parsingResume && <p className="text-[10px] text-blue-600 mt-0.5">Selected: {form._file.name}</p>}
+          </div>
+          <div><label className="label">Address <span className="text-gray-400 font-normal text-[10px]">(auto-filled from resume if found)</span></label>
+            <textarea className="input" rows="2" value={form.address || ''} onChange={e => setForm({...form, address: e.target.value})} placeholder="House no, Street, City, State, PIN" />
           </div>
           <div><label className="label">Notes</label><textarea className="input" rows="3" value={form.notes || ''} onChange={e => setForm({...form, notes: e.target.value})} /></div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" disabled={uploading} className="btn btn-primary">{uploading ? 'Uploading…' : (editing ? 'Update' : 'Add Candidate')}</button></div>
