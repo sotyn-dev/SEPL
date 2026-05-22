@@ -94,9 +94,11 @@ export default function Checklists() {
 
   // Group checklists by assignee so the admin view shows one section per person.
   // Sections are ordered alphabetically by assignee name.
-  const visible = personFilter
-    ? checklists.filter(c => String(c.assigned_to) === String(personFilter))
-    : checklists;
+  const visible = checklists.filter(c => {
+    if (personFilter && String(c.assigned_to) !== String(personFilter)) return false;
+    if (deptFilter   && c.department !== deptFilter) return false;
+    return true;
+  });
   const byPerson = visible.reduce((acc, c) => {
     const key = c.assigned_to_name || 'Unassigned';
     (acc[key] = acc[key] || []).push(c);
@@ -328,11 +330,20 @@ export default function Checklists() {
       {/* Admin-only filter by assignee (regular users only see their own anyway).
           Hidden in the by-date / approval view since that has its own date picker. */}
       {view === 'current' && isAdmin() && (
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-gray-500 font-semibold uppercase">Filter by person:</label>
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="text-xs text-gray-500 font-semibold uppercase">Person:</label>
           <select className="select text-sm max-w-xs" value={personFilter} onChange={e => setPersonFilter(e.target.value)}>
             <option value="">All people</option>
             {users.filter(u => u.active !== 0).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+          {/* Department filter on Master Templates too (mam, 2026-05-22:
+              department should be a first-class facet alongside person). */}
+          <label className="text-xs text-gray-500 font-semibold uppercase ml-3">Department:</label>
+          <select className="select text-sm max-w-xs" value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
+            <option value="">All departments</option>
+            {[...new Set(checklists.map(c => c.department).filter(Boolean))].sort().map(d => (
+              <option key={d} value={d}>{d}</option>
+            ))}
           </select>
           <span className="text-xs text-gray-400">{visible.length} task{visible.length === 1 ? '' : 's'}</span>
         </div>
@@ -351,11 +362,16 @@ export default function Checklists() {
             </h4>
           </div>
           <table className="freeze-head">
-            <thead><tr><th>Task</th><th>Frequency</th><th>Due Date / Time</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Task</th><th>Department</th><th>Frequency</th><th>Due Date / Time</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {byPerson[personName].map(c => (
                 <tr key={c.id}>
                   <td className="font-medium max-w-md"><div className="line-clamp-2">{c.description || c.title}</div></td>
+                  <td className="text-[11px]">
+                    {c.department
+                      ? <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">{c.department}</span>
+                      : <span className="text-gray-300">—</span>}
+                  </td>
                   <td className="capitalize">{c.frequency}</td>
                   <td>
                     {c.frequency === 'daily'
