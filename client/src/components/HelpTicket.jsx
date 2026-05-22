@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiHelpCircle, FiBook, FiX, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle } from 'react-icons/fi';
 import useDraggableFab from '../hooks/useDraggableFab';
+import { fmtDateIST } from '../utils/dateIST';
 
 const GUIDES = [
   { title: 'How to Add a Business Book Entry', steps: ['Go to Business Book page', 'Click "New Entry"', 'Fill client, company, project details', 'Select category (FF/Electrical/etc)', 'Save - auto creates Site + Order Planning'] },
@@ -135,7 +136,7 @@ export default function HelpTicket() {
                     </div>
                     <div className="flex items-center justify-between mt-1">
                       <span className={`text-[9px] font-bold ${priorityColors[t.priority]}`}>{t.priority.toUpperCase()}</span>
-                      <span className="text-[9px] text-gray-400">{t.created_at?.split('T')[0]}</span>
+                      <span className="text-[9px] text-gray-400">{fmtDateIST(t.created_at)}</span>
                     </div>
                   </div>
                 ))}

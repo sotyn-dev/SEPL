@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiSearch, FiFilter, FiEye, FiCheck, FiX, FiClock, FiCheckCircle, FiXCircle, FiUpload, FiTrash2, FiDownload, FiSettings } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtISTPair } from '../utils/dateIST';
 import { LuIndianRupee } from 'react-icons/lu';
 
 const CATEGORIES = ['TA/DA', 'Purchase', 'Labour', 'Transport', 'Salary', 'Compliance'];
@@ -316,7 +317,21 @@ export default function PaymentRequired() {
                   </td>
                   <td><span className="text-xs bg-gray-100 px-2 py-0.5 rounded">{r.current_step}/5</span></td>
                   <td><StatusBadge status={r.status} /></td>
-                  <td className="text-xs">{r.created_at?.split('T')[0]}</td>
+                  {/* Date column — mam (2026-05-22): "this is pick wrong
+                      time according to indian" — SQLite stores UTC,
+                      now converted to IST via fmtISTPair so the row
+                      reflects the actual local submission time. */}
+                  <td className="text-xs">
+                    {(() => {
+                      const { date, time } = fmtISTPair(r.created_at);
+                      return (
+                        <>
+                          <div>{date}</div>
+                          <div className="text-[10px] text-gray-500">{time}</div>
+                        </>
+                      );
+                    })()}
+                  </td>
                   <td><div className="flex gap-1">
                     <button onClick={() => viewRequest(r.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"><FiEye size={15} /></button>
                     {canApprove('payment_required') && r.status !== 'final_approved' && r.status !== 'rejected' && <>

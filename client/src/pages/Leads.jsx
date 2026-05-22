@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDateIST } from '../utils/dateIST';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 
 // Mam's 11-stage Sales Funnel spec (SEPL_Sales_Funnel_ERP_Build_Spec).
@@ -359,7 +360,7 @@ export default function Leads() {
             <td className="px-3 py-2.5">{l.assigned_sc||'-'}</td>
             <td className="px-3 py-2.5"><span className="text-[9px] px-2 py-1 rounded-full font-bold text-white" style={{backgroundColor:STAGE_COLORS[l.current_stage]||'#888'}}>{STAGE_SHORT[l.current_stage]||l.current_stage}</span></td>
             <td className="px-3 py-2.5">{slaChip}</td>
-            <td className="px-3 py-2.5 text-[10px] text-gray-400">{l.created_at?.split('T')[0]}</td>
+            <td className="px-3 py-2.5 text-[10px] text-gray-400">{fmtDateIST(l.created_at)}</td>
             <td className="px-3 py-2.5" onClick={e=>e.stopPropagation()}>
               <div className="flex gap-1">
                 <button onClick={()=>viewLead(l)} className="p-1 text-red-600 hover:bg-red-50 rounded"><FiEye size={14}/></button>
