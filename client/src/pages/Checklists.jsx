@@ -137,7 +137,23 @@ export default function Checklists() {
             checklists.map(c => [c.description || c.title, c.frequency, c.due_date, c.due_time, c.assigned_to_name, c.status]))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
           {isAdmin() && (
-            <button onClick={() => { setEditing(null); setForm({ description: '', frequency: 'monthly', due_date: '', due_time: '', assigned_to: '' }); setModal(true); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Checklist</button>
+            <button onClick={() => {
+              // Mam (2026-05-22): "by default end date is 31/12/2026"
+              // — pre-fill recurrence window so admin only has to
+              // change it when the task actually has a different
+              // lifecycle.  Start defaults to today; End defaults to
+              // 31 Dec of the current calendar year.
+              const today = new Date();
+              const yearEnd = `${today.getFullYear()}-12-31`;
+              const todayIso = today.toISOString().slice(0, 10);
+              setEditing(null);
+              setForm({
+                description: '', frequency: 'monthly', due_date: '', due_time: '', assigned_to: '',
+                recurrence_start_date: todayIso,
+                recurrence_end_date:   yearEnd,
+              });
+              setModal(true);
+            }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Checklist</button>
           )}
         </div>
       </div>
