@@ -2750,6 +2750,32 @@ function initializeDatabase() {
     }
   } catch (e) { /* non-fatal */ }
 
+  // Mam (2026-05-22): pre-existing checklists were saved before the
+  // recurrence_start_date / recurrence_end_date columns existed, so
+  // they all carry NULL bounds.  The strict by-date filter then
+  // hides them on every date.  This one-time backfill gives every
+  // such row a sensible default:
+  //   start = COALESCE(due_date, DATE(created_at))  -- when the task
+  //                                                     was first set up
+  //   end   = '2026-12-31'                          -- mam's chosen
+  //                                                     default cap
+  // Idempotent via the checklist_recurrence_backfill_v1 flag.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='checklist_recurrence_backfill_v1'").get();
+    if (!done) {
+      const r = db.prepare(`
+        UPDATE checklists
+        SET recurrence_start_date = COALESCE(recurrence_start_date, due_date, DATE(created_at), DATE('now','localtime')),
+            recurrence_end_date   = COALESCE(recurrence_end_date,   '2026-12-31')
+        WHERE recurrence_start_date IS NULL OR recurrence_end_date IS NULL
+      `).run();
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('checklist_recurrence_backfill_v1', '1')").run();
+      if (r.changes > 0) console.log(`[migration] checklists: backfilled recurrence window on ${r.changes} rows (end=2026-12-31)`);
+    }
+  } catch (e) {
+    console.warn('[migration] checklist recurrence backfill skipped:', e.message);
+  }
+
   // Seed the canonical 5 lead-source values per MD's TOC v3 spec.
   // INSERT OR IGNORE so re-runs don't duplicate or overwrite custom
   // sources added by hand.  Free-text source entry is blocked in the
