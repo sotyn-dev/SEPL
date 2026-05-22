@@ -179,15 +179,33 @@ export default function HR() {
     if (!stageForm.decision) return toast.error('Pick a decision');
     let offerUrl = stageForm.offer_letter_file || null;
     if (stageForm.decision === 'shortlisted') {
+      // Mam (2026-05-22): "create offer letter and show pdf" — system
+      // now auto-generates the letter from the captured fields.
+      // Position / Salary / Joining Date are required so the generator
+      // has the info it needs.  Upload PDF is OPTIONAL — admin can
+      // attach a signed copy after the candidate returns it.
+      if (!stageForm.offered_position?.trim()) return toast.error('Enter the position being offered');
+      if (!stageForm.offered_salary)           return toast.error('Enter the offered salary');
+      if (!stageForm.joining_date)             return toast.error('Pick the joining date');
       if (stageForm._file) offerUrl = await uploadFile(stageForm._file);
-      if (!offerUrl) return toast.error('Upload the offer letter PDF');
     }
     await api.post(`/hr/candidates/${stageRow.id}/md-decision`, {
       decision: stageForm.decision,
       notes: stageForm.notes,
       offer_letter_file: offerUrl,
+      offered_position: stageForm.offered_position,
+      offered_salary:   stageForm.offered_salary,
+      joining_date:     stageForm.joining_date,
+      reporting_to:     stageForm.reporting_to,
     });
-    toast.success(stageForm.decision === 'shortlisted' ? 'Offer letter sent ✓' : 'Rejected by MD');
+    if (stageForm.decision === 'shortlisted') {
+      toast.success('Offer ready — opening letter for review');
+      // Auto-open the generated offer letter in a new tab so admin can
+      // Ctrl+P → Save as PDF or share the URL with the candidate.
+      window.open(`/hr/candidates/${stageRow.id}/offer-letter`, '_blank');
+    } else {
+      toast.success('Rejected by MD');
+    }
     setModal(false); load();
   };
 
@@ -334,7 +352,14 @@ export default function HR() {
                       </td>
                       <td className="px-3 py-2 text-[11px] space-y-1">
                         {c.resume_file && <a href={c.resume_file} target="_blank" rel="noreferrer" className="block text-blue-600 hover:underline"><FiFileText className="inline mr-1" size={11}/>Resume</a>}
-                        {c.offer_letter_file && <a href={c.offer_letter_file} target="_blank" rel="noreferrer" className="block text-emerald-600 hover:underline"><FiAward className="inline mr-1" size={11}/>Offer Letter</a>}
+                        {c.offer_letter_file && <a href={c.offer_letter_file} target="_blank" rel="noreferrer" className="block text-emerald-600 hover:underline"><FiAward className="inline mr-1" size={11}/>Uploaded PDF</a>}
+                        {/* Auto-generated offer letter — visible once the
+                            candidate is in offer_sent / accepted / onboarded
+                            state.  Opens in a new tab; mam can print or
+                            save as PDF.  Mam (2026-05-22). */}
+                        {['offer_sent','accepted','onboarded'].includes(c.status) && (
+                          <a href={`/hr/candidates/${c.id}/offer-letter`} target="_blank" rel="noreferrer" className="block text-blue-700 hover:underline"><FiAward className="inline mr-1" size={11}/>Generated Letter</a>
+                        )}
                       </td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-1">
@@ -494,9 +519,9 @@ export default function HR() {
       </Modal>
 
       {/* STAGE 5 — MD DECISION + OFFER LETTER */}
-      <Modal isOpen={modal === 'md_decision'} onClose={() => setModal(false)} title={`MD Decision — ${stageRow?.name || ''}`}>
+      <Modal isOpen={modal === 'md_decision'} onClose={() => setModal(false)} title={`MD Decision — ${stageRow?.name || ''}`} wide>
         <form onSubmit={submitMDDecision} className="space-y-3">
-          <p className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-3 py-2">If MD shortlisted — upload the offer letter (PDF) and the candidate moves to "Offer Sent". If rejected — pipeline ends.</p>
+          <p className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-100 rounded px-3 py-2">If MD shortlisted — fill the offer details below and the system will auto-generate the offer letter PDF for review. If rejected — pipeline ends.</p>
           {stageRow?.md_interview_date && <div className="text-[12px] text-gray-600">MD round: <b>{fmtDt(stageRow.md_interview_date)}</b></div>}
           <div>
             <label className="label">MD's Decision *</label>
@@ -512,9 +537,42 @@ export default function HR() {
             </div>
           </div>
           {stageForm.decision === 'shortlisted' && (
-            <div>
-              <label className="label">Offer Letter <span className="text-red-500">*</span> <span className="text-gray-400 font-normal text-[10px]">(PDF / DOC / DOCX)</span></label>
-              <input className="input" type="file" accept=".pdf,.doc,.docx" onChange={e => setStageForm(f => ({ ...f, _file: e.target.files?.[0] || null }))} />
+            <div className="bg-emerald-50/50 border border-emerald-200 rounded-lg p-3 space-y-3">
+              <p className="text-[11px] text-emerald-800 font-semibold">Offer details (auto-generates the offer letter PDF)</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Position *</label>
+                  <input className="input" required
+                    value={stageForm.offered_position || stageRow?.position || ''}
+                    onChange={e => setStageForm(f => ({ ...f, offered_position: e.target.value }))}
+                    placeholder="e.g. Site Engineer" />
+                </div>
+                <div>
+                  <label className="label">Offered Salary (₹/month) *</label>
+                  <input className="input" type="number" required
+                    value={stageForm.offered_salary || ''}
+                    onChange={e => setStageForm(f => ({ ...f, offered_salary: e.target.value }))}
+                    placeholder="35000" />
+                </div>
+                <div>
+                  <label className="label">Joining Date *</label>
+                  <input className="input" type="date" required
+                    value={stageForm.joining_date || ''}
+                    onChange={e => setStageForm(f => ({ ...f, joining_date: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="label">Reporting To</label>
+                  <input className="input"
+                    value={stageForm.reporting_to || ''}
+                    onChange={e => setStageForm(f => ({ ...f, reporting_to: e.target.value }))}
+                    placeholder="e.g. Ankur Kaplesh" />
+                </div>
+              </div>
+              <div>
+                <label className="label">Or upload pre-made offer letter <span className="text-gray-400 font-normal text-[10px]">(optional — PDF / DOC / DOCX)</span></label>
+                <input className="input" type="file" accept=".pdf,.doc,.docx" onChange={e => setStageForm(f => ({ ...f, _file: e.target.files?.[0] || null }))} />
+                <p className="text-[10px] text-gray-500 mt-0.5">If empty, the system will use the auto-generated letter from the fields above.</p>
+              </div>
             </div>
           )}
           <div><label className="label">MD's Notes</label><textarea className="input" rows="2" value={stageForm.notes || ''} onChange={e => setStageForm(f => ({ ...f, notes: e.target.value }))} /></div>

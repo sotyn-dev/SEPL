@@ -2018,6 +2018,13 @@ function initializeDatabase() {
     ['candidates', 'md_decision TEXT'],            // 'shortlisted' | 'rejected'
     ['candidates', 'offer_letter_file TEXT'],
     ['candidates', 'offer_sent_at DATETIME'],
+    // Mam (2026-05-22): "when here shortlisted & offer send create
+    // offer letter and show pdf" — populate auto-generated offer
+    // letter at /hr/candidates/:id/offer-letter from these fields.
+    ['candidates', 'offered_position TEXT'],
+    ['candidates', 'offered_salary REAL'],
+    ['candidates', 'joining_date DATE'],
+    ['candidates', 'reporting_to TEXT'],
     // price_requests carries the item's department (CIVIL / ELE / FF / etc.)
     // so the auto-promoted item_master row lands in the right department too.
     ['price_requests', 'department TEXT'],

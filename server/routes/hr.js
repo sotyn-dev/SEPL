@@ -114,12 +114,19 @@ router.post('/candidates/:id/schedule-md-interview', (req, res) => {
 });
 
 router.post('/candidates/:id/md-decision', (req, res) => {
-  const { decision, notes, offer_letter_file } = req.body;
+  const { decision, notes, offer_letter_file,
+          offered_position, offered_salary, joining_date, reporting_to } = req.body;
   if (!['shortlisted','rejected'].includes(decision)) {
     return res.status(400).json({ error: 'decision must be shortlisted or rejected' });
   }
-  if (decision === 'shortlisted' && !offer_letter_file) {
-    return res.status(400).json({ error: 'Upload the offer letter file before MD shortlist' });
+  // Mam (2026-05-22): "when here shortlisted & offer send create
+  // offer letter and show pdf" — no longer requires an uploaded PDF
+  // upfront.  System auto-generates the offer letter from the
+  // captured fields; admin can still upload a signed PDF later.
+  if (decision === 'shortlisted') {
+    if (!offered_position && !offer_letter_file) {
+      return res.status(400).json({ error: 'Either upload an offer letter PDF, or fill the position / salary / joining date so the system can generate one' });
+    }
   }
   const newStatus = decision === 'shortlisted' ? 'offer_sent' : 'rejected';
   const offerSentAt = decision === 'shortlisted' ? new Date().toISOString() : null;
@@ -128,10 +135,26 @@ router.post('/candidates/:id/md-decision', (req, res) => {
                      md_interview_notes = COALESCE(?, md_interview_notes),
                      offer_letter_file  = COALESCE(?, offer_letter_file),
                      offer_sent_at      = COALESCE(?, offer_sent_at),
+                     offered_position   = COALESCE(?, offered_position),
+                     offered_salary     = COALESCE(?, offered_salary),
+                     joining_date       = COALESCE(?, joining_date),
+                     reporting_to       = COALESCE(?, reporting_to),
                      status             = ?
                    WHERE id = ?`)
-    .run(decision, notes || null, offer_letter_file || null, offerSentAt, newStatus, req.params.id);
-  res.json({ message: decision === 'shortlisted' ? 'Offer letter sent' : 'Candidate rejected by MD' });
+    .run(decision, notes || null, offer_letter_file || null, offerSentAt,
+         offered_position || null, offered_salary != null ? +offered_salary : null,
+         joining_date || null, reporting_to || null,
+         newStatus, req.params.id);
+  res.json({ message: decision === 'shortlisted' ? 'Offer letter ready' : 'Candidate rejected by MD' });
+});
+
+// ── GET /hr/candidates/:id ──────────────────────────────────────
+// Used by the OfferLetterPrint page to render the auto-generated
+// letter.  Lightweight read of all fields the template needs.
+router.get('/candidates/:id', (req, res) => {
+  const c = getDb().prepare('SELECT * FROM candidates WHERE id=?').get(req.params.id);
+  if (!c) return res.status(404).json({ error: 'Candidate not found' });
+  res.json(c);
 });
 
 router.post('/candidates/:id/finalize', (req, res) => {

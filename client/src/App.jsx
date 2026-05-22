@@ -59,6 +59,7 @@ import RentalTools from './pages/RentalTools';
 import Influencers from './pages/Influencers';
 import CRMKitting from './pages/CRMKitting';
 import HRSystem from './pages/HRSystem';
+import OfferLetterPrint from './pages/OfferLetterPrint';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -99,6 +100,7 @@ export default function App() {
       <Route path="/rental-po/:id/print" element={<ProtectedRoute><RentalPOPrint /></ProtectedRoute>} />
       <Route path="/indent/:id/print" element={<ProtectedRoute><IndentPrint /></ProtectedRoute>} />
       <Route path="/payroll/slip/:employee_id" element={<ProtectedRoute><SalarySlipPrint /></ProtectedRoute>} />
+      <Route path="/hr/candidates/:id/offer-letter" element={<ProtectedRoute><OfferLetterPrint /></ProtectedRoute>} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
         {/* TOC v3 role dashboards — admin-only for now, dark-navy CMD
