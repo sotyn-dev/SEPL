@@ -185,22 +185,17 @@ export default function HR() {
   const submitMDDecision = async (e) => {
     e.preventDefault();
     if (!stageForm.decision) return toast.error('Pick a decision');
-    let offerUrl = stageForm.offer_letter_file || null;
     if (stageForm.decision === 'shortlisted') {
-      // Mam (2026-05-22): "create offer letter and show pdf" — system
-      // now auto-generates the letter from the captured fields.
-      // Position / Salary / Joining Date are required so the generator
-      // has the info it needs.  Upload PDF is OPTIONAL — admin can
-      // attach a signed copy after the candidate returns it.
+      // Mam (2026-05-22): SEPL's offer letter is ALWAYS auto-generated
+      // from these four fields using the standard SEPL template — no
+      // upload-PDF path anymore.  Validation required for the generator.
       if (!stageForm.offered_position?.trim()) return toast.error('Enter the position being offered');
       if (!stageForm.offered_salary)           return toast.error('Enter the offered salary');
       if (!stageForm.joining_date)             return toast.error('Pick the joining date');
-      if (stageForm._file) offerUrl = await uploadFile(stageForm._file);
     }
     await api.post(`/hr/candidates/${stageRow.id}/md-decision`, {
       decision: stageForm.decision,
       notes: stageForm.notes,
-      offer_letter_file: offerUrl,
       offered_position: stageForm.offered_position,
       offered_salary:   stageForm.offered_salary,
       joining_date:     stageForm.joining_date,
@@ -603,7 +598,9 @@ export default function HR() {
           </div>
           {stageForm.decision === 'shortlisted' && (
             <div className="bg-emerald-50/50 border border-emerald-200 rounded-lg p-3 space-y-3">
-              <p className="text-[11px] text-emerald-800 font-semibold">Offer details (auto-generates the offer letter PDF)</p>
+              <p className="text-[11px] text-emerald-800 font-semibold">
+                Offer details — system auto-generates the offer letter using SEPL's format
+              </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="label">Position *</label>
@@ -633,11 +630,11 @@ export default function HR() {
                     placeholder="e.g. Ankur Kaplesh" />
                 </div>
               </div>
-              <div>
-                <label className="label">Or upload pre-made offer letter <span className="text-gray-400 font-normal text-[10px]">(optional — PDF / DOC / DOCX)</span></label>
-                <input className="input" type="file" accept=".pdf,.doc,.docx" onChange={e => setStageForm(f => ({ ...f, _file: e.target.files?.[0] || null }))} />
-                <p className="text-[10px] text-gray-500 mt-0.5">If empty, the system will use the auto-generated letter from the fields above.</p>
-              </div>
+              <p className="text-[10px] text-emerald-700 italic">
+                After saving, the offer letter opens in a new tab with SEPL's standard
+                format (auto-filled from these fields + the candidate's resume).
+                Press Ctrl+P → Save as PDF to share with the candidate.
+              </p>
             </div>
           )}
           <div><label className="label">MD's Notes</label><textarea className="input" rows="2" value={stageForm.notes || ''} onChange={e => setStageForm(f => ({ ...f, notes: e.target.value }))} /></div>

@@ -171,14 +171,12 @@ router.post('/candidates/:id/md-decision', (req, res) => {
   if (!['shortlisted','rejected'].includes(decision)) {
     return res.status(400).json({ error: 'decision must be shortlisted or rejected' });
   }
-  // Mam (2026-05-22): "when here shortlisted & offer send create
-  // offer letter and show pdf" — no longer requires an uploaded PDF
-  // upfront.  System auto-generates the offer letter from the
-  // captured fields; admin can still upload a signed PDF later.
-  if (decision === 'shortlisted') {
-    if (!offered_position && !offer_letter_file) {
-      return res.status(400).json({ error: 'Either upload an offer letter PDF, or fill the position / salary / joining date so the system can generate one' });
-    }
+  // Mam (2026-05-22): offer letter is ALWAYS auto-generated from
+  // these fields using SEPL's standard template — upload path
+  // removed.  Position is the minimum required field; salary and
+  // joining date come along with it.
+  if (decision === 'shortlisted' && !offered_position) {
+    return res.status(400).json({ error: 'Position is required so the system can generate the offer letter' });
   }
   const newStatus = decision === 'shortlisted' ? 'offer_sent' : 'rejected';
   const offerSentAt = decision === 'shortlisted' ? new Date().toISOString() : null;
