@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { FiBell, FiPlus, FiX, FiTrash2, FiBookmark, FiEdit2, FiEye, FiChevronDown } from 'react-icons/fi';
+import {
+  FiBell, FiPlus, FiX, FiTrash2, FiBookmark, FiEdit2, FiEye,
+  FiChevronDown, FiImage, FiCamera, FiPaperclip,
+} from 'react-icons/fi';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -14,7 +17,12 @@ export default function AnnouncementBell() {
   const [unread, setUnread] = useState(0);
   const [items, setItems] = useState([]);
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ title: '', body: '', pinned: false, expires_at: '' });
+  const [form, setForm] = useState({ title: '', body: '', pinned: false, expires_at: '', attachment_url: '' });
+  // Mam (2026-05-22): "upload photo option so that can check photo" —
+  // uploadingPhoto drives the spinner; lightboxUrl opens a full-size
+  // preview when employee clicks the inline thumbnail.
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState(null);
   const [editing, setEditing] = useState(null);
   // Per-announcement reader drill-down (admin only). Map of id → readers data.
   const [readers, setReaders] = useState({}); // { [annId]: { read_count, unread_count, readers, non_readers } }
@@ -61,7 +69,7 @@ export default function AnnouncementBell() {
         await api.post('/announcements', form);
         toast.success('Announcement posted');
       }
-      setForm({ title: '', body: '', pinned: false, expires_at: '' });
+      setForm({ title: '', body: '', pinned: false, expires_at: '', attachment_url: '' });
       setAdding(false);
       setEditing(null);
       loadItems();
@@ -81,9 +89,34 @@ export default function AnnouncementBell() {
       body: a.body || '',
       pinned: !!a.pinned,
       expires_at: a.expires_at ? a.expires_at.slice(0, 16) : '',
+      attachment_url: a.attachment_url || '',
     });
     setAdding(true);
   };
+
+  // Mam (2026-05-22): upload photo for the announcement — uses the
+  // existing /upload endpoint (multer-backed) so we don't need a new
+  // server route.  Accepts image OR PDF.  capture='environment'
+  // on the camera button means the rear camera on phones.
+  const uploadPhoto = async (file) => {
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) return toast.error('File too large (max 10 MB)');
+    setUploadingPhoto(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setForm(f => ({ ...f, attachment_url: r.data?.url || '' }));
+      toast.success('Photo attached');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Upload failed');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+  // Tells us whether the attachment is an image (so we render <img>)
+  // vs a PDF / other (so we render a link).
+  const isImage = (url) => url && /\.(jpe?g|png|gif|webp|bmp|svg)(\?|$)/i.test(url);
 
   const fmt = (s) => {
     if (!s) return '';
@@ -128,7 +161,7 @@ export default function AnnouncementBell() {
             <h4 className="font-semibold text-sm flex items-center gap-1.5"><FiBell size={14} /> Announcements</h4>
             <div className="flex items-center gap-1">
               {isAdmin() && !adding && (
-                <button onClick={() => { setEditing(null); setForm({ title: '', body: '', pinned: false, expires_at: '' }); setAdding(true); }} className="text-[11px] font-semibold text-blue-700 hover:bg-white px-2 py-1 rounded flex items-center gap-1">
+                <button onClick={() => { setEditing(null); setForm({ title: '', body: '', pinned: false, expires_at: '', attachment_url: '' }); setAdding(true); }} className="text-[11px] font-semibold text-blue-700 hover:bg-white px-2 py-1 rounded flex items-center gap-1">
                   <FiPlus size={11} /> New
                 </button>
               )}
@@ -165,6 +198,52 @@ export default function AnnouncementBell() {
                   onChange={e => setForm(f => ({ ...f, expires_at: e.target.value }))}
                 />
               </div>
+
+              {/* Mam (2026-05-22): upload photo for the announcement.
+                  Two buttons — "Take Photo" uses the device camera
+                  (capture='environment' picks the rear lens on phones),
+                  "Choose File" opens the standard file picker. */}
+              <div className="space-y-1.5">
+                {form.attachment_url ? (
+                  <div className="relative inline-block">
+                    {isImage(form.attachment_url) ? (
+                      <img src={form.attachment_url} alt="Attachment preview"
+                        className="max-h-32 rounded border border-gray-300 object-cover"/>
+                    ) : (
+                      <a href={form.attachment_url} target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 rounded border border-gray-300 text-[11px] text-blue-700 hover:underline">
+                        <FiPaperclip size={11}/> View attached file
+                      </a>
+                    )}
+                    <button type="button" onClick={() => setForm(f => ({ ...f, attachment_url: '' }))}
+                      className="absolute -top-1.5 -right-1.5 bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] shadow"
+                      title="Remove attachment">
+                      <FiX size={10}/>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-1.5 items-center">
+                    <label className="flex items-center gap-1 text-[11px] text-blue-700 hover:text-blue-900 cursor-pointer px-2 py-1 bg-blue-50 border border-blue-200 rounded">
+                      <FiCamera size={12}/> Take Photo
+                      <input type="file" accept="image/*" capture="environment" className="hidden"
+                        disabled={uploadingPhoto}
+                        onChange={e => uploadPhoto(e.target.files?.[0])} />
+                    </label>
+                    <label className="flex items-center gap-1 text-[11px] text-blue-700 hover:text-blue-900 cursor-pointer px-2 py-1 bg-blue-50 border border-blue-200 rounded">
+                      <FiImage size={12}/> Choose File
+                      <input type="file" accept="image/*,application/pdf" className="hidden"
+                        disabled={uploadingPhoto}
+                        onChange={e => uploadPhoto(e.target.files?.[0])} />
+                    </label>
+                    {uploadingPhoto && (
+                      <span className="text-[10px] text-gray-500 flex items-center gap-1">
+                        <span className="inline-block w-2.5 h-2.5 border-2 border-blue-300 border-t-blue-700 rounded-full animate-spin"/>
+                        Uploading…
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
               <div className="flex justify-end gap-2">
                 <button type="button" onClick={() => { setAdding(false); setEditing(null); }} className="text-[11px] text-gray-500 hover:text-gray-700 px-2 py-1">Cancel</button>
                 <button type="submit" className="btn btn-primary text-[11px] py-1 px-3">{editing ? 'Update' : 'Post'}</button>
@@ -188,6 +267,27 @@ export default function AnnouncementBell() {
                       {!!a.is_new && <span className="text-[9px] font-bold uppercase bg-red-100 text-red-700 px-1.5 py-0.5 rounded">NEW</span>}
                     </div>
                     {a.body && <p className="text-[12px] text-gray-600 mt-1 whitespace-pre-wrap">{a.body}</p>}
+                    {/* Mam (2026-05-22): inline photo thumbnail —
+                        click to open in a full-screen lightbox.  For
+                        non-image attachments (PDF etc.) we show a
+                        labelled link instead. */}
+                    {a.attachment_url && (
+                      <div className="mt-2">
+                        {isImage(a.attachment_url) ? (
+                          <img
+                            src={a.attachment_url}
+                            alt={a.title}
+                            onClick={() => setLightboxUrl(a.attachment_url)}
+                            className="max-h-40 w-full object-cover rounded border border-gray-200 cursor-zoom-in hover:opacity-90"
+                          />
+                        ) : (
+                          <a href={a.attachment_url} target="_blank" rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-blue-700 hover:underline">
+                            <FiPaperclip size={11}/> View attached file
+                          </a>
+                        )}
+                      </div>
+                    )}
                     <div className="text-[10px] text-gray-400 mt-1 flex flex-wrap items-center gap-2">
                       <span>{a.created_by_name || 'Admin'} · {fmt(a.created_at)}</span>
                       {a.expires_at && <span>· expires {fmt(a.expires_at)}</span>}
@@ -250,6 +350,24 @@ export default function AnnouncementBell() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Mam (2026-05-22): full-screen photo viewer.  Renders outside
+          the bell panel so it can fill the whole screen and isn't
+          clipped by the dropdown overflow.  Click anywhere to close. */}
+      {lightboxUrl && (
+        <div
+          onClick={() => setLightboxUrl(null)}
+          className="fixed inset-0 z-[100] bg-black/85 flex items-center justify-center p-4 cursor-zoom-out"
+        >
+          <img src={lightboxUrl} alt="Announcement attachment" className="max-w-full max-h-full object-contain rounded shadow-2xl"/>
+          <button
+            onClick={(e) => { e.stopPropagation(); setLightboxUrl(null); }}
+            className="absolute top-4 right-4 bg-white/90 hover:bg-white text-gray-900 rounded-full w-10 h-10 flex items-center justify-center shadow-lg"
+            title="Close">
+            <FiX size={18}/>
+          </button>
         </div>
       )}
     </div>

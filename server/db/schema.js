@@ -2318,6 +2318,10 @@ function initializeDatabase() {
     //   responds via the public link.  Status moves to 'accepted' or
     //   'rejected' accordingly.
     //  offer_response_note — optional message from the candidate.
+    // Mam (2026-05-22): "upload photo option so that can check photo"
+    // on Announcements — admin posts a holiday / event / circular and
+    // can attach a banner image alongside the title/body.
+    ['announcements', 'attachment_url TEXT'],
     ['candidates', 'salary_breakup TEXT'],
     ['candidates', 'offer_token TEXT'],
     ['candidates', 'offer_accepted_at DATETIME'],

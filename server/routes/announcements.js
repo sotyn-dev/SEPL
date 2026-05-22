@@ -88,13 +88,15 @@ router.post('/mark-seen', (req, res) => {
 // Admin-only — create a new announcement.
 router.post('/', (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can post announcements' });
-  const { title, body, pinned, expires_at } = req.body || {};
+  // Mam (2026-05-22): "upload photo option so that can check photo" —
+  // admin can attach a banner image (or PDF link) alongside title/body.
+  const { title, body, pinned, expires_at, attachment_url } = req.body || {};
   const t = String(title || '').trim();
   if (!t) return res.status(400).json({ error: 'Title is required' });
   const r = getDb().prepare(`
-    INSERT INTO announcements (title, body, pinned, expires_at, created_by)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(t, body || '', pinned ? 1 : 0, expires_at || null, req.user.id);
+    INSERT INTO announcements (title, body, pinned, expires_at, attachment_url, created_by)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(t, body || '', pinned ? 1 : 0, expires_at || null, attachment_url || null, req.user.id);
   // Push to every active user — company-wide alert.
   try {
     const { notifyAll } = require('../lib/push');
@@ -111,10 +113,21 @@ router.post('/', (req, res) => {
 
 router.put('/:id', (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admins can edit announcements' });
-  const { title, body, pinned, expires_at } = req.body || {};
+  const { title, body, pinned, expires_at, attachment_url } = req.body || {};
+  // Mam (2026-05-22): frontend always sends attachment_url — either a
+  // URL string (to set/replace) or '' (to clear).  Empty/undefined → NULL.
   getDb().prepare(`
-    UPDATE announcements SET title=?, body=?, pinned=?, expires_at=? WHERE id=?
-  `).run(String(title || '').trim(), body || '', pinned ? 1 : 0, expires_at || null, req.params.id);
+    UPDATE announcements
+       SET title=?, body=?, pinned=?, expires_at=?, attachment_url=?
+     WHERE id=?
+  `).run(
+    String(title || '').trim(),
+    body || '',
+    pinned ? 1 : 0,
+    expires_at || null,
+    attachment_url || null,
+    req.params.id,
+  );
   res.json({ message: 'Updated' });
 });
 
