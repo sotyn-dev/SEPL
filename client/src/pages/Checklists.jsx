@@ -176,12 +176,18 @@ export default function Checklists() {
         toast.error('No tasks found in the Excel file');
         return;
       }
-      // Format each row as "Description | Label | Type" — empty
-      // columns are dropped so blank labels don't produce " | | ".
+      // Format each row as "Description | Label | Type | Time" —
+      // trailing empty columns are dropped, but middle columns get
+      // emptied (e.g. "Task |  | photo | 11:00") so the splitter still
+      // assigns the right value to the right column index.
       const formatted = rows.map(row => {
         const parts = [row.description];
-        if (row.proof_label || row.proof_type) parts.push(row.proof_label || '');
-        if (row.proof_type) parts.push(row.proof_type);
+        const hasL = !!row.proof_label;
+        const hasT = !!row.proof_type;
+        const hasTime = !!row.due_time;
+        if (hasL || hasT || hasTime) parts.push(row.proof_label || '');
+        if (hasT || hasTime)         parts.push(row.proof_type || '');
+        if (hasTime)                 parts.push(row.due_time);
         return parts.join(' | ');
       }).join('\n');
       // Append to existing textarea content (if any) so admin can
@@ -954,12 +960,16 @@ export default function Checklists() {
           <div className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2 space-y-1">
             <div><b>One task per line.</b> Empty lines and duplicates are skipped.</div>
             <div className="text-blue-900">
-              💡 <b>Different proof name per task?</b> Add it after a <code className="bg-white px-1 rounded">|</code>:
-              <pre className="font-mono text-[11px] mt-1 ml-4">{`File GST return   | GST File
-Bank recon        | Bank Statement
-Send WhatsApp report                          ← uses the shared proof name below`}</pre>
-              You can also paste 2 columns from Excel (tab-separated works the same way).<br/>
-              Optional 3rd column overrides proof type: <code className="bg-white px-1 rounded">Task | Label | pdf</code>
+              💡 <b>Different proof name / time per task?</b> Add columns after each task with <code className="bg-white px-1 rounded">|</code>:
+              <pre className="font-mono text-[11px] mt-1 ml-4">{`File GST return       | GST File         | pdf   | 11:00
+Bank recon            | Bank Statement                | 10:30
+Send WhatsApp report                                  ← uses shared settings below`}</pre>
+              Columns (any subset, in order):
+              <code className="bg-white px-1 rounded mx-1">Task</code> |
+              <code className="bg-white px-1 rounded mx-1">Proof Name</code> |
+              <code className="bg-white px-1 rounded mx-1">Type</code> |
+              <code className="bg-white px-1 rounded mx-1">Time (HH:MM)</code>
+              <br/>You can also paste 4 columns from Excel (tab-separated works the same way).
             </div>
           </div>
           {/* Mam (2026-05-22): Excel upload — server parses the
@@ -967,7 +977,7 @@ Send WhatsApp report                          ← uses the shared proof name bel
               admin can review/edit before submitting. */}
           <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-center gap-2 flex-wrap">
             <div className="flex-1 min-w-[180px] text-[11px] text-emerald-800">
-              <b>Have an Excel sheet?</b> Upload it — first column = task description, second = proof name, third = proof type.
+              <b>Have an Excel sheet?</b> Upload it — columns: <b>Description · Proof Name · Proof Type · Time</b>.
             </div>
             <button
               type="button"
@@ -984,13 +994,13 @@ Send WhatsApp report                          ← uses the shared proof name bel
           </div>
 
           <div>
-            <label className="label">Task Lines * <span className="text-gray-400 font-normal text-[10px]">(one per line · optional `| Proof Name` after each)</span></label>
+            <label className="label">Task Lines * <span className="text-gray-400 font-normal text-[10px]">(one per line · optional `| Proof Name | Type | Time` after each)</span></label>
             <textarea
               className="input font-mono text-[12px]"
               rows="8"
               value={bulkForm.lines || ''}
               onChange={e => setBulkForm({ ...bulkForm, lines: e.target.value })}
-              placeholder={`Attendance + no-show alerts        | Attendance Report\nExit checklist + Day-1 joiner verification | Joining Form\nDaily WhatsApp report\n...`}
+              placeholder={`Attendance + no-show alerts | Attendance Report | photo | 10:30\nExit checklist + Day-1 joiner verification | Joining Form | pdf | 17:00\nDaily WhatsApp report                                        | 18:00\n...`}
             />
             {/* Live preview of how the lines will be split */}
             {(() => {
@@ -998,24 +1008,26 @@ Send WhatsApp report                          ← uses the shared proof name bel
               if (lines.length === 0) return <p className="text-[10px] text-gray-500 mt-0.5">0 task(s) ready to create</p>;
               const parsed = lines.map(l => {
                 const parts = l.split(/\s*[|\t]\s*/);
-                return { desc: parts[0], label: parts[1] || null, type: parts[2] || null };
+                return { desc: parts[0], label: parts[1] || null, type: parts[2] || null, time: parts[3] || null };
               });
-              const withCustom = parsed.filter(p => p.label).length;
+              const withCustomLabel = parsed.filter(p => p.label).length;
+              const withCustomTime  = parsed.filter(p => p.time).length;
               return (
                 <div className="text-[10px] mt-1 space-y-0.5">
                   <p className="text-gray-500">
-                    {parsed.length} task(s) ready · {withCustom} with custom proof name · {parsed.length - withCustom} using shared "{bulkForm.proof_label || (bulkForm.proof_type === 'none' ? 'no proof' : 'default')}"
+                    {parsed.length} task(s) ready · {withCustomLabel} with custom proof name · {withCustomTime} with custom time
                   </p>
                   <details className="text-gray-500">
                     <summary className="cursor-pointer hover:text-gray-700">Show parsed preview</summary>
                     <table className="mt-1 text-[10px] w-full border border-gray-200 rounded">
-                      <thead className="bg-gray-50"><tr><th className="text-left px-2 py-1">Task</th><th className="text-left px-2 py-1">Proof Name</th><th className="text-left px-2 py-1">Type</th></tr></thead>
+                      <thead className="bg-gray-50"><tr><th className="text-left px-2 py-1">Task</th><th className="text-left px-2 py-1">Proof Name</th><th className="text-left px-2 py-1">Type</th><th className="text-left px-2 py-1">Time</th></tr></thead>
                       <tbody>
                         {parsed.map((p, i) => (
                           <tr key={i} className="border-t">
-                            <td className="px-2 py-0.5 truncate max-w-[280px]" title={p.desc}>{p.desc}</td>
+                            <td className="px-2 py-0.5 truncate max-w-[260px]" title={p.desc}>{p.desc}</td>
                             <td className="px-2 py-0.5">{p.label || <span className="text-gray-400 italic">{bulkForm.proof_label || '—'}</span>}</td>
                             <td className="px-2 py-0.5">{p.type || <span className="text-gray-400 italic">{bulkForm.proof_type || 'photo'}</span>}</td>
+                            <td className="px-2 py-0.5 font-mono">{p.time || <span className="text-gray-400 italic">{bulkForm.due_time || '—'}</span>}</td>
                           </tr>
                         ))}
                       </tbody>

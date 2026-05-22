@@ -693,16 +693,16 @@ const ALLOWED_PROOF_TYPES = ['photo', 'pdf', 'file', 'text', 'none'];
 router.get('/checklists/bulk-template.xlsx', (req, res) => {
   const wb = XLSX.utils.book_new();
   const aoa = [
-    ['Description',                                'Proof Name',          'Proof Type'],
-    ['File monthly GST return',                    'GST File',            'pdf'],
-    ['Daily attendance + no-show alerts',          'Attendance Report',   'photo'],
-    ['Exit checklist + Day-1 joiner verification', 'Joining Form',        'pdf'],
-    ['Send daily WhatsApp report to MD',           'Screenshot',          'photo'],
-    ['Reconcile petty cash closing',               'Cash Closing Note',   'text'],
-    ['Mark vendor master sheet reviewed',          '',                    'none'],
+    ['Description',                                'Proof Name',          'Proof Type', 'Time'],
+    ['File monthly GST return',                    'GST File',            'pdf',        '11:00'],
+    ['Daily attendance + no-show alerts',          'Attendance Report',   'photo',      '10:30'],
+    ['Exit checklist + Day-1 joiner verification', 'Joining Form',        'pdf',        '17:00'],
+    ['Send daily WhatsApp report to MD',           'Screenshot',          'photo',      '18:00'],
+    ['Reconcile petty cash closing',               'Cash Closing Note',   'text',       '19:30'],
+    ['Mark vendor master sheet reviewed',          '',                    'none',       ''],
   ];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{ wch: 50 }, { wch: 24 }, { wch: 12 }];
+  ws['!cols'] = [{ wch: 50 }, { wch: 24 }, { wch: 12 }, { wch: 10 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Checklists');
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -733,27 +733,46 @@ router.post('/checklists/parse-excel', checklistsExcelUpload.single('file'), (re
   // ── Locate the header row.  Most files put it on row 1, but some
   // people leave 1-2 blank lines or a title at the top.  Scan the
   // first 5 rows for any keyword we know how to map.
-  const HEADER_KEYWORDS = ['description', 'task', 'proof name', 'proof', 'name', 'label', 'type', 'proof type'];
+  const HEADER_KEYWORDS = ['description', 'task', 'proof name', 'proof', 'name', 'label', 'type', 'proof type', 'time', 'time of day', 'due time'];
   let headerIdx = -1;
   for (let i = 0; i < Math.min(5, rows.length); i++) {
     const cells = (rows[i] || []).map(c => String(c || '').toLowerCase().trim());
     const matches = HEADER_KEYWORDS.filter(k => cells.some(c => c === k || c.includes(k))).length;
     if (matches >= 1) { headerIdx = i; break; }
   }
-  // If no headers, treat row 0 as data with column order [desc, label, type]
-  let descCol = 0, labelCol = 1, typeCol = 2;
+  // If no headers, treat row 0 as data with column order [desc, label, type, time]
+  let descCol = 0, labelCol = 1, typeCol = 2, timeCol = 3;
   if (headerIdx >= 0) {
     const headers = (rows[headerIdx] || []).map(c => String(c || '').toLowerCase().trim());
     const findCol = (...keys) => headers.findIndex(h => keys.some(k => h === k || h.includes(k)));
     const di = findCol('description', 'task');
     const li = findCol('proof name', 'label');
     const ti = findCol('proof type', 'type');
+    const tmi = findCol('time of day', 'due time', 'time');
     if (di >= 0) descCol = di;
     if (li >= 0) labelCol = li; else labelCol = -1;
     if (ti >= 0) typeCol = ti; else typeCol = -1;
+    if (tmi >= 0) timeCol = tmi; else timeCol = -1;
   } else {
     headerIdx = -1;  // start reading from row 0
   }
+
+  // Excel stores time-of-day cells as fractional Date numbers (0.5 =
+  // noon) when the user formats the cell as Time.  Convert to HH:MM
+  // 24h.  Also accept plain strings ("14:30", "2:30 PM") and pre-
+  // formatted Excel strings like "14:30:00".
+  const formatExcelTime = (v) => {
+    if (v == null || v === '') return '';
+    if (typeof v === 'number') {
+      // Fractional part = time of day; ignore integer part (date)
+      const frac = v - Math.floor(v);
+      const totalMins = Math.round(frac * 24 * 60);
+      const h = Math.floor(totalMins / 60) % 24;
+      const m = totalMins % 60;
+      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+    }
+    return String(v).trim();
+  };
 
   const dataStart = headerIdx >= 0 ? headerIdx + 1 : 0;
   const parsed = [];
@@ -768,7 +787,8 @@ router.post('/checklists/parse-excel', checklistsExcelUpload.single('file'), (re
     const proof_label = labelCol >= 0 ? String(row[labelCol] || '').trim() || null : null;
     const rawType = typeCol >= 0 ? String(row[typeCol] || '').trim().toLowerCase() : '';
     const proof_type = ALLOWED_PROOF_TYPES.includes(rawType) ? rawType : null;
-    parsed.push({ description, proof_label, proof_type });
+    const due_time = timeCol >= 0 ? formatExcelTime(row[timeCol]) || null : null;
+    parsed.push({ description, proof_label, proof_type, due_time });
   }
 
   cleanup();
@@ -836,13 +856,33 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
   const defaultPl = proof_label && String(proof_label).trim() ? String(proof_label).trim() : null;
 
   // Mam (2026-05-22): per-line overrides via pipe or tab separator:
-  //   Pay GST           | GST File
+  //   Pay GST           | GST File       | pdf | 10:00
   //   Reconcile cash    | Bank Statement | pdf
-  //   Take site photo
+  //   Take site photo                               | 17:30
   // Column 1 = description (required)
   // Column 2 = proof_label override (optional — falls back to shared)
   // Column 3 = proof_type override  (optional, must be in whitelist)
-  // Lines with NO separator just use the shared proof_label/proof_type.
+  // Column 4 = due_time override    (optional, HH:MM 24h; falls back to shared)
+  // Lines with NO separator just use the shared bulk settings.
+  const normaliseTime = (s) => {
+    if (!s) return null;
+    const t = String(s).trim();
+    // Accept HH:MM 24h, H:MM AM/PM, and Excel's HH:MM:SS (drop seconds).
+    let m;
+    if ((m = t.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*$/))) {
+      const h = +m[1], mn = +m[2];
+      if (h >= 0 && h <= 23 && mn >= 0 && mn <= 59) return `${String(h).padStart(2,'0')}:${String(mn).padStart(2,'0')}`;
+    }
+    if ((m = t.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i))) {
+      let h = +m[1]; const mn = +m[2]; const ap = m[3].toLowerCase();
+      if (h === 12) h = 0;
+      if (ap === 'pm') h += 12;
+      if (h >= 0 && h <= 23 && mn >= 0 && mn <= 59) return `${String(h).padStart(2,'0')}:${String(mn).padStart(2,'0')}`;
+    }
+    return null;
+  };
+  const defaultDueTime = due_time && normaliseTime(due_time);
+
   const rows = [];
   const seen = new Set();
   for (const raw of tasks) {
@@ -859,7 +899,8 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
     const rowLabel = parts[1] && parts[1].trim() ? parts[1].trim() : defaultPl;
     const rawType = parts[2] && parts[2].trim().toLowerCase();
     const rowType = rawType && ALLOWED_PROOF_TYPES.includes(rawType) ? rawType : defaultPt;
-    rows.push({ description, proof_label: rowLabel, proof_type: rowType });
+    const rowTime = normaliseTime(parts[3]) || defaultDueTime || null;
+    rows.push({ description, proof_label: rowLabel, proof_type: rowType, due_time: rowTime });
   }
   if (rows.length === 0) return res.status(400).json({ error: 'All task lines were empty' });
 
@@ -873,7 +914,8 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
     let added = 0;
     for (const r of items) {
       const title = deriveTitle(null, r.description);
-      ins.run(title, r.description, frequency || 'monthly', due_date || null, due_time || null,
+      ins.run(title, r.description, frequency || 'monthly', due_date || null,
+              r.due_time || null,
               assigned_to, dept,
               recurrence_start_date || null, recurrence_end_date || null,
               r.proof_type, r.proof_label, req.user.id);
