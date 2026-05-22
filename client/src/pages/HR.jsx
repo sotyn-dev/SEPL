@@ -64,6 +64,10 @@ export default function HR() {
   const [stageForm, setStageForm] = useState({});
   const [stageRow, setStageRow] = useState(null);
   const [uploading, setUploading] = useState(false);
+  // Mam (2026-05-22): pill-tabs for the 5-stage pipeline, same shape
+  // as CRM Full Kitting's Stage 1/2/3 row.  Filter values map to the
+  // status buckets pipelineFor() returns.
+  const [stageFilter, setStageFilter] = useState('all');
 
   const load = () => {
     api.get('/hr/candidates').then(r => setCandidates(r.data));
@@ -212,8 +216,37 @@ export default function HR() {
           module" — standalone Sub-Contractors module already lives in
           the sidebar).  HR & Hiring is now Candidates-only. */}
 
-      {tab === 'candidates' && (
-        <>
+      {tab === 'candidates' && (() => {
+        // Bucket each candidate into one of 5 stages (+ rejected + all).
+        // Drives both the pill counts and the table filter.  Kept inline
+        // here because pipelineFor() above only knows label/colour, not
+        // the funnel-stage bucket mam asked for.
+        const bucketFor = (c) => {
+          const s = c.status || 'lead';
+          if (s === 'rejected') return 'rejected';
+          if (s === 'lead' || s === 'called') return 'lead';
+          if (s === 'interview_scheduled')    return 'schedule';
+          if (s === 'interview_done')         return 'decision';
+          if (s === 'qualified')              return 'md';
+          if (['offer_sent','accepted','onboarded'].includes(s)) return 'offer';
+          return 'lead';
+        };
+        const STAGE_PILLS = [
+          { id: 'lead',     label: 'Stage 1 — LEAD',                   color: 'bg-blue-500' },
+          { id: 'schedule', label: 'Stage 2 — SCHEDULE INTERVIEW',     color: 'bg-indigo-500' },
+          { id: 'decision', label: 'Stage 3 — INTERVIEW DECISION',     color: 'bg-amber-500' },
+          { id: 'md',       label: 'Stage 4 — MD ROUND',               color: 'bg-purple-500' },
+          { id: 'offer',    label: 'Stage 5 — OFFER & ONBOARDING',     color: 'bg-emerald-500' },
+          { id: 'rejected', label: 'REJECTED',                          color: 'bg-rose-500' },
+        ];
+        const stageCounts = STAGE_PILLS.reduce((acc, s) => {
+          acc[s.id] = candidates.filter(c => bucketFor(c) === s.id).length;
+          return acc;
+        }, {});
+        const visibleCandidates = stageFilter === 'all'
+          ? candidates
+          : candidates.filter(c => bucketFor(c) === stageFilter);
+        return (<>
           <div className="flex justify-between items-center flex-wrap gap-2">
             <div>
               <h3 className="font-semibold">Hiring Pipeline</h3>
@@ -226,6 +259,37 @@ export default function HR() {
                 className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
               <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', source: 'naukri', position: '', notes: '' }); setModal('candidate'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Candidate</button>
             </div>
+          </div>
+
+          {/* Stage pill tabs — same Sales-Funnel / CRM-Kitting pattern
+              with coloured count badges.  Click a pill to filter the
+              table.  Mam (2026-05-22). */}
+          <div className="flex gap-2 flex-wrap items-center">
+            <button
+              onClick={() => setStageFilter('all')}
+              className={`btn ${stageFilter === 'all' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
+            >
+              All
+              <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[22px] text-center ${stageFilter === 'all' ? 'bg-white/30 text-white' : 'text-white bg-gray-500'}`}>
+                {candidates.length}
+              </span>
+            </button>
+            {STAGE_PILLS.map(s => {
+              const active = stageFilter === s.id;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => setStageFilter(s.id)}
+                  className={`btn ${active ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
+                  title={s.label}
+                >
+                  {s.label}
+                  <span className={`px-1.5 rounded-full text-[10px] font-bold min-w-[22px] text-center ${active ? 'bg-white/30 text-white' : `text-white ${s.color}`}`}>
+                    {stageCounts[s.id] || 0}
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
           <div className="card p-0 overflow-x-auto">
@@ -241,7 +305,7 @@ export default function HR() {
                 </tr>
               </thead>
               <tbody>
-                {candidates.map(c => {
+                {visibleCandidates.map(c => {
                   const p = pipelineFor(c);
                   return (
                     <tr key={c.id} className="border-t hover:bg-gray-50/60 align-top">
@@ -291,12 +355,18 @@ export default function HR() {
                     </tr>
                   );
                 })}
-                {candidates.length === 0 && <tr><td colSpan="6" className="text-center py-8 text-gray-400">No candidates yet — click "Add Candidate" to start the pipeline</td></tr>}
+                {visibleCandidates.length === 0 && (
+                  <tr><td colSpan="6" className="text-center py-8 text-gray-400">
+                    {candidates.length === 0
+                      ? 'No candidates yet — click "Add Candidate" to start the pipeline'
+                      : `No candidates in ${STAGE_PILLS.find(p => p.id === stageFilter)?.label || stageFilter}`}
+                  </td></tr>
+                )}
               </tbody>
             </table>
           </div>
-        </>
-      )}
+        </>);
+      })()}
 
       {tab === 'contractors' && (
         <>
