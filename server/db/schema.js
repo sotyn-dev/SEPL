@@ -782,6 +782,49 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- HR Phase 1 Batch C (mam 2026-05-22): Screening Questions.
+    -- Per-position screening forms (hiring_request_id set) or global
+    -- (hiring_request_id NULL) for HR to use during phone screening.
+    --
+    -- question_type options:
+    --   'mcq'         — single-choice from options (JSON array)
+    --   'descriptive' — free-text answer
+    --   'yes_no'      — boolean
+    --   'number'      — numeric input (notice period, current salary, exp etc.)
+    --
+    -- auto_reject_op + auto_reject_value form the rules engine:
+    --   gt (a > v), lt (a < v), gte, lte, eq, neq, contains, not_contains,
+    --   in (a ∈ csv-v), not_in
+    -- A null op means the question has NO auto-reject rule (info only).
+    CREATE TABLE IF NOT EXISTS screening_questions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      hiring_request_id INTEGER REFERENCES hiring_requests(id),
+      question_text TEXT NOT NULL,
+      question_type TEXT NOT NULL CHECK(question_type IN ('mcq','descriptive','yes_no','number')) DEFAULT 'descriptive',
+      options TEXT,                            -- JSON array for MCQ
+      is_mandatory INTEGER DEFAULT 0,
+      auto_reject_op TEXT,                     -- gt | lt | gte | lte | eq | neq | contains | not_contains | in | not_in
+      auto_reject_value TEXT,                  -- string/number/csv depending on op
+      auto_reject_reason TEXT,                 -- shown to admin when this rule fires
+      order_index INTEGER DEFAULT 0,
+      is_active INTEGER DEFAULT 1,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- HR Phase 1 Batch C (mam 2026-05-22): Screening Answers.
+    -- One row per (candidate × question).  Submitting a screening
+    -- form deletes-and-reinserts so re-screening doesn't double-count.
+    CREATE TABLE IF NOT EXISTS screening_answers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+      question_id INTEGER NOT NULL REFERENCES screening_questions(id) ON DELETE CASCADE,
+      answer_text TEXT,                        -- always stored as text; cast at eval time
+      auto_rejected INTEGER DEFAULT 0,         -- did THIS answer trip its rule?
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- HR Phase 1 Batch B (mam 2026-05-22): Final Round Question Bank.
     -- Curated questions MD / panel can pull during the final round,
     -- organised by category (Leadership / Ownership / Decision
@@ -2167,6 +2210,15 @@ function initializeDatabase() {
     ['candidates', 'is_on_hold INTEGER DEFAULT 0'],
     ['candidates', 'hold_reason TEXT'],
     ['candidates', 'hiring_request_id INTEGER REFERENCES hiring_requests(id)'],
+    // HR Phase 1 Batch C (mam 2026-05-22): eligibility engine.
+    // Stamped by /candidates/:id/screening-answers after rules run.
+    //   'eligible'  — all mandatory questions answered, no rule fired
+    //   'partial'   — mandatory question(s) unanswered
+    //   'rejected'  — at least one auto-reject rule fired
+    //   NULL         — screening hasn't been run yet
+    ['candidates', 'eligibility_status TEXT'],
+    ['candidates', 'eligibility_reason TEXT'],   // which rule fired (for "rejected") OR which q missed (for "partial")
+    ['candidates', 'screened_at DATETIME'],
     // price_requests carries the item's department (CIVIL / ELE / FF / etc.)
     // so the auto-promoted item_master row lands in the right department too.
     ['price_requests', 'department TEXT'],

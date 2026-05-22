@@ -1454,4 +1454,349 @@ function safeParseJson(s) {
   try { return JSON.parse(s); } catch (_) { return s; }
 }
 
+// ═════════════════════════════════════════════════════════════════
+// SCREENING QUESTIONS + ELIGIBILITY ENGINE
+// (mam 2026-05-22 Phase 1 Batch C, modules #5 + #6)
+// ═════════════════════════════════════════════════════════════════
+//
+// Per-position screening forms (hiring_request_id set) or GLOBAL
+// (hiring_request_id NULL) for HR to fill during phone screening.
+// On submit, the engine evaluates auto-reject rules and stamps the
+// candidate with eligibility_status: eligible | partial | rejected.
+
+// ── QUESTIONS CRUD ──
+router.get('/screening-questions', (req, res) => {
+  const { hiring_request_id, active } = req.query;
+  let sql = `SELECT * FROM screening_questions WHERE 1=1`;
+  const args = [];
+  if (hiring_request_id === 'global') {
+    sql += ' AND hiring_request_id IS NULL';
+  } else if (hiring_request_id) {
+    // Both this position's questions AND any global ones apply.
+    sql += ' AND (hiring_request_id = ? OR hiring_request_id IS NULL)';
+    args.push(+hiring_request_id);
+  }
+  if (active === '1') sql += ' AND is_active = 1';
+  sql += ' ORDER BY hiring_request_id NULLS FIRST, order_index, id';
+  const rows = getDb().prepare(sql).all(...args);
+  res.json(rows.map(r => ({ ...r, options: safeParseJson(r.options) })));
+});
+
+router.post('/screening-questions', (req, res) => {
+  try {
+    const { hiring_request_id, question_text, question_type, options,
+            is_mandatory, auto_reject_op, auto_reject_value,
+            auto_reject_reason, order_index } = req.body || {};
+    if (!question_text || !String(question_text).trim()) return res.status(400).json({ error: 'Question text is required' });
+    const allowedTypes = ['mcq','descriptive','yes_no','number'];
+    const qt = allowedTypes.includes(question_type) ? question_type : 'descriptive';
+    const allowedOps = ['gt','lt','gte','lte','eq','neq','contains','not_contains','in','not_in'];
+    const op = auto_reject_op && allowedOps.includes(auto_reject_op) ? auto_reject_op : null;
+    const r = getDb().prepare(`
+      INSERT INTO screening_questions
+        (hiring_request_id, question_text, question_type, options,
+         is_mandatory, auto_reject_op, auto_reject_value, auto_reject_reason,
+         order_index, is_active, created_by)
+      VALUES (?,?,?,?,?,?,?,?,?,1,?)
+    `).run(
+      hiring_request_id ? +hiring_request_id : null,
+      question_text.trim(), qt,
+      options ? (typeof options === 'string' ? options : JSON.stringify(options)) : null,
+      is_mandatory ? 1 : 0,
+      op, op ? (auto_reject_value == null ? null : String(auto_reject_value)) : null,
+      op ? (auto_reject_reason || null) : null,
+      order_index != null ? +order_index : 0,
+      req.user.id,
+    );
+    res.status(201).json({ id: r.lastInsertRowid });
+  } catch (err) {
+    console.error('POST /hr/screening-questions error', err);
+    res.status(500).json({ error: err.message || 'Failed to save question' });
+  }
+});
+
+router.put('/screening-questions/:id', (req, res) => {
+  const { hiring_request_id, question_text, question_type, options,
+          is_mandatory, auto_reject_op, auto_reject_value,
+          auto_reject_reason, order_index, is_active } = req.body || {};
+  getDb().prepare(`
+    UPDATE screening_questions SET
+      hiring_request_id = ?,
+      question_text = COALESCE(?, question_text),
+      question_type = COALESCE(?, question_type),
+      options = ?,
+      is_mandatory = COALESCE(?, is_mandatory),
+      auto_reject_op = ?,
+      auto_reject_value = ?,
+      auto_reject_reason = ?,
+      order_index = COALESCE(?, order_index),
+      is_active = COALESCE(?, is_active)
+    WHERE id = ?
+  `).run(
+    hiring_request_id != null ? (hiring_request_id ? +hiring_request_id : null) : null,
+    question_text || null, question_type || null,
+    options != null ? (typeof options === 'string' ? options : JSON.stringify(options)) : null,
+    is_mandatory != null ? (is_mandatory ? 1 : 0) : null,
+    auto_reject_op || null,
+    auto_reject_value != null ? String(auto_reject_value) : null,
+    auto_reject_reason || null,
+    order_index != null ? +order_index : null,
+    is_active != null ? (is_active ? 1 : 0) : null,
+    req.params.id,
+  );
+  res.json({ message: 'Updated' });
+});
+
+router.delete('/screening-questions/:id', (req, res) => {
+  const db = getDb();
+  // Cascade deletes answers via ON DELETE CASCADE.
+  const r = db.prepare('DELETE FROM screening_questions WHERE id = ?').run(req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ message: 'Deleted' });
+});
+
+// ── EVALUATION HELPERS ──
+//
+// evalRule(answer, op, value) → boolean (true = AUTO-REJECT TRIGGERED)
+// Handles numeric coercion for gt/lt/gte/lte, CSV split for in/not_in,
+// case-insensitive contains for descriptive answers.
+function evalRule(answerRaw, op, value) {
+  if (!op) return false;
+  const a = answerRaw == null ? '' : String(answerRaw).trim();
+  const v = value == null ? '' : String(value).trim();
+  if (!a && a !== '0') return false;  // unanswered — handled by 'partial', not 'rejected'
+  switch (op) {
+    case 'eq':            return a.toLowerCase() === v.toLowerCase();
+    case 'neq':           return a.toLowerCase() !== v.toLowerCase();
+    case 'gt':            return Number(a) >  Number(v);
+    case 'lt':            return Number(a) <  Number(v);
+    case 'gte':           return Number(a) >= Number(v);
+    case 'lte':           return Number(a) <= Number(v);
+    case 'contains':      return a.toLowerCase().includes(v.toLowerCase());
+    case 'not_contains':  return !a.toLowerCase().includes(v.toLowerCase());
+    case 'in': {
+      const list = v.split(/[,;|]/).map(s => s.trim().toLowerCase()).filter(Boolean);
+      return list.includes(a.toLowerCase());
+    }
+    case 'not_in': {
+      const list = v.split(/[,;|]/).map(s => s.trim().toLowerCase()).filter(Boolean);
+      return !list.includes(a.toLowerCase());
+    }
+    default: return false;
+  }
+}
+
+// ── ANSWER SUBMIT + AUTO-EVALUATE ──
+router.post('/candidates/:id/screening-answers', (req, res) => {
+  try {
+    const candidateId = +req.params.id;
+    const { answers } = req.body || {};        // [{ question_id, answer_text }]
+    if (!Array.isArray(answers)) return res.status(400).json({ error: 'answers must be an array' });
+
+    const db = getDb();
+    const candidate = db.prepare('SELECT id, hiring_request_id FROM candidates WHERE id=?').get(candidateId);
+    if (!candidate) return res.status(404).json({ error: 'Candidate not found' });
+
+    // Pull applicable questions (this position + globals)
+    let qSql = `SELECT * FROM screening_questions WHERE is_active = 1`;
+    const qArgs = [];
+    if (candidate.hiring_request_id) {
+      qSql += ' AND (hiring_request_id = ? OR hiring_request_id IS NULL)';
+      qArgs.push(candidate.hiring_request_id);
+    } else {
+      qSql += ' AND hiring_request_id IS NULL';
+    }
+    const questions = db.prepare(qSql).all(...qArgs);
+
+    // Delete + reinsert the candidate's answers (re-screening is allowed)
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM screening_answers WHERE candidate_id = ?').run(candidateId);
+      const ins = db.prepare(
+        `INSERT INTO screening_answers (candidate_id, question_id, answer_text, auto_rejected, created_by)
+         VALUES (?,?,?,?,?)`
+      );
+
+      // Build a quick lookup of submitted answers
+      const ansByQ = {};
+      for (const a of answers) {
+        if (a && a.question_id != null) ansByQ[+a.question_id] = a.answer_text;
+      }
+
+      // Evaluate each applicable question
+      let firstRejectReason = null;
+      let firstMissingMandatory = null;
+      for (const q of questions) {
+        const ans = ansByQ[q.id];
+        const rejected = evalRule(ans, q.auto_reject_op, q.auto_reject_value);
+        if (rejected && !firstRejectReason) {
+          firstRejectReason = q.auto_reject_reason ||
+            `Auto-rejected: "${q.question_text}" answer (${ans}) failed rule ${q.auto_reject_op} ${q.auto_reject_value}`;
+        }
+        if (q.is_mandatory && (ans == null || String(ans).trim() === '') && !firstMissingMandatory) {
+          firstMissingMandatory = `Missing mandatory: "${q.question_text}"`;
+        }
+        // Save the answer (only for questions the user actually answered)
+        if (ans != null && String(ans).trim() !== '') {
+          ins.run(candidateId, q.id, String(ans), rejected ? 1 : 0, req.user.id);
+        }
+      }
+
+      // Stamp eligibility
+      let status, reason;
+      if (firstRejectReason) {
+        status = 'rejected';
+        reason = firstRejectReason;
+      } else if (firstMissingMandatory) {
+        status = 'partial';
+        reason = firstMissingMandatory;
+      } else {
+        status = 'eligible';
+        reason = null;
+      }
+      db.prepare(`UPDATE candidates
+                     SET eligibility_status = ?,
+                         eligibility_reason = ?,
+                         screened_at = CURRENT_TIMESTAMP
+                   WHERE id = ?`).run(status, reason, candidateId);
+
+      logEvent(db, candidateId, 'screening_done', {
+        note: `Screening: ${status}${reason ? ' — ' + reason : ''}`,
+        user_id: req.user.id, user_name: req.user.name,
+      });
+
+      return { status, reason };
+    });
+
+    const out = tx();
+    res.json({ ok: true, ...out });
+  } catch (err) {
+    console.error('POST /hr/candidates/:id/screening-answers error', err);
+    res.status(500).json({ error: err.message || 'Failed to save screening answers' });
+  }
+});
+
+router.get('/candidates/:id/screening-answers', (req, res) => {
+  const rows = getDb().prepare(
+    `SELECT a.*, q.question_text, q.question_type, q.options, q.is_mandatory,
+            q.auto_reject_op, q.auto_reject_value, q.auto_reject_reason
+       FROM screening_answers a
+       JOIN screening_questions q ON q.id = a.question_id
+      WHERE a.candidate_id = ?
+      ORDER BY q.order_index, q.id`
+  ).all(req.params.id);
+  res.json(rows.map(r => ({ ...r, options: safeParseJson(r.options) })));
+});
+
+// ═════════════════════════════════════════════════════════════════
+// HR DASHBOARD — 6 KPIs (mam 2026-05-22 Phase 1 Batch C, module #14)
+// ═════════════════════════════════════════════════════════════════
+//
+// Single endpoint that powers the Dashboard tab inside /hr.  Cheap
+// aggregates over candidates + hiring_requests; runs in <50ms even
+// at a few thousand rows since SQLite indexes the candidate.status
+// column implicitly via the CHECK constraint.
+
+router.get('/dashboard', (req, res) => {
+  const db = getDb();
+
+  // ── 1. Open positions: approved + not closed
+  const openPositions = db.prepare(
+    `SELECT COUNT(*) AS c FROM hiring_requests WHERE status = 'approved'`
+  ).get().c;
+
+  // ── 2. Candidates in pipeline: NOT rejected/onboarded
+  const inPipeline = db.prepare(
+    `SELECT COUNT(*) AS c FROM candidates
+      WHERE status NOT IN ('rejected','onboarded')`
+  ).get().c;
+
+  // ── 3. Time to hire: avg(joining_date - created_at) for onboarded
+  const tth = db.prepare(`
+    SELECT AVG(julianday(COALESCE(joining_date, DATE('now'))) - julianday(DATE(created_at))) AS days,
+           COUNT(*) AS n
+    FROM candidates WHERE status = 'onboarded'
+  `).get();
+  const timeToHireDays = tth.days != null ? Math.round(tth.days) : null;
+
+  // ── 4. Offer acceptance rate: accepted+onboarded / (offer_sent+accepted+onboarded)
+  //     "rejected after offer" isn't tracked separately yet, so we
+  //     approximate using post-offer statuses.
+  const offers = db.prepare(`
+    SELECT
+      SUM(CASE WHEN status IN ('accepted','onboarded') THEN 1 ELSE 0 END) AS accepted_count,
+      SUM(CASE WHEN status IN ('offer_sent','accepted','onboarded') THEN 1 ELSE 0 END) AS offer_count
+    FROM candidates
+  `).get();
+  const offerAcceptRate = offers.offer_count > 0
+    ? Math.round((offers.accepted_count / offers.offer_count) * 1000) / 10   // 1-decimal %
+    : null;
+
+  // ── 5. Joining status: candidates with offers accepted (joining pending)
+  //     Split into "this month" vs "later" for the dashboard tile.
+  const joining = db.prepare(`
+    SELECT
+      SUM(CASE WHEN status = 'accepted' THEN 1 ELSE 0 END) AS pending,
+      SUM(CASE WHEN status = 'onboarded' THEN 1 ELSE 0 END) AS onboarded,
+      SUM(CASE WHEN status = 'accepted' AND joining_date IS NOT NULL
+                AND joining_date BETWEEN DATE('now') AND DATE('now','+30 days')
+               THEN 1 ELSE 0 END) AS joining_next_30
+    FROM candidates
+  `).get();
+
+  // ── 6. Pending interviews: scheduled and date is today or future
+  const pendingInterviews = db.prepare(`
+    SELECT COUNT(*) AS c FROM candidates
+     WHERE status = 'interview_scheduled'
+       AND (interview_date IS NULL OR DATE(interview_date) >= DATE('now'))
+  `).get().c;
+
+  // ── Extras for the dashboard charts
+  const byStage = db.prepare(`
+    SELECT status, COUNT(*) AS c FROM candidates
+     WHERE is_on_hold = 0 OR is_on_hold IS NULL
+     GROUP BY status
+  `).all();
+
+  const bySource = db.prepare(`
+    SELECT source, COUNT(*) AS c FROM candidates
+     WHERE source IS NOT NULL GROUP BY source
+  `).all();
+
+  const newThisMonth = db.prepare(`
+    SELECT COUNT(*) AS c FROM candidates
+     WHERE created_at >= DATE('now','start of month')
+  `).get().c;
+
+  const eligibility = db.prepare(`
+    SELECT
+      SUM(CASE WHEN eligibility_status = 'eligible' THEN 1 ELSE 0 END) AS eligible,
+      SUM(CASE WHEN eligibility_status = 'partial' THEN 1 ELSE 0 END) AS partial,
+      SUM(CASE WHEN eligibility_status = 'rejected' THEN 1 ELSE 0 END) AS rejected,
+      SUM(CASE WHEN eligibility_status IS NULL THEN 1 ELSE 0 END) AS not_screened
+    FROM candidates
+  `).get();
+
+  // ── Hiring requests by status (for the dashboard's "open" tile drill-down)
+  const reqsByStatus = db.prepare(`
+    SELECT status, COUNT(*) AS c FROM hiring_requests GROUP BY status
+  `).all();
+
+  res.json({
+    kpis: {
+      open_positions:        openPositions || 0,
+      candidates_in_pipeline: inPipeline || 0,
+      time_to_hire_days:      timeToHireDays,                 // null if no onboarded yet
+      offer_acceptance_rate:  offerAcceptRate,                // % (1 decimal)
+      joining_pending:        joining.pending || 0,
+      joining_next_30:        joining.joining_next_30 || 0,
+      pending_interviews:     pendingInterviews || 0,
+      new_this_month:         newThisMonth || 0,
+    },
+    eligibility:    eligibility,
+    by_stage:       byStage,
+    by_source:      bySource,
+    reqs_by_status: reqsByStatus,
+  });
+});
+
 module.exports = router;

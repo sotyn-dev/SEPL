@@ -5,12 +5,14 @@ import StatusBadge from '../components/StatusBadge';
 import HiringRequestsTab from '../components/HiringRequestsTab';
 import JobDescriptionsTab from '../components/JobDescriptionsTab';
 import FinalRoundQuestionsTab from '../components/FinalRoundQuestionsTab';
+import ScreeningQuestionsTab from '../components/ScreeningQuestionsTab';
+import DashboardTab from '../components/DashboardTab';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import {
   FiPlus, FiEdit2, FiTrash2, FiCalendar, FiCheckCircle, FiUser, FiFileText,
   FiAward, FiDownload, FiClock, FiTag, FiPauseCircle, FiPlayCircle, FiBriefcase,
-  FiAlertTriangle,
+  FiAlertTriangle, FiClipboard, FiBarChart2, FiHelpCircle,
 } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
@@ -97,6 +99,11 @@ export default function HR() {
   const [holdRow, setHoldRow] = useState(null);
   const [holdDraft, setHoldDraft] = useState('');
   const [dupWarning, setDupWarning] = useState(null);   // { duplicates, payload } | null
+  // Batch C: screening modal — applicable questions + admin's draft answers
+  const [screeningRow, setScreeningRow] = useState(null);
+  const [screeningQs, setScreeningQs] = useState([]);
+  const [screeningAns, setScreeningAns] = useState({});  // { [question_id]: answer_text }
+  const [screeningSubmitting, setScreeningSubmitting] = useState(false);
 
   const load = () => {
     api.get('/hr/candidates').then(r => setCandidates(r.data));
@@ -208,6 +215,53 @@ export default function HR() {
       setHoldRow(null); load();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to toggle hold');
+    }
+  };
+
+  // ── Batch C: Screening flow (mam 2026-05-22) ────────────────────
+  // Opens the modal pre-loaded with all applicable questions (the
+  // candidate's hiring_request_id + globals).  Pre-fills with any
+  // existing answers so re-screening shows what was previously asked.
+  const openScreening = async (row) => {
+    setScreeningRow(row);
+    setScreeningQs([]);
+    setScreeningAns({});
+    try {
+      const reqId = row.hiring_request_id || 'global';
+      const [qs, prev] = await Promise.all([
+        api.get(`/hr/screening-questions?hiring_request_id=${reqId}&active=1`),
+        api.get(`/hr/candidates/${row.id}/screening-answers`).catch(() => ({ data: [] })),
+      ]);
+      setScreeningQs(qs.data || []);
+      const draft = {};
+      for (const a of (prev.data || [])) draft[a.question_id] = a.answer_text;
+      setScreeningAns(draft);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load screening form');
+    }
+  };
+
+  const submitScreening = async () => {
+    setScreeningSubmitting(true);
+    try {
+      const answers = Object.entries(screeningAns).map(([qid, txt]) => ({
+        question_id: +qid,
+        answer_text: txt,
+      }));
+      const r = await api.post(`/hr/candidates/${screeningRow.id}/screening-answers`, { answers });
+      const verdict = r.data?.status;
+      const reason = r.data?.reason;
+      const msg = verdict === 'eligible' ? '✓ Candidate is eligible'
+                : verdict === 'partial'  ? `⚠ Partial — ${reason}`
+                :                          `✗ Auto-rejected — ${reason}`;
+      if (verdict === 'rejected') toast.error(msg, { duration: 8000 });
+      else if (verdict === 'partial') toast(msg, { icon: '⚠️', duration: 6000 });
+      else toast.success(msg);
+      setScreeningRow(null); load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save screening');
+    } finally {
+      setScreeningSubmitting(false);
     }
   };
 
@@ -340,15 +394,17 @@ export default function HR() {
 
   return (
     <div className="space-y-4">
-      {/* Top-level tab switcher — Candidates (ATS) | Hiring Requests
-          | JDs | Final-Round Qs.  Mam (2026-05-22 Phase 1 spec)
-          wants all HR modules under the single /hr page (no separate
-          sidebar entries). */}
+      {/* Top-level tab switcher — Dashboard | Candidates | Hiring
+          Requests | JDs | Screening Qs | Final-Round Qs.  Mam
+          (2026-05-22 Phase 1 spec) wants all HR modules under the
+          single /hr page (no separate sidebar entries). */}
       <div className="flex gap-2 border-b border-gray-200 overflow-x-auto">
         {[
-          { id: 'candidates',      label: 'Candidates (ATS)',  icon: FiUser },
+          { id: 'dashboard',       label: 'Dashboard',          icon: FiBarChart2 },
+          { id: 'candidates',      label: 'Candidates (ATS)',   icon: FiUser },
           { id: 'hiring-requests', label: 'Hiring Requests',    icon: FiBriefcase },
           { id: 'jds',             label: 'Job Descriptions',   icon: FiFileText },
+          { id: 'screening',       label: 'Screening Qs',       icon: FiClipboard },
           { id: 'final-round',     label: 'Final-Round Qs',     icon: FiAward },
         ].map(t => {
           const active = tab === t.id;
@@ -368,8 +424,10 @@ export default function HR() {
         })}
       </div>
 
+      {tab === 'dashboard'       && <DashboardTab />}
       {tab === 'hiring-requests' && <HiringRequestsTab employees={employees} />}
       {tab === 'jds'             && <JobDescriptionsTab />}
+      {tab === 'screening'       && <ScreeningQuestionsTab />}
       {tab === 'final-round'     && <FinalRoundQuestionsTab />}
 
       {tab === 'candidates' && (() => {
@@ -470,12 +528,22 @@ export default function HR() {
                   return (
                     <tr key={c.id} className="border-t hover:bg-gray-50/60 align-top">
                       <td className="px-3 py-2">
-                        <div className="font-medium text-gray-900 flex items-center gap-1.5">
+                        <div className="font-medium text-gray-900 flex items-center gap-1.5 flex-wrap">
                           {c.name}
                           {c.is_on_hold && (
                             <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-gray-200 text-gray-700" title={c.hold_reason || 'On hold'}>
                               ⏸ HOLD
                             </span>
+                          )}
+                          {/* Batch C: eligibility badge stamped after screening */}
+                          {c.eligibility_status === 'eligible' && (
+                            <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200" title="Passed screening">✓ ELIGIBLE</span>
+                          )}
+                          {c.eligibility_status === 'partial' && (
+                            <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200" title={c.eligibility_reason || 'Mandatory questions unanswered'}>◐ PARTIAL</span>
+                          )}
+                          {c.eligibility_status === 'rejected' && (
+                            <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200" title={c.eligibility_reason || 'Auto-rejected by screening'}>✗ AUTO-REJECT</span>
                           )}
                         </div>
                         {c.phone && <div className="text-[11px] text-gray-500">📞 {c.phone}</div>}
@@ -531,6 +599,17 @@ export default function HR() {
                           {p.next === 'schedule_md' && <button onClick={() => openStage(c, 'schedule_md')} className="btn btn-primary text-[11px] py-1 px-2"><FiCalendar size={11} className="inline mr-1"/>Schedule MD Interview</button>}
                           {p.next === 'md_decision' && <button onClick={() => openStage(c, 'md_decision')} className="btn btn-primary text-[11px] py-1 px-2"><FiAward size={11} className="inline mr-1"/>MD Decision + Offer</button>}
                           {p.next === 'finalize' && <button onClick={() => openStage(c, 'finalize')} className="btn btn-primary text-[11px] py-1 px-2"><FiCheckCircle size={11} className="inline mr-1"/>Mark Onboarded</button>}
+                          <button
+                            onClick={() => openScreening(c)}
+                            className={`p-1 ${
+                              c.eligibility_status === 'eligible' ? 'text-emerald-600 hover:text-emerald-700'
+                              : c.eligibility_status === 'partial' ? 'text-amber-600 hover:text-amber-700'
+                              : c.eligibility_status === 'rejected' ? 'text-rose-600 hover:text-rose-700'
+                              : 'text-gray-400 hover:text-blue-600'
+                            }`}
+                            title={c.eligibility_status ? `Re-screen (current: ${c.eligibility_status})` : 'Run screening'}>
+                            <FiClipboard size={14} />
+                          </button>
                           <button onClick={() => openTimeline(c)} className="p-1 text-gray-400 hover:text-indigo-600" title="Activity timeline"><FiClock size={14} /></button>
                           <button
                             onClick={() => openHold(c)}
@@ -1024,6 +1103,114 @@ export default function HR() {
               </div>
             </>
           )}
+        </div>
+      </Modal>
+
+      {/* ── BATCH C: RUN SCREENING modal ──
+          HR types/picks the candidate's answers to the applicable
+          screening questions, hits Submit, and the server stamps the
+          candidate's eligibility_status (eligible / partial / rejected). */}
+      <Modal isOpen={!!screeningRow} onClose={() => setScreeningRow(null)} title={`Run Screening — ${screeningRow?.name || ''}`} wide>
+        <div className="space-y-3 max-h-[75vh] overflow-y-auto">
+          <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
+            Fill the candidate's answers below. The system will auto-stamp <b>Eligible</b> / <b>Partial</b> /
+            <b> Auto-Rejected</b> based on the rules configured under the <b>Screening Qs</b> tab.
+          </p>
+          {screeningRow?.eligibility_status && (
+            <div className="text-[12px] text-gray-700 bg-gray-50 border border-gray-200 rounded px-3 py-2">
+              Previous result: <b className={
+                screeningRow.eligibility_status === 'eligible' ? 'text-emerald-700' :
+                screeningRow.eligibility_status === 'partial'  ? 'text-amber-700'    :
+                                                                  'text-rose-700'
+              }>{screeningRow.eligibility_status.toUpperCase()}</b>
+              {screeningRow.eligibility_reason && <span className="ml-1 italic">— {screeningRow.eligibility_reason}</span>}
+            </div>
+          )}
+          {screeningQs.length === 0 ? (
+            <div className="text-center py-10 text-gray-400 text-[13px]">
+              No screening questions configured yet.<br/>
+              <a className="text-blue-700 hover:underline" onClick={() => { setScreeningRow(null); setTab('screening'); }} style={{cursor:'pointer'}}>
+                Go to Screening Qs tab to add some →
+              </a>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {screeningQs.map((q, idx) => (
+                <div key={q.id} className="border border-gray-200 rounded-lg p-3">
+                  <div className="flex items-start gap-2 mb-2">
+                    <span className="text-[11px] font-bold text-gray-500 w-5">{idx + 1}.</span>
+                    <div className="flex-1">
+                      <div className="text-[13px] text-gray-900 flex items-center gap-1.5 flex-wrap">
+                        {q.question_text}
+                        {!!q.is_mandatory && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-100 text-red-700">Mandatory *</span>}
+                        {q.auto_reject_op && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-700" title={q.auto_reject_reason || `Reject if answer ${q.auto_reject_op} ${q.auto_reject_value}`}>Has auto-reject rule</span>}
+                      </div>
+                      <div className="mt-2">
+                        {q.question_type === 'mcq' && Array.isArray(q.options) && (
+                          <div className="flex flex-wrap gap-2">
+                            {q.options.map(opt => (
+                              <button
+                                type="button"
+                                key={opt}
+                                onClick={() => setScreeningAns(a => ({ ...a, [q.id]: opt }))}
+                                className={`px-3 py-1.5 rounded-lg border text-[12px]
+                                  ${screeningAns[q.id] === opt
+                                    ? 'bg-blue-600 text-white border-blue-600'
+                                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>
+                                {opt}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {q.question_type === 'yes_no' && (
+                          <div className="flex gap-2">
+                            {['Yes','No'].map(opt => (
+                              <button
+                                type="button"
+                                key={opt}
+                                onClick={() => setScreeningAns(a => ({ ...a, [q.id]: opt }))}
+                                className={`px-4 py-1.5 rounded-lg border text-[12px] font-bold
+                                  ${screeningAns[q.id] === opt
+                                    ? (opt === 'Yes' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-red-600 text-white border-red-600')
+                                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>
+                                {opt}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {q.question_type === 'number' && (
+                          <input
+                            type="number"
+                            className="input w-40"
+                            value={screeningAns[q.id] || ''}
+                            onChange={e => setScreeningAns(a => ({ ...a, [q.id]: e.target.value }))}
+                            placeholder="number"
+                          />
+                        )}
+                        {q.question_type === 'descriptive' && (
+                          <textarea
+                            className="input"
+                            rows="2"
+                            value={screeningAns[q.id] || ''}
+                            onChange={e => setScreeningAns(a => ({ ...a, [q.id]: e.target.value }))}
+                            placeholder="Candidate's answer"
+                          />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={() => setScreeningRow(null)} className="btn btn-secondary">Cancel</button>
+            {screeningQs.length > 0 && (
+              <button onClick={submitScreening} disabled={screeningSubmitting} className="btn btn-primary">
+                {screeningSubmitting ? 'Evaluating…' : 'Submit & Evaluate'}
+              </button>
+            )}
+          </div>
         </div>
       </Modal>
 
