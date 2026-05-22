@@ -71,38 +71,21 @@ export default function Dashboard() {
   const pendingChecklists = todayChecklists.filter(c => !c.completion_id);
   const doneChecklists = todayChecklists.filter(c => c.completion_id);
 
-  // Each card drills into the page that produced its number so mam can jump
-  // straight to the underlying data instead of hunting for it.
-  const cards = [
-    { title: 'Total Leads', value: stats.leads.total, sub: `${stats.leads.new} new`, icon: FiTarget, color: 'bg-red-500', link: '/leads' },
-    { title: 'Won Deals', value: stats.leads.won, sub: `${stats.leads.qualified} qualified`, icon: FiTarget, color: 'bg-emerald-500', link: '/leads' },
-    { title: 'Active Orders', value: stats.orders.total, sub: `Rs ${(stats.orders.totalValue/100000).toFixed(1)}L value`, icon: FiShoppingCart, color: 'bg-purple-500', link: '/orders' },
-    { title: 'Installations', value: stats.installations.inProgress, sub: `${stats.installations.completed} completed`, icon: FiTool, color: 'bg-amber-500', link: '/installation' },
-    { title: 'Open Complaints', value: stats.complaints.open, sub: `${stats.complaints.inProgress} in progress`, icon: FiAlertCircle, color: 'bg-red-500', link: '/complaints' },
-    { title: 'Employees', value: stats.hr.employees, sub: `${stats.hr.subContractors} contractors`, icon: FiUsers, color: 'bg-teal-500', link: '/employees' },
-    { title: 'Pending Expenses', value: `Rs ${stats.expenses.pending.toLocaleString()}`, sub: `Rs ${stats.expenses.approved.toLocaleString()} approved`, icon: LuIndianRupee, color: 'bg-orange-500', link: '/expenses' },
-    { title: 'Candidates', value: stats.hr.candidates, sub: 'in pipeline', icon: FiUsers, color: 'bg-red-500', link: '/hr' },
-  ];
+  // Mam (2026-05-22): the 8 colour-coded KPI tiles (Total Leads /
+  // Won Deals / Active Orders / Installations / Open Complaints /
+  // Employees / Pending Expenses / Candidates) were removed from the
+  // top of the dashboard.  Each module already has its own page +
+  // filters that give richer detail than a single number, and the
+  // tiles were duplicating those numbers without adding value.
+  // The drill-down was a nice-to-have but mam asked to clear the
+  // visual noise.  Kept the data fetcher intact (no schema change)
+  // in case we want to bring them back behind an admin toggle later.
 
   return (
     <div className="space-y-6">
       {/* Daily ERP-culture mantra — rotates by day-of-year so the whole
           team sees the same quote in their morning standup. */}
       <ErpMantraBanner />
-
-      {/* Stat Cards — each drills into the page it came from */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {cards.map((c, i) => (
-          <Link to={c.link} key={i} className="stat-card hover:shadow-md transition-shadow cursor-pointer">
-            <div className={`${c.color} p-3 rounded-xl text-white`}><c.icon size={24} /></div>
-            <div className="flex-1 min-w-0">
-              <div className="text-2xl font-bold text-gray-800">{c.value}</div>
-              <div className="text-xs text-gray-500 flex items-center gap-1">{c.title} <span className="text-[10px] text-red-500 font-semibold">→</span></div>
-              <div className="text-xs text-gray-400 mt-0.5">{c.sub}</div>
-            </div>
-          </Link>
-        ))}
-      </div>
 
       {/* This Month's Attendance — hidden for admin (they don't personally
           punch in/out; they monitor everyone via the Attendance page). Only
