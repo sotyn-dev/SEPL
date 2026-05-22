@@ -3,6 +3,8 @@ import api from '../api';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import HiringRequestsTab from '../components/HiringRequestsTab';
+import JobDescriptionsTab from '../components/JobDescriptionsTab';
+import FinalRoundQuestionsTab from '../components/FinalRoundQuestionsTab';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -240,10 +242,36 @@ export default function HR() {
   const submitInterviewDecision = async (e) => {
     e.preventDefault();
     if (!stageForm.decision) return toast.error('Pick a decision');
+    // First the decision (always saved)
     await api.post(`/hr/candidates/${stageRow.id}/interview-done`, {
       decision: stageForm.decision,
       notes: stageForm.notes,
     });
+    // Mam (2026-05-22 Batch B): if interviewer filled the scorecard
+    // sliders, POST that as a separate row.  Scorecard is OPTIONAL —
+    // skip the POST if no scores were entered (don't pollute the
+    // table with empty rows).
+    const hasAnyScore = ['technical','communication','culture','problem'].some(k => stageForm[`sc_${k}`]);
+    if (hasAnyScore || stageForm.sc_overall) {
+      try {
+        await api.post(`/hr/candidates/${stageRow.id}/scorecard`, {
+          interviewer_id:        stageRow?.interviewer_id || null,
+          stage:                 'first',
+          technical_score:       stageForm.sc_technical,
+          communication_score:   stageForm.sc_communication,
+          culture_fit_score:     stageForm.sc_culture,
+          problem_solving_score: stageForm.sc_problem,
+          overall_recommend:     stageForm.sc_overall,
+          strengths:             stageForm.sc_strengths,
+          weaknesses:            stageForm.sc_weaknesses,
+          overall_feedback:      stageForm.notes,    // re-use the decision notes
+        });
+      } catch (err) {
+        // Decision still saved — only warn for the scorecard step.
+        console.warn('Scorecard save failed:', err);
+        toast.error('Decision saved, but scorecard failed: ' + (err.response?.data?.error || err.message));
+      }
+    }
     const m = stageForm.decision === 'shortlisted' ? 'Shortlisted — schedule MD interview next'
             : stageForm.decision === 'rejected'    ? 'Marked rejected'
             : 'On hold — keep in pipeline';
@@ -312,13 +340,16 @@ export default function HR() {
 
   return (
     <div className="space-y-4">
-      {/* Top-level tab switcher — Candidates (ATS) | Hiring Requests.
-          Mam (2026-05-22 Phase 1 spec) wants both modules under the
-          single /hr page (no separate sidebar entries). */}
-      <div className="flex gap-2 border-b border-gray-200">
+      {/* Top-level tab switcher — Candidates (ATS) | Hiring Requests
+          | JDs | Final-Round Qs.  Mam (2026-05-22 Phase 1 spec)
+          wants all HR modules under the single /hr page (no separate
+          sidebar entries). */}
+      <div className="flex gap-2 border-b border-gray-200 overflow-x-auto">
         {[
-          { id: 'candidates',      label: 'Candidates (ATS)', icon: FiUser },
-          { id: 'hiring-requests', label: 'Hiring Requests',   icon: FiBriefcase },
+          { id: 'candidates',      label: 'Candidates (ATS)',  icon: FiUser },
+          { id: 'hiring-requests', label: 'Hiring Requests',    icon: FiBriefcase },
+          { id: 'jds',             label: 'Job Descriptions',   icon: FiFileText },
+          { id: 'final-round',     label: 'Final-Round Qs',     icon: FiAward },
         ].map(t => {
           const active = tab === t.id;
           const Icon = t.icon;
@@ -326,7 +357,7 @@ export default function HR() {
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
-              className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px flex items-center gap-1.5
+              className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px flex items-center gap-1.5 whitespace-nowrap
                 ${active
                   ? 'border-blue-600 text-blue-700'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
@@ -338,6 +369,8 @@ export default function HR() {
       </div>
 
       {tab === 'hiring-requests' && <HiringRequestsTab employees={employees} />}
+      {tab === 'jds'             && <JobDescriptionsTab />}
+      {tab === 'final-round'     && <FinalRoundQuestionsTab />}
 
       {tab === 'candidates' && (() => {
         // Mam (2026-05-22 ATS Phase 1 spec): 7-stage pipeline.
@@ -686,8 +719,8 @@ export default function HR() {
         </form>
       </Modal>
 
-      {/* STAGE 3 — INTERVIEW DECISION */}
-      <Modal isOpen={modal === 'interview_decision'} onClose={() => setModal(false)} title={`Interview Decision — ${stageRow?.name || ''}`}>
+      {/* STAGE 3 — INTERVIEW DECISION + Scorecard (mam Batch B) */}
+      <Modal isOpen={modal === 'interview_decision'} onClose={() => setModal(false)} title={`Interview Decision — ${stageRow?.name || ''}`} wide>
         <form onSubmit={submitInterviewDecision} className="space-y-3">
           <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded px-3 py-2">After the first interview — record the interviewer's decision. <b>Shortlisted</b> moves to MD round; <b>Rejected</b> ends the pipeline.</p>
           {stageRow?.interview_date && <div className="text-[12px] text-gray-600">Interview held: <b>{fmtDt(stageRow.interview_date)}</b>{stageRow.interviewer_name ? ` · by ${stageRow.interviewer_name}` : ''}</div>}
@@ -704,8 +737,83 @@ export default function HR() {
               ))}
             </div>
           </div>
-          <div><label className="label">Interview Notes (what did the interviewer think)</label><textarea className="input" rows="3" value={stageForm.notes || ''} onChange={e => setStageForm(f => ({ ...f, notes: e.target.value }))} placeholder="Strengths / weaknesses / fit / red flags" /></div>
-          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save Decision</button></div>
+
+          {/* ─── SCORECARD (mam 2026-05-22 Batch B) ─── */}
+          {/* Optional — interviewer can skip if they prefer note-only.
+              When ANY score is set, the scorecard row is saved alongside
+              the decision via POST /candidates/:id/scorecard. */}
+          <div className="border border-indigo-200 bg-indigo-50/40 rounded-lg p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-semibold text-indigo-800">
+                Scorecard <span className="text-gray-500 font-normal">(optional — rate 1-5 on each dimension)</span>
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {[
+                { k: 'technical',     label: 'Technical' },
+                { k: 'communication', label: 'Communication' },
+                { k: 'culture',       label: 'Culture Fit' },
+                { k: 'problem',       label: 'Problem Solving' },
+              ].map(d => (
+                <div key={d.k}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-semibold text-gray-700">{d.label}</label>
+                    <span className="text-[10px] text-gray-500">{stageForm[`sc_${d.k}`] || '—'}/5</span>
+                  </div>
+                  <div className="flex gap-1">
+                    {[1,2,3,4,5].map(n => (
+                      <button type="button" key={n}
+                        onClick={() => setStageForm(f => ({ ...f, [`sc_${d.k}`]: f[`sc_${d.k}`] === n ? null : n }))}
+                        className={`flex-1 py-1.5 rounded text-xs font-bold border
+                          ${stageForm[`sc_${d.k}`] === n
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : stageForm[`sc_${d.k}`] != null && stageForm[`sc_${d.k}`] >= n
+                              ? 'bg-indigo-200 text-indigo-800 border-indigo-300'
+                              : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}>
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <label className="label">Overall Recommendation</label>
+              <div className="flex gap-1 flex-wrap">
+                {[
+                  { v: 'strong_yes', l: 'Strong Yes', c: 'emerald-700' },
+                  { v: 'yes',        l: 'Yes',         c: 'emerald-500' },
+                  { v: 'maybe',      l: 'Maybe',       c: 'amber-500' },
+                  { v: 'no',         l: 'No',          c: 'red-500' },
+                  { v: 'strong_no',  l: 'Strong No',   c: 'red-700' },
+                ].map(o => (
+                  <button type="button" key={o.v}
+                    onClick={() => setStageForm(f => ({ ...f, sc_overall: f.sc_overall === o.v ? null : o.v }))}
+                    className={`px-3 py-1 rounded text-[11px] font-bold uppercase border
+                      ${stageForm.sc_overall === o.v
+                        ? `bg-${o.c} text-white border-${o.c}`
+                        : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>
+                    {o.l}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Strengths</label>
+                <textarea className="input" rows="2" placeholder="e.g. solid systems thinking, fast on MEP basics"
+                  value={stageForm.sc_strengths || ''} onChange={e => setStageForm(f => ({ ...f, sc_strengths: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Weaknesses / Concerns</label>
+                <textarea className="input" rows="2" placeholder="e.g. struggled with conflict scenario, junior on contracts"
+                  value={stageForm.sc_weaknesses || ''} onChange={e => setStageForm(f => ({ ...f, sc_weaknesses: e.target.value }))} />
+              </div>
+            </div>
+          </div>
+
+          <div><label className="label">Interview Notes / Decision Reasoning</label><textarea className="input" rows="3" value={stageForm.notes || ''} onChange={e => setStageForm(f => ({ ...f, notes: e.target.value }))} placeholder="Final summary — why shortlisted / rejected / on hold" /></div>
+          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save Decision{(['technical','communication','culture','problem'].some(k => stageForm[`sc_${k}`]) || stageForm.sc_overall) ? ' + Scorecard' : ''}</button></div>
         </form>
       </Modal>
 

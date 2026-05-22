@@ -1138,4 +1138,320 @@ router.delete('/hiring-requests/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+// ═════════════════════════════════════════════════════════════════
+// JOB DESCRIPTIONS (mam 2026-05-22 Phase 1 Batch B, module #3)
+// ═════════════════════════════════════════════════════════════════
+//
+// JD templates → JD records (linked optionally to a hiring_request).
+// Each JD carries both internal_jd (full detail) and public_job_post
+// (sanitised for external boards).  Status: draft → published → archived.
+
+// ── JD TEMPLATES ──
+router.get('/jd-templates', (req, res) => {
+  const rows = getDb().prepare(
+    `SELECT id, name, description, template_content, is_default, created_at
+       FROM jd_templates ORDER BY is_default DESC, name`
+  ).all();
+  // Parse JSON content for the client.
+  res.json(rows.map(r => ({ ...r, template_content: safeParseJson(r.template_content) })));
+});
+
+router.post('/jd-templates', (req, res) => {
+  try {
+    const { name, description, template_content, is_default } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: 'Template name is required' });
+    const db = getDb();
+    if (is_default) db.prepare('UPDATE jd_templates SET is_default = 0').run();
+    const r = db.prepare(`
+      INSERT INTO jd_templates (name, description, template_content, is_default, created_by)
+      VALUES (?,?,?,?,?)
+    `).run(
+      name.trim(), description || null,
+      template_content ? JSON.stringify(template_content) : null,
+      is_default ? 1 : 0,
+      req.user.id,
+    );
+    res.status(201).json({ id: r.lastInsertRowid });
+  } catch (err) {
+    console.error('POST /hr/jd-templates error', err);
+    res.status(500).json({ error: err.message || 'Failed to save template' });
+  }
+});
+
+router.put('/jd-templates/:id', (req, res) => {
+  const { name, description, template_content, is_default } = req.body || {};
+  const db = getDb();
+  if (is_default) db.prepare('UPDATE jd_templates SET is_default = 0 WHERE id != ?').run(req.params.id);
+  db.prepare(`
+    UPDATE jd_templates SET
+      name = COALESCE(?, name),
+      description = COALESCE(?, description),
+      template_content = COALESCE(?, template_content),
+      is_default = COALESCE(?, is_default)
+    WHERE id = ?
+  `).run(
+    name || null, description || null,
+    template_content ? JSON.stringify(template_content) : null,
+    is_default != null ? (is_default ? 1 : 0) : null,
+    req.params.id,
+  );
+  res.json({ message: 'Updated' });
+});
+
+router.delete('/jd-templates/:id', (req, res) => {
+  const r = getDb().prepare('DELETE FROM jd_templates WHERE id = ?').run(req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ message: 'Deleted' });
+});
+
+// ── JOB DESCRIPTIONS ──
+router.get('/job-descriptions', (req, res) => {
+  const { hiring_request_id, status } = req.query;
+  let sql = `SELECT jd.*, hr.position_title AS hiring_request_position,
+                    hr.department AS hiring_request_department,
+                    t.name AS template_name
+               FROM job_descriptions jd
+               LEFT JOIN hiring_requests hr ON hr.id = jd.hiring_request_id
+               LEFT JOIN jd_templates    t  ON t.id  = jd.template_id
+              WHERE 1=1`;
+  const args = [];
+  if (hiring_request_id) { sql += ' AND jd.hiring_request_id = ?'; args.push(+hiring_request_id); }
+  if (status)            { sql += ' AND jd.status = ?';            args.push(status); }
+  sql += ' ORDER BY jd.created_at DESC';
+  res.json(getDb().prepare(sql).all(...args));
+});
+
+router.get('/job-descriptions/:id', (req, res) => {
+  const row = getDb().prepare(
+    `SELECT jd.*, hr.position_title AS hiring_request_position,
+            hr.department AS hiring_request_department,
+            t.name AS template_name
+       FROM job_descriptions jd
+       LEFT JOIN hiring_requests hr ON hr.id = jd.hiring_request_id
+       LEFT JOIN jd_templates    t  ON t.id  = jd.template_id
+      WHERE jd.id = ?`
+  ).get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'JD not found' });
+  res.json(row);
+});
+
+router.post('/job-descriptions', (req, res) => {
+  try {
+    const { hiring_request_id, template_id, title, description, responsibilities,
+            required_skills, required_experience, education_required,
+            internal_jd, public_job_post, status } = req.body || {};
+    if (!title || !String(title).trim()) return res.status(400).json({ error: 'Title is required' });
+    const st = ['draft','published','archived'].includes(status) ? status : 'draft';
+    const r = getDb().prepare(`
+      INSERT INTO job_descriptions
+        (hiring_request_id, template_id, title, description, responsibilities,
+         required_skills, required_experience, education_required,
+         internal_jd, public_job_post, status, created_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      hiring_request_id ? +hiring_request_id : null,
+      template_id ? +template_id : null,
+      title.trim(), description || null, responsibilities || null,
+      required_skills || null, required_experience || null, education_required || null,
+      internal_jd || null, public_job_post || null,
+      st, req.user.id,
+    );
+    res.status(201).json({ id: r.lastInsertRowid });
+  } catch (err) {
+    console.error('POST /hr/job-descriptions error', err);
+    res.status(500).json({ error: err.message || 'Failed to save JD' });
+  }
+});
+
+router.put('/job-descriptions/:id', (req, res) => {
+  const { hiring_request_id, template_id, title, description, responsibilities,
+          required_skills, required_experience, education_required,
+          internal_jd, public_job_post, status } = req.body || {};
+  getDb().prepare(`
+    UPDATE job_descriptions SET
+      hiring_request_id = ?,
+      template_id = ?,
+      title = COALESCE(?, title),
+      description = COALESCE(?, description),
+      responsibilities = COALESCE(?, responsibilities),
+      required_skills = COALESCE(?, required_skills),
+      required_experience = COALESCE(?, required_experience),
+      education_required = COALESCE(?, education_required),
+      internal_jd = COALESCE(?, internal_jd),
+      public_job_post = COALESCE(?, public_job_post),
+      status = COALESCE(?, status),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    hiring_request_id ? +hiring_request_id : null,
+    template_id ? +template_id : null,
+    title || null, description || null, responsibilities || null,
+    required_skills || null, required_experience || null, education_required || null,
+    internal_jd || null, public_job_post || null,
+    status || null, req.params.id,
+  );
+  res.json({ message: 'Updated' });
+});
+
+router.delete('/job-descriptions/:id', (req, res) => {
+  const r = getDb().prepare('DELETE FROM job_descriptions WHERE id = ?').run(req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ message: 'Deleted' });
+});
+
+// ═════════════════════════════════════════════════════════════════
+// INTERVIEW SCORECARDS (mam 2026-05-22 Phase 1 Batch B, module #7)
+// ═════════════════════════════════════════════════════════════════
+// One scorecard per (candidate × interviewer × stage).  Stage is
+// 'first' (interviewer round) or 'final' (MD round).  Saved alongside
+// the existing interview_decision so legacy data is untouched.
+
+router.get('/candidates/:id/scorecards', (req, res) => {
+  const rows = getDb().prepare(
+    `SELECT * FROM interview_scorecards
+      WHERE candidate_id = ? ORDER BY created_at DESC`
+  ).all(req.params.id);
+  res.json(rows);
+});
+
+router.post('/candidates/:id/scorecard', (req, res) => {
+  try {
+    const { interviewer_id, stage, technical_score, communication_score,
+            culture_fit_score, problem_solving_score, overall_recommend,
+            strengths, weaknesses, overall_feedback } = req.body || {};
+    const st = ['first','final'].includes(stage) ? stage : 'first';
+    const rec = ['strong_yes','yes','maybe','no','strong_no'].includes(overall_recommend)
+                ? overall_recommend : null;
+    // Constrain scores to 1-5 (null allowed).
+    const score = (v) => {
+      if (v == null || v === '') return null;
+      const n = +v;
+      if (isNaN(n)) return null;
+      return Math.min(5, Math.max(1, Math.round(n)));
+    };
+    const db = getDb();
+    const intvName = interviewer_id
+      ? (db.prepare('SELECT name FROM employees WHERE id=?').get(+interviewer_id)?.name || null)
+      : null;
+    const r = db.prepare(`
+      INSERT INTO interview_scorecards
+        (candidate_id, interviewer_id, interviewer_name, stage,
+         technical_score, communication_score, culture_fit_score, problem_solving_score,
+         overall_recommend, strengths, weaknesses, overall_feedback, created_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      +req.params.id,
+      interviewer_id ? +interviewer_id : null,
+      intvName, st,
+      score(technical_score), score(communication_score),
+      score(culture_fit_score), score(problem_solving_score),
+      rec, strengths || null, weaknesses || null, overall_feedback || null,
+      req.user.id,
+    );
+    logEvent(db, req.params.id, 'scorecard_added', {
+      note: `Scorecard (${st}) by ${intvName || `#${interviewer_id}`} — ${rec || 'no overall rating'}`,
+      user_id: req.user.id, user_name: req.user.name,
+    });
+    res.status(201).json({ id: r.lastInsertRowid });
+  } catch (err) {
+    console.error('POST /hr/candidates/:id/scorecard error', err);
+    res.status(500).json({ error: err.message || 'Failed to save scorecard' });
+  }
+});
+
+router.delete('/scorecards/:id', (req, res) => {
+  const r = getDb().prepare('DELETE FROM interview_scorecards WHERE id = ?').run(req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ message: 'Deleted' });
+});
+
+// ═════════════════════════════════════════════════════════════════
+// FINAL-ROUND QUESTION BANK (mam 2026-05-22 Phase 1 Batch B, module #8)
+// ═════════════════════════════════════════════════════════════════
+// Curated questions for the MD / final round, organised by category.
+// 25 starter questions seeded in schema.js (seed_final_round_questions_v1).
+
+router.get('/final-round-questions', (req, res) => {
+  const { category, for_role, difficulty, active } = req.query;
+  let sql = 'SELECT * FROM final_round_questions WHERE 1=1';
+  const args = [];
+  if (category)   { sql += ' AND category = ?';   args.push(category); }
+  if (for_role)   { sql += ' AND (for_role = ? OR for_role = "Any" OR for_role IS NULL)'; args.push(for_role); }
+  if (difficulty) { sql += ' AND difficulty = ?'; args.push(difficulty); }
+  if (active === '1') sql += ' AND is_active = 1';
+  sql += ' ORDER BY category, id';
+  res.json(getDb().prepare(sql).all(...args));
+});
+
+// Pick N random ACTIVE questions, optionally filtered by category /
+// role / difficulty.  Used by the "Random pick" button before an MD
+// round so the panel has a starting set without scrolling.
+router.get('/final-round-questions/pick', (req, res) => {
+  const n = Math.min(20, Math.max(1, +req.query.n || 5));
+  const { category, for_role, difficulty } = req.query;
+  let sql = 'SELECT * FROM final_round_questions WHERE is_active = 1';
+  const args = [];
+  if (category)   { sql += ' AND category = ?';   args.push(category); }
+  if (for_role)   { sql += ' AND (for_role = ? OR for_role = "Any" OR for_role IS NULL)'; args.push(for_role); }
+  if (difficulty) { sql += ' AND difficulty = ?'; args.push(difficulty); }
+  sql += ' ORDER BY RANDOM() LIMIT ?';
+  args.push(n);
+  res.json(getDb().prepare(sql).all(...args));
+});
+
+router.post('/final-round-questions', (req, res) => {
+  try {
+    const { category, question_text, for_role, difficulty, notes, is_active } = req.body || {};
+    if (!category || !String(category).trim())       return res.status(400).json({ error: 'Category is required' });
+    if (!question_text || !String(question_text).trim()) return res.status(400).json({ error: 'Question text is required' });
+    const diff = ['easy','medium','hard'].includes(difficulty) ? difficulty : 'medium';
+    const r = getDb().prepare(`
+      INSERT INTO final_round_questions
+        (category, question_text, for_role, difficulty, notes, is_active, created_by)
+      VALUES (?,?,?,?,?,?,?)
+    `).run(
+      category.trim(), question_text.trim(),
+      for_role || null, diff, notes || null,
+      is_active === false ? 0 : 1,
+      req.user.id,
+    );
+    res.status(201).json({ id: r.lastInsertRowid });
+  } catch (err) {
+    console.error('POST /hr/final-round-questions error', err);
+    res.status(500).json({ error: err.message || 'Failed to save question' });
+  }
+});
+
+router.put('/final-round-questions/:id', (req, res) => {
+  const { category, question_text, for_role, difficulty, notes, is_active } = req.body || {};
+  getDb().prepare(`
+    UPDATE final_round_questions SET
+      category = COALESCE(?, category),
+      question_text = COALESCE(?, question_text),
+      for_role = ?,
+      difficulty = COALESCE(?, difficulty),
+      notes = ?,
+      is_active = COALESCE(?, is_active)
+    WHERE id = ?
+  `).run(
+    category || null, question_text || null,
+    for_role || null, difficulty || null, notes || null,
+    is_active == null ? null : (is_active ? 1 : 0),
+    req.params.id,
+  );
+  res.json({ message: 'Updated' });
+});
+
+router.delete('/final-round-questions/:id', (req, res) => {
+  const r = getDb().prepare('DELETE FROM final_round_questions WHERE id = ?').run(req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ message: 'Deleted' });
+});
+
+// JSON helper — never throws.
+function safeParseJson(s) {
+  if (!s) return null;
+  try { return JSON.parse(s); } catch (_) { return s; }
+}
+
 module.exports = router;

@@ -721,6 +721,86 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- HR Phase 1 Batch B (mam 2026-05-22): JD templates — reusable JD
+    -- skeletons HR can clone for new positions (Site Engineer, Sales
+    -- Executive, etc.).  template_content is JSON: { responsibilities,
+    -- required_skills, required_experience, education_required, etc. }.
+    CREATE TABLE IF NOT EXISTS jd_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      template_content TEXT,                 -- JSON blob
+      is_default INTEGER DEFAULT 0,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- HR Phase 1 Batch B (mam 2026-05-22): Job Descriptions.
+    -- One JD per position; can be derived from a template + linked to
+    -- the hiring_request that opened the role.  Two output flavours
+    -- are stored side-by-side: internal_jd (full detail for HR /
+    -- managers) and public_job_post (sanitised post for Naukri / LI).
+    CREATE TABLE IF NOT EXISTS job_descriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      hiring_request_id INTEGER REFERENCES hiring_requests(id),
+      template_id INTEGER REFERENCES jd_templates(id),
+      title TEXT NOT NULL,                   -- e.g. "Senior Site Engineer — Chandigarh"
+      description TEXT,                       -- one-paragraph hook
+      responsibilities TEXT,                  -- bullet list, free-text
+      required_skills TEXT,                   -- CSV or free-text
+      required_experience TEXT,
+      education_required TEXT,
+      internal_jd TEXT,                       -- full internal-only version
+      public_job_post TEXT,                   -- sanitised for external boards
+      status TEXT DEFAULT 'draft' CHECK(status IN ('draft','published','archived')),
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- HR Phase 1 Batch B (mam 2026-05-22): Interview Scorecards.
+    -- One row per (candidate × interviewer × stage).  Stage is either
+    -- 'first' (interviewer round) or 'final' (MD round).  All scores
+    -- are 1-5; overall_recommend captures the interviewer's verdict
+    -- separately from the 4 dimension scores so a "hire" decision is
+    -- explicit even if scores are mixed.
+    CREATE TABLE IF NOT EXISTS interview_scorecards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+      interviewer_id INTEGER REFERENCES employees(id),
+      interviewer_name TEXT,                  -- denormalised
+      stage TEXT CHECK(stage IN ('first','final')) DEFAULT 'first',
+      technical_score INTEGER,                -- 1-5
+      communication_score INTEGER,            -- 1-5
+      culture_fit_score INTEGER,              -- 1-5
+      problem_solving_score INTEGER,          -- 1-5
+      overall_recommend TEXT CHECK(overall_recommend IN ('strong_yes','yes','maybe','no','strong_no')),
+      strengths TEXT,
+      weaknesses TEXT,
+      overall_feedback TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- HR Phase 1 Batch B (mam 2026-05-22): Final Round Question Bank.
+    -- Curated questions MD / panel can pull during the final round,
+    -- organised by category (Leadership / Ownership / Decision
+    -- Making / Conflict Management / Team Handling).  for_role is a
+    -- free-text tag ("Manager", "Engineer", "Sales") so questions
+    -- can be filtered when picking — keeps it flexible without
+    -- coupling to the permissions role system.
+    CREATE TABLE IF NOT EXISTS final_round_questions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL,                -- 'Leadership' | 'Ownership' | etc.
+      question_text TEXT NOT NULL,
+      for_role TEXT,                          -- free-text: 'Manager' | 'IC' | 'Sales' | 'Any'
+      difficulty TEXT CHECK(difficulty IN ('easy','medium','hard')) DEFAULT 'medium',
+      notes TEXT,                             -- panellist notes / what to listen for
+      is_active INTEGER DEFAULT 1,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- HR Phase 1 (mam 2026-05-22 spec): Candidate activity timeline.
     -- Every status-change / decision / tag-edit / hold-toggle writes a row
     -- here so the candidate detail view shows a chronological audit log.
@@ -2843,6 +2923,61 @@ function initializeDatabase() {
     }
   } catch (e) {
     console.warn('[migration] checklist recurrence backfill skipped:', e.message);
+  }
+
+  // HR Phase 1 Batch B (mam 2026-05-22): seed the final-round
+  // question bank so the panel has a starting set on day 1.  25
+  // questions across the 5 spec categories (Leadership / Ownership /
+  // Decision Making / Conflict Management / Team Handling).  Idempotent
+  // via the seed_final_round_questions_v1 sentinel.  Admin can add /
+  // edit / disable questions from the UI after seeding.
+  try {
+    const seeded = db.prepare("SELECT value FROM app_settings WHERE key='seed_final_round_questions_v1'").get();
+    if (!seeded) {
+      const FRQ = [
+        // Leadership
+        ['Leadership','Describe a time you led a team through significant change. How did you keep people aligned?','Manager','medium','Look for: setting context, listening to concerns, decisive moves, follow-through'],
+        ['Leadership','Tell us about a time you had to make an unpopular decision. How did you handle the pushback?','Manager','hard','Look for: principled reasoning, transparency, owning the call'],
+        ['Leadership','How do you develop the people who report to you?','Manager','medium','Look for: structured 1:1s, growth plans, specific examples of someone they helped grow'],
+        ['Leadership','When you took over a struggling team, what was your first 30 days?','Manager','hard','Look for: diagnostic mindset, listening before acting'],
+        ['Leadership','How do you set vision for your team in a way they actually feel?','Manager','medium','Look for: simple language, repeatable narrative, connection to individual work'],
+        // Ownership
+        ['Ownership','Tell us about a failure that was clearly yours. What did you do?','Any','medium','Look for: blame-free language, specific lessons, behaviour change after'],
+        ['Ownership','When was the last time you went beyond your job description?','Any','easy','Look for: initiative without being asked, clear impact'],
+        ['Ownership','Describe a project no one asked you to do but you did anyway.','Any','medium','Look for: spotted a gap, made the case, shipped it'],
+        ['Ownership','A critical task is yours. You realise the budget is half what you need. What do you do?','Any','medium','Look for: re-scoping, surfacing risk early, not just suffering in silence'],
+        ['Ownership','Tell us about a time you missed a deadline. What happened next?','Any','medium','Look for: early signalling, recovery plan, prevention for next time'],
+        // Decision Making
+        ['Decision Making','Walk us through the hardest decision you have made in the last 12 months.','Any','hard','Look for: trade-offs, who they consulted, how they communicated it'],
+        ['Decision Making','When data is incomplete, how do you decide?','Any','medium','Look for: framing assumptions, reversibility, risk appetite'],
+        ['Decision Making','Tell us about a time you had to choose between two equally good options.','Any','medium','Look for: structured comparison, clarity on what mattered most'],
+        ['Decision Making','When was the last time you changed your mind on something important? Why?','Any','medium','Look for: intellectual honesty, willingness to update'],
+        ['Decision Making','You have to choose between launching now vs polishing for 2 more weeks. How do you decide?','Any','medium','Look for: customer impact, learning vs. risk, who else is consulted'],
+        // Conflict Management
+        ['Conflict Management','Tell us about a conflict you had with a peer. How was it resolved?','Any','medium','Look for: directness, listening to other side, durable resolution'],
+        ['Conflict Management','When have you disagreed with your manager? What did you do?','Any','medium','Look for: respectful pushback, escalation path, accepting the call after'],
+        ['Conflict Management','How do you handle a teammate who consistently misses commitments?','Manager','hard','Look for: direct feedback first, structured plan, escalation only after'],
+        ['Conflict Management','A senior leader publicly criticises your work in a meeting. What do you do?','Any','hard','Look for: composure, clarification, follow-up in private'],
+        ['Conflict Management','Two of your reports are not getting along. How do you intervene?','Manager','hard','Look for: hearing both sides, focus on behaviours not personalities, clear expectations'],
+        // Team Handling
+        ['Team Handling','How do you onboard a new hire in your team?','Manager','easy','Look for: structured plan, early wins, regular check-ins'],
+        ['Team Handling','When did you last give someone tough feedback? Walk us through it.','Manager','medium','Look for: timeliness, specificity, framing for growth'],
+        ['Team Handling','How do you handle a high performer who is becoming hard to work with?','Manager','hard','Look for: directness, raising the bar on behaviour, willingness to lose them'],
+        ['Team Handling','Tell us about a time you had to let someone go. How did you handle it?','Manager','hard','Look for: respectful process, clarity, learnings about hiring'],
+        ['Team Handling','How do you run an effective 1:1?','Manager','easy','Look for: agenda owned by report, growth + obstacles + personal, follow-up'],
+      ];
+      const stmt = db.prepare(`INSERT INTO final_round_questions
+        (category, question_text, for_role, difficulty, notes, is_active)
+        VALUES (?,?,?,?,?,1)`);
+      let count = 0;
+      for (const [cat, q, role, diff, notes] of FRQ) {
+        try { stmt.run(cat, q, role, diff, notes); count++; } catch (_) {}
+      }
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('seed_final_round_questions_v1', '1')").run();
+      console.log(`[seed] final_round_questions: inserted ${count} starter questions`);
+    }
+  } catch (e) {
+    console.warn('[seed] final_round_questions skipped:', e.message);
   }
 
   // Seed the canonical 5 lead-source values per MD's TOC v3 spec.
