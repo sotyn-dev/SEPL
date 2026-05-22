@@ -139,18 +139,15 @@ export default function Checklists() {
           {isAdmin() && (
             <button onClick={() => {
               // Mam (2026-05-22): "by default end date is 31/12/2026"
-              // — pre-fill recurrence window so admin only has to
-              // change it when the task actually has a different
-              // lifecycle.  Start defaults to today; End defaults to
-              // 31 Dec of the current calendar year.
+              // — hard-pinned to 2026-12-31, NOT current-year (mam:
+              // "not 2027 31/12/2026").  Admin overrides when needed.
               const today = new Date();
-              const yearEnd = `${today.getFullYear()}-12-31`;
               const todayIso = today.toISOString().slice(0, 10);
               setEditing(null);
               setForm({
                 description: '', frequency: 'monthly', due_date: '', due_time: '', assigned_to: '',
                 recurrence_start_date: todayIso,
-                recurrence_end_date:   yearEnd,
+                recurrence_end_date:   '2026-12-31',
               });
               setModal(true);
             }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Checklist</button>
