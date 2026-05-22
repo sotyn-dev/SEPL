@@ -2375,38 +2375,68 @@ function initializeDatabase() {
     try { db.exec('ROLLBACK'); } catch (e2) {}
   }
 
-  // Mam (2026-05-21) STILL hit the CHECK error.  Previous rebuild
-  // attempts kept rolling back silently for reasons that varied per
-  // SQLite version (IF NOT EXISTS handling, FK trigger lifecycle,
-  // etc.).  This version uses the SQLite `writable_schema` PRAGMA
-  // which lets us patch sqlite_master.sql directly — no table
-  // rebuild, no data copy, just a schema-text edit.  Documented
-  // SQLite trick that better-sqlite3 supports cleanly.
+  // Mam (2026-05-21) STILL "not done" after multiple attempts.  Going
+  // all-in this time: proper SQLite table-rebuild pattern per docs
+  // (foreign_keys=OFF, BEGIN, create new, copy, drop, rename, COMMIT,
+  // foreign_keys=ON) PLUS post-rebuild verification that re-reads
+  // sqlite_master to confirm the CHECK is gone.  Failure to verify
+  // throws so it surfaces in pm2 logs instead of hiding.
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='payment_requests'").get();
     if (row && /CHECK\s*\(\s*category\s+IN/i.test(row.sql)) {
-      console.log('[migration] payment_requests CHECK detected — patching schema directly');
-      const newSql = row.sql.replace(/,?\s*CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i, '');
+      console.log('[migration] ════════════════════════════════════════════');
+      console.log('[migration] payment_requests CHECK detected — rebuilding');
+      console.log('[migration] OLD sql:\n', row.sql);
+
+      // SQLite docs require FKs off during structural change.
+      db.pragma('foreign_keys = OFF');
+
+      // Clean up any orphan from a prior failed run.
+      try { db.exec('DROP TABLE IF EXISTS payment_requests_new'); } catch (_) {}
+
+      // Build the new CREATE statement.  Handles BOTH `CREATE TABLE`
+      // and `CREATE TABLE IF NOT EXISTS` shapes, and any inline CHECK
+      // clause that references the category column.
+      const newSql = row.sql
+        .replace(/CREATE TABLE(?:\s+IF NOT EXISTS)?\s+payment_requests/i, 'CREATE TABLE payment_requests_new')
+        .replace(/,?\s*CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i, '');
+      console.log('[migration] NEW sql:\n', newSql);
+
       if (newSql === row.sql) {
-        console.error('[migration] payment_requests regex did NOT match.  Raw sql:\n', row.sql);
-      } else {
-        const curVer = db.pragma('schema_version', { simple: true });
-        db.pragma('writable_schema = ON');
-        db.prepare('UPDATE sqlite_master SET sql = ? WHERE type = ? AND name = ?')
-          .run(newSql, 'table', 'payment_requests');
-        // Bump schema_version so the in-memory schema cache is
-        // invalidated for the next prepared statement.
-        db.pragma(`schema_version = ${curVer + 1}`);
-        db.pragma('writable_schema = OFF');
-        console.log(`[migration] payment_requests.category CHECK dropped (writable_schema) — schema_version ${curVer} → ${curVer + 1}.  Salary / Compliance / Other now allowed.`);
+        throw new Error('regex did not modify sql — CHECK clause shape unexpected');
       }
+
+      // Explicit column list — safer than `INSERT ... SELECT *` if the
+      // old table has columns the new schema doesn't (or vice-versa).
+      const cols = db.prepare('PRAGMA table_info(payment_requests)').all().map(c => c.name);
+      const colList = cols.map(c => `"${c}"`).join(', ');
+
+      db.exec('BEGIN');
+      db.exec(newSql);
+      db.exec(`INSERT INTO payment_requests_new (${colList}) SELECT ${colList} FROM payment_requests`);
+      db.exec('DROP TABLE payment_requests');
+      db.exec('ALTER TABLE payment_requests_new RENAME TO payment_requests');
+      db.exec('COMMIT');
+
+      db.pragma('foreign_keys = ON');
+
+      // VERIFY — re-read sqlite_master and make sure the CHECK is
+      // actually gone.  If verification fails, we throw so the next
+      // pm2 log line tells mam exactly what to forward to me.
+      const after = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='payment_requests'").get();
+      if (after && /CHECK\s*\(\s*category\s+IN/i.test(after.sql)) {
+        throw new Error('verification failed — CHECK still present after rebuild. post-rebuild sql:\n' + after.sql);
+      }
+      console.log('[migration] ✓ payment_requests CHECK removed — Salary / Compliance / Other now allowed');
+      console.log('[migration] ════════════════════════════════════════════');
     } else if (row) {
       console.log('[migration] payment_requests CHECK already gone — skipping');
     }
   } catch (e) {
-    console.error('[migration] payment_requests CHECK drop FAILED:', e.message);
+    try { db.exec('ROLLBACK'); } catch (_) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.error('[migration] ✗ payment_requests CHECK drop FAILED:', e.message);
     console.error(e.stack);
-    try { db.pragma('writable_schema = OFF'); } catch (_) {}
   }
 
   // Relax attendance.status CHECK to allow 'short_day' (4-8 hours worked).
