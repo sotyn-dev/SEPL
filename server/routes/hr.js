@@ -8,6 +8,32 @@ const { parseResume } = require('../utils/resumeParser');
 const router = express.Router();
 router.use(authMiddleware);
 
+// ── Candidate timeline helper (mam 2026-05-22 ATS spec) ─────────
+// Every status-change / decision / tag-edit / hold-toggle calls this
+// so the candidate detail view shows a chronological audit log
+// without scattering INSERT statements through every route.
+// Fails silently — a missing timeline row should NEVER block the
+// underlying business action (the actual candidate update is what
+// HR cares about).
+function logEvent(db, candidateId, eventType, opts = {}) {
+  try {
+    db.prepare(`INSERT INTO candidate_events
+                  (candidate_id, event_type, from_status, to_status, note, user_id, user_name)
+                VALUES (?,?,?,?,?,?,?)`)
+      .run(
+        +candidateId,
+        eventType,
+        opts.from_status || null,
+        opts.to_status   || null,
+        opts.note        || null,
+        opts.user_id     || null,
+        opts.user_name   || null,
+      );
+  } catch (e) {
+    console.warn('[hr/logEvent] failed:', e.message);
+  }
+}
+
 // Resume uploads land here so we can parse + retain.  Same /uploads
 // static handler serves them back.
 const resumeDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'hr-resumes');
@@ -62,21 +88,83 @@ router.get('/candidates', (req, res) => {
   res.json(getDb().prepare(sql).all(...params));
 });
 
+// ── Duplicate-detection helper (mam 2026-05-22 ATS spec) ─────────
+// "Candidate duplicate detection" — match on normalised email OR last-10-
+// digit phone.  Returns an array of {id, name, status, created_at} the
+// frontend can show in a warning dialog before letting admin save.
+function findDuplicates(db, { email, phone, excludeId } = {}) {
+  const dups = [];
+  const seen = new Set();
+  const push = (rows) => {
+    for (const r of rows) {
+      if (excludeId && r.id === +excludeId) continue;
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      dups.push(r);
+    }
+  };
+  if (email && String(email).trim()) {
+    push(db.prepare(
+      `SELECT id, name, status, phone, email, position, created_at
+         FROM candidates WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))`
+    ).all(email));
+  }
+  if (phone && String(phone).trim()) {
+    const last10 = String(phone).replace(/\D/g, '').slice(-10);
+    if (last10.length === 10) {
+      push(db.prepare(
+        `SELECT id, name, status, phone, email, position, created_at
+           FROM candidates
+          WHERE REPLACE(REPLACE(REPLACE(REPLACE(phone,' ',''),'-',''),'+',''),'(','') LIKE '%' || ? || '%'`
+      ).all(last10));
+    }
+  }
+  return dups;
+}
+
+// Preflight duplicate check — frontend calls this before opening the
+// Add Candidate modal to warn early.  Returns { duplicates: [...] }.
+router.post('/candidates/check-duplicates', (req, res) => {
+  const { email, phone, excludeId } = req.body || {};
+  res.json({ duplicates: findDuplicates(getDb(), { email, phone, excludeId }) });
+});
+
 router.post('/candidates', (req, res) => {
   try {
     const { name, phone, email, source, position, notes, resume_file,
-            address, linkedin_url } = req.body;
+            address, linkedin_url, tags, hiring_request_id } = req.body;
+    const force = req.query.force === '1' || req.body.force === true;
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name is required' });
     // SQLite CHECK on source must match one of the allowed values, else the
     // row is rejected with a cryptic constraint error. Validate up-front so
     // HR sees a clean message ('Source must be one of...') instead of a 500.
     const allowedSources = ['facebook','naukri','linkedin','reference','other'];
     const src = source && allowedSources.includes(source) ? source : 'other';
-    const r = getDb().prepare(
-      `INSERT INTO candidates (name, phone, email, source, position, notes, resume_file, address, linkedin_url)
-       VALUES (?,?,?,?,?,?,?,?,?)`
+    const db = getDb();
+    // Mam (2026-05-22): duplicate detection BEFORE insert — if email or
+    // phone already exists on another candidate, refuse with 409 +
+    // duplicates list so frontend can show "Existing candidate found —
+    // open existing / save anyway".  Pass ?force=1 to bypass.
+    if (!force) {
+      const dups = findDuplicates(db, { email, phone });
+      if (dups.length) {
+        return res.status(409).json({
+          error: 'Duplicate candidate found',
+          duplicates: dups,
+          hint: 'Re-submit with ?force=1 to save anyway, or open the existing candidate from the list.',
+        });
+      }
+    }
+    const r = db.prepare(
+      `INSERT INTO candidates (name, phone, email, source, position, notes, resume_file, address, linkedin_url, tags, hiring_request_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
     ).run(name, phone || null, email || null, src, position || null, notes || null,
-          resume_file || null, address || null, linkedin_url || null);
+          resume_file || null, address || null, linkedin_url || null,
+          tags || null, hiring_request_id ? +hiring_request_id : null);
+    logEvent(db, r.lastInsertRowid, 'created', {
+      to_status: 'lead', user_id: req.user.id, user_name: req.user.name,
+      note: force ? 'Created (duplicate check bypassed)' : 'Candidate created',
+    });
     res.status(201).json({ id: r.lastInsertRowid });
   } catch (err) {
     console.error('POST /hr/candidates error', err);
@@ -122,6 +210,7 @@ router.post('/candidates/:id/schedule-interview', (req, res) => {
   if (!interviewer_id) return res.status(400).json({ error: 'Pick an interviewer (employee)' });
   if (!interview_date) return res.status(400).json({ error: 'Interview date required' });
   const db = getDb();
+  const before = db.prepare('SELECT status FROM candidates WHERE id=?').get(req.params.id);
   db.prepare(`UPDATE candidates SET
                 interviewer_id = ?,
                 interview_date = ?,
@@ -130,6 +219,12 @@ router.post('/candidates/:id/schedule-interview', (req, res) => {
                 status         = 'interview_scheduled'
               WHERE id = ?`)
     .run(+interviewer_id, interview_date, resume_file || null, notes || null, req.params.id);
+  const intvName = db.prepare('SELECT name FROM employees WHERE id=?').get(+interviewer_id)?.name || '?';
+  logEvent(db, req.params.id, 'interview_scheduled', {
+    from_status: before?.status, to_status: 'interview_scheduled',
+    note: `Interview with ${intvName} on ${interview_date}`,
+    user_id: req.user.id, user_name: req.user.name,
+  });
   res.json({ message: 'Interview scheduled' });
 });
 
@@ -144,12 +239,19 @@ router.post('/candidates/:id/interview-done', (req, res) => {
   const newStatus = decision === 'shortlisted' ? 'qualified'
                   : decision === 'rejected'    ? 'rejected'
                   :                              'interview_done';
-  getDb().prepare(`UPDATE candidates SET
+  const db = getDb();
+  const before = db.prepare('SELECT status FROM candidates WHERE id=?').get(req.params.id);
+  db.prepare(`UPDATE candidates SET
                      interview_decision = ?,
                      interview_notes    = COALESCE(?, interview_notes),
                      status             = ?
                    WHERE id = ?`)
     .run(decision, notes || null, newStatus, req.params.id);
+  logEvent(db, req.params.id, 'interview_done', {
+    from_status: before?.status, to_status: newStatus,
+    note: `Interview decision: ${decision}${notes ? ' — ' + notes : ''}`,
+    user_id: req.user.id, user_name: req.user.name,
+  });
   res.json({ message: 'Interview decision recorded' });
 });
 
@@ -157,11 +259,16 @@ router.post('/candidates/:id/schedule-md-interview', (req, res) => {
   const { md_interview_date, notes } = req.body;
   if (!md_interview_date) return res.status(400).json({ error: 'MD interview date required' });
   // Status stays 'qualified' — md_interview_date being set marks the MD round.
-  getDb().prepare(`UPDATE candidates SET
+  const db = getDb();
+  db.prepare(`UPDATE candidates SET
                      md_interview_date = ?,
                      notes             = COALESCE(?, notes)
                    WHERE id = ?`)
     .run(md_interview_date, notes || null, req.params.id);
+  logEvent(db, req.params.id, 'md_scheduled', {
+    note: `Final round (MD) scheduled on ${md_interview_date}`,
+    user_id: req.user.id, user_name: req.user.name,
+  });
   res.json({ message: 'MD interview scheduled' });
 });
 
@@ -180,7 +287,9 @@ router.post('/candidates/:id/md-decision', (req, res) => {
   }
   const newStatus = decision === 'shortlisted' ? 'offer_sent' : 'rejected';
   const offerSentAt = decision === 'shortlisted' ? new Date().toISOString() : null;
-  getDb().prepare(`UPDATE candidates SET
+  const db = getDb();
+  const before = db.prepare('SELECT status FROM candidates WHERE id=?').get(req.params.id);
+  db.prepare(`UPDATE candidates SET
                      md_decision        = ?,
                      md_interview_notes = COALESCE(?, md_interview_notes),
                      offer_letter_file  = COALESCE(?, offer_letter_file),
@@ -195,6 +304,13 @@ router.post('/candidates/:id/md-decision', (req, res) => {
          offered_position || null, offered_salary != null ? +offered_salary : null,
          joining_date || null, reporting_to || null,
          newStatus, req.params.id);
+  logEvent(db, req.params.id, decision === 'shortlisted' ? 'offer_generated' : 'md_decision', {
+    from_status: before?.status, to_status: newStatus,
+    note: decision === 'shortlisted'
+      ? `MD shortlisted — offer for ${offered_position} @ ₹${offered_salary}/mo, joining ${joining_date}`
+      : `MD rejected${notes ? ' — ' + notes : ''}`,
+    user_id: req.user.id, user_name: req.user.name,
+  });
   res.json({ message: decision === 'shortlisted' ? 'Offer letter ready' : 'Candidate rejected by MD' });
 });
 
@@ -213,9 +329,57 @@ router.post('/candidates/:id/finalize', (req, res) => {
   if (!['accepted','onboarded','rejected'].includes(final_status)) {
     return res.status(400).json({ error: 'final_status must be accepted / onboarded / rejected' });
   }
-  getDb().prepare(`UPDATE candidates SET status = ?, notes = COALESCE(?, notes) WHERE id = ?`)
+  const db = getDb();
+  const before = db.prepare('SELECT status FROM candidates WHERE id=?').get(req.params.id);
+  db.prepare(`UPDATE candidates SET status = ?, notes = COALESCE(?, notes) WHERE id = ?`)
     .run(final_status, notes || null, req.params.id);
+  logEvent(db, req.params.id, 'finalised', {
+    from_status: before?.status, to_status: final_status,
+    note: `Final status: ${final_status}${notes ? ' — ' + notes : ''}`,
+    user_id: req.user.id, user_name: req.user.name,
+  });
   res.json({ message: 'Status updated' });
+});
+
+// ── HR Phase 1 (mam 2026-05-22 spec) — extras on the candidate row ───
+//
+// GET  /candidates/:id/timeline  → chronological audit log for one candidate.
+// PUT  /candidates/:id/tags      → save free-form CSV tag chips.
+// POST /candidates/:id/hold      → toggle is_on_hold (any pipeline stage).
+//
+router.get('/candidates/:id/timeline', (req, res) => {
+  const rows = getDb().prepare(
+    `SELECT id, event_type, from_status, to_status, note, user_id, user_name, created_at
+       FROM candidate_events WHERE candidate_id = ? ORDER BY created_at DESC, id DESC`
+  ).all(req.params.id);
+  res.json(rows);
+});
+
+router.put('/candidates/:id/tags', (req, res) => {
+  const { tags } = req.body || {};
+  // Normalise: split on comma, trim, drop empties, re-join.
+  const csv = String(tags || '')
+    .split(',').map(s => s.trim()).filter(Boolean).join(',') || null;
+  const db = getDb();
+  db.prepare('UPDATE candidates SET tags = ? WHERE id = ?').run(csv, req.params.id);
+  logEvent(db, req.params.id, 'tags_updated', {
+    note: csv ? `Tags: ${csv}` : 'Tags cleared',
+    user_id: req.user.id, user_name: req.user.name,
+  });
+  res.json({ ok: true, tags: csv });
+});
+
+router.post('/candidates/:id/hold', (req, res) => {
+  const { is_on_hold, reason } = req.body || {};
+  const flag = is_on_hold ? 1 : 0;
+  const db = getDb();
+  db.prepare('UPDATE candidates SET is_on_hold = ?, hold_reason = ? WHERE id = ?')
+    .run(flag, flag ? (reason || null) : null, req.params.id);
+  logEvent(db, req.params.id, flag ? 'hold_on' : 'hold_off', {
+    note: flag ? `On hold: ${reason || '(no reason given)'}` : 'Hold removed',
+    user_id: req.user.id, user_name: req.user.name,
+  });
+  res.json({ ok: true, is_on_hold: flag });
 });
 
 router.get('/candidates/stats', (req, res) => {
@@ -786,6 +950,192 @@ router.post('/checklists/completions/:id/decision', (req, res) => {
   `).run(status, req.user.id, note || null, req.params.id);
   if (r.changes === 0) return res.status(404).json({ error: 'Completion not found' });
   res.json({ message: `Marked ${status}` });
+});
+
+// ═════════════════════════════════════════════════════════════════
+// HIRING REQUESTS (mam 2026-05-22 Phase 1 spec, module #2 in priority)
+// ═════════════════════════════════════════════════════════════════
+//
+// Manager raises a requisition → HR approves → position opens →
+// candidates link back via candidates.hiring_request_id.
+//
+// Workflow:
+//   pending  → approve  → approved (open for sourcing)
+//   pending  → reject   → rejected
+//   approved → close    → closed   (filled / cancelled)
+//
+// All routes are mounted under /api/hr/hiring-requests.
+
+// Helper — only admin / HR can approve or reject.  Hiring manager who
+// raised the request CANNOT approve their own (separation of duties,
+// same rule we enforce on Indent).
+function isHrOrAdmin(req) {
+  if (req.user.role === 'admin') return true;
+  const db = getDb();
+  const u = db.prepare('SELECT department FROM users WHERE id=?').get(req.user.id);
+  if (u?.department && String(u.department).toLowerCase().includes('hr')) return true;
+  const roles = db.prepare(
+    `SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id=r.id WHERE ur.user_id=?`
+  ).all(req.user.id);
+  return roles.some(r => String(r.name || '').toLowerCase().includes('hr'));
+}
+
+router.get('/hiring-requests', (req, res) => {
+  const { status, department } = req.query;
+  let sql = `SELECT hr.*, e.name AS reporting_manager_name,
+                    (SELECT COUNT(*) FROM candidates c WHERE c.hiring_request_id = hr.id) AS candidates_count
+               FROM hiring_requests hr
+               LEFT JOIN employees e ON e.id = hr.reporting_manager_id
+              WHERE 1=1`;
+  const args = [];
+  if (status)     { sql += ' AND hr.status = ?';     args.push(status); }
+  if (department) { sql += ' AND hr.department = ?'; args.push(department); }
+  sql += ' ORDER BY hr.created_at DESC';
+  res.json(getDb().prepare(sql).all(...args));
+});
+
+router.get('/hiring-requests/:id', (req, res) => {
+  const db = getDb();
+  const row = db.prepare(
+    `SELECT hr.*, e.name AS reporting_manager_name
+       FROM hiring_requests hr
+       LEFT JOIN employees e ON e.id = hr.reporting_manager_id
+      WHERE hr.id = ?`
+  ).get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Hiring request not found' });
+  // Inline candidate list — manager wants to see "X applied for this role".
+  row.candidates = db.prepare(
+    `SELECT id, name, phone, email, status, created_at
+       FROM candidates WHERE hiring_request_id = ? ORDER BY created_at DESC`
+  ).all(req.params.id);
+  res.json(row);
+});
+
+router.post('/hiring-requests', (req, res) => {
+  try {
+    const { department, position_title, num_openings, salary_min, salary_max,
+            experience_required, employment_type, hiring_deadline,
+            reporting_manager_id, job_description } = req.body || {};
+    if (!department || !String(department).trim()) return res.status(400).json({ error: 'Department is required' });
+    if (!position_title || !String(position_title).trim()) return res.status(400).json({ error: 'Position title is required' });
+    const allowedTypes = ['full_time','part_time','contract','internship','freelance'];
+    const empType = allowedTypes.includes(employment_type) ? employment_type : 'full_time';
+    const db = getDb();
+    const r = db.prepare(`
+      INSERT INTO hiring_requests
+        (department, position_title, num_openings, salary_min, salary_max,
+         experience_required, employment_type, hiring_deadline,
+         reporting_manager_id, job_description,
+         status, requested_by, requested_by_name)
+      VALUES (?,?,?,?,?,?,?,?,?,?, 'pending', ?, ?)
+    `).run(
+      department.trim(), position_title.trim(),
+      num_openings ? +num_openings : 1,
+      salary_min != null && salary_min !== '' ? +salary_min : null,
+      salary_max != null && salary_max !== '' ? +salary_max : null,
+      experience_required || null, empType, hiring_deadline || null,
+      reporting_manager_id ? +reporting_manager_id : null,
+      job_description || null,
+      req.user.id, req.user.name || null,
+    );
+    res.status(201).json({ id: r.lastInsertRowid });
+  } catch (err) {
+    console.error('POST /hr/hiring-requests error', err);
+    res.status(500).json({ error: err.message || 'Failed to create hiring request' });
+  }
+});
+
+router.put('/hiring-requests/:id', (req, res) => {
+  const db = getDb();
+  const cur = db.prepare('SELECT * FROM hiring_requests WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  // Approved / closed / rejected rows are frozen — admin override only.
+  if (cur.status !== 'pending' && req.user.role !== 'admin') {
+    return res.status(403).json({ error: `Cannot edit a ${cur.status} request — admin only` });
+  }
+  const { department, position_title, num_openings, salary_min, salary_max,
+          experience_required, employment_type, hiring_deadline,
+          reporting_manager_id, job_description } = req.body || {};
+  db.prepare(`
+    UPDATE hiring_requests SET
+      department = COALESCE(?, department),
+      position_title = COALESCE(?, position_title),
+      num_openings = COALESCE(?, num_openings),
+      salary_min = ?,
+      salary_max = ?,
+      experience_required = COALESCE(?, experience_required),
+      employment_type = COALESCE(?, employment_type),
+      hiring_deadline = ?,
+      reporting_manager_id = ?,
+      job_description = COALESCE(?, job_description)
+    WHERE id = ?
+  `).run(
+    department || null, position_title || null,
+    num_openings != null ? +num_openings : null,
+    salary_min != null && salary_min !== '' ? +salary_min : null,
+    salary_max != null && salary_max !== '' ? +salary_max : null,
+    experience_required || null, employment_type || null,
+    hiring_deadline || null,
+    reporting_manager_id ? +reporting_manager_id : null,
+    job_description || null,
+    req.params.id,
+  );
+  res.json({ message: 'Updated' });
+});
+
+router.post('/hiring-requests/:id/approve', (req, res) => {
+  if (!isHrOrAdmin(req)) return res.status(403).json({ error: 'HR or Admin only' });
+  const db = getDb();
+  const cur = db.prepare('SELECT * FROM hiring_requests WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  if (cur.status !== 'pending') return res.status(409).json({ error: `Already ${cur.status}` });
+  // Separation of duties — the requester cannot approve their own request.
+  if (cur.requested_by === req.user.id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'You raised this request; another HR must approve it' });
+  }
+  const { notes } = req.body || {};
+  db.prepare(`UPDATE hiring_requests
+                 SET status='approved', approval_notes=?, approved_by=?, approved_at=CURRENT_TIMESTAMP
+               WHERE id=?`)
+    .run(notes || null, req.user.id, req.params.id);
+  res.json({ message: 'Hiring request approved — position is now open for sourcing' });
+});
+
+router.post('/hiring-requests/:id/reject', (req, res) => {
+  if (!isHrOrAdmin(req)) return res.status(403).json({ error: 'HR or Admin only' });
+  const db = getDb();
+  const cur = db.prepare('SELECT * FROM hiring_requests WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  if (cur.status !== 'pending') return res.status(409).json({ error: `Already ${cur.status}` });
+  const { reason } = req.body || {};
+  if (!reason || !String(reason).trim()) return res.status(400).json({ error: 'Rejection reason required' });
+  db.prepare(`UPDATE hiring_requests
+                 SET status='rejected', approval_notes=?, approved_by=?, approved_at=CURRENT_TIMESTAMP
+               WHERE id=?`)
+    .run(reason, req.user.id, req.params.id);
+  res.json({ message: 'Hiring request rejected' });
+});
+
+router.post('/hiring-requests/:id/close', (req, res) => {
+  if (!isHrOrAdmin(req)) return res.status(403).json({ error: 'HR or Admin only' });
+  const db = getDb();
+  const cur = db.prepare('SELECT * FROM hiring_requests WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  if (cur.status === 'closed') return res.json({ message: 'Already closed' });
+  db.prepare(`UPDATE hiring_requests
+                 SET status='closed', closed_at=CURRENT_TIMESTAMP
+               WHERE id=?`).run(req.params.id);
+  res.json({ message: 'Hiring request closed' });
+});
+
+router.delete('/hiring-requests/:id', (req, res) => {
+  if (!isHrOrAdmin(req)) return res.status(403).json({ error: 'HR or Admin only' });
+  const db = getDb();
+  // Don't orphan candidates — null out their hiring_request_id first.
+  db.prepare('UPDATE candidates SET hiring_request_id = NULL WHERE hiring_request_id = ?').run(req.params.id);
+  const r = db.prepare('DELETE FROM hiring_requests WHERE id = ?').run(req.params.id);
+  if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ message: 'Deleted' });
 });
 
 module.exports = router;

@@ -695,6 +695,51 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- HR Phase 1 (mam 2026-05-22 spec): Hiring Requests.
+    -- Manager raises a hiring requirement → HR approves → open position.
+    -- Candidates can be linked back to a hiring_request_id so the funnel
+    -- shows "X applicants for Position Y" per request.
+    CREATE TABLE IF NOT EXISTS hiring_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      department TEXT NOT NULL,
+      position_title TEXT NOT NULL,
+      num_openings INTEGER DEFAULT 1,
+      salary_min REAL,
+      salary_max REAL,
+      experience_required TEXT,              -- e.g. '2-4 years', 'Fresher'
+      employment_type TEXT DEFAULT 'full_time' CHECK(employment_type IN ('full_time','part_time','contract','internship','freelance')),
+      hiring_deadline DATE,
+      reporting_manager_id INTEGER REFERENCES employees(id),
+      job_description TEXT,                  -- short JD blurb; full JD module comes in Batch B
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected','closed')),
+      approval_notes TEXT,
+      requested_by INTEGER REFERENCES users(id),
+      requested_by_name TEXT,                -- denormalised so list view doesn't need extra JOIN
+      approved_by INTEGER REFERENCES users(id),
+      approved_at DATETIME,
+      closed_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- HR Phase 1 (mam 2026-05-22 spec): Candidate activity timeline.
+    -- Every status-change / decision / tag-edit / hold-toggle writes a row
+    -- here so the candidate detail view shows a chronological audit log.
+    -- event_type values used by routes/hr.js:
+    --   'created' | 'status_change' | 'interview_scheduled' | 'interview_done'
+    --   | 'md_scheduled' | 'md_decision' | 'offer_generated' | 'finalised'
+    --   | 'tags_updated' | 'hold_on' | 'hold_off' | 'note_added'
+    CREATE TABLE IF NOT EXISTS candidate_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      candidate_id INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL,
+      from_status TEXT,
+      to_status TEXT,
+      note TEXT,
+      user_id INTEGER REFERENCES users(id),
+      user_name TEXT,                        -- denormalised so deleted users still show
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- HR: Employees
     CREATE TABLE IF NOT EXISTS employees (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2029,6 +2074,19 @@ function initializeDatabase() {
     // DOCX) so the offer letter has full contact details.
     ['candidates', 'address TEXT'],
     ['candidates', 'linkedin_url TEXT'],
+    // ── HR Phase 1 (mam 2026-05-22 ATS spec) ────────────────────────
+    // tags: free-form CSV chips on each candidate ("urgent", "ex-L&T",
+    //        "diversity", etc.).  Search / filter uses LIKE for now.
+    // is_on_hold: overlay flag — a candidate at ANY pipeline stage can
+    //             be put on hold; UI surfaces "On Hold" as its own
+    //             funnel pill without losing the underlying status.
+    // hiring_request_id: optional FK back to hiring_requests so a
+    //             hiring manager can see all candidates applying for
+    //             their open requisition in one click.
+    ['candidates', 'tags TEXT'],
+    ['candidates', 'is_on_hold INTEGER DEFAULT 0'],
+    ['candidates', 'hold_reason TEXT'],
+    ['candidates', 'hiring_request_id INTEGER REFERENCES hiring_requests(id)'],
     // price_requests carries the item's department (CIVIL / ELE / FF / etc.)
     // so the auto-promoted item_master row lands in the right department too.
     ['price_requests', 'department TEXT'],

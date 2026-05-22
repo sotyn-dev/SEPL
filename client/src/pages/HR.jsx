@@ -2,9 +2,14 @@ import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
+import HiringRequestsTab from '../components/HiringRequestsTab';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2, FiCalendar, FiCheckCircle, FiUser, FiFileText, FiAward, FiDownload } from 'react-icons/fi';
+import {
+  FiPlus, FiEdit2, FiTrash2, FiCalendar, FiCheckCircle, FiUser, FiFileText,
+  FiAward, FiDownload, FiClock, FiTag, FiPauseCircle, FiPlayCircle, FiBriefcase,
+  FiAlertTriangle,
+} from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
 const candidateStatuses = ['lead','called','qualified','interview_scheduled','interview_done','offer_sent','accepted','onboarded','rejected'];
@@ -54,7 +59,10 @@ function pipelineFor(c) {
 
 export default function HR() {
   const { canDelete } = useAuth();
-  const [tab, setTab] = useState('candidates');
+  // Mam (2026-05-22 ATS Phase 1 spec): top-level tab inside /hr.  No
+  // separate sidebar entry — keeps the single "HR & Hiring" entry
+  // point per the duplication rule.
+  const [tab, setTab] = useState('candidates');         // 'candidates' | 'hiring-requests'
   const [candidates, setCandidates] = useState([]);
   const [contractors, setContractors] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -70,10 +78,23 @@ export default function HR() {
   // so they know what still needs manual entry.
   const [parsingResume, setParsingResume] = useState(false);
   const [parsedHits, setParsedHits] = useState(null);
-  // Mam (2026-05-22): pill-tabs for the 5-stage pipeline, same shape
-  // as CRM Full Kitting's Stage 1/2/3 row.  Filter values map to the
-  // status buckets pipelineFor() returns.
+  // Mam (2026-05-22): pill-tabs for the 7-stage spec pipeline
+  // (Applied / Screening / Interview / Final Round / Selected /
+  // Rejected / On Hold).  Filter value drives the table filter.
   const [stageFilter, setStageFilter] = useState('all');
+  // Mam (2026-05-22 ATS Phase 1):
+  //   timelineRow → candidate whose activity log is open in a modal
+  //   timelineEvents → fetched events for that candidate
+  //   tagsRow / tagsDraft → which row's tags are being edited inline
+  //   holdRow / holdDraft → on-hold toggle modal
+  //   dupWarning → duplicate detection result when admin tries to save
+  const [timelineRow, setTimelineRow] = useState(null);
+  const [timelineEvents, setTimelineEvents] = useState([]);
+  const [tagsRow, setTagsRow] = useState(null);
+  const [tagsDraft, setTagsDraft] = useState('');
+  const [holdRow, setHoldRow] = useState(null);
+  const [holdDraft, setHoldDraft] = useState('');
+  const [dupWarning, setDupWarning] = useState(null);   // { duplicates, payload } | null
 
   const load = () => {
     api.get('/hr/candidates').then(r => setCandidates(r.data));
@@ -100,8 +121,8 @@ export default function HR() {
     } finally { setUploading(false); }
   };
 
-  const saveCandidate = async (e) => {
-    e.preventDefault();
+  const saveCandidate = async (e, opts = {}) => {
+    if (e?.preventDefault) e.preventDefault();
     // Upload the resume first (if attached) and stash the URL on the
     // candidate row so the same file flows naturally into Stage 2's
     // schedule-interview screen — no need to re-upload there.  If the
@@ -115,17 +136,76 @@ export default function HR() {
       payload.resume_file = url;
     }
     try {
-      if (editing) { await api.put(`/hr/candidates/${editing.id}`, payload); }
-      else { await api.post('/hr/candidates', payload); }
-      toast.success(editing ? 'Updated' : 'Added candidate (Stage 1 — Lead)');
-      setModal(false); load();
+      if (editing) {
+        await api.put(`/hr/candidates/${editing.id}`, payload);
+      } else {
+        // Mam (2026-05-22 ATS Phase 1): duplicate detection.  Backend
+        // returns 409 + { duplicates: [...] } when email/phone match
+        // an existing candidate.  We catch that below and surface a
+        // warning dialog instead of an error toast.  opts.force=true
+        // skips the check (after admin confirms "Save Anyway").
+        const url = opts.force ? '/hr/candidates?force=1' : '/hr/candidates';
+        await api.post(url, payload);
+      }
+      toast.success(editing ? 'Updated' : 'Added candidate (Stage 1 — Applied)');
+      setModal(false); setDupWarning(null); load();
     } catch (err) {
-      // Surface the real backend error instead of failing silently — mam
-      // (and HR users) need to see WHY a candidate save was rejected so
-      // they can fix the input or report a real bug.
+      if (err.response?.status === 409 && err.response?.data?.duplicates) {
+        // Stash duplicates + the payload so "Save Anyway" can re-submit.
+        setDupWarning({
+          duplicates: err.response.data.duplicates,
+          payload,
+        });
+        return;
+      }
       const msg = err.response?.data?.error || err.message || 'Failed to save candidate';
       toast.error(msg, { duration: 6000 });
       console.error('saveCandidate error', err);
+    }
+  };
+
+  // Mam (2026-05-22 ATS Phase 1): activity timeline modal — chronological
+  // audit log per candidate (created / status changes / decisions /
+  // tags / hold / offer generated).
+  const openTimeline = async (row) => {
+    setTimelineRow(row);
+    setTimelineEvents([]);
+    try {
+      const r = await api.get(`/hr/candidates/${row.id}/timeline`);
+      setTimelineEvents(r.data || []);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not load timeline');
+    }
+  };
+
+  const openTags = (row) => {
+    setTagsRow(row);
+    setTagsDraft(row.tags || '');
+  };
+  const saveTags = async () => {
+    try {
+      await api.put(`/hr/candidates/${tagsRow.id}/tags`, { tags: tagsDraft });
+      toast.success('Tags updated');
+      setTagsRow(null); load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update tags');
+    }
+  };
+
+  const openHold = (row) => {
+    setHoldRow(row);
+    setHoldDraft(row.hold_reason || '');
+  };
+  const toggleHold = async (turnOn) => {
+    try {
+      await api.post(`/hr/candidates/${holdRow.id}/hold`, {
+        is_on_hold: turnOn,
+        reason: turnOn ? holdDraft : null,
+      });
+      toast.success(turnOn ? 'Candidate put on hold' : 'Hold removed');
+      setHoldRow(null); load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to toggle hold');
     }
   };
 
@@ -232,33 +312,59 @@ export default function HR() {
 
   return (
     <div className="space-y-4">
-      {/* Sub-Contractors tab removed (mam, 2026-05-22: "here
-          sub-contractor not required we already create different
-          module" — standalone Sub-Contractors module already lives in
-          the sidebar).  HR & Hiring is now Candidates-only. */}
+      {/* Top-level tab switcher — Candidates (ATS) | Hiring Requests.
+          Mam (2026-05-22 Phase 1 spec) wants both modules under the
+          single /hr page (no separate sidebar entries). */}
+      <div className="flex gap-2 border-b border-gray-200">
+        {[
+          { id: 'candidates',      label: 'Candidates (ATS)', icon: FiUser },
+          { id: 'hiring-requests', label: 'Hiring Requests',   icon: FiBriefcase },
+        ].map(t => {
+          const active = tab === t.id;
+          const Icon = t.icon;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px flex items-center gap-1.5
+                ${active
+                  ? 'border-blue-600 text-blue-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+            >
+              <Icon size={14}/>{t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === 'hiring-requests' && <HiringRequestsTab employees={employees} />}
 
       {tab === 'candidates' && (() => {
-        // Bucket each candidate into one of 5 stages (+ rejected + all).
-        // Drives both the pill counts and the table filter.  Kept inline
-        // here because pipelineFor() above only knows label/colour, not
-        // the funnel-stage bucket mam asked for.
+        // Mam (2026-05-22 ATS Phase 1 spec): 7-stage pipeline.
+        //   Applied → Screening → Interview → Final Round → Selected
+        //   + Rejected + On Hold (overlay)
+        // bucketFor maps existing status + is_on_hold flag to a pill id.
+        // On Hold takes precedence — a held candidate at any stage
+        // shows only in the On Hold filter (avoid double-counting).
         const bucketFor = (c) => {
+          if (c.is_on_hold) return 'on_hold';
           const s = c.status || 'lead';
           if (s === 'rejected') return 'rejected';
-          if (s === 'lead' || s === 'called') return 'lead';
-          if (s === 'interview_scheduled')    return 'schedule';
-          if (s === 'interview_done')         return 'decision';
-          if (s === 'qualified')              return 'md';
-          if (['offer_sent','accepted','onboarded'].includes(s)) return 'offer';
-          return 'lead';
+          if (s === 'lead' || s === 'called')        return 'applied';
+          if (s === 'interview_scheduled')           return 'screening';
+          if (s === 'interview_done')                return 'interview';
+          if (s === 'qualified')                     return 'final_round';
+          if (['offer_sent','accepted','onboarded'].includes(s)) return 'selected';
+          return 'applied';
         };
         const STAGE_PILLS = [
-          { id: 'lead',     label: 'Stage 1 — LEAD',                   color: 'bg-blue-500' },
-          { id: 'schedule', label: 'Stage 2 — SCHEDULE INTERVIEW',     color: 'bg-indigo-500' },
-          { id: 'decision', label: 'Stage 3 — INTERVIEW DECISION',     color: 'bg-amber-500' },
-          { id: 'md',       label: 'Stage 4 — MD ROUND',               color: 'bg-purple-500' },
-          { id: 'offer',    label: 'Stage 5 — OFFER & ONBOARDING',     color: 'bg-emerald-500' },
-          { id: 'rejected', label: 'REJECTED',                          color: 'bg-rose-500' },
+          { id: 'applied',     label: '1 · APPLIED',     color: 'bg-blue-500' },
+          { id: 'screening',   label: '2 · SCREENING',   color: 'bg-indigo-500' },
+          { id: 'interview',   label: '3 · INTERVIEW',   color: 'bg-amber-500' },
+          { id: 'final_round', label: '4 · FINAL ROUND', color: 'bg-purple-500' },
+          { id: 'selected',    label: '5 · SELECTED',    color: 'bg-emerald-500' },
+          { id: 'rejected',    label: 'REJECTED',         color: 'bg-rose-500' },
+          { id: 'on_hold',     label: 'ON HOLD',          color: 'bg-gray-500' },
         ];
         const stageCounts = STAGE_PILLS.reduce((acc, s) => {
           acc[s.id] = candidates.filter(c => bucketFor(c) === s.id).length;
@@ -331,9 +437,29 @@ export default function HR() {
                   return (
                     <tr key={c.id} className="border-t hover:bg-gray-50/60 align-top">
                       <td className="px-3 py-2">
-                        <div className="font-medium text-gray-900">{c.name}</div>
+                        <div className="font-medium text-gray-900 flex items-center gap-1.5">
+                          {c.name}
+                          {c.is_on_hold && (
+                            <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-gray-200 text-gray-700" title={c.hold_reason || 'On hold'}>
+                              ⏸ HOLD
+                            </span>
+                          )}
+                        </div>
                         {c.phone && <div className="text-[11px] text-gray-500">📞 {c.phone}</div>}
                         {c.email && <div className="text-[11px] text-gray-500">✉️ {c.email}</div>}
+                        {/* Tag chips (mam Phase 1 spec — free-form CSV) */}
+                        {(c.tags && c.tags.trim()) ? (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {c.tags.split(',').map(t => t.trim()).filter(Boolean).map(t => (
+                              <span key={t} className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">{t}</span>
+                            ))}
+                            <button onClick={() => openTags(c)} className="text-[9px] text-gray-400 hover:text-blue-600 underline">edit</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => openTags(c)} className="text-[10px] text-gray-400 hover:text-blue-600 mt-1 flex items-center gap-0.5">
+                            <FiTag size={9}/> add tags
+                          </button>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-[12px]">
                         <div>{c.position || <span className="text-gray-300">—</span>}</div>
@@ -372,6 +498,13 @@ export default function HR() {
                           {p.next === 'schedule_md' && <button onClick={() => openStage(c, 'schedule_md')} className="btn btn-primary text-[11px] py-1 px-2"><FiCalendar size={11} className="inline mr-1"/>Schedule MD Interview</button>}
                           {p.next === 'md_decision' && <button onClick={() => openStage(c, 'md_decision')} className="btn btn-primary text-[11px] py-1 px-2"><FiAward size={11} className="inline mr-1"/>MD Decision + Offer</button>}
                           {p.next === 'finalize' && <button onClick={() => openStage(c, 'finalize')} className="btn btn-primary text-[11px] py-1 px-2"><FiCheckCircle size={11} className="inline mr-1"/>Mark Onboarded</button>}
+                          <button onClick={() => openTimeline(c)} className="p-1 text-gray-400 hover:text-indigo-600" title="Activity timeline"><FiClock size={14} /></button>
+                          <button
+                            onClick={() => openHold(c)}
+                            className={`p-1 ${c.is_on_hold ? 'text-amber-600 hover:text-amber-700' : 'text-gray-400 hover:text-amber-600'}`}
+                            title={c.is_on_hold ? `On hold: ${c.hold_reason || ''}` : 'Put on hold'}>
+                            {c.is_on_hold ? <FiPlayCircle size={14}/> : <FiPauseCircle size={14}/>}
+                          </button>
                           <button onClick={() => { setEditing(c); setForm(c); setModal('candidate'); }} className="p-1 text-gray-400 hover:text-blue-600" title="Edit basic info"><FiEdit2 size={14} /></button>
                           {canDelete('hr') && <button onClick={async () => {
                             if (!confirm(`Delete candidate "${c.name}"?`)) return;
@@ -658,6 +791,174 @@ export default function HR() {
           <div><label className="label">Notes</label><textarea className="input" rows="2" value={stageForm.notes || ''} onChange={e => setStageForm(f => ({ ...f, notes: e.target.value }))} /></div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>
+      </Modal>
+
+      {/* ════════════════════════════════════════════════════════════ */}
+      {/*  ATS Phase 1 modals (mam 2026-05-22): Timeline · Tags · Hold */}
+      {/*  + Duplicate-warning dialog.                                  */}
+      {/* ════════════════════════════════════════════════════════════ */}
+
+      {/* TIMELINE — chronological audit log for one candidate */}
+      <Modal isOpen={!!timelineRow} onClose={() => setTimelineRow(null)} title={`Activity Timeline — ${timelineRow?.name || ''}`} wide>
+        <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+          {timelineEvents.length === 0 && (
+            <p className="text-[12px] text-gray-400 italic px-2 py-4 text-center">No events recorded yet.</p>
+          )}
+          {timelineEvents.map(ev => {
+            const dt = ev.created_at ? new Date(ev.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+            const typeColors = {
+              created:             'bg-blue-100 text-blue-700 border-blue-300',
+              interview_scheduled: 'bg-indigo-100 text-indigo-700 border-indigo-300',
+              interview_done:      'bg-amber-100 text-amber-700 border-amber-300',
+              md_scheduled:        'bg-purple-100 text-purple-700 border-purple-300',
+              md_decision:         'bg-purple-100 text-purple-700 border-purple-300',
+              offer_generated:     'bg-emerald-100 text-emerald-700 border-emerald-300',
+              finalised:           'bg-teal-100 text-teal-700 border-teal-300',
+              tags_updated:        'bg-gray-100 text-gray-700 border-gray-300',
+              hold_on:             'bg-amber-100 text-amber-800 border-amber-400',
+              hold_off:            'bg-emerald-100 text-emerald-700 border-emerald-300',
+            };
+            const cls = typeColors[ev.event_type] || 'bg-gray-100 text-gray-700 border-gray-300';
+            return (
+              <div key={ev.id} className="border border-gray-200 rounded-lg p-2.5 text-[12px] flex items-start gap-3">
+                <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border whitespace-nowrap ${cls}`}>{ev.event_type.replace(/_/g, ' ')}</span>
+                <div className="flex-1">
+                  <div className="text-gray-800">{ev.note || '—'}</div>
+                  <div className="text-[10px] text-gray-400 mt-0.5">
+                    {dt} · by {ev.user_name || `#${ev.user_id || '?'}`}
+                    {ev.from_status && ev.to_status && (
+                      <span className="ml-2 text-gray-500">[{ev.from_status} → {ev.to_status}]</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex justify-end pt-3">
+          <button onClick={() => setTimelineRow(null)} className="btn btn-secondary">Close</button>
+        </div>
+      </Modal>
+
+      {/* TAGS — edit free-form CSV chips per candidate */}
+      <Modal isOpen={!!tagsRow} onClose={() => setTagsRow(null)} title={`Tags — ${tagsRow?.name || ''}`}>
+        <div className="space-y-3">
+          <p className="text-[11px] text-gray-500">
+            Comma-separated tags for quick filtering / search.  Examples:
+            <span className="ml-1 italic">urgent, diversity, ex-L&amp;T, returning-employee</span>
+          </p>
+          <input
+            className="input"
+            value={tagsDraft}
+            onChange={e => setTagsDraft(e.target.value)}
+            placeholder="urgent, ex-L&T, BBA-fresher"
+            autoFocus
+          />
+          {tagsDraft && (
+            <div className="flex flex-wrap gap-1">
+              {tagsDraft.split(',').map(t => t.trim()).filter(Boolean).map(t => (
+                <span key={t} className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">{t}</span>
+              ))}
+            </div>
+          )}
+          <div className="flex justify-end gap-3 pt-1">
+            <button onClick={() => setTagsRow(null)} className="btn btn-secondary">Cancel</button>
+            <button onClick={saveTags} className="btn btn-primary">Save Tags</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* HOLD — toggle is_on_hold + reason */}
+      <Modal isOpen={!!holdRow} onClose={() => setHoldRow(null)} title={`${holdRow?.is_on_hold ? 'Remove Hold' : 'Put On Hold'} — ${holdRow?.name || ''}`}>
+        <div className="space-y-3">
+          {holdRow?.is_on_hold ? (
+            <>
+              <p className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded px-3 py-2">
+                Removing the hold returns the candidate to the regular pipeline.
+              </p>
+              <div className="text-[12px] text-gray-600">
+                <span className="font-semibold">Current reason:</span> {holdRow.hold_reason || '(none recorded)'}
+              </div>
+              <div className="flex justify-end gap-3 pt-1">
+                <button onClick={() => setHoldRow(null)} className="btn btn-secondary">Cancel</button>
+                <button onClick={() => toggleHold(false)} className="btn btn-primary bg-emerald-600 hover:bg-emerald-700 border-emerald-600">Remove Hold</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded px-3 py-2">
+                Held candidates stay in the system but move to the "On Hold" filter — they don't show in their original pipeline stage until the hold is removed.
+              </p>
+              <div>
+                <label className="label">Reason <span className="text-gray-400 font-normal text-[10px]">(optional)</span></label>
+                <textarea
+                  className="input"
+                  rows="2"
+                  value={holdDraft}
+                  onChange={e => setHoldDraft(e.target.value)}
+                  placeholder="e.g. Pending budget approval / candidate asked for time / re-engage in Q3"
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-1">
+                <button onClick={() => setHoldRow(null)} className="btn btn-secondary">Cancel</button>
+                <button onClick={() => toggleHold(true)} className="btn btn-primary bg-amber-600 hover:bg-amber-700 border-amber-600">Put On Hold</button>
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
+
+      {/* DUPLICATE WARNING — shown after POST /candidates returns 409.
+          Admin sees the matching candidate(s) and can either cancel
+          or "Save Anyway" (re-POSTs with ?force=1). */}
+      <Modal isOpen={!!dupWarning} onClose={() => setDupWarning(null)} title="Possible Duplicate Candidate" wide>
+        <div className="space-y-3">
+          <p className="text-[12px] text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2 flex items-start gap-2">
+            <FiAlertTriangle size={16} className="mt-0.5 flex-shrink-0"/>
+            <span>
+              <b>{dupWarning?.duplicates?.length || 0}</b> existing candidate{(dupWarning?.duplicates?.length || 0) === 1 ? '' : 's'} match the email or phone you entered.
+              Open the existing record to update it, or click "Save Anyway" to create a new candidate.
+            </span>
+          </p>
+          <div className="border border-gray-200 rounded-lg overflow-hidden">
+            <table className="text-[12px] w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="text-left px-2 py-1.5 text-[10px] font-semibold text-gray-500 uppercase">Existing Candidate</th>
+                  <th className="text-left px-2 py-1.5 text-[10px] font-semibold text-gray-500 uppercase">Contact</th>
+                  <th className="text-left px-2 py-1.5 text-[10px] font-semibold text-gray-500 uppercase">Status</th>
+                  <th className="text-left px-2 py-1.5 text-[10px] font-semibold text-gray-500 uppercase">Added</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(dupWarning?.duplicates || []).map(d => (
+                  <tr key={d.id} className="border-t">
+                    <td className="px-2 py-1.5"><b>{d.name}</b>{d.position ? ` · ${d.position}` : ''}</td>
+                    <td className="px-2 py-1.5 text-gray-600">
+                      {d.phone || ''}
+                      {d.phone && d.email && ' · '}
+                      {d.email || ''}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">{d.status?.replace(/_/g, ' ')}</span>
+                    </td>
+                    <td className="px-2 py-1.5 text-gray-500 text-[11px]">
+                      {d.created_at ? new Date(d.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={() => setDupWarning(null)} className="btn btn-secondary">Cancel</button>
+            <button
+              onClick={() => saveCandidate(null, { force: true })}
+              className="btn btn-primary bg-amber-600 hover:bg-amber-700 border-amber-600">
+              Save Anyway (new candidate)
+            </button>
+          </div>
+        </div>
       </Modal>
 
       <Modal isOpen={modal === 'contractor'} onClose={() => setModal(false)} title={editing ? 'Edit Contractor' : 'Add Contractor'}>
