@@ -2375,39 +2375,38 @@ function initializeDatabase() {
     try { db.exec('ROLLBACK'); } catch (e2) {}
   }
 
-  // Mam (2026-05-21) STILL hit the CHECK error after the previous fix.
-  // Root cause: SQLite stores the CREATE statement as it was written —
-  // `CREATE TABLE IF NOT EXISTS payment_requests` — but my old regex
-  // matched only `CREATE TABLE payment_requests` (no "IF NOT EXISTS"),
-  // so the rename never happened, the new table couldn't be created
-  // (same name as the existing one), and the whole migration rolled
-  // back silently.  Detailed step logging this time.
+  // Mam (2026-05-21) STILL hit the CHECK error.  Previous rebuild
+  // attempts kept rolling back silently for reasons that varied per
+  // SQLite version (IF NOT EXISTS handling, FK trigger lifecycle,
+  // etc.).  This version uses the SQLite `writable_schema` PRAGMA
+  // which lets us patch sqlite_master.sql directly — no table
+  // rebuild, no data copy, just a schema-text edit.  Documented
+  // SQLite trick that better-sqlite3 supports cleanly.
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='payment_requests'").get();
-    const hasCategoryCheck = row && /CHECK\s*\(\s*category\s+IN/i.test(row.sql);
-    if (hasCategoryCheck) {
-      console.log('[migration] payment_requests CHECK detected, rebuilding…');
-      // Defensive cleanup — if a prior failed run left an orphan
-      // payment_requests_new table around, drop it first.
-      try { db.exec('DROP TABLE IF EXISTS payment_requests_new'); } catch (_) {}
-
-      db.exec('BEGIN');
-      const newSql = row.sql
-        // Handles BOTH `CREATE TABLE payment_requests` and
-        // `CREATE TABLE IF NOT EXISTS payment_requests`.
-        .replace(/CREATE TABLE(\s+IF NOT EXISTS)?\s+payment_requests/i, 'CREATE TABLE payment_requests_new')
-        // Drop the CHECK clause + any leading comma.
-        .replace(/,?\s*CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i, '');
-      db.exec(newSql);
-      db.exec('INSERT INTO payment_requests_new SELECT * FROM payment_requests');
-      db.exec('DROP TABLE payment_requests');
-      db.exec('ALTER TABLE payment_requests_new RENAME TO payment_requests');
-      db.exec('COMMIT');
-      console.log('[migration] payment_requests.category CHECK dropped — Salary / Compliance / Other now allowed');
+    if (row && /CHECK\s*\(\s*category\s+IN/i.test(row.sql)) {
+      console.log('[migration] payment_requests CHECK detected — patching schema directly');
+      const newSql = row.sql.replace(/,?\s*CHECK\s*\(\s*category\s+IN\s*\([^)]*\)\s*\)/i, '');
+      if (newSql === row.sql) {
+        console.error('[migration] payment_requests regex did NOT match.  Raw sql:\n', row.sql);
+      } else {
+        const curVer = db.pragma('schema_version', { simple: true });
+        db.pragma('writable_schema = ON');
+        db.prepare('UPDATE sqlite_master SET sql = ? WHERE type = ? AND name = ?')
+          .run(newSql, 'table', 'payment_requests');
+        // Bump schema_version so the in-memory schema cache is
+        // invalidated for the next prepared statement.
+        db.pragma(`schema_version = ${curVer + 1}`);
+        db.pragma('writable_schema = OFF');
+        console.log(`[migration] payment_requests.category CHECK dropped (writable_schema) — schema_version ${curVer} → ${curVer + 1}.  Salary / Compliance / Other now allowed.`);
+      }
+    } else if (row) {
+      console.log('[migration] payment_requests CHECK already gone — skipping');
     }
   } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (e2) {}
-    console.error('[migration] payment_requests CHECK drop failed:', e.message, e.stack);
+    console.error('[migration] payment_requests CHECK drop FAILED:', e.message);
+    console.error(e.stack);
+    try { db.pragma('writable_schema = OFF'); } catch (_) {}
   }
 
   // Relax attendance.status CHECK to allow 'short_day' (4-8 hours worked).
