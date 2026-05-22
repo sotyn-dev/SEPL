@@ -1,16 +1,26 @@
 // Print-ready Offer Letter for a hired candidate.
 //
-// Mam (2026-05-22) shared her reference offer letter (Bhanu Pratap
-// Rana · AI Engineer) and asked to match its format.  Layout below
-// mirrors that template exactly:
-//   • "PRIVATE AND CONFIDENTIAL" pill, top-right
-//   • Date / Name / Address / Email / Subject / Mobile block
-//   • Dear [First Name]
-//   • Standard opening paragraph
-//   • CTC (With complete break-up) — 3-col table
-//   • Date of Joining / Probationary Period / Notice Period sections
-//   • Confidentiality paragraph
-//   • With Regards · Secured Engineers Pvt. Ltd. · Signature
+// Mam (2026-05-22) shared the .docx reference
+// (Offer_Letter_Bhanu_Pratap_Rana.docx) and asked the auto-generated
+// PDF to match that format exactly.  Layout below mirrors the docx:
+//
+//   1. Letterhead (centered, top):
+//      • SECURED ENGINEERS PVT. LTD. (bold caps)
+//      • Head Office: B.K Towers, Janta Nagar, Gill Road, Ludhiana, (PB) (141003)
+//      • Corporate Office: 58/A/1, First Floor, Kalu Sarai, New Delhi - 110016
+//   2. PRIVATE AND CONFIDENTIAL  (centered, small caps)
+//   3. OFFER LETTER  (centered, bold caps, larger)
+//   4. Header field block — Date / Name / Address / Email / Mobile No / Subject
+//      (in this exact order — Mobile is BEFORE Subject in the docx)
+//   5. Dear [Full Name],
+//   6. Standard opening paragraph
+//   7. CTC table — Basic Pay / Conveyance / HRA /
+//      Adhoc Allowance / Miscellaneous Allowance (combined into ONE row) /
+//      Total Earnings
+//   8. Date of Joining · Probationary Period (3 months) ·
+//      Notice Period (15 days, 45-day clearance)
+//   9. Confidentiality paragraph
+//  10. With Regards · Secured Engineers Pvt. Ltd. · Human Resources Department
 //
 // Same HTML→Ctrl+P→Save as PDF pattern as VendorPOPrint /
 // IndentPrint / SalarySlipPrint.
@@ -22,10 +32,9 @@ import { useParams } from 'react-router-dom';
 import api from '../api';
 
 const COMPANY = {
-  name: 'Secured Engineers Pvt. Ltd.',
-  short: 'SEPL',
-  email: 'hr@securedengineers.com',
-  website: 'www.securedengineers.com',
+  name:     'Secured Engineers Pvt. Ltd.',
+  headOff:  'Head Office: B.K Towers, Janta Nagar, Gill Road, Ludhiana, (PB) (141003)',
+  corpOff:  'Corporate Office: 58/A/1, First Floor, Kalu Sarai, New Delhi - 110016',
 };
 
 const fmtINR = (n) => Number(n || 0).toLocaleString('en-IN');
@@ -55,7 +64,6 @@ export default function OfferLetterPrint() {
   const monthly      = +c.offered_salary || 0;
   const annual       = monthly * 12;
   const joiningStr   = fmtDateLong(c.joining_date);
-  const firstName    = (c.name || '').split(' ')[0] || c.name || '';
 
   return (
     <div className="bg-gray-100 min-h-screen py-6 print:bg-white print:py-0">
@@ -69,23 +77,41 @@ export default function OfferLetterPrint() {
 
       {/* Letter — A4 width, white card */}
       <div className="max-w-[800px] mx-auto bg-white shadow-lg print:shadow-none p-10 print:p-12 text-[12.5px] leading-relaxed text-gray-900" style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}>
-        {/* PRIVATE AND CONFIDENTIAL */}
-        <div className="text-right text-[10.5px] italic font-bold tracking-widest text-gray-700 mb-8">
+
+        {/* ── LETTERHEAD ─────────────────────────────────────────── */}
+        <div className="text-center mb-5">
+          <div className="text-[16px] font-bold tracking-wide">{COMPANY.name.toUpperCase()}</div>
+          <div className="text-[10.5px] mt-1 text-gray-800">{COMPANY.headOff}</div>
+          <div className="text-[10.5px] text-gray-800">{COMPANY.corpOff}</div>
+        </div>
+
+        {/* Thin separator under the letterhead */}
+        <div className="border-t border-gray-400 mb-5" />
+
+        {/* PRIVATE AND CONFIDENTIAL (centered) */}
+        <div className="text-center text-[11px] italic font-bold tracking-widest text-gray-700 mb-2">
           PRIVATE AND CONFIDENTIAL
         </div>
 
-        {/* Header block — Date / Name / Address / Email / Subject / Mobile */}
-        <div className="space-y-0.5 text-[12.5px]">
-          <div><strong>Date:</strong> {today}</div>
-          <div><strong>Name:</strong> {c.name}</div>
-          {c.address && <div><strong>Address:</strong> {c.address}</div>}
-          {c.email && <div><strong>Email:</strong> {c.email}</div>}
-          <div><strong>Subject –</strong> Offer Letter</div>
-          {c.phone && <div><strong>Mobile no -</strong> {c.phone}</div>}
+        {/* OFFER LETTER title (centered, larger) */}
+        <div className="text-center text-[18px] font-bold tracking-wider mb-6">
+          OFFER LETTER
         </div>
 
-        {/* Salutation */}
-        <p className="mt-6 mb-3"><strong>Dear {firstName}</strong>,</p>
+        {/* Header block — Date / Name / Address / Email / Mobile No / Subject */}
+        <table className="text-[12.5px] w-full mb-5">
+          <tbody>
+            <tr><td className="font-bold pr-3 py-0.5 align-top w-[100px]">Date</td><td className="py-0.5">{today}</td></tr>
+            <tr><td className="font-bold pr-3 py-0.5 align-top">Name</td><td className="py-0.5">{c.name || '___________'}</td></tr>
+            <tr><td className="font-bold pr-3 py-0.5 align-top">Address</td><td className="py-0.5">{c.address || '___________'}</td></tr>
+            <tr><td className="font-bold pr-3 py-0.5 align-top">Email</td><td className="py-0.5">{c.email || '___________'}</td></tr>
+            <tr><td className="font-bold pr-3 py-0.5 align-top">Mobile No</td><td className="py-0.5">{c.phone || '___________'}</td></tr>
+            <tr><td className="font-bold pr-3 py-0.5 align-top">Subject</td><td className="py-0.5">Offer Letter</td></tr>
+          </tbody>
+        </table>
+
+        {/* Salutation — full name per the reference docx */}
+        <p className="mt-4 mb-3"><strong>Dear {c.name || '___________'},</strong></p>
 
         {/* Opening paragraph */}
         <p className="mb-5 text-justify">
@@ -118,18 +144,13 @@ export default function OfferLetterPrint() {
             </tr>
             <tr>
               <td className="border border-gray-700 px-2 py-1.5">House Rent Allowance</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">Provided by company</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">Provided by company</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">Provide by company</td>
+              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">Provide by company</td>
             </tr>
             <tr>
-              <td className="border border-gray-700 px-2 py-1.5">Adhoc Allowance</td>
+              <td className="border border-gray-700 px-2 py-1.5">Adhoc Allowance / Miscellaneous Allowance</td>
               <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">N/A</td>
               <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">N/A</td>
-            </tr>
-            <tr>
-              <td className="border border-gray-700 px-2 py-1.5">Miscellaneous Allowance</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">As applicable</td>
-              <td className="border border-gray-700 px-2 py-1.5 text-right italic text-gray-700">As applicable</td>
             </tr>
             <tr className="font-bold bg-gray-50">
               <td className="border border-gray-700 px-2 py-1.5">Total Earnings</td>
@@ -141,21 +162,21 @@ export default function OfferLetterPrint() {
 
         {/* Date of Joining */}
         <p className="mb-3 text-justify">
-          <strong>Date of Joining:</strong> Your date of joining would be{' '}
+          <strong>Date of Joining:</strong>&nbsp; Your date of joining would be{' '}
           <strong>{joiningStr}</strong>. If joining does not take place on the given
           date then the offer letter will be considered invalid.
         </p>
 
         {/* Probationary Period */}
         <p className="mb-3 text-justify">
-          <strong>Probationary Period:</strong> The probationary period of 3 months
-          needs to be served by the candidate after joining the job.
+          <strong>Probationary Period:</strong>&nbsp; The probationary period of 3 months
+          need to be served by candidate, after joining the job.
         </p>
 
         {/* Notice Period */}
         <p className="mb-3 text-justify">
-          <strong>Notice Period:</strong> If the employee desires to leave the
-          company, he / she needs to serve the notice period of 15 days. If the
+          <strong>Notice Period:</strong>&nbsp; If the employee desires to leave the
+          company, he/she needs to serve the notice period of 15 days. If the
           performance is not good then the employee can be terminated even during
           the probation period and all salary clearance will be done after 45 days
           even if the employee is terminated.
@@ -166,14 +187,13 @@ export default function OfferLetterPrint() {
           Please note that the contents of this letter are confidential and should
           not be used as a bargaining tool for negotiating employment terms with
           any other organization. If you have any queries, please feel free to
-          contact us.  We look forward to working with you.
+          contact us. We look forward to working with you.
         </p>
 
         <div className="mt-10">
           <div><strong>With Regards,</strong></div>
-          <div><strong>{COMPANY.name}</strong></div>
-          <div className="mt-10 text-gray-700">Signature</div>
-          <div className="border-t border-gray-500 w-48 mt-1" />
+          <div className="mt-1"><strong>{COMPANY.name}</strong></div>
+          <div className="mt-1"><strong>Human Resources Department</strong></div>
         </div>
       </div>
 
