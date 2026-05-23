@@ -294,6 +294,48 @@ export default function PaymentRequired() {
             <select className="select w-40" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}><option value="">All Status</option>{STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}</select>
           </div>
 
+          {/* Mam (2026-05-22): "give me one small dashbaord of total
+              amount as per my filter change" — live totals strip
+              that recomputes from the SAME filter chain used by the
+              table below.  Refreshes instantly as admin types in the
+              search box or picks a different tab / category. */}
+          {(() => {
+            const visible = requests.filter(r => {
+              if (tab === 'pending')  return !['final_approved','rejected'].includes(r.status);
+              if (tab === 'approved') return r.status === 'final_approved';
+              if (tab === 'rejected') return r.status === 'rejected';
+              return true;
+            });
+            const totalAmount  = visible.reduce((s, r) => s + (+r.amount || 0), 0);
+            const pendingAmt   = visible.filter(r => !['final_approved','rejected'].includes(r.status)).reduce((s, r) => s + (+r.amount || 0), 0);
+            const approvedAmt  = visible.filter(r => r.status === 'final_approved').reduce((s, r) => s + (+r.amount || 0), 0);
+            const rejectedAmt  = visible.filter(r => r.status === 'rejected').reduce((s, r) => s + (+r.amount || 0), 0);
+            return (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="card p-3 border-l-4 border-blue-500">
+                  <div className="text-[11px] text-gray-500 uppercase">Showing</div>
+                  <div className="text-xl font-bold text-blue-700">{visible.length} <span className="text-[11px] font-normal text-gray-500">{visible.length === 1 ? 'request' : 'requests'}</span></div>
+                  <div className="text-[12px] text-gray-600 mt-0.5">Rs <b className="text-blue-700">{fmt(totalAmount)}</b> total</div>
+                </div>
+                <div className="card p-3 border-l-4 border-amber-500">
+                  <div className="text-[11px] text-gray-500 uppercase">Pending</div>
+                  <div className="text-xl font-bold text-amber-700">{visible.filter(r => !['final_approved','rejected'].includes(r.status)).length}</div>
+                  <div className="text-[12px] text-gray-600 mt-0.5">Rs <b className="text-amber-700">{fmt(pendingAmt)}</b></div>
+                </div>
+                <div className="card p-3 border-l-4 border-emerald-500">
+                  <div className="text-[11px] text-gray-500 uppercase">Approved</div>
+                  <div className="text-xl font-bold text-emerald-700">{visible.filter(r => r.status === 'final_approved').length}</div>
+                  <div className="text-[12px] text-gray-600 mt-0.5">Rs <b className="text-emerald-700">{fmt(approvedAmt)}</b></div>
+                </div>
+                <div className="card p-3 border-l-4 border-rose-500">
+                  <div className="text-[11px] text-gray-500 uppercase">Rejected</div>
+                  <div className="text-xl font-bold text-rose-700">{visible.filter(r => r.status === 'rejected').length}</div>
+                  <div className="text-[12px] text-gray-600 mt-0.5">Rs <b className="text-rose-700">{fmt(rejectedAmt)}</b></div>
+                </div>
+              </div>
+            );
+          })()}
+
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody>
