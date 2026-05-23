@@ -1158,6 +1158,12 @@ export default function Procurement() {
                       <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-xs flex items-center gap-1">
                         <FiPrinter size={11} /> View / Print
                       </a>
+                      {/* Mam (2026-05-22): "show here also delivery
+                          note" — DN link on every PO row across the
+                          procurement views. */}
+                      <a href={`/vendor-po/${v.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:text-emerald-900 underline text-xs flex items-center gap-1">
+                        🚚 Delivery Note
+                      </a>
                       {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-[10px]">attached PDF</a>}
                     </div>
                   </td>
