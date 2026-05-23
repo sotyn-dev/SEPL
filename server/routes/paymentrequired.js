@@ -229,6 +229,121 @@ router.get('/stats', requirePermission('payment_required', 'view'), (req, res) =
   res.json({ total: total.c, totalAmount: totalAmount.t, pending: pending.c, approved: approved.c, rejected: rejected.c, byCategory, byStep });
 });
 
+// ── My Inbox (mam 2026-05-22) ─────────────────────────────────────
+// Returns the payment requests where the CURRENT step's approver is
+// the logged-in user.  Aanchal logs in → sees only step-1 HR rows
+// where she has the override (or has the matching role).  Once she
+// approves, the row moves to the next step and vanishes from her
+// inbox; if that step's approver = Shubham, it appears in his.
+//
+// Two sources merged:
+//   1. Explicit override — payment_approval_overrides row points at
+//      this user for (category, current_step).
+//   2. Role-based — no override set AND user's role matches the
+//      workflow step's approver_role (e.g. "Accountant").
+//
+// Admin sees their own inbox too (when assigned) — not the whole
+// firehose; for that they have All Requests / Pending tabs.
+router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res) => {
+  const db = getDb();
+  const uid = req.user.id;
+
+  // Pull every pending row in one shot; filter for "is mine" in JS
+  // because the "next approver" logic spans 6 workflows × overrides
+  // table — a single SQL with all the unions/joins would be hairy.
+  const rows = db.prepare(`
+    SELECT pr.*, u.name AS created_by_name
+      FROM payment_requests pr
+      LEFT JOIN users u ON pr.created_by = u.id
+     WHERE pr.status NOT IN ('final_approved','rejected')
+     ORDER BY pr.created_at DESC
+  `).all();
+
+  // What roles does this user have? (matches canUserApproveStep logic)
+  const myRoles = db.prepare(
+    `SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id=r.id WHERE ur.user_id=?`
+  ).all(uid).map(r => r.name);
+  const isAdmin = req.user.role === 'admin';
+
+  const inbox = [];
+  for (const row of rows) {
+    const workflow = WORKFLOW[row.category];
+    if (!workflow) continue;
+    const stepInfo = workflow.find(w => w.step === row.current_step);
+    if (!stepInfo) continue;
+    // System steps (Velocity Check) never go to a human inbox.
+    if (stepInfo.approver_role === 'System') continue;
+
+    const overrideUserId = getApprovalRoutingFor(db, row.category, row.current_step);
+    let isMine = false;
+    if (overrideUserId) {
+      // Explicit override — ONLY the assigned user (or admin) is "next".
+      isMine = overrideUserId === uid || isAdmin;
+    } else {
+      // No override — any user with the matching role is "next".
+      isMine = myRoles.includes(stepInfo.approver_role) || isAdmin;
+    }
+    if (!isMine) continue;
+
+    // Enrich the same way the list endpoint does so the UI can show
+    // "✓ HR Approval by Aanchal · ⏳ Waiting on you" cleanly.
+    try {
+      row.approvals_total = workflow.length;
+      row.current_step_name = stepInfo.name;
+      row.next_approver_role = stepInfo.approver_role;
+      const lastApproval = db.prepare(`
+        SELECT pa.step_name, pa.approved_at, u.name AS approved_by_name
+          FROM payment_approvals pa
+          LEFT JOIN users u ON u.id = pa.approved_by
+         WHERE pa.request_id = ? AND pa.action = 'approved'
+         ORDER BY pa.step DESC, pa.id DESC LIMIT 1
+      `).get(row.id);
+      if (lastApproval) {
+        row.last_approved_step_name = lastApproval.step_name;
+        row.last_approved_by_name   = lastApproval.approved_by_name;
+        row.last_approved_at        = lastApproval.approved_at;
+      }
+      const cleared = db.prepare(
+        `SELECT COUNT(DISTINCT step) AS c FROM payment_approvals
+          WHERE request_id = ? AND action = 'approved'`
+      ).get(row.id);
+      row.approvals_count = cleared?.c || 0;
+    } catch (_) {}
+    inbox.push(row);
+  }
+  res.json(inbox);
+});
+
+// Lightweight inbox count for the bell badge — same logic as
+// /my-inbox but only returns { count }.  Polled by the header every
+// 60s so we don't ship the full request list each time.
+router.get('/my-inbox-count', requirePermission('payment_required', 'view'), (req, res) => {
+  const db = getDb();
+  const uid = req.user.id;
+  const isAdmin = req.user.role === 'admin';
+  const myRoles = db.prepare(
+    `SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id=r.id WHERE ur.user_id=?`
+  ).all(uid).map(r => r.name);
+  const rows = db.prepare(`
+    SELECT id, category, current_step FROM payment_requests
+     WHERE status NOT IN ('final_approved','rejected')
+  `).all();
+  let count = 0;
+  for (const row of rows) {
+    const workflow = WORKFLOW[row.category];
+    if (!workflow) continue;
+    const stepInfo = workflow.find(w => w.step === row.current_step);
+    if (!stepInfo || stepInfo.approver_role === 'System') continue;
+    const overrideUserId = getApprovalRoutingFor(db, row.category, row.current_step);
+    if (overrideUserId) {
+      if (overrideUserId === uid || isAdmin) count++;
+    } else {
+      if (myRoles.includes(stepInfo.approver_role) || isAdmin) count++;
+    }
+  }
+  res.json({ count });
+});
+
 // GET single with workflow
 router.get('/:id', requirePermission('payment_required', 'view'), (req, res, next) => {
   // Mam (2026-05-22): a numeric-id route at /:id was greedily matching
@@ -339,6 +454,38 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
       tag: `payment-${r.lastInsertRowid}`,
     });
   } catch {}
+  // Mam (2026-05-22): bell-ping the actual STEP-1 approver(s) too —
+  // override user if set, else everyone holding the matching role.
+  // This is in-app (bell) only; the push above covers browser.
+  try {
+    const wf1 = WORKFLOW[b.category]?.[0];
+    if (wf1) {
+      const overrideUserId = getApprovalRoutingFor(db, b.category, wf1.step);
+      const targets = [];
+      if (overrideUserId) {
+        targets.push(overrideUserId);
+      } else {
+        const userIds = db.prepare(
+          `SELECT DISTINCT ur.user_id FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE r.name = ?`
+        ).all(wf1.approver_role).map(r => r.user_id);
+        targets.push(...userIds);
+      }
+      const ins = db.prepare(`INSERT INTO notifications
+          (user_id, type, title, body, link_url, channel_sent, dedupe_key)
+        VALUES (?, 'approval_pending', ?, ?, ?, 'in_app', ?)`);
+      for (const uid of targets) {
+        if (uid === req.user.id) continue;
+        try {
+          ins.run(uid,
+            `${wf1.name} needed — ${requestNo}`,
+            `${b.employee_name || 'Someone'} raised Rs ${(+b.amount || 0).toLocaleString('en-IN')} for ${b.purpose || 'work'}.  It's now at your step.`,
+            '/payment-required',
+            `pr_approval:${r.lastInsertRowid}:${wf1.step}:${uid}`,
+          );
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
   res.status(201).json({ id: r.lastInsertRowid, request_no: requestNo });
 });
 
@@ -368,6 +515,42 @@ function advanceToNextStep(db, request, approvedBy) {
 
   // Move to next step
   db.prepare('UPDATE payment_requests SET current_step=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(nextStepInfo.step, request.id);
+
+  // Mam (2026-05-22): bell-ping whoever is now blocking the request.
+  // Resolves the next approver via override → role-based fallback.
+  // Fails silently — a missing notification should never break the
+  // approval flow.
+  try {
+    const overrideUserId = getApprovalRoutingFor(db, request.category, nextStepInfo.step);
+    const targets = [];
+    if (overrideUserId) {
+      targets.push(overrideUserId);
+    } else {
+      // Notify every user holding the required role.
+      const userIds = db.prepare(`
+        SELECT DISTINCT ur.user_id
+          FROM user_roles ur
+          JOIN roles r ON ur.role_id = r.id
+         WHERE r.name = ?
+      `).all(nextStepInfo.approver_role).map(r => r.user_id);
+      targets.push(...userIds);
+    }
+    const ins = db.prepare(`INSERT INTO notifications
+        (user_id, type, title, body, link_url, channel_sent, dedupe_key)
+      VALUES (?, 'approval_pending', ?, ?, ?, 'in_app', ?)`);
+    for (const uid of targets) {
+      if (uid === approvedBy) continue;     // don't ping the person who just approved
+      const dedupe = `pr_approval:${request.id}:${nextStepInfo.step}:${uid}`;
+      try {
+        ins.run(uid,
+          `${nextStepInfo.name} needed — ${request.request_no}`,
+          `${request.employee_name || 'Someone'} raised Rs ${(+request.amount || 0).toLocaleString('en-IN')} for ${request.purpose || 'work'}.  It's now at your step.`,
+          '/payment-required',
+          dedupe,
+        );
+      } catch (_) { /* dedupe collision — already pinged */ }
+    }
+  } catch (e) { /* non-fatal */ }
 
   // If next step is velocity check (Step 3), auto-approve if in top 3
   if (nextStepInfo.step === 3) {

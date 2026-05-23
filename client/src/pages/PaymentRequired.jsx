@@ -48,6 +48,11 @@ export default function PaymentRequired() {
   const { canCreate, canApprove, canDelete, user } = useAuth();
   const [tab, setTab] = useState('dashboard');
   const [requests, setRequests] = useState([]);
+  // Mam (2026-05-22): "My Inbox" — payment requests where the
+  // current step's approver is THIS user.  Fetched separately so
+  // we can also use the count for the badge on the tab.
+  const [myInbox, setMyInbox] = useState([]);
+  const [myInboxCount, setMyInboxCount] = useState(0);
   const [stats, setStats] = useState(null);
   const [sites, setSites] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -123,7 +128,22 @@ export default function PaymentRequired() {
     Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
     api.get(`/payment-required?${params}`).then(r => setRequests(r.data)).catch(() => {});
     api.get('/payment-required/stats').then(r => setStats(r.data)).catch(() => {});
+    // Mam (2026-05-22): refresh My Inbox + badge count on every load.
+    // Badge is also polled every 60s via setInterval below so it stays
+    // current when the page is left open.
+    api.get('/payment-required/my-inbox').then(r => setMyInbox(r.data || [])).catch(() => {});
+    api.get('/payment-required/my-inbox-count').then(r => setMyInboxCount(r.data?.count || 0)).catch(() => {});
   }, [search, filters]);
+
+  // Mam (2026-05-22): poll the inbox count every 60s so the tab
+  // badge updates when someone else approves and a new item lands
+  // on this user's desk without them refreshing the page.
+  useEffect(() => {
+    const id = setInterval(() => {
+      api.get('/payment-required/my-inbox-count').then(r => setMyInboxCount(r.data?.count || 0)).catch(() => {});
+    }, 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     load();
@@ -221,10 +241,26 @@ export default function PaymentRequired() {
         </div>
       </div>
 
+      {/* Mam (2026-05-22): "My Inbox" tab pinned first so approvers
+          land on their pending items.  Red badge = count of requests
+          waiting on this user.  Other tabs unchanged. */}
       <div className="flex gap-2 flex-wrap">
-        {['dashboard', 'all', 'pending', 'approved', 'rejected'].map(t => (
-          <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'} text-sm`}>{t === 'all' ? 'All Requests' : t.charAt(0).toUpperCase() + t.slice(1)}</button>
-        ))}
+        {['dashboard', 'inbox', 'all', 'pending', 'approved', 'rejected'].map(t => {
+          const isInbox = t === 'inbox';
+          const label = t === 'all' ? 'All Requests'
+                      : isInbox ? 'My Inbox'
+                      : t.charAt(0).toUpperCase() + t.slice(1);
+          return (
+            <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
+              {isInbox && '📥 '}{label}
+              {isInbox && myInboxCount > 0 && (
+                <span className={`text-[10px] font-bold rounded-full min-w-[20px] h-[18px] px-1.5 flex items-center justify-center ${tab === t ? 'bg-white text-red-600' : 'bg-red-600 text-white'}`}>
+                  {myInboxCount > 99 ? '99+' : myInboxCount}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Dashboard */}
@@ -298,9 +334,12 @@ export default function PaymentRequired() {
               amount as per my filter change" — live totals strip
               that recomputes from the SAME filter chain used by the
               table below.  Refreshes instantly as admin types in the
-              search box or picks a different tab / category. */}
+              search box or picks a different tab / category.
+              My Inbox tab reads from the separately-fetched myInbox
+              array (server-filtered to current-step-approver = me). */}
           {(() => {
-            const visible = requests.filter(r => {
+            const source = tab === 'inbox' ? myInbox : requests;
+            const visible = source.filter(r => {
               if (tab === 'pending')  return !['final_approved','rejected'].includes(r.status);
               if (tab === 'approved') return r.status === 'final_approved';
               if (tab === 'rejected') return r.status === 'rejected';
@@ -339,7 +378,7 @@ export default function PaymentRequired() {
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody>
-              {requests.filter(r => {
+              {(tab === 'inbox' ? myInbox : requests).filter(r => {
                 if (tab === 'pending') return !['final_approved', 'rejected'].includes(r.status);
                 if (tab === 'approved') return r.status === 'final_approved';
                 if (tab === 'rejected') return r.status === 'rejected';
