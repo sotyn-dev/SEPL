@@ -252,7 +252,7 @@ export default function PMSTasks() {
           ...(isAdmin() ? [{ id: 'all', label: 'All (admin)' }] : []),
         ].map(t => (
           <button key={t.id} onClick={() => setScope(t.id)}
-            className={`px-3 py-1.5 rounded-lg font-medium border ${scope === t.id ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
+            className={`px-3 py-1.5 rounded-lg font-medium border ${scope === t.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
             {t.label}
           </button>
         ))}
