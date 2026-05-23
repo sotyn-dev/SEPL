@@ -189,6 +189,10 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
       client_po_uploaded: totalPO?.total || 0,
       amount_received: pf?.amount_received || amountReceived, // H: Tally (manual)
       milestone_name: pf?.milestone_name || '',  // I: Milestone (manual)
+      // Mam (2026-05-22): AR Cleared column between Milestone and
+      // Aanchal — CRM marks how much AR has been cleared per project.
+      // Raw rupees; manual.  Independent of amount_received (Tally).
+      ar_cleared_value: pf?.ar_cleared_value || 0,
       aanchal_value: pf?.aanchal_value || 0,  // J: Aanchal Value (raw rupees, manual)
       purchase_value: pf?.manual_purchase_value != null ? pf.manual_purchase_value : purchaseAmt, // K: Purchase Value (manual raw rupees, else auto from FMS)
       cash_velocity: cashVelocity,  // M: (J-K)/R
@@ -220,19 +224,23 @@ router.get('/projects', requirePermission('cashflow', 'view'), (req, res) => {
   // Total Value = sum of Aanchal Values (raw rupees post pf_amounts_raw_rupees_v1
   // migration — no × 1,00,000 conversion needed).
   const totalValue = result.reduce((s, r) => s + (r.aanchal_value || 0), 0);
+  // Mam (2026-05-22): new KPI tile — total AR cleared across all projects.
+  const totalArCleared = result.reduce((s, r) => s + (r.ar_cleared_value || 0), 0);
 
-  res.json({ projects: result, summary: { totalSale, totalSaleExGst, totalReceived, totalValue, totalPurchase, projectCount: result.length } });
+  res.json({ projects: result, summary: { totalSale, totalSaleExGst, totalReceived, totalArCleared, totalValue, totalPurchase, projectCount: result.length } });
 });
 
 // POST update project manual fields (milestone, aanchal value, payment days)
 router.post('/projects/:id/update', requirePermission('cashflow', 'edit'), (req, res) => {
-  const { crm_person, amount_received, milestone_name, aanchal_value, payment_investment_days, payment_days, manual_purchase_value, manual_completion_days } = req.body;
+  const { crm_person, amount_received, milestone_name, ar_cleared_value, aanchal_value, payment_investment_days, payment_days, manual_purchase_value, manual_completion_days } = req.body;
   const db = getDb();
   // Add payment_days column if missing (defensive — same pattern as
   // the other late-added columns; safe to re-run, throws and we swallow).
   try { db.exec('ALTER TABLE project_finance ADD COLUMN payment_days INTEGER DEFAULT 0'); } catch(e) {}
   try { db.exec('ALTER TABLE project_finance ADD COLUMN manual_purchase_value REAL'); } catch(e) {}
   try { db.exec('ALTER TABLE project_finance ADD COLUMN manual_completion_days INTEGER'); } catch(e) {}
+  // Mam (2026-05-22): AR Cleared column between Milestone and Aanchal.
+  try { db.exec('ALTER TABLE project_finance ADD COLUMN ar_cleared_value REAL DEFAULT 0'); } catch(e) {}
   // OPTION A — locked target date for "Last Pmt Date".  Mam, 2026-05-16:
   // "i want days never increase when days are not edited".  We re-lock
   // the date HERE on every save (today + new total_days).  The dashboard
@@ -255,8 +263,8 @@ router.post('/projects/:id/update', requirePermission('cashflow', 'edit'), (req,
     const prev = db.prepare('SELECT last_payment_target_date FROM project_finance WHERE business_book_id=?').get(req.params.id);
     lockedTarget = prev?.last_payment_target_date || null;
   }
-  db.prepare('INSERT OR REPLACE INTO project_finance (business_book_id, amount_received, milestone_name, aanchal_value, payment_investment_days, payment_days, manual_purchase_value, manual_completion_days, last_payment_target_date, updated_at) VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)')
-    .run(req.params.id, amount_received || 0, milestone_name, aanchal_value || 0, payment_investment_days || 0, payment_days || 0, manual_purchase_value ?? null, manual_completion_days ?? null, lockedTarget);
+  db.prepare('INSERT OR REPLACE INTO project_finance (business_book_id, amount_received, milestone_name, ar_cleared_value, aanchal_value, payment_investment_days, payment_days, manual_purchase_value, manual_completion_days, last_payment_target_date, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)')
+    .run(req.params.id, amount_received || 0, milestone_name, ar_cleared_value || 0, aanchal_value || 0, payment_investment_days || 0, payment_days || 0, manual_purchase_value ?? null, manual_completion_days ?? null, lockedTarget);
   res.json({ message: 'Updated', last_payment_target_date: lockedTarget });
 });
 

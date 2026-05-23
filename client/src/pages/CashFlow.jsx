@@ -162,8 +162,8 @@ export default function CashFlow() {
           <button onClick={() => {
             if (tab === 'projects') {
               exportCsv('cashflow-projects',
-                ['Sr','Project','CRM','Sale (with GST)','Received','Milestone','Aanchal','Purchase','Velocity','Live','Inv Days','Compl','Pmt','Total'],
-                filtered.map(p => [p.sr_no, p.project_name, p.crm_person, (p.po_amount || (p.sale_amount || 0) * 1.18), p.amount_received, p.milestone_name, p.aanchal_value, p.purchase_value, p.cash_velocity, p.live_date, p.payment_investment_days, p.completion_days, p.payment_days, p.total_days]));
+                ['Sr','Project','CRM','Sale (with GST)','Received','Milestone','AR Cleared','Aanchal','Purchase','Velocity','Live','Inv Days','Compl','Pmt','Total'],
+                filtered.map(p => [p.sr_no, p.project_name, p.crm_person, (p.po_amount || (p.sale_amount || 0) * 1.18), p.amount_received, p.milestone_name, p.ar_cleared_value, p.aanchal_value, p.purchase_value, p.cash_velocity, p.live_date, p.payment_investment_days, p.completion_days, p.payment_days, p.total_days]));
             } else {
               exportCsv(`cashflow-entries-${selectedDate}`,
                 ['Type','Category','Description','Party','Amount'],
@@ -174,10 +174,13 @@ export default function CashFlow() {
         {tab === 'projects' && (
           <>
             {summary && (
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
                 <div className="card p-3 border-l-4 border-red-500"><p className="text-xs text-gray-500">Total Projects</p><p className="text-2xl font-bold">{summary.projectCount}</p></div>
                 <div className="card p-3 border-l-4 border-emerald-500"><p className="text-xs text-gray-500" title="Sum of Sale ₹ (with GST) across all projects — matches the Sale ₹ column total">Total Sale Value (with GST)</p><p className="text-xl font-bold text-emerald-600">{fmtL(summary.totalSale)}</p></div>
                 <div className="card p-3 border-l-4 border-amber-500"><p className="text-xs text-gray-500">Total Received</p><p className="text-xl font-bold text-amber-600">{fmtL(summary.totalReceived)}</p></div>
+                {/* Mam (2026-05-22): new AR Cleared tile — sum of the
+                    new ar_cleared_value column across all projects. */}
+                <div className="card p-3 border-l-4 border-cyan-500"><p className="text-xs text-gray-500" title="Sum of AR Cleared values entered by CRM on each row">Total AR Cleared</p><p className="text-xl font-bold text-cyan-600">{fmtL(summary.totalArCleared || 0)}</p></div>
                 {/* Total Value = sum of Aanchal Values across all projects.
                     Comes from the backend already pre-multiplied to rupees. */}
                 <div className="card p-3 border-l-4 border-blue-500"><p className="text-xs text-gray-500">Total Value</p><p className="text-xl font-bold text-blue-600">{fmtL(summary.totalValue)}</p></div>
@@ -257,6 +260,10 @@ export default function CashFlow() {
                   <th className="px-2 py-2 text-right" title="Sale value with 18% GST — auto-computed from Business Book (Sale × 1.18)">Sale ₹ (with GST)</th>
                   <th className="px-2 py-2 text-right" title="Amount actually received from client so far">Received ₹</th>
                   <th className="px-2 py-2 text-center" title="Current milestone — handover / delivery / etc.">Milestone</th>
+                  {/* Mam (2026-05-22): AR Cleared column between
+                      Milestone and Aanchal — CRM enters how much
+                      receivable has been cleared per project. */}
+                  <th className="px-2 py-2 text-right" title="AR Cleared — how much of the receivable has been cleared (raw rupees)">AR Cleared ₹</th>
                   <th className="px-2 py-2 text-right" title="Aanchal value — enter the exact rupee figure (no lakhs conversion)">Aanchal ₹</th>
                   <th className="px-2 py-2 text-right" title="Total purchase / cost spent on this project">Purchase ₹</th>
                   <th className="px-2 py-2 text-right" title="Cash velocity = received ÷ purchase. ≥1 means we're cash-positive">Velocity</th>
@@ -310,12 +317,16 @@ export default function CashFlow() {
                   {editing ? (<>
                     <td className="px-1 py-1"><input className="input text-xs w-24" type="number" value={editForm.amount_received||''} onChange={e=>setEditForm({...editForm,amount_received:+e.target.value})} /></td>
                     <td className="px-1 py-1"><select className="input text-xs w-24" value={editForm.milestone_name||''} onChange={e=>setEditForm({...editForm,milestone_name:e.target.value})}><option value="">—</option><option>milestone</option><option>handover</option><option>delivery</option></select></td>
+                    {/* Mam (2026-05-22): AR Cleared edit input */}
+                    <td className="px-1 py-1"><input className="input text-xs w-20" type="number" value={editForm.ar_cleared_value||''} onChange={e=>setEditForm({...editForm,ar_cleared_value:+e.target.value})} placeholder="₹ amount" /></td>
                     <td className="px-1 py-1"><input className="input text-xs w-20" type="number" value={editForm.aanchal_value||''} onChange={e=>setEditForm({...editForm,aanchal_value:+e.target.value})} placeholder="₹ amount" /></td>
                   </>) : (<>
                     <td className="px-2 py-2 text-right font-medium text-emerald-700 tabular-nums">{p.amount_received > 0 ? fmt(p.amount_received) : dash}</td>
                     <td className="px-2 py-2 text-center">{p.milestone_name ? (
                       <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">{p.milestone_name}</span>
                     ) : dash}</td>
+                    {/* Mam (2026-05-22): AR Cleared cell — raw rupees */}
+                    <td className="px-2 py-2 text-right font-medium text-cyan-700 tabular-nums">{p.ar_cleared_value > 0 ? fmt(p.ar_cleared_value) : dash}</td>
                     {/* Aanchal — stored as raw rupees from 2026-05-15 onwards.
                         Mam: "if i enter 10 then 10". Multiplier × 1,00,000
                         was removed so input and display match 1:1.  Any
@@ -385,7 +396,7 @@ export default function CashFlow() {
                       <button onClick={()=>setEditRow(null)} className="p-1.5 bg-gray-100 text-gray-500 hover:bg-gray-200 rounded" title="Cancel"><FiX size={14} /></button>
                     </div>
                   ) : (
-                    <button onClick={()=>{setEditRow(p.id);setEditForm({crm_person:p.crm_person,amount_received:p.amount_received,milestone_name:p.milestone_name,aanchal_value:p.aanchal_value,payment_investment_days:p.payment_investment_days,payment_days:p.payment_days,manual_purchase_value:p.purchase_value,manual_completion_days:p.completion_days});}}
+                    <button onClick={()=>{setEditRow(p.id);setEditForm({crm_person:p.crm_person,amount_received:p.amount_received,milestone_name:p.milestone_name,ar_cleared_value:p.ar_cleared_value,aanchal_value:p.aanchal_value,payment_investment_days:p.payment_investment_days,payment_days:p.payment_days,manual_purchase_value:p.purchase_value,manual_completion_days:p.completion_days});}}
                             className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Edit row"><FiEdit2 size={13} /></button>
                   )}</td>
                 </tr>
@@ -399,6 +410,8 @@ export default function CashFlow() {
                 </td>
                 <td className="px-2 py-3 text-right text-emerald-700 tabular-nums">{fmt(filtered.reduce((s, p) => s + p.amount_received, 0))}</td>
                 <td></td>
+                {/* Mam (2026-05-22): AR Cleared total cell */}
+                <td className="px-2 py-3 text-right text-cyan-700 tabular-nums">{fmt(filtered.reduce((s, p) => s + (p.ar_cleared_value || 0), 0))}</td>
                 <td className="px-2 py-3 text-right tabular-nums">{fmt(filtered.reduce((s, p) => s + (p.aanchal_value || 0), 0))}</td>
                 <td className="px-2 py-3 text-right text-red-700 tabular-nums">{fmtL(filtered.reduce((s, p) => s + p.purchase_value, 0))}</td>
                 <td colSpan="8"></td>

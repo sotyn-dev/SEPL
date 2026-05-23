@@ -2612,6 +2612,11 @@ function initializeDatabase() {
     //   'text'  — text note only, no upload
     //   'none'  — no proof needed, just mark done
     ['checklists', "proof_type TEXT DEFAULT 'photo'"],
+    // Mam (2026-05-22): "between MILESTONE and AANCHAL add AR CLEARED
+    // so that CRM can add AR cleared and above dashboard also show AR
+    // cleared".  New per-project column in raw rupees, edited by CRM
+    // on each Cash Flow row.  Summary card sums it across projects.
+    ['project_finance', 'ar_cleared_value REAL DEFAULT 0'],
     // Mam (2026-05-22): "add one proof name like type gst file etc"
     // — friendly label shown ON the assignee's upload button so they
     // know what to attach (e.g. "GST File", "Bank Statement",
