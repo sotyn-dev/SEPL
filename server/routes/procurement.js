@@ -961,6 +961,9 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
   // Items — only the columns the DN template shows.  Pull from
   // indent_items via vendor_po_items (the items actually purchased
   // under THIS PO, not the full indent).
+  // HSN lives on po_items (Client PO line), not item_master — so we
+  // join through indent_items.po_item_id to get it.  item_master only
+  // has the gst % (e.g. "18%") which we use as a fallback.
   const items = db.prepare(`
     SELECT vpi.id, vpi.quantity,
            COALESCE(NULLIF(TRIM(im.item_name), ''), ii.description) as description,
@@ -968,10 +971,12 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
            COALESCE(im.make, ii.make) as make,
            COALESCE(im.uom, ii.unit) as uom,
            im.item_code,
-           im.hsn_code, im.gst as gst_text
+           poi.hsn_code as hsn_code,
+           im.gst as gst_text
       FROM vendor_po_items vpi
       LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
       LEFT JOIN item_master im ON im.id = ii.item_master_id
+      LEFT JOIN po_items poi ON poi.id = ii.po_item_id
      WHERE vpi.vendor_po_id = ?
      ORDER BY vpi.id
   `).all(req.params.id);
