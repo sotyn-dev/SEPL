@@ -469,38 +469,9 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
       tag: `payment-${r.lastInsertRowid}`,
     });
   } catch {}
-  // Mam (2026-05-22): bell-ping the actual STEP-1 approver(s) too —
-  // override user if set, else everyone holding the matching role.
-  // This is in-app (bell) only; the push above covers browser.
-  try {
-    const wf1 = WORKFLOW[b.category]?.[0];
-    if (wf1) {
-      const overrideUserId = getApprovalRoutingFor(db, b.category, wf1.step);
-      const targets = [];
-      if (overrideUserId) {
-        targets.push(overrideUserId);
-      } else {
-        const userIds = db.prepare(
-          `SELECT DISTINCT ur.user_id FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE r.name = ?`
-        ).all(wf1.approver_role).map(r => r.user_id);
-        targets.push(...userIds);
-      }
-      const ins = db.prepare(`INSERT INTO notifications
-          (user_id, type, title, body, link_url, channel_sent, dedupe_key)
-        VALUES (?, 'approval_pending', ?, ?, ?, 'in_app', ?)`);
-      for (const uid of targets) {
-        if (uid === req.user.id) continue;
-        try {
-          ins.run(uid,
-            `${wf1.name} needed — ${requestNo}`,
-            `${b.employee_name || 'Someone'} raised Rs ${(+b.amount || 0).toLocaleString('en-IN')} for ${b.purpose || 'work'}.  It's now at your step.`,
-            '/payment-required',
-            `pr_approval:${r.lastInsertRowid}:${wf1.step}:${uid}`,
-          );
-        } catch (_) {}
-      }
-    }
-  } catch (_) {}
+  // Mam (2026-05-22): removed the in-app bell ping on create.
+  // My Inbox tab + 60s badge poll already surface what each
+  // approver needs to act on without bell noise.
   res.status(201).json({ id: r.lastInsertRowid, request_no: requestNo });
 });
 
@@ -531,41 +502,9 @@ function advanceToNextStep(db, request, approvedBy) {
   // Move to next step
   db.prepare('UPDATE payment_requests SET current_step=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(nextStepInfo.step, request.id);
 
-  // Mam (2026-05-22): bell-ping whoever is now blocking the request.
-  // Resolves the next approver via override → role-based fallback.
-  // Fails silently — a missing notification should never break the
-  // approval flow.
-  try {
-    const overrideUserId = getApprovalRoutingFor(db, request.category, nextStepInfo.step);
-    const targets = [];
-    if (overrideUserId) {
-      targets.push(overrideUserId);
-    } else {
-      // Notify every user holding the required role.
-      const userIds = db.prepare(`
-        SELECT DISTINCT ur.user_id
-          FROM user_roles ur
-          JOIN roles r ON ur.role_id = r.id
-         WHERE r.name = ?
-      `).all(nextStepInfo.approver_role).map(r => r.user_id);
-      targets.push(...userIds);
-    }
-    const ins = db.prepare(`INSERT INTO notifications
-        (user_id, type, title, body, link_url, channel_sent, dedupe_key)
-      VALUES (?, 'approval_pending', ?, ?, ?, 'in_app', ?)`);
-    for (const uid of targets) {
-      if (uid === approvedBy) continue;     // don't ping the person who just approved
-      const dedupe = `pr_approval:${request.id}:${nextStepInfo.step}:${uid}`;
-      try {
-        ins.run(uid,
-          `${nextStepInfo.name} needed — ${request.request_no}`,
-          `${request.employee_name || 'Someone'} raised Rs ${(+request.amount || 0).toLocaleString('en-IN')} for ${request.purpose || 'work'}.  It's now at your step.`,
-          '/payment-required',
-          dedupe,
-        );
-      } catch (_) { /* dedupe collision — already pinged */ }
-    }
-  } catch (e) { /* non-fatal */ }
+  // Mam (2026-05-22): removed the in-app bell ping on step advance.
+  // The 📥 My Inbox tab + 60s badge poll already surface what each
+  // approver needs to act on; bells were too noisy.
 
   // If next step is velocity check (Step 3), auto-approve if in top 3
   if (nextStepInfo.step === 3) {
