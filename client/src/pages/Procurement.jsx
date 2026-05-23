@@ -2048,10 +2048,12 @@ export default function Procurement() {
           template needs, save submits the data, and the SEPL-format
           document is generated right after save (opens in a new tab).
           The signed-copy upload is now a follow-up step after delivery. */}
-      <Modal isOpen={modal === 'delivery'} onClose={() => setModal(false)} title={(() => {
-        const which = form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill';
-        return form.vendor_po_number ? `Create ${which} — ${form.vendor_po_number}` : `Create ${which}`;
-      })()}>
+      {/* Mam (2026-05-22): "only here sales bill" — modal is strictly
+          Sales Bill now.  The Delivery Challan option was removed
+          from inside (radio chooser deleted).  For challans / FOC
+          send-with-truck papers, use the auto-generated DN at
+          /vendor-po/:id/delivery-note instead. */}
+      <Modal isOpen={modal === 'delivery'} onClose={() => setModal(false)} title={form.vendor_po_number ? `Create Sales Bill — ${form.vendor_po_number}` : 'Create Sales Bill'}>
         <form onSubmit={saveDeliveryNote} className="space-y-4">
           {form.vendor_po_number && (
             <div className="bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-xs text-emerald-700">
@@ -2134,25 +2136,15 @@ export default function Procurement() {
               )}
             </div>
           )}
-          <div>
-            <label className="label">Dispatch Type *</label>
-            <div className="flex gap-2">
-              <label className={`flex-1 border rounded-lg px-3 py-2 cursor-pointer flex items-center gap-2 ${form.document_type === 'sales_bill' ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
-                <input type="radio" name="doc_type" value="sales_bill" checked={form.document_type === 'sales_bill'} onChange={() => setForm({...form, document_type: 'sales_bill'})} />
-                <div>
-                  <div className="text-sm font-semibold">Sales Bill</div>
-                  <div className="text-[10px] text-gray-500">For PO items we sell to the client</div>
-                </div>
-              </label>
-              <label className={`flex-1 border rounded-lg px-3 py-2 cursor-pointer flex items-center gap-2 ${form.document_type === 'challan' ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
-                <input type="radio" name="doc_type" value="challan" checked={form.document_type === 'challan'} onChange={() => setForm({...form, document_type: 'challan'})} />
-                <div>
-                  <div className="text-sm font-semibold">Delivery Challan</div>
-                  <div className="text-[10px] text-gray-500">For FOC / RGP items (not billable)</div>
-                </div>
-              </label>
-            </div>
-          </div>
+          {/* Mam (2026-05-22): "only here sales bill" — Dispatch Type
+              chooser removed.  This modal is now strictly for Sales
+              Bill (formal GST tax invoice tracked in delivery_notes).
+              The old Delivery Challan radio is gone — that use case
+              (FOC / RGP / "send paper with the truck") is handled by
+              the auto-generated Delivery Note at /vendor-po/:id/
+              delivery-note, which doesn't need BB completeness or
+              BOQ SITC rates.  document_type is locked to 'sales_bill'
+              for any new save from this modal. */}
           {!form.vendor_po_number && (
             <div>
               <label className="label">Source Vendor PO <span className="text-[10px] text-gray-400 font-normal">(supply — items came from this PO)</span></label>
