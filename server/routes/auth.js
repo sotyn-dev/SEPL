@@ -98,6 +98,14 @@ router.get('/me', authMiddleware, (req, res) => {
 
 router.get('/users', authMiddleware, (req, res) => {
   const db = getDb();
+  // Mam (2026-05-22): "I NEED DATA NOT DELETE PREVIOUS BUT IN FUTURE
+  // WHEN I ENTRY SHOW THIS NAME TO ASSIGN IN DATA WHICH IS INACTIVE"
+  // — ex-employees should NOT appear in assignment pickers but their
+  // historical records must stay intact.  Caller passes ?active_only=1
+  // to get only currently-active users.  User Management page (admin)
+  // omits the param so it can still see + manage inactives.
+  const activeOnly = req.query.active_only === '1';
+  const whereClause = activeOnly ? 'WHERE u.active = 1' : '';
   const users = db.prepare(`
     SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.active,
            COALESCE(u.track_location, 1) as track_location, u.created_at,
@@ -105,6 +113,7 @@ router.get('/users', authMiddleware, (req, res) => {
     FROM users u
     LEFT JOIN user_roles ur ON u.id = ur.user_id
     LEFT JOIN roles r ON ur.role_id = r.id
+    ${whereClause}
     GROUP BY u.id ORDER BY u.name
   `).all();
   res.json(users);

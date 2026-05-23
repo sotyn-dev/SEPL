@@ -20,7 +20,8 @@ export default function Installation() {
   useEffect(() => {
     load();
     api.get('/orders/po').then(r => setPos(r.data));
-    api.get('/auth/users').then(r => setUsers(r.data));
+    // Mam (2026-05-22): hide inactive ex-employees from installer picker.
+    api.get('/auth/users?active_only=1').then(r => setUsers(r.data));
   }, []);
 
   const save = async (e) => {

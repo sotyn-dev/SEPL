@@ -31,7 +31,8 @@ export default function Collections() {
     api.get('/collections/summary').then(r => setSummary(r.data));
     api.get('/collections/target-summary').then(r => setTargetSummary(r.data)).catch(() => setTargetSummary(null));
     api.get('/collections/sites').then(r => setSites(r.data || [])).catch(() => setSites([]));
-    api.get('/auth/users').then(r => setUsers(r.data));
+    // Mam (2026-05-22): hide inactive ex-employees from the collector picker.
+    api.get('/auth/users?active_only=1').then(r => setUsers(r.data));
   };
   useEffect(() => { load(); }, [filter]);
 

@@ -157,7 +157,8 @@ export default function DPR() {
     const params = (reportFilter && !dateTouched) ? {} : { date: filterDate };
     api.get('/dpr', { params }).then(r => setDprs(r.data));
     api.get('/dpr/sites').then(r => setSites(r.data));
-    api.get('/auth/users').then(r => setUsers(r.data)).catch(() => {});
+    // Mam (2026-05-22): hide inactive ex-employees from DPR assignment.
+    api.get('/auth/users?active_only=1').then(r => setUsers(r.data)).catch(() => {});
     api.get('/dpr/progress').then(r => setProgress(r.data)).catch(() => setProgress([]));
   };
   useEffect(() => { load(); }, [filterDate, reportFilter, dateTouched]);

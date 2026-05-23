@@ -98,7 +98,10 @@ export default function Checklists() {
       setTodayDone(map);
     }).catch(() => setTodayDone({}));
   };
-  useEffect(() => { load(); api.get('/auth/users').then(r => setUsers(r.data)); }, []);
+  // Mam (2026-05-22): "show this name to assign in data which is inactive"
+  // — ex-employees must not appear in assignment dropdowns.  Server now
+  // filters with ?active_only=1.  Past records keep the snapshot.
+  useEffect(() => { load(); api.get('/auth/users?active_only=1').then(r => setUsers(r.data)); }, []);
   // Auto-load today's instance grid on first paint so the page lands
   // straight on the actionable view (mam's preferred mental model).
   useEffect(() => { loadHistory(historyDate); /* eslint-disable-next-line */ }, []);
