@@ -986,9 +986,23 @@ export default function Checklists() {
                   const days = (form.fortnight_days || '1,15').split(/[,;|&]/).map(s => s.trim()).filter(Boolean).join(' & ');
                   return `Instance created twice a month on day ${days} between Start and End.`;
                 })()}
-                {form.frequency === 'monthly'  && 'Instance created once per month between Start and End.'}
-                {form.frequency === 'quarterly'&& 'Instance created once per quarter between Start and End.'}
-                {form.frequency === 'yearly'   && 'Instance created once per year between Start and End.'}
+                {/* Mam (2026-05-22): use due_date as anchor.  Blurb
+                    spells out the day so admin can verify before save. */}
+                {form.frequency === 'monthly' && (() => {
+                  if (!form.due_date) return '⚠ Pick a Due Date — it sets the day-of-month the task repeats on.';
+                  const d = new Date(form.due_date + 'T00:00:00').getDate();
+                  return `Instance created on day ${d} of every month between Start and End.`;
+                })()}
+                {form.frequency === 'quarterly' && (() => {
+                  if (!form.due_date) return '⚠ Pick a Due Date — sets the day-of-month + which month of the quarter.';
+                  const dt = new Date(form.due_date + 'T00:00:00');
+                  return `Instance created on day ${dt.getDate()} every 3rd month (starting ${dt.toLocaleString('en-IN', { month: 'long' })}) between Start and End.`;
+                })()}
+                {form.frequency === 'yearly' && (() => {
+                  if (!form.due_date) return '⚠ Pick a Due Date — sets the month + day the task repeats each year.';
+                  const dt = new Date(form.due_date + 'T00:00:00');
+                  return `Instance created on ${dt.toLocaleString('en-IN', { day: '2-digit', month: 'long' })} every year between Start and End.`;
+                })()}
               </div>
             </div>
           )}
@@ -1094,6 +1108,37 @@ Send WhatsApp report                                  ← uses shared settings b
               <label className="label">Time of Day <span className="text-gray-400 font-normal text-[10px]">(optional)</span></label>
               <input type="time" className="input" value={bulkForm.due_time || ''} onChange={e => setBulkForm({ ...bulkForm, due_time: e.target.value })}/>
             </div>
+            {/* Mam (2026-05-22): "if here is month then you dont think
+                selection of month if quartly" — anchor date drives:
+                  monthly   → repeats on same day-of-month
+                  quarterly → repeats every 3rd month on same day
+                  yearly    → repeats same month + day each year
+                  once      → fires only on this date
+                Bulk modal didn't have this field at all; adding it now
+                so admin doesn't end up with monthly tasks firing every
+                day. */}
+            {['monthly','quarterly','yearly','once'].includes(bulkForm.frequency) && (
+              <div className="sm:col-span-2">
+                <label className="label">
+                  {bulkForm.frequency === 'once'      && 'Due Date *'}
+                  {bulkForm.frequency === 'monthly'   && 'Anchor Date'}
+                  {bulkForm.frequency === 'quarterly' && 'Anchor Date'}
+                  {bulkForm.frequency === 'yearly'    && 'Anchor Date'}
+                  <span className="text-gray-400 font-normal text-[10px] ml-1">
+                    {bulkForm.frequency === 'monthly'   && '(repeats on this DAY-OF-MONTH every month)'}
+                    {bulkForm.frequency === 'quarterly' && '(repeats every 3rd month on this DAY)'}
+                    {bulkForm.frequency === 'yearly'    && '(repeats this MONTH + DAY each year)'}
+                    {bulkForm.frequency === 'once'      && '(one-time)'}
+                  </span>
+                </label>
+                <input type="date" className="input" value={bulkForm.due_date || ''} onChange={e => setBulkForm({ ...bulkForm, due_date: e.target.value })}/>
+                {bulkForm.frequency !== 'once' && !bulkForm.due_date && (
+                  <p className="text-[10px] text-amber-700 mt-0.5">
+                    ⚠ Without an anchor date, this task will appear on EVERY day in the Follow-up grid.  Pick a date so the system knows when it actually fires.
+                  </p>
+                )}
+              </div>
+            )}
             {/* Mam (2026-05-22): fortnight-days picker — applies to
                 every task in this bulk batch when frequency is
                 fortnightly.  Defaults to "1,15" if blank. */}

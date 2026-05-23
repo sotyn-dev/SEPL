@@ -1185,16 +1185,30 @@ router.get('/checklists/by-date', (req, res) => {
       AND (c.recurrence_end_date   IS NULL OR c.recurrence_end_date   >= ?)
     ORDER BY u.name, c.department, c.description
   `).all(...args);
-  // Mam (2026-05-22): post-filter fortnightly tasks — they should
-  // only appear on the two day-of-month slots stored in
-  // fortnight_days.  Day-of-week / quarterly / yearly stay generous
-  // since the existing list-all-active behaviour was working for them.
-  const dom = new Date(date + 'T00:00:00').getDate();
+  // Mam (2026-05-22): post-filter so each frequency only fires on its
+  // intended day(s).  Uses due_date as the recurrence anchor for
+  // monthly / quarterly / yearly — matches the followup's applies()
+  // logic so by-date + followup stay in sync.
+  const todayDate = new Date(date + 'T00:00:00');
+  const dom = todayDate.getDate();
   const filtered = rows.filter(r => {
-    if (String(r.frequency || '').toLowerCase() !== 'fortnightly') return true;
-    const csv = r.fortnight_days && String(r.fortnight_days).trim() ? r.fortnight_days : '1,15';
-    const days = csv.split(/[,;|]/).map(s => parseInt(String(s).trim(), 10)).filter(d => d >= 1 && d <= 31);
-    return days.includes(dom);
+    const f = String(r.frequency || '').toLowerCase();
+    if (f === 'fortnightly') {
+      const csv = r.fortnight_days && String(r.fortnight_days).trim() ? r.fortnight_days : '1,15';
+      const days = csv.split(/[,;|]/).map(s => parseInt(String(s).trim(), 10)).filter(d => d >= 1 && d <= 31);
+      return days.includes(dom);
+    }
+    if (!r.due_date) return true;                  // legacy: keep generous
+    const due = new Date(String(r.due_date).slice(0, 10) + 'T00:00:00');
+    if (f === 'monthly')   return dom === due.getDate();
+    if (f === 'quarterly') {
+      if (dom !== due.getDate()) return false;
+      const diff = ((todayDate.getMonth() - due.getMonth()) % 3 + 3) % 3;
+      return diff === 0;
+    }
+    if (f === 'yearly') return todayDate.getMonth() === due.getMonth() && dom === due.getDate();
+    if (f === 'once')   return String(r.due_date).slice(0, 10) === date;
+    return true;                                    // daily / weekly / unknown
   });
   res.json({ date, rows: filtered });
 });
@@ -1278,7 +1292,37 @@ router.get('/checklists/followup', (req, res) => {
       const dom = new Date(dateStr + 'T00:00:00').getDate();
       return days.includes(dom);
     }
-    // monthly / quarterly / yearly / once — keep generous.
+    // Mam (2026-05-22): "if here is month then you dont think selection
+    // of month if quartly" — use due_date as the recurrence anchor:
+    //   monthly   → fires on same DAY-of-MONTH as due_date, every month
+    //   quarterly → fires on same DAY-of-MONTH AND every 3rd month
+    //               offset from the due_date month
+    //   yearly    → fires on same MONTH + DAY as due_date, every year
+    // No due_date set → legacy generous behaviour (matches any day) so
+    // existing rows don't suddenly disappear from the grid.
+    const d = new Date(dateStr + 'T00:00:00');
+    const dueIso = task.due_date ? String(task.due_date).slice(0, 10) : null;
+    if (f === 'monthly') {
+      if (!dueIso) return true;     // legacy: keep generous
+      return d.getDate() === new Date(dueIso + 'T00:00:00').getDate();
+    }
+    if (f === 'quarterly') {
+      if (!dueIso) return true;
+      const due = new Date(dueIso + 'T00:00:00');
+      if (d.getDate() !== due.getDate()) return false;
+      // Same month-of-quarter: (d.month - due.month) divisible by 3
+      const diff = ((d.getMonth() - due.getMonth()) % 3 + 3) % 3;
+      return diff === 0;
+    }
+    if (f === 'yearly') {
+      if (!dueIso) return true;
+      const due = new Date(dueIso + 'T00:00:00');
+      return d.getMonth() === due.getMonth() && d.getDate() === due.getDate();
+    }
+    if (f === 'once') {
+      if (!dueIso) return true;
+      return dueIso === dateStr;
+    }
     return true;
   }
 
