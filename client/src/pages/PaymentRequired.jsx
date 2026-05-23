@@ -484,33 +484,78 @@ export default function PaymentRequired() {
               </div>
             </div>
 
-            {/* Approval Progress — each step shows a "Re-assign"
-                pencil for admin (mam, 2026-05-16: "i told you now hr
-                approval give aanchal how can i change i need it
-                dynamic to change").  Clicking opens the routing
-                modal pre-focused on this category+step. */}
-            <div className="flex gap-1">
-              {(viewData.workflow || (viewData.category === 'TA/DA' ? TADA_STEPS : STEPS)).map(s => {
-                const approval = viewData.approvals?.find(a => a.step === s.step);
-                const isCurrent = viewData.current_step === s.step && viewData.status !== 'final_approved' && viewData.status !== 'rejected';
-                return (
-                  <div key={s.step} className={`flex-1 text-center p-2 rounded text-[11px] font-medium relative ${approval?.action === 'approved' ? 'bg-emerald-100 text-emerald-700' : approval?.action === 'rejected' ? 'bg-red-100 text-red-700' : isCurrent ? 'bg-amber-100 text-amber-700 ring-2 ring-amber-400' : 'bg-gray-100 text-gray-400'}`}>
-                    <div className="font-bold">Step {s.step}</div>
-                    <div className="text-[10px]">{s.name}</div>
-                    {approval && <div className="text-[9px] mt-1">{approval.approved_by_name}</div>}
-                    {/* Inline re-assign — admin only, hides on already-actioned steps */}
-                    {isAdmin && !approval && s.step !== 3 && s.step !== 4 && (
-                      <button
-                        onClick={openRoutingModal}
-                        className="absolute top-1 right-1 text-[9px] px-1 py-0.5 rounded bg-white/80 hover:bg-white border border-gray-300 hover:border-red-400 text-gray-600 hover:text-red-700"
-                        title={`Re-assign ${s.name} to a specific user (e.g. Aanchal)`}
-                      >
-                        re-assign
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
+            {/* Mam (2026-05-22): full workflow strip — ✓ done with
+                timestamp & approver  →  ⏳ current (WAITING ON name)
+                 →  ⏸ future · System / Auto steps labelled.  Arrows
+                between boxes show the flow direction.  Re-assign
+                pencil (admin only) still on un-actioned, non-auto
+                steps for routing changes mid-flight. */}
+            <div className="flex gap-0 items-stretch flex-wrap">
+              {(() => {
+                const steps = viewData.workflow || (viewData.category === 'TA/DA' ? TADA_STEPS : STEPS);
+                return steps.map((s, idx) => {
+                  const approval = viewData.approvals?.find(a => a.step === s.step);
+                  const isCurrent = viewData.current_step === s.step && viewData.status !== 'final_approved' && viewData.status !== 'rejected';
+                  const isSystem  = (s.approver_role || s.role) === 'System';
+                  // Format approval timestamp as "23 May · 10:06"
+                  const fmtTs = (iso) => {
+                    if (!iso) return '';
+                    const d = new Date(iso);
+                    if (isNaN(d.getTime())) return '';
+                    return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+                  };
+                  const box = (
+                    <div className={`flex-1 min-w-[120px] p-2 rounded text-[11px] font-medium relative ${
+                      approval?.action === 'approved' ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                      : approval?.action === 'rejected' ? 'bg-red-100 text-red-700 border border-red-300'
+                      : isCurrent ? 'bg-amber-100 text-amber-800 border-2 border-amber-400 shadow'
+                      : 'bg-gray-100 text-gray-400 border border-gray-200'
+                    }`}>
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span className="font-bold">Step {s.step}</span>
+                        {approval?.action === 'approved' && <span>✓</span>}
+                        {approval?.action === 'rejected' && <span>✗</span>}
+                        {isCurrent && <span>⏳</span>}
+                        {!approval && !isCurrent && <span>⏸</span>}
+                      </div>
+                      <div className="text-[10.5px] leading-tight">{s.name}</div>
+                      {isSystem && <div className="text-[9px] italic text-gray-500 mt-0.5">(auto)</div>}
+                      {approval && (
+                        <div className="text-[9.5px] mt-1 leading-tight">
+                          <div>by <b>{approval.approved_by_name}</b></div>
+                          <div className="text-[9px] opacity-75">{fmtTs(approval.approved_at)}</div>
+                        </div>
+                      )}
+                      {isCurrent && !approval && (
+                        <div className="text-[9.5px] mt-1 leading-tight font-bold">
+                          WAITING ON:<br/>
+                          {viewData.next_approver_name
+                            ? viewData.next_approver_name
+                            : <>any {viewData.next_approver_role || s.approver_role || s.role || '?'}</>}
+                        </div>
+                      )}
+                      {/* Inline re-assign — admin only, non-auto, non-actioned */}
+                      {isAdmin && !approval && !isSystem && (
+                        <button
+                          onClick={openRoutingModal}
+                          className="absolute top-1 right-1 text-[9px] px-1 py-0.5 rounded bg-white/80 hover:bg-white border border-gray-300 hover:border-red-400 text-gray-600 hover:text-red-700"
+                          title={`Re-assign ${s.name} to a specific user`}
+                        >
+                          re-assign
+                        </button>
+                      )}
+                    </div>
+                  );
+                  return (
+                    <div key={s.step} className="flex items-center flex-1 min-w-[140px]">
+                      {box}
+                      {idx < steps.length - 1 && (
+                        <div className="px-1 text-gray-400 text-xl font-bold flex-shrink-0">→</div>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
             </div>
 
             <div className="grid grid-cols-3 gap-3 text-sm">

@@ -365,6 +365,21 @@ router.get('/:id', requirePermission('payment_required', 'view'), (req, res, nex
   request.approvals = db.prepare(`SELECT pa.*, u.name as approved_by_name FROM payment_approvals pa LEFT JOIN users u ON pa.approved_by=u.id WHERE pa.request_id=? ORDER BY pa.step`).all(req.params.id);
   request.workflow = WORKFLOW[request.category] || [];
   request.can_approve_current = canUserApproveStep(db, req.user.id, request.category, request.current_step);
+  // Mam (2026-05-22): same next-approver enrichment as the list
+  // endpoint, so the detail modal's workflow strip can show
+  // "WAITING ON: <name>" on the current step.
+  try {
+    const curStep = request.workflow.find(w => w.step === request.current_step);
+    if (curStep) {
+      const overrideUserId = getApprovalRoutingFor(db, request.category, request.current_step);
+      if (overrideUserId) {
+        const u = db.prepare('SELECT name FROM users WHERE id=?').get(overrideUserId);
+        request.next_approver_name = u?.name || null;
+      }
+      request.next_approver_role = curStep.approver_role;
+      request.current_step_name = curStep.name;
+    }
+  } catch (_) {}
   res.json(request);
 });
 
