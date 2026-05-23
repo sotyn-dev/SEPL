@@ -806,9 +806,24 @@ router.post('/checklists/parse-excel', checklistsExcelUpload.single('file'), (re
   });
 });
 
+// Mam (2026-05-22): normalise fortnight_days CSV input.
+// Accepts "5,20" / "5 & 20" / "5;20" / [5,20] — outputs canonical
+// "5,20".  Empty / invalid → null (server falls back to "1,15"
+// inside applies()).
+function normaliseFortnightDays(v) {
+  if (!v) return null;
+  const arr = (Array.isArray(v) ? v : String(v).split(/[,;|&]| and /i))
+    .map(s => parseInt(String(s).trim(), 10))
+    .filter(n => Number.isFinite(n) && n >= 1 && n <= 31);
+  if (arr.length === 0) return null;
+  // Dedupe + sort + cap at 2 (it's FORTnightly, not weekly).
+  return [...new Set(arr)].sort((a, b) => a - b).slice(0, 2).join(',');
+}
+
 router.post('/checklists', adminGuard, (req, res) => {
   const { title, description, frequency, due_date, due_time, assigned_to, department,
-          recurrence_start_date, recurrence_end_date, proof_type, proof_label } = req.body;
+          recurrence_start_date, recurrence_end_date, proof_type, proof_label,
+          fortnight_days } = req.body;
   const t = deriveTitle(title, description);
   const desc = String(description || '').trim();
   if (!desc && !title) return res.status(400).json({ error: 'Description is required' });
@@ -825,13 +840,14 @@ router.post('/checklists', adminGuard, (req, res) => {
   }
   const pt = ALLOWED_PROOF_TYPES.includes(proof_type) ? proof_type : 'photo';
   const pl = proof_label && String(proof_label).trim() ? String(proof_label).trim() : null;
+  const fd = frequency === 'fortnightly' ? (normaliseFortnightDays(fortnight_days) || '1,15') : null;
   const r = getDb().prepare(
     `INSERT INTO checklists
        (title, description, frequency, due_date, due_time, assigned_to, department,
-        recurrence_start_date, recurrence_end_date, proof_type, proof_label, created_by)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+        recurrence_start_date, recurrence_end_date, proof_type, proof_label, fortnight_days, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(t, desc, frequency, due_date, due_time || null, assigned_to, dept,
-        recurrence_start_date || null, recurrence_end_date || null, pt, pl, req.user.id);
+        recurrence_start_date || null, recurrence_end_date || null, pt, pl, fd, req.user.id);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
@@ -841,7 +857,8 @@ router.post('/checklists', adminGuard, (req, res) => {
 // one form fill.
 router.post('/checklists/bulk', adminGuard, (req, res) => {
   const { tasks, frequency, due_date, due_time, assigned_to, assigned_to_ids, department,
-          recurrence_start_date, recurrence_end_date, proof_type, proof_label } = req.body || {};
+          recurrence_start_date, recurrence_end_date, proof_type, proof_label,
+          fortnight_days } = req.body || {};
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return res.status(400).json({ error: 'tasks array required' });
   }
@@ -937,10 +954,16 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
   if (rows.length === 0) return res.status(400).json({ error: 'All task lines were empty' });
 
   const db = getDb();
+  // Mam (2026-05-22): fortnight_days defaults to "1,15" when frequency
+  // is fortnightly AND admin didn't pick days.  Same for every task
+  // in the batch.
+  const fdBulk = frequency === 'fortnightly'
+    ? (normaliseFortnightDays(fortnight_days) || '1,15')
+    : null;
   const ins = db.prepare(`INSERT INTO checklists
       (title, description, frequency, due_date, due_time, assigned_to, department,
-       recurrence_start_date, recurrence_end_date, proof_type, proof_label, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
+       recurrence_start_date, recurrence_end_date, proof_type, proof_label, fortnight_days, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 
   // Mam (2026-05-22): emit one INSERT per (task × assignee) so a
   // batch of 3 tasks × 2 users creates 6 rows in a single atomic tx.
@@ -953,7 +976,7 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
                 r.due_time || null,
                 uid, dept,
                 recurrence_start_date || null, recurrence_end_date || null,
-                r.proof_type, r.proof_label, req.user.id);
+                r.proof_type, r.proof_label, fdBulk, req.user.id);
         added++;
       }
     }
@@ -965,7 +988,8 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
 
 router.put('/checklists/:id', adminGuard, (req, res) => {
   const { status, title, description, frequency, due_date, due_time, assigned_to, department,
-          recurrence_start_date, recurrence_end_date, proof_type, proof_label } = req.body;
+          recurrence_start_date, recurrence_end_date, proof_type, proof_label,
+          fortnight_days } = req.body;
   const t = deriveTitle(title, description);
   if (!assigned_to) return res.status(400).json({ error: 'Assigned To is required' });
   let dept = department && String(department).trim() ? String(department).trim() : null;
@@ -981,17 +1005,27 @@ router.put('/checklists/:id', adminGuard, (req, res) => {
   const pl = proof_label === undefined ? null
            : proof_label && String(proof_label).trim() ? String(proof_label).trim()
            : '';
+  // Same COALESCE-vs-empty trick for fortnight_days as proof_label
+  // so passing '' clears, undefined keeps existing, value sets.
+  const fdEdit = fortnight_days === undefined ? null
+              : fortnight_days && normaliseFortnightDays(fortnight_days)
+                ? normaliseFortnightDays(fortnight_days)
+                : '';
   getDb().prepare(
     `UPDATE checklists SET status=?, title=?, description=?, frequency=?, due_date=?, due_time=?,
        assigned_to=?, department=?, recurrence_start_date=?, recurrence_end_date=?,
        proof_type = COALESCE(?, proof_type),
        proof_label = CASE WHEN ? IS NULL THEN proof_label
                           WHEN ? = '' THEN NULL
-                          ELSE ? END
+                          ELSE ? END,
+       fortnight_days = CASE WHEN ? IS NULL THEN fortnight_days
+                             WHEN ? = '' THEN NULL
+                             ELSE ? END
      WHERE id=?`
   ).run(status, t, description, frequency, due_date, due_time || null, assigned_to, dept,
         recurrence_start_date || null, recurrence_end_date || null, pt,
         pl, pl, pl,
+        fdEdit, fdEdit, fdEdit,
         req.params.id);
   res.json({ message: 'Updated' });
 });
@@ -1135,6 +1169,7 @@ router.get('/checklists/by-date', (req, res) => {
   const rows = db.prepare(`
     SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
            c.department, c.recurrence_start_date, c.recurrence_end_date,
+           c.fortnight_days,
            c.assigned_to, u.name as assigned_to_name,
            comp.id as completion_id,
            comp.proof_url, comp.notes, comp.submitted_at,
@@ -1150,7 +1185,18 @@ router.get('/checklists/by-date', (req, res) => {
       AND (c.recurrence_end_date   IS NULL OR c.recurrence_end_date   >= ?)
     ORDER BY u.name, c.department, c.description
   `).all(...args);
-  res.json({ date, rows });
+  // Mam (2026-05-22): post-filter fortnightly tasks — they should
+  // only appear on the two day-of-month slots stored in
+  // fortnight_days.  Day-of-week / quarterly / yearly stay generous
+  // since the existing list-all-active behaviour was working for them.
+  const dom = new Date(date + 'T00:00:00').getDate();
+  const filtered = rows.filter(r => {
+    if (String(r.frequency || '').toLowerCase() !== 'fortnightly') return true;
+    const csv = r.fortnight_days && String(r.fortnight_days).trim() ? r.fortnight_days : '1,15';
+    const days = csv.split(/[,;|]/).map(s => parseInt(String(s).trim(), 10)).filter(d => d >= 1 && d <= 31);
+    return days.includes(dom);
+  });
+  res.json({ date, rows: filtered });
 });
 
 // ── GET /hr/checklists/followup?back=7&forward=7 ────────────────
@@ -1183,12 +1229,12 @@ router.get('/checklists/followup', (req, res) => {
   const taskSql = isAdmin
     ? `SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
               c.department, c.assigned_to, u.name AS assigned_to_name,
-              c.recurrence_start_date, c.recurrence_end_date
+              c.recurrence_start_date, c.recurrence_end_date, c.fortnight_days
        FROM checklists c LEFT JOIN users u ON c.assigned_to = u.id
        ORDER BY u.name COLLATE NOCASE, c.department, c.description`
     : `SELECT c.id, c.description, c.title, c.frequency, c.due_date, c.due_time,
               c.department, c.assigned_to, u.name AS assigned_to_name,
-              c.recurrence_start_date, c.recurrence_end_date
+              c.recurrence_start_date, c.recurrence_end_date, c.fortnight_days
        FROM checklists c LEFT JOIN users u ON c.assigned_to = u.id
        WHERE c.assigned_to = ?
        ORDER BY c.department, c.description`;
@@ -1220,6 +1266,17 @@ router.get('/checklists/followup', (req, res) => {
     if (f === 'weekly') {
       if (!task.due_date) return true;
       return new Date(task.due_date).getDay() === new Date(dateStr).getDay();
+    }
+    // Mam (2026-05-22): fortnightly = twice a month on the two day-of-
+    // month slots stored in fortnight_days ("5,20"; default "1,15").
+    // Cell is "applicable" only when the date's day-of-month matches.
+    if (f === 'fortnightly') {
+      const csv = task.fortnight_days && String(task.fortnight_days).trim()
+        ? task.fortnight_days : '1,15';
+      const days = csv.split(/[,;|]/).map(s => parseInt(String(s).trim(), 10)).filter(d => d >= 1 && d <= 31);
+      if (days.length === 0) return false;
+      const dom = new Date(dateStr + 'T00:00:00').getDate();
+      return days.includes(dom);
     }
     // monthly / quarterly / yearly / once — keep generous.
     return true;

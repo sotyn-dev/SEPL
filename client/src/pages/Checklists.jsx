@@ -827,7 +827,7 @@ export default function Checklists() {
         <form onSubmit={save} className="space-y-4">
           <div><label className="label">Task Description *</label><textarea className="input" rows="3" required value={form.description || ''} onChange={e => setForm({...form, description: e.target.value})} placeholder="What needs to be done…" /></div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div><label className="label">Frequency</label><select className="select" value={form.frequency || 'monthly'} onChange={e => setForm({...form, frequency: e.target.value})}>{['daily','weekly','monthly','quarterly','yearly','once'].map(f => <option key={f} value={f}>{f}</option>)}</select></div>
+            <div><label className="label">Frequency</label><select className="select" value={form.frequency || 'monthly'} onChange={e => setForm({...form, frequency: e.target.value})}>{['daily','weekly','fortnightly','monthly','quarterly','yearly','once'].map(f => <option key={f} value={f}>{f}</option>)}</select></div>
             {/* For 'once' tasks we keep the Due Date. For recurring (daily/weekly/…),
                 we show Time of Day instead since the date is derived from the frequency. */}
             {form.frequency === 'daily' ? (
@@ -837,6 +837,23 @@ export default function Checklists() {
             )}
             {form.frequency !== 'daily' && (
               <div><label className="label">Time of Day <span className="text-gray-400 font-normal">(optional)</span></label><input className="input" type="time" value={form.due_time || ''} onChange={e => setForm({...form, due_time: e.target.value})} /></div>
+            )}
+            {/* Mam (2026-05-22): fortnightly = twice a month on two
+                specific day-of-month slots ("5 & 20" / "2 & 16").
+                Defaults to "1,15" if blank. */}
+            {form.frequency === 'fortnightly' && (
+              <div className="sm:col-span-2">
+                <label className="label">Fortnight Days <span className="text-gray-400 font-normal text-[10px]">(two day-of-month numbers, ≈15 days apart)</span></label>
+                <input
+                  className="input"
+                  placeholder="e.g. 5,20  or  1,15"
+                  value={form.fortnight_days || ''}
+                  onChange={e => setForm({ ...form, fortnight_days: e.target.value })}
+                />
+                <p className="text-[10px] text-gray-500 mt-0.5">
+                  Instance generates twice a month on these two dates. Leave blank for default <code>1, 15</code>.
+                </p>
+              </div>
             )}
             <div>
               <label className="label">Assigned To *</label>
@@ -965,6 +982,10 @@ export default function Checklists() {
               <div className="sm:col-span-2 text-[11px] text-blue-800 bg-blue-100/70 rounded px-2 py-1">
                 {form.frequency === 'daily'    && 'Instance created every day between Start and End.'}
                 {form.frequency === 'weekly'   && 'Instance created on the same weekday between Start and End.'}
+                {form.frequency === 'fortnightly' && (() => {
+                  const days = (form.fortnight_days || '1,15').split(/[,;|&]/).map(s => s.trim()).filter(Boolean).join(' & ');
+                  return `Instance created twice a month on day ${days} between Start and End.`;
+                })()}
                 {form.frequency === 'monthly'  && 'Instance created once per month between Start and End.'}
                 {form.frequency === 'quarterly'&& 'Instance created once per quarter between Start and End.'}
                 {form.frequency === 'yearly'   && 'Instance created once per year between Start and End.'}
@@ -1066,13 +1087,28 @@ Send WhatsApp report                                  ← uses shared settings b
             <div>
               <label className="label">Frequency</label>
               <select className="select" value={bulkForm.frequency || 'monthly'} onChange={e => setBulkForm({ ...bulkForm, frequency: e.target.value })}>
-                {['daily','weekly','monthly','quarterly','yearly','once'].map(f => <option key={f} value={f}>{f}</option>)}
+                {['daily','weekly','fortnightly','monthly','quarterly','yearly','once'].map(f => <option key={f} value={f}>{f}</option>)}
               </select>
             </div>
             <div>
               <label className="label">Time of Day <span className="text-gray-400 font-normal text-[10px]">(optional)</span></label>
               <input type="time" className="input" value={bulkForm.due_time || ''} onChange={e => setBulkForm({ ...bulkForm, due_time: e.target.value })}/>
             </div>
+            {/* Mam (2026-05-22): fortnight-days picker — applies to
+                every task in this bulk batch when frequency is
+                fortnightly.  Defaults to "1,15" if blank. */}
+            {bulkForm.frequency === 'fortnightly' && (
+              <div className="sm:col-span-2">
+                <label className="label">Fortnight Days <span className="text-gray-400 font-normal text-[10px]">(two day-of-month numbers, ≈15 days apart)</span></label>
+                <input
+                  className="input"
+                  placeholder="e.g. 5,20  or  1,15"
+                  value={bulkForm.fortnight_days || ''}
+                  onChange={e => setBulkForm({ ...bulkForm, fortnight_days: e.target.value })}
+                />
+                <p className="text-[10px] text-gray-500 mt-0.5">All tasks in this batch will fire on these two days each month.  Leave blank for default <code>1, 15</code>.</p>
+              </div>
+            )}
             <div className="sm:col-span-2">
               {/* Mam (2026-05-22): "multiple name mean assign one or
                   multiple user one time" — picker now multi-select.

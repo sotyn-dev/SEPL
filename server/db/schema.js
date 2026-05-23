@@ -1001,7 +1001,7 @@ function initializeDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
       description TEXT,
-      frequency TEXT DEFAULT 'monthly' CHECK(frequency IN ('daily','weekly','monthly','quarterly','yearly','once')),
+      frequency TEXT DEFAULT 'monthly' CHECK(frequency IN ('daily','weekly','fortnightly','monthly','quarterly','yearly','once')),
       due_date DATE,
       status TEXT DEFAULT 'pending' CHECK(status IN ('pending','in_progress','completed','overdue')),
       assigned_to INTEGER REFERENCES users(id),
@@ -2612,6 +2612,11 @@ function initializeDatabase() {
     //   'text'  — text note only, no upload
     //   'none'  — no proof needed, just mark done
     ['checklists', "proof_type TEXT DEFAULT 'photo'"],
+    // Mam (2026-05-22): "add frequency fortnightly mean month 2 time
+    // b/w 15 days distance" — store the two day-of-month slots
+    // (e.g. "5,20") on each checklist row.  Default 1,15 if blank.
+    // Followup / by-date queries treat day-of-month match as "due".
+    ['checklists', 'fortnight_days TEXT'],
     // Mam (2026-05-22): "between MILESTONE and AANCHAL add AR CLEARED
     // so that CRM can add AR cleared and above dashboard also show AR
     // cleared".  New per-project column in raw rupees, edited by CRM
@@ -3290,6 +3295,33 @@ in your first week. If a process feels broken, raise a Help Ticket
     }
   } catch (e) {
     console.warn('[seed] final_round_questions skipped:', e.message);
+  }
+
+  // Mam (2026-05-22): "add frequency fortnightly mean month 2 time
+  // b/w 15 days distance" — relax the checklists.frequency CHECK so
+  // the new 'fortnightly' value is accepted.  Uses writable_schema
+  // to edit the constraint in place (same pattern as the
+  // payment_requests CHECK rebuild).  Idempotent via app_settings.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='checklist_freq_fortnightly_v1'").get();
+    if (!done) {
+      // Check current CHECK clause — only patch if it's the old one.
+      const cur = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='checklists'").get();
+      if (cur?.sql && !cur.sql.includes("'fortnightly'")) {
+        db.exec('PRAGMA writable_schema = 1');
+        db.exec(`
+          UPDATE sqlite_master SET sql = REPLACE(sql,
+            "CHECK(frequency IN ('daily','weekly','monthly','quarterly','yearly','once'))",
+            "CHECK(frequency IN ('daily','weekly','fortnightly','monthly','quarterly','yearly','once'))"
+          ) WHERE type='table' AND name='checklists'
+        `);
+        db.exec('PRAGMA writable_schema = 0');
+        console.log('[migration] checklists CHECK relaxed to allow fortnightly');
+      }
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('checklist_freq_fortnightly_v1', '1')").run();
+    }
+  } catch (e) {
+    console.warn('[migration] checklist freq fortnightly CHECK relax failed:', e.message);
   }
 
   // Seed the canonical 5 lead-source values per MD's TOC v3 spec.
