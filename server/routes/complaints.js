@@ -92,7 +92,10 @@ router.get('/stats', requirePermission('complaints', 'view'), (req, res) => {
   const total = db.prepare('SELECT COUNT(*) as c FROM complaints').get();
   const open = db.prepare("SELECT COUNT(*) as c FROM complaints WHERE status='open'").get();
   const inProgress = db.prepare("SELECT COUNT(*) as c FROM complaints WHERE status='in_progress'").get();
-  const resolved = db.prepare("SELECT COUNT(*) as c FROM complaints WHERE status='resolved'").get();
+  // Mam (2026-05-22 audit fix): UI treats both 'resolved' AND legacy
+  // 'closed' as done (Complaints.jsx:161 OR check) but stats only
+  // counted 'resolved' → tile undershoot.  Match the UI's union.
+  const resolved = db.prepare("SELECT COUNT(*) as c FROM complaints WHERE status IN ('resolved','closed')").get();
   const byCategory = db.prepare("SELECT category, COUNT(*) as count FROM complaints WHERE category IS NOT NULL GROUP BY category").all();
   res.json({ total: total.c, open: open.c, inProgress: inProgress.c, resolved: resolved.c, byCategory });
 });

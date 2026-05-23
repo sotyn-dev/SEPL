@@ -2330,10 +2330,17 @@ router.get('/dashboard', (req, res) => {
   ).get().c;
 
   // ── 3. Time to hire: avg(joining_date - created_at) for onboarded
+  //
+  // Mam (2026-05-22 audit fix): the COALESCE(joining_date, DATE('now'))
+  // fallback was wrong — when status='onboarded' the candidate MUST
+  // have a joining_date.  If joining_date is NULL it's a data bug;
+  // we should exclude that row from the average, not substitute today
+  // (which gives a misleadingly small number for "missing data" rows).
   const tth = db.prepare(`
-    SELECT AVG(julianday(COALESCE(joining_date, DATE('now'))) - julianday(DATE(created_at))) AS days,
+    SELECT AVG(julianday(joining_date) - julianday(DATE(created_at))) AS days,
            COUNT(*) AS n
-    FROM candidates WHERE status = 'onboarded'
+    FROM candidates
+   WHERE status = 'onboarded' AND joining_date IS NOT NULL
   `).get();
   const timeToHireDays = tth.days != null ? Math.round(tth.days) : null;
 

@@ -158,20 +158,33 @@ export default function DashboardCMD() {
         <SectionHead>Business cycle · Lead → Quote → PO → Site → Bill → Cash</SectionHead>
         <Row cols="3">
           <Card title="Full lead-to-cash funnel" meta={`last ${days} days`}>
+            {/* Mam (2026-05-22 audit fix): the bar widths used to be
+                hardcoded (78%, 54%, 32%, 21%, 11%, 6%) so the visual
+                lied about actual conversion.  Now they're computed
+                from each stage's count as a % of the LEAD count (the
+                full-funnel top stage) — a stage at zero shows a 0%-
+                wide bar, and the visual matches the numbers below. */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 4 }}>
-              {[
-                ['Leads received', sales.funnel.leads, 100, C.blue, '#fff', null],
-                ['Qualified', sales.funnel.qualified, 78, C.blue2, '#fff', null],
-                ['Quotes sent', sales.funnel.quoted, 54, '#7896E8', null, null],
-                ['POs received', sales.funnel.pos, 32, C.amber, null, null],
-                ['In execution', sales.funnel.in_execution, 21, C.orange, '#fff', null],
-                ['Billed', sales.funnel.billed, 11, C.red, '#fff', null],
-                ['Cash collected', sales.funnel.collected, 6, C.green, '#fff', null],
-              ].map(([lbl, val, w, color, txt], i, arr) => {
-                const prev = i > 0 ? arr[i - 1][1] : null;
-                const drop = prev > 0 && val < prev ? `−${Math.round((1 - val / prev) * 100)}%` : '·';
-                return <FunnelBar key={lbl} label={lbl} value={val} drop={drop} width={w} color={color} textColor={txt} />;
-              })}
+              {(() => {
+                const stages = [
+                  ['Leads received', sales.funnel.leads,        C.blue,    '#fff'],
+                  ['Qualified',      sales.funnel.qualified,    C.blue2,   '#fff'],
+                  ['Quotes sent',    sales.funnel.quoted,       '#7896E8', null  ],
+                  ['POs received',   sales.funnel.pos,          C.amber,   null  ],
+                  ['In execution',   sales.funnel.in_execution, C.orange,  '#fff'],
+                  ['Billed',         sales.funnel.billed,       C.red,     '#fff'],
+                  ['Cash collected', sales.funnel.collected,    C.green,   '#fff'],
+                ];
+                const topVal = stages[0][1] || 0;   // Leads received drives the 100% reference
+                return stages.map(([lbl, val, color, txt], i) => {
+                  // Width as % of top funnel stage; minimum 2% so 0-count
+                  // bars are still faintly visible (otherwise the row collapses).
+                  const w = topVal > 0 ? Math.max(2, Math.round((val / topVal) * 100)) : 0;
+                  const prev = i > 0 ? stages[i - 1][1] : null;
+                  const drop = prev > 0 && val < prev ? `−${Math.round((1 - val / prev) * 100)}%` : '·';
+                  return <FunnelBar key={lbl} label={lbl} value={val} drop={drop} width={w} color={color} textColor={txt} />;
+                });
+              })()}
             </div>
             <div style={{ fontSize: 10.5, color: C.ink2, marginTop: 10, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
               <strong style={{ color: C.red }}>Biggest leak: Bill → Cash ·</strong>

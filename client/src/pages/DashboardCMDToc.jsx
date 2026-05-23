@@ -290,17 +290,24 @@ export default function DashboardCMDToc() {
             )}
           </Card>
           <Card title="Lead → PO funnel" meta={`${days} days`}>
+            {/* Mam (2026-05-22 audit fix): widths now derived from
+                actual stage counts (% of Leads), not hardcoded
+                100/78/54/41/22.  See sibling fix in DashboardCMD.jsx. */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 4 }}>
-              {[
-                ['Leads', sales.funnel.leads, 100, C.blue, '#fff'],
-                ['Qualified', sales.funnel.qualified, 78, C.blue2, '#fff'],
-                ['Quote sent', sales.funnel.quoted, 54, '#7896E8', null],
-                ['Negotiation', sales.funnel.in_execution, 41, C.amber, null],
-                ['PO won', sales.funnel.pos, 22, C.green, '#fff'],
-              ].map(([lbl, val, w, color, txt], i, arr) => {
-                const prev = i > 0 ? arr[i - 1][1] : null;
-                const drop = prev > 0 && val < prev ? `−${Math.round((1 - val / prev) * 100)}%` : '·';
-                return (
+              {(() => {
+                const stages = [
+                  ['Leads',       sales.funnel.leads,        C.blue,    '#fff'],
+                  ['Qualified',   sales.funnel.qualified,    C.blue2,   '#fff'],
+                  ['Quote sent',  sales.funnel.quoted,       '#7896E8', null  ],
+                  ['Negotiation', sales.funnel.in_execution, C.amber,   null  ],
+                  ['PO won',      sales.funnel.pos,          C.green,   '#fff'],
+                ];
+                const topVal = stages[0][1] || 0;
+                return stages.map(([lbl, val, color, txt], i) => {
+                  const w = topVal > 0 ? Math.max(2, Math.round((val / topVal) * 100)) : 0;
+                  const prev = i > 0 ? stages[i - 1][1] : null;
+                  const drop = prev > 0 && val < prev ? `−${Math.round((1 - val / prev) * 100)}%` : '·';
+                  return (
                   <div key={lbl} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 50px', gap: 8, alignItems: 'center', fontSize: 11 }}>
                     <div style={{ height: 18, background: C.panel2, borderRadius: 3, overflow: 'hidden' }}>
                       <div style={{ width: `${w}%`, height: '100%', background: color, borderRadius: 3, display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: 10, fontWeight: 600, color: txt || '#000' }}>{lbl}</div>
@@ -309,7 +316,8 @@ export default function DashboardCMDToc() {
                     <div style={{ textAlign: 'right', fontSize: 10, color: C.red }}>{drop}</div>
                   </div>
                 );
-              })}
+                });
+              })()}
             </div>
             <div style={{ fontSize: 10.5, color: C.ink2, marginTop: 10, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
               {sales.funnel.leads > 0 && sales.funnel.pos > 0

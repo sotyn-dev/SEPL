@@ -94,7 +94,12 @@ router.get('/dashboard', requirePermission('leads', 'view'), (req, res) => {
   const db = getDb();
   const total = db.prepare('SELECT COUNT(*) as c FROM sales_funnel').get();
   const bystage = db.prepare('SELECT current_stage, COUNT(*) as count FROM sales_funnel GROUP BY current_stage').all();
-  const won = db.prepare("SELECT COUNT(*) as c, COALESCE(SUM(won_amount),0) as amount FROM sales_funnel WHERE current_stage='won'").get();
+  // Mam (2026-05-22 audit fix): stage was renamed 'won' → 'contract_signed'
+  // in the 11-stage spec (commit sf_stages_v2), but this dashboard
+  // still queried the old key — Won Deals tile showed 0.  Match both
+  // for backwards compatibility with any rows that escaped the
+  // migration.
+  const won = db.prepare("SELECT COUNT(*) as c, COALESCE(SUM(won_amount),0) as amount FROM sales_funnel WHERE current_stage IN ('contract_signed','won')").get();
   const lost = db.prepare("SELECT COUNT(*) as c FROM sales_funnel WHERE current_stage='lost'").get();
   const thisMonth = db.prepare("SELECT COUNT(*) as c FROM sales_funnel WHERE created_at >= date('now','start of month')").get();
   const byCategory = db.prepare("SELECT category, COUNT(*) as count FROM sales_funnel WHERE category IS NOT NULL AND category != '' GROUP BY category").all();
