@@ -2059,6 +2059,32 @@ export default function Procurement() {
             </div>
           )}
 
+          {/* Mam (2026-05-22): "here only sales bill of po item with
+              only show delivery note as data which is created with po"
+              — the Sales Bill form needs client GSTIN + BOQ rates and
+              fails on incomplete BB rows.  For routine deliveries the
+              admin just needs the auto-generated DN that pulls
+              everything from the PO.  Shortcut banner — when admin
+              picks a PO they can skip this form entirely. */}
+          {form.vendor_po_id && (
+            <div className="bg-blue-50 border border-blue-300 rounded-lg px-3 py-2.5 flex items-center justify-between gap-2 flex-wrap">
+              <div className="text-[12px] text-blue-900 flex-1 min-w-[200px]">
+                🚚 <b>Just need a Delivery Note?</b> Skip this form — the
+                auto-generated DN is already filled in from the PO
+                (vendor / client / site / items / HSN).
+              </div>
+              <a
+                href={`/vendor-po/${form.vendor_po_id}/delivery-note`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setModal(false)}
+                className="btn btn-primary text-[12px] py-1.5 px-3 bg-emerald-700 hover:bg-emerald-800 border-emerald-700 whitespace-nowrap"
+              >
+                Open Auto-Generated DN →
+              </a>
+            </div>
+          )}
+
           {/* BILL TO block — mam (2026-05-16): "no client / bill-to block"
               was issue #1.  Surfaces every field a tax invoice needs:
               client name + address + GSTIN + state + state code +
