@@ -1602,21 +1602,14 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
     });
   }
 
-  // No Client PO items found.  For Sales Bill we refuse to fall
-  // back to vendor cost — that would be billing the wrong amount.
-  // Return empty + a clear reason so the UI can show a red warning.
-  if (isSalesBill) {
-    return res.json({
-      items: [],
-      source: 'empty',
-      rate_source: null,
-      warning: 'No Client PO / BOQ items linked to this Vendor PO. Sales Bill needs BOQ SITC rates — upload the Client PO with BOQ first, OR add rows manually with the right selling rate.',
-    });
-  }
-
-  // Challan (or other non-billable doc) — vendor PO fallback is fine.
+  // No Client PO BOQ items found.  Mam (2026-05-22): "according to
+  // indent fill po items" — fall back to the indent items from the
+  // Vendor PO so the line items still pre-fill (qty / description /
+  // unit / HSN).  For Sales Bill we keep rate=0 and return a clear
+  // amber warning so admin enters the SELLING rate (BOQ SITC) before
+  // saving — billing the wrong amount is worse than an empty form.
   const vpRows = db.prepare(`
-    SELECT vpi.id, ii.description, vpi.quantity, ii.unit, vpi.rate, vpi.amount,
+    SELECT vpi.id, ii.description, vpi.quantity, ii.unit, vpi.rate AS vendor_rate, vpi.amount,
            NULL AS hsn_code,
            im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name
       FROM vendor_po_items vpi
@@ -1625,7 +1618,24 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
      WHERE vpi.vendor_po_id = ?
      ORDER BY vpi.id
   `).all(req.params.id);
-  res.json({ items: vpRows, source: 'vendor_po', rate_source: 'vendor_cost' });
+
+  if (isSalesBill) {
+    // Sales bill: ZERO the rate so admin can't accidentally bill at
+    // vendor cost.  Keep the rest so the form is pre-filled.
+    const safeRows = vpRows.map(r => ({ ...r, rate: 0, amount: 0 }));
+    return res.json({
+      items: safeRows,
+      source: 'indent_fallback',
+      rate_source: 'rate_missing',
+      warning: `Pre-filled ${safeRows.length} line(s) from the indent.  No Client PO BOQ found → SELLING RATE column is blank for each line.  Fill in the SITC selling rate before saving.`,
+      rated_count: 0,
+      total_count: safeRows.length,
+    });
+  }
+
+  // Challan (or other non-billable doc) — vendor cost is fine.
+  const vpRowsWithCost = vpRows.map(r => ({ ...r, rate: r.vendor_rate || 0 }));
+  res.json({ items: vpRowsWithCost, source: 'vendor_po', rate_source: 'vendor_cost' });
 });
 
 // Print-page renderer for a dispatch row. Returns a self-contained HTML

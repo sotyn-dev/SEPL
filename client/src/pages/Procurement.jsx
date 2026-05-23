@@ -2201,13 +2201,26 @@ export default function Procurement() {
                      ? 'Delivery Challan — no rate column (FOC / RGP, not billable). Uncheck items you\'re not dispatching today.'
                      : dispatchItemsSource === 'po_items'
                        ? <>Rate column = <strong className="text-emerald-700">BOQ SITC selling rate</strong> from Client PO. Tweak qty / disc % if needed, or uncheck rows you\'re not billing today.{dispatchRateInfo.rated < dispatchRateInfo.total && <span className="text-amber-700"> ⚠ {dispatchRateInfo.total - dispatchRateInfo.rated} of {dispatchRateInfo.total} BOQ rows have ₹0 rate — fill them in or skip.</span>}</>
+                       : dispatchItemsSource === 'indent_fallback'
+                         ? <>Pre-filled <strong>{dispatchItems.length}</strong> line(s) from the indent (qty / description / unit). <strong className="text-amber-700">Selling rates left blank</strong> — enter the SITC rate per row before saving.</>
                        : dispatchItemsSource === 'vendor_po' ? 'No Client PO items found — falling back to Vendor PO items (vendor cost). Verify rates before saving.'
                        : 'No items pre-filled. Add rows manually below.'}
                 </div>
-                {/* Hard warning when BOQ rates are missing on a Sales Bill — mam (2026-05-16) */}
+                {/* Mam (2026-05-22): two-tier warning.
+                    rate_source='rate_missing' → AMBER (form is pre-filled,
+                       just needs rates) → recoverable in seconds
+                    rate_source=null (empty)   → RED (nothing pre-filled,
+                       admin has to add rows manually) → needs more work */}
                 {form.document_type === 'sales_bill' && !dispatchItemsLoading && dispatchRateInfo.warning && (
-                  <div className="text-[11px] bg-red-100 border border-red-300 text-red-800 rounded p-2 mt-1">
-                    ❌ <strong>BOQ SITC rates missing.</strong> {dispatchRateInfo.warning}
+                  <div className={`text-[11px] rounded p-2 mt-1 ${
+                    dispatchRateInfo.source === 'rate_missing'
+                      ? 'bg-amber-50 border border-amber-300 text-amber-900'
+                      : 'bg-red-100 border border-red-300 text-red-800'
+                  }`}>
+                    {dispatchRateInfo.source === 'rate_missing'
+                      ? <>⚠ <strong>Selling rates needed.</strong> {dispatchRateInfo.warning}</>
+                      : <>❌ <strong>BOQ SITC rates missing.</strong> {dispatchRateInfo.warning}</>
+                    }
                   </div>
                 )}
               </div>
