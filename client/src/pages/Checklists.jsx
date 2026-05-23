@@ -9,10 +9,10 @@ import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiExternalLink, FiDownload, FiCale
 import { exportCsv } from '../utils/exportCsv';
 
 // Mam (2026-05-22): "department will on drop down :- Sales, Accounts,
-// Marketing, Finance, IT, MDO, Operations, Admin" — fixed list used
-// across both Add Checklist + Bulk Add modals.  Free-text entries
-// from legacy rows still display but the picker presents this set.
-const DEPARTMENTS = ['Sales', 'Accounts', 'Marketing', 'Finance', 'IT', 'MDO', 'Operations', 'Admin'];
+// Marketing, Finance, IT, MDO, Operations, Admin" + Purchase added
+// 2026-05-22 in a follow-up.  Free-text entries from legacy rows
+// still display via the (legacy) option preserved in the select.
+const DEPARTMENTS = ['Sales', 'Accounts', 'Purchase', 'Marketing', 'Finance', 'IT', 'MDO', 'Operations', 'Admin'];
 
 export default function Checklists() {
   const { user, canDelete, isAdmin } = useAuth();
