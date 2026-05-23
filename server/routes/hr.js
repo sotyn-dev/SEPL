@@ -699,6 +699,8 @@ router.get('/checklists/bulk-template.xlsx', (req, res) => {
     ['Exit checklist + Day-1 joiner verification', 'Joining Form',        'pdf',        '17:00'],
     ['Send daily WhatsApp report to MD',           'Screenshot',          'photo',      '18:00'],
     ['Reconcile petty cash closing',               'Cash Closing Note',   'text',       '19:30'],
+    // Mam (2026-05-22): comma-separated times = one row per slot.
+    ['Stock recon + items below ROL',              'Stock Photo',         'photo',      '09:00,13:00,17:00'],
     ['Mark vendor master sheet reviewed',          '',                    'none',       ''],
   ];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -899,8 +901,30 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
     const rowLabel = parts[1] && parts[1].trim() ? parts[1].trim() : defaultPl;
     const rawType = parts[2] && parts[2].trim().toLowerCase();
     const rowType = rawType && ALLOWED_PROOF_TYPES.includes(rawType) ? rawType : defaultPt;
-    const rowTime = normaliseTime(parts[3]) || defaultDueTime || null;
-    rows.push({ description, proof_label: rowLabel, proof_type: rowType, due_time: rowTime });
+    // Mam (2026-05-22): "can add multiple time names also" — the
+    // Time column accepts a comma-separated list (09:00, 13:00,
+    // 17:00) which expands into one checklist row per time.  Useful
+    // for tasks that fire multiple times per day at fixed slots
+    // (attendance checks, stock recon, etc.).
+    let rowTimes = [];
+    if (parts[3] && /[,;]/.test(parts[3])) {
+      rowTimes = parts[3]
+        .split(/[,;]/)
+        .map(t => normaliseTime(t))
+        .filter(Boolean);
+    } else {
+      const single = normaliseTime(parts[3]) || defaultDueTime || null;
+      rowTimes = [single];
+    }
+    // Emit one row per time slot.  Description gets an "@ HH:MM"
+    // suffix when more than one slot so the rows don't collapse
+    // into duplicates of each other in the dedup set.
+    for (const t of rowTimes) {
+      const desc = rowTimes.length > 1 && t
+        ? `${description} @ ${t}`
+        : description;
+      rows.push({ description: desc, proof_label: rowLabel, proof_type: rowType, due_time: t });
+    }
   }
   if (rows.length === 0) return res.status(400).json({ error: 'All task lines were empty' });
 

@@ -8,6 +8,12 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiExternalLink, FiDownload, FiCalendar, FiCheck, FiX, FiClock } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
+// Mam (2026-05-22): "department will on drop down :- Sales, Accounts,
+// Marketing, Finance, IT, MDO, Operations, Admin" — fixed list used
+// across both Add Checklist + Bulk Add modals.  Free-text entries
+// from legacy rows still display but the picker presents this set.
+const DEPARTMENTS = ['Sales', 'Accounts', 'Marketing', 'Finance', 'IT', 'MDO', 'Operations', 'Admin'];
+
 export default function Checklists() {
   const { user, canDelete, isAdmin } = useAuth();
   const [checklists, setChecklists] = useState([]);
@@ -846,18 +852,21 @@ export default function Checklists() {
                 assignee is picked. */}
             <div>
               <label className="label">Department <span className="text-gray-400 font-normal text-[10px]">(auto-fills from assignee)</span></label>
-              <input
-                list="checklist-department-options"
-                className="input"
+              <select
+                className="select"
                 value={form.department || ''}
                 onChange={e => setForm({ ...form, department: e.target.value })}
-                placeholder="e.g. Accounts, HR, Procurement…"
-              />
-              <datalist id="checklist-department-options">
-                {[...new Set(users.map(u => u.department).filter(Boolean))].sort().map(d => (
-                  <option key={d} value={d} />
-                ))}
-              </datalist>
+              >
+                <option value="">— Pick department —</option>
+                {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                {/* Preserve any legacy value not in the fixed list so
+                    older rows still display + can be re-saved without
+                    losing data.  Marked (legacy) so admin sees the
+                    intent. */}
+                {form.department && !DEPARTMENTS.includes(form.department) && (
+                  <option value={form.department}>{form.department} (legacy)</option>
+                )}
+              </select>
             </div>
             {/* Mam (2026-05-22): "i want to tell which type proof
                 need for complete or text" — admin tells the system
@@ -966,13 +975,15 @@ export default function Checklists() {
               💡 <b>Different proof name / time per task?</b> Add columns after each task with <code className="bg-white px-1 rounded">|</code>:
               <pre className="font-mono text-[11px] mt-1 ml-4">{`File GST return       | GST File         | pdf   | 11:00
 Bank recon            | Bank Statement                | 10:30
+Stock recon           | Stock Photo      | photo | 09:00,13:00,17:00
 Send WhatsApp report                                  ← uses shared settings below`}</pre>
               Columns (any subset, in order):
               <code className="bg-white px-1 rounded mx-1">Task</code> |
               <code className="bg-white px-1 rounded mx-1">Proof Name</code> |
               <code className="bg-white px-1 rounded mx-1">Type</code> |
               <code className="bg-white px-1 rounded mx-1">Time (HH:MM)</code>
-              <br/>You can also paste 4 columns from Excel (tab-separated works the same way).
+              <br/>You can also paste 4 columns from Excel (tab-separated works the same way).<br/>
+              <b>⏰ Multiple times per task:</b> separate with commas — <code className="bg-white px-1 rounded">09:00,13:00,17:00</code> creates 3 rows (one per slot) for tasks that fire at fixed times of day.
             </div>
           </div>
           {/* Mam (2026-05-22): Excel upload — server parses the
@@ -1063,7 +1074,13 @@ Send WhatsApp report                                  ← uses shared settings b
             </div>
             <div>
               <label className="label">Department</label>
-              <input className="input" value={bulkForm.department || ''} onChange={e => setBulkForm({ ...bulkForm, department: e.target.value })} placeholder="auto-fills from assignee"/>
+              <select className="select" value={bulkForm.department || ''} onChange={e => setBulkForm({ ...bulkForm, department: e.target.value })}>
+                <option value="">— Pick (or auto-fill from assignee) —</option>
+                {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                {bulkForm.department && !DEPARTMENTS.includes(bulkForm.department) && (
+                  <option value={bulkForm.department}>{bulkForm.department} (legacy)</option>
+                )}
+              </select>
             </div>
             <div>
               <label className="label">Proof Type *</label>
