@@ -148,7 +148,67 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);
   }
   sql += ' ORDER BY pr.created_at DESC';
-  res.json(getDb().prepare(sql).all(...params));
+  const db = getDb();
+  const rows = db.prepare(sql).all(...params);
+
+  // Mam (2026-05-22): "user can show their if aanchal approve the
+  // payment and next step show the user so that they easy show
+  // where is stuck their payment".  Enrich every row with:
+  //   • current_step_name        — e.g. "Accountant Approval"
+  //   • next_approver_name       — who's blocking (override user OR
+  //                                "any <Role>" when no override set)
+  //   • last_approved_step_name  — e.g. "HR Approval"
+  //   • last_approved_by_name    — e.g. "Aanchal"
+  //   • last_approved_at         — when (so user sees freshness)
+  //   • approvals_count          — how many steps cleared so far
+  //   • approvals_total          — workflow length (denominator)
+  // All best-effort — wrap in try/catch so a missing column doesn't
+  // break the whole list.
+  for (const row of rows) {
+    try {
+      const workflow = WORKFLOW[row.category] || [];
+      row.approvals_total = workflow.length || null;
+      // ── Current step info
+      const curStep = workflow.find(w => w.step === row.current_step);
+      row.current_step_name = curStep?.name || null;
+      // ── Who's next (override user if any, else role label)
+      if (curStep) {
+        const overrideUserId = getApprovalRoutingFor(db, row.category, row.current_step);
+        if (overrideUserId) {
+          const u = db.prepare('SELECT name FROM users WHERE id=?').get(overrideUserId);
+          row.next_approver_name = u?.name || null;
+          row.next_approver_role = curStep.approver_role;
+        } else {
+          row.next_approver_name = null;             // no specific person
+          row.next_approver_role = curStep.approver_role;
+        }
+      }
+      // ── Last approval that cleared (skip system / velocity check)
+      const lastApproval = db.prepare(`
+        SELECT pa.step, pa.step_name, pa.approved_at, u.name AS approved_by_name
+          FROM payment_approvals pa
+          LEFT JOIN users u ON u.id = pa.approved_by
+         WHERE pa.request_id = ? AND pa.action = 'approved'
+         ORDER BY pa.step DESC, pa.id DESC
+         LIMIT 1
+      `).get(row.id);
+      if (lastApproval) {
+        row.last_approved_step_name = lastApproval.step_name;
+        row.last_approved_by_name   = lastApproval.approved_by_name;
+        row.last_approved_at        = lastApproval.approved_at;
+      }
+      // ── Approvals cleared so far
+      const cleared = db.prepare(
+        `SELECT COUNT(DISTINCT step) AS c FROM payment_approvals
+          WHERE request_id = ? AND action = 'approved'`
+      ).get(row.id);
+      row.approvals_count = cleared?.c || 0;
+    } catch (e) {
+      // Don't blow up the list response on a single bad row
+      console.warn('[payment-required GET] enrich failed for row', row.id, e.message);
+    }
+  }
+  res.json(rows);
 });
 
 // GET stats — scoped same way as the list. A site engineer's "totals"

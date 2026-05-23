@@ -257,7 +257,19 @@ export default function PaymentRequired() {
                     <td className="font-bold text-red-600 cursor-pointer" onClick={() => viewRequest(r.id)}>{r.request_no}</td>
                     <td>{r.employee_name}</td><td><span className="badge badge-blue">{r.category}</span></td>
                     <td className="font-semibold">{fmt(r.amount)}</td>
-                    <td><span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded">Step {r.current_step}/2</span></td>
+                    {/* Mam (2026-05-22): same enrichment as the All
+                        Requests table — show approver names so the
+                        TA/DA Pending tab also explains where stuck. */}
+                    <td className="text-[11px]">
+                      <div className="flex items-center gap-1 mb-0.5">
+                        <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-mono text-[10px]">{r.approvals_count || 0}/{r.approvals_total || 2}</span>
+                        {r.current_step_name && <span className="text-amber-700 font-medium">{r.current_step_name}</span>}
+                      </div>
+                      {r.last_approved_by_name && <div className="text-[10px] text-emerald-700">✓ by <b>{r.last_approved_by_name}</b></div>}
+                      {(r.next_approver_name || r.next_approver_role) && (
+                        <div className="text-[10px] text-amber-800">⏳ {r.next_approver_name ? <b>{r.next_approver_name}</b> : <>any <b>{r.next_approver_role}</b></>}</div>
+                      )}
+                    </td>
                     <td><div className="flex gap-1">
                       <button onClick={() => viewRequest(r.id)} className="p-1 hover:bg-red-50 rounded text-red-600"><FiEye size={14} /></button>
                       {canApprove('payment_required') && <>
@@ -315,7 +327,28 @@ export default function PaymentRequired() {
                       </div>
                     )}
                   </td>
-                  <td><span className="text-xs bg-gray-100 px-2 py-0.5 rounded">{r.current_step}/5</span></td>
+                  {/* Mam (2026-05-22): "user can show ... where is stuck
+                      their payment" — STEP cell now shows both who
+                      approved last AND who's blocking next, so the
+                      requester sees exactly where the payment sits. */}
+                  <td className="text-[11px]">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="bg-gray-100 px-2 py-0.5 rounded font-mono text-[11px]">{r.approvals_count || 0}/{r.approvals_total || 5}</span>
+                      {r.current_step_name && r.status !== 'final_approved' && r.status !== 'rejected' && (
+                        <span className="text-amber-700 font-medium">→ {r.current_step_name}</span>
+                      )}
+                    </div>
+                    {r.last_approved_by_name && (
+                      <div className="text-[10px] text-emerald-700">
+                        ✓ {r.last_approved_step_name} by <b>{r.last_approved_by_name}</b>
+                      </div>
+                    )}
+                    {r.status !== 'final_approved' && r.status !== 'rejected' && (r.next_approver_name || r.next_approver_role) && (
+                      <div className="text-[10px] text-amber-800">
+                        ⏳ Waiting on {r.next_approver_name ? <b>{r.next_approver_name}</b> : <>any <b>{r.next_approver_role}</b></>}
+                      </div>
+                    )}
+                  </td>
                   <td><StatusBadge status={r.status} /></td>
                   {/* Date column — mam (2026-05-22): "this is pick wrong
                       time according to indian" — SQLite stores UTC,
