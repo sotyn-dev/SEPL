@@ -840,17 +840,25 @@ router.post('/checklists', adminGuard, (req, res) => {
 // dept / dates / proof_type.  Reduces 30 single-task adds down to
 // one form fill.
 router.post('/checklists/bulk', adminGuard, (req, res) => {
-  const { tasks, frequency, due_date, due_time, assigned_to, department,
+  const { tasks, frequency, due_date, due_time, assigned_to, assigned_to_ids, department,
           recurrence_start_date, recurrence_end_date, proof_type, proof_label } = req.body || {};
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return res.status(400).json({ error: 'tasks array required' });
   }
-  if (!assigned_to) return res.status(400).json({ error: 'Assigned To is required' });
+  // Mam (2026-05-22): "multiple name mean assign one or multiple
+  // user one time" — accept either an array (new shape) or a
+  // single id (legacy).  Normalise into one array.
+  const assigneeIds = Array.isArray(assigned_to_ids) && assigned_to_ids.length
+    ? assigned_to_ids.map(x => +x).filter(Boolean)
+    : (assigned_to ? [+assigned_to] : []);
+  if (assigneeIds.length === 0) return res.status(400).json({ error: 'At least one assignee is required' });
 
+  // Department auto-fill — if not explicitly set, take it from the
+  // FIRST picked user.  All N tasks × M users get the same dept tag.
   let dept = department && String(department).trim() ? String(department).trim() : null;
   if (!dept) {
     try {
-      const u = getDb().prepare('SELECT department FROM users WHERE id=?').get(assigned_to);
+      const u = getDb().prepare('SELECT department FROM users WHERE id=?').get(assigneeIds[0]);
       dept = u?.department || null;
     } catch (_) {}
   }
@@ -934,16 +942,20 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
        recurrence_start_date, recurrence_end_date, proof_type, proof_label, created_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
 
+  // Mam (2026-05-22): emit one INSERT per (task × assignee) so a
+  // batch of 3 tasks × 2 users creates 6 rows in a single atomic tx.
   const tx = db.transaction((items) => {
     let added = 0;
     for (const r of items) {
       const title = deriveTitle(null, r.description);
-      ins.run(title, r.description, frequency || 'monthly', due_date || null,
-              r.due_time || null,
-              assigned_to, dept,
-              recurrence_start_date || null, recurrence_end_date || null,
-              r.proof_type, r.proof_label, req.user.id);
-      added++;
+      for (const uid of assigneeIds) {
+        ins.run(title, r.description, frequency || 'monthly', due_date || null,
+                r.due_time || null,
+                uid, dept,
+                recurrence_start_date || null, recurrence_end_date || null,
+                r.proof_type, r.proof_label, req.user.id);
+        added++;
+      }
     }
     return added;
   });

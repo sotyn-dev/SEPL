@@ -213,14 +213,24 @@ export default function Checklists() {
     }
   };
 
-  // Mam (2026-05-22): bulk add — POST many tasks at once.
+  // Mam (2026-05-22): bulk add — POST many tasks at once.  Now
+  // accepts an ARRAY of assignees so one bulk submit creates rows
+  // for every picked user.  Server returns added = lines × users.
   const submitBulk = async () => {
     const lines = String(bulkForm.lines || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     if (lines.length === 0) return toast.error('Paste at least one task line');
-    if (!bulkForm.assigned_to) return toast.error('Pick an assignee for all tasks');
+    const assignees = (bulkForm.assigned_to_ids || []).filter(Boolean);
+    if (assignees.length === 0 && !bulkForm.assigned_to) {
+      return toast.error('Pick at least one assignee');
+    }
     try {
-      const r = await api.post('/hr/checklists/bulk', { ...bulkForm, tasks: lines });
-      toast.success(`Added ${r.data?.added || lines.length} checklist task(s)`);
+      const r = await api.post('/hr/checklists/bulk', {
+        ...bulkForm,
+        tasks: lines,
+        assigned_to_ids: assignees.length ? assignees : [bulkForm.assigned_to],
+      });
+      const n = r.data?.added || (lines.length * Math.max(1, assignees.length));
+      toast.success(`Added ${n} checklist task(s)`);
       setBulkModal(false); load();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Bulk add failed');
@@ -283,7 +293,8 @@ export default function Checklists() {
               const todayIso = today.toISOString().slice(0, 10);
               setBulkForm({
                 lines: '', frequency: 'monthly', due_date: '', due_time: '',
-                assigned_to: '', department: '',
+                assigned_to: '', assigned_to_ids: [],
+                department: '',
                 recurrence_start_date: todayIso, recurrence_end_date: '2026-12-31',
                 proof_type: 'photo',
               });
@@ -1063,14 +1074,55 @@ Send WhatsApp report                                  ← uses shared settings b
               <input type="time" className="input" value={bulkForm.due_time || ''} onChange={e => setBulkForm({ ...bulkForm, due_time: e.target.value })}/>
             </div>
             <div className="sm:col-span-2">
-              <label className="label">Assigned To * <span className="text-gray-400 font-normal text-[10px]">(same person gets all the tasks)</span></label>
+              {/* Mam (2026-05-22): "multiple name mean assign one or
+                  multiple user one time" — picker now multi-select.
+                  Each picked user becomes a chip; every task line is
+                  created for EACH picked user.  So 3 tasks × 2 users
+                  = 6 checklist rows in one submit. */}
+              <label className="label">Assigned To * <span className="text-gray-400 font-normal text-[10px]">(pick one or many — each task is created for every selected user)</span></label>
               <SearchableSelect
-                options={users.map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') + (u.department ? ' · ' + u.department : '') }))}
-                value={bulkForm.assigned_to || null}
+                options={users
+                  .filter(u => !(bulkForm.assigned_to_ids || []).includes(u.id))
+                  .map(u => ({ ...u, label: u.name + (u.username ? ' (@' + u.username + ')' : '') + (u.department ? ' · ' + u.department : '') }))}
+                value={null}
                 valueKey="id" displayKey="label"
                 placeholder="Search user by name…"
-                onChange={(u) => setBulkForm({ ...bulkForm, assigned_to: u?.id || '', department: bulkForm.department || u?.department || '' })}
+                onChange={(u) => {
+                  if (!u?.id) return;
+                  const next = [...(bulkForm.assigned_to_ids || []), u.id];
+                  setBulkForm({
+                    ...bulkForm,
+                    assigned_to_ids: next,
+                    assigned_to: next[0],   // kept for back-compat on submit
+                    department: bulkForm.department || u.department || '',
+                  });
+                }}
               />
+              {(bulkForm.assigned_to_ids || []).length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {(bulkForm.assigned_to_ids || []).map(uid => {
+                    const u = users.find(x => x.id === uid);
+                    if (!u) return null;
+                    return (
+                      <span key={uid} className="inline-flex items-center gap-1 text-[11px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full border border-blue-200">
+                        {u.name}{u.department ? ` · ${u.department}` : ''}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = (bulkForm.assigned_to_ids || []).filter(x => x !== uid);
+                            setBulkForm({ ...bulkForm, assigned_to_ids: next, assigned_to: next[0] || '' });
+                          }}
+                          className="ml-0.5 text-blue-600 hover:text-blue-900"
+                          aria-label="Remove"
+                        >×</button>
+                      </span>
+                    );
+                  })}
+                  <span className="text-[10px] text-gray-500 self-center">
+                    → will create <b>{(String(bulkForm.lines || '').split(/\r?\n/).filter(l => l.trim()).length) * (bulkForm.assigned_to_ids || []).length}</b> checklist(s) total
+                  </span>
+                </div>
+              )}
             </div>
             <div>
               <label className="label">Department</label>
