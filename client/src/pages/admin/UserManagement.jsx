@@ -86,6 +86,32 @@ export default function UserManagement() {
       toast.success(`User "${user.name}" deleted`);
       load();
     } catch (err) {
+      // Mam (2026-05-22): when FK refs block the regular delete,
+      // offer Force Delete (server nulls every FK ref pointing at
+      // this user, then deletes the row).  Used for ex-employees
+      // where she really wants the user GONE, not just deactivated.
+      const status = err.response?.status;
+      const refCount = err.response?.data?.reference_count;
+      if (status === 409) {
+        const ok = confirm(
+          `Regular delete failed — this user is referenced on ${refCount || 'several'} other rows ` +
+          `(indents created, candidates added, payment approvals, etc.).\n\n` +
+          `FORCE DELETE will:\n` +
+          `  • Set all those references to NULL (old rows keep working — just lose the "created by" link)\n` +
+          `  • Then delete the user permanently\n\n` +
+          `Audit-trail snapshots (denormalised "user_name" fields) stay intact.\n\n` +
+          `Proceed with force delete?`
+        );
+        if (!ok) return;
+        try {
+          const r = await api.delete(`/auth/users/${user.id}?force=1`);
+          toast.success(`User "${user.name}" force-deleted (${r.data?.cleared_total || 0} references nulled)`);
+          load();
+        } catch (err2) {
+          toast.error(err2.response?.data?.error || 'Force delete failed');
+        }
+        return;
+      }
       toast.error(err.response?.data?.error || 'Delete failed — try Deactivate instead');
     }
   };

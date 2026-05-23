@@ -257,14 +257,49 @@ router.post('/users/:id/reset-password', authMiddleware, adminOnly, (req, res) =
   res.json({ message: 'Password reset', user: { id: user.id, name: user.name, username: user.username, email: user.email }, new_password: newPassword });
 });
 
+// Discover every (table, column) that has a foreign key pointing at
+// users(id).  Used by the force-delete path so we don't have to keep
+// a hard-coded list of tables in sync with the schema — SQLite tells
+// us dynamically.  Returns [{ table, column }].
+function findUserFkReferences(db) {
+  const refs = [];
+  // Pull every user table (not views, not sqlite_master itself).
+  const tables = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_new'"
+  ).all();
+  for (const { name } of tables) {
+    try {
+      // PRAGMA foreign_key_list returns one row per FK column.
+      const fks = db.prepare(`PRAGMA foreign_key_list("${name}")`).all();
+      for (const fk of fks) {
+        // fk.table is the REFERENCED table (e.g. "users"); fk.from is
+        // the LOCAL column.  Match case-insensitively.
+        if (String(fk.table).toLowerCase() === 'users') {
+          refs.push({ table: name, column: fk.from, on_delete: fk.on_delete });
+        }
+      }
+    } catch (_) { /* skip tables that can't be inspected */ }
+  }
+  return refs;
+}
+
 // Deactivate user (admin only)
 // Hard delete a user. Admin-only. Guarded so admins can't:
 //   - delete themselves (would lock them out of the session)
 //   - delete the last active admin (would orphan the system)
 // Falls back to "deactivate" guidance if FK references block the delete.
+//
+// Mam (2026-05-22): "not able to delete who left" — when an employee
+// leaves, their user row has FK refs on indents.created_by,
+// candidates.created_by, etc.  Plain DELETE fails the FK constraint.
+// Pass ?force=1 to nullify every FK ref pointing at this user across
+// every table, then delete.  Audit-trail snapshots (user_name fields)
+// stay intact because we only null the JOIN, not the denormalised
+// names.
 router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
   const db = getDb();
   const id = +req.params.id;
+  const force = req.query.force === '1';
   if (id === req.user.id) {
     return res.status(400).json({ error: "You can't delete your own account. Ask another admin." });
   }
@@ -276,6 +311,40 @@ router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
       return res.status(400).json({ error: 'Cannot delete the only admin. Promote another user to admin first.' });
     }
   }
+  if (force) {
+    // Discover all FK refs, null them, then delete — atomic in a
+    // single transaction so a partial failure doesn't leave dangling
+    // references.
+    try {
+      const refs = findUserFkReferences(db);
+      const cleared = {};
+      const tx = db.transaction(() => {
+        for (const ref of refs) {
+          if (ref.table === 'user_roles') continue;  // gets DELETED below
+          try {
+            const r = db.prepare(`UPDATE "${ref.table}" SET "${ref.column}" = NULL WHERE "${ref.column}" = ?`).run(id);
+            if (r.changes > 0) cleared[`${ref.table}.${ref.column}`] = r.changes;
+          } catch (e) {
+            // Don't kill the whole transaction on a single column —
+            // some FKs may point at views or have other oddities.
+            console.warn('[user-delete] could not null', ref.table + '.' + ref.column, '-', e.message);
+          }
+        }
+        db.prepare('DELETE FROM user_roles WHERE user_id = ?').run(id);
+        db.prepare('DELETE FROM users WHERE id=?').run(id);
+      });
+      tx();
+      res.json({
+        message: `User "${target.name}" force-deleted`,
+        cleared,
+        cleared_total: Object.values(cleared).reduce((a, b) => a + b, 0),
+      });
+    } catch (e) {
+      console.error('[user-delete force] failed:', e.message);
+      res.status(500).json({ error: `Force-delete failed: ${e.message}` });
+    }
+    return;
+  }
   try {
     // user_roles has ON DELETE CASCADE on user_id, so role assignments clear
     // automatically. Other tables (audit_log, indents.created_by, etc.) hold
@@ -285,7 +354,24 @@ router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
     db.prepare('DELETE FROM users WHERE id=?').run(id);
     res.json({ message: `User "${target.name}" deleted` });
   } catch (e) {
-    res.status(409).json({ error: `Delete blocked: ${e.message}. Try Deactivate instead — same effect, reversible.` });
+    // FK reference count for an informative error so admin can decide
+    // whether to force-delete.
+    let refCount = 0;
+    try {
+      const refs = findUserFkReferences(db);
+      for (const r of refs) {
+        if (r.table === 'user_roles') continue;
+        try {
+          const c = db.prepare(`SELECT COUNT(*) as c FROM "${r.table}" WHERE "${r.column}" = ?`).get(id);
+          refCount += (c?.c || 0);
+        } catch (_) {}
+      }
+    } catch (_) {}
+    res.status(409).json({
+      error: `Delete blocked: ${e.message}.`,
+      reference_count: refCount,
+      hint: 'Try Deactivate (reversible, recommended), OR Force Delete (passes ?force=1, nulls all FK references first).',
+    });
   }
 });
 
