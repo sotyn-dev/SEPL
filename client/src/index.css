@@ -180,6 +180,43 @@ tbody tr:hover {
   @apply bg-red-50/40;
 }
 
+/* Freeze first column on horizontal scroll — mam (2026-05-25):
+   "if we want go to left to right we need first go to end then can
+   scroll left to right which is time wasting". When a wide table is
+   wrapped in an overflow-x-auto container, this pins the first <td> /
+   <th> of every row to the left edge so the indent number / row label
+   stays visible while the user scrolls right to see actions / status.
+
+   Add the `freeze-col` className alongside the existing `freeze-head`
+   on any <table> you want this on. Works with whatever row background
+   (white / gray-50 / amber-50) by inheriting from the parent row, with
+   a fallback white so rows without an explicit bg stay clean.
+
+   The box-shadow on the right edge creates a subtle visual separator
+   that signals "this column is pinned" without a hard border. */
+.freeze-col tr > :first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: white;
+  box-shadow: 4px 0 6px -4px rgba(0, 0, 0, 0.08);
+}
+.freeze-col thead tr > :first-child {
+  background: #f9fafb; /* matches the gray-50 thead gradient start */
+  z-index: 2;
+}
+/* Preserve row background colours behind the pinned cell so expanded /
+   highlighted rows don't show a white stripe on the left. */
+.freeze-col tr.bg-gray-50 > :first-child   { background: #f9fafb; }
+.freeze-col tr.bg-amber-50 > :first-child  { background: #fffbeb; }
+.freeze-col tr.bg-red-50 > :first-child    { background: #fef2f2; }
+.freeze-col tr.bg-emerald-50 > :first-child { background: #ecfdf5; }
+.freeze-col tr.bg-indigo-50 > :first-child  { background: #eef2ff; }
+.freeze-col tbody tr:hover > :first-child {
+  /* Match the global tbody tr:hover bg-red-50/40 effect */
+  background: rgba(254, 226, 226, 0.4);
+}
+
 .badge {
   @apply inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide uppercase;
 }

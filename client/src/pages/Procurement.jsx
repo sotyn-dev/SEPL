@@ -972,7 +972,10 @@ export default function Procurement() {
             </div>
           </div>
 
-          <div className="card p-0"><table className="freeze-head">
+          {/* freeze-col pins Indent No to the left while user scrolls right
+              to see Approval / Actions (mam 2026-05-25 — was "time wasting"
+              to scroll-end-then-back to read row labels). */}
+          <div className="card p-0 overflow-x-auto"><table className="freeze-head freeze-col">
             <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
             <tbody>
               {indPg.rows.map(i => {
@@ -1238,7 +1241,7 @@ export default function Procurement() {
               sub-item came from. The same CHECK NUT used in two BOQs
               of one indent is now a SINGLE merged row. */}
           <div className="card p-0 overflow-x-auto hidden lg:block">
-            <table className="text-xs" style={{ minWidth: '1400px' }}>
+            <table className="text-xs freeze-col" style={{ minWidth: '1400px' }}>
               <thead>
                 <tr className="bg-gray-50">
                   <th className="px-2 py-2 text-left" rowSpan="2">Indent</th>
@@ -1581,7 +1584,7 @@ export default function Procurement() {
                 </div>
               </div>
 
-          <div className="card p-0"><table className="freeze-head">
+          <div className="card p-0 overflow-x-auto"><table className="freeze-head freeze-col">
             <thead><tr><th>PO Number</th><th>Indent</th><th>PO Date</th><th>Vendor</th><th>Amount</th><th>File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {listPg.rows.map(v => (
@@ -1885,7 +1888,7 @@ export default function Procurement() {
                   Showing <span className="font-semibold text-gray-700">{filteredBills.length}</span> of {purchaseBills.length}
                 </div>
               </div>
-          <div className="card p-0"><table className="freeze-head">
+          <div className="card p-0 overflow-x-auto"><table className="freeze-head freeze-col">
             <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
               {billsListPg.rows.map(b => (
@@ -2155,7 +2158,7 @@ export default function Procurement() {
                   Showing <span className="font-semibold text-gray-700">{filteredDispatch.length}</span> of {deliveryNotes.length}
                 </div>
               </div>
-          <div className="card p-0"><table className="freeze-head">
+          <div className="card p-0 overflow-x-auto"><table className="freeze-head freeze-col">
             <thead><tr><th>ID</th><th>Type</th><th>Doc No</th><th>PO</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {dispListPg.rows.map(d => (
