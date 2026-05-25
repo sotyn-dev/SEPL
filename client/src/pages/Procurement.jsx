@@ -3,6 +3,7 @@ import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
+import NumInput from '../components/NumInput';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload } from 'react-icons/fi';
@@ -1911,7 +1912,11 @@ export default function Procurement() {
                             />
                           );
                           const makeInput = <input className="input text-sm" placeholder="Make" value={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />;
-                          const qtyInput = <input className="input text-base font-bold text-right" type="number" min="0" placeholder="Qty" value={item.quantity} onChange={e => { const n = [...indentItems]; n[i].quantity = +e.target.value; setIndentItems(n); }} />;
+                          // Qty input — uses NumInput so backspace/Ctrl+A
+                          // doesn't snap the field back to 0 (mam 2026-05-25).
+                          // emitZeroOnEmpty keeps the same number contract
+                          // for downstream code that expects a numeric quantity.
+                          const qtyInput = <NumInput className="input text-base font-bold text-right" min="0" placeholder="Qty" value={item.quantity} emitZeroOnEmpty onChange={v => { const n = [...indentItems]; n[i].quantity = v; setIndentItems(n); }} />;
                           // Per-item required-by date — mam (2026-05-21):
                           // each row on the Vendor PO print should show
                           // its own "DUE ON" date, not one PO-level
@@ -2162,8 +2167,9 @@ export default function Procurement() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div><label className="label">Bill Number</label><input className="input" value={form.bill_number} onChange={e => setForm({...form, bill_number: e.target.value})} /></div>
             <div><label className="label">Bill Date</label><input className="input" type="date" value={form.bill_date} onChange={e => setForm({...form, bill_date: e.target.value})} /></div>
-            <div><label className="label">Amount</label><input className="input" type="number" value={form.amount} onChange={e => setForm({...form, amount: +e.target.value, total_amount: +e.target.value + (form.gst_amount || 0)})} /></div>
-            <div><label className="label">GST Amount</label><input className="input" type="number" value={form.gst_amount} onChange={e => setForm({...form, gst_amount: +e.target.value, total_amount: (form.amount || 0) + +e.target.value})} /></div>
+            {/* `|| ''` lets backspace clear the field (mam 2026-05-25). */}
+            <div><label className="label">Amount</label><input className="input" type="number" value={form.amount || ''} onChange={e => setForm({...form, amount: +e.target.value, total_amount: +e.target.value + (form.gst_amount || 0)})} /></div>
+            <div><label className="label">GST Amount</label><input className="input" type="number" value={form.gst_amount || ''} onChange={e => setForm({...form, gst_amount: +e.target.value, total_amount: (form.amount || 0) + +e.target.value})} /></div>
           </div>
           <div><label className="label">Total</label><input className="input" type="number" value={form.total_amount} readOnly /></div>
           <div>
@@ -2799,9 +2805,11 @@ export default function Procurement() {
                           </td>
                           <td className="px-2 py-1 text-right text-gray-500">{it.quantity}</td>
                           <td className="px-2 py-1 text-right">
-                            <input type="number" step="any" min="0.001"
+                            {/* NumInput keeps backspace/select-all-delete from
+                                snapping the field to 0 (mam 2026-05-25). */}
+                            <NumInput step="any" min="0.001"
                               value={approveQtyOverrides[it.id] ?? it.quantity}
-                              onChange={(e) => setApproveQtyOverrides(prev => ({ ...prev, [it.id]: e.target.value }))}
+                              onChange={(v) => setApproveQtyOverrides(prev => ({ ...prev, [it.id]: v }))}
                               className="border border-gray-300 rounded px-2 py-1 w-20 text-right text-xs focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
                           </td>
                           <td className="px-2 py-1 text-right font-medium">

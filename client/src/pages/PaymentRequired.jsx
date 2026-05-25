@@ -803,7 +803,8 @@ export default function PaymentRequired() {
                   <option value="">Select</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}
                 </select>
               </div>
-              <div><label className="label">Amount Required (Rs) *</label><input className="input" type="number" value={form.amount} onChange={e => F('amount', +e.target.value)} required /></div>
+              {/* `|| ''` lets backspace clear field (mam 2026-05-25). */}
+              <div><label className="label">Amount Required (Rs) *</label><input className="input" type="number" value={form.amount || ''} onChange={e => F('amount', +e.target.value)} required /></div>
               <div className="col-span-2"><label className="label">Purpose / Description *</label><input className="input" value={form.purpose} onChange={e => F('purpose', e.target.value)} required /></div>
               <div><label className="label">Payment Mode</label>
                 <select className="select" value={form.payment_mode} onChange={e => F('payment_mode', e.target.value)}>
@@ -924,7 +925,7 @@ export default function PaymentRequired() {
               <h4 className="font-semibold text-sm text-green-700 mb-3">Labour Details</h4>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="label">Labour Type *</label><select className="select" value={form.labour_type} onChange={e => F('labour_type', e.target.value)} required><option value="">Select</option><option>Skilled</option><option>Unskilled</option><option>Semi-skilled</option><option>Contractor</option></select></div>
-                <div><label className="label">Number of Workers *</label><input className="input" type="number" value={form.number_of_workers} onChange={e => F('number_of_workers', +e.target.value)} required /></div>
+                <div><label className="label">Number of Workers *</label><input className="input" type="number" value={form.number_of_workers || ''} onChange={e => F('number_of_workers', +e.target.value)} required /></div>
                 <div><label className="label">Work Duration</label><input className="input" value={form.work_duration} onChange={e => F('work_duration', e.target.value)} placeholder="e.g. 5 days, 2 weeks" /></div>
                 <div><label className="label">Site Engineer Name</label><input className="input" value={form.site_engineer_name} onChange={e => F('site_engineer_name', e.target.value)} /></div>
               </div>

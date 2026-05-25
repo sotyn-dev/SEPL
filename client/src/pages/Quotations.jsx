@@ -235,7 +235,9 @@ export default function Quotations() {
                 </div>
                 <div className="col-span-4 md:col-span-1">
                   <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Qty</div>
-                  <input className="input" type="number" placeholder="Qty" value={item.quantity}
+                  {/* `|| ''` lets backspace clear the field instead of
+                      snapping back to 0 (mam 2026-05-25). */}
+                  <input className="input" type="number" placeholder="Qty" value={item.quantity || ''}
                     onChange={e => { const n = [...boqItems]; n[i].quantity = +e.target.value; setBoqItems(n); }} />
                 </div>
                 <div className="col-span-3 md:col-span-1">
@@ -245,7 +247,8 @@ export default function Quotations() {
                 </div>
                 <div className="col-span-5 md:col-span-2">
                   <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Rate</div>
-                  <input className="input" type="number" placeholder="Rate" value={item.rate}
+                  {/* `|| ''` keeps backspace from snapping to 0 (mam 2026-05-25). */}
+                  <input className="input" type="number" placeholder="Rate" value={item.rate || ''}
                     onChange={e => { const n = [...boqItems]; n[i].rate = +e.target.value; setBoqItems(n); }} />
                 </div>
               </div>
