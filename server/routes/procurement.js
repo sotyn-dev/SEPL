@@ -887,17 +887,71 @@ router.get('/indents/:id/print', (req, res) => {
 });
 
 router.get('/indents/:id', (req, res) => {
-  const indent = getDb().prepare(
+  const db = getDb();
+  const indent = db.prepare(
     `SELECT i.*, u.name as created_by_name FROM indents i LEFT JOIN users u ON i.created_by=u.id WHERE i.id=?`
   ).get(req.params.id);
   if (!indent) return res.status(404).json({ error: 'Not found' });
-  indent.items = getDb().prepare(
-    `SELECT ii.*, v.name as vendor_name, im.item_code, im.item_name as master_name
+
+  // Pull each line + the same budget rate resolution used in the list
+  // endpoint (master → history fallback) so the Approve modal sees
+  // consistent numbers.
+  indent.items = db.prepare(
+    `SELECT ii.*,
+            v.name as vendor_name,
+            im.item_code, im.item_name as master_name,
+            im.specification as master_specification, im.size as master_size,
+            COALESCE(
+              NULLIF(im.current_price, 0),
+              (SELECT iph.rate FROM item_price_history iph
+                WHERE iph.item_id = ii.item_master_id
+                ORDER BY iph.created_at DESC LIMIT 1),
+              0
+            ) as master_price,
+            CASE
+              WHEN COALESCE(im.current_price, 0) > 0 THEN 'master'
+              WHEN (SELECT iph.rate FROM item_price_history iph
+                     WHERE iph.item_id = ii.item_master_id
+                     ORDER BY iph.created_at DESC LIMIT 1) > 0 THEN 'history'
+              ELSE 'none'
+            END as rate_source
      FROM indent_items ii
      LEFT JOIN vendors v ON ii.vendor_id = v.id
      LEFT JOIN item_master im ON ii.item_master_id = im.id
      WHERE ii.indent_id = ?`
   ).all(req.params.id);
+
+  // ── Stock visibility per line (mam 2026-05-25 follow-up) ──────────
+  // "at approval time i need to show over office stock and stock at site".
+  // For every line that's linked to item_master, sum stock_balance by
+  // warehouse.type so the approver knows what's already on hand before
+  // they sign off on more procurement.  Office stock = head office store,
+  // Site stock = sum across all site_store warehouses (we don't filter to
+  // *this* indent's site because mam wants total available across sites
+  // — covers the "send from another site" case).
+  const stockStmt = db.prepare(
+    `SELECT w.type, COALESCE(SUM(sb.quantity), 0) as qty
+       FROM stock_balance sb
+       JOIN warehouses w ON w.id = sb.warehouse_id AND COALESCE(w.active, 1) = 1
+      WHERE sb.item_master_id = ?
+      GROUP BY w.type`
+  );
+  for (const it of indent.items) {
+    if (!it.item_master_id) {
+      it.office_stock = 0;
+      it.site_stock = 0;
+      continue;
+    }
+    const rows = stockStmt.all(it.item_master_id);
+    let office = 0, site = 0;
+    for (const r of rows) {
+      if (r.type === 'office') office += +r.qty || 0;
+      else if (r.type === 'site_store') site += +r.qty || 0;
+    }
+    it.office_stock = office;
+    it.site_stock = site;
+  }
+
   res.json(indent);
 });
 

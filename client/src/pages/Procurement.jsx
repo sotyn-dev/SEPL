@@ -434,11 +434,23 @@ export default function Procurement() {
 
   // Open the Approve modal — pre-seeds the qty-override map with each line's
   // current quantity so the approver can edit-in-place before confirming.
-  const openApproveModal = (indent) => {
+  //
+  // Mam (2026-05-25 follow-up): also fetch fresh detail from /indents/:id
+  // so the modal has the per-line office_stock + site_stock + master_price
+  // numbers that the list endpoint doesn't carry.  Falls back to the row
+  // already in the list if the fetch fails.
+  const openApproveModal = async (indent) => {
+    let detail = indent;
+    try {
+      const r = await api.get(`/procurement/indents/${indent.id}`);
+      detail = { ...indent, items: r.data?.items || indent.items || [] };
+    } catch (err) {
+      // Use the list-loaded row; the modal still works, just without stock.
+    }
     const seed = {};
-    for (const it of (indent.items || [])) seed[it.id] = it.quantity;
+    for (const it of (detail.items || [])) seed[it.id] = it.quantity;
     setApproveQtyOverrides(seed);
-    setApproveTarget(indent);
+    setApproveTarget(detail);
   };
   // Open the Reject modal — empty reason; saves on submit only if non-empty.
   const openRejectModal = (indent) => {
@@ -3306,6 +3318,19 @@ export default function Procurement() {
             return sum + ((Number.isFinite(q) ? q : +it.quantity) * (+it.master_price || 0));
           }, 0);
           const changedCount = items.filter(it => +approveQtyOverrides[it.id] !== +it.quantity).length;
+          // Stock-coverage rollup (mam 2026-05-25 follow-up).  Counts how
+          // many lines are fully covered by office+site stock so mam can
+          // see at a glance "3 of 5 items already on hand" before drilling
+          // into individual rows.
+          const stockSummary = items.reduce((acc, it) => {
+            const usedQty = Number.isFinite(+approveQtyOverrides[it.id]) ? +approveQtyOverrides[it.id] : +it.quantity;
+            const total = (+it.office_stock || 0) + (+it.site_stock || 0);
+            if (!it.item_master_id) acc.unknown += 1;
+            else if (total >= usedQty && usedQty > 0) acc.covered += 1;
+            else if (total > 0)                       acc.partial += 1;
+            else                                      acc.uncovered += 1;
+            return acc;
+          }, { covered: 0, partial: 0, uncovered: 0, unknown: 0 });
           return (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 text-xs bg-emerald-50 border border-emerald-200 rounded p-3">
@@ -3315,6 +3340,21 @@ export default function Procurement() {
                 <div><span className="text-gray-500">Original budget:</span> <span className="font-medium">₹{Math.round(+approveTarget.budget_amount || 0).toLocaleString('en-IN')}</span></div>
               </div>
 
+              {/* Stock-coverage banner — surfaces lines that may not need
+                  to be purchased because we already have them in stock. */}
+              {(stockSummary.covered + stockSummary.partial) > 0 && (
+                <div className="text-xs bg-amber-50 border border-amber-200 rounded p-2 flex flex-wrap gap-3 items-center">
+                  <span className="font-semibold text-amber-800">⚠ Stock check:</span>
+                  {stockSummary.covered > 0 && (
+                    <span className="text-emerald-700"><b>{stockSummary.covered}</b> line{stockSummary.covered === 1 ? '' : 's'} fully covered by stock</span>
+                  )}
+                  {stockSummary.partial > 0 && (
+                    <span className="text-amber-700"><b>{stockSummary.partial}</b> partially covered</span>
+                  )}
+                  <span className="text-gray-500 ml-auto">Consider trimming approved qty to avoid over-buying.</span>
+                </div>
+              )}
+
               <div className="overflow-x-auto">
                 <table className="text-xs w-full">
                   <thead className="bg-gray-50 text-gray-600">
@@ -3323,6 +3363,13 @@ export default function Procurement() {
                       <th className="text-left px-2 py-1">Sub-Item</th>
                       <th className="text-left px-2 py-1 w-16">Unit</th>
                       <th className="text-right px-2 py-1 w-24">Master Rate</th>
+                      {/* Stock columns — mam (2026-05-25): "at approval
+                          time i need to show over office stock and stock
+                          at site if free".  Helps the approver decide if
+                          they should reduce qty / reject because the
+                          item is already on hand. */}
+                      <th className="text-right px-2 py-1 w-24">Office<br/><span className="text-[9px] font-normal text-gray-400 normal-case">Stock</span></th>
+                      <th className="text-right px-2 py-1 w-24">Site<br/><span className="text-[9px] font-normal text-gray-400 normal-case">Stock</span></th>
                       <th className="text-right px-2 py-1 w-28">Original Qty</th>
                       <th className="text-right px-2 py-1 w-28">Approved Qty</th>
                       <th className="text-right px-2 py-1 w-28">Line Budget</th>
@@ -3355,6 +3402,33 @@ export default function Procurement() {
                               </div>
                             ) : <span className="text-gray-300">—</span>}
                           </td>
+                          {/* Stock cells — mam (2026-05-25).  Green if
+                              office+site stock covers the approved qty,
+                              amber if partial (X short), gray if none.
+                              When master_id is null (manual entry) show
+                              "—" since stock can't be looked up. */}
+                          {(() => {
+                            const office = +it.office_stock || 0;
+                            const site   = +it.site_stock || 0;
+                            const total  = office + site;
+                            const needed = +usedQty || 0;
+                            const covered = needed > 0 && total >= needed;
+                            const partial = needed > 0 && total > 0 && total < needed;
+                            const stockClass = covered ? 'text-emerald-700 font-semibold' : partial ? 'text-amber-700 font-semibold' : 'text-gray-500';
+                            const fmt = (n) => n > 0 ? n.toLocaleString('en-IN') : '0';
+                            return (
+                              <>
+                                <td className={`px-2 py-1 text-right ${stockClass}`}>
+                                  {it.item_master_id ? fmt(office) : <span className="text-gray-300">—</span>}
+                                </td>
+                                <td className={`px-2 py-1 text-right ${stockClass}`}>
+                                  {it.item_master_id ? fmt(site) : <span className="text-gray-300">—</span>}
+                                  {covered && <div className="text-[9px] font-normal text-emerald-600 normal-case">covered</div>}
+                                  {partial && <div className="text-[9px] font-normal text-amber-600 normal-case">{(needed - total).toLocaleString('en-IN')} short</div>}
+                                </td>
+                              </>
+                            );
+                          })()}
                           <td className="px-2 py-1 text-right text-gray-500">{it.quantity}</td>
                           <td className="px-2 py-1 text-right">
                             {/* NumInput keeps backspace/select-all-delete from
@@ -3373,7 +3447,7 @@ export default function Procurement() {
                   </tbody>
                   <tfoot>
                     <tr className="bg-emerald-50 font-semibold">
-                      <td colSpan="6" className="px-2 py-2 text-right">Approved Budget Total</td>
+                      <td colSpan="8" className="px-2 py-2 text-right">Approved Budget Total</td>
                       <td className="px-2 py-2 text-right text-emerald-700">₹{Math.round(liveBudget).toLocaleString('en-IN')}</td>
                     </tr>
                   </tfoot>
