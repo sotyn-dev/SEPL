@@ -8,6 +8,11 @@ const {
   complaintAssignedToEngineerMsg,
   complaintAssignedToClientMsg,
 } = require('../utils/whatsapp');
+// Twilio-backed WhatsApp + SMS sender.  Sends a confirmation to the
+// customer immediately after their complaint is saved.  Wrapped in
+// fire-and-forget at call sites so a Twilio outage never blocks the
+// complaint INSERT (see callers below).
+const { sendComplaintRegistered } = require('../services/notify');
 const router = express.Router();
 
 // ── Idempotent migrations for the OTP-gated resolution flow ─────
@@ -65,6 +70,21 @@ router.post('/public', (req, res) => {
   ).run(cn, b.client_name, b.company_name, b.mobile_number, b.category, b.state || null,
     b.problem_detail, b.customer_type, b.complaint_type, b.emp_name, b.remarks || null,
     b.problem_detail, 'open');
+
+  // Fire-and-forget: send Twilio WhatsApp + SMS confirmation.  Wrapped
+  // in try/catch + .catch so any failure stays out of the response path.
+  // sendComplaintRegistered itself never throws but we belt-and-brace
+  // here because this endpoint is PUBLIC and must always complete.
+  try {
+    sendComplaintRegistered({
+      complaintNo: cn,
+      clientName: b.client_name,
+      mobile: b.mobile_number,
+    }).catch(err => console.error('[complaints/public] notify failed:', err.message || err));
+  } catch (err) {
+    console.error('[complaints/public] notify dispatch failed:', err.message || err);
+  }
+
   res.status(201).json({ id: r.lastInsertRowid, complaint_number: cn, message: 'Complaint registered. Our team will contact you soon.' });
 });
 
@@ -126,12 +146,28 @@ router.post('/', requirePermission('complaints', 'create'), (req, res) => {
     b.problem_detail, b.customer_type, b.complaint_type, b.emp_name, b.remarks || null,
     b.step1_planned_date, b.step1_assigned_to, b.problem_detail, 'open', req.user.id);
 
-  // Build the client-acknowledgement WhatsApp link so the frontend can
-  // surface a "Send Registration Message" button immediately after save.
+  // Build the click-to-send WhatsApp wa.me link for the OLD flow
+  // (frontend surfaces a "Send Registration Message" button).  This
+  // is kept as a safety net even though Twilio now sends automatically.
   // Mam (2026-05-21): "when complaint register send mesage to client
   // that complaint is register".
   const created = { complaint_number: cn, client_name: b.client_name, company_name: b.company_name, mobile_number: b.mobile_number };
   const wa = buildClientRegisterAck(created);
+
+  // AUTO-SEND via Twilio (mam 2026-05-25): fire WhatsApp + SMS
+  // confirmation the moment the complaint saves.  Fire-and-forget so
+  // any Twilio outage doesn't block the response.  sendComplaintRegistered
+  // returns a never-rejecting promise; the .catch is a belt-and-brace.
+  try {
+    sendComplaintRegistered({
+      complaintNo: cn,
+      clientName: b.client_name,
+      mobile: b.mobile_number,
+    }).catch(err => console.error('[complaints] notify failed:', err.message || err));
+  } catch (err) {
+    console.error('[complaints] notify dispatch failed:', err.message || err);
+  }
+
   res.status(201).json({ id: r.lastInsertRowid, complaint_number: cn, whatsapp_client_register: wa });
 });
 
