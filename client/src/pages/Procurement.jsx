@@ -826,6 +826,42 @@ export default function Procurement() {
             <h3 className="font-semibold">Raise Indent</h3>
             <button onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Raise Indent</button>
           </div>
+
+          {/* KPI strip — mam (2026-05-25): "show also dashbaord total indent .
+              approved indent count with amount , reject count with amount".
+              Pure client-side rollup from the existing indents array; no
+              server changes.  Each tile colour-coded to the matching status
+              badge so eyes can scan: gray=all, amber=pending, emerald=approved,
+              red=rejected, blue=PO sent. */}
+          {(() => {
+            const sum = (arr) => arr.reduce((s, i) => s + (+i.budget_amount || 0), 0);
+            const byStatus = (s) => indents.filter(i => i.status === s);
+            const submitted = byStatus('submitted');
+            const approved  = byStatus('approved');
+            const rejected  = byStatus('rejected');
+            const poSent    = byStatus('po_sent');
+            const tile = (label, count, amount, color) => (
+              <div className={`flex-1 min-w-[150px] rounded-lg border ${color.border} ${color.bg} p-3`}>
+                <div className={`text-[11px] font-semibold uppercase tracking-wide ${color.text}`}>{label}</div>
+                <div className="flex items-baseline justify-between mt-1 gap-2">
+                  <div className={`text-2xl font-bold ${color.text}`}>{count}</div>
+                  <div className={`text-xs font-medium ${color.text} opacity-80`}>
+                    {amount > 0 ? `₹${Math.round(amount).toLocaleString('en-IN')}` : '—'}
+                  </div>
+                </div>
+              </div>
+            );
+            return (
+              <div className="flex flex-wrap gap-2">
+                {tile('Total Indents',     indents.length,    sum(indents),    { border: 'border-gray-300',    bg: 'bg-gray-50',     text: 'text-gray-700'   })}
+                {tile('Pending Approval',  submitted.length,  sum(submitted),  { border: 'border-amber-300',   bg: 'bg-amber-50',    text: 'text-amber-700'  })}
+                {tile('Approved',          approved.length,   sum(approved),   { border: 'border-emerald-300', bg: 'bg-emerald-50',  text: 'text-emerald-700'})}
+                {tile('Rejected',          rejected.length,   sum(rejected),   { border: 'border-red-300',     bg: 'bg-red-50',      text: 'text-red-700'    })}
+                {tile('PO Sent',           poSent.length,     sum(poSent),     { border: 'border-blue-300',    bg: 'bg-blue-50',     text: 'text-blue-700'   })}
+              </div>
+            );
+          })()}
+
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
             <tbody>
