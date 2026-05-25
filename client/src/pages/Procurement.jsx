@@ -918,7 +918,32 @@ export default function Procurement() {
         // mam (2026-05-25): filter by date range + status + search by
         // indent id / site.  All client-side off the already-loaded
         // indents array — no extra API calls.
+        //
+        // Two scopes:
+        //   kpiScope        — indents matching date+search ONLY (no status
+        //                     filter, so KPI tiles can still show all 5
+        //                     status breakdowns within the date range).
+        //   filteredIndents — kpiScope further filtered by status (drives
+        //                     the table + pagination).
+        // Mam (2026-05-25 follow-up): "data filter also from to according
+        // to that amounts count change" — tiles now respect from/to + search.
         const q = indSearch.trim().toLowerCase();
+        const matchesDateAndSearch = (i) => {
+          if (indFilterFrom) {
+            const d = (i.created_at || i.indent_date || '').slice(0, 10);
+            if (d && d < indFilterFrom) return false;
+          }
+          if (indFilterTo) {
+            const d = (i.created_at || i.indent_date || '').slice(0, 10);
+            if (d && d > indFilterTo) return false;
+          }
+          if (q) {
+            const hay = `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''}`.toLowerCase();
+            if (!hay.includes(q)) return false;
+          }
+          return true;
+        };
+        const kpiScope = indents.filter(matchesDateAndSearch);
         const filteredIndents = indents.filter(i => {
           if (indFilterStatus !== 'all' && i.status !== indFilterStatus) return false;
           if (indFilterFrom) {
@@ -945,36 +970,56 @@ export default function Procurement() {
 
           {/* KPI strip — mam (2026-05-25): "show also dashbaord total indent .
               approved indent count with amount , reject count with amount".
-              Pure client-side rollup from the existing indents array; no
-              server changes.  Each tile colour-coded to the matching status
-              badge so eyes can scan: gray=all, amber=pending, emerald=approved,
-              red=rejected, blue=PO sent. */}
+              Pure client-side rollup from kpiScope (date+search filtered).
+              Each tile colour-coded to the matching status badge so eyes
+              can scan: gray=all, amber=pending, emerald=approved,
+              red=rejected, blue=PO sent.
+              Mam (2026-05-25 follow-up): "data filter also from to according
+              to that amounts count change" — tiles now react to date+search
+              filters so the totals always match what's in the table below. */}
           {(() => {
             const sum = (arr) => arr.reduce((s, i) => s + (+i.budget_amount || 0), 0);
-            const byStatus = (s) => indents.filter(i => i.status === s);
+            const byStatus = (s) => kpiScope.filter(i => i.status === s);
             const submitted = byStatus('submitted');
             const approved  = byStatus('approved');
             const rejected  = byStatus('rejected');
             const poSent    = byStatus('po_sent');
-            const tile = (label, count, amount, color) => (
-              <div className={`flex-1 min-w-[150px] rounded-lg border ${color.border} ${color.bg} p-3`}>
-                <div className={`text-[11px] font-semibold uppercase tracking-wide ${color.text}`}>{label}</div>
-                <div className="flex items-baseline justify-between mt-1 gap-2">
-                  <div className={`text-2xl font-bold ${color.text}`}>{count}</div>
-                  <div className={`text-xs font-medium ${color.text} opacity-80`}>
-                    {amount > 0 ? `₹${Math.round(amount).toLocaleString('en-IN')}` : '—'}
+            const filterActive = !!(indFilterFrom || indFilterTo || indSearch.trim());
+            // Clicking a tile sets the status filter to that bucket so mam
+            // can drill from the dashboard view into the matching rows
+            // without typing in the toolbar.
+            const tile = (label, count, amount, color, statusKey) => {
+              const isActive = indFilterStatus === statusKey;
+              return (
+                <button
+                  type="button"
+                  onClick={() => { setIndFilterStatus(statusKey); setIndPage(1); }}
+                  className={`flex-1 min-w-[150px] rounded-lg border ${color.border} ${color.bg} p-3 text-left transition hover:shadow-sm ${isActive ? 'ring-2 ring-offset-1 ' + color.ring : ''}`}>
+                  <div className={`text-[11px] font-semibold uppercase tracking-wide ${color.text}`}>{label}</div>
+                  <div className="flex items-baseline justify-between mt-1 gap-2">
+                    <div className={`text-2xl font-bold ${color.text}`}>{count}</div>
+                    <div className={`text-xs font-medium ${color.text} opacity-80`}>
+                      {amount > 0 ? `₹${Math.round(amount).toLocaleString('en-IN')}` : '—'}
+                    </div>
                   </div>
-                </div>
-              </div>
-            );
+                </button>
+              );
+            };
             return (
-              <div className="flex flex-wrap gap-2">
-                {tile('Total Indents',     indents.length,    sum(indents),    { border: 'border-gray-300',    bg: 'bg-gray-50',     text: 'text-gray-700'   })}
-                {tile('Pending Approval',  submitted.length,  sum(submitted),  { border: 'border-amber-300',   bg: 'bg-amber-50',    text: 'text-amber-700'  })}
-                {tile('Approved',          approved.length,   sum(approved),   { border: 'border-emerald-300', bg: 'bg-emerald-50',  text: 'text-emerald-700'})}
-                {tile('Rejected',          rejected.length,   sum(rejected),   { border: 'border-red-300',     bg: 'bg-red-50',      text: 'text-red-700'    })}
-                {tile('PO Sent',           poSent.length,     sum(poSent),     { border: 'border-blue-300',    bg: 'bg-blue-50',     text: 'text-blue-700'   })}
-              </div>
+              <>
+                {filterActive && (
+                  <div className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-1.5 flex items-center gap-2">
+                    📊 Showing totals for the current filter ({kpiScope.length} of {indents.length} indents).
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  {tile('Total Indents',     kpiScope.length,   sum(kpiScope),   { border: 'border-gray-300',    bg: 'bg-gray-50',     text: 'text-gray-700',    ring: 'ring-gray-400'    }, 'all')}
+                  {tile('Pending Approval',  submitted.length,  sum(submitted),  { border: 'border-amber-300',   bg: 'bg-amber-50',    text: 'text-amber-700',   ring: 'ring-amber-400'   }, 'submitted')}
+                  {tile('Approved',          approved.length,   sum(approved),   { border: 'border-emerald-300', bg: 'bg-emerald-50',  text: 'text-emerald-700', ring: 'ring-emerald-400' }, 'approved')}
+                  {tile('Rejected',          rejected.length,   sum(rejected),   { border: 'border-red-300',     bg: 'bg-red-50',      text: 'text-red-700',     ring: 'ring-red-400'     }, 'rejected')}
+                  {tile('PO Sent',           poSent.length,     sum(poSent),     { border: 'border-blue-300',    bg: 'bg-blue-50',     text: 'text-blue-700',    ring: 'ring-blue-400'    }, 'po_sent')}
+                </div>
+              </>
             );
           })()}
 
