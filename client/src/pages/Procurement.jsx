@@ -4,6 +4,8 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import NumInput from '../components/NumInput';
+import Pagination, { usePagination } from '../components/Pagination';
+import InfoTooltip from '../components/InfoTooltip';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload } from 'react-icons/fi';
@@ -142,6 +144,50 @@ export default function Procurement() {
   const [rejectTarget, setRejectTarget] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectSaving, setRejectSaving] = useState(false);
+
+  // ── Filter / search / pagination state (mam 2026-05-25 UI sweep) ──────
+  // Each tab gets its own filter slice + page index so switching tabs
+  // doesn't lose state, and changing a filter on one tab doesn't reset
+  // pagination on another.  PER_PAGE = 15 across the board per mam's spec.
+  const PER_PAGE = 15;
+  // Indents
+  const [indFilterStatus, setIndFilterStatus]   = useState('all');
+  const [indFilterFrom, setIndFilterFrom]       = useState('');
+  const [indFilterTo, setIndFilterTo]           = useState('');
+  const [indSearch, setIndSearch]               = useState('');
+  const [indPage, setIndPage]                   = useState(1);
+  // Vendor Rates
+  const [ratesSearch, setRatesSearch]           = useState('');
+  const [ratesPage, setRatesPage]               = useState(1);
+  // Vendor PO sub-tabs (pending | list)
+  const [vpoSubTab, setVpoSubTab]               = useState('pending');
+  const [vpoPendingSearch, setVpoPendingSearch] = useState('');
+  const [vpoPendingStatus, setVpoPendingStatus] = useState('all');
+  const [vpoPendingPage, setVpoPendingPage]     = useState(1);
+  const [vpoListSearch, setVpoListSearch]       = useState('');
+  const [vpoListStatus, setVpoListStatus]       = useState('all');
+  const [vpoListFrom, setVpoListFrom]           = useState('');
+  const [vpoListTo, setVpoListTo]               = useState('');
+  const [vpoListPage, setVpoListPage]           = useState(1);
+  // Purchase Bills sub-tabs (followup | bills)
+  const [billsSubTab, setBillsSubTab]           = useState('followup');
+  const [billsFuSearch, setBillsFuSearch]       = useState('');
+  const [billsFuExpFrom, setBillsFuExpFrom]     = useState('');
+  const [billsFuExpTo, setBillsFuExpTo]         = useState('');
+  const [billsFuPage, setBillsFuPage]           = useState(1);
+  const [billsListSearch, setBillsListSearch]   = useState('');
+  const [billsListFrom, setBillsListFrom]       = useState('');
+  const [billsListTo, setBillsListTo]           = useState('');
+  const [billsListPage, setBillsListPage]       = useState(1);
+  // Dispatch sub-tabs (ready | list)
+  const [dispatchSubTab, setDispatchSubTab]     = useState('ready');
+  const [dispReadySearch, setDispReadySearch]   = useState('');
+  const [dispReadyPage, setDispReadyPage]       = useState(1);
+  const [dispListSearch, setDispListSearch]     = useState('');
+  const [dispListStatus, setDispListStatus]     = useState('all');
+  const [dispListFrom, setDispListFrom]         = useState('');
+  const [dispListTo, setDispListTo]             = useState('');
+  const [dispListPage, setDispListPage]         = useState(1);
   const [expandedIndents, setExpandedIndents] = useState(() => new Set());
   const toggleIndentRow = (id) => setExpandedIndents(prev => {
     const next = new Set(prev);
@@ -820,7 +866,30 @@ export default function Procurement() {
         </div>
       </div>
 
-      {tab === 'indents' && (
+      {tab === 'indents' && (() => {
+        // ── Filtering / search ─────────────────────────────────────────
+        // mam (2026-05-25): filter by date range + status + search by
+        // indent id / site.  All client-side off the already-loaded
+        // indents array — no extra API calls.
+        const q = indSearch.trim().toLowerCase();
+        const filteredIndents = indents.filter(i => {
+          if (indFilterStatus !== 'all' && i.status !== indFilterStatus) return false;
+          if (indFilterFrom) {
+            const d = (i.created_at || i.indent_date || '').slice(0, 10);
+            if (d && d < indFilterFrom) return false;
+          }
+          if (indFilterTo) {
+            const d = (i.created_at || i.indent_date || '').slice(0, 10);
+            if (d && d > indFilterTo) return false;
+          }
+          if (q) {
+            const hay = `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''}`.toLowerCase();
+            if (!hay.includes(q)) return false;
+          }
+          return true;
+        });
+        const indPg = usePagination(filteredIndents, PER_PAGE, indPage, setIndPage);
+        return (
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="font-semibold">Raise Indent</h3>
@@ -862,10 +931,51 @@ export default function Procurement() {
             );
           })()}
 
+          {/* Filter toolbar — date range + status + search (mam 2026-05-25) */}
+          <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
+            <div className="flex-1 min-w-[180px]">
+              <label className="label text-[10px] mb-0.5">Search · indent no / site / raised by</label>
+              <input className="input text-xs" placeholder="e.g. IND-0070 or Jeewan Mala"
+                value={indSearch} onChange={e => { setIndSearch(e.target.value); setIndPage(1); }} />
+            </div>
+            <div>
+              <label className="label text-[10px] mb-0.5">Status</label>
+              <select className="select text-xs" value={indFilterStatus}
+                onChange={e => { setIndFilterStatus(e.target.value); setIndPage(1); }}>
+                <option value="all">All ({indents.length})</option>
+                <option value="submitted">Submitted</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+                <option value="po_sent">PO Sent</option>
+                <option value="dispatched">Dispatched</option>
+                <option value="received">Received</option>
+              </select>
+            </div>
+            <div>
+              <label className="label text-[10px] mb-0.5">From</label>
+              <input className="input text-xs" type="date" value={indFilterFrom}
+                onChange={e => { setIndFilterFrom(e.target.value); setIndPage(1); }} />
+            </div>
+            <div>
+              <label className="label text-[10px] mb-0.5">To</label>
+              <input className="input text-xs" type="date" value={indFilterTo}
+                onChange={e => { setIndFilterTo(e.target.value); setIndPage(1); }} />
+            </div>
+            {(indSearch || indFilterStatus !== 'all' || indFilterFrom || indFilterTo) && (
+              <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                onClick={() => { setIndSearch(''); setIndFilterStatus('all'); setIndFilterFrom(''); setIndFilterTo(''); setIndPage(1); }}>
+                Reset
+              </button>
+            )}
+            <div className="ml-auto text-[11px] text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{filteredIndents.length}</span> of {indents.length}
+            </div>
+          </div>
+
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
             <tbody>
-              {indents.map(i => {
+              {indPg.rows.map(i => {
                 const items = i.items || [];
                 const expanded = expandedIndents.has(i.id);
                 return (
@@ -1065,12 +1175,28 @@ export default function Procurement() {
               );
               })}
               {indents.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No indents yet</td></tr>}
+              {indents.length > 0 && filteredIndents.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No indents match the current filters — try Reset</td></tr>}
             </tbody>
-          </table></div>
+          </table>
+          <Pagination pg={indPg} className="border-t border-gray-100" />
+          </div>
         </>
-      )}
+        );
+      })()}
 
-      {tab === 'rates' && (
+      {tab === 'rates' && (() => {
+        // Status filter (status chip row) + search by indent no /
+        // sub-item description + pagination (mam 2026-05-25).
+        const rq = ratesSearch.trim().toLowerCase();
+        const filteredRates = mergedRates
+          .filter(r => ratesFilter === 'all' ? true : (r.rate_status || 'pending') === ratesFilter)
+          .filter(r => {
+            if (!rq) return true;
+            const hay = `${r.indent_number || ''} ${r.master_name || ''} ${r.description || ''} ${r.site_name || ''}`.toLowerCase();
+            return hay.includes(rq);
+          });
+        const ratesPg = usePagination(filteredRates, PER_PAGE, ratesPage, setRatesPage);
+        return (
         <>
           {/* Vendor Name uses SearchableSelect component now, sourced from
               Vendor Master. The old <datalist> fallback is removed. */}
@@ -1081,12 +1207,28 @@ export default function Procurement() {
             </div>
             <div className="flex gap-1 flex-wrap">
               {['all','pending','quoted','finalized'].map(f => (
-                <button key={f} onClick={() => setRatesFilter(f)}
+                <button key={f} onClick={() => { setRatesFilter(f); setRatesPage(1); }}
                   className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${ratesFilter === f ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
                   {f === 'all' ? 'All' : f[0].toUpperCase() + f.slice(1)}
                   <span className="ml-1 opacity-80">({mergedRates.filter(r => f === 'all' ? true : (r.rate_status || 'pending') === f).length})</span>
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Search toolbar (mam 2026-05-25) */}
+          <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
+            <div className="flex-1 min-w-[220px]">
+              <label className="label text-[10px] mb-0.5">Search · indent no / item / site</label>
+              <input className="input text-xs" placeholder="e.g. IND-0070 or CHECK NUT"
+                value={ratesSearch} onChange={e => { setRatesSearch(e.target.value); setRatesPage(1); }} />
+            </div>
+            {ratesSearch && (
+              <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                onClick={() => { setRatesSearch(''); setRatesPage(1); }}>Reset</button>
+            )}
+            <div className="ml-auto text-[11px] text-gray-500">
+              Showing <span className="font-semibold text-gray-700">{filteredRates.length}</span> of {mergedRates.length}
             </div>
           </div>
 
@@ -1115,7 +1257,7 @@ export default function Procurement() {
                 </tr>
               </thead>
               <tbody>
-                {mergedRates.filter(r => ratesFilter === 'all' ? true : (r.rate_status || 'pending') === ratesFilter).map(r => {
+                {ratesPg.rows.map(r => {
                   const stat = r.rate_status || 'pending';
                   const statColor = stat === 'finalized' ? 'bg-emerald-100 text-emerald-700' : stat === 'quoted' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700';
                   return (
@@ -1217,7 +1359,7 @@ export default function Procurement() {
               data so the same item across multiple BOQs collapses to ONE
               card with the combined qty. */}
           <div className="lg:hidden space-y-2">
-            {mergedRates.filter(r => ratesFilter === 'all' ? true : (r.rate_status || 'pending') === ratesFilter).map(r => {
+            {ratesPg.rows.map(r => {
               const stat = r.rate_status || 'pending';
               return (
                 <div key={r.indent_item_ids.join('-')} className="card p-3 space-y-2">
@@ -1266,23 +1408,92 @@ export default function Procurement() {
               );
             })}
             {mergedRates.length === 0 && <div className="card text-center py-8 text-gray-400">No indent items yet.</div>}
+            {mergedRates.length > 0 && filteredRates.length === 0 && <div className="card text-center py-8 text-gray-400">No items match the current filters.</div>}
           </div>
+          {/* Shared pagination for both desktop + mobile renderings */}
+          <div className="card"><Pagination pg={ratesPg} /></div>
         </>
-      )}
+        );
+      })()}
 
-      {tab === 'vendorpo' && (
+      {tab === 'vendorpo' && (() => {
+        // Sub-tab filtering (mam 2026-05-25):
+        //   pending  → "Pending for Vendor PO" (yellow highlight, items waiting)
+        //   list     → "View by PO"            (the full vendor_pos table)
+        // Each sub-tab has its own search + filter + pagination state.
+        const pSearch = vpoPendingSearch.trim().toLowerCase();
+        const filteredPending = pendingPoItems.filter(p => {
+          if (vpoPendingStatus !== 'all' && (p.rate_status || 'pending') !== vpoPendingStatus) return false;
+          if (!pSearch) return true;
+          const hay = `${p.indent_number || ''} ${p.site_name || ''} ${p.master_name || ''} ${p.description || ''}`.toLowerCase();
+          return hay.includes(pSearch);
+        });
+        const pendingPg = usePagination(filteredPending, PER_PAGE, vpoPendingPage, setVpoPendingPage);
+
+        const lSearch = vpoListSearch.trim().toLowerCase();
+        const filteredList = vendorPos.filter(v => {
+          if (vpoListStatus !== 'all' && (v.cancelled ? 'cancelled' : v.status) !== vpoListStatus) return false;
+          if (vpoListFrom && v.po_date && v.po_date < vpoListFrom) return false;
+          if (vpoListTo   && v.po_date && v.po_date > vpoListTo) return false;
+          if (!lSearch) return true;
+          const hay = `${v.po_number || ''} ${v.indent_number || ''} ${v.vendor_name || ''} ${v.indent_site_name || ''}`.toLowerCase();
+          return hay.includes(lSearch);
+        });
+        const listPg = usePagination(filteredList, PER_PAGE, vpoListPage, setVpoListPage);
+        return (
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="font-semibold">Vendor Purchase Orders</h3>
             <button onClick={() => openCreateVendorPo('')} className="btn btn-primary flex items-center gap-2"><FiPlus /> Create Vendor PO</button>
           </div>
 
-          {/* Pending for PO — finalized items that haven't been covered by any Vendor PO yet */}
-          {pendingPoItems.length > 0 && (
+          {/* Sub-tabs (mam 2026-05-25) — yellow tinted for the Pending tab
+              since those are urgent waiting items, neutral for the full list. */}
+          <div className="flex gap-1 border-b border-gray-200">
+            <button onClick={() => setVpoSubTab('pending')}
+              className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${vpoSubTab === 'pending' ? 'border-amber-500 text-amber-700 bg-amber-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              Pending for Vendor PO <span className="ml-1 text-[10px] opacity-80">({pendingPoItems.length})</span>
+            </button>
+            <button onClick={() => setVpoSubTab('list')}
+              className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${vpoSubTab === 'list' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              View by PO <span className="ml-1 text-[10px] opacity-80">({vendorPos.length})</span>
+            </button>
+          </div>
+
+          {/* ===== Sub-tab 1: Pending for Vendor PO ===== */}
+          {vpoSubTab === 'pending' && pendingPoItems.length === 0 && (
+            <div className="card text-center py-8 text-gray-400 text-xs">All finalized rates are already on a Vendor PO. 🎉</div>
+          )}
+          {vpoSubTab === 'pending' && pendingPoItems.length > 0 && (
             <div className="card p-3 bg-amber-50 border border-amber-200">
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                 <h4 className="font-semibold text-amber-800 text-sm">Pending for Vendor PO <span className="text-xs font-normal text-amber-600">({pendingPoItems.length} item{pendingPoItems.length === 1 ? '' : 's'})</span></h4>
                 <span className="text-[11px] text-amber-700">Items with a finalized rate but no Vendor PO yet</span>
+              </div>
+              {/* Search + status filter strip (mam 2026-05-25) */}
+              <div className="flex flex-wrap items-end gap-2 text-xs mb-3 pb-3 border-b border-amber-200">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label text-[10px] mb-0.5 text-amber-900">Search · indent no / item</label>
+                  <input className="input text-xs" placeholder="e.g. IND-0070 or CHECK NUT"
+                    value={vpoPendingSearch} onChange={e => { setVpoPendingSearch(e.target.value); setVpoPendingPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5 text-amber-900">Status</label>
+                  <select className="select text-xs" value={vpoPendingStatus}
+                    onChange={e => { setVpoPendingStatus(e.target.value); setVpoPendingPage(1); }}>
+                    <option value="all">All</option>
+                    <option value="pending">Pending</option>
+                    <option value="quoted">Quoted</option>
+                    <option value="finalized">Finalized</option>
+                  </select>
+                </div>
+                {(vpoPendingSearch || vpoPendingStatus !== 'all') && (
+                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                    onClick={() => { setVpoPendingSearch(''); setVpoPendingStatus('all'); setVpoPendingPage(1); }}>Reset</button>
+                )}
+                <div className="ml-auto text-[11px] text-amber-900">
+                  Showing <span className="font-semibold">{filteredPending.length}</span> of {pendingPoItems.length}
+                </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="text-xs">
@@ -1296,7 +1507,7 @@ export default function Procurement() {
                     <th className="px-2 py-1"></th>
                   </tr></thead>
                   <tbody>
-                    {pendingPoItems.map(p => {
+                    {pendingPg.rows.map(p => {
                       // Prefer Item Master values for display (what mam picked in the indent)
                       const displayName = [p.master_name || p.description, p.specification, p.size].filter(Boolean).join(' / ');
                       return (
@@ -1322,16 +1533,58 @@ export default function Procurement() {
                         </tr>
                       );
                     })}
+                    {filteredPending.length === 0 && (
+                      <tr><td colSpan="7" className="text-center py-6 text-amber-700">No items match the current filters.</td></tr>
+                    )}
                   </tbody>
                 </table>
               </div>
+              <Pagination pg={pendingPg} className="border-t border-amber-200 pt-2" />
             </div>
           )}
+
+          {/* ===== Sub-tab 2: View by PO ===== */}
+          {vpoSubTab === 'list' && (
+            <>
+              <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label text-[10px] mb-0.5">Search · PO no / indent / vendor / site</label>
+                  <input className="input text-xs" placeholder="e.g. VPO-0042 or IND-0070"
+                    value={vpoListSearch} onChange={e => { setVpoListSearch(e.target.value); setVpoListPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">Status</label>
+                  <select className="select text-xs" value={vpoListStatus}
+                    onChange={e => { setVpoListStatus(e.target.value); setVpoListPage(1); }}>
+                    <option value="all">All</option>
+                    <option value="open">Open</option>
+                    <option value="received">Received</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">PO Date From</label>
+                  <input className="input text-xs" type="date" value={vpoListFrom}
+                    onChange={e => { setVpoListFrom(e.target.value); setVpoListPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">PO Date To</label>
+                  <input className="input text-xs" type="date" value={vpoListTo}
+                    onChange={e => { setVpoListTo(e.target.value); setVpoListPage(1); }} />
+                </div>
+                {(vpoListSearch || vpoListStatus !== 'all' || vpoListFrom || vpoListTo) && (
+                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                    onClick={() => { setVpoListSearch(''); setVpoListStatus('all'); setVpoListFrom(''); setVpoListTo(''); setVpoListPage(1); }}>Reset</button>
+                )}
+                <div className="ml-auto text-[11px] text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{filteredList.length}</span> of {vendorPos.length}
+                </div>
+              </div>
 
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>PO Number</th><th>Indent</th><th>PO Date</th><th>Vendor</th><th>Amount</th><th>File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-              {vendorPos.map(v => (
+              {listPg.rows.map(v => (
                 <tr key={v.id}>
                   <td className="font-medium">{v.po_number}</td>
                   {/* Indent column (mam, 2026-05-20). */}
@@ -1405,10 +1658,15 @@ export default function Procurement() {
                 </tr>
               ))}
               {vendorPos.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No vendor POs yet — click "Create Vendor PO"</td></tr>}
+              {vendorPos.length > 0 && filteredList.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No POs match the current filters.</td></tr>}
             </tbody>
+            <tfoot><tr><td colSpan="8" className="border-t border-gray-100"><Pagination pg={listPg} /></td></tr></tfoot>
           </table></div>
+            </>
+          )}
         </>
-      )}
+        );
+      })()}
 
       {tab === 'bills' && (() => {
         // POs that don't have a bill yet — sorted by Expected Receipt Date
@@ -1424,6 +1682,27 @@ export default function Procurement() {
             const bx = b.expected_receipt_date || '9999-12-31';
             return ax.localeCompare(bx);
           });
+
+        // Sub-tab filtering (mam 2026-05-25)
+        const fSearch = billsFuSearch.trim().toLowerCase();
+        const filteredFu = pendingPos.filter(po => {
+          if (billsFuExpFrom && po.expected_receipt_date && po.expected_receipt_date < billsFuExpFrom) return false;
+          if (billsFuExpTo   && po.expected_receipt_date && po.expected_receipt_date > billsFuExpTo) return false;
+          if (!fSearch) return true;
+          const hay = `${po.po_number || ''} ${po.indent_number || ''} ${po.vendor_name || ''} ${po.indent_site_name || ''}`.toLowerCase();
+          return hay.includes(fSearch);
+        });
+        const fuPg = usePagination(filteredFu, PER_PAGE, billsFuPage, setBillsFuPage);
+
+        const blSearch = billsListSearch.trim().toLowerCase();
+        const filteredBills = purchaseBills.filter(b => {
+          if (billsListFrom && b.bill_date && b.bill_date < billsListFrom) return false;
+          if (billsListTo   && b.bill_date && b.bill_date > billsListTo) return false;
+          if (!blSearch) return true;
+          const hay = `${b.bill_number || ''} ${b.vendor_name || ''}`.toLowerCase();
+          return hay.includes(blSearch);
+        });
+        const billsListPg = usePagination(filteredBills, PER_PAGE, billsListPage, setBillsListPage);
         const daysDiff = (d) => {
           if (!d) return null;
           const dt = new Date(d); const tdt = new Date(today);
@@ -1444,8 +1723,28 @@ export default function Procurement() {
         };
         return (
         <>
-          {/* ===== Follow-up section ===== */}
-          {pendingPos.length > 0 && (
+          {/* Sub-tabs (mam 2026-05-25) */}
+          <div className="flex justify-between items-center flex-wrap gap-2">
+            <div className="flex gap-1 border-b border-gray-200 -mb-px">
+              <button onClick={() => setBillsSubTab('followup')}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${billsSubTab === 'followup' ? 'border-amber-500 text-amber-700 bg-amber-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                Follow-up <span className="ml-1 text-[10px] opacity-80">({pendingPos.length})</span>
+              </button>
+              <button onClick={() => setBillsSubTab('bills')}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${billsSubTab === 'bills' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                Purchase Bills <span className="ml-1 text-[10px] opacity-80">({purchaseBills.length})</span>
+              </button>
+            </div>
+            {billsSubTab === 'bills' && (
+              <button onClick={() => { setForm({ vendor_id: '', bill_number: '', bill_date: '', amount: 0, gst_amount: 0, total_amount: 0 }); setModal('bill'); }} className="btn btn-primary flex items-center gap-2 text-xs"><FiPlus /> Add Bill</button>
+            )}
+          </div>
+
+          {/* ===== Sub-tab 1: Follow-up ===== */}
+          {billsSubTab === 'followup' && pendingPos.length === 0 && (
+            <div className="card text-center py-8 text-gray-400 text-xs">No POs awaiting a Purchase Bill. 🎉</div>
+          )}
+          {billsSubTab === 'followup' && pendingPos.length > 0 && (
             <div className="card p-3 bg-amber-50 border border-amber-200">
               <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
                 <h4 className="font-semibold text-amber-800 text-sm">
@@ -1453,6 +1752,32 @@ export default function Procurement() {
                   <span className="text-xs font-normal text-amber-600 ml-2">({pendingPos.length} PO{pendingPos.length === 1 ? '' : 's'})</span>
                 </h4>
                 <span className="text-[11px] text-amber-700">Sorted by Expected Receipt Date — chase the oldest first</span>
+              </div>
+
+              {/* Search + expected-date filter (mam 2026-05-25) */}
+              <div className="flex flex-wrap items-end gap-2 text-xs mb-3 pb-3 border-b border-amber-200">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label text-[10px] mb-0.5 text-amber-900">Search · PO no / indent no / vendor</label>
+                  <input className="input text-xs" placeholder="e.g. VPO-0042 or IND-0070"
+                    value={billsFuSearch} onChange={e => { setBillsFuSearch(e.target.value); setBillsFuPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5 text-amber-900">Expected From</label>
+                  <input className="input text-xs" type="date" value={billsFuExpFrom}
+                    onChange={e => { setBillsFuExpFrom(e.target.value); setBillsFuPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5 text-amber-900">Expected To</label>
+                  <input className="input text-xs" type="date" value={billsFuExpTo}
+                    onChange={e => { setBillsFuExpTo(e.target.value); setBillsFuPage(1); }} />
+                </div>
+                {(billsFuSearch || billsFuExpFrom || billsFuExpTo) && (
+                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                    onClick={() => { setBillsFuSearch(''); setBillsFuExpFrom(''); setBillsFuExpTo(''); setBillsFuPage(1); }}>Reset</button>
+                )}
+                <div className="ml-auto text-[11px] text-amber-900">
+                  Showing <span className="font-semibold">{filteredFu.length}</span> of {pendingPos.length}
+                </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="text-xs">
@@ -1472,7 +1797,7 @@ export default function Procurement() {
                     <th className="px-2 py-1"></th>
                   </tr></thead>
                   <tbody>
-                    {pendingPos.map(po => {
+                    {fuPg.rows.map(po => {
                       const d = daysDiff(po.expected_receipt_date);
                       let chip;
                       if (!po.expected_receipt_date) chip = <span className="text-gray-400">— no date —</span>;
@@ -1529,18 +1854,41 @@ export default function Procurement() {
                   </tbody>
                 </table>
               </div>
+              <Pagination pg={fuPg} className="border-t border-amber-200 pt-2" />
             </div>
           )}
 
-          {/* ===== Existing bills table ===== */}
-          <div className="flex justify-between items-center">
-            <h3 className="font-semibold">Purchase Bills</h3>
-            <button onClick={() => { setForm({ vendor_id: '', bill_number: '', bill_date: '', amount: 0, gst_amount: 0, total_amount: 0 }); setModal('bill'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Bill</button>
-          </div>
+          {/* ===== Sub-tab 2: Purchase Bills ===== */}
+          {billsSubTab === 'bills' && (
+            <>
+              <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label text-[10px] mb-0.5">Search · bill no / vendor</label>
+                  <input className="input text-xs" placeholder="e.g. PB-0042 or vendor name"
+                    value={billsListSearch} onChange={e => { setBillsListSearch(e.target.value); setBillsListPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">Bill Date From</label>
+                  <input className="input text-xs" type="date" value={billsListFrom}
+                    onChange={e => { setBillsListFrom(e.target.value); setBillsListPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">Bill Date To</label>
+                  <input className="input text-xs" type="date" value={billsListTo}
+                    onChange={e => { setBillsListTo(e.target.value); setBillsListPage(1); }} />
+                </div>
+                {(billsListSearch || billsListFrom || billsListTo) && (
+                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                    onClick={() => { setBillsListSearch(''); setBillsListFrom(''); setBillsListTo(''); setBillsListPage(1); }}>Reset</button>
+                )}
+                <div className="ml-auto text-[11px] text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{filteredBills.length}</span> of {purchaseBills.length}
+                </div>
+              </div>
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
-              {purchaseBills.map(b => (
+              {billsListPg.rows.map(b => (
                 <tr key={b.id}>
                   <td className="font-medium">{b.bill_number}</td><td>{b.vendor_name}</td><td>{b.bill_date}</td>
                   <td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td>
@@ -1559,8 +1907,12 @@ export default function Procurement() {
                 </tr>
               ))}
               {purchaseBills.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No bills yet</td></tr>}
+              {purchaseBills.length > 0 && filteredBills.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No bills match the current filters.</td></tr>}
             </tbody>
+            <tfoot><tr><td colSpan="9" className="border-t border-gray-100"><Pagination pg={billsListPg} /></td></tr></tfoot>
           </table></div>
+            </>
+          )}
         </>
         );
       })()}
@@ -1573,6 +1925,26 @@ export default function Procurement() {
         const readyToDispatch = vendorPos.filter(po =>
           billedPoIds.has(po.id) && !dispatchedPoIds.has(po.id) && !po.cancelled
         );
+
+        // Sub-tab filtering (mam 2026-05-25)
+        const rSearch = dispReadySearch.trim().toLowerCase();
+        const filteredReady = readyToDispatch.filter(po => {
+          if (!rSearch) return true;
+          const hay = `${po.po_number || ''} ${po.vendor_name || ''} ${po.indent_number || ''}`.toLowerCase();
+          return hay.includes(rSearch);
+        });
+        const readyPg = usePagination(filteredReady, PER_PAGE, dispReadyPage, setDispReadyPage);
+
+        const dSearch = dispListSearch.trim().toLowerCase();
+        const filteredDispatch = deliveryNotes.filter(d => {
+          if (dispListStatus !== 'all' && d.status !== dispListStatus) return false;
+          if (dispListFrom && d.received_on && d.received_on.slice(0, 10) < dispListFrom) return false;
+          if (dispListTo   && d.received_on && d.received_on.slice(0, 10) > dispListTo) return false;
+          if (!dSearch) return true;
+          const hay = `${d.po_number || ''} ${d.document_number || ''} ${d.received_by_name || ''}`.toLowerCase();
+          return hay.includes(dSearch);
+        });
+        const dispListPg = usePagination(filteredDispatch, PER_PAGE, dispListPage, setDispListPage);
         // Detect item-type hint for each PO (if any indent_item linked is type=PO,
         // suggest Sales Bill; else suggest Challan). We don't have per-item info
         // on the client, so the dropdown defaults to Sales Bill and user can switch.
@@ -1657,8 +2029,25 @@ export default function Procurement() {
         };
         return (
         <>
-          {/* ===== Follow-up: ready to dispatch ===== */}
-          {readyToDispatch.length > 0 && (
+          {/* Sub-tabs (mam 2026-05-25) */}
+          <div className="flex justify-between items-center flex-wrap gap-2">
+            <div className="flex gap-1 border-b border-gray-200 -mb-px">
+              <button onClick={() => setDispatchSubTab('ready')}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'ready' ? 'border-indigo-500 text-indigo-700 bg-indigo-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                Ready to Dispatch <span className="ml-1 text-[10px] opacity-80">({readyToDispatch.length})</span>
+              </button>
+              <button onClick={() => setDispatchSubTab('list')}
+                className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'list' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                Dispatch &amp; Receiving <span className="ml-1 text-[10px] opacity-80">({deliveryNotes.length})</span>
+              </button>
+            </div>
+          </div>
+
+          {/* ===== Sub-tab 1: Ready to dispatch ===== */}
+          {dispatchSubTab === 'ready' && readyToDispatch.length === 0 && (
+            <div className="card text-center py-8 text-gray-400 text-xs">No POs awaiting dispatch. 🎉</div>
+          )}
+          {dispatchSubTab === 'ready' && readyToDispatch.length > 0 && (
             <div className="card p-3 bg-indigo-50 border border-indigo-200">
               <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
                 <h4 className="font-semibold text-indigo-800 text-sm">
@@ -1666,6 +2055,21 @@ export default function Procurement() {
                   <span className="text-xs font-normal text-indigo-600 ml-2">({readyToDispatch.length} PO{readyToDispatch.length === 1 ? '' : 's'})</span>
                 </h4>
                 <span className="text-[11px] text-indigo-700">POs with Purchase Bill uploaded but no Dispatch yet — Sales Bill for PO items, Challan for FOC/RGP</span>
+              </div>
+              {/* Search strip (mam 2026-05-25) */}
+              <div className="flex flex-wrap items-end gap-2 text-xs mb-3 pb-3 border-b border-indigo-200">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label text-[10px] mb-0.5 text-indigo-900">Search · PO no / vendor / indent</label>
+                  <input className="input text-xs" placeholder="e.g. VPO-0042"
+                    value={dispReadySearch} onChange={e => { setDispReadySearch(e.target.value); setDispReadyPage(1); }} />
+                </div>
+                {dispReadySearch && (
+                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                    onClick={() => { setDispReadySearch(''); setDispReadyPage(1); }}>Reset</button>
+                )}
+                <div className="ml-auto text-[11px] text-indigo-900">
+                  Showing <span className="font-semibold">{filteredReady.length}</span> of {readyToDispatch.length}
+                </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="text-xs">
@@ -1678,7 +2082,7 @@ export default function Procurement() {
                     <th className="px-2 py-1"></th>
                   </tr></thead>
                   <tbody>
-                    {readyToDispatch.map(po => (
+                    {readyPg.rows.map(po => (
                       <tr key={po.id} className="border-b border-indigo-100">
                         <td className="px-2 py-1.5 font-semibold text-red-700 whitespace-nowrap">
                           {po.po_number}
@@ -1701,21 +2105,60 @@ export default function Procurement() {
                         </td>
                       </tr>
                     ))}
+                    {filteredReady.length === 0 && (
+                      <tr><td colSpan="6" className="text-center py-6 text-indigo-700">No POs match the current filters.</td></tr>
+                    )}
                   </tbody>
                 </table>
               </div>
+              <Pagination pg={readyPg} className="border-t border-indigo-200 pt-2" />
             </div>
           )}
 
-          {/* ===== Main dispatch list ===== */}
-          <div className="flex justify-between items-center">
-            <h3 className="font-semibold">Dispatch & Receiving</h3>
-            <button onClick={() => openAddDispatch()} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Dispatch</button>
-          </div>
+          {/* ===== Sub-tab 2: Main dispatch list ===== */}
+          {dispatchSubTab === 'list' && (
+            <>
+              <div className="flex justify-between items-center">
+                <h3 className="font-semibold">Dispatch & Receiving</h3>
+                <button onClick={() => openAddDispatch()} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Dispatch</button>
+              </div>
+              <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="label text-[10px] mb-0.5">Search · PO no / doc no / received by</label>
+                  <input className="input text-xs" placeholder="e.g. VPO-0042"
+                    value={dispListSearch} onChange={e => { setDispListSearch(e.target.value); setDispListPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">Status</label>
+                  <select className="select text-xs" value={dispListStatus}
+                    onChange={e => { setDispListStatus(e.target.value); setDispListPage(1); }}>
+                    <option value="all">All</option>
+                    <option value="dispatched">Dispatched</option>
+                    <option value="received">Received</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">Received From</label>
+                  <input className="input text-xs" type="date" value={dispListFrom}
+                    onChange={e => { setDispListFrom(e.target.value); setDispListPage(1); }} />
+                </div>
+                <div>
+                  <label className="label text-[10px] mb-0.5">Received To</label>
+                  <input className="input text-xs" type="date" value={dispListTo}
+                    onChange={e => { setDispListTo(e.target.value); setDispListPage(1); }} />
+                </div>
+                {(dispListSearch || dispListStatus !== 'all' || dispListFrom || dispListTo) && (
+                  <button type="button" className="btn btn-secondary text-xs py-1 px-2"
+                    onClick={() => { setDispListSearch(''); setDispListStatus('all'); setDispListFrom(''); setDispListTo(''); setDispListPage(1); }}>Reset</button>
+                )}
+                <div className="ml-auto text-[11px] text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{filteredDispatch.length}</span> of {deliveryNotes.length}
+                </div>
+              </div>
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>ID</th><th>Type</th><th>Doc No</th><th>PO</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-              {deliveryNotes.map(d => (
+              {dispListPg.rows.map(d => (
                 <tr key={d.id}>
                   <td>#{d.id}</td>
                   <td>
@@ -1773,8 +2216,12 @@ export default function Procurement() {
                 </tr>
               ))}
               {deliveryNotes.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
+              {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
             </tbody>
+            <tfoot><tr><td colSpan="11" className="border-t border-gray-100"><Pagination pg={dispListPg} /></td></tr></tfoot>
           </table></div>
+            </>
+          )}
         </>
         );
       })()}
@@ -1790,7 +2237,17 @@ export default function Procurement() {
           {/* Header — Site from Business Book, Raised By from Employees. Stacks on mobile. */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="label">Site Name *</label>
+              <label className="label flex items-center gap-1">
+                Site Name *
+                {/* mam (2026-05-25): "beside show an info icon, on hovering
+                    over it show a tooltip popup with text of the selected
+                    field dropdown content".  Tooltip shows the full long
+                    site name + lead number which often gets truncated in
+                    the picker button. */}
+                <InfoTooltip text={form.site_name
+                  ? `Currently picked: ${form.site_name}.\n\nThe selected site's Client PO BOQ items load below — pick one BOQ row, then pick a sub-item from the Item Master. ${boqItems.length} BOQ item(s) available.`
+                  : 'Pick the destination site for this indent. Sites are sourced from Business Book — long company names will be truncated in the dropdown, hover here to see what is currently selected.'} />
+              </label>
               <SearchableSelect
                 options={sites.map(s => ({ id: s.name, label: `${s.lead_no ? '[' + s.lead_no + '] ' : ''}${s.name}`, ...s }))}
                 value={form.site_name || null}
