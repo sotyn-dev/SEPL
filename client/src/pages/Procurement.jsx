@@ -131,6 +131,16 @@ export default function Procurement() {
   // saveIndent will PUT instead of POST. Used by the Edit pencil action
   // (mam: 'site eng is on training, if they fill wrong indent can edit').
   const [editingIndentId, setEditingIndentId] = useState(null);
+
+  // Approval / Rejection modals (mam 2026-05-25). approveTarget holds the
+  // indent row + per-line quantity overrides the approver can tweak.
+  // rejectTarget holds the indent row + the mandatory reason field.
+  const [approveTarget, setApproveTarget] = useState(null);
+  const [approveQtyOverrides, setApproveQtyOverrides] = useState({});
+  const [approveSaving, setApproveSaving] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectSaving, setRejectSaving] = useState(false);
   const [expandedIndents, setExpandedIndents] = useState(() => new Set());
   const toggleIndentRow = (id) => setExpandedIndents(prev => {
     const next = new Set(prev);
@@ -338,6 +348,77 @@ export default function Procurement() {
     await api.put(`/procurement/indents/${id}`, { status });
     toast.success(`Indent ${status}`);
     load();
+  };
+
+  // Open the Approve modal — pre-seeds the qty-override map with each line's
+  // current quantity so the approver can edit-in-place before confirming.
+  const openApproveModal = (indent) => {
+    const seed = {};
+    for (const it of (indent.items || [])) seed[it.id] = it.quantity;
+    setApproveQtyOverrides(seed);
+    setApproveTarget(indent);
+  };
+  // Open the Reject modal — empty reason; saves on submit only if non-empty.
+  const openRejectModal = (indent) => {
+    setRejectReason('');
+    setRejectTarget(indent);
+  };
+
+  const submitApprove = async () => {
+    if (!approveTarget) return;
+    // Only send overrides that actually CHANGED, so unchanged lines aren't
+    // touched server-side. Also guard against 0 / negative / NaN here so
+    // the user gets a friendly toast before the round-trip.
+    const original = {};
+    for (const it of (approveTarget.items || [])) original[it.id] = it.quantity;
+    const changed = {};
+    for (const [k, v] of Object.entries(approveQtyOverrides)) {
+      const newQty = +v;
+      const oldQty = +original[k];
+      if (!Number.isFinite(newQty) || newQty <= 0) {
+        toast.error(`Quantity must be greater than 0`);
+        return;
+      }
+      if (newQty !== oldQty) changed[k] = newQty;
+    }
+    setApproveSaving(true);
+    try {
+      await api.put(`/procurement/indents/${approveTarget.id}`, {
+        status: 'approved',
+        quantity_overrides: changed,
+      });
+      toast.success(Object.keys(changed).length
+        ? `Approved with ${Object.keys(changed).length} qty change(s)`
+        : 'Approved');
+      setApproveTarget(null);
+      setApproveQtyOverrides({});
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Approve failed');
+    } finally {
+      setApproveSaving(false);
+    }
+  };
+
+  const submitReject = async () => {
+    if (!rejectTarget) return;
+    const r = String(rejectReason || '').trim();
+    if (r.length < 3) { toast.error('Please enter a rejection reason (min 3 chars)'); return; }
+    setRejectSaving(true);
+    try {
+      await api.put(`/procurement/indents/${rejectTarget.id}`, {
+        status: 'rejected',
+        reason: r,
+      });
+      toast.success('Indent rejected');
+      setRejectTarget(null);
+      setRejectReason('');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Reject failed');
+    } finally {
+      setRejectSaving(false);
+    }
   };
 
   // Open the Upload Vendor PO modal. If an indent is pre-selected (from the
@@ -745,7 +826,7 @@ export default function Procurement() {
             <button onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Raise Indent</button>
           </div>
           <div className="card p-0"><table className="freeze-head">
-            <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th>Items</th><th>BOQ</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
             <tbody>
               {indents.map(i => {
                 const items = i.items || [];
@@ -785,7 +866,53 @@ export default function Procurement() {
                       ? <a href={i.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 hover:underline flex items-center gap-1 text-xs"><FiExternalLink size={12} /> View</a>
                       : <span className="text-gray-400 text-xs">—</span>}
                   </td>
+                  {/* Budget = sum of (qty × item_master.current_price) across
+                      every line. Tells the approver what they're committing to
+                      before they hit Approve. Falls back to '—' when no master
+                      rates exist yet so unrated items don't lie about ₹0. */}
+                  <td className="text-right">
+                    {i.budget_amount > 0 ? (
+                      <span className="font-semibold text-gray-800">
+                        ₹{Math.round(i.budget_amount).toLocaleString('en-IN')}
+                      </span>
+                    ) : (
+                      <span className="text-gray-300 text-xs" title="No item-master rate on any line">—</span>
+                    )}
+                  </td>
                   <td><StatusBadge status={i.status} /></td>
+                  {/* Approval cell — shows "approved by X · DD MMM" once
+                      approved, or "rejected by X · reason" if rejected.
+                      Helps mam see at a glance WHO approved / rejected
+                      without opening each row. */}
+                  <td className="text-xs">
+                    {i.status === 'approved' && (
+                      <div>
+                        <div className="text-emerald-700 font-medium flex items-center gap-1">
+                          <FiCheck size={12} /> {i.approved_by_name || 'approver'}
+                        </div>
+                        {i.approved_at && (
+                          <div className="text-[10px] text-gray-500">
+                            {new Date(i.approved_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {i.status === 'rejected' && (
+                      <div>
+                        <div className="text-red-700 font-medium flex items-center gap-1" title={i.rejection_reason || ''}>
+                          <FiX size={12} /> {i.rejected_by_name || 'approver'}
+                        </div>
+                        {i.rejection_reason && (
+                          <div className="text-[10px] text-gray-500 italic max-w-[180px] truncate" title={i.rejection_reason}>
+                            “{i.rejection_reason}”
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {i.status !== 'approved' && i.status !== 'rejected' && (
+                      <span className="text-gray-300">—</span>
+                    )}
+                  </td>
                   <td>
                     <div className="flex gap-1 items-center">
                       {/* Separation of duties — mam (2026-05-21): a user
@@ -799,8 +926,11 @@ export default function Procurement() {
                           net for direct API calls. */}
                       {i.status === 'submitted' && (canApprove('procurement') || isAdmin()) && i.created_by !== user?.id && (
                         <>
-                          <button onClick={() => approveIndent(i.id, 'approved')} className="btn btn-success text-xs py-1 px-2">Approve</button>
-                          <button onClick={() => approveIndent(i.id, 'rejected')} className="btn btn-danger text-xs py-1 px-2">Reject</button>
+                          {/* Modal-driven approve — lets approver tweak qty
+                              per line before confirming (mam 2026-05-25). */}
+                          <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve</button>
+                          {/* Modal-driven reject — forces non-empty reason. */}
+                          <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject</button>
                         </>
                       )}
                       {/* If creator is viewing their own submitted indent,
@@ -827,7 +957,7 @@ export default function Procurement() {
                 {expanded && items.length > 0 && (
                   <tr className="bg-gray-50">
                     <td></td>
-                    <td colSpan="8" className="p-3">
+                    <td colSpan="10" className="p-3">
                       <div className="text-xs font-semibold text-gray-600 mb-2">BoQ items raised in {i.indent_number}</div>
                       <table className="text-xs w-full">
                         <thead>
@@ -839,6 +969,8 @@ export default function Procurement() {
                             <th className="text-right py-1 pr-3 w-20">Qty</th>
                             <th className="text-left py-1 pr-3 w-16">Unit</th>
                             <th className="text-left py-1 pr-3 w-16">Type</th>
+                            <th className="text-right py-1 pr-3 w-24">Rate</th>
+                            <th className="text-right py-1 pr-3 w-28">Line Budget</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -865,6 +997,12 @@ export default function Procurement() {
                               <td className="py-1 pr-3 text-right">{it.quantity}</td>
                               <td className="py-1 pr-3">{it.unit || '—'}</td>
                               <td className="py-1 pr-3">{it.item_type || <span className="text-gray-400">—</span>}</td>
+                              <td className="py-1 pr-3 text-right">
+                                {+it.master_price > 0 ? `₹${Math.round(+it.master_price).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
+                              </td>
+                              <td className="py-1 pr-3 text-right">
+                                {+it.line_budget > 0 ? <span className="font-medium">₹{Math.round(+it.line_budget).toLocaleString('en-IN')}</span> : <span className="text-gray-300">—</span>}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -875,7 +1013,7 @@ export default function Procurement() {
                 </Fragment>
               );
               })}
-              {indents.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No indents yet</td></tr>}
+              {indents.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No indents yet</td></tr>}
             </tbody>
           </table></div>
         </>
@@ -2603,6 +2741,144 @@ export default function Procurement() {
           </form>
         </Modal>
       )}
+
+      {/* APPROVE INDENT MODAL — mam (2026-05-25): "show budget according to
+          sub item item wise master sheet total ... and can edit qty at
+          approval time".  Approver sees the full line list with editable
+          qty inputs + a live budget total at the bottom.  Only changed
+          quantities go up in the request body. */}
+      <Modal isOpen={!!approveTarget} onClose={() => { setApproveTarget(null); setApproveQtyOverrides({}); }} title={approveTarget ? `Approve Indent ${approveTarget.indent_number}` : 'Approve Indent'} wide>
+        {approveTarget && (() => {
+          const items = approveTarget.items || [];
+          const liveBudget = items.reduce((sum, it) => {
+            const q = +approveQtyOverrides[it.id];
+            return sum + ((Number.isFinite(q) ? q : +it.quantity) * (+it.master_price || 0));
+          }, 0);
+          const changedCount = items.filter(it => +approveQtyOverrides[it.id] !== +it.quantity).length;
+          return (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 text-xs bg-emerald-50 border border-emerald-200 rounded p-3">
+                <div><span className="text-gray-500">Site:</span> <span className="font-medium">{approveTarget.site_name || '—'}</span></div>
+                <div><span className="text-gray-500">Raised by:</span> <span className="font-medium">{approveTarget.raised_by_name || approveTarget.created_by_name}</span></div>
+                <div><span className="text-gray-500">Items:</span> <span className="font-medium">{items.length}</span></div>
+                <div><span className="text-gray-500">Original budget:</span> <span className="font-medium">₹{Math.round(+approveTarget.budget_amount || 0).toLocaleString('en-IN')}</span></div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="text-xs w-full">
+                  <thead className="bg-gray-50 text-gray-600">
+                    <tr>
+                      <th className="text-left px-2 py-1 w-8">#</th>
+                      <th className="text-left px-2 py-1">Sub-Item</th>
+                      <th className="text-left px-2 py-1 w-16">Unit</th>
+                      <th className="text-right px-2 py-1 w-24">Master Rate</th>
+                      <th className="text-right px-2 py-1 w-28">Original Qty</th>
+                      <th className="text-right px-2 py-1 w-28">Approved Qty</th>
+                      <th className="text-right px-2 py-1 w-28">Line Budget</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((it, idx) => {
+                      const editedQty = +approveQtyOverrides[it.id];
+                      const usedQty = Number.isFinite(editedQty) ? editedQty : +it.quantity;
+                      const lineBudget = usedQty * (+it.master_price || 0);
+                      const changed = +editedQty !== +it.quantity;
+                      return (
+                        <tr key={it.id} className={`border-b ${changed ? 'bg-amber-50' : ''}`}>
+                          <td className="px-2 py-1 text-gray-500">{idx + 1}</td>
+                          <td className="px-2 py-1">
+                            {it.item_code && <span className="font-mono text-[10px] text-gray-500">[{it.item_code}] </span>}
+                            <span className="font-medium">{it.master_name || it.description}</span>
+                            {(it.master_size || it.master_specification) && (
+                              <div className="text-[10px] text-gray-500">{[it.master_size, it.master_specification].filter(Boolean).join(' / ')}</div>
+                            )}
+                          </td>
+                          <td className="px-2 py-1">{it.unit || '—'}</td>
+                          <td className="px-2 py-1 text-right">
+                            {+it.master_price > 0 ? `₹${(+it.master_price).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="px-2 py-1 text-right text-gray-500">{it.quantity}</td>
+                          <td className="px-2 py-1 text-right">
+                            <input type="number" step="any" min="0.001"
+                              value={approveQtyOverrides[it.id] ?? it.quantity}
+                              onChange={(e) => setApproveQtyOverrides(prev => ({ ...prev, [it.id]: e.target.value }))}
+                              className="border border-gray-300 rounded px-2 py-1 w-20 text-right text-xs focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
+                          </td>
+                          <td className="px-2 py-1 text-right font-medium">
+                            {+it.master_price > 0 ? `₹${Math.round(lineBudget).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-emerald-50 font-semibold">
+                      <td colSpan="6" className="px-2 py-2 text-right">Approved Budget Total</td>
+                      <td className="px-2 py-2 text-right text-emerald-700">₹{Math.round(liveBudget).toLocaleString('en-IN')}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              {changedCount > 0 && (
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                  <strong>{changedCount}</strong> qty change{changedCount === 1 ? '' : 's'} will be applied on approve.
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3 pt-2 border-t">
+                <button type="button" onClick={() => { setApproveTarget(null); setApproveQtyOverrides({}); }} className="btn btn-secondary">Cancel</button>
+                <button type="button" onClick={submitApprove} disabled={approveSaving} className="btn btn-success flex items-center gap-1">
+                  <FiCheck /> {approveSaving ? 'Approving…' : 'Approve Indent'}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* REJECT INDENT MODAL — mam (2026-05-25): "if reject then reason
+          mandatory".  Server also enforces a non-empty reason (≥3 chars).
+          Reason is saved into indents.rejection_reason and surfaced on
+          the Approval column of the indent list. */}
+      <Modal isOpen={!!rejectTarget} onClose={() => { setRejectTarget(null); setRejectReason(''); }} title={rejectTarget ? `Reject Indent ${rejectTarget.indent_number}` : 'Reject Indent'}>
+        {rejectTarget && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 text-xs bg-red-50 border border-red-200 rounded p-3">
+              <div><span className="text-gray-500">Site:</span> <span className="font-medium">{rejectTarget.site_name || '—'}</span></div>
+              <div><span className="text-gray-500">Raised by:</span> <span className="font-medium">{rejectTarget.raised_by_name || rejectTarget.created_by_name}</span></div>
+              <div><span className="text-gray-500">Items:</span> <span className="font-medium">{(rejectTarget.items || []).length}</span></div>
+              <div><span className="text-gray-500">Budget:</span> <span className="font-medium">₹{Math.round(+rejectTarget.budget_amount || 0).toLocaleString('en-IN')}</span></div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Reason for rejection <span className="text-red-600">*</span>
+              </label>
+              <textarea rows="4"
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="e.g. Qty too high for current scope, item already in stock, vendor rate not finalised, etc."
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500" />
+              <div className="flex justify-between mt-1">
+                <span className="text-[11px] text-gray-500">Required · the raiser will see this reason</span>
+                <span className={`text-[11px] ${rejectReason.trim().length >= 3 ? 'text-emerald-600' : 'text-gray-400'}`}>
+                  {rejectReason.trim().length} / min 3 chars
+                </span>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2 border-t">
+              <button type="button" onClick={() => { setRejectTarget(null); setRejectReason(''); }} className="btn btn-secondary">Cancel</button>
+              <button type="button" onClick={submitReject}
+                disabled={rejectSaving || rejectReason.trim().length < 3}
+                className="btn btn-danger flex items-center gap-1">
+                <FiX /> {rejectSaving ? 'Rejecting…' : 'Reject Indent'}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

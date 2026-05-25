@@ -433,10 +433,13 @@ router.get('/indents', (req, res) => {
   const where = canSeeAll ? '' : 'WHERE i.created_by = ?';
   const params = canSeeAll ? [] : [req.user.id];
   const indents = db.prepare(
-    `SELECT i.*, u.name as created_by_name, au.name as approved_by_name
+    `SELECT i.*, u.name as created_by_name,
+            au.name as approved_by_name,
+            ru.name as rejected_by_name
      FROM indents i
      LEFT JOIN users u ON i.created_by = u.id
      LEFT JOIN users au ON i.approved_by = au.id
+     LEFT JOIN users ru ON i.rejected_by = ru.id
      ${where}
      ORDER BY i.created_at DESC`
   ).all(...params);
@@ -448,19 +451,26 @@ router.get('/indents', (req, res) => {
   // BOQ description — the BOQ description is often very long and identical
   // across rows of the same BOQ, so the sub-item column is what tells the
   // rows apart at a glance.
+  // im.current_price comes through so the approval modal can compute
+  // line-level budget = qty × current_price and the list view can show
+  // a total budget per indent (mam 2026-05-25).
   const allItems = db.prepare(
     `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity,
-            ii.unit, ii.item_type,
+            ii.unit, ii.item_type, ii.item_master_id,
             im.item_code, im.item_name as master_name,
-            im.specification as master_specification, im.size as master_size
+            im.specification as master_specification, im.size as master_size,
+            COALESCE(im.current_price, 0) as master_price,
+            COALESCE(im.current_price, 0) * COALESCE(ii.quantity, 0) as line_budget
      FROM indent_items ii
      LEFT JOIN item_master im ON ii.item_master_id = im.id
      ORDER BY ii.id`
   ).all();
   const itemsByIndent = new Map();
+  const budgetByIndent = new Map();
   for (const it of allItems) {
     if (!itemsByIndent.has(it.indent_id)) itemsByIndent.set(it.indent_id, []);
     itemsByIndent.get(it.indent_id).push(it);
+    budgetByIndent.set(it.indent_id, (budgetByIndent.get(it.indent_id) || 0) + (+it.line_budget || 0));
   }
 
   // One BOQ-link lookup per unique site_name — cached in the loop so we
@@ -491,6 +501,7 @@ router.get('/indents', (req, res) => {
     ...i,
     boq_file_link: findBoq(i.site_name || i.client_name),
     items: itemsByIndent.get(i.id) || [],
+    budget_amount: +(budgetByIndent.get(i.id) || 0).toFixed(2),
   })));
 });
 
@@ -614,7 +625,7 @@ router.post('/indents', (req, res) => {
 //      Vendor PO has been created against it. Once approved or POed,
 //      it's frozen.
 router.put('/indents/:id', (req, res) => {
-  const { status, items, site_name, raised_by_name, notes } = req.body;
+  const { status, items, site_name, raised_by_name, notes, reason, quantity_overrides } = req.body;
   const db = getDb();
   const id = req.params.id;
 
@@ -635,8 +646,74 @@ router.put('/indents/:id', (req, res) => {
         });
       }
     }
+
+    // Reject path — mam (2026-05-25): "if reject then reason mandatory".
+    // Enforce a non-empty reason (≥ 3 chars after trim).  Saved to
+    // indents.rejection_reason + rejected_by + rejected_at for audit.
+    if (status === 'rejected') {
+      const r = String(reason || '').trim();
+      if (r.length < 3) {
+        return res.status(400).json({ error: 'Rejection reason is required (at least 3 characters).' });
+      }
+      db.prepare(
+        `UPDATE indents
+           SET status = 'rejected',
+               approved_by = NULL,
+               approved_at = NULL,
+               rejected_by = ?,
+               rejected_at = CURRENT_TIMESTAMP,
+               rejection_reason = ?
+         WHERE id = ?`
+      ).run(req.user.id, r, id);
+      return res.json({ message: 'Rejected', reason: r });
+    }
+
+    // Approve path — mam (2026-05-25): "can edit qty at approval time".
+    // quantity_overrides is an optional { indent_item_id: new_qty } map.
+    // We apply every override inside a single transaction with the
+    // status flip so an approver can trim quantities before the indent
+    // becomes purchase-orderable.  Each override must be a positive
+    // finite number; invalid entries are rejected up front so we
+    // don't half-apply.
+    if (status === 'approved') {
+      const overrides = quantity_overrides && typeof quantity_overrides === 'object' ? quantity_overrides : {};
+      const valid = [];
+      for (const [k, v] of Object.entries(overrides)) {
+        const itemId = +k;
+        const qty = +v;
+        if (!Number.isFinite(itemId) || itemId <= 0) continue;
+        if (!Number.isFinite(qty) || qty <= 0) {
+          return res.status(400).json({ error: `Quantity for item #${itemId} must be greater than 0.` });
+        }
+        valid.push([itemId, qty]);
+      }
+      try {
+        const tx = db.transaction(() => {
+          if (valid.length) {
+            const upd = db.prepare('UPDATE indent_items SET quantity = ? WHERE id = ? AND indent_id = ?');
+            for (const [itemId, qty] of valid) upd.run(qty, itemId, id);
+          }
+          db.prepare(
+            `UPDATE indents
+               SET status = 'approved',
+                   approved_by = ?,
+                   approved_at = CURRENT_TIMESTAMP,
+                   rejected_by = NULL,
+                   rejected_at = NULL,
+                   rejection_reason = NULL
+             WHERE id = ?`
+          ).run(req.user.id, id);
+        });
+        tx();
+      } catch (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      return res.json({ message: 'Approved', qty_changes: valid.length });
+    }
+
+    // Any other status flip (draft → submitted, etc.) — keep legacy behaviour.
     db.prepare('UPDATE indents SET status=?, approved_by=? WHERE id=?')
-      .run(status, status === 'approved' ? req.user.id : null, id);
+      .run(status, null, id);
     return res.json({ message: 'Updated' });
   }
 

@@ -2482,6 +2482,14 @@ function initializeDatabase() {
     ['indents', 'lead_no TEXT'],       // kept for backward compat (removed from UI)
     ['indents', 'site_name TEXT'],     // unique site name from Business Book
     ['indents', 'raised_by_name TEXT'],// employee who raised the indent
+    // Approval / rejection audit trail — mam (2026-05-25): "show how
+    // approved and ... if reject then reason mandatory". Approver name
+    // already derivable from approved_by; these add WHEN approved and
+    // WHY rejected (mandatory non-empty reason).
+    ['indents', 'approved_at DATETIME'],
+    ['indents', 'rejected_by INTEGER REFERENCES users(id)'],
+    ['indents', 'rejected_at DATETIME'],
+    ['indents', 'rejection_reason TEXT'],
     // Item classification mirrored from item_master.type (PO / FOC / RGP)
     ['indent_items', 'item_type TEXT'],
     // Links this indent line back to the site BOQ row it was picked from
