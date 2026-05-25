@@ -356,20 +356,55 @@ export default function Procurement() {
         raised_by_name: data.raised_by_name || '',
         notes: data.notes || '',
       });
-      // Hydrate boqItems for this site so the BOQ Item dropdown populates.
-      await reloadBoq(data.site_name || '');
-      const rows = (data.items || []).map(it => ({
-        po_item_id: it.po_item_id || '',
-        item_master_id: it.item_master_id || '',
-        description: it.description || '',
-        make: it.make || '',
-        quantity: +it.quantity || 0,
-        unit: it.unit || 'nos',
-        item_type: it.item_type || '',
-        boq_qty: 0,
-        remaining_qty: null,
-        manual: !it.po_item_id && !!it.description,
-      }));
+      // Fetch BOQ items inline so we have the list synchronously available
+      // for the back-fill below.  reloadBoq() sets state but doesn't return
+      // the list, so we can't use it for the per-item lookup.
+      let boqList = [];
+      try {
+        const bRes = await api.get('/procurement/boq-items', { params: { site_name: data.site_name || '' } });
+        const payload = bRes.data;
+        boqList = Array.isArray(payload) ? payload : (payload?.items || []);
+        setBoqItems(boqList);
+        setBoqDiag(Array.isArray(payload) ? null : (payload?.diagnostic || null));
+      } catch { setBoqItems([]); }
+
+      // Back-fill po_item_id from item_master_id — mam (2026-05-25):
+      // legacy indents created before po_item_id was a required field have
+      // it=NULL even though item_master_id is set.  Without this, the Edit
+      // modal grouped each item under "__empty_<idx>" and showed an empty
+      // BOQ picker for every row.  Now we walk the BOQ list and try to
+      // attach each item to the BOQ row whose item_master_id matches.
+      //
+      // Strategy:
+      //   1. If the indent item already has a valid po_item_id, keep it.
+      //   2. Else if it has item_master_id, find the first BOQ row with
+      //      the same item_master_id and steal its id.  This groups all
+      //      lines pointing at the same sub-item under one BOQ section.
+      //   3. Else fall back to manual entry (description preserved).
+      const findBoqByMaster = (masterId) => {
+        if (!masterId) return null;
+        return boqList.find(b => +b.item_master_id === +masterId) || null;
+      };
+      const rows = (data.items || []).map(it => {
+        let poId = it.po_item_id || '';
+        if (!poId && it.item_master_id) {
+          const boq = findBoqByMaster(it.item_master_id);
+          if (boq) poId = boq.id;
+        }
+        return {
+          po_item_id: poId,
+          item_master_id: it.item_master_id || '',
+          description: it.description || '',
+          make: it.make || '',
+          quantity: +it.quantity || 0,
+          unit: it.unit || 'nos',
+          item_type: it.item_type || '',
+          boq_qty: 0,
+          remaining_qty: null,
+          manual: !poId && !it.item_master_id && !!it.description,
+          required_date: it.required_date || '',
+        };
+      });
       setIndentItems(rows.length ? rows : [{ ...EMPTY_ITEM }]);
       setEditingIndentId(indent.id);
       setModal('indent');
