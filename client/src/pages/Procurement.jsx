@@ -1035,7 +1035,21 @@ export default function Procurement() {
                               <td className="py-1 pr-3">{it.unit || '—'}</td>
                               <td className="py-1 pr-3">{it.item_type || <span className="text-gray-400">—</span>}</td>
                               <td className="py-1 pr-3 text-right">
-                                {+it.master_price > 0 ? `₹${Math.round(+it.master_price).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
+                                {+it.master_price > 0 ? (
+                                  <div className="inline-flex items-center gap-1">
+                                    <span>₹{Math.round(+it.master_price).toLocaleString('en-IN')}</span>
+                                    {/* Rate source badge — mam (2026-05-25):
+                                        "history" means item_master.current_price
+                                        was 0, so we fell back to the last logged
+                                        rate from item_price_history.  Lets mam
+                                        know to update the master sheet. */}
+                                    {it.rate_source === 'history' && (
+                                      <span className="text-[9px] px-1 rounded bg-amber-100 text-amber-700 font-medium" title="Rate pulled from item_price_history (master sheet has no current_price). Update Item Master to dismiss.">
+                                        hist
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : <span className="text-gray-300" title="No rate in Item Master or price history for this sub-item">—</span>}
                               </td>
                               <td className="py-1 pr-3 text-right">
                                 {+it.line_budget > 0 ? <span className="font-medium">₹{Math.round(+it.line_budget).toLocaleString('en-IN')}</span> : <span className="text-gray-300">—</span>}
@@ -2837,7 +2851,14 @@ export default function Procurement() {
                           </td>
                           <td className="px-2 py-1">{it.unit || '—'}</td>
                           <td className="px-2 py-1 text-right">
-                            {+it.master_price > 0 ? `₹${(+it.master_price).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
+                            {+it.master_price > 0 ? (
+                              <div className="inline-flex items-center gap-1 justify-end">
+                                <span>₹{(+it.master_price).toLocaleString('en-IN')}</span>
+                                {it.rate_source === 'history' && (
+                                  <span className="text-[9px] px-1 rounded bg-amber-100 text-amber-700 font-medium" title="Rate from price history — Item Master has no current_price">hist</span>
+                                )}
+                              </div>
+                            ) : <span className="text-gray-300">—</span>}
                           </td>
                           <td className="px-2 py-1 text-right text-gray-500">{it.quantity}</td>
                           <td className="px-2 py-1 text-right">

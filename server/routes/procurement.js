@@ -451,16 +451,45 @@ router.get('/indents', (req, res) => {
   // BOQ description — the BOQ description is often very long and identical
   // across rows of the same BOQ, so the sub-item column is what tells the
   // rows apart at a glance.
-  // im.current_price comes through so the approval modal can compute
-  // line-level budget = qty × current_price and the list view can show
-  // a total budget per indent (mam 2026-05-25).
+  //
+  // Budget rate resolution (mam 2026-05-25 follow-up):
+  //   1. Prefer im.current_price (the item-wise master sheet rate)
+  //   2. If that's 0 or NULL, fall back to the MOST RECENT rate from
+  //      item_price_history for the same item_master_id — covers older
+  //      items that haven't been re-priced into the master yet
+  //   3. Otherwise 0  →  UI shows "—"
+  // rate_source tells the UI which fallback hit so mam knows whether the
+  // displayed rate came from master or history.
   const allItems = db.prepare(
     `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity,
             ii.unit, ii.item_type, ii.item_master_id,
             im.item_code, im.item_name as master_name,
             im.specification as master_specification, im.size as master_size,
-            COALESCE(im.current_price, 0) as master_price,
-            COALESCE(im.current_price, 0) * COALESCE(ii.quantity, 0) as line_budget
+            COALESCE(
+              NULLIF(im.current_price, 0),
+              (SELECT iph.rate
+                 FROM item_price_history iph
+                WHERE iph.item_id = ii.item_master_id
+                ORDER BY iph.created_at DESC
+                LIMIT 1),
+              0
+            ) as master_price,
+            CASE
+              WHEN COALESCE(im.current_price, 0) > 0 THEN 'master'
+              WHEN (SELECT iph.rate FROM item_price_history iph
+                     WHERE iph.item_id = ii.item_master_id
+                     ORDER BY iph.created_at DESC LIMIT 1) > 0 THEN 'history'
+              ELSE 'none'
+            END as rate_source,
+            COALESCE(
+              NULLIF(im.current_price, 0),
+              (SELECT iph.rate
+                 FROM item_price_history iph
+                WHERE iph.item_id = ii.item_master_id
+                ORDER BY iph.created_at DESC
+                LIMIT 1),
+              0
+            ) * COALESCE(ii.quantity, 0) as line_budget
      FROM indent_items ii
      LEFT JOIN item_master im ON ii.item_master_id = im.id
      ORDER BY ii.id`
