@@ -1351,6 +1351,15 @@ export default function Procurement() {
                           <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject</button>
                         </>
                       )}
+                      {/* Admin-only "Re-reject" on approved indents — revokes
+                          the approval and flips back to rejected, using the
+                          same mandatory-reason modal.  Mam (2026-05-25):
+                          "give this permission to delete or again reject". */}
+                      {i.status === 'approved' && isAdmin() && (
+                        <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2" title="Revoke approval and reject this indent">
+                          Re-reject
+                        </button>
+                      )}
                       {/* If creator is viewing their own submitted indent,
                           show a small "Awaiting approval" hint instead so
                           they know what's happening. */}

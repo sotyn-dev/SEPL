@@ -839,24 +839,60 @@ router.put('/indents/:id', (req, res) => {
   return res.status(400).json({ error: 'Nothing to update' });
 });
 
+// DELETE /indents/:id — soft-reject when downstream records would be
+// orphaned, hard-delete only when nothing references the indent.
+// FK children of indents:
+//   indent_items     → CASCADE in schema, automatic
+//   vendor_pos       → no cascade, check + soft-reject if any active
+//   grn              → no cascade, check + soft-reject if any (mam wouldn't
+//                      want received-goods records cut loose from their indent)
+//   indent_tracker   → audit-only, safe to delete alongside (mam 2026-05-25
+//                      "73 indent approved but now admin is unable to delete"
+//                      — the FK constraint failed BECAUSE of this table)
 router.delete('/indents/:id', (req, res) => {
   const db = getDb();
   const id = req.params.id;
-  // Active vendor POs (cancelled=0) referencing this indent block hard delete.
-  // Cancelled POs don't block — they're already soft-deleted themselves.
+
+  // Block hard delete if active Vendor POs reference this indent.
   const vpoCount = db.prepare(
     'SELECT COUNT(*) as c FROM vendor_pos WHERE indent_id=? AND COALESCE(cancelled, 0) = 0'
   ).get(id).c;
   if (vpoCount > 0) {
-    // Soft-reject instead of failing. The indent + its items stay for audit
-    // and the linked vendor POs continue to function. Status='rejected' hides
-    // the indent from active "Pending for PO" / "Submitted" queues.
-    db.prepare("UPDATE indents SET status='rejected' WHERE id=?").run(id);
+    db.prepare("UPDATE indents SET status='rejected', rejected_by=?, rejected_at=CURRENT_TIMESTAMP, rejection_reason=COALESCE(rejection_reason, 'Auto-rejected on delete attempt') WHERE id=?")
+      .run(req.user?.id || null, id);
     return res.json({ message: `Indent rejected (cannot hard-delete — ${vpoCount} active Vendor PO(s) reference it). Indent kept for audit.`, soft: true });
   }
-  db.prepare('DELETE FROM indent_items WHERE indent_id=?').run(id);
-  db.prepare('DELETE FROM indents WHERE id=?').run(id);
-  res.json({ message: 'Deleted', soft: false });
+
+  // Block hard delete if GRN rows reference this indent.
+  const grnCount = db.prepare('SELECT COUNT(*) as c FROM grn WHERE indent_id=?').get(id).c;
+  if (grnCount > 0) {
+    db.prepare("UPDATE indents SET status='rejected', rejected_by=?, rejected_at=CURRENT_TIMESTAMP, rejection_reason=COALESCE(rejection_reason, 'Auto-rejected on delete attempt') WHERE id=?")
+      .run(req.user?.id || null, id);
+    return res.json({ message: `Indent rejected (cannot hard-delete — ${grnCount} GRN record(s) reference it). Indent kept for audit.`, soft: true });
+  }
+
+  // Safe to hard-delete.  Wrap in a tx so a mid-flight FK failure rolls
+  // back the indent_items + indent_tracker cleanup instead of leaving
+  // half-deleted state.
+  try {
+    const tx = db.transaction(() => {
+      // indent_tracker has no CASCADE → delete explicitly to satisfy FK
+      db.prepare('DELETE FROM indent_tracker WHERE indent_id=?').run(id);
+      // indent_items DOES cascade but explicit is harmless + clearer
+      db.prepare('DELETE FROM indent_items WHERE indent_id=?').run(id);
+      db.prepare('DELETE FROM indents WHERE id=?').run(id);
+    });
+    tx();
+    return res.json({ message: 'Deleted', soft: false });
+  } catch (err) {
+    // Last-ditch fallback: if some OTHER FK we don't know about fires,
+    // fall back to soft-reject instead of returning a 500.  Mam's UI
+    // gets the indent out of active queues either way.
+    console.error('[indents/delete] FK fallback for indent', id, ':', err.message);
+    db.prepare("UPDATE indents SET status='rejected', rejected_by=?, rejected_at=CURRENT_TIMESTAMP, rejection_reason=COALESCE(rejection_reason, 'Auto-rejected on delete attempt') WHERE id=?")
+      .run(req.user?.id || null, id);
+    return res.json({ message: `Indent rejected (delete blocked by downstream records: ${err.message.replace(/^SqliteError:\s*/, '')}). Indent kept for audit.`, soft: true });
+  }
 });
 
 // Print-friendly payload for the indent — same shape mam uses on the
