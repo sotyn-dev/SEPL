@@ -2747,13 +2747,41 @@ export default function Procurement() {
                             : t === 'RGP' ? 'bg-amber-50 text-amber-700 border-amber-200'
                             : t === 'PO' ? 'bg-red-50 text-red-700 border-red-200'
                             : 'bg-gray-50 text-gray-500 border-gray-200';
+                          // pickedMaster = the full Item Master row currently selected
+                          // for this indent line.  Used to build a rich details
+                          // tooltip next to the picker (mam 2026-05-25: "hose drop
+                          // down button show tooltip button to show all data").
+                          const pickedMaster = item.item_master_id
+                            ? masterItems.find(m => +m.id === +item.item_master_id)
+                            : null;
+                          const masterDetailsText = pickedMaster ? [
+                            `Code: [${pickedMaster.item_code || '—'}]`,
+                            `Name: ${pickedMaster.item_name || '—'}`,
+                            pickedMaster.specification && `Spec: ${pickedMaster.specification}`,
+                            pickedMaster.size && `Size: ${pickedMaster.size}`,
+                            `UOM: ${pickedMaster.uom || '—'}`,
+                            `Type: ${pickedMaster.type || '—'}`,
+                            pickedMaster.make && `Make: ${pickedMaster.make}`,
+                            pickedMaster.department && `Dept: ${pickedMaster.department}`,
+                            pickedMaster.current_price > 0 && `Master Rate: ₹${(+pickedMaster.current_price).toLocaleString('en-IN')}`,
+                            `GST: ${pickedMaster.gst || '—'}`,
+                          ].filter(Boolean).join('\n') : 'Pick a sub-item first to see its full details.';
                           const masterPicker = (
-                            <SearchableSelect
-                              options={masterItems.map(m => ({ id: m.id, label: `[${m.item_code}] ${m.display_name || m.item_name}${m.type ? ' · ' + m.type : ''}`, ...m }))}
-                              value={item.item_master_id || null} valueKey="id" displayKey="label"
-                              placeholder="Search sub-item from Item Master…"
-                              onChange={(m) => pickMasterItem(i, m)}
-                            />
+                            <div className="flex items-center gap-1 w-full">
+                              <div className="flex-1 min-w-0">
+                                <SearchableSelect
+                                  options={masterItems.map(m => ({ id: m.id, label: `[${m.item_code}] ${m.display_name || m.item_name}${m.type ? ' · ' + m.type : ''}`, ...m }))}
+                                  value={item.item_master_id || null} valueKey="id" displayKey="label"
+                                  placeholder="Search sub-item from Item Master…"
+                                  onChange={(m) => pickMasterItem(i, m)}
+                                />
+                              </div>
+                              {/* (i) info button beside the dropdown — shows
+                                  ALL fields of the picked master item on
+                                  hover (mam 2026-05-25). Side=right so it
+                                  doesn't clip near the top of the modal. */}
+                              <InfoTooltip side="right" text={masterDetailsText} />
+                            </div>
                           );
                           const makeInput = <input className="input text-sm" placeholder="Make" value={item.make || ''} title={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />;
                           // Qty input — uses NumInput so backspace/Ctrl+A

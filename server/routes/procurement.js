@@ -547,6 +547,26 @@ router.post('/indents', (req, res) => {
   //      (the fallback when the site has no BOQ yet or mam wants
   //       to enter a free-text item — same flow as the old code)
   // Quantity must always be > 0.
+  //
+  // Mam (2026-05-25): "po item can raise one and not above quantity from
+  // boq and also add with foc and rgp items".  Adds a qty cap rule:
+  //   - PO type items: indented qty + already-existing indented qty must
+  //     NOT exceed the BOQ row's quantity (po_items.quantity).
+  //   - FOC / RGP: no cap, unlimited (free-of-cost / returnable items
+  //     don't consume BOQ quantity).
+  //   - Multiple PO indents per BOQ are allowed AS LONG AS total stays
+  //     within BOQ.  Mam's "raise one" was about not blowing past the
+  //     BOQ cap, not preventing additional indents.
+  const getPoItemQty = db.prepare('SELECT quantity FROM po_items WHERE id=?');
+  const getIndentedSum = db.prepare(
+    `SELECT COALESCE(SUM(ii.quantity), 0) as already
+       FROM indent_items ii
+       JOIN indents i ON ii.indent_id = i.id
+      WHERE ii.po_item_id = ?
+        AND COALESCE(ii.item_type, '') NOT IN ('FOC', 'RGP')
+        AND i.status <> 'rejected'`
+  );
+  const getMasterType = db.prepare('SELECT type FROM item_master WHERE id=?');
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     const hasBoq = !!it.po_item_id;
@@ -554,6 +574,35 @@ router.post('/indents', (req, res) => {
     const isManual = it.manual === true || !!String(it.description || '').trim();
     const qtyOk = +it.quantity > 0;
     if (!qtyOk) return res.status(400).json({ error: `Row ${i + 1}: Quantity must be greater than 0` });
+
+    // BOQ-qty cap (only applies to PO-type items linked to a BOQ row)
+    if (hasBoq && hasSub && Number.isInteger(+it.po_item_id) && +it.po_item_id > 0) {
+      const masterType = String(it.item_type || getMasterType.get(+it.item_master_id)?.type || '').toUpperCase();
+      // FOC and RGP are unlimited — skip cap check
+      if (masterType !== 'FOC' && masterType !== 'RGP') {
+        const boq = getPoItemQty.get(+it.po_item_id);
+        const boqQty = +boq?.quantity || 0;
+        if (boqQty > 0) {
+          const already = +getIndentedSum.get(+it.po_item_id).already || 0;
+          const thisLine = +it.quantity || 0;
+          // Also include any OTHER lines in the same submission that
+          // point at the same BOQ + are PO type (multi-row case)
+          const sameBoqLines = items.filter((other, idx) =>
+            idx !== i &&
+            +other.po_item_id === +it.po_item_id &&
+            String(other.item_type || '').toUpperCase() !== 'FOC' &&
+            String(other.item_type || '').toUpperCase() !== 'RGP'
+          ).reduce((s, x) => s + (+x.quantity || 0), 0);
+          const total = already + thisLine + sameBoqLines;
+          if (total > boqQty) {
+            return res.status(400).json({
+              error: `Row ${i + 1}: PO qty exceeds BOQ. BOQ has ${boqQty}, already indented ${already}, this submission adds ${thisLine + sameBoqLines}. Reduce qty or split into FOC/RGP if appropriate.`
+            });
+          }
+        }
+      }
+    }
+
     if (isManual) continue;                              // manual entry — skip BOQ/sub checks
     if (hasBoq && hasSub) continue;                      // BOQ-linked entry — both present, OK
     if (!hasBoq) return res.status(400).json({ error: `Row ${i + 1}: pick a BOQ Item (or type a description for manual entry)` });
@@ -760,7 +809,20 @@ router.put('/indents/:id', (req, res) => {
       return res.status(400).json({ error: `Cannot edit — ${vpoCount} active Vendor PO(s) reference this indent` });
     }
 
-    // Same per-row validation as POST.
+    // Same per-row validation as POST — including PO qty cap (mam 2026-05-25).
+    // On edit, exclude the CURRENT indent's own rows from the already-indented
+    // sum so we don't double-count the lines we're about to replace.
+    const getPoItemQtyEdit = db.prepare('SELECT quantity FROM po_items WHERE id=?');
+    const getIndentedSumEdit = db.prepare(
+      `SELECT COALESCE(SUM(ii.quantity), 0) as already
+         FROM indent_items ii
+         JOIN indents i ON ii.indent_id = i.id
+        WHERE ii.po_item_id = ?
+          AND i.id <> ?
+          AND COALESCE(ii.item_type, '') NOT IN ('FOC', 'RGP')
+          AND i.status <> 'rejected'`
+    );
+    const getMasterTypeEdit = db.prepare('SELECT type FROM item_master WHERE id=?');
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       const hasBoq = !!it.po_item_id;
@@ -768,6 +830,32 @@ router.put('/indents/:id', (req, res) => {
       const isManual = it.manual === true || !!String(it.description || '').trim();
       const qtyOk = +it.quantity > 0;
       if (!qtyOk) return res.status(400).json({ error: `Row ${i + 1}: Quantity must be greater than 0` });
+
+      // BOQ-qty cap for PO type (FOC/RGP unlimited)
+      if (hasBoq && hasSub && Number.isInteger(+it.po_item_id) && +it.po_item_id > 0) {
+        const masterType = String(it.item_type || getMasterTypeEdit.get(+it.item_master_id)?.type || '').toUpperCase();
+        if (masterType !== 'FOC' && masterType !== 'RGP') {
+          const boq = getPoItemQtyEdit.get(+it.po_item_id);
+          const boqQty = +boq?.quantity || 0;
+          if (boqQty > 0) {
+            const already = +getIndentedSumEdit.get(+it.po_item_id, id).already || 0;
+            const thisLine = +it.quantity || 0;
+            const sameBoqLines = items.filter((other, idx) =>
+              idx !== i &&
+              +other.po_item_id === +it.po_item_id &&
+              String(other.item_type || '').toUpperCase() !== 'FOC' &&
+              String(other.item_type || '').toUpperCase() !== 'RGP'
+            ).reduce((s, x) => s + (+x.quantity || 0), 0);
+            const total = already + thisLine + sameBoqLines;
+            if (total > boqQty) {
+              return res.status(400).json({
+                error: `Row ${i + 1}: PO qty exceeds BOQ. BOQ has ${boqQty}, already indented elsewhere ${already}, this indent adds ${thisLine + sameBoqLines}.`
+              });
+            }
+          }
+        }
+      }
+
       if (isManual) continue;
       if (hasBoq && hasSub) continue;
       if (!hasBoq) return res.status(400).json({ error: `Row ${i + 1}: pick a BOQ Item (or type a description for manual entry)` });
