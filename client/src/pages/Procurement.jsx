@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, Fragment } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -53,7 +54,26 @@ export default function Procurement() {
   // the purchase team / admin role only. Matches mam's request (2026-04-23).
   const canPurchaseOps = isAdmin() || canApprove('procurement');
   const canRaiseIndent = isAdmin() || canCreate('procurement');
-  const [tab, setTab] = useState('indents');
+  // Tab + sub-tab state synced with URL ?tab=...&subtab=... so refresh /
+  // back-button preserves where the user is, and tabs become bookmarkable
+  // (mam 2026-05-25: "when i refresh then it go to front page which is
+  // wrong"). Use a setter helper that writes both React state AND the URL
+  // in one shot — no useEffect ping-pong.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'bills', 'delivery'];
+  const urlTab = searchParams.get('tab');
+  const [tab, _setTab] = useState(VALID_TABS.includes(urlTab) ? urlTab : 'indents');
+  const setTab = (newTab) => {
+    _setTab(newTab);
+    setSearchParams(prev => {
+      const sp = new URLSearchParams(prev);
+      sp.set('tab', newTab);
+      // Clear sub-tab when switching parent tab — previous sub-tab is
+      // meaningless on the new tab.
+      sp.delete('subtab');
+      return sp;
+    }, { replace: true });
+  };
   const [indents, setIndents] = useState([]);
   const [vendorPos, setVendorPos] = useState([]);
   const [purchaseBills, setPurchaseBills] = useState([]);
@@ -159,8 +179,15 @@ export default function Procurement() {
   // Vendor Rates
   const [ratesSearch, setRatesSearch]           = useState('');
   const [ratesPage, setRatesPage]               = useState(1);
-  // Vendor PO sub-tabs (pending | list)
-  const [vpoSubTab, setVpoSubTab]               = useState('pending');
+  // Vendor PO sub-tabs (pending | list) — URL-synced
+  const urlSubTab = searchParams.get('subtab');
+  const [vpoSubTab, _setVpoSubTab] = useState(
+    urlTab === 'vendorpo' && ['pending','list'].includes(urlSubTab) ? urlSubTab : 'pending'
+  );
+  const setVpoSubTab = (st) => {
+    _setVpoSubTab(st);
+    setSearchParams(prev => { const sp = new URLSearchParams(prev); sp.set('subtab', st); return sp; }, { replace: true });
+  };
   const [vpoPendingSearch, setVpoPendingSearch] = useState('');
   const [vpoPendingStatus, setVpoPendingStatus] = useState('all');
   const [vpoPendingPage, setVpoPendingPage]     = useState(1);
@@ -169,8 +196,14 @@ export default function Procurement() {
   const [vpoListFrom, setVpoListFrom]           = useState('');
   const [vpoListTo, setVpoListTo]               = useState('');
   const [vpoListPage, setVpoListPage]           = useState(1);
-  // Purchase Bills sub-tabs (followup | bills)
-  const [billsSubTab, setBillsSubTab]           = useState('followup');
+  // Purchase Bills sub-tabs (followup | bills) — URL-synced
+  const [billsSubTab, _setBillsSubTab] = useState(
+    urlTab === 'bills' && ['followup','bills'].includes(urlSubTab) ? urlSubTab : 'followup'
+  );
+  const setBillsSubTab = (st) => {
+    _setBillsSubTab(st);
+    setSearchParams(prev => { const sp = new URLSearchParams(prev); sp.set('subtab', st); return sp; }, { replace: true });
+  };
   const [billsFuSearch, setBillsFuSearch]       = useState('');
   const [billsFuExpFrom, setBillsFuExpFrom]     = useState('');
   const [billsFuExpTo, setBillsFuExpTo]         = useState('');
@@ -179,8 +212,14 @@ export default function Procurement() {
   const [billsListFrom, setBillsListFrom]       = useState('');
   const [billsListTo, setBillsListTo]           = useState('');
   const [billsListPage, setBillsListPage]       = useState(1);
-  // Dispatch sub-tabs (ready | list)
-  const [dispatchSubTab, setDispatchSubTab]     = useState('ready');
+  // Dispatch sub-tabs (ready | list) — URL-synced
+  const [dispatchSubTab, _setDispatchSubTab] = useState(
+    urlTab === 'delivery' && ['ready','list'].includes(urlSubTab) ? urlSubTab : 'ready'
+  );
+  const setDispatchSubTab = (st) => {
+    _setDispatchSubTab(st);
+    setSearchParams(prev => { const sp = new URLSearchParams(prev); sp.set('subtab', st); return sp; }, { replace: true });
+  };
   const [dispReadySearch, setDispReadySearch]   = useState('');
   const [dispReadyPage, setDispReadyPage]       = useState(1);
   const [dispListSearch, setDispListSearch]     = useState('');
