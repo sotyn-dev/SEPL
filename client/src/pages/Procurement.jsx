@@ -2787,19 +2787,17 @@ export default function Procurement() {
                           );
                         })}
 
-                        {/* Add another sub-item under the same BOQ — pre-fills the BOQ link so the user only picks the sub-item. */}
-                        <button
-                          type="button"
-                          onClick={() => setIndentItems([...indentItems, {
-                            ...EMPTY_ITEM,
-                            po_item_id: group.boq_id,
-                            description: group.sample.description,
-                            boq_qty: group.sample.boq_qty,
-                            remaining_qty: group.sample.remaining_qty,
-                            unit: group.sample.unit || 'nos',
-                          }])}
-                          className="text-[11px] text-blue-600 hover:text-blue-800 font-medium px-1 py-1"
-                        >+ Add sub-item to this BOQ</button>
+                        {/* "+ Add sub-item to this BOQ" was REMOVED on
+                            mam's instruction (2026-05-25, IND-0075):
+                            users were filing wrong-category sub-items
+                            under one BOQ — e.g. a 12-way DB under a
+                            CPVC pipes BOQ.  Now each BOQ section is
+                            locked to ONE sub-item.  If multiple items
+                            genuinely belong under the same BOQ, the
+                            user adds another BOQ section (button below)
+                            and picks the same BOQ description — that
+                            forces a deliberate per-line choice.
+                            Block kept (commented) for the audit trail. */}
                       </div>
                     )}
                   </div>
