@@ -1135,6 +1135,7 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
            v.address as vendor_address, v.phone as vendor_phone,
            v.contact_person as vendor_contact,
            i.indent_number, i.site_name as indent_site_name,
+           i.client_name as indent_client_name,
            i.raised_by_name as site_engineer_name,
            bb.company_name as client_company,
            bb.client_name as client_person_name,
@@ -1153,6 +1154,51 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
      WHERE vp.id = ?
   `).get(req.params.id);
   if (!data) return res.status(404).json({ error: 'Vendor PO not found' });
+
+  // Fallback business_book lookup — mam (2026-05-25, DN-260526-VPO20260001):
+  // "CLIENT/COMPANY NAME IS FROM BUSINESS BOOK ADDRESS BILLING TO AND
+  // DELIVERY SITE SHIIPING TO".  The DN was blank because the indent had
+  // planning_id = NULL → order_planning JOIN failed → business_book never
+  // reached.  Try 3 fallback paths to recover the link:
+  //   1. sites.business_book_id where sites.name = indent.site_name
+  //   2. business_book where company_name = indent.site_name (or client_name)
+  //   3. business_book where project_name = indent.site_name
+  // First non-empty match wins.  Only fires when client_company is missing.
+  if (!data.client_company && data.indent_site_name) {
+    const tryNames = [data.indent_site_name, data.indent_client_name].filter(Boolean);
+    const findBb = db.prepare(`
+      SELECT bb.company_name, bb.client_name, bb.client_contact, bb.client_email,
+             bb.billing_address, bb.shipping_address, bb.state, bb.district,
+             bb.gstin, bb.state_code, bb.project_name, bb.lead_no
+        FROM business_book bb
+       WHERE bb.id IN (
+         SELECT DISTINCT s.business_book_id FROM sites s
+          WHERE s.name = ? AND s.business_book_id IS NOT NULL
+         UNION
+         SELECT id FROM business_book
+          WHERE company_name = ? OR project_name = ? OR client_name = ?
+       )
+       ORDER BY bb.id DESC LIMIT 1
+    `);
+    for (const name of tryNames) {
+      const bb = findBb.get(name, name, name, name);
+      if (bb && bb.company_name) {
+        data.client_company    = bb.company_name;
+        data.client_person_name = bb.client_name;
+        data.client_phone      = bb.client_contact;
+        data.client_email      = bb.client_email;
+        data.client_address    = bb.billing_address;
+        data.site_address      = bb.shipping_address;
+        data.client_state      = bb.state;
+        data.client_district   = bb.district;
+        data.client_gstin      = bb.gstin;
+        data.client_state_code = bb.state_code;
+        data.bb_project_name   = bb.project_name;
+        data.bb_lead_no        = bb.lead_no;
+        break;
+      }
+    }
+  }
 
   // Items — only the columns the DN template shows.  Pull from
   // indent_items via vendor_po_items (the items actually purchased
