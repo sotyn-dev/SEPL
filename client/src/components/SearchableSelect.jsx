@@ -29,9 +29,19 @@ export default function SearchableSelect({ options, value, onChange, placeholder
     if (open && inputRef.current) inputRef.current.focus();
   }, [open]);
 
+  // selectedLabel is the full untruncated text we'll surface via the
+  // native title= attribute on hover (mam 2026-05-25: "i need item where
+  // write hose book tooltip of every" — every truncated sub-item should
+  // reveal its full name on hover).
+  const selectedLabel = selected ? selected[displayKey] : '';
+
   return (
     <div ref={ref} className="relative">
       <button type="button" onClick={() => { setOpen(!open); setSearch(''); }}
+        // title attribute → browser-native tooltip on hover with the full
+        // (untruncated) selected value.  Cheap, no library needed, works
+        // across all browsers.
+        title={selectedLabel || placeholder}
         className={buttonClassName}>
         <span className={`truncate ${selected ? 'text-gray-900' : 'text-gray-400'}`}>
           {selected ? selected[displayKey] : placeholder}
@@ -60,6 +70,9 @@ export default function SearchableSelect({ options, value, onChange, placeholder
             {filtered.length === 0 && <div className="px-3 py-4 text-sm text-gray-400 text-center">No items found</div>}
             {filtered.slice(0, RENDER_CAP).map(o => (
               <button type="button" key={o[valueKey]} onClick={() => { onChange(o); setOpen(false); setSearch(''); }}
+                // title also on each option so even items that get
+                // visually truncated mid-scroll show full text on hover.
+                title={o[displayKey]}
                 className={`w-full text-left px-3 py-2 text-sm whitespace-normal break-words leading-snug hover:bg-red-50 transition-colors ${o[valueKey] === value ? 'bg-red-50 font-medium text-red-700' : 'text-gray-700'}`}>
                 {o[displayKey]}
               </button>

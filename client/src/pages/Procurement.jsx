@@ -2743,7 +2743,7 @@ export default function Procurement() {
                               onChange={(m) => pickMasterItem(i, m)}
                             />
                           );
-                          const makeInput = <input className="input text-sm" placeholder="Make" value={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />;
+                          const makeInput = <input className="input text-sm" placeholder="Make" value={item.make || ''} title={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />;
                           // Qty input — uses NumInput so backspace/Ctrl+A
                           // doesn't snap the field back to 0 (mam 2026-05-25).
                           // emitZeroOnEmpty keeps the same number contract
