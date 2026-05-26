@@ -567,6 +567,25 @@ router.post('/indents', (req, res) => {
         AND i.status <> 'rejected'`
   );
   const getMasterType = db.prepare('SELECT type FROM item_master WHERE id=?');
+
+  // One PO line per BOQ per indent — mam (2026-05-25): user can add
+  // multiple FOC/RGP sub-items under one BOQ, but only ONE chargeable
+  // PO sub-item.  Tracks po_item_id → already-seen-PO in this submission.
+  const poCountPerBoq = new Map();
+  for (const it of items) {
+    const t = String(it.item_type || '').toUpperCase();
+    if (t === 'PO' && Number.isInteger(+it.po_item_id) && +it.po_item_id > 0) {
+      poCountPerBoq.set(+it.po_item_id, (poCountPerBoq.get(+it.po_item_id) || 0) + 1);
+    }
+  }
+  for (const [poId, count] of poCountPerBoq) {
+    if (count > 1) {
+      return res.status(400).json({
+        error: `Only ONE PO sub-item allowed per BOQ row.  BOQ #${poId} has ${count} PO lines — keep one and convert the others to FOC or RGP if they're not chargeable.`
+      });
+    }
+  }
+
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     const hasBoq = !!it.po_item_id;
@@ -823,6 +842,23 @@ router.put('/indents/:id', (req, res) => {
           AND i.status <> 'rejected'`
     );
     const getMasterTypeEdit = db.prepare('SELECT type FROM item_master WHERE id=?');
+
+    // One PO line per BOQ per indent (Edit path).  Same rule as POST.
+    const poCountPerBoqEdit = new Map();
+    for (const it of items) {
+      const t = String(it.item_type || '').toUpperCase();
+      if (t === 'PO' && Number.isInteger(+it.po_item_id) && +it.po_item_id > 0) {
+        poCountPerBoqEdit.set(+it.po_item_id, (poCountPerBoqEdit.get(+it.po_item_id) || 0) + 1);
+      }
+    }
+    for (const [poId, count] of poCountPerBoqEdit) {
+      if (count > 1) {
+        return res.status(400).json({
+          error: `Only ONE PO sub-item allowed per BOQ row.  BOQ #${poId} has ${count} PO lines — keep one and convert the others to FOC or RGP if they're not chargeable.`
+        });
+      }
+    }
+
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       const hasBoq = !!it.po_item_id;

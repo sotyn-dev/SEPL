@@ -2863,17 +2863,51 @@ export default function Procurement() {
                           );
                         })}
 
-                        {/* "+ Add sub-item to this BOQ" was REMOVED on
-                            mam's instruction (2026-05-25, IND-0075):
-                            users were filing wrong-category sub-items
-                            under one BOQ — e.g. a 12-way DB under a
-                            CPVC pipes BOQ.  Now each BOQ section is
-                            locked to ONE sub-item.  If multiple items
-                            genuinely belong under the same BOQ, the
-                            user adds another BOQ section (button below)
-                            and picks the same BOQ description — that
-                            forces a deliberate per-line choice.
-                            Block kept (commented) for the audit trail. */}
+                        {/* "+ Add FOC / RGP sub-item" — restored on mam's
+                            follow-up (2026-05-25: "unable to fill foc or
+                            rgp"). PO-type sub-items are still capped at
+                            ONE per BOQ (the old IND-0075 mis-categorisation
+                            concern), but FOC + RGP can stack freely under
+                            the same BOQ — those are free-of-cost / returnable
+                            items that legitimately accompany a chargeable
+                            PO item (e.g. PO Pipe + FOC Pipe Clamp + RGP
+                            Cutting Tool all under one CPVC BOQ).
+
+                            Server enforces the "1 PO per BOQ" rule too,
+                            so even direct API calls can't break it. */}
+                        {(() => {
+                          // Has this BOQ section already used a PO line?
+                          // If yes, we lock the FOC/RGP-only add button.
+                          const hasPoLineInGroup = group.rows.some(r =>
+                            String(r.item.item_type || '').toUpperCase() === 'PO'
+                          );
+                          return (
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <button
+                                type="button"
+                                onClick={() => setIndentItems([...indentItems, {
+                                  ...EMPTY_ITEM,
+                                  po_item_id: group.boq_id,
+                                  description: group.sample.description,
+                                  boq_qty: group.sample.boq_qty,
+                                  remaining_qty: group.sample.remaining_qty,
+                                  unit: group.sample.unit || 'nos',
+                                  // Default type to FOC since PO slot is
+                                  // typically already filled.  User can
+                                  // change to RGP via the type chip after
+                                  // picking the sub-item.
+                                  item_type: hasPoLineInGroup ? 'FOC' : '',
+                                }])}
+                                className="text-[11px] text-blue-600 hover:text-blue-800 font-medium px-1 py-1"
+                              >+ Add {hasPoLineInGroup ? 'FOC / RGP' : ''} sub-item to this BOQ</button>
+                              {hasPoLineInGroup && (
+                                <span className="text-[10px] text-gray-400 italic">
+                                  (PO slot used — only FOC / RGP can be added here)
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
