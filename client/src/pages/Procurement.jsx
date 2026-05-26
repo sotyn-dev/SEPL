@@ -418,6 +418,30 @@ export default function Procurement() {
       make: master?.make || n[i].make || '',
     };
     setIndentItems(n);
+
+    // Department-mismatch warning — mam (2026-05-25, IND-0075 follow-up):
+    // when the picked sub-item's department doesn't match the BOQ row's
+    // expected department (derived from the BOQ's primary item_master
+    // linkage), fire a yellow warning toast.  Not an error — user can
+    // still save if they know better, but they'll notice the mismatch
+    // before submitting.  Only fires when BOTH sides have a department
+    // — silent otherwise to avoid noise.
+    if (master?.department && n[i].po_item_id) {
+      const boq = boqItems.find(b => +b.id === +n[i].po_item_id);
+      const boqMasterId = boq?.item_master_id;
+      if (boqMasterId && +boqMasterId !== +master.id) {
+        const boqMaster = masterItems.find(m => +m.id === +boqMasterId);
+        const boqDept = String(boqMaster?.department || '').trim().toUpperCase();
+        const picked  = String(master.department || '').trim().toUpperCase();
+        if (boqDept && picked && boqDept !== picked) {
+          toast(`⚠ Dept mismatch: BOQ is ${boqDept}, sub-item is ${picked}. Double-check this is intentional.`, {
+            duration: 5000,
+            icon: '⚠️',
+            style: { background: '#fffbeb', color: '#92400e', border: '1px solid #fcd34d' },
+          });
+        }
+      }
+    }
   };
 
   // Picking a BOQ item for this row — fills description / unit / type / make
