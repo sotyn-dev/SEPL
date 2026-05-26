@@ -15,12 +15,17 @@ import { FiInfo } from 'react-icons/fi';
 //   </label>
 export default function InfoTooltip({ text, children, side = 'top', className = '' }) {
   const [open, setOpen] = useState(false);
+  // Anchored to the icon's LEFT EDGE (left-0), not centered, so the popup
+  // always extends rightward instead of pushing off the left side of the
+  // viewport when the icon is near the screen edge (mam 2026-05-25:
+  // "WHEN I SELECT INFO IN SITE NAME THAT IS HIDE").  width:max-content
+  // lets the popup grow up to its max-width naturally.
   const sideClass = {
-    top:    'bottom-full left-1/2 -translate-x-1/2 mb-2',
-    bottom: 'top-full left-1/2 -translate-x-1/2 mt-2',
+    top:    'bottom-full left-0 mb-2',
+    bottom: 'top-full left-0 mt-2',
     left:   'right-full top-1/2 -translate-y-1/2 mr-2',
     right:  'left-full top-1/2 -translate-y-1/2 ml-2',
-  }[side] || 'bottom-full left-1/2 -translate-x-1/2 mb-2';
+  }[side] || 'bottom-full left-0 mb-2';
   return (
     <span
       className={`relative inline-flex items-center ${className}`}

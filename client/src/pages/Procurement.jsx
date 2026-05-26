@@ -2713,9 +2713,14 @@ export default function Procurement() {
                     {/* SUB-ITEMS LIST — shown only when a BOQ is picked. Each row picks an Item Master sub-item. */}
                     {group.boq_id && (
                       <div className="p-2 space-y-2">
-                        {/* Desktop column headers */}
+                        {/* Desktop column headers — InfoTooltip on Sub-Item
+                            explains what's required + warns about dept-mismatch
+                            (mam 2026-05-25: "INFO BUTTON SHOW ON ITEM NAME ALSO"). */}
                         <div className="hidden md:grid gap-2 text-[10px] font-bold text-gray-500 uppercase px-1" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr)) auto' }}>
-                          <div className="col-span-4">Sub-Item (Item Master) <span className="text-red-500">*</span></div>
+                          <div className="col-span-4 flex items-center gap-1">
+                            Sub-Item (Item Master) <span className="text-red-500">*</span>
+                            <InfoTooltip text={`Pick from Item Master.  Each BOQ section locks to ONE sub-item — if you need more components under the same BOQ, click "+ Add another BOQ item" and pick this BOQ again.\n\nWarning: if the picked sub-item's department differs from the BOQ's category, you'll see a yellow toast — common cause of bad indents (e.g. picking a 12-way DB under a CPVC pipes BOQ).`} />
+                          </div>
                           <div className="col-span-2">Make</div>
                           <div className="col-span-2">Type</div>
                           <div className="col-span-2">Qty</div>
@@ -2785,7 +2790,10 @@ export default function Procurement() {
                                   {removeBtn}
                                 </div>
                                 <div>
-                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Sub-Item <span className="text-gray-400 font-normal normal-case">(Item Master)</span></label>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5 flex items-center gap-1">
+                                    Sub-Item <span className="text-gray-400 font-normal normal-case">(Item Master)</span>
+                                    <InfoTooltip text="One sub-item per BOQ section. Mismatched-department picks trigger a warning toast." />
+                                  </label>
                                   {masterPicker}
                                 </div>
                                 <div className="grid grid-cols-4 gap-2">
