@@ -1993,42 +1993,84 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
   const docType = String(req.query.doc_type || '').toLowerCase();
   const isSalesBill = docType === 'sales_bill';
 
-  // Resolve business_book_id via multiple fallback paths (mam 2026-05-25:
-  // "rate also pick as per boq sitc rate from order to planning").  The
-  // straight chain (vp → indent → op → bb) only works when planning_id
-  // is set on the indent.  Many legacy indents have planning_id=NULL, so
-  // we ALSO try: indent.site_name → sites.business_book_id → business_book,
-  // and indent.site_name → business_book.company_name / project_name
-  // directly.  First non-null match wins.
-  const bbResolve = db.prepare(`
-    SELECT COALESCE(
-      (SELECT op.business_book_id FROM vendor_pos vp
-        JOIN indents ind ON ind.id = vp.indent_id
-        JOIN order_planning op ON op.id = ind.planning_id
-        WHERE vp.id = ?),
-      (SELECT s.business_book_id FROM vendor_pos vp
-        JOIN indents ind ON ind.id = vp.indent_id
-        JOIN sites s ON s.name = ind.site_name AND s.business_book_id IS NOT NULL
-        WHERE vp.id = ? LIMIT 1),
-      (SELECT bb.id FROM vendor_pos vp
-        JOIN indents ind ON ind.id = vp.indent_id
-        JOIN business_book bb ON bb.company_name = ind.site_name
-                              OR bb.project_name = ind.site_name
-                              OR bb.client_name  = ind.site_name
-        WHERE vp.id = ? LIMIT 1)
-    ) as bb_id
-  `).get(req.params.id, req.params.id, req.params.id);
-  const bbId = bbResolve?.bb_id;
+  // Scope to THIS Vendor PO's items (mam 2026-05-25: "you pick all not
+  // pick all boq boq fill indent so here is indent wise").  Earlier
+  // version loaded the entire Client PO BOQ (~all items for the
+  // business_book) which dumped 15+ unrelated lines into the Sales
+  // Bill.  Correct path:
+  //   vendor_po_items → indent_items (their qty + linkage) → po_items
+  //   (the BOQ row that supplies the SITC rate).
+  // Returns ONE row per vendor_po_item, with:
+  //   - quantity from vendor_po_items (the qty actually PO'd, not the
+  //     full BOQ qty)
+  //   - rate from po_items (BOQ SITC rate — what we BILL the client)
+  //   - description + spec + size from item_master where possible,
+  //     fallback to po_items.description, then indent_items.description
+  //   - HSN from po_items
+  // This way the Sales Bill is exactly the items in THIS PO at the
+  // client-facing rates.
+  const rows = db.prepare(`
+    SELECT vpi.id,
+           COALESCE(NULLIF(TRIM(im.item_name), ''),
+                    NULLIF(TRIM(poi.description), ''),
+                    ii.description) as description,
+           vpi.quantity,
+           COALESCE(ii.unit, poi.unit, im.uom) as unit,
+           COALESCE(poi.rate, 0) as rate,
+           COALESCE(poi.amount, 0) as amount,
+           poi.hsn_code,
+           im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name,
+           vpi.rate as vendor_rate,
+           poi.id as po_item_id
+      FROM vendor_po_items vpi
+      LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
+      LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+     WHERE vpi.vendor_po_id = ?
+     ORDER BY vpi.id
+  `).all(req.params.id);
 
-  const rows = bbId ? db.prepare(`
-    SELECT pi.id, pi.description, pi.quantity, pi.unit, pi.rate, pi.amount,
-           pi.hsn_code,
-           im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name
-      FROM po_items pi
-      LEFT JOIN item_master im ON pi.item_master_id = im.id
-     WHERE pi.business_book_id = ?
-     ORDER BY pi.id
-  `).all(bbId) : [];
+  // Decide what to return based on what data we found:
+  // - rows with po_item_id AND rate > 0  →  proper BOQ SITC link
+  // - rows with po_item_id but rate = 0  →  BOQ exists but SITC blank
+  // - rows with no po_item_id            →  indent-only fallback
+  const withBoqRate    = rows.filter(r => r.po_item_id && +r.rate > 0).length;
+  const withBoqNoRate  = rows.filter(r => r.po_item_id && +r.rate === 0).length;
+  const indentOnly     = rows.filter(r => !r.po_item_id).length;
+
+  if (rows.length && withBoqRate === rows.length) {
+    // Best case: every line has a BOQ SITC rate.  Just return.
+    return res.json({
+      items: rows,
+      source: 'vendor_po_items',
+      rate_source: 'boq_sitc',
+      rated_count: withBoqRate,
+      total_count: rows.length,
+    });
+  }
+
+  // Some / all rows are missing rates.  For Sales Bill, surface a
+  // warning so mam fills the SELLING rate before saving (vendor cost
+  // is NEVER auto-used for Sales Bills — mam: "if sales bill we enter
+  // BOQ SITC rate").
+  if (isSalesBill) {
+    const safeRows = rows.map(r => ({ ...r, rate: +r.rate > 0 ? r.rate : 0, amount: +r.rate > 0 ? r.amount : 0 }));
+    return res.json({
+      items: safeRows,
+      source: 'vendor_po_items',
+      rate_source: withBoqRate > 0 ? 'boq_sitc_partial' : 'rate_missing',
+      warning:
+        withBoqRate > 0
+          ? `${withBoqNoRate + indentOnly} of ${rows.length} line(s) are missing the BOQ SITC rate.  Fill those before saving.`
+          : `${rows.length} line(s) pre-filled from the indent.  BOQ SITC rates not found → SELLING RATE column is blank.  Fill in the SITC selling rate before saving.`,
+      rated_count: withBoqRate,
+      total_count: rows.length,
+    });
+  }
+
+  // Challan / non-billable doc — vendor cost is fine for internal docs.
+  const vpRowsWithCost = rows.map(r => ({ ...r, rate: +r.rate > 0 ? r.rate : (+r.vendor_rate || 0) }));
+  return res.json({ items: vpRowsWithCost, source: 'vendor_po_items', rate_source: 'mixed' });
 
   if (rows.length) {
     // Count rows with usable rates — surfaces a warning when BOQ was
@@ -2043,40 +2085,17 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
     });
   }
 
-  // No Client PO BOQ items found.  Mam (2026-05-22): "according to
-  // indent fill po items" — fall back to the indent items from the
-  // Vendor PO so the line items still pre-fill (qty / description /
-  // unit / HSN).  For Sales Bill we keep rate=0 and return a clear
-  // amber warning so admin enters the SELLING rate (BOQ SITC) before
-  // saving — billing the wrong amount is worse than an empty form.
-  const vpRows = db.prepare(`
-    SELECT vpi.id, ii.description, vpi.quantity, ii.unit, vpi.rate AS vendor_rate, vpi.amount,
-           NULL AS hsn_code,
-           im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name
-      FROM vendor_po_items vpi
-      LEFT JOIN indent_items ii ON vpi.indent_item_id = ii.id
-      LEFT JOIN item_master im ON ii.item_master_id = im.id
-     WHERE vpi.vendor_po_id = ?
-     ORDER BY vpi.id
-  `).all(req.params.id);
-
-  if (isSalesBill) {
-    // Sales bill: ZERO the rate so admin can't accidentally bill at
-    // vendor cost.  Keep the rest so the form is pre-filled.
-    const safeRows = vpRows.map(r => ({ ...r, rate: 0, amount: 0 }));
-    return res.json({
-      items: safeRows,
-      source: 'indent_fallback',
-      rate_source: 'rate_missing',
-      warning: `Pre-filled ${safeRows.length} line(s) from the indent.  No Client PO BOQ found → SELLING RATE column is blank for each line.  Fill in the SITC selling rate before saving.`,
-      rated_count: 0,
-      total_count: safeRows.length,
-    });
-  }
-
-  // Challan (or other non-billable doc) — vendor cost is fine.
-  const vpRowsWithCost = vpRows.map(r => ({ ...r, rate: r.vendor_rate || 0 }));
-  res.json({ items: vpRowsWithCost, source: 'vendor_po', rate_source: 'vendor_cost' });
+  // Empty-PO edge case: no vendor_po_items rows at all.  Return empty
+  // list with a clear message so the UI shows the friendly empty-state
+  // instead of a vague spinner.
+  return res.json({
+    items: [],
+    source: 'empty',
+    rate_source: 'none',
+    warning: 'No items found on this Vendor PO. Check the source indent has BOQ-linked items.',
+    rated_count: 0,
+    total_count: 0,
+  });
 });
 
 // Print-page renderer for a dispatch row. Returns a self-contained HTML
