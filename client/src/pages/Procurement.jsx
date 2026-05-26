@@ -155,6 +155,35 @@ export default function Procurement() {
   // (mam: 'site eng is on training, if they fill wrong indent can edit').
   const [editingIndentId, setEditingIndentId] = useState(null);
 
+  // Sales Bill late-upload modal (mam 2026-05-25): when a dispatch was
+  // sent with Challan only + sales_bill_pending flag, this modal lets
+  // mam add the formal SB later.  sbTarget = the dispatch row; null = closed.
+  const [sbTarget, setSbTarget] = useState(null);
+  const [sbForm, setSbForm] = useState({ sales_bill_number: '', file: null });
+  const [sbSaving, setSbSaving] = useState(false);
+  const submitSalesBill = async () => {
+    if (!sbTarget) return;
+    const num = String(sbForm.sales_bill_number || '').trim();
+    if (!num) { toast.error('Sales Bill number is required'); return; }
+    setSbSaving(true);
+    try {
+      const fd = new FormData();
+      fd.append('sales_bill_number', num);
+      if (sbForm.file) fd.append('file', sbForm.file);
+      await api.post(`/procurement/delivery-notes/${sbTarget.id}/sales-bill`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      toast.success(`Sales Bill ${num} added`);
+      setSbTarget(null);
+      setSbForm({ sales_bill_number: '', file: null });
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Upload failed');
+    } finally {
+      setSbSaving(false);
+    }
+  };
+
   // Approval / Rejection modals (mam 2026-05-25). approveTarget holds the
   // indent row + per-line quantity overrides the approver can tweak.
   // rejectTarget holds the indent row + the mandatory reason field.
@@ -951,6 +980,9 @@ export default function Procurement() {
     // vendor PO's items auto-land as stock IN at that warehouse on the
     // server side. Skipped silently if no warehouse selected.
     if (form.warehouse_id) fd.append('warehouse_id', form.warehouse_id);
+    // sales_bill_pending — mam (2026-05-25): flag at receipt time so the
+    // dispatch shows the amber "📋 SB PENDING" chip until SB is uploaded.
+    if (form.sales_bill_pending) fd.append('sales_bill_pending', '1');
     try {
       const r = await api.patch(`/procurement/delivery-notes/${form.receive_id}/receive`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -2494,9 +2526,25 @@ export default function Procurement() {
                 <tr key={d.id}>
                   <td>#{d.id}</td>
                   <td>
-                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
-                      {d.document_type === 'sales_bill' ? 'SALES BILL' : d.document_type === 'challan' ? 'CHALLAN' : '—'}
-                    </span>
+                    <div className="flex flex-col gap-1 items-start">
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                        {d.document_type === 'sales_bill' ? 'SALES BILL' : d.document_type === 'challan' ? 'CHALLAN' : '—'}
+                      </span>
+                      {/* Sales Bill pending chip — mam (2026-05-25): when
+                          dispatched with Challan only and SB will follow
+                          later, this amber chip lingers until SB is
+                          uploaded via the Add Sales Bill button below. */}
+                      {d.sales_bill_pending === 1 && !d.sales_bill_number && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300" title="Goods delivered on a Challan only — formal Sales Bill is still pending. Click 'Add Sales Bill' in actions to upload when it arrives.">
+                          📋 SB PENDING
+                        </span>
+                      )}
+                      {d.sales_bill_number && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200" title={`Sales Bill ${d.sales_bill_number} uploaded`}>
+                          ✓ SB {d.sales_bill_number}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="font-medium">{d.document_number || <span className="text-gray-300">—</span>}</td>
                   <td className="text-xs">{d.vendor_po_number || <span className="text-gray-300">—</span>}<div className="text-[10px] text-gray-500">{d.vendor_name || ''}</div></td>
@@ -2538,6 +2586,14 @@ export default function Procurement() {
                     >🖨 Print</button>
                     {!d.received_by_name && (
                       <button onClick={() => openMarkReceived(d)} className="btn btn-success text-[10px] px-2 py-1 mr-1">Mark Received</button>
+                    )}
+                    {/* Add Sales Bill — only when this dispatch was marked
+                        sales_bill_pending=1 AND no SB has been uploaded yet
+                        (mam 2026-05-25). */}
+                    {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
+                      <button onClick={() => { setSbTarget(d); setSbForm({ sales_bill_number: '', file: null }); }} className="text-[10px] px-2 py-1 mr-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">
+                        Add Sales Bill
+                      </button>
                     )}
                     {canDelete('procurement') && <button onClick={async () => {
                       if (!confirm(`Delete dispatch #${d.id}?`)) return;
@@ -3464,6 +3520,45 @@ export default function Procurement() {
         </form>
       </Modal>
 
+      {/* Add Sales Bill modal — mam (2026-05-25): for Challan-only
+          dispatches that were marked sales_bill_pending=1, this lets
+          her upload the formal Sales Bill once it arrives.  Clears
+          the pending flag on save. */}
+      <Modal isOpen={!!sbTarget} onClose={() => { setSbTarget(null); setSbForm({ sales_bill_number: '', file: null }); }} title={sbTarget ? `Add Sales Bill — Dispatch #${sbTarget.id}` : 'Add Sales Bill'}>
+        {sbTarget && (
+          <div className="space-y-4">
+            <div className="text-xs bg-amber-50 border border-amber-200 rounded p-3">
+              <div className="font-semibold text-amber-800 mb-1">📋 Sales Bill pending — adding now</div>
+              <div className="text-amber-700 grid grid-cols-2 gap-1">
+                <div><span className="text-gray-500">Dispatch:</span> <b>{sbTarget.document_number || '#' + sbTarget.id}</b></div>
+                <div><span className="text-gray-500">PO:</span> <b>{sbTarget.vendor_po_number || '—'}</b></div>
+                <div><span className="text-gray-500">Vendor:</span> {sbTarget.vendor_name || '—'}</div>
+                <div><span className="text-gray-500">Date:</span> {sbTarget.delivery_date || '—'}</div>
+              </div>
+            </div>
+            <div>
+              <label className="label">Sales Bill Number <span className="text-red-600">*</span></label>
+              <input className="input" placeholder="e.g. INV/2026/0042"
+                value={sbForm.sales_bill_number}
+                onChange={(e) => setSbForm(f => ({ ...f, sales_bill_number: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">Sales Bill File <span className="text-gray-400 text-[10px] font-normal">(optional · PDF / image / xlsx)</span></label>
+              <input type="file" className="input"
+                accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls"
+                onChange={(e) => setSbForm(f => ({ ...f, file: e.target.files?.[0] || null }))} />
+              {sbForm.file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {sbForm.file.name}</p>}
+            </div>
+            <div className="flex justify-end gap-3 pt-2 border-t">
+              <button type="button" onClick={() => { setSbTarget(null); setSbForm({ sales_bill_number: '', file: null }); }} className="btn btn-secondary">Cancel</button>
+              <button type="button" onClick={submitSalesBill} disabled={sbSaving || !sbForm.sales_bill_number.trim()} className="btn btn-primary">
+                {sbSaving ? 'Saving…' : 'Add Sales Bill'}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       {/* Mark Received Modal — captures who received the dispatch AND the
           client's stamped + signed receipt photo as proof of delivery. This
           receipt is critical for mam because without it clients sometimes
@@ -3494,6 +3589,23 @@ export default function Procurement() {
             {form.receipt_file && <p className="text-[10px] text-emerald-600 mt-0.5">Selected: {form.receipt_file.name}</p>}
             <p className="text-[10px] text-gray-400 mt-0.5">On mobile, tapping this opens the camera directly — take the photo of the stamped sales bill / challan.</p>
           </div>
+          {/* Sales Bill pending — mam (2026-05-25): "rec is against some
+              time delivery note so can upload but show sales bill is
+              pending".  Lets mam mark "the receipt I'm uploading is the
+              DN — Sales Bill is still coming".  Adds the amber chip
+              "📋 SB PENDING" to the dispatch row + enables the "Add
+              Sales Bill" button once the SB arrives. */}
+          <label className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 rounded p-2.5 cursor-pointer">
+            <input type="checkbox" className="mt-0.5"
+              checked={!!form.sales_bill_pending}
+              onChange={(e) => setForm({ ...form, sales_bill_pending: e.target.checked })} />
+            <span>
+              <span className="font-semibold text-amber-800">Sales Bill is pending</span>
+              <span className="text-amber-700 block mt-0.5">
+                Tick this if the receipt above is a Delivery Note / Challan and the formal Sales Bill will arrive later.  An "📋 SB Pending" chip will show on this dispatch until you upload the Sales Bill.
+              </span>
+            </span>
+          </label>
           {/* Optional inventory link — pick a warehouse to auto-add the
               vendor PO's items as stock. Leave blank to skip. */}
           {warehouses.length > 0 && (

@@ -2682,6 +2682,14 @@ function initializeDatabase() {
     // Shape: JSON array of {po_item_id, description, hsn, unit, qty,
     //                       rate, disc_pct, amount}
     ['delivery_notes', 'items_json TEXT'],
+    // Late Sales Bill — mam (2026-05-25): sometimes goods are dispatched
+    // with only a Delivery Note / Challan, and the formal Sales Bill
+    // follows days later.  These columns let us flag "DN delivered,
+    // Sales Bill still pending" and then back-fill the SB once it arrives.
+    ['delivery_notes', 'sales_bill_pending INTEGER DEFAULT 0'],
+    ['delivery_notes', 'sales_bill_number TEXT'],
+    ['delivery_notes', 'sales_bill_file_path TEXT'],
+    ['delivery_notes', 'sales_bill_uploaded_at DATETIME'],
     // Sub-Contractor module (mam's "Sub-Contractor Form" Google-Form
     // 47-entry workflow brought into ERP). Extends the existing
     // sub_contractors table — legacy HR fields (phone, email,

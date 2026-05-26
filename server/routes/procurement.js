@@ -1752,6 +1752,13 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
     items_json: itemsJson,
   };
 
+  // sales_bill_pending — mam (2026-05-25): when dispatching with a
+  // Challan only, mam can tick "Sales Bill pending" to flag that the
+  // formal Sales Bill will be uploaded later via /sales-bill endpoint.
+  // Only meaningful for Challan dispatches — sales_bill dispatches
+  // already HAVE the Sales Bill (this row IS the SB).
+  const salesBillPending = (document_type === 'challan' && (b.sales_bill_pending === '1' || b.sales_bill_pending === 1 || b.sales_bill_pending === true)) ? 1 : 0;
+
   try {
     const r = getDb().prepare(
       `INSERT INTO delivery_notes (vendor_po_id, delivery_date, received_by, notes,
@@ -1759,18 +1766,57 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
                                     vehicle_no, driver_name, driver_mobile, lr_challan_no, total_packages,
                                     place_of_supply, state_code, reverse_charge, e_way_bill_no,
                                     cgst_pct, sgst_pct, igst_pct, freight_amount, round_off_amount,
-                                    subtotal_amount, grand_total_amount)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                    subtotal_amount, grand_total_amount, sales_bill_pending)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(vendor_po_id, delivery_date, req.user.id, notes, document_type, document_number, filePath,
       fields.vehicle_no, fields.driver_name, fields.driver_mobile, fields.lr_challan_no, fields.total_packages,
       fields.place_of_supply, fields.state_code, fields.reverse_charge, fields.e_way_bill_no,
       fields.cgst_pct, fields.sgst_pct, fields.igst_pct, fields.freight_amount, fields.round_off_amount,
-      fields.subtotal_amount, fields.grand_total_amount);
-    res.status(201).json({ id: r.lastInsertRowid, file_path: filePath, document_number, document_type });
+      fields.subtotal_amount, fields.grand_total_amount, salesBillPending);
+    res.status(201).json({ id: r.lastInsertRowid, file_path: filePath, document_number, document_type, sales_bill_pending: salesBillPending });
   } catch (err) {
     if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
     res.status(500).json({ error: err.message });
   }
+});
+
+// Upload the formal Sales Bill for a Challan-only dispatch that was
+// previously marked sales_bill_pending=1.  Mam (2026-05-25): "rec is
+// against some time delivery note so can upload but show sales bill is
+// pending" — this is the late-add endpoint that clears the pending flag.
+router.post('/delivery-notes/:id/sales-bill', needsApprove, vendorPoUpload.single('file'), (req, res) => {
+  const b = req.body || {};
+  const db = getDb();
+  const dn = db.prepare('SELECT id, document_type, sales_bill_pending FROM delivery_notes WHERE id=?').get(req.params.id);
+  if (!dn) return res.status(404).json({ error: 'Dispatch not found' });
+  if (!dn.sales_bill_pending) {
+    return res.status(400).json({ error: 'This dispatch is not marked sales_bill_pending. Nothing to add.' });
+  }
+  const sales_bill_number = String(b.sales_bill_number || '').trim();
+  if (!sales_bill_number) {
+    return res.status(400).json({ error: 'Sales Bill number is required' });
+  }
+  let sbFilePath = null;
+  if (req.file) {
+    try {
+      const safeName = (req.file.originalname || 'sales-bill').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const newName = `${Date.now()}-${safeName}`;
+      const newPath = path.join(path.dirname(req.file.path), newName);
+      fs.renameSync(req.file.path, newPath);
+      sbFilePath = `/uploads/${newName}`;
+    } catch (e) {
+      sbFilePath = `/uploads/${req.file.filename}`;
+    }
+  }
+  db.prepare(
+    `UPDATE delivery_notes
+       SET sales_bill_pending = 0,
+           sales_bill_number = ?,
+           sales_bill_file_path = COALESCE(?, sales_bill_file_path),
+           sales_bill_uploaded_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).run(sales_bill_number, sbFilePath, req.params.id);
+  res.json({ ok: true, sales_bill_number, sales_bill_file_path: sbFilePath });
 });
 
 // Mark a dispatch as "Received by <name> on <date>" and attach the stamped +
@@ -1810,6 +1856,12 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
   // no warehouse selected (legacy behavior).
   const warehouseId = b.warehouse_id ? +b.warehouse_id : null;
 
+  // sales_bill_pending — mam (2026-05-25): when the receipt is a DN
+  // and the Sales Bill is still pending.  Stored on the dispatch row
+  // so the amber "📋 SB PENDING" chip shows in the list until SB
+  // arrives via /sales-bill endpoint.
+  const sbPendingFlag = (b.sales_bill_pending === '1' || b.sales_bill_pending === 1 || b.sales_bill_pending === true) ? 1 : null;
+
   try {
     db.prepare(
       `UPDATE delivery_notes
@@ -1817,9 +1869,10 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
              received_at = COALESCE(?, CURRENT_TIMESTAMP),
              receipt_file_path = COALESCE(?, receipt_file_path),
              status = 'received',
-             warehouse_id = COALESCE(?, warehouse_id)
+             warehouse_id = COALESCE(?, warehouse_id),
+             sales_bill_pending = COALESCE(?, sales_bill_pending)
        WHERE id = ?`
-    ).run(String(received_by_name).trim(), received_at || null, receiptPath, warehouseId, req.params.id);
+    ).run(String(received_by_name).trim(), received_at || null, receiptPath, warehouseId, sbPendingFlag, req.params.id);
 
     // INVENTORY AUTO-IN — best effort; never blocks the receipt save.
     let stockIns = 0;
