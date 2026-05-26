@@ -2909,7 +2909,7 @@ export default function Procurement() {
             <div className="flex gap-1 flex-wrap">
               {[
                 { id: 'material',           label: 'Material',         hint: 'BOQ items (PO + FOC). RGP hidden.' },
-                { id: 'rgp',                label: 'RGP',              hint: 'BOQ RGP items only.' },
+                { id: 'rgp',                label: 'RGP',              hint: 'Pick any BOQ row, then Sub-Item from Item Master where type = RGP.' },
                 { id: 'extra_schedule',     label: 'Extra · Schedule', hint: 'BOQ item exists, qty cap removed (over-BOQ).' },
                 { id: 'extra_non_schedule', label: 'Extra · Non-Schedule', hint: 'Item outside BOQ — pick free from Item Master (PO + FOC).' },
                 { id: 'rental',             label: 'Rental',           hint: 'Rented tool — Days × Rate/Day. Blocks if rental ≥ buying outright.' },
@@ -2941,7 +2941,7 @@ export default function Procurement() {
               {(() => {
                 const c = form.indent_category || 'material';
                 if (c === 'material')           return 'BOQ items where type is PO or FOC. RGP items hidden — pick the RGP category for those.';
-                if (c === 'rgp')                return 'BOQ items where type is RGP only.';
+                if (c === 'rgp')                return 'Pick any BOQ row, then pick a Sub-Item from Item Master where type = RGP. (RGP-ness lives on the Item Master, not on the BOQ row.)';
                 if (c === 'extra_schedule')     return 'BOQ item exists but the site needs MORE qty than BOQ allows. Qty cap is removed — L1+L2 will see the over-commit.';
                 if (c === 'extra_non_schedule') return 'Item is completely outside the BOQ. Pick directly from Item Master (PO + FOC types).';
                 if (c === 'rental')             return 'Rented tool. Per row: Days × Rate/Day. Server BLOCKS the indent if rental cost ≥ buying outright cost.';
@@ -3128,9 +3128,15 @@ export default function Procurement() {
               {/* ─── BOQ-grouped layout for Material / RGP / Extra-Schedule ─── */}
               {(form.indent_category === 'material' || form.indent_category === 'rgp' || form.indent_category === 'extra_schedule' || !form.indent_category) && (() => {
                 const cat = form.indent_category || 'material';
-                // BOQ items filtered per category (mam 2026-05-26).
+                // BOQ items filter (mam 2026-05-26 follow-up): RGP-ness is
+                // determined at the ITEM MASTER level (im.type='RGP'), NOT at
+                // the BOQ row level — Client PO BOQ rows are typically all PO
+                // (no RGP rows in the Client PO at all). So for RGP category
+                // we show ALL BOQ rows and the user picks the BOQ they're
+                // associating the RGP item with; the actual RGP filter is
+                // applied at the Sub-Item picker further down (filteredMasterForBoq).
                 const filteredBoqItems = cat === 'rgp'
-                  ? boqItems.filter(b => String(b.item_type || '').toUpperCase() === 'RGP')
+                  ? boqItems
                   : boqItems.filter(b => {
                       const t = String(b.item_type || '').toUpperCase();
                       return t === 'PO' || t === 'FOC' || t === '';
@@ -3184,8 +3190,12 @@ export default function Procurement() {
                                 value={null} valueKey="id" displayKey="label"
                                 placeholder={
                                   filteredBoqItems.length
-                                    ? `Search BOQ item (${cat === 'rgp' ? 'RGP items only' : 'PO + FOC items'})…`
-                                    : `No ${cat === 'rgp' ? 'RGP' : 'PO/FOC'} BOQ items for this site`
+                                    ? (cat === 'rgp'
+                                        ? 'Search BOQ item (any) — RGP filter is on the Sub-Item below…'
+                                        : 'Search BOQ item (PO + FOC items)…')
+                                    : (cat === 'rgp'
+                                        ? 'No BOQ items for this site'
+                                        : 'No PO/FOC BOQ items for this site')
                                 }
                                 onChange={(b) => pickBoqItem(group.rows[0].idx, b)}
                               />
