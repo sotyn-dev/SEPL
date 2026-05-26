@@ -234,25 +234,110 @@ export default function Procurement() {
     return next;
   });
 
-  const load = () => {
-    api.get('/procurement/indents').then(r => setIndents(r.data));
-    api.get('/procurement/vendor-po').then(r => setVendorPos(r.data));
-    api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data));
-    api.get('/procurement/delivery-notes').then(r => setDeliveryNotes(r.data));
-    api.get('/procurement/vendors').then(r => setVendors(r.data));
-    api.get('/procurement/item-rates').then(r => setItemRates(r.data || [])).catch(() => setItemRates([]));
-    api.get('/procurement/pending-po-items').then(r => setPendingPoItems(r.data || [])).catch(() => setPendingPoItems([]));
+  // ── Tab-wise lazy fetching (mam 2026-05-25: "abd tab wise api fetch") ──
+  //
+  // Old behaviour: load() fired 9 parallel API calls on mount regardless
+  // of which tab was visible.  Slow + wasted bandwidth for users who
+  // only opened one tab.
+  //
+  // New behaviour:
+  //   1. Reference data (vendors, sites, employees, masterItems, warehouses)
+  //      loads once on mount — these are small and used by modals on
+  //      every tab.
+  //   2. Each tab's domain data loads ON DEMAND when that tab is first
+  //      shown (or when reloadTab is called after a CRUD operation).
+  //   3. `loadedTabs` Set caches which tabs have been fetched so quick
+  //      tab-switching doesn't refetch unnecessarily.  Tabs are dropped
+  //      from the cache after CRUD so the next visit refreshes.
+  //
+  // Dependencies between tabs (e.g. Bills tab needs vendorPos AND
+  // purchaseBills; Dispatch tab needs all three) are spelt out per tab
+  // in TAB_FETCHERS so each tab gets exactly what it renders, no more.
+  const [loadedTabs, setLoadedTabs] = useState(() => new Set());
+
+  // One-time reference data load.  These are small + cross-tab so it's
+  // cheaper to load them once than to track per-tab dependencies.
+  const loadReference = () => {
+    api.get('/procurement/vendors').then(r => setVendors(r.data)).catch(() => setVendors([]));
     api.get('/item-master/dropdown').then(r => setMasterItems(r.data || [])).catch(() => setMasterItems([]));
-    api.get('/procurement/sites').then(r => {
-      // Response is one row per unique name: [{ name, lead_no }]
-      setSites(r.data || []);
-    }).catch(() => setSites([]));
+    api.get('/procurement/sites').then(r => setSites(r.data || [])).catch(() => setSites([]));
     api.get('/hr/employees').then(r => setEmployees((r.data || []).filter(e => !e.status || e.status === 'active'))).catch(() => setEmployees([]));
-    // Warehouses fuel the optional auto-IN dropdown on the Mark Received modal.
-    // Silent on 403 — non-inventory users still see the original receive form.
+    // Warehouses · 403 for non-inventory users → silently empty list.
     api.get('/inventory/warehouses').then(r => setWarehouses(r.data || [])).catch(() => setWarehouses([]));
   };
-  useEffect(() => { load(); }, []);
+
+  // Per-tab loaders.  Each returns a Promise that resolves when all of
+  // that tab's required data is in state.  Tabs declare their full
+  // dependency set so an indirect tab switch (e.g. Bills uses vendorPos
+  // too) still works.
+  const TAB_FETCHERS = {
+    indents: () => Promise.all([
+      api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
+    ]),
+    rates: () => Promise.all([
+      api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
+      api.get('/procurement/item-rates').then(r => setItemRates(r.data || [])).catch(() => setItemRates([])),
+    ]),
+    vendorpo: () => Promise.all([
+      api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
+      api.get('/procurement/pending-po-items').then(r => setPendingPoItems(r.data || [])).catch(() => setPendingPoItems([])),
+    ]),
+    bills: () => Promise.all([
+      api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
+      api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
+    ]),
+    delivery: () => Promise.all([
+      api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
+      api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
+      api.get('/procurement/delivery-notes').then(r => setDeliveryNotes(r.data)).catch(() => setDeliveryNotes([])),
+    ]),
+  };
+
+  // Fetch a tab's data, honouring cache.  Pass force=true after a CRUD
+  // operation to bypass cache and refresh.
+  const loadTab = (tabName, { force = false } = {}) => {
+    const fetcher = TAB_FETCHERS[tabName];
+    if (!fetcher) return Promise.resolve();
+    if (!force && loadedTabs.has(tabName)) return Promise.resolve();
+    return fetcher().then(() => {
+      setLoadedTabs(prev => new Set(prev).add(tabName));
+    });
+  };
+
+  // Backward-compat: many CRUD handlers call `load()` to refresh.  Keep
+  // the name but reroute it to "refresh the CURRENTLY-ACTIVE tab only"
+  // — that's all the user can see, anyway.  We also invalidate the
+  // cache for tabs whose data overlaps so a follow-up switch refetches.
+  const load = () => {
+    // Reset cache for tabs that overlap with the current tab so stale
+    // cross-tab data doesn't linger after a create/edit/delete.
+    setLoadedTabs(prev => {
+      const next = new Set(prev);
+      // Most CRUD ops in this page invalidate vendorPos / purchaseBills
+      // somehow, so safest to evict the dependent tabs alongside the
+      // current one.  Indents tab is self-contained.
+      next.delete(tab);
+      if (tab === 'vendorpo' || tab === 'bills' || tab === 'delivery') {
+        next.delete('vendorpo');
+        next.delete('bills');
+        next.delete('delivery');
+      }
+      return next;
+    });
+    return loadTab(tab, { force: true });
+  };
+
+  // Mount → reference data + current tab.  No more 9-call fan-out.
+  useEffect(() => {
+    loadReference();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Tab switch → lazy fetch the new tab's data (cached if already loaded).
+  useEffect(() => {
+    loadTab(tab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   // Site dropdown shows one row per unique name. BOQ/PO items are aggregated
   // across every Business Book entry matching that name, so picking
