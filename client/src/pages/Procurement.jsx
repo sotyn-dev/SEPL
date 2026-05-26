@@ -3331,14 +3331,13 @@ export default function Procurement() {
                   </div>
                 )}
               </div>
-              <button
-                type="button"
-                className="text-[11px] px-2 py-1 rounded border border-red-300 text-red-700 hover:bg-red-100"
-                onClick={() => setDispatchItems(prev => [...prev, {
-                  include: true, description: '', hsn: '', unit: 'nos',
-                  quantity: 0, rate: 0, disc_pct: 0,
-                }])}
-              >+ Add row</button>
+              {/* "+ Add row" REMOVED on mam's instruction (2026-05-25):
+                  "dont add row because already pick according indent".
+                  Lines are auto-populated from the indent / BOQ; manual
+                  rows let users add ghost items that aren't tied to any
+                  PO line, leading to billing mistakes.  If a line really
+                  is missing, the source data (BOQ or indent) needs to be
+                  fixed — not papered over with a manual row here. */}
             </div>
             {/* Challan = FOC / RGP, not billable, so we hide Rate / Disc /
                 Amount columns entirely. Sales Bill keeps the full set. */}
@@ -3364,7 +3363,7 @@ export default function Procurement() {
                 </thead>
                 <tbody>
                   {dispatchItems.length === 0 && !dispatchItemsLoading && (
-                    <tr><td colSpan={emptyColspan} className="px-2 py-3 text-center text-gray-400 italic">No line items yet. Click "+ Add row" to add manually.</td></tr>
+                    <tr><td colSpan={emptyColspan} className="px-2 py-3 text-center text-gray-400 italic">No line items found for this PO. Check that the source indent has BOQ-linked items.</td></tr>
                   )}
                   {dispatchItems.map((it, idx) => {
                     const qty = +it.quantity || 0;

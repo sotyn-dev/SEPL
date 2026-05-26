@@ -1992,21 +1992,43 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
   // fallback — better empty + clear warning than wrong rate billed.
   const docType = String(req.query.doc_type || '').toLowerCase();
   const isSalesBill = docType === 'sales_bill';
-  const rows = db.prepare(`
+
+  // Resolve business_book_id via multiple fallback paths (mam 2026-05-25:
+  // "rate also pick as per boq sitc rate from order to planning").  The
+  // straight chain (vp → indent → op → bb) only works when planning_id
+  // is set on the indent.  Many legacy indents have planning_id=NULL, so
+  // we ALSO try: indent.site_name → sites.business_book_id → business_book,
+  // and indent.site_name → business_book.company_name / project_name
+  // directly.  First non-null match wins.
+  const bbResolve = db.prepare(`
+    SELECT COALESCE(
+      (SELECT op.business_book_id FROM vendor_pos vp
+        JOIN indents ind ON ind.id = vp.indent_id
+        JOIN order_planning op ON op.id = ind.planning_id
+        WHERE vp.id = ?),
+      (SELECT s.business_book_id FROM vendor_pos vp
+        JOIN indents ind ON ind.id = vp.indent_id
+        JOIN sites s ON s.name = ind.site_name AND s.business_book_id IS NOT NULL
+        WHERE vp.id = ? LIMIT 1),
+      (SELECT bb.id FROM vendor_pos vp
+        JOIN indents ind ON ind.id = vp.indent_id
+        JOIN business_book bb ON bb.company_name = ind.site_name
+                              OR bb.project_name = ind.site_name
+                              OR bb.client_name  = ind.site_name
+        WHERE vp.id = ? LIMIT 1)
+    ) as bb_id
+  `).get(req.params.id, req.params.id, req.params.id);
+  const bbId = bbResolve?.bb_id;
+
+  const rows = bbId ? db.prepare(`
     SELECT pi.id, pi.description, pi.quantity, pi.unit, pi.rate, pi.amount,
            pi.hsn_code,
            im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name
       FROM po_items pi
       LEFT JOIN item_master im ON pi.item_master_id = im.id
-     WHERE pi.business_book_id = (
-       SELECT op.business_book_id
-         FROM vendor_pos vp
-         JOIN indents ind ON ind.id = vp.indent_id
-         JOIN order_planning op ON op.id = ind.planning_id
-        WHERE vp.id = ?
-     )
+     WHERE pi.business_book_id = ?
      ORDER BY pi.id
-  `).all(req.params.id);
+  `).all(bbId) : [];
 
   if (rows.length) {
     // Count rows with usable rates — surfaces a warning when BOQ was
