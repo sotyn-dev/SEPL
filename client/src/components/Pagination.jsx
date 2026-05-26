@@ -46,11 +46,19 @@ export function usePagination(rows, perPage, page, setPage) {
 }
 
 // Pagination — small page-nav strip designed to live under a table.
-// Shows "X-Y of Z" + Prev / page numbers / Next.  Hides itself when
-// there's only 1 page (no point in rendering 7 dead pixels).
-export default function Pagination({ pg, className = '' }) {
+// Shows "Per page" selector + "X-Y of Z" + Prev / page numbers / Next.
+// Hides page-nav when there's only 1 page (no point in dead pixels).
+//
+// Per-page selector (mam 2026-05-25: "show here all data remove page
+// wise as per user requirement") — when `setPerPage` is provided,
+// renders a dropdown letting the user pick 15 / 50 / 100 / All.  "All"
+// is implemented as perPage = total (the whole array) so the existing
+// slice math doesn't need special cases.  Hidden if setPerPage missing
+// (backwards compat for any callers that don't want it).
+const DEFAULT_PER_PAGE_OPTIONS = [15, 50, 100, 'all'];
+export default function Pagination({ pg, className = '', setPerPage, perPageOptions = DEFAULT_PER_PAGE_OPTIONS }) {
   if (!pg || pg.total === 0) return null;
-  const { page, pages, total, from, to, setPage, hasPrev, hasNext } = pg;
+  const { page, pages, total, perPage, from, to, setPage, hasPrev, hasNext } = pg;
 
   // Build a compact page-number list with ellipses for long ranges.
   // For ≤ 7 pages we show them all; beyond that, we collapse the middle.
@@ -60,10 +68,35 @@ export default function Pagination({ pg, className = '' }) {
     return [...out].filter(p => p >= 1 && p <= pages).sort((a, b) => a - b);
   })();
 
+  // Detect "All" mode — when perPage is >= total, every row is on one
+  // page.  Selector shows "all" highlighted in that case.
+  const isAllMode = perPage >= total && total > 0;
+
   return (
     <div className={`flex items-center justify-between gap-2 flex-wrap text-xs text-gray-600 px-2 py-2 ${className}`}>
-      <div>
-        Showing <span className="font-semibold">{from + 1}</span>–<span className="font-semibold">{to}</span> of <span className="font-semibold">{total}</span>
+      <div className="flex items-center gap-3 flex-wrap">
+        <div>
+          Showing <span className="font-semibold">{from + 1}</span>–<span className="font-semibold">{to}</span> of <span className="font-semibold">{total}</span>
+        </div>
+        {setPerPage && (
+          <label className="flex items-center gap-1">
+            <span className="text-gray-500">Per page:</span>
+            <select
+              value={isAllMode ? 'all' : perPage}
+              onChange={(e) => {
+                const v = e.target.value === 'all' ? Math.max(total, 1) : parseInt(e.target.value, 10);
+                setPerPage(v);
+                setPage(1); // jump to page 1 so we don't land on an empty page
+              }}
+              className="border border-gray-200 rounded px-1.5 py-0.5 text-xs bg-white">
+              {perPageOptions.map(opt => (
+                <option key={opt} value={opt}>
+                  {opt === 'all' ? `All (${total})` : opt}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
       {pages > 1 && (
         <div className="flex items-center gap-1">

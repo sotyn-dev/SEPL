@@ -168,8 +168,20 @@ export default function Procurement() {
   // ── Filter / search / pagination state (mam 2026-05-25 UI sweep) ──────
   // Each tab gets its own filter slice + page index so switching tabs
   // doesn't lose state, and changing a filter on one tab doesn't reset
-  // pagination on another.  PER_PAGE = 15 across the board per mam's spec.
-  const PER_PAGE = 15;
+  // pagination on another.
+  //
+  // Per-page is now PER-TAB stateful (mam 2026-05-25 follow-up:
+  // "show here all data remove page wise as per user requirement").
+  // User picks 15 / 50 / 100 / All from the Pagination dropdown; choice
+  // persists for that tab until they navigate away.  Defaults to 15.
+  const [indPerPage, setIndPerPage]               = useState(15);
+  const [ratesPerPage, setRatesPerPage]           = useState(15);
+  const [vpoPendingPerPage, setVpoPendingPerPage] = useState(15);
+  const [vpoListPerPage, setVpoListPerPage]       = useState(15);
+  const [billsFuPerPage, setBillsFuPerPage]       = useState(15);
+  const [billsListPerPage, setBillsListPerPage]   = useState(15);
+  const [dispReadyPerPage, setDispReadyPerPage]   = useState(15);
+  const [dispListPerPage, setDispListPerPage]     = useState(15);
   // Indents
   const [indFilterStatus, setIndFilterStatus]   = useState('all');
   const [indFilterFrom, setIndFilterFrom]       = useState('');
@@ -1164,7 +1176,7 @@ export default function Procurement() {
           }
           return true;
         });
-        const indPg = usePagination(filteredIndents, PER_PAGE, indPage, setIndPage);
+        const indPg = usePagination(filteredIndents, indPerPage, indPage, setIndPage);
         return (
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
@@ -1486,7 +1498,7 @@ export default function Procurement() {
               {indents.length > 0 && filteredIndents.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No indents match the current filters — try Reset</td></tr>}
             </tbody>
           </table>
-          <Pagination pg={indPg} className="border-t border-gray-100" />
+          <Pagination pg={indPg} setPerPage={setIndPerPage} className="border-t border-gray-100" />
           </div>
         </>
         );
@@ -1503,7 +1515,7 @@ export default function Procurement() {
             const hay = `${r.indent_number || ''} ${r.master_name || ''} ${r.description || ''} ${r.site_name || ''}`.toLowerCase();
             return hay.includes(rq);
           });
-        const ratesPg = usePagination(filteredRates, PER_PAGE, ratesPage, setRatesPage);
+        const ratesPg = usePagination(filteredRates, ratesPerPage, ratesPage, setRatesPage);
         return (
         <>
           {/* Vendor Name uses SearchableSelect component now, sourced from
@@ -1723,7 +1735,7 @@ export default function Procurement() {
             {mergedRates.length > 0 && filteredRates.length === 0 && <div className="card text-center py-8 text-gray-400">No items match the current filters.</div>}
           </div>
           {/* Shared pagination for both desktop + mobile renderings */}
-          <div className="card"><Pagination pg={ratesPg} /></div>
+          <div className="card"><Pagination pg={ratesPg} setPerPage={setRatesPerPage} /></div>
         </>
         );
       })()}
@@ -1740,7 +1752,7 @@ export default function Procurement() {
           const hay = `${p.indent_number || ''} ${p.site_name || ''} ${p.master_name || ''} ${p.description || ''}`.toLowerCase();
           return hay.includes(pSearch);
         });
-        const pendingPg = usePagination(filteredPending, PER_PAGE, vpoPendingPage, setVpoPendingPage);
+        const pendingPg = usePagination(filteredPending, vpoPendingPerPage, vpoPendingPage, setVpoPendingPage);
 
         const lSearch = vpoListSearch.trim().toLowerCase();
         const filteredList = vendorPos.filter(v => {
@@ -1751,7 +1763,7 @@ export default function Procurement() {
           const hay = `${v.po_number || ''} ${v.indent_number || ''} ${v.vendor_name || ''} ${v.indent_site_name || ''}`.toLowerCase();
           return hay.includes(lSearch);
         });
-        const listPg = usePagination(filteredList, PER_PAGE, vpoListPage, setVpoListPage);
+        const listPg = usePagination(filteredList, vpoListPerPage, vpoListPage, setVpoListPage);
         return (
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
@@ -1859,7 +1871,7 @@ export default function Procurement() {
                   </tbody>
                 </table>
               </div>
-              <Pagination pg={pendingPg} className="border-t border-amber-200 pt-2" />
+              <Pagination pg={pendingPg} setPerPage={setVpoPendingPerPage} className="border-t border-amber-200 pt-2" />
             </div>
           )}
 
@@ -1980,7 +1992,7 @@ export default function Procurement() {
               {vendorPos.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No vendor POs yet — click "Create Vendor PO"</td></tr>}
               {vendorPos.length > 0 && filteredList.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400">No POs match the current filters.</td></tr>}
             </tbody>
-            <tfoot><tr><td colSpan="8" className="border-t border-gray-100"><Pagination pg={listPg} /></td></tr></tfoot>
+            <tfoot><tr><td colSpan="8" className="border-t border-gray-100"><Pagination pg={listPg} setPerPage={setVpoListPerPage} /></td></tr></tfoot>
           </table></div>
             </>
           )}
@@ -2012,7 +2024,7 @@ export default function Procurement() {
           const hay = `${po.po_number || ''} ${po.indent_number || ''} ${po.vendor_name || ''} ${po.indent_site_name || ''}`.toLowerCase();
           return hay.includes(fSearch);
         });
-        const fuPg = usePagination(filteredFu, PER_PAGE, billsFuPage, setBillsFuPage);
+        const fuPg = usePagination(filteredFu, billsFuPerPage, billsFuPage, setBillsFuPage);
 
         const blSearch = billsListSearch.trim().toLowerCase();
         const filteredBills = purchaseBills.filter(b => {
@@ -2022,7 +2034,7 @@ export default function Procurement() {
           const hay = `${b.bill_number || ''} ${b.vendor_name || ''}`.toLowerCase();
           return hay.includes(blSearch);
         });
-        const billsListPg = usePagination(filteredBills, PER_PAGE, billsListPage, setBillsListPage);
+        const billsListPg = usePagination(filteredBills, billsListPerPage, billsListPage, setBillsListPage);
         const daysDiff = (d) => {
           if (!d) return null;
           const dt = new Date(d); const tdt = new Date(today);
@@ -2174,7 +2186,7 @@ export default function Procurement() {
                   </tbody>
                 </table>
               </div>
-              <Pagination pg={fuPg} className="border-t border-amber-200 pt-2" />
+              <Pagination pg={fuPg} setPerPage={setBillsFuPerPage} className="border-t border-amber-200 pt-2" />
             </div>
           )}
 
@@ -2229,7 +2241,7 @@ export default function Procurement() {
               {purchaseBills.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No bills yet</td></tr>}
               {purchaseBills.length > 0 && filteredBills.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No bills match the current filters.</td></tr>}
             </tbody>
-            <tfoot><tr><td colSpan="9" className="border-t border-gray-100"><Pagination pg={billsListPg} /></td></tr></tfoot>
+            <tfoot><tr><td colSpan="9" className="border-t border-gray-100"><Pagination pg={billsListPg} setPerPage={setBillsListPerPage} /></td></tr></tfoot>
           </table></div>
             </>
           )}
@@ -2253,7 +2265,7 @@ export default function Procurement() {
           const hay = `${po.po_number || ''} ${po.vendor_name || ''} ${po.indent_number || ''}`.toLowerCase();
           return hay.includes(rSearch);
         });
-        const readyPg = usePagination(filteredReady, PER_PAGE, dispReadyPage, setDispReadyPage);
+        const readyPg = usePagination(filteredReady, dispReadyPerPage, dispReadyPage, setDispReadyPage);
 
         const dSearch = dispListSearch.trim().toLowerCase();
         const filteredDispatch = deliveryNotes.filter(d => {
@@ -2264,7 +2276,7 @@ export default function Procurement() {
           const hay = `${d.po_number || ''} ${d.document_number || ''} ${d.received_by_name || ''}`.toLowerCase();
           return hay.includes(dSearch);
         });
-        const dispListPg = usePagination(filteredDispatch, PER_PAGE, dispListPage, setDispListPage);
+        const dispListPg = usePagination(filteredDispatch, dispListPerPage, dispListPage, setDispListPage);
         // Detect item-type hint for each PO (if any indent_item linked is type=PO,
         // suggest Sales Bill; else suggest Challan). We don't have per-item info
         // on the client, so the dropdown defaults to Sales Bill and user can switch.
@@ -2431,7 +2443,7 @@ export default function Procurement() {
                   </tbody>
                 </table>
               </div>
-              <Pagination pg={readyPg} className="border-t border-indigo-200 pt-2" />
+              <Pagination pg={readyPg} setPerPage={setDispReadyPerPage} className="border-t border-indigo-200 pt-2" />
             </div>
           )}
 
@@ -2538,7 +2550,7 @@ export default function Procurement() {
               {deliveryNotes.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
               {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
             </tbody>
-            <tfoot><tr><td colSpan="11" className="border-t border-gray-100"><Pagination pg={dispListPg} /></td></tr></tfoot>
+            <tfoot><tr><td colSpan="11" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
           </table></div>
             </>
           )}
