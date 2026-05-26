@@ -122,9 +122,16 @@ export default function Procurement() {
   // — line items + vendor change need their own flows.
   const [editPo, setEditPo] = useState(null);
   const [editPoForm, setEditPoForm] = useState({});
+  const [editPoItems, setEditPoItems] = useState([]);    // editable line items
+  const [editPoLocked, setEditPoLocked] = useState(false); // locked when bills/DN exist
+  const [editPoLockReason, setEditPoLockReason] = useState('');
   const [editPoSaving, setEditPoSaving] = useState(false);
 
-  const openEditVendorPo = (v) => {
+  // Open Edit PO modal — fetches the PO with items so line-level fields
+  // can be edited (mam 2026-05-25: "i want edit the po after creation
+  // so that after correct").  Surfaces a lock banner if bills or DNs
+  // already reference the PO (those would need cancelling first).
+  const openEditVendorPo = async (v) => {
     setEditPo(v);
     setEditPoForm({
       po_date: v.po_date || '',
@@ -133,16 +140,57 @@ export default function Procurement() {
       advance_required: v.advance_required || 0,
       remarks: v.remarks || '',
     });
+    setEditPoItems([]);
+    setEditPoLocked(false);
+    setEditPoLockReason('');
+    try {
+      const r = await api.get(`/procurement/vendor-po/${v.id}/with-items`);
+      setEditPoItems((r.data?.items || []).map(it => ({
+        id: it.id,
+        quantity: it.quantity,
+        rate: it.rate,
+        description: it.description || it.master_name || it.indent_description || '',
+        hsn_code: it.hsn_code || '',
+        item_code: it.item_code || '',
+        master_name: it.master_name || '',
+        specification: it.specification || '',
+        size: it.size || '',
+        unit: it.unit || '',
+      })));
+      if (r.data?.edit_locked) {
+        setEditPoLocked(true);
+        setEditPoLockReason(`${r.data.bill_count || 0} bill(s) and ${r.data.dn_count || 0} delivery note(s) reference this PO.  Cancel them first to edit line items.`);
+      }
+    } catch (err) {
+      console.error('[openEditVendorPo] fetch items failed:', err.message);
+    }
   };
   const saveEditVendorPo = async (e) => {
     e.preventDefault();
     if (!editPo?.id) return;
     setEditPoSaving(true);
     try {
-      await api.put(`/procurement/vendor-po/${editPo.id}`, editPoForm);
+      // Include line items only when NOT locked — server will reject
+      // the request 409 if we send items on a locked PO.
+      const payload = { ...editPoForm };
+      if (!editPoLocked && editPoItems.length) {
+        // Strip display-only fields so the server gets the minimal shape.
+        payload.items = editPoItems.map(it => ({
+          id: it.id,
+          quantity: it.quantity,
+          rate: it.rate,
+          description: it.description,
+          hsn_code: it.hsn_code,
+        }));
+        // Header total_amount will be auto-recomputed server-side from
+        // the line items, so don't send the stale value.
+        delete payload.total_amount;
+      }
+      await api.put(`/procurement/vendor-po/${editPo.id}`, payload);
       toast.success('PO updated');
       setEditPo(null);
       setEditPoForm({});
+      setEditPoItems([]);
       load();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Save failed');
@@ -3733,7 +3781,7 @@ export default function Procurement() {
           any Purchase Bill references the PO.  Modal shows that
           context inline so user knows why a field might fail. */}
       {editPo && (
-        <Modal isOpen={true} onClose={() => { setEditPo(null); setEditPoForm({}); }} title={`Edit Vendor PO — ${editPo.po_number}`}>
+        <Modal isOpen={true} onClose={() => { setEditPo(null); setEditPoForm({}); setEditPoItems([]); }} title={`Edit Vendor PO — ${editPo.po_number}`} wide>
           <form onSubmit={saveEditVendorPo} className="space-y-3 text-sm">
             <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-gray-700">
               <strong>{editPo.po_number}</strong> · {editPo.vendor_name}
@@ -3781,8 +3829,95 @@ export default function Procurement() {
                         placeholder="Any notes about this PO — change reason, supplier follow-up, etc." />
             </div>
 
+            {/* Line items — mam (2026-05-25): "i want edit the po after
+                creation so that after correct".  Editable qty / rate /
+                description / HSN per row.  Locked + grey when bills or
+                delivery notes already reference this PO (would
+                invalidate them).  Live total recalculates as user types. */}
+            {editPoItems.length > 0 && (
+              <div className="border-t pt-3">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-sm font-semibold">Line Items ({editPoItems.length})</h4>
+                  {editPoLocked && (
+                    <span className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-0.5">
+                      🔒 LOCKED · {editPoLockReason}
+                    </span>
+                  )}
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="text-xs w-full">
+                    <thead className="bg-gray-50 text-gray-600">
+                      <tr>
+                        <th className="text-left px-2 py-1 w-8">#</th>
+                        <th className="text-left px-2 py-1">Description</th>
+                        <th className="text-left px-2 py-1 w-20">HSN</th>
+                        <th className="text-right px-2 py-1 w-20">Qty</th>
+                        <th className="text-left px-2 py-1 w-16">Unit</th>
+                        <th className="text-right px-2 py-1 w-24">Rate (₹)</th>
+                        <th className="text-right px-2 py-1 w-28">Amount (₹)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {editPoItems.map((it, idx) => {
+                        const amt = (+it.quantity || 0) * (+it.rate || 0);
+                        return (
+                          <tr key={it.id} className="border-b align-top">
+                            <td className="px-2 py-1 text-gray-500">{idx + 1}</td>
+                            <td className="px-2 py-1">
+                              {it.item_code && <div className="text-[9px] font-mono text-gray-400">[{it.item_code}]</div>}
+                              <input className="input text-xs w-full" disabled={editPoLocked}
+                                value={it.description || ''}
+                                onChange={e => setEditPoItems(prev => prev.map((r, i) => i === idx ? { ...r, description: e.target.value } : r))} />
+                            </td>
+                            <td className="px-2 py-1">
+                              <input className="input text-xs w-full" disabled={editPoLocked}
+                                value={it.hsn_code || ''}
+                                onChange={e => setEditPoItems(prev => prev.map((r, i) => i === idx ? { ...r, hsn_code: e.target.value } : r))} />
+                            </td>
+                            <td className="px-2 py-1 text-right">
+                              <NumInput className="input text-xs w-full text-right" disabled={editPoLocked} emitZeroOnEmpty min="0"
+                                value={it.quantity}
+                                onChange={v => setEditPoItems(prev => prev.map((r, i) => i === idx ? { ...r, quantity: v } : r))} />
+                            </td>
+                            <td className="px-2 py-1 text-gray-600">{it.unit || '—'}</td>
+                            <td className="px-2 py-1 text-right">
+                              <NumInput className="input text-xs w-full text-right" disabled={editPoLocked} emitZeroOnEmpty min="0"
+                                value={it.rate}
+                                onChange={v => setEditPoItems(prev => prev.map((r, i) => i === idx ? { ...r, rate: v } : r))} />
+                            </td>
+                            <td className="px-2 py-1 text-right font-semibold whitespace-nowrap">
+                              ₹{amt.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-blue-50 font-semibold">
+                        <td colSpan="6" className="px-2 py-2 text-right">Sub-total (taxable)</td>
+                        <td className="px-2 py-2 text-right text-blue-700">
+                          ₹{editPoItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                      <tr className="bg-blue-50 font-semibold text-blue-800">
+                        <td colSpan="6" className="px-2 py-2 text-right">+ 18% GST · Grand Total</td>
+                        <td className="px-2 py-2 text-right">
+                          ₹{(editPoItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0) * 1.18).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+                {!editPoLocked && (
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    Saving will auto-recompute the PO's Total Amount from these line items (× 1.18 GST).
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="flex justify-end gap-3 pt-2 border-t">
-              <button type="button" onClick={() => { setEditPo(null); setEditPoForm({}); }} className="btn btn-secondary">Cancel</button>
+              <button type="button" onClick={() => { setEditPo(null); setEditPoForm({}); setEditPoItems([]); }} className="btn btn-secondary">Cancel</button>
               <button type="submit" disabled={editPoSaving} className="btn btn-primary">
                 {editPoSaving ? 'Saving…' : 'Update PO'}
               </button>

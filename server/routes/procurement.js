@@ -1548,9 +1548,89 @@ router.put('/vendor-po/:id', (req, res) => {
     set('vendor_id', +b.vendor_id || null);
   }
 
-  if (sets.length === 0) return res.status(400).json({ error: 'No fields to update' });
-  db.prepare(`UPDATE vendor_pos SET ${sets.join(', ')} WHERE id=?`).run(...params, id);
-  res.json({ message: 'Updated', changed: sets.length });
+  // Line items edit (mam 2026-05-25: "i want edit the po after creation
+  // so that after correct").  Body.items[] = array of { id, quantity,
+  // rate, description, hsn_code }.  Only patches fields that are
+  // present on each row; id is required to match an existing
+  // vendor_po_items row.  Total is auto-recomputed at the end.
+  let itemUpdates = 0;
+  if (Array.isArray(b.items) && b.items.length) {
+    // Block line-item edits when bills exist — they invalidate the bill
+    // amount + GST tracking.  Mam should cancel the bill first.
+    if (billCount > 0) {
+      return res.status(409).json({ error: `Cannot edit line items — ${billCount} purchase bill(s) reference this PO. Cancel the bill first or restore-then-recreate.` });
+    }
+    const dnCount = db.prepare('SELECT COUNT(*) as c FROM delivery_notes WHERE vendor_po_id=?').get(id).c;
+    if (dnCount > 0) {
+      return res.status(409).json({ error: `Cannot edit line items — ${dnCount} delivery note(s) reference this PO. Cancel them first.` });
+    }
+    const updLine = db.prepare(
+      `UPDATE vendor_po_items
+         SET quantity    = COALESCE(?, quantity),
+             rate        = COALESCE(?, rate),
+             amount      = COALESCE(?, amount),
+             description = COALESCE(?, description),
+             hsn_code    = COALESCE(?, hsn_code)
+       WHERE id = ? AND vendor_po_id = ?`
+    );
+    const tx = db.transaction(() => {
+      for (const it of b.items) {
+        const itemId = +it.id;
+        if (!itemId) continue;
+        const qty = it.quantity !== undefined && it.quantity !== null && it.quantity !== '' ? +it.quantity : null;
+        const rate = it.rate !== undefined && it.rate !== null && it.rate !== '' ? +it.rate : null;
+        const amount = qty != null && rate != null ? +(qty * rate).toFixed(2) : null;
+        const desc = it.description !== undefined ? String(it.description || '') : null;
+        const hsn = it.hsn_code !== undefined ? String(it.hsn_code || '') : null;
+        const r = updLine.run(qty, rate, amount, desc, hsn, itemId, id);
+        itemUpdates += r.changes;
+      }
+      // Auto-recompute total_amount = sum(line amounts) × 1.18 (GST).
+      // Skips if caller explicitly set total_amount above (avoid double-set).
+      if (b.total_amount === undefined) {
+        const newTotal = db.prepare(
+          'SELECT COALESCE(ROUND(SUM(amount) * 1.18, 2), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
+        ).get(id).t;
+        db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(newTotal, id);
+      }
+    });
+    try { tx(); }
+    catch (err) { return res.status(500).json({ error: 'Line items update failed: ' + err.message }); }
+  }
+
+  if (sets.length === 0 && itemUpdates === 0) return res.status(400).json({ error: 'No fields to update' });
+  if (sets.length > 0) db.prepare(`UPDATE vendor_pos SET ${sets.join(', ')} WHERE id=?`).run(...params, id);
+  res.json({ message: 'Updated', header_changed: sets.length, items_changed: itemUpdates });
+});
+
+// GET single Vendor PO with its line items — used by the Edit PO modal
+// to pre-fill editable rows (mam 2026-05-25: "i want edit the po after
+// creation so that after correct").
+router.get('/vendor-po/:id/with-items', (req, res) => {
+  const db = getDb();
+  const po = db.prepare(`
+    SELECT vp.*, v.name as vendor_name
+      FROM vendor_pos vp
+      LEFT JOIN vendors v ON v.id = vp.vendor_id
+     WHERE vp.id = ?
+  `).get(req.params.id);
+  if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
+  const items = db.prepare(`
+    SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.description, vpi.hsn_code,
+           ii.description as indent_description, ii.unit,
+           im.item_code, im.item_name as master_name, im.specification, im.size
+      FROM vendor_po_items vpi
+      LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+     WHERE vpi.vendor_po_id = ?
+     ORDER BY vpi.id
+  `).all(req.params.id);
+  // Block-edit warnings — surface bill / DN count so the UI can disable
+  // line-item editing fields when downstream documents already reference
+  // this PO.
+  const billCount = db.prepare('SELECT COUNT(*) as c FROM purchase_bills WHERE vendor_po_id=?').get(req.params.id).c;
+  const dnCount = db.prepare('SELECT COUNT(*) as c FROM delivery_notes WHERE vendor_po_id=?').get(req.params.id).c;
+  res.json({ po, items, bill_count: billCount, dn_count: dnCount, edit_locked: billCount > 0 || dnCount > 0 });
 });
 
 router.delete('/vendor-po/:id', (req, res) => {
