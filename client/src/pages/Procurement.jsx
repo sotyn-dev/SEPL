@@ -2312,11 +2312,15 @@ export default function Procurement() {
         // Detect item-type hint for each PO (if any indent_item linked is type=PO,
         // suggest Sales Bill; else suggest Challan). We don't have per-item info
         // on the client, so the dropdown defaults to Sales Bill and user can switch.
-        const openAddDispatch = (po = null) => {
+        const openAddDispatch = (po = null, docType = 'sales_bill') => {
+          // docType param (mam 2026-05-25: "here also add delivery note
+          // for rec"): pass 'challan' to open the modal as a Delivery
+          // Note for FOC / RGP / receipt-only goods.  Defaults to
+          // 'sales_bill' for backward compat with existing callers.
           setForm({
             vendor_po_id: po?.id || '',
             vendor_po_number: po?.po_number || '',
-            document_type: 'sales_bill',
+            document_type: docType,
             document_number: '',
             delivery_date: new Date().toISOString().slice(0, 10),
             notes: '',
@@ -2336,7 +2340,10 @@ export default function Procurement() {
             // default is sales_bill; user can flip to challan in the
             // modal and we'll respect either way.
             Promise.all([
-              api.get(`/procurement/vendor-pos/${po.id}/client-po-items`, { params: { doc_type: 'sales_bill' } }).catch(() => ({ data: { items: [], source: 'empty' } })),
+              // Pass the actual docType so the server picks the right
+              // rate-fallback rule (challan allows vendor cost; sales_bill
+              // enforces BOQ SITC and warns if missing).
+              api.get(`/procurement/vendor-pos/${po.id}/client-po-items`, { params: { doc_type: docType } }).catch(() => ({ data: { items: [], source: 'empty' } })),
               api.get(`/procurement/vendor-pos/${po.id}/bill-to`).catch(() => ({ data: null })),
             ]).then(([itemsRes, billRes]) => {
               const rawRows = (itemsRes.data?.items || []).map(it => ({
@@ -2482,9 +2489,21 @@ export default function Procurement() {
           {/* ===== Sub-tab 2: Main dispatch list ===== */}
           {dispatchSubTab === 'list' && (
             <>
-              <div className="flex justify-between items-center">
+              <div className="flex justify-between items-center flex-wrap gap-2">
                 <h3 className="font-semibold">Dispatch & Receiving</h3>
-                <button onClick={() => openAddDispatch()} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Dispatch</button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Add Delivery Note · mam (2026-05-25): "here also add
+                      delivery note for rec".  Opens the same modal but
+                      pre-set to document_type='challan' — used for FOC
+                      / RGP / receipt-only goods where no Sales Bill is
+                      issued. */}
+                  <button onClick={() => openAddDispatch(null, 'challan')} className="btn btn-secondary flex items-center gap-2 text-sm">
+                    <FiPlus /> Add Delivery Note
+                  </button>
+                  <button onClick={() => openAddDispatch(null, 'sales_bill')} className="btn btn-primary flex items-center gap-2">
+                    <FiPlus /> Add Sales Bill
+                  </button>
+                </div>
               </div>
               <div className="card p-3 flex flex-wrap items-end gap-2 text-xs">
                 <div className="flex-1 min-w-[200px]">
@@ -3160,7 +3179,13 @@ export default function Procurement() {
           from inside (radio chooser deleted).  For challans / FOC
           send-with-truck papers, use the auto-generated DN at
           /vendor-po/:id/delivery-note instead. */}
-      <Modal isOpen={modal === 'delivery'} onClose={() => setModal(false)} title={form.vendor_po_number ? `Create Sales Bill — ${form.vendor_po_number}` : 'Create Sales Bill'}>
+      {/* Modal title adapts to document_type so it's clear whether you're
+          creating a billable Sales Bill or a non-billable Delivery Note
+          / Challan (mam 2026-05-25: "here also add delivery note for rec"). */}
+      <Modal isOpen={modal === 'delivery'} onClose={() => setModal(false)} title={(() => {
+        const kind = form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill';
+        return form.vendor_po_number ? `Create ${kind} — ${form.vendor_po_number}` : `Create ${kind}`;
+      })()}>
         <form onSubmit={saveDeliveryNote} className="space-y-4">
           {form.vendor_po_number && (
             <div className="bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-xs text-emerald-700">
