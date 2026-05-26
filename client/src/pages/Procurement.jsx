@@ -189,7 +189,11 @@ export default function Procurement() {
     setSearchParams(prev => { const sp = new URLSearchParams(prev); sp.set('subtab', st); return sp; }, { replace: true });
   };
   const [vpoPendingSearch, setVpoPendingSearch] = useState('');
-  const [vpoPendingStatus, setVpoPendingStatus] = useState('all');
+  // Default to 'finalized' — mam (2026-05-25): "I WANT SHOW HERE AFTER
+  // RATE FINIALISE".  Only finalized rates are ready for a Vendor PO;
+  // pending/quoted items still need purchase team to negotiate.  Mam can
+  // flip the dropdown to "All" to see everything if she wants.
+  const [vpoPendingStatus, setVpoPendingStatus] = useState('finalized');
   const [vpoPendingPage, setVpoPendingPage]     = useState(1);
   const [vpoListSearch, setVpoListSearch]       = useState('');
   const [vpoListStatus, setVpoListStatus]       = useState('all');
@@ -1747,8 +1751,16 @@ export default function Procurement() {
           {vpoSubTab === 'pending' && pendingPoItems.length > 0 && (
             <div className="card p-3 bg-amber-50 border border-amber-200">
               <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                <h4 className="font-semibold text-amber-800 text-sm">Pending for Vendor PO <span className="text-xs font-normal text-amber-600">({pendingPoItems.length} item{pendingPoItems.length === 1 ? '' : 's'})</span></h4>
-                <span className="text-[11px] text-amber-700">Items with a finalized rate but no Vendor PO yet</span>
+                <h4 className="font-semibold text-amber-800 text-sm">
+                  Pending for Vendor PO
+                  <span className="text-xs font-normal text-amber-600 ml-2">
+                    ({(() => {
+                      const finalisedCount = pendingPoItems.filter(p => (p.rate_status || 'pending') === 'finalized').length;
+                      return `${finalisedCount} ready · ${pendingPoItems.length} total`;
+                    })()})
+                  </span>
+                </h4>
+                <span className="text-[11px] text-amber-700">Showing finalized-rate items by default — flip the Rate Status filter to see still-quoting / pending items.</span>
               </div>
               {/* Search + status filter strip (mam 2026-05-25) */}
               <div className="flex flex-wrap items-end gap-2 text-xs mb-3 pb-3 border-b border-amber-200">
@@ -1758,13 +1770,13 @@ export default function Procurement() {
                     value={vpoPendingSearch} onChange={e => { setVpoPendingSearch(e.target.value); setVpoPendingPage(1); }} />
                 </div>
                 <div>
-                  <label className="label text-[10px] mb-0.5 text-amber-900">Status</label>
+                  <label className="label text-[10px] mb-0.5 text-amber-900">Rate Status</label>
                   <select className="select text-xs" value={vpoPendingStatus}
                     onChange={e => { setVpoPendingStatus(e.target.value); setVpoPendingPage(1); }}>
-                    <option value="all">All</option>
-                    <option value="pending">Pending</option>
+                    <option value="finalized">Finalized (ready for PO)</option>
                     <option value="quoted">Quoted</option>
-                    <option value="finalized">Finalized</option>
+                    <option value="pending">Pending</option>
+                    <option value="all">All (show everything)</option>
                   </select>
                 </div>
                 {(vpoPendingSearch || vpoPendingStatus !== 'all') && (
