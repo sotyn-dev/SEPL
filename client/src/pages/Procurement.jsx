@@ -1545,12 +1545,16 @@ export default function Procurement() {
               (indent · sub-item), regardless of which BOQ line that
               sub-item came from. The same CHECK NUT used in two BOQs
               of one indent is now a SINGLE merged row. */}
-          <div className="card p-0 overflow-x-auto hidden lg:block">
-            <table className="text-xs freeze-col" style={{ minWidth: '1400px' }}>
+          {/* freeze-2col + explicit --freeze-col-1-w pins Indent + Sub-Item
+              while scrolling rate columns horizontally (mam 2026-05-25). */}
+          <div className="card p-0 overflow-x-auto hidden lg:block" style={{ '--freeze-col-1-w': '150px' }}>
+            <table className="text-xs freeze-2col" style={{ minWidth: '1400px' }}>
               <thead>
                 <tr className="bg-gray-50">
-                  <th className="px-2 py-2 text-left" rowSpan="2">Indent</th>
-                  <th className="px-2 py-2 text-left" rowSpan="2">Sub-Item<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(Item Master)</span></th>
+                  {/* width matches --freeze-col-1-w so the 2nd sticky column
+                      sits flush against this one with no gap or overlap. */}
+                  <th className="px-2 py-2 text-left" rowSpan="2" style={{ width: '150px', minWidth: '150px' }}>Indent</th>
+                  <th className="px-2 py-2 text-left" rowSpan="2" style={{ width: '260px', minWidth: '260px' }}>Sub-Item<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(Item Master)</span></th>
                   <th className="px-2 py-2" rowSpan="2">Qty</th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 1</th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 2</th>

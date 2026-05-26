@@ -217,6 +217,42 @@ tbody tr:hover {
   background: rgba(254, 226, 226, 0.4);
 }
 
+/* freeze-2col — pins the FIRST TWO columns instead of just one.  Use
+   when the meaningful row label spans two cells (e.g. on the Vendor
+   Rates table the Indent No is in col 1 and the Sub-Item description
+   is in col 2 — losing the sub-item while scrolling right makes the
+   rate columns ambiguous).  Mam (2026-05-25): "LOOK NOT GOOD INTERFACE
+   TILL ITEM WISE FREEZE".
+
+   The wrapper must set --freeze-col-1-w to the actual width of the
+   first column in pixels (defaults to 140px).  The 2nd column's
+   sticky left is positioned right after the first column.
+*/
+.freeze-2col tr > :first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: white;
+}
+.freeze-2col tr > :nth-child(2) {
+  position: sticky;
+  left: var(--freeze-col-1-w, 140px);
+  z-index: 1;
+  background: white;
+  box-shadow: 4px 0 6px -4px rgba(0, 0, 0, 0.08);
+}
+.freeze-2col thead tr > :first-child,
+.freeze-2col thead tr > :nth-child(2) {
+  background: #f9fafb;
+  z-index: 2;
+}
+.freeze-2col tr.bg-gray-50 > :first-child,
+.freeze-2col tr.bg-gray-50 > :nth-child(2) { background: #f9fafb; }
+.freeze-2col tbody tr:hover > :first-child,
+.freeze-2col tbody tr:hover > :nth-child(2) {
+  background: rgba(254, 226, 226, 0.4);
+}
+
 .badge {
   @apply inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide uppercase;
 }
