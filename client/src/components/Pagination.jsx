@@ -1,16 +1,26 @@
-import { useMemo } from 'react';
-
 // usePagination — slice an array into a page, plus page-nav state.
 //
+// CRITICAL: this is a PLAIN UTILITY FUNCTION, not a React hook (despite
+// the `use` prefix — kept as a naming convention).  Earlier version used
+// useMemo internally, which broke when callers invoked it inside
+// conditional `{tab === 'X' && (() => { ... })}` IIFEs.  Switching tabs
+// changed the order of hook calls and React aborted with Minified error
+// #310 ("Rendered more hooks than during the previous render.").
+//
+// By dropping useMemo, this function is safe to call inside any
+// conditional branch — including the per-tab IIFEs in Procurement.jsx.
+// The slice + math is cheap enough that memoization wasn't buying us
+// anything noticeable anyway.
+//
 // Usage:
-//   const pg = usePagination(rows, 15);
+//   const pg = usePagination(rows, 15, page, setPage);
 //   return (<>
-//     <table>...rows.slice(pg.from, pg.to).map(...)</table>
+//     <table>...pg.rows.map(...)</table>
 //     <Pagination pg={pg} />
 //   </>);
 //
 // Page state is held by the parent in the form of a `page` number + setter.
-// This hook itself is stateless — it just derives the slice indices and
+// This function is stateless — it just derives the slice indices and
 // total pages from the full row count + perPage.  Passing in your own
 // useState lets you reset to page 1 when filters change without ceremony.
 export function usePagination(rows, perPage, page, setPage) {
@@ -21,7 +31,7 @@ export function usePagination(rows, perPage, page, setPage) {
   const cur = Math.min(Math.max(1, page), pages);
   const from = (cur - 1) * perPage;
   const to = Math.min(from + perPage, total);
-  return useMemo(() => ({
+  return {
     page: cur,
     pages,
     perPage,
@@ -32,7 +42,7 @@ export function usePagination(rows, perPage, page, setPage) {
     rows: rows.slice(from, to),
     hasPrev: cur > 1,
     hasNext: cur < pages,
-  }), [rows, perPage, cur, pages, from, to, setPage, total]);
+  };
 }
 
 // Pagination — small page-nav strip designed to live under a table.
