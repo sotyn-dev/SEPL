@@ -368,27 +368,42 @@ export default function Procurement() {
         setBoqDiag(Array.isArray(payload) ? null : (payload?.diagnostic || null));
       } catch { setBoqItems([]); }
 
-      // Back-fill po_item_id from item_master_id — mam (2026-05-25):
-      // legacy indents created before po_item_id was a required field have
-      // it=NULL even though item_master_id is set.  Without this, the Edit
-      // modal grouped each item under "__empty_<idx>" and showed an empty
-      // BOQ picker for every row.  Now we walk the BOQ list and try to
-      // attach each item to the BOQ row whose item_master_id matches.
+      // Back-fill po_item_id from item_master_id / description — mam
+      // (2026-05-25): legacy indents created before po_item_id was a
+      // required field have it=NULL even though item_master_id +
+      // description are set.  Without this, the Edit modal grouped each
+      // item under "__empty_<idx>" and showed an empty BOQ picker for
+      // every row.
       //
-      // Strategy:
+      // Strategy (in order — first match wins):
       //   1. If the indent item already has a valid po_item_id, keep it.
-      //   2. Else if it has item_master_id, find the first BOQ row with
-      //      the same item_master_id and steal its id.  This groups all
-      //      lines pointing at the same sub-item under one BOQ section.
-      //   3. Else fall back to manual entry (description preserved).
-      const findBoqByMaster = (masterId) => {
-        if (!masterId) return null;
-        return boqList.find(b => +b.item_master_id === +masterId) || null;
-      };
+      //   2. Else if it has item_master_id, find the BOQ row with the same
+      //      item_master_id and steal its id.
+      //   3. Else (covers IND-0050 case where ONE BOQ has 3 sub-items
+      //      with 3 different item_master_ids, but only one matches the
+      //      BOQ's primary linkage), match by description — indent_items
+      //      .description was copied verbatim from po_items.description at
+      //      creation time, so trimmed/lowered equality is a safe match.
+      //   4. Else fall back to manual entry (description preserved).
+      const descKey = (s) => String(s || '').trim().toLowerCase();
+      const boqByMaster = new Map();
+      const boqByDesc = new Map();
+      for (const b of boqList) {
+        if (b.item_master_id) {
+          const k = +b.item_master_id;
+          if (!boqByMaster.has(k)) boqByMaster.set(k, b);
+        }
+        const dk = descKey(b.description);
+        if (dk && !boqByDesc.has(dk)) boqByDesc.set(dk, b);
+      }
       const rows = (data.items || []).map(it => {
         let poId = it.po_item_id || '';
         if (!poId && it.item_master_id) {
-          const boq = findBoqByMaster(it.item_master_id);
+          const boq = boqByMaster.get(+it.item_master_id);
+          if (boq) poId = boq.id;
+        }
+        if (!poId && it.description) {
+          const boq = boqByDesc.get(descKey(it.description));
           if (boq) poId = boq.id;
         }
         return {
