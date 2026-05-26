@@ -377,17 +377,22 @@ export default function Procurement() {
       //
       // Strategy (in order — first match wins):
       //   1. If the indent item already has a valid po_item_id, keep it.
-      //   2. Else if it has item_master_id, find the BOQ row with the same
-      //      item_master_id and steal its id.
-      //   3. Else (covers IND-0050 case where ONE BOQ has 3 sub-items
-      //      with 3 different item_master_ids, but only one matches the
-      //      BOQ's primary linkage), match by description — indent_items
-      //      .description was copied verbatim from po_items.description at
-      //      creation time, so trimmed/lowered equality is a safe match.
-      //   4. Else fall back to manual entry (description preserved).
-      const descKey = (s) => String(s || '').trim().toLowerCase();
+      //   2. Match by item_master_id  →  BOQ row's primary linkage.
+      //   3. Match by exact description (lowercase, trimmed).
+      //   4. NEW · Match by description PREFIX (first 60 normalised chars)
+      //      — catches truncation differences ("…complete as per" vs the
+      //      full "…complete as per drawings & specifications").
+      //   5. NEW · Match by SIBLING — if another indent line with the same
+      //      description (or item_master_id) already resolved to a BOQ
+      //      via steps 2-4, reuse that po_id.  Covers IND-0050 where 3
+      //      sub-items share ONE BOQ but only the first one had a matching
+      //      item_master_id linkage in the BOQ row.
+      //   6. Fall back to manual entry (description preserved).
+      const descKey = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const prefixKey = (s) => descKey(s).slice(0, 60);
       const boqByMaster = new Map();
       const boqByDesc = new Map();
+      const boqByPrefix = new Map();
       for (const b of boqList) {
         if (b.item_master_id) {
           const k = +b.item_master_id;
@@ -395,8 +400,11 @@ export default function Procurement() {
         }
         const dk = descKey(b.description);
         if (dk && !boqByDesc.has(dk)) boqByDesc.set(dk, b);
+        const pk = prefixKey(b.description);
+        if (pk && !boqByPrefix.has(pk)) boqByPrefix.set(pk, b);
       }
-      const rows = (data.items || []).map(it => {
+      // First pass · resolve each line independently via methods 1-4.
+      const resolved = (data.items || []).map(it => {
         let poId = it.po_item_id || '';
         if (!poId && it.item_master_id) {
           const boq = boqByMaster.get(+it.item_master_id);
@@ -406,8 +414,29 @@ export default function Procurement() {
           const boq = boqByDesc.get(descKey(it.description));
           if (boq) poId = boq.id;
         }
+        if (!poId && it.description) {
+          const boq = boqByPrefix.get(prefixKey(it.description));
+          if (boq) poId = boq.id;
+        }
+        return { it, poId };
+      });
+      // Second pass · for any STILL-empty rows, see if a sibling with the
+      // same description already resolved.  Reuse that poId so all
+      // siblings group under the same BOQ section.
+      const siblingByDesc = new Map();
+      for (const r of resolved) {
+        if (r.poId && r.it.description) {
+          const k = descKey(r.it.description);
+          if (!siblingByDesc.has(k)) siblingByDesc.set(k, r.poId);
+        }
+      }
+      const rows = resolved.map(({ it, poId }) => {
+        let finalPoId = poId;
+        if (!finalPoId && it.description) {
+          finalPoId = siblingByDesc.get(descKey(it.description)) || '';
+        }
         return {
-          po_item_id: poId,
+          po_item_id: finalPoId,
           item_master_id: it.item_master_id || '',
           description: it.description || '',
           make: it.make || '',
@@ -416,10 +445,18 @@ export default function Procurement() {
           item_type: it.item_type || '',
           boq_qty: 0,
           remaining_qty: null,
-          manual: !poId && !it.item_master_id && !!it.description,
+          manual: !finalPoId && !it.item_master_id && !!it.description,
           required_date: it.required_date || '',
         };
       });
+      // Diagnostic — logs to browser console if any line failed to resolve.
+      // Helps mam tell us which indent items need attention without us
+      // having to ask for screenshots.
+      const unresolved = rows.filter(r => !r.po_item_id && r.item_master_id);
+      if (unresolved.length) {
+        console.warn(`[openEditIndent] ${unresolved.length}/${rows.length} indent items couldn't be matched to a BOQ row.`,
+          unresolved.map(r => ({ description: r.description, item_master_id: r.item_master_id })));
+      }
       setIndentItems(rows.length ? rows : [{ ...EMPTY_ITEM }]);
       setEditingIndentId(indent.id);
       setModal('indent');
