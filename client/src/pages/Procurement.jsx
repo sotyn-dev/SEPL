@@ -46,6 +46,50 @@ const UNIT_OPTIONS = [
   'ltr','ml',
 ];
 
+// One stacked row in the APPROVAL cell for 2-level indents. Reused for
+// both L1 and L2. States:
+//   pending (+waiting=true)  → grey dot, italic "Waiting" (L1 not done yet)
+//   pending                  → amber dot, italic "Pending"
+//   approved                 → green tick + name + short date
+//   rejected                 → red cross + name + truncated reason
+function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason }) {
+  const fmt = (d) => {
+    if (!d) return '';
+    const dt = new Date(d.includes('T') ? d : d.replace(' ', 'T') + 'Z');
+    if (isNaN(dt.getTime())) return '';
+    return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) + ' ' +
+           dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  };
+  if (status === 'approved') {
+    return (
+      <div className="flex items-baseline gap-1 text-[11px]">
+        <span className="text-emerald-600 font-mono w-3">✓</span>
+        <span className="font-semibold text-gray-600 w-5">{label}</span>
+        <span className="text-emerald-700 font-medium truncate">{name || '—'}</span>
+        <span className="text-[10px] text-gray-500 ml-auto">{fmt(at)}</span>
+      </div>
+    );
+  }
+  if (status === 'rejected' || isReject) {
+    return (
+      <div className="flex items-baseline gap-1 text-[11px]" title={reason || ''}>
+        <span className="text-red-600 font-mono w-3">✗</span>
+        <span className="font-semibold text-gray-600 w-5">{label}</span>
+        <span className="text-red-700 font-medium truncate">{name || '—'}</span>
+        {reason && <span className="text-[10px] text-red-500 italic ml-auto truncate max-w-[100px]">“{reason.slice(0, 18)}{reason.length > 18 ? '…' : ''}”</span>}
+      </div>
+    );
+  }
+  // pending
+  return (
+    <div className="flex items-baseline gap-1 text-[11px]">
+      <span className={`font-mono w-3 ${waiting ? 'text-gray-300' : 'text-amber-500'}`}>●</span>
+      <span className="font-semibold text-gray-500 w-5">{label}</span>
+      <span className="text-gray-500 italic truncate">{name || (waiting ? 'Waiting' : 'Pending')}</span>
+    </div>
+  );
+}
+
 export default function Procurement() {
   const { canDelete, canCreate, canEdit, canApprove, user, isAdmin } = useAuth();
   // Site-engineer-style users see only "Raise Indent" — they don't enter
@@ -1276,10 +1320,11 @@ export default function Procurement() {
           {(() => {
             const sum = (arr) => arr.reduce((s, i) => s + (+i.budget_amount || 0), 0);
             const byStatus = (s) => kpiScope.filter(i => i.status === s);
-            const submitted = byStatus('submitted');
-            const approved  = byStatus('approved');
-            const rejected  = byStatus('rejected');
-            const poSent    = byStatus('po_sent');
+            const submitted   = byStatus('submitted');     // Pending L1 (or legacy "Pending Approval")
+            const l1Approved  = byStatus('l1_approved');   // Pending L2 (two-level only, mam 2026-05-26)
+            const approved    = byStatus('approved');
+            const rejected    = byStatus('rejected');
+            const poSent      = byStatus('po_sent');
             const filterActive = !!(indFilterFrom || indFilterTo || indSearch.trim());
             // Clicking a tile sets the status filter to that bucket so mam
             // can drill from the dashboard view into the matching rows
@@ -1310,7 +1355,8 @@ export default function Procurement() {
                 )}
                 <div className="flex flex-wrap gap-2">
                   {tile('Total Indents',     kpiScope.length,   sum(kpiScope),   { border: 'border-gray-300',    bg: 'bg-gray-50',     text: 'text-gray-700',    ring: 'ring-gray-400'    }, 'all')}
-                  {tile('Pending Approval',  submitted.length,  sum(submitted),  { border: 'border-amber-300',   bg: 'bg-amber-50',    text: 'text-amber-700',   ring: 'ring-amber-400'   }, 'submitted')}
+                  {tile('Pending L1',        submitted.length,  sum(submitted),  { border: 'border-amber-300',   bg: 'bg-amber-50',    text: 'text-amber-700',   ring: 'ring-amber-400'   }, 'submitted')}
+                  {tile('Pending L2',        l1Approved.length, sum(l1Approved), { border: 'border-purple-300',  bg: 'bg-purple-50',   text: 'text-purple-700',  ring: 'ring-purple-400'  }, 'l1_approved')}
                   {tile('Approved',          approved.length,   sum(approved),   { border: 'border-emerald-300', bg: 'bg-emerald-50',  text: 'text-emerald-700', ring: 'ring-emerald-400' }, 'approved')}
                   {tile('Rejected',          rejected.length,   sum(rejected),   { border: 'border-red-300',     bg: 'bg-red-50',      text: 'text-red-700',     ring: 'ring-red-400'     }, 'rejected')}
                   {tile('PO Sent',           poSent.length,     sum(poSent),     { border: 'border-blue-300',    bg: 'bg-blue-50',     text: 'text-blue-700',    ring: 'ring-blue-400'    }, 'po_sent')}
@@ -1331,7 +1377,8 @@ export default function Procurement() {
               <select className="select text-xs" value={indFilterStatus}
                 onChange={e => { setIndFilterStatus(e.target.value); setIndPage(1); }}>
                 <option value="all">All ({indents.length})</option>
-                <option value="submitted">Submitted</option>
+                <option value="submitted">Pending L1</option>
+                <option value="l1_approved">Pending L2</option>
                 <option value="approved">Approved</option>
                 <option value="rejected">Rejected</option>
                 <option value="po_sent">PO Sent</option>
@@ -1420,57 +1467,119 @@ export default function Procurement() {
                   <td><StatusBadge status={i.status} /></td>
                   {/* Approval cell — shows "approved by X · DD MMM" once
                       approved, or "rejected by X · reason" if rejected.
-                      Helps mam see at a glance WHO approved / rejected
-                      without opening each row. */}
+                      For two_level indents (mam 2026-05-26) also shows a
+                      stacked L1 + L2 mini-row so progress is visible from
+                      the list without opening each row. */}
                   <td className="text-xs">
-                    {i.status === 'approved' && (
-                      <div>
-                        <div className="text-emerald-700 font-medium flex items-center gap-1">
-                          <FiCheck size={12} /> {i.approved_by_name || 'approver'}
-                        </div>
-                        {i.approved_at && (
-                          <div className="text-[10px] text-gray-500">
-                            {new Date(i.approved_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    {i.approval_policy === 'two_level' ? (
+                      <div className="space-y-0.5 min-w-[150px]">
+                        <ApprovalLevelRow
+                          label="L1"
+                          status={i.l1_status}
+                          name={i.l1_by_name || i.approver_names?.l1}
+                          at={i.l1_at}
+                          isReject={i.status === 'rejected' && i.l1_status === 'rejected'}
+                          reason={i.rejection_reason}
+                        />
+                        <ApprovalLevelRow
+                          label="L2"
+                          status={i.l2_status}
+                          name={i.l2_by_name || i.approver_names?.l2}
+                          at={i.l2_at}
+                          waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
+                          isReject={i.status === 'rejected' && i.l2_status === 'rejected'}
+                          reason={i.rejection_reason}
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        {i.status === 'approved' && (
+                          <div>
+                            <div className="text-emerald-700 font-medium flex items-center gap-1">
+                              <FiCheck size={12} /> {i.approved_by_name || 'approver'}
+                            </div>
+                            {i.approved_at && (
+                              <div className="text-[10px] text-gray-500">
+                                {new Date(i.approved_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                              </div>
+                            )}
                           </div>
                         )}
-                      </div>
-                    )}
-                    {i.status === 'rejected' && (
-                      <div>
-                        <div className="text-red-700 font-medium flex items-center gap-1" title={i.rejection_reason || ''}>
-                          <FiX size={12} /> {i.rejected_by_name || 'approver'}
-                        </div>
-                        {i.rejection_reason && (
-                          <div className="text-[10px] text-gray-500 italic max-w-[180px] truncate" title={i.rejection_reason}>
-                            “{i.rejection_reason}”
+                        {i.status === 'rejected' && (
+                          <div>
+                            <div className="text-red-700 font-medium flex items-center gap-1" title={i.rejection_reason || ''}>
+                              <FiX size={12} /> {i.rejected_by_name || 'approver'}
+                            </div>
+                            {i.rejection_reason && (
+                              <div className="text-[10px] text-gray-500 italic max-w-[180px] truncate" title={i.rejection_reason}>
+                                “{i.rejection_reason}”
+                              </div>
+                            )}
                           </div>
                         )}
-                      </div>
-                    )}
-                    {i.status !== 'approved' && i.status !== 'rejected' && (
-                      <span className="text-gray-300">—</span>
+                        {i.status !== 'approved' && i.status !== 'rejected' && (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </>
                     )}
                   </td>
                   <td>
-                    <div className="flex gap-1 items-center">
-                      {/* Separation of duties — mam (2026-05-21): a user
-                          must NOT approve / reject their own indent.
-                          Only show the Approve / Reject buttons when:
-                          (a) status is 'submitted' AND
-                          (b) the viewer has procurement-approve
-                              permission (or is admin) AND
-                          (c) the viewer is NOT the creator.
-                          Backend enforces the same rule as a safety
-                          net for direct API calls. */}
-                      {i.status === 'submitted' && (canApprove('procurement') || isAdmin()) && i.created_by !== user?.id && (
-                        <>
-                          {/* Modal-driven approve — lets approver tweak qty
-                              per line before confirming (mam 2026-05-25). */}
-                          <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve</button>
-                          {/* Modal-driven reject — forces non-empty reason. */}
-                          <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject</button>
-                        </>
-                      )}
+                    <div className="flex gap-1 items-center flex-wrap">
+                      {/* ─── 2-Level approval routing (mam 2026-05-26) ─────
+                          For two_level indents, the same Approve / Reject
+                          modals are reused but the label flips to "Approve L1"
+                          or "Approve L2" based on current stage, and visibility
+                          is gated on user.approval_role (admin sees both).
+                          Server enforces the same guards as a safety net. */}
+                      {(() => {
+                        const isTwoLevel = i.approval_policy === 'two_level';
+                        const isCreator = i.created_by === user?.id;
+                        const canActL1 = isAdmin() || user?.approval_role === 'l1';
+                        const canActL2 = isAdmin() || user?.approval_role === 'l2';
+                        const blockSelfL2 = i.l1_by && i.l1_by === user?.id;
+
+                        // L1 stage — submitted + (legacy OR two_level pending L1)
+                        if (i.status === 'submitted' && !isCreator) {
+                          if (isTwoLevel) {
+                            if (canActL1) {
+                              return (
+                                <>
+                                  <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve L1</button>
+                                  <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject L1</button>
+                                </>
+                              );
+                            }
+                            return <span className="text-[10px] text-amber-600 italic" title={`Waiting for ${i.approver_names?.l1 || 'L1 approver'}`}>Awaiting {i.approver_names?.l1 || 'L1'}</span>;
+                          }
+                          // Legacy single-approval flow — original buttons unchanged.
+                          if (canApprove('procurement') || isAdmin()) {
+                            return (
+                              <>
+                                <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve</button>
+                                <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject</button>
+                              </>
+                            );
+                          }
+                        }
+
+                        // L2 stage — only happens for two_level indents.
+                        if (i.status === 'l1_approved' && !isCreator) {
+                          if (canActL2 && !blockSelfL2) {
+                            return (
+                              <>
+                                <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve L2</button>
+                                <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject L2</button>
+                              </>
+                            );
+                          }
+                          if (canActL2 && blockSelfL2) {
+                            return <span className="text-[10px] text-gray-500 italic" title="You approved L1 — L2 needs a different reviewer">Needs different reviewer</span>;
+                          }
+                          return <span className="text-[10px] text-purple-600 italic" title={`Waiting for ${i.approver_names?.l2 || 'L2 approver'}`}>Awaiting {i.approver_names?.l2 || 'L2'}</span>;
+                        }
+                        return null;
+                      })()}
+
                       {/* Admin-only "Re-reject" on approved indents — revokes
                           the approval and flips back to rejected, using the
                           same mandatory-reason modal.  Mam (2026-05-25):
@@ -1480,10 +1589,11 @@ export default function Procurement() {
                           Re-reject
                         </button>
                       )}
-                      {/* If creator is viewing their own submitted indent,
-                          show a small "Awaiting approval" hint instead so
-                          they know what's happening. */}
-                      {i.status === 'submitted' && i.created_by === user?.id && (
+                      {/* If creator is viewing their own pending indent, show
+                          a small "Awaiting approval" hint instead so they
+                          know what's happening. Works for both submitted +
+                          l1_approved (two_level intermediate state). */}
+                      {(i.status === 'submitted' || i.status === 'l1_approved') && i.created_by === user?.id && (
                         <span className="text-[10px] text-gray-500 italic" title="Only an approver can act on your indent">Awaiting approval</span>
                       )}
                       {i.status === 'draft' && <button onClick={() => approveIndent(i.id, 'submitted')} className="btn btn-primary text-xs py-1 px-2">Submit</button>}

@@ -50,6 +50,10 @@ router.post('/login', (req, res) => {
     user: {
       id: user.id, name: user.name, email: user.email, username: user.username,
       role: user.role, department: user.department, phone: user.phone,
+      // L1/L2 indent approval role (mam's 2026-05-26 spec). 'l1' = Nitin
+      // Jain ji, 'l2' = Nitin Sir, NULL = ordinary user. Procurement UI
+      // uses this to decide whether to show Approve L1 / L2 buttons.
+      approval_role: user.approval_role || null,
       // Frontend uses this to force a "set recovery code" modal on first
       // login, guaranteeing every user can self-recover later.
       has_recovery_code: !!user.recovery_code_hash,
@@ -87,7 +91,7 @@ router.post('/register', authMiddleware, adminOnly, (req, res) => {
 
 router.get('/me', authMiddleware, (req, res) => {
   const db = getDb();
-  const user = db.prepare('SELECT id, name, email, username, role, department, phone, recovery_code_hash FROM users WHERE id = ?').get(req.user.id);
+  const user = db.prepare('SELECT id, name, email, username, role, department, phone, recovery_code_hash, approval_role FROM users WHERE id = ?').get(req.user.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   const has_recovery_code = !!user.recovery_code_hash;
   delete user.recovery_code_hash;

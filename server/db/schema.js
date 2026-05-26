@@ -2490,6 +2490,25 @@ function initializeDatabase() {
     ['indents', 'rejected_by INTEGER REFERENCES users(id)'],
     ['indents', 'rejected_at DATETIME'],
     ['indents', 'rejection_reason TEXT'],
+    // ─── 2-Level Indent Approval (mam's spec 2026-05-26) ───
+    // From 2026-05-25 onwards every new indent needs both an L1 sign-off
+    // (Nitin Jain ji, Sr. Manager — technical / budget check) AND an L2
+    // sign-off (Nitin Sir, Director — final). Older indents stay on the
+    // legacy single-approval flow via approval_policy='single' so a flood
+    // of pre-existing pending rows doesn't get retroactively re-queued.
+    // Existing approved_by / approved_at / rejected_by / rejection_reason
+    // continue to capture the FINAL state — L1/L2 fields capture per-level
+    // detail. Audit + Approval column stay backward-compatible.
+    ['indents', "approval_policy TEXT DEFAULT 'single'"],   // 'single' | 'two_level'
+    ['indents', 'l1_status TEXT'],                           // 'pending' | 'approved' | 'rejected'
+    ['indents', 'l1_by INTEGER REFERENCES users(id)'],
+    ['indents', 'l1_at DATETIME'],
+    ['indents', 'l2_status TEXT'],
+    ['indents', 'l2_by INTEGER REFERENCES users(id)'],
+    ['indents', 'l2_at DATETIME'],
+    // Tags the two Nitins (seeded below) as the designated approvers so
+    // the UI / API can gate Approve L1 / L2 to them. NULL = ordinary user.
+    ['users', 'approval_role TEXT'],
     // Item classification mirrored from item_master.type (PO / FOC / RGP)
     ['indent_items', 'item_type TEXT'],
     // Links this indent line back to the site BOQ row it was picked from
@@ -2869,9 +2888,63 @@ function initializeDatabase() {
     console.error('[migration] leave_requests CHECK relax failed:', e.message);
   }
 
+  // Relax indents.status CHECK to allow 'l1_approved' — the intermediate
+  // state when Nitin Jain ji has approved L1 but Nitin Sir's L2 sign-off
+  // is still pending. Same rebuild pattern as attendance / leave above.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='indents'").get();
+    if (row && !/l1_approved/.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+indents/i, 'CREATE TABLE indents_new')
+        .replace(/CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i,
+                 "CHECK(status IN ('draft','submitted','l1_approved','approved','rejected','po_sent','dispatched','received'))");
+      db.exec(newSql);
+      const oldCols = db.prepare("PRAGMA table_info(indents)").all().map(c => c.name);
+      const newCols = db.prepare("PRAGMA table_info(indents_new)").all().map(c => c.name);
+      const shared = oldCols.filter(c => newCols.includes(c)).join(', ');
+      db.exec(`INSERT INTO indents_new (${shared}) SELECT ${shared} FROM indents`);
+      db.exec('DROP TABLE indents');
+      db.exec('ALTER TABLE indents_new RENAME TO indents');
+      db.exec('COMMIT');
+      console.log('[migration] indents.status CHECK relaxed to allow l1_approved (2-level approval)');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+    console.error('[migration] indents CHECK relax failed:', e.message);
+  }
+
   for (const [table, col] of migrations) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
+
+  // ─── 2-Level Indent Approval — tag Nitin Jain ji = L1, Nitin Sir = L2 ─
+  // Idempotent: only sets approval_role on rows that don't already carry one,
+  // and matches loosely (case-insensitive name LIKE) so minor punctuation in
+  // seed data doesn't break it. Runs after the migrations loop so the
+  // approval_role column definitely exists.
+  try {
+    const l1 = db.prepare(`
+      UPDATE users SET approval_role='l1'
+        WHERE id = (
+          SELECT id FROM users
+            WHERE LOWER(name) LIKE 'nitin%' AND LOWER(name) LIKE '%jain%'
+            ORDER BY id LIMIT 1
+        ) AND (approval_role IS NULL OR approval_role='')
+    `).run();
+    if (l1.changes > 0) console.log('[seed] Tagged Nitin Jain ji as L1 indent approver');
+
+    const l2 = db.prepare(`
+      UPDATE users SET approval_role='l2'
+        WHERE id = (
+          SELECT id FROM users
+            WHERE LOWER(name) LIKE 'nitin%' AND LOWER(name) NOT LIKE '%jain%'
+              AND (approval_role IS NULL OR approval_role='')
+            ORDER BY id LIMIT 1
+        ) AND (approval_role IS NULL OR approval_role='')
+    `).run();
+    if (l2.changes > 0) console.log('[seed] Tagged Nitin Sir as L2 indent approver');
+  } catch (e) { /* column not yet present on very first boot — silent */ }
 
   // ─── One-time data backfill: link sites to business_book ──────────
   // Mam: "in dpr all not see boq item which i upload in order to

@@ -435,11 +435,15 @@ router.get('/indents', (req, res) => {
   const indents = db.prepare(
     `SELECT i.*, u.name as created_by_name,
             au.name as approved_by_name,
-            ru.name as rejected_by_name
+            ru.name as rejected_by_name,
+            l1u.name as l1_by_name,
+            l2u.name as l2_by_name
      FROM indents i
      LEFT JOIN users u ON i.created_by = u.id
      LEFT JOIN users au ON i.approved_by = au.id
      LEFT JOIN users ru ON i.rejected_by = ru.id
+     LEFT JOIN users l1u ON i.l1_by = l1u.id
+     LEFT JOIN users l2u ON i.l2_by = l2u.id
      ${where}
      ORDER BY i.created_at DESC`
   ).all(...params);
@@ -526,11 +530,22 @@ router.get('/indents', (req, res) => {
     return link;
   };
 
+  // Names of the currently-designated L1 / L2 approvers — surfaced so the
+  // UI can show "Awaiting Nitin Jain ji" on rows where nobody has acted
+  // yet. Pulled once per request, not per row.
+  const l1User = db.prepare("SELECT name FROM users WHERE approval_role='l1' AND active=1 LIMIT 1").get();
+  const l2User = db.prepare("SELECT name FROM users WHERE approval_role='l2' AND active=1 LIMIT 1").get();
+  const approverNames = {
+    l1: l1User?.name || 'L1 approver',
+    l2: l2User?.name || 'L2 approver',
+  };
+
   res.json(indents.map(i => ({
     ...i,
     boq_file_link: findBoq(i.site_name || i.client_name),
     items: itemsByIndent.get(i.id) || [],
     budget_amount: +(budgetByIndent.get(i.id) || 0).toFixed(2),
+    approver_names: approverNames,
   })));
 });
 
@@ -640,10 +655,25 @@ router.post('/indents', (req, res) => {
   // submission goes straight to the approval queue, no draft state in between.
   // Approver then either Approves (→ 'approved') or Rejects (→ 'rejected') from
   // the indent list.
+  //
+  // 2-level approval policy (mam 2026-05-26): indents raised ON OR AFTER
+  // 2026-05-25 go through L1 (Nitin Jain ji) then L2 (Nitin Sir). Older
+  // indents stay on the legacy single-approval flow.
+  const TWO_LEVEL_CUTOFF = '2026-05-25';
+  const today = new Date().toISOString().slice(0, 10);
+  const policy = today >= TWO_LEVEL_CUTOFF ? 'two_level' : 'single';
   const r = db.prepare(
-    `INSERT INTO indents (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by)
-     VALUES (?,?,?,?,?,?,?,?)`
-  ).run(resolvedPlanningId, indentNum, 'submitted', notes || '', site_name || '', raised_by_name || '', site_name || '', req.user.id);
+    `INSERT INTO indents
+       (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,
+        approval_policy, l1_status, l2_status)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+  ).run(
+    resolvedPlanningId, indentNum, 'submitted',
+    notes || '', site_name || '', raised_by_name || '', site_name || '', req.user.id,
+    policy,
+    policy === 'two_level' ? 'pending' : null,
+    policy === 'two_level' ? 'pending' : null,
+  );
 
   // Seed the indent_tracker with the approval_pending stage so the IndentFMS
   // pipeline view immediately reflects "this indent is waiting for approval".
@@ -728,6 +758,102 @@ router.put('/indents/:id', (req, res) => {
 
   // Approve / reject path.
   if (status && !items) {
+    // ─── 2-Level approval routing (mam 2026-05-26) ────────────────────
+    // For indents with approval_policy='two_level', the flow is:
+    //   submitted  --(L1 approve)-->  l1_approved  --(L2 approve)-->  approved
+    //        \--(L1 reject)--> rejected      \--(L2 reject)--> rejected
+    //
+    // Guards on top of the existing separation-of-duties + reject-reason:
+    //   - L1 actions require users.approval_role='l1' (or admin)
+    //   - L2 actions require users.approval_role='l2' (or admin)
+    //   - L2 cannot fire until L1 is approved (server-side sequence guard)
+    //   - Same user cannot do BOTH levels of the same indent (no self-double-sign)
+    //
+    // Strategy: detect two_level state, do the per-level update, then either
+    //   - L1 approve → set l1_*, flip status='l1_approved', return (don't fall through)
+    //   - L2 approve → set l2_*, then FALL THROUGH to the existing approve
+    //                  path so quantity_overrides + approved_by/at still apply
+    //   - Reject at L1 or L2 → set l*_status='rejected', then FALL THROUGH
+    //                  to the existing reject path so rejection_reason + the
+    //                  legacy Approval-column display keep working.
+    if (status === 'approved' || status === 'rejected') {
+      const cur2 = db.prepare(
+        `SELECT created_by, approval_policy, status, l1_status, l2_status, l1_by
+           FROM indents WHERE id=?`
+      ).get(id);
+      if (cur2 && cur2.approval_policy === 'two_level') {
+        const actor = db.prepare('SELECT id, role, approval_role FROM users WHERE id=?').get(req.user.id) || req.user;
+        const isAdminUser = actor.role === 'admin';
+        const canActL1 = isAdminUser || actor.approval_role === 'l1';
+        const canActL2 = isAdminUser || actor.approval_role === 'l2';
+
+        if (status === 'approved') {
+          // Which level are we acting on? Drive off the current status.
+          if (cur2.status === 'submitted' && cur2.l1_status === 'pending') {
+            // L1 approve — gate by role, then write l1_* and flip status='l1_approved'.
+            if (!canActL1) {
+              return res.status(403).json({ error: 'Only the designated L1 approver (Nitin Jain ji) can approve L1' });
+            }
+            db.prepare(
+              `UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP,
+                                  status='l1_approved'
+                 WHERE id=?`
+            ).run(actor.id, id);
+            return res.json({ message: 'L1 approved — awaiting L2 sign-off', stage: 'l1_done' });
+          }
+          if (cur2.status === 'l1_approved' && cur2.l2_status === 'pending') {
+            // L2 approve — gate by role + sequence + self-double-sign block.
+            if (!canActL2) {
+              return res.status(403).json({ error: 'Only the designated L2 approver (Nitin Sir) can approve L2' });
+            }
+            if (cur2.l1_by && cur2.l1_by === actor.id) {
+              return res.status(400).json({ error: 'Same user cannot do both L1 and L2 — get a second pair of eyes' });
+            }
+            db.prepare(
+              `UPDATE indents SET l2_status='approved', l2_by=?, l2_at=CURRENT_TIMESTAMP
+                 WHERE id=?`
+            ).run(actor.id, id);
+            // Fall through to the existing approve path → it sets status='approved',
+            // approved_by, approved_at, and applies quantity_overrides.
+          } else if (cur2.status !== 'submitted') {
+            // Trying to "approve" a row that isn't waiting for L1 or L2 (e.g.
+            // already approved, rejected, po_sent, or stuck in an exotic state
+            // like l1_approved + l2_rejected). Reject the call so the legacy
+            // approve path can't accidentally bulldoze a final state.
+            return res.status(400).json({ error: `Cannot approve from status='${cur2.status}' (l1=${cur2.l1_status}, l2=${cur2.l2_status})` });
+          }
+        }
+
+        if (status === 'rejected') {
+          // Either L1 or L2 can reject. Validate the reject reason FIRST
+          // (mirroring the legacy check below) so a bad-reason call can't
+          // half-mutate l*_status before bouncing. THEN gate by role, THEN
+          // tag the level, THEN fall through to the legacy reject path
+          // (which writes rejection_reason + status='rejected').
+          const reasonStr = String(reason || '').trim();
+          if (reasonStr.length < 3) {
+            return res.status(400).json({ error: 'Rejection reason is required (at least 3 characters).' });
+          }
+          if (cur2.l1_status === 'pending') {
+            if (!canActL1) {
+              return res.status(403).json({ error: 'Only the designated L1 approver (Nitin Jain ji) can reject L1' });
+            }
+            db.prepare('UPDATE indents SET l1_status=?, l1_by=?, l1_at=CURRENT_TIMESTAMP WHERE id=?')
+              .run('rejected', actor.id, id);
+          } else if (cur2.l2_status === 'pending' && cur2.l1_status === 'approved') {
+            if (!canActL2) {
+              return res.status(403).json({ error: 'Only the designated L2 approver (Nitin Sir) can reject L2' });
+            }
+            db.prepare('UPDATE indents SET l2_status=?, l2_by=?, l2_at=CURRENT_TIMESTAMP WHERE id=?')
+              .run('rejected', actor.id, id);
+          }
+          // (No 'else' branch — admin Re-reject on an already-approved indent
+          // skips the L1/L2 tagging entirely and falls straight through to
+          // the legacy reject path, which is what mam wants.)
+        }
+      }
+    }
+
     // Separation of duties — mam (2026-05-21): "how can if user fill
     // that indent how can he she approved and reject their indent".
     // Block the creator from approving / rejecting their own indent.

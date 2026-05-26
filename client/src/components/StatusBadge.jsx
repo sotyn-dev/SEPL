@@ -14,6 +14,9 @@ const statusColors = {
   pass: 'badge-green', fail: 'badge-red',
   delivered: 'badge-green', dispatched: 'badge-blue', acknowledged: 'badge-purple',
   po_sent: 'badge-blue', signed: 'badge-green', testing: 'badge-purple',
+  // 2-level indent approval (mam's 2026-05-26) — intermediate state when
+  // L1 (Nitin Jain ji) has approved but L2 (Nitin Sir) hasn't yet.
+  l1_approved: 'badge-purple',
   interview_scheduled: 'badge-yellow', interview_done: 'badge-blue', offer_sent: 'badge-purple',
   onboarded: 'badge-green', advance_received: 'badge-green',
   verified: 'badge-blue',
