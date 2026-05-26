@@ -39,7 +39,13 @@ export default function InfoTooltip({ text, children, side = 'top', className = 
       {open && (
         <span
           role="tooltip"
-          className={`absolute z-50 ${sideClass} px-3 py-2 rounded-md bg-gray-900 text-white text-[11px] leading-snug font-normal shadow-lg w-64 max-w-[280px] whitespace-pre-wrap break-words`}>
+          // max-w uses min() so the popup auto-shrinks on narrow screens to
+          // stay within viewport (mam 2026-05-25: popup was clipping past
+          // modal left edge).  break-words ensures long names like
+          // "M/s Chattargarh Renewable Energy Pvt. Ltd (SAEL)" wrap
+          // cleanly instead of forcing wider layout.
+          style={{ maxWidth: 'min(280px, calc(100vw - 40px))' }}
+          className={`absolute z-50 ${sideClass} px-3 py-2 rounded-md bg-gray-900 text-white text-[11px] leading-snug font-normal shadow-lg w-max whitespace-pre-wrap break-words`}>
           {children || text}
         </span>
       )}

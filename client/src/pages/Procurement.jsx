@@ -2564,7 +2564,7 @@ export default function Procurement() {
                     field dropdown content".  Tooltip shows the full long
                     site name + lead number which often gets truncated in
                     the picker button. */}
-                <InfoTooltip text={form.site_name
+                <InfoTooltip side="right" text={form.site_name
                   ? `Currently picked: ${form.site_name}.\n\nThe selected site's Client PO BOQ items load below — pick one BOQ row, then pick a sub-item from the Item Master. ${boqItems.length} BOQ item(s) available.`
                   : 'Pick the destination site for this indent. Sites are sourced from Business Book — long company names will be truncated in the dropdown, hover here to see what is currently selected.'} />
               </label>
