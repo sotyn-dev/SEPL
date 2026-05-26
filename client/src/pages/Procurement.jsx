@@ -3253,13 +3253,23 @@ export default function Procurement() {
                             pickedMaster.current_price > 0 && `Master Rate: ₹${(+pickedMaster.current_price).toLocaleString('en-IN')}`,
                             `GST: ${pickedMaster.gst || '—'}`,
                           ].filter(Boolean).join('\n') : 'Pick a sub-item first to see its full details.';
+                          // Sub-Item filter by category (mam 2026-05-26):
+                          //   Material + Extra-Schedule → PO + FOC only (RGP has its own flow)
+                          //   RGP                       → RGP only
+                          //   (Non-Schedule + Rental use the flat-list layout above, not here)
+                          const filteredMasterForBoq = cat === 'rgp'
+                            ? masterItems.filter(m => String(m.type || '').toUpperCase() === 'RGP')
+                            : masterItems.filter(m => {
+                                const t = String(m.type || '').toUpperCase();
+                                return t === 'PO' || t === 'FOC' || t === '';
+                              });
                           const masterPicker = (
                             <div className="flex items-center gap-1 w-full">
                               <div className="flex-1 min-w-0">
                                 <SearchableSelect
-                                  options={masterItems.map(m => ({ id: m.id, label: `[${m.item_code}] ${m.display_name || m.item_name}${m.type ? ' · ' + m.type : ''}`, ...m }))}
+                                  options={filteredMasterForBoq.map(m => ({ id: m.id, label: `[${m.item_code}] ${m.display_name || m.item_name}${m.type ? ' · ' + m.type : ''}`, ...m }))}
                                   value={item.item_master_id || null} valueKey="id" displayKey="label"
-                                  placeholder="Search sub-item from Item Master…"
+                                  placeholder={cat === 'rgp' ? 'Search RGP sub-item…' : 'Search sub-item from Item Master…'}
                                   onChange={(m) => pickMasterItem(i, m)}
                                 />
                               </div>
@@ -3364,10 +3374,23 @@ export default function Procurement() {
                             so even direct API calls can't break it. */}
                         {(() => {
                           // Has this BOQ section already used a PO line?
-                          // If yes, we lock the FOC/RGP-only add button.
+                          // If yes, we lock the FOC-only add button. RGP is
+                          // EXCLUDED here in Material / Extra-Schedule flows
+                          // because RGP has its own category (mam 2026-05-26).
                           const hasPoLineInGroup = group.rows.some(r =>
                             String(r.item.item_type || '').toUpperCase() === 'PO'
                           );
+                          const isRgpCat = cat === 'rgp';
+                          // What label + default sub-type goes on the new row?
+                          //   RGP category: more RGP sub-items allowed under the same BOQ
+                          //   Else (Material / Extra-Schedule): FOC only after PO slot is filled
+                          const addLabel = isRgpCat
+                            ? '+ Add RGP sub-item to this BOQ'
+                            : `+ Add ${hasPoLineInGroup ? 'FOC' : ''} sub-item to this BOQ`;
+                          const lockHint = isRgpCat
+                            ? null
+                            : (hasPoLineInGroup ? '(PO slot used — only FOC can be added here)' : null);
+                          const defaultType = isRgpCat ? 'RGP' : (hasPoLineInGroup ? 'FOC' : '');
                           return (
                             <div className="flex items-center gap-2 flex-wrap">
                               <button
@@ -3379,18 +3402,12 @@ export default function Procurement() {
                                   boq_qty: group.sample.boq_qty,
                                   remaining_qty: group.sample.remaining_qty,
                                   unit: group.sample.unit || 'nos',
-                                  // Default type to FOC since PO slot is
-                                  // typically already filled.  User can
-                                  // change to RGP via the type chip after
-                                  // picking the sub-item.
-                                  item_type: hasPoLineInGroup ? 'FOC' : '',
+                                  item_type: defaultType,
                                 }])}
                                 className="text-[11px] text-blue-600 hover:text-blue-800 font-medium px-1 py-1"
-                              >+ Add {hasPoLineInGroup ? 'FOC / RGP' : ''} sub-item to this BOQ</button>
-                              {hasPoLineInGroup && (
-                                <span className="text-[10px] text-gray-400 italic">
-                                  (PO slot used — only FOC / RGP can be added here)
-                                </span>
+                              >{addLabel}</button>
+                              {lockHint && (
+                                <span className="text-[10px] text-gray-400 italic">{lockHint}</span>
                               )}
                             </div>
                           );
