@@ -423,15 +423,21 @@ export default function PriceRequired() {
               </select>
             </div>
             <div>
-              <label className="label">Department <span className="text-gray-400 font-normal text-[10px]">(matches Item Master)</span></label>
-              {/* Combo input — pick from existing departments OR type a new one.
-                  The list attribute wires the input to the datalist, so the
-                  browser shows autocomplete suggestions. Stored uppercase to
-                  stay consistent with how Item Master treats them. */}
+              <label className="label">
+                Department <span className="text-red-600">*</span>
+                <span className="text-gray-400 font-normal text-[10px] ml-1">(drives the new item_code prefix · FF1810 / ELV0987 / ELE0035…)</span>
+              </label>
+              {/* Combo input — pick from existing departments OR type a new
+                  one.  Required because the item_code prefix is derived from
+                  the department on finalize (mam 2026-05-25: "ITEM NAME
+                  CREATE AT PLACE OF PO IF DEPARTMENT FF THEN FF").  Stored
+                  uppercase to stay consistent with how Item Master treats
+                  them. */}
               <input
                 className="input"
                 list="price-req-departments"
-                placeholder="e.g. CIVIL / ELE / FF / GEN"
+                required
+                placeholder="e.g. FF / ELV / ELE / CIVIL / GEN"
                 value={form.department || ''}
                 onChange={e => setForm({ ...form, department: e.target.value.toUpperCase() })}
               />

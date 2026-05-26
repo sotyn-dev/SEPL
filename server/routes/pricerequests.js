@@ -63,6 +63,12 @@ router.post('/', (req, res) => {
   if (!b.item_name || !String(b.item_name).trim()) {
     return res.status(400).json({ error: 'Item name is required' });
   }
+  // Mam (2026-05-25): "HERE DEPARTMENT IS MEDATORY AND ACCORDING TO THAT
+  // ITEM NAME CREATE AT PLACE OF PO" — department must be filled so the
+  // auto-generated item_code can use the right prefix (FF / ELV / ELE...).
+  if (!b.department || !String(b.department).trim()) {
+    return res.status(400).json({ error: 'Department is required (drives the item_code prefix when promoted to Item Master)' });
+  }
   const allowedTypes = ['PO', 'FOC', 'RGP'];
   const itemType = allowedTypes.includes(String(b.item_type || '').toUpperCase())
     ? String(b.item_type).toUpperCase() : 'PO';
@@ -238,13 +244,49 @@ router.post('/:id/finalize', (req, res) => {
   // Always include `cur` even if it's already 'finalized'
   if (!siblings.find(s => s.id === cur.id)) siblings.push(cur);
 
-  // 1) Auto-generate item_code by reusing item_master's existing pattern. We
-  //    derive a 3-letter prefix from the type (PO / FOC / RGP) and append the
-  //    next id, e.g. PO-0042. The item_master upsert below ignores duplicates
-  //    on item_code, so we keep the format simple and unique-enough.
-  const seq = db.prepare(`SELECT COUNT(*) as c FROM item_master`).get().c + 1;
-  const codePrefix = String(cur.item_type || 'PO').toUpperCase();
-  const itemCode = `${codePrefix}-${String(seq).padStart(4, '0')}`;
+  // 1) Auto-generate item_code with a DEPARTMENT-driven prefix (mam
+  //    2026-05-25: "ITEM NAME CREATE AT PLACE OF PO IF DEPARTMENT FF
+  //    THEN FF IF SELECT ELV THEN START FRO ELV").  Matches the
+  //    convention already in the master sheet (FF1806, ELV0986, ELE0034,
+  //    OTH0006...) — no hyphen, 4-digit sequence, per-department counter.
+  //
+  //    Map common SEPL department names to their established prefixes;
+  //    fall back to first 3 alpha chars of the dept name for anything
+  //    we don't know about.  Sequence is the max existing numeric suffix
+  //    for that prefix + 1, so we never collide with legacy codes.
+  const DEPT_PREFIX = {
+    'fire fighting': 'FF', 'fire': 'FF', 'ff': 'FF',
+    'elv': 'ELV', 'extra low voltage': 'ELV',
+    'electrical': 'ELE', 'ele': 'ELE', 'electric': 'ELE',
+    'lv': 'LV', 'low voltage': 'LV',
+    'civil': 'CIV',
+    'mep': 'MEP',
+    'hvac': 'HVAC',
+    'plumbing': 'PLM',
+    'general': 'GEN', 'gen': 'GEN',
+    'other': 'OTH', 'others': 'OTH',
+  };
+  const deptKey = String(cur.department || '').trim().toLowerCase();
+  let codePrefix = DEPT_PREFIX[deptKey];
+  if (!codePrefix) {
+    const cleaned = deptKey.replace(/[^a-z]/g, '');
+    codePrefix = (cleaned.slice(0, 3) || 'GEN').toUpperCase();
+  }
+  // Find the highest existing suffix for this prefix → next is +1.  Uses
+  // LIKE to scope to the prefix; the regex on the matched code extracts
+  // the numeric tail safely even if the suffix length differs.
+  const topRow = db.prepare(
+    `SELECT item_code FROM item_master
+      WHERE item_code LIKE ?
+      ORDER BY LENGTH(item_code) DESC, item_code DESC
+      LIMIT 1`
+  ).get(codePrefix + '%');
+  let nextSeq = 1;
+  if (topRow?.item_code) {
+    const m = String(topRow.item_code).match(/(\d+)$/);
+    if (m) nextSeq = (+m[1] || 0) + 1;
+  }
+  const itemCode = `${codePrefix}${String(nextSeq).padStart(4, '0')}`;
   const itemMasterIns = db.prepare(`
     INSERT INTO item_master
       (item_code, item_name, specification, size, uom, type, make, current_price, gst, department)
