@@ -2509,6 +2509,27 @@ function initializeDatabase() {
     // Tags the two Nitins (seeded below) as the designated approvers so
     // the UI / API can gate Approve L1 / L2 to them. NULL = ordinary user.
     ['users', 'approval_role TEXT'],
+    // ─── Indent Category (mam's spec 2026-05-26) ───
+    // Old indents had a single flow (all "material"). Mam wants explicit
+    // categories so the BOQ picker filters correctly and over-budget items
+    // (extras / rentals) carry their own audit trail. Default 'material'
+    // keeps every pre-existing indent on the legacy flow without a touch.
+    //   material           — BOQ PO + FOC items only (RGP hidden)
+    //   rgp                — BOQ RGP items only
+    //   extra_schedule     — BOQ row exists, qty cap removed (over-BOQ)
+    //   extra_non_schedule — No BOQ link, picked free from Item Master
+    //   rental             — Rented tools, validated against buy-outright cost
+    ['indents', "indent_category TEXT DEFAULT 'material'"],
+    // Per-line flags so listing + downstream reports can tell extra rows
+    // apart from regular ones without re-deriving from indents.indent_category.
+    ['indent_items', 'is_extra_schedule INTEGER DEFAULT 0'],
+    ['indent_items', 'is_extra_non_schedule INTEGER DEFAULT 0'],
+    // Rental-only fields. Non-null only when indent.indent_category='rental'.
+    // total_rental = quantity * rental_days * rental_rate_per_day. Server
+    // blocks the indent if total_rental >= quantity * item_master.current_price
+    // (renting can't cost as much or more than buying outright).
+    ['indent_items', 'rental_days INTEGER'],
+    ['indent_items', 'rental_rate_per_day REAL'],
     // Item classification mirrored from item_master.type (PO / FOC / RGP)
     ['indent_items', 'item_type TEXT'],
     // Links this indent line back to the site BOQ row it was picked from

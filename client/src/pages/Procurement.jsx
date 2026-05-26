@@ -304,11 +304,12 @@ export default function Procurement() {
   const [dispReadyPerPage, setDispReadyPerPage]   = useState(15);
   const [dispListPerPage, setDispListPerPage]     = useState(15);
   // Indents
-  const [indFilterStatus, setIndFilterStatus]   = useState('all');
-  const [indFilterFrom, setIndFilterFrom]       = useState('');
-  const [indFilterTo, setIndFilterTo]           = useState('');
-  const [indSearch, setIndSearch]               = useState('');
-  const [indPage, setIndPage]                   = useState(1);
+  const [indFilterStatus, setIndFilterStatus]     = useState('all');
+  const [indFilterCategory, setIndFilterCategory] = useState('all');  // mam's 5 categories (2026-05-26)
+  const [indFilterFrom, setIndFilterFrom]         = useState('');
+  const [indFilterTo, setIndFilterTo]             = useState('');
+  const [indSearch, setIndSearch]                 = useState('');
+  const [indPage, setIndPage]                     = useState(1);
   // Vendor Rates
   const [ratesSearch, setRatesSearch]           = useState('');
   const [ratesPage, setRatesPage]               = useState(1);
@@ -601,20 +602,45 @@ export default function Procurement() {
     e.preventDefault();
     if (!form.site_name) return toast.error('Site Name is required');
     if (!form.raised_by_name) return toast.error('Raised By is required');
-    // Both BOQ Item (po_item_id) AND Sub-Item (item_master_id) are
-    // mandatory per mam's spec — surface the row number on failure
-    // so the user knows which line to fix.
+    // ─── Per-category client-side validation (mam's spec 2026-05-26) ───
+    // Server enforces the same rules, but failing fast in the UI gives
+    // a better error UX (row number + specific cause).
+    const cat = form.indent_category || 'material';
+    const needsBoq = (cat === 'material' || cat === 'rgp' || cat === 'extra_schedule');
     for (let i = 0; i < indentItems.length; i++) {
       const it = indentItems[i];
-      if (!it.po_item_id) return toast.error(`Row ${i + 1}: pick BOQ Item (from Client PO)`);
+      if (needsBoq && !it.po_item_id) return toast.error(`Row ${i + 1}: pick BOQ Item (from Client PO)`);
       if (!it.item_master_id) return toast.error(`Row ${i + 1}: pick Sub-Item (from Item Master)`);
       if (!(+it.quantity > 0)) return toast.error(`Row ${i + 1}: Quantity must be greater than 0`);
+      if (cat === 'rental') {
+        if (!(+it.rental_days > 0)) return toast.error(`Row ${i + 1}: Days must be greater than 0 (Rental)`);
+        if (!(+it.rental_rate_per_day > 0)) return toast.error(`Row ${i + 1}: Rate per day must be greater than 0 (Rental)`);
+        // Rental-vs-buy block — mirrored server-side. Surfaces here so the
+        // user can fix it before sending. masterPrice comes from item_master
+        // (or item_price_history fallback) — both surfaced via masterItems.
+        const m = masterItems.find(x => +x.id === +it.item_master_id);
+        const masterPrice = +m?.current_price || 0;
+        if (masterPrice <= 0) return toast.error(`Row ${i + 1}: Cannot validate rental — Item Master rate missing for this item`);
+        const totalRental = (+it.quantity || 0) * (+it.rental_days || 0) * (+it.rental_rate_per_day || 0);
+        const buyCost = (+it.quantity || 0) * masterPrice;
+        if (totalRental >= buyCost) {
+          return toast.error(`Row ${i + 1}: Rental cost ₹${Math.round(totalRental).toLocaleString('en-IN')} ≥ buying outright ₹${Math.round(buyCost).toLocaleString('en-IN')}. Buy instead of renting.`);
+        }
+      }
     }
     const payload = {
       site_name: form.site_name,
       raised_by_name: form.raised_by_name,
       notes: form.notes || '',
-      items: indentItems.map(it => ({ ...it, make: it.make || '' })),
+      indent_category: cat,
+      items: indentItems.map(it => ({
+        ...it,
+        make: it.make || '',
+        // Strip rental fields off non-rental rows so the server doesn't
+        // mistake old form state for rental data.
+        rental_days: cat === 'rental' ? (+it.rental_days || null) : null,
+        rental_rate_per_day: cat === 'rental' ? (+it.rental_rate_per_day || null) : null,
+      })),
     };
     try {
       if (editingIndentId) {
@@ -1278,7 +1304,7 @@ export default function Procurement() {
             if (d && d > indFilterTo) return false;
           }
           if (q) {
-            const hay = `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''}`.toLowerCase();
+            const hay = `${i.indent_number || ''} ${i.site_name || ''} ${i.client_name || ''} ${i.raised_by_name || ''} ${i.created_by_name || ''} ${(i.indent_category || 'material').replace(/_/g, ' ')}`.toLowerCase();
             if (!hay.includes(q)) return false;
           }
           return true;
@@ -1286,6 +1312,7 @@ export default function Procurement() {
         const kpiScope = indents.filter(matchesDateAndSearch);
         const filteredIndents = indents.filter(i => {
           if (indFilterStatus !== 'all' && i.status !== indFilterStatus) return false;
+          if (indFilterCategory !== 'all' && (i.indent_category || 'material') !== indFilterCategory) return false;
           if (indFilterFrom) {
             const d = (i.created_at || i.indent_date || '').slice(0, 10);
             if (d && d < indFilterFrom) return false;
@@ -1305,7 +1332,7 @@ export default function Procurement() {
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="font-semibold">Raise Indent</h3>
-            <button onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Raise Indent</button>
+            <button onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Raise Indent</button>
           </div>
 
           {/* KPI strip — mam (2026-05-25): "show also dashbaord total indent .
@@ -1387,6 +1414,18 @@ export default function Procurement() {
               </select>
             </div>
             <div>
+              <label className="label text-[10px] mb-0.5">Category</label>
+              <select className="select text-xs" value={indFilterCategory}
+                onChange={e => { setIndFilterCategory(e.target.value); setIndPage(1); }}>
+                <option value="all">All</option>
+                <option value="material">Material</option>
+                <option value="rgp">RGP</option>
+                <option value="extra_schedule">Extra · Schedule</option>
+                <option value="extra_non_schedule">Extra · Non-Schedule</option>
+                <option value="rental">Rental</option>
+              </select>
+            </div>
+            <div>
               <label className="label text-[10px] mb-0.5">From</label>
               <input className="input text-xs" type="date" value={indFilterFrom}
                 onChange={e => { setIndFilterFrom(e.target.value); setIndPage(1); }} />
@@ -1396,9 +1435,9 @@ export default function Procurement() {
               <input className="input text-xs" type="date" value={indFilterTo}
                 onChange={e => { setIndFilterTo(e.target.value); setIndPage(1); }} />
             </div>
-            {(indSearch || indFilterStatus !== 'all' || indFilterFrom || indFilterTo) && (
+            {(indSearch || indFilterStatus !== 'all' || indFilterCategory !== 'all' || indFilterFrom || indFilterTo) && (
               <button type="button" className="btn btn-secondary text-xs py-1 px-2"
-                onClick={() => { setIndSearch(''); setIndFilterStatus('all'); setIndFilterFrom(''); setIndFilterTo(''); setIndPage(1); }}>
+                onClick={() => { setIndSearch(''); setIndFilterStatus('all'); setIndFilterCategory('all'); setIndFilterFrom(''); setIndFilterTo(''); setIndPage(1); }}>
                 Reset
               </button>
             )}
@@ -1426,7 +1465,30 @@ export default function Procurement() {
                       </button>
                     )}
                   </td>
-                  <td className="font-medium">{i.indent_number}</td>
+                  <td className="font-medium">
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <span>{i.indent_number}</span>
+                      {/* Category chip (mam 2026-05-26) — only shown for
+                          non-Material categories to keep the listing clean
+                          for the common case. Hover for the full label. */}
+                      {(() => {
+                        const c = i.indent_category || 'material';
+                        if (c === 'material') return null;
+                        const cfg = {
+                          rgp:                 { label: 'RGP',    color: 'bg-purple-100 text-purple-700 border-purple-200', full: 'RGP (return goods particulars)' },
+                          extra_schedule:      { label: 'EXT-S',  color: 'bg-amber-100 text-amber-700 border-amber-200',    full: 'Extra · Schedule (over-BOQ qty)' },
+                          extra_non_schedule:  { label: 'EXT-NS', color: 'bg-orange-100 text-orange-700 border-orange-200', full: 'Extra · Non-Schedule (outside BOQ)' },
+                          rental:              { label: 'RENT',   color: 'bg-cyan-100 text-cyan-700 border-cyan-200',       full: 'Rental (tools on rent)' },
+                        }[c];
+                        if (!cfg) return null;
+                        return (
+                          <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${cfg.color}`} title={cfg.full}>
+                            {cfg.label}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  </td>
                   <td className="text-xs text-gray-600">{i.created_at ? new Date(i.created_at).toLocaleString() : (i.indent_date || '—')}</td>
                   <td>{i.site_name || i.client_name || <span className="text-gray-400">—</span>}</td>
                   <td>{i.raised_by_name || i.created_by_name}</td>
@@ -2838,8 +2900,66 @@ export default function Procurement() {
             </div>
           </div>
 
+          {/* ─── Category selector (mam's spec 2026-05-26) ────────────────
+              5 indent flows.  Selection drives whether the items section
+              uses the BOQ picker, a free Item Master picker, or the rental
+              capture (days × rate/day with the rent-vs-buy block). */}
+          <div>
+            <label className="label">Category *</label>
+            <div className="flex gap-1 flex-wrap">
+              {[
+                { id: 'material',           label: 'Material',         hint: 'BOQ items (PO + FOC). RGP hidden.' },
+                { id: 'rgp',                label: 'RGP',              hint: 'BOQ RGP items only.' },
+                { id: 'extra_schedule',     label: 'Extra · Schedule', hint: 'BOQ item exists, qty cap removed (over-BOQ).' },
+                { id: 'extra_non_schedule', label: 'Extra · Non-Schedule', hint: 'Item outside BOQ — pick free from Item Master (PO + FOC).' },
+                { id: 'rental',             label: 'Rental',           hint: 'Rented tool — Days × Rate/Day. Blocks if rental ≥ buying outright.' },
+              ].map(c => {
+                const active = (form.indent_category || 'material') === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => {
+                      // Reset items when category changes — different categories
+                      // have incompatible row shapes (BOQ vs flat Item Master).
+                      setForm(f => ({ ...f, indent_category: c.id }));
+                      setIndentItems([{ ...EMPTY_ITEM }]);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+                      active
+                        ? 'bg-blue-700 text-white border-blue-700 shadow-sm'
+                        : 'bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:text-blue-700'
+                    }`}
+                    title={c.hint}
+                  >
+                    {c.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-gray-500 mt-1">
+              {(() => {
+                const c = form.indent_category || 'material';
+                if (c === 'material')           return 'BOQ items where type is PO or FOC. RGP items hidden — pick the RGP category for those.';
+                if (c === 'rgp')                return 'BOQ items where type is RGP only.';
+                if (c === 'extra_schedule')     return 'BOQ item exists but the site needs MORE qty than BOQ allows. Qty cap is removed — L1+L2 will see the over-commit.';
+                if (c === 'extra_non_schedule') return 'Item is completely outside the BOQ. Pick directly from Item Master (PO + FOC types).';
+                if (c === 'rental')             return 'Rented tool. Per row: Days × Rate/Day. Server BLOCKS the indent if rental cost ≥ buying outright cost.';
+                return '';
+              })()}
+            </p>
+          </div>
+
           <h4 className="font-semibold text-sm">
-            Items <span className="text-gray-400 font-normal">(BOQ item from Client PO → then sub-item from Item Master)</span>
+            Items
+            <span className="text-gray-400 font-normal ml-1">
+              {(() => {
+                const c = form.indent_category || 'material';
+                if (c === 'extra_non_schedule') return '(direct pick from Item Master — no BOQ)';
+                if (c === 'rental')             return '(Item Master + Days × Rate/Day)';
+                return '(BOQ item from Client PO → then sub-item from Item Master)';
+              })()}
+            </span>
           </h4>
           {!form.site_name ? (
             <div className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center text-sm text-gray-500 bg-gray-50">
@@ -2882,9 +3002,139 @@ export default function Procurement() {
                 );
               })()}
 
-              {/* GROUP rows by po_item_id so each BOQ is a parent section with its sub-items underneath.
-                  Empty (un-picked) rows form their own placeholder group so the user can pick a BOQ. */}
-              {(() => {
+              {/* ─── Category-aware items rendering (mam's spec 2026-05-26) ─
+                  Material / RGP / Extra-Schedule use the BOQ-grouped UI.
+                  Extra-Non-Schedule + Rental use a flat list of Item Master
+                  rows (no BOQ link).
+                  BOQ picker filter (inside the BOQ-grouped IIFE below):
+                    Material + Extra-Schedule → type IN (PO, FOC, '')
+                    RGP                       → type = RGP
+                    (Non-Schedule + Rental don't show BOQ at all) */}
+              {/* ─── FLAT-LIST layout for Extra-Non-Schedule + Rental ─── */}
+              {(form.indent_category === 'extra_non_schedule' || form.indent_category === 'rental') && (() => {
+                const isRental = form.indent_category === 'rental';
+                // Filter Item Master for the picker — Non-Schedule excludes
+                // RGP (RGP has its own category); Rental allows any type.
+                const filteredMasterItems = isRental
+                  ? masterItems
+                  : masterItems.filter(m => {
+                      const t = String(m.type || '').toUpperCase();
+                      return t === 'PO' || t === 'FOC' || t === '';
+                    });
+                return (
+                  <div className="space-y-2">
+                    {indentItems.map((item, i) => {
+                      const m = item.item_master_id ? masterItems.find(x => +x.id === +item.item_master_id) : null;
+                      const masterPrice = +m?.current_price || 0;
+                      const qty = +item.quantity || 0;
+                      const days = +item.rental_days || 0;
+                      const ratePerDay = +item.rental_rate_per_day || 0;
+                      const totalRental = qty * days * ratePerDay;
+                      const buyCost = qty * masterPrice;
+                      const rentalBlocks = isRental && (
+                        (!m || masterPrice <= 0)
+                          ? false  // separate error message below
+                          : (totalRental > 0 && totalRental >= buyCost)
+                      );
+                      const rentalNoPrice = isRental && m && masterPrice <= 0;
+                      return (
+                        <div key={i} className={`border rounded-lg p-3 space-y-2 ${rentalBlocks ? 'bg-red-50 border-red-300' : 'bg-white'}`}>
+                          <div className="flex justify-between items-center">
+                            <div className="text-[11px] font-bold text-gray-500 uppercase">
+                              {isRental ? `Rental ${i + 1}` : `Extra item ${i + 1}`}
+                            </div>
+                            {indentItems.length > 1 && (
+                              <button type="button" onClick={() => setIndentItems(indentItems.filter((_, x) => x !== i))} className="p-1 text-gray-400 hover:text-red-600" title="Remove row">
+                                <FiTrash2 size={14} />
+                              </button>
+                            )}
+                          </div>
+                          {/* Item Master picker — full width on top */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">
+                              Item (from Item Master) <span className="text-red-500">*</span>
+                            </label>
+                            <SearchableSelect
+                              options={filteredMasterItems.map(x => ({ id: x.id, label: `[${x.item_code}] ${x.display_name || x.item_name}${x.type ? ' · ' + x.type : ''}${x.current_price > 0 ? ' · ₹' + (+x.current_price).toLocaleString('en-IN') : ''}`, ...x }))}
+                              value={item.item_master_id || null} valueKey="id" displayKey="label"
+                              placeholder="Search Item Master…"
+                              onChange={(picked) => pickMasterItem(i, picked)}
+                            />
+                            {m && (
+                              <div className="text-[10px] text-gray-500 mt-0.5">
+                                {m.specification || m.size ? <>{[m.size, m.specification].filter(Boolean).join(' / ')} · </> : ''}
+                                Master rate: {masterPrice > 0 ? `₹${masterPrice.toLocaleString('en-IN')}` : <span className="text-red-500 italic">not set</span>}
+                                {m.type && <> · Type: <span className="font-semibold">{m.type}</span></>}
+                              </div>
+                            )}
+                          </div>
+                          {/* Qty + Unit + Make (common) — plus rental Days + Rate/Day */}
+                          <div className={`grid gap-2 ${isRental ? 'grid-cols-2 md:grid-cols-6' : 'grid-cols-2 md:grid-cols-4'}`}>
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Qty *</label>
+                              <NumInput className="input text-base font-bold text-right" min="0" value={item.quantity} emitZeroOnEmpty onChange={v => { const n = [...indentItems]; n[i].quantity = v; setIndentItems(n); }} />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Unit</label>
+                              <input className="input text-sm" placeholder="nos" value={item.unit || 'nos'} onChange={e => { const n = [...indentItems]; n[i].unit = e.target.value; setIndentItems(n); }} />
+                            </div>
+                            {isRental && (
+                              <>
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Days *</label>
+                                  <NumInput className="input text-base font-bold text-right" min="0" value={item.rental_days || 0} emitZeroOnEmpty onChange={v => { const n = [...indentItems]; n[i].rental_days = v; setIndentItems(n); }} />
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Rate / Day (₹) *</label>
+                                  <NumInput className="input text-base font-bold text-right" min="0" value={item.rental_rate_per_day || 0} emitZeroOnEmpty onChange={v => { const n = [...indentItems]; n[i].rental_rate_per_day = v; setIndentItems(n); }} />
+                                </div>
+                              </>
+                            )}
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Make</label>
+                              <input className="input text-sm" placeholder="Make" value={item.make || ''} onChange={e => { const n = [...indentItems]; n[i].make = e.target.value; setIndentItems(n); }} />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Required by</label>
+                              <input className="input text-sm" type="date" value={item.required_date || ''} onChange={e => { const n = [...indentItems]; n[i].required_date = e.target.value; setIndentItems(n); }} />
+                            </div>
+                          </div>
+                          {/* Rental cost summary — live computed, red when block fires */}
+                          {isRental && (qty > 0 || days > 0 || ratePerDay > 0) && (
+                            <div className={`text-xs rounded p-2 ${
+                              rentalBlocks ? 'bg-red-100 text-red-800 border border-red-300'
+                              : rentalNoPrice ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                              : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                            }`}>
+                              {rentalNoPrice ? (
+                                <>⚠️ Item Master rate is 0 — set the master rate first so rental can be validated.</>
+                              ) : rentalBlocks ? (
+                                <><b>BLOCKED.</b> Rental ₹{Math.round(totalRental).toLocaleString('en-IN')} ≥ buying ₹{Math.round(buyCost).toLocaleString('en-IN')}. Buy instead of renting.</>
+                              ) : totalRental > 0 ? (
+                                <>Rental cost: <b>₹{Math.round(totalRental).toLocaleString('en-IN')}</b> ({qty} × {days} days × ₹{ratePerDay}/day) vs buying outright ₹{Math.round(buyCost).toLocaleString('en-IN')} — savings ₹{Math.round(buyCost - totalRental).toLocaleString('en-IN')}.</>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    <button type="button" onClick={() => setIndentItems([...indentItems, { ...EMPTY_ITEM, rental_days: 0, rental_rate_per_day: 0 }])} className="btn btn-secondary text-xs">
+                      + Add another {isRental ? 'rental' : 'item'}
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {/* ─── BOQ-grouped layout for Material / RGP / Extra-Schedule ─── */}
+              {(form.indent_category === 'material' || form.indent_category === 'rgp' || form.indent_category === 'extra_schedule' || !form.indent_category) && (() => {
+                const cat = form.indent_category || 'material';
+                // BOQ items filtered per category (mam 2026-05-26).
+                const filteredBoqItems = cat === 'rgp'
+                  ? boqItems.filter(b => String(b.item_type || '').toUpperCase() === 'RGP')
+                  : boqItems.filter(b => {
+                      const t = String(b.item_type || '').toUpperCase();
+                      return t === 'PO' || t === 'FOC' || t === '';
+                    });
                 const groups = [];
                 const seen = new Map();
                 indentItems.forEach((item, idx) => {
@@ -2926,13 +3176,17 @@ export default function Procurement() {
                             <>
                               <div className="text-[10px] font-bold text-gray-500 uppercase mb-1">BOQ Item — pick first <span className="text-red-500">*</span></div>
                               <SearchableSelect
-                                options={boqItems.map(b => ({
+                                options={filteredBoqItems.map(b => ({
                                   id: b.id,
                                   label: `${b.description || '(no desc)'}${b.boq_qty ? ' · Qty ' + b.boq_qty : ''}${b.item_type ? ' · ' + b.item_type : ''}`,
                                   ...b,
                                 }))}
                                 value={null} valueKey="id" displayKey="label"
-                                placeholder={boqItems.length ? 'Search BOQ item from Client PO…' : 'No BOQ items for this site'}
+                                placeholder={
+                                  filteredBoqItems.length
+                                    ? `Search BOQ item (${cat === 'rgp' ? 'RGP items only' : 'PO + FOC items'})…`
+                                    : `No ${cat === 'rgp' ? 'RGP' : 'PO/FOC'} BOQ items for this site`
+                                }
                                 onChange={(b) => pickBoqItem(group.rows[0].idx, b)}
                               />
                             </>
@@ -3147,7 +3401,9 @@ export default function Procurement() {
                 ));
               })()}
 
-              <button type="button" onClick={() => setIndentItems([...indentItems, { ...EMPTY_ITEM }])} className="btn btn-secondary text-xs">+ Add another BOQ item</button>
+              {(form.indent_category === 'material' || form.indent_category === 'rgp' || form.indent_category === 'extra_schedule' || !form.indent_category) && (
+                <button type="button" onClick={() => setIndentItems([...indentItems, { ...EMPTY_ITEM }])} className="btn btn-secondary text-xs">+ Add another BOQ item</button>
+              )}
             </>
           )}
           <div><label className="label">Notes</label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm({...form, notes: e.target.value})} placeholder="Any remarks for Purchase…" /></div>

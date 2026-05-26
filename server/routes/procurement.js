@@ -467,6 +467,8 @@ router.get('/indents', (req, res) => {
   const allItems = db.prepare(
     `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity,
             ii.unit, ii.item_type, ii.item_master_id,
+            ii.is_extra_schedule, ii.is_extra_non_schedule,
+            ii.rental_days, ii.rental_rate_per_day,
             im.item_code, im.item_name as master_name,
             im.specification as master_specification, im.size as master_size,
             COALESCE(
@@ -551,10 +553,35 @@ router.get('/indents', (req, res) => {
 
 router.post('/indents', (req, res) => {
   const db = getDb();
-  const { planning_id, items, notes, site_name, raised_by_name, business_book_id } = req.body;
+  const { planning_id, items, notes, site_name, raised_by_name, business_book_id, indent_category } = req.body;
   if (!items || items.length === 0) {
     return res.status(400).json({ error: 'At least one item is required' });
   }
+  // ─── Indent Category (mam's spec 2026-05-26) ─────────────────────────
+  // Validate and normalise the category. Default 'material' so any
+  // pre-existing client that doesn't send the field keeps working.
+  //   material           — BOQ PO + FOC rows (RGP excluded)
+  //   rgp                — BOQ RGP rows only
+  //   extra_schedule     — BOQ + Sub-Item required, qty cap dropped
+  //   extra_non_schedule — No BOQ, Sub-Item from Item Master (PO+FOC only)
+  //   rental             — No BOQ, Item Master + days + rate/day,
+  //                         total rental MUST stay below qty × current_price
+  const VALID_CATEGORIES = ['material', 'rgp', 'extra_schedule', 'extra_non_schedule', 'rental'];
+  const category = VALID_CATEGORIES.includes(indent_category) ? indent_category : 'material';
+  const isExtraSchedule    = category === 'extra_schedule';
+  const isExtraNonSchedule = category === 'extra_non_schedule';
+  const isRental           = category === 'rental';
+  const isRgp              = category === 'rgp';
+  // Master-price lookup reused by the rental block check. Returns
+  // 0 if no rate has ever been recorded, which triggers a clear error
+  // instead of silently letting the indent through.
+  const getMasterPrice = db.prepare(`
+    SELECT COALESCE(NULLIF(im.current_price, 0), (
+      SELECT iph.rate FROM item_price_history iph
+        WHERE iph.item_id = im.id ORDER BY iph.created_at DESC LIMIT 1
+    ), 0) as price
+    FROM item_master im WHERE im.id=?
+  `);
   // Per-row validation. Two valid modes:
   //   1) BOQ-linked: BOTH po_item_id AND item_master_id are picked
   //      (the normal flow when the site has a Client PO BOQ uploaded)
@@ -609,8 +636,41 @@ router.post('/indents', (req, res) => {
     const qtyOk = +it.quantity > 0;
     if (!qtyOk) return res.status(400).json({ error: `Row ${i + 1}: Quantity must be greater than 0` });
 
-    // BOQ-qty cap (only applies to PO-type items linked to a BOQ row)
-    if (hasBoq && hasSub && Number.isInteger(+it.po_item_id) && +it.po_item_id > 0) {
+    // ─── Per-category validation (mam's spec 2026-05-26) ───
+    if (isExtraNonSchedule || isRental) {
+      // Extra Non-Schedule & Rental: no BOQ link. Sub-Item REQUIRED so
+      // the catalogue / pricing trail is intact. (No qty cap — these are
+      // by definition off-BOQ.)
+      if (!hasSub) return res.status(400).json({ error: `Row ${i + 1}: pick a Sub-Item (Item Master) — ${isRental ? 'Rental' : 'Non-Schedule'} indents don't use BOQ` });
+
+      // Rental-only: days, rate/day, and the rent-vs-buy block check.
+      if (isRental) {
+        const days = +it.rental_days || 0;
+        const ratePerDay = +it.rental_rate_per_day || 0;
+        const qty = +it.quantity || 0;
+        if (days <= 0) return res.status(400).json({ error: `Row ${i + 1}: Days must be greater than 0 for a rental` });
+        if (ratePerDay <= 0) return res.status(400).json({ error: `Row ${i + 1}: Rate per day must be greater than 0 for a rental` });
+        const totalRental = qty * days * ratePerDay;
+        const masterPrice = +getMasterPrice.get(+it.item_master_id)?.price || 0;
+        if (masterPrice <= 0) {
+          return res.status(400).json({
+            error: `Row ${i + 1}: Cannot validate rental cost — Item Master rate missing for this item. Set the master rate first.`
+          });
+        }
+        const buyCost = qty * masterPrice;
+        if (totalRental >= buyCost) {
+          return res.status(400).json({
+            error: `Row ${i + 1}: Rental cost ₹${Math.round(totalRental).toLocaleString('en-IN')} ≥ buying outright ₹${Math.round(buyCost).toLocaleString('en-IN')}. Buy instead of renting.`
+          });
+        }
+      }
+      continue; // Skip BOQ + qty-cap checks below for these two categories
+    }
+
+    // For Material, RGP, and Extra-Schedule: BOQ row required (unless manual).
+    // BOQ-qty cap applies to Material + RGP only; Extra-Schedule explicitly
+    // drops the cap (that's the whole point of "extra qty beyond BOQ").
+    if (hasBoq && hasSub && Number.isInteger(+it.po_item_id) && +it.po_item_id > 0 && !isExtraSchedule) {
       const masterType = String(it.item_type || getMasterType.get(+it.item_master_id)?.type || '').toUpperCase();
       // FOC and RGP are unlimited — skip cap check
       if (masterType !== 'FOC' && masterType !== 'RGP') {
@@ -630,7 +690,7 @@ router.post('/indents', (req, res) => {
           const total = already + thisLine + sameBoqLines;
           if (total > boqQty) {
             return res.status(400).json({
-              error: `Row ${i + 1}: PO qty exceeds BOQ. BOQ has ${boqQty}, already indented ${already}, this submission adds ${thisLine + sameBoqLines}. Reduce qty or split into FOC/RGP if appropriate.`
+              error: `Row ${i + 1}: PO qty exceeds BOQ. BOQ has ${boqQty}, already indented ${already}, this submission adds ${thisLine + sameBoqLines}. Reduce qty, split into FOC/RGP, or use Extra Item · Schedule for over-BOQ qty.`
             });
           }
         }
@@ -665,14 +725,15 @@ router.post('/indents', (req, res) => {
   const r = db.prepare(
     `INSERT INTO indents
        (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,
-        approval_policy, l1_status, l2_status)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+        approval_policy, l1_status, l2_status, indent_category)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     resolvedPlanningId, indentNum, 'submitted',
     notes || '', site_name || '', raised_by_name || '', site_name || '', req.user.id,
     policy,
     policy === 'two_level' ? 'pending' : null,
     policy === 'two_level' ? 'pending' : null,
+    category,
   );
 
   // Seed the indent_tracker with the approval_pending stage so the IndentFMS
@@ -695,8 +756,10 @@ router.post('/indents', (req, res) => {
   const getMaster = db.prepare('SELECT item_name, specification, size, uom, type, make FROM item_master WHERE id=?');
   const insertItem = db.prepare(
     `INSERT INTO indent_items
-      (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount, item_type, is_foc, is_tool, required_date)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount,
+       item_type, is_foc, is_tool, required_date,
+       is_extra_schedule, is_extra_non_schedule, rental_days, rental_rate_per_day)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   );
   for (const i of (items || [])) {
     let desc = i.description || '';
@@ -735,9 +798,17 @@ router.post('/indents', (req, res) => {
     // reports still work.
     const foc = String(itemType || '').toUpperCase() === 'FOC' ? 1 : 0;
     const tool = String(itemType || '').toUpperCase() === 'RGP' ? 1 : 0;
+    // Per-line category flags + rental fields (mam's spec 2026-05-26).
+    // Stamped per-row so reports / downstream views can tell extras and
+    // rentals apart without re-deriving from indents.indent_category.
+    const extraSch = isExtraSchedule ? 1 : 0;
+    const extraNon = isExtraNonSchedule ? 1 : 0;
+    const rentDays = isRental ? (+i.rental_days || null) : null;
+    const rentRate = isRental ? (+i.rental_rate_per_day || null) : null;
     insertItem.run(
       r.lastInsertRowid, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool,
       i.required_date || null,
+      extraSch, extraNon, rentDays, rentRate,
     );
   }
   res.status(201).json({ id: r.lastInsertRowid, indent_number: indentNum });
