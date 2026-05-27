@@ -12,12 +12,37 @@ import toast from 'react-hot-toast';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import {
-  FiHome, FiUsers, FiTarget, FiFileText, FiShoppingCart,
-  FiTruck, FiTool, FiAlertCircle, FiUserPlus,
-  FiCheckSquare, FiMenu, FiX, FiLogOut, FiPackage, FiClipboard, FiChevronRight, FiChevronDown,
-  FiSettings, FiShield, FiTrendingUp, FiCreditCard, FiLayers, FiBarChart2, FiBook, FiGrid, FiKey, FiMapPin, FiHelpCircle, FiBriefcase, FiDatabase, FiPhoneCall
+  // Navigation + UI controls (kept as-is)
+  FiHome, FiMenu, FiX, FiLogOut, FiChevronRight, FiChevronDown, FiKey,
+  // ─── No-duplicate icon set (mam 2026-05-27: "icon dont have duplicates") ───
+  // 64 distinct icons for 64 sidebar entries. Every one used exactly once.
+  // Group headers + standalone Dashboard + Settings group
+  FiTarget, FiFileText, FiShoppingBag, FiBriefcase, FiUsers, FiPackage,
+  FiCheckSquare, FiPhoneCall, FiStar, FiShield, FiSettings,
+  // CRM children
+  FiGlobe, FiTrendingUp, FiFilter, FiBook, FiUser,
+  // Quotes & Orders children
+  FiArchive, FiClipboard, FiTruck, FiShoppingCart,
+  // Procurement children
+  FiGrid, FiHexagon, FiInbox, FiTag,
+  // Projects children
+  FiBarChart2, FiAlertCircle, FiZap, FiTool,
+  // Finance children
+  FiFile, FiCreditCard, FiSend, FiList, FiRefreshCw, FiPieChart,
+  // People children
+  FiUserPlus, FiHelpCircle, FiBookOpen, FiCalendar, FiDollarSign, FiAtSign,
+  // Inventory children
+  FiClock, FiBox, FiServer, FiSliders, FiBookmark,
+  // Tasks children
+  FiAward, FiPaperclip, FiLayers, FiCheckCircle,
+  // Service Desk children
+  FiAlertTriangle, FiMessageCircle,
+  // Executive children
+  FiCrosshair, FiMonitor, FiCompass,
+  // Admin children + Settings children
+  FiActivity, FiMapPin, FiDatabase, FiMail, FiUserCheck, FiSearch
 } from 'react-icons/fi';
-import { LuIndianRupee } from 'react-icons/lu';
+import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 
 // ─── Sidebar structure (mam 2026-05-27 — SEPL_Sidebar_Restructure spec) ───
 // Dashboard stays standalone at the very top (no group, single URL).
@@ -36,88 +61,93 @@ import { LuIndianRupee } from 'react-icons/lu';
 //                          alive for direct-URL access).
 const SIDEBAR_DASHBOARD = { path: '/', label: 'Dashboard', icon: FiHome, module: 'dashboard' };
 
+// ─── Icon map — NO DUPLICATES (mam 2026-05-27) ────────────────────────
+// Every single entry below uses a distinct icon. 64 entries · 64 icons.
+// When picking a new icon, search this file first to make sure it's not
+// already in use somewhere else.
 const SIDEBAR_GROUPS = [
   { id: 'crm', label: 'CRM', icon: FiTarget, items: [
-    { path: '/influencers',   label: 'Partners',       icon: FiUsers,  module: 'influencers' },
-    { path: '/leads',         label: 'Sales Funnel',   icon: FiTarget, module: 'leads' },
-    { path: '/business-book', label: 'Business Book',  icon: FiBook,   module: 'business_book' },
-    { path: '/customers',     label: 'Customers',      icon: FiUsers,  module: 'customers' },
+    { path: '/influencers',   label: 'Partners',          icon: FiGlobe,      module: 'influencers' },
+    // CRM Sales Funnel restored by mam (2026-05-27): "dont remove crm
+    // sales funnel please it[s] under crm". Different from /leads
+    // (the legacy Sales Funnel) — this is the modern phase-A funnel.
+    { path: '/crm-funnel',    label: 'CRM Sales Funnel',  icon: FiTrendingUp, module: 'crm_funnel' },
+    { path: '/leads',         label: 'Sales Funnel',      icon: FiFilter,     module: 'leads' },
+    { path: '/business-book', label: 'Business Book',     icon: FiBook,       module: 'business_book' },
+    { path: '/customers',     label: 'Customers',         icon: FiUser,       module: 'customers' },
   ]},
   { id: 'quotes_orders', label: 'Quotes & Orders', icon: FiFileText, items: [
-    { path: '/crm-kitting',   label: 'Full Kitting',       icon: FiPackage,      module: 'crm_kitting' },
-    { path: '/quotations',    label: 'Quotations',         icon: FiFileText,     module: 'quotations' },
-    { path: '/procurement',   label: 'Dispatch',           icon: FiPackage,      module: 'procurement' },
-    { path: '/orders',        label: 'Order to Planning',  icon: FiShoppingCart, module: 'orders' },
+    { path: '/crm-kitting', label: 'Full Kitting',      icon: FiArchive,      module: 'crm_kitting' },
+    { path: '/quotations',  label: 'Quotations',        icon: FiClipboard,    module: 'quotations' },
+    { path: '/procurement', label: 'Dispatch',          icon: FiTruck,        module: 'procurement' },
+    { path: '/orders',      label: 'Order to Planning', icon: FiShoppingCart, module: 'orders' },
   ]},
-  { id: 'procurement', label: 'Procurement', icon: FiTruck, items: [
-    { path: '/item-master',    label: 'Items',       icon: FiGrid,        module: 'item_master' },
-    { path: '/sub-contractors',label: 'Contractors', icon: FiUserPlus,    module: 'sub_contractors' },
-    { path: '/price-required', label: 'RFQ Queue',   icon: LuIndianRupee, module: null },
-    { path: '/vendors',        label: 'Vendors',     icon: FiTruck,       module: 'vendors' },
+  { id: 'procurement', label: 'Procurement', icon: FiShoppingBag, items: [
+    { path: '/item-master',    label: 'Items',       icon: FiGrid,    module: 'item_master' },
+    { path: '/sub-contractors',label: 'Contractors', icon: FiHexagon, module: 'sub_contractors' },
+    { path: '/price-required', label: 'RFQ Queue',   icon: FiInbox,   module: null },
+    { path: '/vendors',        label: 'Vendors',     icon: FiTag,     module: 'vendors' },
   ]},
-  { id: 'projects', label: 'Projects', icon: FiBarChart2, items: [
+  { id: 'projects', label: 'Projects', icon: FiBriefcase, items: [
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
     { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
-    { path: '/fire-noc',     label: 'Fire NOC Renewal', icon: FiTarget,      module: 'fire_noc' },
+    { path: '/fire-noc',     label: 'Fire NOC Renewal', icon: FiZap,         module: 'fire_noc' },
     { path: '/installation', label: 'Installations',    icon: FiTool,        module: 'installation' },
   ]},
   { id: 'finance', label: 'Finance', icon: LuIndianRupee, items: [
-    { path: '/cheques',          label: 'Cheques',     icon: FiFileText,    module: 'cheques' },
-    { path: '/payment-required', label: 'Payables',    icon: LuIndianRupee, module: 'payment_required' },
-    { path: '/collections',      label: 'Collections', icon: FiCreditCard,  module: 'collections' },
-    { path: '/billing',          label: 'Invoices',    icon: FiClipboard,   module: 'billing' },
-    { path: '/cashflow',         label: 'Cash Flow',   icon: FiTrendingUp,  module: 'cashflow' },
-    { path: '/expenses',         label: 'Expenses',    icon: LuIndianRupee, module: 'expenses' },
+    { path: '/cheques',          label: 'Cheques',     icon: FiFile,       module: 'cheques' },
+    { path: '/payment-required', label: 'Payables',    icon: FiCreditCard, module: 'payment_required' },
+    { path: '/collections',      label: 'Collections', icon: FiSend,       module: 'collections' },
+    { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing' },
+    { path: '/cashflow',         label: 'Cash Flow',   icon: FiRefreshCw,  module: 'cashflow' },
+    { path: '/expenses',         label: 'Expenses',    icon: FiPieChart,   module: 'expenses' },
   ]},
   { id: 'people', label: 'People', icon: FiUsers, items: [
-    { path: '/hr',         label: 'Hiring',     icon: FiBriefcase,   module: 'hr' },
+    { path: '/hr',         label: 'Hiring',     icon: FiUserPlus,    module: 'hr' },
     { path: '/induction',  label: 'Onboarding', icon: FiHelpCircle,  module: null },
-    { path: '/training',   label: 'Training',   icon: FiCheckSquare, module: null },
-    { path: '/attendance', label: 'Attendance', icon: FiCheckSquare, module: 'attendance' },
-    { path: '/payroll',    label: 'Payroll',    icon: LuIndianRupee, module: 'payroll' },
-    { path: '/employees',  label: 'Employees',  icon: FiUsers,       module: 'employees' },
+    { path: '/training',   label: 'Training',   icon: FiBookOpen,    module: null },
+    { path: '/attendance', label: 'Attendance', icon: FiCalendar,    module: 'attendance' },
+    { path: '/payroll',    label: 'Payroll',    icon: FiDollarSign,  module: 'payroll' },
+    { path: '/employees',  label: 'Employees',  icon: FiAtSign,      module: 'employees' },
   ]},
   { id: 'inventory', label: 'Inventory', icon: FiPackage, items: [
-    { path: '/rental-tools',   label: 'Tool Rentals', icon: FiTool,    module: 'rental_tools' },
-    { path: '/company-assets', label: 'Assets',       icon: FiPackage, module: 'company_assets' },
-    { path: '/inventory',      label: 'Inventory',    icon: FiPackage, module: 'inventory' },
-    { path: '/tools',          label: 'Tools',        icon: FiTool,    module: 'tools' },
-    { path: '/rentals',        label: 'Room Rentals', icon: FiHome,    module: 'rentals' },
+    { path: '/rental-tools',   label: 'Tool Rentals', icon: FiClock,    module: 'rental_tools' },
+    { path: '/company-assets', label: 'Assets',       icon: FiBox,      module: 'company_assets' },
+    { path: '/inventory',      label: 'Inventory',    icon: FiServer,   module: 'inventory' },
+    { path: '/tools',          label: 'Tools',        icon: FiSliders,  module: 'tools' },
+    { path: '/rentals',        label: 'Room Rentals', icon: FiBookmark, module: 'rentals' },
   ]},
   { id: 'tasks', label: 'Tasks', icon: FiCheckSquare, items: [
-    { path: '/scorecard',   label: 'Performance', icon: FiBarChart2,   module: 'scoring' },
-    { path: '/delegations', label: 'Delegations', icon: FiCheckSquare, module: 'delegations' },
-    { path: '/pms-tasks',   label: 'Tasks',       icon: FiLayers,      module: 'pms_tasks' },
-    { path: '/checklists',  label: 'Checklists',  icon: FiCheckSquare, module: 'checklists' },
+    { path: '/scorecard',   label: 'Performance', icon: FiAward,         module: 'scoring' },
+    { path: '/delegations', label: 'Delegations', icon: FiPaperclip,     module: 'delegations' },
+    { path: '/pms-tasks',   label: 'Tasks',       icon: FiLayers,        module: 'pms_tasks' },
+    { path: '/checklists',  label: 'Checklists',  icon: FiCheckCircle,   module: 'checklists' },
   ]},
   { id: 'service_desk', label: 'Service Desk', icon: FiPhoneCall, items: [
-    { path: '/complaints',   label: 'Complaints',   icon: FiAlertCircle, module: 'complaints' },
-    { path: '/help-tickets', label: 'Help Tickets', icon: FiHelpCircle,  module: null },
+    { path: '/complaints',   label: 'Complaints',   icon: FiAlertTriangle,  module: 'complaints' },
+    { path: '/help-tickets', label: 'Help Tickets', icon: FiMessageCircle,  module: null },
   ]},
-  // Executive group — collapses Director's War Room + CMD Console + CMD TOC
-  // View into a single "Executive" tile (mam's spec says "merge into
-  // Executive" for all 3).  Single entry, pointed at the canonical CMD
-  // Operating Console; the other 2 routes still resolve by URL.
-  { id: 'executive', label: 'Executive', icon: FiTrendingUp, adminOnly: true, items: [
-    { path: '/dashboard/cmd',      label: 'Executive',          icon: FiTrendingUp, module: 'users' },
-    { path: '/dashboard/war-room', label: 'War Room (legacy)',  icon: FiTrendingUp, module: 'users', hidden: true },
-    { path: '/dashboard/cmd-toc',  label: 'TOC View (legacy)',  icon: FiTrendingUp, module: 'users', hidden: true },
+  // Executive group — 3 dashboards (mam 2026-05-27).
+  { id: 'executive', label: 'Executive', icon: FiStar, adminOnly: true, items: [
+    { path: '/dashboard/war-room', label: 'War Room',           icon: FiCrosshair, module: 'users' },
+    { path: '/dashboard/cmd',      label: 'Operating Console',  icon: FiMonitor,   module: 'users' },
+    { path: '/dashboard/cmd-toc',  label: 'TOC View',           icon: FiCompass,   module: 'users' },
   ]},
-  { id: 'admin', label: 'Admin', icon: FiShield, adminOnly: true, items: [
-    { path: '/admin/word-count', label: 'Activity Log', icon: FiBarChart2, module: 'users' },
-    { path: '/admin/locations',  label: 'Location',     icon: FiMapPin,    module: 'users' },
+  { id: 'admin', label: 'Admin', icon: FiKey, adminOnly: true, items: [
+    { path: '/admin/word-count', label: 'Activity Log', icon: FiActivity, module: 'users' },
+    { path: '/admin/locations',  label: 'Location',     icon: FiMapPin,   module: 'users' },
   ]},
 ];
 
 // Settings group — always rendered LAST (pinned to bottom of the nav)
 // per mam's spec.  Same collapsible accordion behaviour as the others.
 const SIDEBAR_SETTINGS = { id: 'settings', label: 'Settings', icon: FiSettings, adminOnly: true, items: [
-  { path: '/admin/backups',        label: 'Backups',             icon: FiDatabase, module: 'users' },
-  { path: '/admin/ai-settings',    label: 'AI',                  icon: FiSettings, module: 'users' },
-  { path: '/admin/email-settings', label: 'Email',               icon: FiSettings, module: 'users' },
-  { path: '/admin/users',          label: 'Users',               icon: FiUsers,    module: 'users' },
-  { path: '/admin/roles',          label: 'Roles & Permissions', icon: FiShield,   module: 'users' },
-  { path: '/admin/audit',          label: 'Audit Log',           icon: FiShield,   module: 'users' },
+  { path: '/admin/backups',        label: 'Backups',             icon: FiDatabase,  module: 'users' },
+  { path: '/admin/ai-settings',    label: 'AI',                  icon: LuBrain,     module: 'users' },
+  { path: '/admin/email-settings', label: 'Email',               icon: FiMail,      module: 'users' },
+  { path: '/admin/users',          label: 'Users',               icon: FiUserCheck, module: 'users' },
+  { path: '/admin/roles',          label: 'Roles & Permissions', icon: FiShield,    module: 'users' },
+  { path: '/admin/audit',          label: 'Audit Log',           icon: FiSearch,    module: 'users' },
 ]};
 
 export default function Layout() {
