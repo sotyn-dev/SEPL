@@ -1334,9 +1334,25 @@ export default function Procurement() {
     <div className="space-y-4">
       <div className="sticky-toolbar">
         <div className="flex gap-2 flex-wrap items-center justify-between">
-          <div className="flex gap-2 flex-wrap">{tabs.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)} className={`btn ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>{t.label}</button>
-          ))}</div>
+          <div className="flex gap-2 flex-wrap">{tabs.map(t => {
+            // Urgent-payment badge on the Payment tab — Accounts can see
+            // at a glance whether anything needs clearing without clicking
+            // (mam 2026-05-27 workflow gate).
+            const urgentCount = t.id === 'payment'
+              ? (vendorPos || []).filter(po => !po.cancelled && po.payment_block_status === 'pending').length
+              : 0;
+            return (
+              <button key={t.id} onClick={() => setTab(t.id)} className={`btn relative ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>
+                {t.label}
+                {urgentCount > 0 && (
+                  <span className="ml-2 inline-flex items-center justify-center text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-600 text-white border border-red-700"
+                        title={`${urgentCount} PO${urgentCount === 1 ? '' : 's'} blocked on payment`}>
+                    🚨 {urgentCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}</div>
           {/* One Export button — exports current tab's data */}
           <button onClick={() => {
             if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length]));
@@ -2340,29 +2356,27 @@ export default function Procurement() {
           Surfaces every active PO that has a payment_block_type set, grouped
           by urgency. Accounts clears here → Purchase picks up in next tab. */}
       {tab === 'payment' && (() => {
-        // Active (non-cancelled) POs only; payment status is irrelevant for
-        // cancelled rows. Sorted by oldest PO first so the queue stays in
-        // FIFO order.
+        // Active (non-cancelled) POs only. Mam's workflow gate (2026-05-27):
+        // this tab ONLY shows POs that need (or just had) Accounts action —
+        // pending payment OR recently cleared. POs with no_advance / NULL
+        // status live in Purchase Bills > Follow-up directly.
         const activePos = (vendorPos || []).filter(po => !po.cancelled);
 
         // Bucket each PO by payment status
         const buckets = {
           urgent:  activePos.filter(po => po.payment_block_status === 'pending'),
           cleared: activePos.filter(po => po.payment_block_status === 'cleared'),
-          // 'na' = no_advance (vendor ships on credit) + legacy NULL rows
-          na:      activePos.filter(po => !po.payment_block_type || po.payment_block_status === 'na'),
         };
         const sumUrgent  = buckets.urgent.reduce((s, p) => s + (+p.payment_block_amount || 0), 0);
         const sumCleared = buckets.cleared.reduce((s, p) => s + (+p.payment_block_amount || 0), 0);
-        const sumAll     = activePos.reduce((s, p) => s + (+p.display_total || +p.total_amount || 0), 0);
+
+        // Coerce stale pill selections (na/all) to 'urgent' for users who
+        // bookmarked the old URL or had old localStorage state.
+        const effectivePill = (paymentPill === 'urgent' || paymentPill === 'cleared') ? paymentPill : 'urgent';
 
         // Filter pipeline: pill bucket + free-text search
         const q = paymentSearch.trim().toLowerCase();
-        const visible = (paymentPill === 'all' ? activePos
-                       : paymentPill === 'urgent' ? buckets.urgent
-                       : paymentPill === 'cleared' ? buckets.cleared
-                       : buckets.na
-                      ).filter(po => {
+        const visible = (effectivePill === 'urgent' ? buckets.urgent : buckets.cleared).filter(po => {
           if (!q) return true;
           const hay = `${po.po_number || ''} ${po.indent_number || ''} ${po.vendor_name || ''} ${po.indent_site_name || ''} ${po.payment_block_notes || ''}`.toLowerCase();
           return hay.includes(q);
@@ -2370,15 +2384,16 @@ export default function Procurement() {
 
         return (
           <>
-            {/* Pill segments — count + ₹ sum per bucket */}
+            {/* Pill segments — count + ₹ sum per bucket.  Only 2 pills
+                here (Urgent / Cleared) because no_advance + legacy NULL
+                POs skip this tab entirely and go straight to Purchase
+                Bills > Follow-up per mam's workflow rule. */}
             <div className="flex flex-wrap items-center gap-2">
               {[
                 { id: 'urgent',  label: '🚨 Payment Urgent',   activeCls: 'bg-red-600 text-white border-red-700 shadow',           inactiveCls: 'bg-white text-red-700 border-red-300',          n: buckets.urgent.length,  v: sumUrgent,  hint: "Vendor won't ship — Accounts must clear advance / old dues" },
-                { id: 'cleared', label: '✓ Cleared',           activeCls: 'bg-emerald-600 text-white border-emerald-700 shadow',  inactiveCls: 'bg-white text-emerald-700 border-emerald-300', n: buckets.cleared.length, v: sumCleared, hint: 'Payment done — Purchase team can chase the bill' },
-                { id: 'na',      label: 'No Advance / Credit', activeCls: 'bg-gray-700 text-white border-gray-800 shadow',         inactiveCls: 'bg-white text-gray-700 border-gray-300',        n: buckets.na.length,      v: 0,          hint: 'Ships on credit — no payment block' },
-                { id: 'all',     label: 'All Active POs',      activeCls: 'bg-blue-700 text-white border-blue-800 shadow',         inactiveCls: 'bg-white text-blue-700 border-blue-300',        n: activePos.length,       v: sumAll,     hint: 'Every non-cancelled PO regardless of payment status' },
+                { id: 'cleared', label: '✓ Recently Cleared',  activeCls: 'bg-emerald-600 text-white border-emerald-700 shadow',  inactiveCls: 'bg-white text-emerald-700 border-emerald-300', n: buckets.cleared.length, v: sumCleared, hint: 'Payment done — Purchase team can now chase the bill in the next tab' },
               ].map(p => {
-                const active = paymentPill === p.id;
+                const active = effectivePill === p.id;
                 return (
                   <button
                     key={p.id}
@@ -2400,11 +2415,13 @@ export default function Procurement() {
             {/* Workflow hint */}
             <div className="card p-2.5 bg-blue-50/50 border-blue-100 text-[11px] text-blue-900 flex items-center gap-2 flex-wrap">
               <span className="font-semibold">Workflow:</span>
-              <span>① Create PO (set "Advance required" / "Old payment hold" if applicable)</span>
+              <span>① Create PO</span>
               <span className="opacity-50">→</span>
-              <span>② Accounts clears the payment here</span>
+              <span><b>No advance?</b> Skips straight to Purchase Bills</span>
+              <span className="opacity-50">·</span>
+              <span><b>Advance / Old hold?</b> Sits here until Accounts marks cleared</span>
               <span className="opacity-50">→</span>
-              <span>③ Purchase team chases the vendor bill in the next tab</span>
+              <span>Once cleared, the PO moves to <b>Purchase Bills</b> for the bill chase</span>
             </div>
 
             {/* Search + showing-count */}
@@ -2496,10 +2513,9 @@ export default function Procurement() {
                   ))}
                   {visible.length === 0 && (
                     <tr><td colSpan="8" className="text-center py-8 text-gray-400 text-xs">
-                      {paymentPill === 'urgent' ? '🎉 No urgent payments — all blocked POs cleared.'
-                       : paymentPill === 'cleared' ? 'No cleared payments yet.'
-                       : paymentPill === 'na' ? 'No no-advance / legacy POs.'
-                       : 'No active POs.'}
+                      {effectivePill === 'urgent'
+                        ? '🎉 No urgent payments — every blocked PO is cleared. Purchase team can chase bills in the next tab.'
+                        : 'No cleared payments yet. Once Accounts clears an urgent PO, it shows here for confirmation, then moves to Purchase Bills.'}
                     </td></tr>
                   )}
                 </tbody>
@@ -2518,6 +2534,11 @@ export default function Procurement() {
         const pendingPos = vendorPos
           // Skip cancelled POs — they're not waiting for a bill anymore.
           .filter(po => !billedPoIds.has(po.id) && !po.cancelled)
+          // Payment gate (mam 2026-05-27): POs still blocked on advance /
+          // old dues do NOT appear in Purchase Bill follow-up — Accounts
+          // handles them in the Payment tab first. Once cleared (or if no
+          // payment block at all), they land here for the bill chase.
+          .filter(po => po.payment_block_status !== 'pending')
           .sort((a, b) => {
             const ax = a.expected_receipt_date || '9999-12-31';
             const bx = b.expected_receipt_date || '9999-12-31';
@@ -2582,6 +2603,24 @@ export default function Procurement() {
           </div>
 
           {/* ===== Sub-tab 1: Follow-up ===== */}
+          {/* Heads-up banner when POs are hidden behind the payment gate.
+              Tells the purchase team where those POs went so they don't
+              wonder why a PO they just created isn't showing up here. */}
+          {billsSubTab === 'followup' && (() => {
+            const blockedCount = (vendorPos || []).filter(po =>
+              !po.cancelled && !billedPoIds.has(po.id) && po.payment_block_status === 'pending'
+            ).length;
+            if (blockedCount === 0) return null;
+            return (
+              <div className="card p-2.5 bg-red-50 border border-red-200 text-[11px] text-red-800 flex items-center gap-2 flex-wrap">
+                <span>🚨 <b>{blockedCount}</b> PO{blockedCount === 1 ? '' : 's'} hidden — blocked on payment.</span>
+                <button type="button" onClick={() => setTab('payment')} className="text-red-700 underline font-semibold hover:text-red-900">
+                  Go to Payment tab →
+                </button>
+                <span className="opacity-70">Accounts clears them first, then they appear here automatically.</span>
+              </div>
+            );
+          })()}
           {billsSubTab === 'followup' && pendingPos.length === 0 && (
             <div className="card text-center py-8 text-gray-400 text-xs">No POs awaiting a Purchase Bill. 🎉</div>
           )}
