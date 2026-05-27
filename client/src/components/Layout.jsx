@@ -125,7 +125,7 @@ const SIDEBAR_GROUPS = [
   { id: 'tasks', label: 'Tasks', icon: FiCheckSquare, items: [
     { path: '/scorecard',   label: 'Performance', icon: FiAward,         module: 'scoring' },
     { path: '/delegations', label: 'Delegations', icon: FiPaperclip,     module: 'delegations' },
-    { path: '/pms-tasks',   label: 'Tasks',       icon: FiLayers,        module: 'pms_tasks' },
+    { path: '/pms-tasks',   label: 'PMS Tasks',   icon: FiLayers,        module: 'pms_tasks' },
     { path: '/checklists',  label: 'Checklists',  icon: FiCheckCircle,   module: 'checklists' },
   ]},
   { id: 'service_desk', label: 'Service Desk', icon: FiPhoneCall, items: [
