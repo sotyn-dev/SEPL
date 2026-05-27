@@ -188,7 +188,9 @@ input[type="number"].input-compact::-webkit-inner-spin-button {
         "container with padding 1", so we scope to <button> tags that
         are direct children of action cells / action wrappers and don't
         have other padding utilities. */
-  button.p-1 {
+  button.p-1,
+  button.p-1\.5,
+  button.p-0\.5 {
     padding: 0.5rem;
     min-width: 32px;
     min-height: 32px;
@@ -199,6 +201,13 @@ input[type="number"].input-compact::-webkit-inner-spin-button {
   button.text-\[10px\] {
     min-height: 32px;
     padding: 0.4rem 0.6rem;
+  }
+  /* Filter pill rows (Item Master / Cheque FMS / Procurement) use
+     py-1.5 padding which renders at 30-31px tall — 1-2 px under the
+     tap-target line. Hits both text-xs and text-[11px] variants. */
+  button.py-1\.5,
+  a.py-1\.5 {
+    min-height: 32px;
   }
 }
 
