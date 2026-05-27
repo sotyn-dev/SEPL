@@ -3095,12 +3095,12 @@ export default function Procurement() {
                 const isRgp = cat === 'rgp';
                 // Filter Item Master for the picker:
                 //   RGP            → only type='RGP'
-                //   Non-Schedule   → PO + FOC (RGP excluded — has its own category)
-                //   Rental         → any type (tools / equipment vary)
+                //   Non-Schedule   → PO + FOC (RGP / RENTAL excluded — own categories)
+                //   Rental         → only type='RENTAL' (mam 2026-05-27, mirrors RGP)
                 const filteredMasterItems = isRgp
                   ? masterItems.filter(m => String(m.type || '').toUpperCase() === 'RGP')
                   : isRental
-                    ? masterItems
+                    ? masterItems.filter(m => String(m.type || '').toUpperCase() === 'RENTAL')
                     : masterItems.filter(m => {
                         const t = String(m.type || '').toUpperCase();
                         return t === 'PO' || t === 'FOC' || t === '';

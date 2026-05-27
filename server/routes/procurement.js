@@ -658,6 +658,13 @@ router.post('/indents', (req, res) => {
 
       // Rental-only: days, rate/day, and the rent-vs-buy block check.
       if (isRental) {
+        // Defense in depth (mam 2026-05-27): client filters Item Master
+        // to type='RENTAL' but a tampered API call could still send a PO
+        // master_id — block at the server too. Mirrors the RGP guard.
+        const mt = String(getMasterType.get(+it.item_master_id)?.type || '').toUpperCase();
+        if (mt !== 'RENTAL') {
+          return res.status(400).json({ error: `Row ${i + 1}: Item Master type must be RENTAL for a Rental indent (got '${mt || 'unknown'}')` });
+        }
         const days = +it.rental_days || 0;
         const ratePerDay = +it.rental_rate_per_day || 0;
         const qty = +it.quantity || 0;

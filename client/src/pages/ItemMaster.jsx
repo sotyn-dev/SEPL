@@ -18,7 +18,13 @@ import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiDownload, FiUpload, FiPackage, F
 
 const DEPARTMENTS = ['FF', 'LV', 'ELE', 'CCTV', 'AC', 'NET', 'SOL', 'OTHER'];
 const DEPT_LABELS = { FF: 'Fire Fighting', LV: 'Low Voltage', ELE: 'Electrical', CCTV: 'CCTV', AC: 'Access Control', NET: 'Networking', SOL: 'Solar', OTHER: 'Other' };
-const TYPES = ['PO', 'FOC', 'RGP'];
+// PO  = chargeable purchase
+// FOC = free-of-cost (no rate, no GST line)
+// RGP = Returnable Gate Pass (contractor's own tools to site, return after)
+// RENTAL = rented from vendor for short-term use (mam 2026-05-27).
+//          Picked from this list in the Rental indent flow, validated
+//          against current_price so renting can't cost ≥ buying outright.
+const TYPES = ['PO', 'FOC', 'RGP', 'RENTAL'];
 const UOMS = ['PCS', 'MTR', 'KG', 'SQMM', 'PACKET', 'SET', 'LOT', 'PAIR', 'RFT', 'LTR', 'BOX'];
 const SOURCE_TYPES = ['PO', 'Quote', 'Manual', 'Online'];
 
