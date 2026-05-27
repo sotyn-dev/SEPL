@@ -637,11 +637,24 @@ router.post('/indents', (req, res) => {
     if (!qtyOk) return res.status(400).json({ error: `Row ${i + 1}: Quantity must be greater than 0` });
 
     // ─── Per-category validation (mam's spec 2026-05-26) ───
-    if (isExtraNonSchedule || isRental) {
-      // Extra Non-Schedule & Rental: no BOQ link. Sub-Item REQUIRED so
-      // the catalogue / pricing trail is intact. (No qty cap — these are
-      // by definition off-BOQ.)
-      if (!hasSub) return res.status(400).json({ error: `Row ${i + 1}: pick a Sub-Item (Item Master) — ${isRental ? 'Rental' : 'Non-Schedule'} indents don't use BOQ` });
+    // RGP joined the no-BOQ group on 2026-05-27: returnable material has no
+    // Client PO BOQ counterpart; user picks straight from Item Master
+    // (filtered to type='RGP' on the client).
+    if (isRgp || isExtraNonSchedule || isRental) {
+      // No BOQ link required. Sub-Item REQUIRED so the catalogue / pricing
+      // trail is intact. No qty cap (these are by definition off-BOQ).
+      const flowLabel = isRental ? 'Rental' : isRgp ? 'RGP' : 'Non-Schedule';
+      if (!hasSub) return res.status(400).json({ error: `Row ${i + 1}: pick a Sub-Item (Item Master) — ${flowLabel} indents don't use BOQ` });
+
+      // RGP enforces type=RGP on the picked Item Master (the client filters
+      // the picker to RGP-only, but a tampered API call could still send a
+      // non-RGP master_id — defense in depth).
+      if (isRgp) {
+        const mt = String(getMasterType.get(+it.item_master_id)?.type || '').toUpperCase();
+        if (mt !== 'RGP') {
+          return res.status(400).json({ error: `Row ${i + 1}: Item Master type must be RGP for an RGP indent (got '${mt || 'unknown'}')` });
+        }
+      }
 
       // Rental-only: days, rate/day, and the rent-vs-buy block check.
       if (isRental) {
@@ -664,12 +677,12 @@ router.post('/indents', (req, res) => {
           });
         }
       }
-      continue; // Skip BOQ + qty-cap checks below for these two categories
+      continue; // Skip BOQ + qty-cap checks below for these three categories
     }
 
-    // For Material, RGP, and Extra-Schedule: BOQ row required (unless manual).
-    // BOQ-qty cap applies to Material + RGP only; Extra-Schedule explicitly
-    // drops the cap (that's the whole point of "extra qty beyond BOQ").
+    // For Material and Extra-Schedule: BOQ row required (unless manual).
+    // BOQ-qty cap applies to Material only; Extra-Schedule explicitly drops
+    // the cap (that's the whole point of "extra qty beyond BOQ").
     if (hasBoq && hasSub && Number.isInteger(+it.po_item_id) && +it.po_item_id > 0 && !isExtraSchedule) {
       const masterType = String(it.item_type || getMasterType.get(+it.item_master_id)?.type || '').toUpperCase();
       // FOC and RGP are unlimited — skip cap check

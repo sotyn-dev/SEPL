@@ -606,7 +606,9 @@ export default function Procurement() {
     // Server enforces the same rules, but failing fast in the UI gives
     // a better error UX (row number + specific cause).
     const cat = form.indent_category || 'material';
-    const needsBoq = (cat === 'material' || cat === 'rgp' || cat === 'extra_schedule');
+    // RGP no longer requires BOQ (mam 2026-05-27): returnable material is
+    // picked directly from Item Master, not tied to the Client PO BOQ.
+    const needsBoq = (cat === 'material' || cat === 'extra_schedule');
     for (let i = 0; i < indentItems.length; i++) {
       const it = indentItems[i];
       if (needsBoq && !it.po_item_id) return toast.error(`Row ${i + 1}: pick BOQ Item (from Client PO)`);
@@ -2909,7 +2911,7 @@ export default function Procurement() {
             <div className="flex gap-1 flex-wrap">
               {[
                 { id: 'material',           label: 'Material',         hint: 'BOQ items (PO + FOC). RGP hidden.' },
-                { id: 'rgp',                label: 'RGP',              hint: 'Pick any BOQ row, then Sub-Item from Item Master where type = RGP.' },
+                { id: 'rgp',                label: 'RGP',              hint: 'Returnable Gate Pass. No BOQ — pick directly from Item Master where type = RGP.' },
                 { id: 'extra_schedule',     label: 'Extra · Schedule', hint: 'BOQ item exists, qty cap removed (over-BOQ).' },
                 { id: 'extra_non_schedule', label: 'Extra · Non-Schedule', hint: 'Item outside BOQ — pick free from Item Master (PO + FOC).' },
                 { id: 'rental',             label: 'Rental',           hint: 'Rented tool — Days × Rate/Day. Blocks if rental ≥ buying outright.' },
@@ -2941,7 +2943,7 @@ export default function Procurement() {
               {(() => {
                 const c = form.indent_category || 'material';
                 if (c === 'material')           return 'BOQ items where type is PO or FOC. RGP items hidden — pick the RGP category for those.';
-                if (c === 'rgp')                return 'Pick any BOQ row, then pick a Sub-Item from Item Master where type = RGP. (RGP-ness lives on the Item Master, not on the BOQ row.)';
+                if (c === 'rgp')                return 'RGP (Returnable Gate Pass) — items go to site and come back. No BOQ link; pick directly from Item Master where type = RGP.';
                 if (c === 'extra_schedule')     return 'BOQ item exists but the site needs MORE qty than BOQ allows. Qty cap is removed — L1+L2 will see the over-commit.';
                 if (c === 'extra_non_schedule') return 'Item is completely outside the BOQ. Pick directly from Item Master (PO + FOC types).';
                 if (c === 'rental')             return 'Rented tool. Per row: Days × Rate/Day. Server BLOCKS the indent if rental cost ≥ buying outright cost.';
@@ -3010,17 +3012,28 @@ export default function Procurement() {
                     Material + Extra-Schedule → type IN (PO, FOC, '')
                     RGP                       → type = RGP
                     (Non-Schedule + Rental don't show BOQ at all) */}
-              {/* ─── FLAT-LIST layout for Extra-Non-Schedule + Rental ─── */}
-              {(form.indent_category === 'extra_non_schedule' || form.indent_category === 'rental') && (() => {
-                const isRental = form.indent_category === 'rental';
-                // Filter Item Master for the picker — Non-Schedule excludes
-                // RGP (RGP has its own category); Rental allows any type.
-                const filteredMasterItems = isRental
-                  ? masterItems
-                  : masterItems.filter(m => {
-                      const t = String(m.type || '').toUpperCase();
-                      return t === 'PO' || t === 'FOC' || t === '';
-                    });
+              {/* ─── FLAT-LIST layout for RGP + Extra-Non-Schedule + Rental ───
+                  RGP joined this group (mam 2026-05-27): returnable material
+                  is brought to site by the contractor, has no BOQ counterpart
+                  on the Client PO, so picked directly from Item Master
+                  filtered to type='RGP'. */}
+              {(form.indent_category === 'rgp' || form.indent_category === 'extra_non_schedule' || form.indent_category === 'rental') && (() => {
+                const cat = form.indent_category;
+                const isRental = cat === 'rental';
+                const isRgp = cat === 'rgp';
+                // Filter Item Master for the picker:
+                //   RGP            → only type='RGP'
+                //   Non-Schedule   → PO + FOC (RGP excluded — has its own category)
+                //   Rental         → any type (tools / equipment vary)
+                const filteredMasterItems = isRgp
+                  ? masterItems.filter(m => String(m.type || '').toUpperCase() === 'RGP')
+                  : isRental
+                    ? masterItems
+                    : masterItems.filter(m => {
+                        const t = String(m.type || '').toUpperCase();
+                        return t === 'PO' || t === 'FOC' || t === '';
+                      });
+                const rowLabel = isRental ? 'Rental' : isRgp ? 'RGP item' : 'Extra item';
                 return (
                   <div className="space-y-2">
                     {indentItems.map((item, i) => {
@@ -3041,7 +3054,7 @@ export default function Procurement() {
                         <div key={i} className={`border rounded-lg p-3 space-y-2 ${rentalBlocks ? 'bg-red-50 border-red-300' : 'bg-white'}`}>
                           <div className="flex justify-between items-center">
                             <div className="text-[11px] font-bold text-gray-500 uppercase">
-                              {isRental ? `Rental ${i + 1}` : `Extra item ${i + 1}`}
+                              {rowLabel} {i + 1}
                             </div>
                             {indentItems.length > 1 && (
                               <button type="button" onClick={() => setIndentItems(indentItems.filter((_, x) => x !== i))} className="p-1 text-gray-400 hover:text-red-600" title="Remove row">
@@ -3119,28 +3132,24 @@ export default function Procurement() {
                       );
                     })}
                     <button type="button" onClick={() => setIndentItems([...indentItems, { ...EMPTY_ITEM, rental_days: 0, rental_rate_per_day: 0 }])} className="btn btn-secondary text-xs">
-                      + Add another {isRental ? 'rental' : 'item'}
+                      + Add another {isRental ? 'rental' : isRgp ? 'RGP item' : 'item'}
                     </button>
                   </div>
                 );
               })()}
 
-              {/* ─── BOQ-grouped layout for Material / RGP / Extra-Schedule ─── */}
-              {(form.indent_category === 'material' || form.indent_category === 'rgp' || form.indent_category === 'extra_schedule' || !form.indent_category) && (() => {
+              {/* ─── BOQ-grouped layout for Material / Extra-Schedule ─── */}
+              {/* RGP moved to the flat layout (mam 2026-05-27): RGP is
+                  returnable material brought to site by the contractor —
+                  it has no BOQ counterpart on the Client PO, so user picks
+                  directly from Item Master where type='RGP'. Same flow as
+                  Non-Schedule / Rental. */}
+              {(form.indent_category === 'material' || form.indent_category === 'extra_schedule' || !form.indent_category) && (() => {
                 const cat = form.indent_category || 'material';
-                // BOQ items filter (mam 2026-05-26 follow-up): RGP-ness is
-                // determined at the ITEM MASTER level (im.type='RGP'), NOT at
-                // the BOQ row level — Client PO BOQ rows are typically all PO
-                // (no RGP rows in the Client PO at all). So for RGP category
-                // we show ALL BOQ rows and the user picks the BOQ they're
-                // associating the RGP item with; the actual RGP filter is
-                // applied at the Sub-Item picker further down (filteredMasterForBoq).
-                const filteredBoqItems = cat === 'rgp'
-                  ? boqItems
-                  : boqItems.filter(b => {
-                      const t = String(b.item_type || '').toUpperCase();
-                      return t === 'PO' || t === 'FOC' || t === '';
-                    });
+                const filteredBoqItems = boqItems.filter(b => {
+                  const t = String(b.item_type || '').toUpperCase();
+                  return t === 'PO' || t === 'FOC' || t === '';
+                });
                 const groups = [];
                 const seen = new Map();
                 indentItems.forEach((item, idx) => {
