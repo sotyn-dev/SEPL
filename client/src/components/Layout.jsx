@@ -75,18 +75,23 @@ const SIDEBAR_GROUPS = [
     { path: '/leads',         label: 'Sales Funnel',      icon: FiFilter,     module: 'leads' },
     { path: '/business-book', label: 'Business Book',     icon: FiBook,       module: 'business_book' },
     { path: '/customers',     label: 'Customers',         icon: FiUser,       module: 'customers' },
+    // Full Kitting moved here (mam 2026-05-27): "full kitting is under CRM"
+    { path: '/crm-kitting',   label: 'Full Kitting',      icon: FiArchive,    module: 'crm_kitting' },
   ]},
   { id: 'quotes_orders', label: 'Quotes & Orders', icon: FiFileText, items: [
-    { path: '/crm-kitting', label: 'Full Kitting',      icon: FiArchive,      module: 'crm_kitting' },
     { path: '/quotations',  label: 'Quotations',        icon: FiClipboard,    module: 'quotations' },
-    { path: '/procurement', label: 'Dispatch',          icon: FiTruck,        module: 'procurement' },
-    { path: '/orders',      label: 'Order to Planning', icon: FiShoppingCart, module: 'orders' },
   ]},
+  // Procurement (mam 2026-05-27 follow-up): Dispatch + Order to Planning
+  // moved here from Quotes & Orders — they're procurement workflow steps,
+  // not quote/order workflow.  Dispatch renamed back to "Indent to
+  // Dispatch" to match the page header.
   { id: 'procurement', label: 'Procurement', icon: FiShoppingBag, items: [
-    { path: '/item-master',    label: 'Items',       icon: FiGrid,    module: 'item_master' },
-    { path: '/sub-contractors',label: 'Contractors', icon: FiHexagon, module: 'sub_contractors' },
-    { path: '/price-required', label: 'RFQ Queue',   icon: FiInbox,   module: null },
-    { path: '/vendors',        label: 'Vendors',     icon: FiTag,     module: 'vendors' },
+    { path: '/item-master',    label: 'Items',              icon: FiGrid,         module: 'item_master' },
+    { path: '/sub-contractors',label: 'Contractors',        icon: FiHexagon,      module: 'sub_contractors' },
+    { path: '/price-required', label: 'RFQ Queue',          icon: FiInbox,        module: null },
+    { path: '/vendors',        label: 'Vendors',            icon: FiTag,          module: 'vendors' },
+    { path: '/procurement',    label: 'Indent to Dispatch', icon: FiTruck,        module: 'procurement' },
+    { path: '/orders',         label: 'Order to Planning',  icon: FiShoppingCart, module: 'orders' },
   ]},
   { id: 'projects', label: 'Projects', icon: FiBriefcase, items: [
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
