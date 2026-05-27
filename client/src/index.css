@@ -152,6 +152,54 @@ input[type="number"].input-compact::-webkit-inner-spin-button {
   /* Make table cells slightly more touch-friendly on phone — small
      padding bump improves tap accuracy on row-level actions. */
   td { padding-top: 0.7rem; padding-bottom: 0.7rem; }
+
+  /* ─── Mobile mass-fix (mam 2026-05-28, MD complaint) ─────────────
+     Two universal fixes that close the worst phone pain points
+     without touching ~50 page files individually.
+
+     1. Auto horizontal-scroll any card that wraps a wide table.
+        Many .card containers across the ERP (Business Book, Vendors,
+        Cheque FMS, Snags, Orders, Item Master, …) hold tables that
+        overflow 375px width. Browser-supported :has() lets us target
+        them in one rule. We also kill the card's p-6 padding while
+        keeping the rounded outer chrome, so the table can scroll
+        cleanly to the right edge of the screen.
+        Note: the card root keeps overflow:hidden under rounded-2xl,
+        which would clip the scrollable child — so we also relax
+        overflow on the parent in mobile. */
+  .card:has(> table),
+  .card:has(> div > table),
+  .card:has(> div > div > table) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 0;
+  }
+  /* Keep the inner card padding for the head area when present (e.g. a
+     filter row + table inside the same card). The table itself stays
+     full-width and scrollable. */
+  .card:has(> table) > *:not(table),
+  .card:has(> div > table) > *:not(div):not(table) {
+    padding: 1rem;
+  }
+
+  /* 2. Bump icon-only padding-1 buttons to a 32px tap target. Pages
+        like Indent to Dispatch have 5+ p-1 icon buttons crammed in
+        the action column. Browsers can't tell "icon button" from
+        "container with padding 1", so we scope to <button> tags that
+        are direct children of action cells / action wrappers and don't
+        have other padding utilities. */
+  button.p-1 {
+    padding: 0.5rem;
+    min-width: 32px;
+    min-height: 32px;
+  }
+  /* Slightly bigger touch zone on any 9px / 10px icon-only chip used
+     as an action (e.g. tiny "✓ Clear pmt" buttons we added recently). */
+  button.text-\[9px\],
+  button.text-\[10px\] {
+    min-height: 32px;
+    padding: 0.4rem 0.6rem;
+  }
 }
 
 table {
