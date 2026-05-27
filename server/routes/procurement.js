@@ -610,21 +610,36 @@ router.post('/indents', (req, res) => {
   );
   const getMasterType = db.prepare('SELECT type FROM item_master WHERE id=?');
 
-  // One PO line per BOQ per indent — mam (2026-05-25): user can add
-  // multiple FOC/RGP sub-items under one BOQ, but only ONE chargeable
-  // PO sub-item.  Tracks po_item_id → already-seen-PO in this submission.
-  const poCountPerBoq = new Map();
-  for (const it of items) {
-    const t = String(it.item_type || '').toUpperCase();
-    if (t === 'PO' && Number.isInteger(+it.po_item_id) && +it.po_item_id > 0) {
-      poCountPerBoq.set(+it.po_item_id, (poCountPerBoq.get(+it.po_item_id) || 0) + 1);
+  // PO sub-item rules per BOQ (mam 2026-05-25 + 2026-05-27 follow-up):
+  //   - EXACTLY one PO sub-item per BOQ row is REQUIRED
+  //   - FOC + RGP sub-items can be multiple (or zero)
+  //   - "Only PO" rule was set earlier (max 1); now adding the
+  //     "at-least 1 PO" rule so an indent can't be all-FOC under a BOQ.
+  //   - Only applies to BOQ-linked categories (material + extra_schedule).
+  //     Off-BOQ categories (rgp / extra_non_schedule / rental) skip this.
+  if (!isRgp && !isExtraNonSchedule && !isRental) {
+    const subItemsPerBoq = new Map(); // poId → { po: n, foc: n, rgp: n }
+    for (const it of items) {
+      const poId = Number.isInteger(+it.po_item_id) && +it.po_item_id > 0 ? +it.po_item_id : null;
+      if (!poId) continue;  // manual entries don't have a BOQ link
+      const t = String(it.item_type || '').toUpperCase();
+      const bucket = subItemsPerBoq.get(poId) || { po: 0, foc: 0, rgp: 0 };
+      if (t === 'PO')       bucket.po++;
+      else if (t === 'FOC') bucket.foc++;
+      else if (t === 'RGP') bucket.rgp++;
+      subItemsPerBoq.set(poId, bucket);
     }
-  }
-  for (const [poId, count] of poCountPerBoq) {
-    if (count > 1) {
-      return res.status(400).json({
-        error: `Only ONE PO sub-item allowed per BOQ row.  BOQ #${poId} has ${count} PO lines — keep one and convert the others to FOC or RGP if they're not chargeable.`
-      });
+    for (const [poId, b] of subItemsPerBoq) {
+      if (b.po > 1) {
+        return res.status(400).json({
+          error: `Only ONE PO sub-item allowed per BOQ row.  BOQ #${poId} has ${b.po} PO lines — keep one and convert the others to FOC or RGP if they're not chargeable.`
+        });
+      }
+      if (b.po === 0) {
+        return res.status(400).json({
+          error: `BOQ #${poId} has no PO sub-item.  Each BOQ needs exactly ONE PO (chargeable) sub-item; FOC/RGP can be multiple but cannot stand alone.`
+        });
+      }
     }
   }
 
@@ -1033,7 +1048,7 @@ router.put('/indents/:id', (req, res) => {
 
   // Full edit path
   if (items) {
-    const cur = db.prepare('SELECT status FROM indents WHERE id=?').get(id);
+    const cur = db.prepare('SELECT status, indent_category FROM indents WHERE id=?').get(id);
     if (!cur) return res.status(404).json({ error: 'Indent not found' });
     if (cur.status === 'approved') {
       return res.status(400).json({ error: 'Cannot edit an approved indent' });
@@ -1060,19 +1075,33 @@ router.put('/indents/:id', (req, res) => {
     );
     const getMasterTypeEdit = db.prepare('SELECT type FROM item_master WHERE id=?');
 
-    // One PO line per BOQ per indent (Edit path).  Same rule as POST.
-    const poCountPerBoqEdit = new Map();
-    for (const it of items) {
-      const t = String(it.item_type || '').toUpperCase();
-      if (t === 'PO' && Number.isInteger(+it.po_item_id) && +it.po_item_id > 0) {
-        poCountPerBoqEdit.set(+it.po_item_id, (poCountPerBoqEdit.get(+it.po_item_id) || 0) + 1);
+    // PO sub-item rules per BOQ (Edit path).  Same rule as POST:
+    //   exactly 1 PO sub-item per BOQ row, FOC/RGP can be multiple
+    //   (mam 2026-05-25 + 2026-05-27 follow-up). Off-BOQ categories
+    //   (rgp / extra_non_schedule / rental) skip this check.
+    const editCat = String(cur.indent_category || 'material').toLowerCase();
+    const editSkipBoqCheck = editCat === 'rgp' || editCat === 'extra_non_schedule' || editCat === 'rental';
+    if (!editSkipBoqCheck) {
+      const subItemsPerBoqEdit = new Map();
+      for (const it of items) {
+        const poId = Number.isInteger(+it.po_item_id) && +it.po_item_id > 0 ? +it.po_item_id : null;
+        if (!poId) continue;
+        const t = String(it.item_type || '').toUpperCase();
+        const b = subItemsPerBoqEdit.get(poId) || { po: 0 };
+        if (t === 'PO') b.po++;
+        subItemsPerBoqEdit.set(poId, b);
       }
-    }
-    for (const [poId, count] of poCountPerBoqEdit) {
-      if (count > 1) {
-        return res.status(400).json({
-          error: `Only ONE PO sub-item allowed per BOQ row.  BOQ #${poId} has ${count} PO lines — keep one and convert the others to FOC or RGP if they're not chargeable.`
-        });
+      for (const [poId, b] of subItemsPerBoqEdit) {
+        if (b.po > 1) {
+          return res.status(400).json({
+            error: `Only ONE PO sub-item allowed per BOQ row.  BOQ #${poId} has ${b.po} PO lines — keep one and convert the others to FOC or RGP if they're not chargeable.`
+          });
+        }
+        if (b.po === 0) {
+          return res.status(400).json({
+            error: `BOQ #${poId} has no PO sub-item.  Each BOQ needs exactly ONE PO (chargeable) sub-item; FOC/RGP can be multiple but cannot stand alone.`
+          });
+        }
       }
     }
 

@@ -677,6 +677,30 @@ export default function Procurement() {
         }
       }
     }
+
+    // ─── BOQ sub-item rules (mam 2026-05-27) ───────────────────────────
+    // Each BOQ row in a Material / Extra-Schedule indent MUST have
+    // exactly ONE PO sub-item (chargeable). FOC + RGP sub-items can
+    // be multiple (or zero). Off-BOQ categories skip this entirely.
+    if (needsBoq) {
+      const subItemsPerBoq = new Map();
+      for (const it of indentItems) {
+        const poId = Number.isInteger(+it.po_item_id) && +it.po_item_id > 0 ? +it.po_item_id : null;
+        if (!poId) continue;
+        const t = String(it.item_type || '').toUpperCase();
+        const b = subItemsPerBoq.get(poId) || { po: 0 };
+        if (t === 'PO') b.po++;
+        subItemsPerBoq.set(poId, b);
+      }
+      for (const [, b] of subItemsPerBoq) {
+        if (b.po > 1) {
+          return toast.error('Only ONE PO sub-item allowed per BOQ. Keep one and convert the others to FOC/RGP if they are not chargeable.');
+        }
+        if (b.po === 0) {
+          return toast.error('Each BOQ needs exactly ONE PO (chargeable) sub-item. FOC/RGP cannot stand alone — add the PO row.');
+        }
+      }
+    }
     const payload = {
       site_name: form.site_name,
       raised_by_name: form.raised_by_name,
@@ -3704,6 +3728,11 @@ export default function Procurement() {
                             ? null
                             : (hasPoLineInGroup ? '(PO slot used — only FOC can be added here)' : null);
                           const defaultType = isRgpCat ? 'RGP' : (hasPoLineInGroup ? 'FOC' : '');
+                          // Missing-PO warning chip (mam 2026-05-27): every
+                          // BOQ row must have exactly ONE PO sub-item.
+                          // Surfaces here so the user sees the requirement
+                          // BEFORE clicking Submit (server also enforces).
+                          const missingPo = !isRgpCat && !hasPoLineInGroup;
                           return (
                             <div className="flex items-center gap-2 flex-wrap">
                               <button
@@ -3719,6 +3748,12 @@ export default function Procurement() {
                                 }])}
                                 className="text-[11px] text-blue-600 hover:text-blue-800 font-medium px-1 py-1"
                               >{addLabel}</button>
+                              {missingPo && (
+                                <span className="text-[10px] font-semibold text-red-700 bg-red-50 border border-red-200 rounded px-1.5 py-0.5"
+                                      title="Every BOQ needs exactly ONE PO (chargeable) sub-item. FOC/RGP cannot stand alone.">
+                                  ⚠ PO sub-item required
+                                </span>
+                              )}
                               {lockHint && (
                                 <span className="text-[10px] text-gray-400 italic">{lockHint}</span>
                               )}
