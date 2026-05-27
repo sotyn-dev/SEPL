@@ -14,83 +14,111 @@ import { useAuth } from '../context/AuthContext';
 import {
   FiHome, FiUsers, FiTarget, FiFileText, FiShoppingCart,
   FiTruck, FiTool, FiAlertCircle, FiUserPlus,
-  FiCheckSquare, FiMenu, FiX, FiLogOut, FiPackage, FiClipboard, FiChevronRight,
-  FiSettings, FiShield, FiTrendingUp, FiCreditCard, FiLayers, FiBarChart2, FiBook, FiGrid, FiKey, FiMapPin, FiHelpCircle
+  FiCheckSquare, FiMenu, FiX, FiLogOut, FiPackage, FiClipboard, FiChevronRight, FiChevronDown,
+  FiSettings, FiShield, FiTrendingUp, FiCreditCard, FiLayers, FiBarChart2, FiBook, FiGrid, FiKey, FiMapPin, FiHelpCircle, FiBriefcase, FiDatabase, FiPhoneCall
 } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 
-const menuItems = [
-  { path: '/', label: 'Dashboard', icon: FiHome, module: 'dashboard' },
-  { path: '/cashflow', label: 'Cash Flow', icon: FiTrendingUp, module: 'cashflow' },
-  { path: '/cheques', label: 'Cheque FMS', icon: FiFileText, module: 'cheques' },
-  { path: '/payment-required', label: 'Payment Required', icon: LuIndianRupee, module: 'payment_required' },
-  { path: '/attendance', label: 'Attendance', icon: FiCheckSquare, module: 'attendance' },
-  { path: '/collections', label: 'Collection Engine', icon: FiCreditCard, module: 'collections' },
-  { path: '/dpr', label: 'DPR', icon: FiBarChart2, module: 'dpr' },
-  { path: '/delegations', label: 'Delegations', icon: FiCheckSquare, module: 'delegations' },
-  { path: '/pms-tasks', label: 'PMS Tasks', icon: FiLayers, module: 'pms_tasks' },
-  { path: '/leads', label: 'Sales Funnel', icon: FiTarget, module: 'leads' },
-  { path: '/crm-funnel', label: 'CRM Sales Funnel', icon: FiTarget, module: 'crm_funnel' },
-  { path: '/fire-noc', label: 'Fire NOC Renewal', icon: FiTarget, module: 'fire_noc' },
-  { path: '/rental-tools', label: 'Rental Tools', icon: FiTool, module: 'rental_tools' },
-  { path: '/influencers', label: 'Influencers', icon: FiUsers, module: 'influencers' },
-  { path: '/crm-kitting', label: 'CRM Full Kitting', icon: FiPackage, module: 'crm_kitting' },
-  // Mam (2026-05-22): "you create hr system and hr & hiring this is
-  // duplicated" — HR System sidebar entry removed.  All hiring
-  // work continues in the legacy /hr page.  Route + page kept alive
-  // for direct-URL access in case mam wants to revisit individual
-  // tabs (Hiring Requests / Dashboard / Offers KPIs).
-  // { path: '/hr-system', label: 'HR System', icon: FiUsers, module: 'hr_system' },
-  { path: '/quotations', label: 'BOQ & Quotations', icon: FiFileText, module: 'quotations' },
-  { path: '/business-book', label: 'Business Book', icon: FiBook, module: 'business_book' },
-  { path: '/item-master', label: 'Item Master', icon: FiGrid, module: 'item_master' },
-  { path: '/orders', label: 'Orders & Planning', icon: FiShoppingCart, module: 'orders' },
-  { path: '/vendors', label: 'Vendors', icon: FiTruck, module: 'vendors' },
-  { path: '/sub-contractors', label: 'Sub-Contractors', icon: FiUserPlus, module: 'sub_contractors' },
-  { path: '/customers', label: 'Customers', icon: FiUsers, module: 'customers' },
-  { path: '/procurement', label: 'Indent to Dispatch', icon: FiPackage, module: 'procurement' },
-  { path: '/price-required', label: 'Price Required', icon: LuIndianRupee, module: null },
-  { path: '/inventory', label: 'Inventory', icon: FiPackage, module: 'inventory' },
-  { path: '/tools', label: 'Tools', icon: FiTool, module: 'tools' },
-  { path: '/rentals', label: 'Room Rentals', icon: FiHome, module: 'rentals' },
-  { path: '/installation', label: 'Installation', icon: FiTool, module: 'installation' },
-  { path: '/billing', label: 'Billing', icon: FiClipboard, module: 'billing' },
-  { path: '/complaints', label: 'Complaints', icon: FiAlertCircle, module: 'complaints' },
-  { path: '/snags', label: 'Snag List', icon: FiAlertCircle, module: 'snags' },
-  { path: '/company-assets', label: 'Company Assets', icon: FiPackage, module: 'company_assets' },
-  { path: '/hr', label: 'HR & Hiring', icon: FiUserPlus, module: 'hr' },
-  // Mam (2026-05-22 Batch E): Induction + Training are OPEN to all
-  // employees (module=null bypasses the canView gate) so even
-  // permission-limited users can complete their assigned training.
-  { path: '/induction', label: 'Induction', icon: FiHelpCircle, module: null },
-  { path: '/training',  label: 'My Training', icon: FiCheckSquare, module: null },
-  { path: '/payroll', label: 'Payroll', icon: LuIndianRupee, module: 'payroll' },
-  { path: '/scorecard', label: 'Scorecard (MIS)', icon: FiBarChart2, module: 'scoring' },
-  { path: '/employees', label: 'Employees', icon: FiUsers, module: 'employees' },
-  { path: '/expenses', label: 'Expenses', icon: LuIndianRupee, module: 'expenses' },
-  { path: '/checklists', label: 'Checklists', icon: FiCheckSquare, module: 'checklists' },
-  // Help Tickets is open to everyone — module=null bypasses canView gate.
-  { path: '/help-tickets', label: 'Help Tickets', icon: FiHelpCircle, module: null },
+// ─── Sidebar structure (mam 2026-05-27 — SEPL_Sidebar_Restructure spec) ───
+// Dashboard stays standalone at the very top (no group, single URL).
+// Every other item lives in a collapsible accordion group, all initially
+// CLOSED and independently expandable (no exclusive-open behaviour — mam
+// asked for "expandable independent").  Settings group is pinned to the
+// bottom of the scrollable nav (still inside scroll, just last entry).
+//
+// Renames applied per spec.  Merges:
+//   - CRM Sales Funnel    → into Indent to Dispatch (entry removed)
+//   - MD Collections      → into Collections (entry removed)
+//   - Director's War Room + CMD Operating Console + CMD TOC View → ONE
+//                          "Executive" entry in the Executive group
+//                          (links to /dashboard/cmd as the canonical
+//                          consolidated view; the other 2 routes stay
+//                          alive for direct-URL access).
+const SIDEBAR_DASHBOARD = { path: '/', label: 'Dashboard', icon: FiHome, module: 'dashboard' };
+
+const SIDEBAR_GROUPS = [
+  { id: 'crm', label: 'CRM', icon: FiTarget, items: [
+    { path: '/influencers',   label: 'Partners',       icon: FiUsers,  module: 'influencers' },
+    { path: '/leads',         label: 'Sales Funnel',   icon: FiTarget, module: 'leads' },
+    { path: '/business-book', label: 'Business Book',  icon: FiBook,   module: 'business_book' },
+    { path: '/customers',     label: 'Customers',      icon: FiUsers,  module: 'customers' },
+  ]},
+  { id: 'quotes_orders', label: 'Quotes & Orders', icon: FiFileText, items: [
+    { path: '/crm-kitting',   label: 'Full Kitting',       icon: FiPackage,      module: 'crm_kitting' },
+    { path: '/quotations',    label: 'Quotations',         icon: FiFileText,     module: 'quotations' },
+    { path: '/procurement',   label: 'Dispatch',           icon: FiPackage,      module: 'procurement' },
+    { path: '/orders',        label: 'Order to Planning',  icon: FiShoppingCart, module: 'orders' },
+  ]},
+  { id: 'procurement', label: 'Procurement', icon: FiTruck, items: [
+    { path: '/item-master',    label: 'Items',       icon: FiGrid,        module: 'item_master' },
+    { path: '/sub-contractors',label: 'Contractors', icon: FiUserPlus,    module: 'sub_contractors' },
+    { path: '/price-required', label: 'RFQ Queue',   icon: LuIndianRupee, module: null },
+    { path: '/vendors',        label: 'Vendors',     icon: FiTruck,       module: 'vendors' },
+  ]},
+  { id: 'projects', label: 'Projects', icon: FiBarChart2, items: [
+    { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
+    { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
+    { path: '/fire-noc',     label: 'Fire NOC Renewal', icon: FiTarget,      module: 'fire_noc' },
+    { path: '/installation', label: 'Installations',    icon: FiTool,        module: 'installation' },
+  ]},
+  { id: 'finance', label: 'Finance', icon: LuIndianRupee, items: [
+    { path: '/cheques',          label: 'Cheques',     icon: FiFileText,    module: 'cheques' },
+    { path: '/payment-required', label: 'Payables',    icon: LuIndianRupee, module: 'payment_required' },
+    { path: '/collections',      label: 'Collections', icon: FiCreditCard,  module: 'collections' },
+    { path: '/billing',          label: 'Invoices',    icon: FiClipboard,   module: 'billing' },
+    { path: '/cashflow',         label: 'Cash Flow',   icon: FiTrendingUp,  module: 'cashflow' },
+    { path: '/expenses',         label: 'Expenses',    icon: LuIndianRupee, module: 'expenses' },
+  ]},
+  { id: 'people', label: 'People', icon: FiUsers, items: [
+    { path: '/hr',         label: 'Hiring',     icon: FiBriefcase,   module: 'hr' },
+    { path: '/induction',  label: 'Onboarding', icon: FiHelpCircle,  module: null },
+    { path: '/training',   label: 'Training',   icon: FiCheckSquare, module: null },
+    { path: '/attendance', label: 'Attendance', icon: FiCheckSquare, module: 'attendance' },
+    { path: '/payroll',    label: 'Payroll',    icon: LuIndianRupee, module: 'payroll' },
+    { path: '/employees',  label: 'Employees',  icon: FiUsers,       module: 'employees' },
+  ]},
+  { id: 'inventory', label: 'Inventory', icon: FiPackage, items: [
+    { path: '/rental-tools',   label: 'Tool Rentals', icon: FiTool,    module: 'rental_tools' },
+    { path: '/company-assets', label: 'Assets',       icon: FiPackage, module: 'company_assets' },
+    { path: '/inventory',      label: 'Inventory',    icon: FiPackage, module: 'inventory' },
+    { path: '/tools',          label: 'Tools',        icon: FiTool,    module: 'tools' },
+    { path: '/rentals',        label: 'Room Rentals', icon: FiHome,    module: 'rentals' },
+  ]},
+  { id: 'tasks', label: 'Tasks', icon: FiCheckSquare, items: [
+    { path: '/scorecard',   label: 'Performance', icon: FiBarChart2,   module: 'scoring' },
+    { path: '/delegations', label: 'Delegations', icon: FiCheckSquare, module: 'delegations' },
+    { path: '/pms-tasks',   label: 'Tasks',       icon: FiLayers,      module: 'pms_tasks' },
+    { path: '/checklists',  label: 'Checklists',  icon: FiCheckSquare, module: 'checklists' },
+  ]},
+  { id: 'service_desk', label: 'Service Desk', icon: FiPhoneCall, items: [
+    { path: '/complaints',   label: 'Complaints',   icon: FiAlertCircle, module: 'complaints' },
+    { path: '/help-tickets', label: 'Help Tickets', icon: FiHelpCircle,  module: null },
+  ]},
+  // Executive group — collapses Director's War Room + CMD Console + CMD TOC
+  // View into a single "Executive" tile (mam's spec says "merge into
+  // Executive" for all 3).  Single entry, pointed at the canonical CMD
+  // Operating Console; the other 2 routes still resolve by URL.
+  { id: 'executive', label: 'Executive', icon: FiTrendingUp, adminOnly: true, items: [
+    { path: '/dashboard/cmd',      label: 'Executive',          icon: FiTrendingUp, module: 'users' },
+    { path: '/dashboard/war-room', label: 'War Room (legacy)',  icon: FiTrendingUp, module: 'users', hidden: true },
+    { path: '/dashboard/cmd-toc',  label: 'TOC View (legacy)',  icon: FiTrendingUp, module: 'users', hidden: true },
+  ]},
+  { id: 'admin', label: 'Admin', icon: FiShield, adminOnly: true, items: [
+    { path: '/admin/word-count', label: 'Activity Log', icon: FiBarChart2, module: 'users' },
+    { path: '/admin/locations',  label: 'Location',     icon: FiMapPin,    module: 'users' },
+  ]},
 ];
 
-const adminItems = [
-  // TOC v3 role dashboards — top of the admin menu so MD/CMD can hit
-  // them first thing on login.  Stage 1 = Operating Console (today's
-  // pulse + funnel + ops + cash).  Stage 2 = TOC View (binding
-  // constraint + 3 moves).  Both pulled from /api/dashboards/cmd-detail.
-  { path: '/dashboard/war-room',label: 'Director\'s War Room',    icon: FiTrendingUp, module: 'users' },
-  { path: '/dashboard/cmd',     label: 'CMD · Operating Console', icon: FiTrendingUp, module: 'users' },
-  { path: '/dashboard/cmd-toc', label: 'CMD · TOC View',          icon: FiTrendingUp, module: 'users' },
-  { path: '/admin/users', label: 'User Management', icon: FiSettings, module: 'users' },
-  { path: '/admin/roles', label: 'Roles & Permissions', icon: FiShield, module: 'users' },
-  { path: '/admin/word-count', label: 'Daily Activity', icon: FiBarChart2, module: 'users' },
-  { path: '/admin/locations', label: 'Location Tracking', icon: FiMapPin, module: 'users' },
-  { path: '/admin/collections-md', label: 'MD Collections', icon: FiTrendingUp, module: 'users' },
-  { path: '/admin/backups', label: 'Database Backups', icon: FiPackage, module: 'users' },
-  { path: '/admin/audit', label: 'Audit Log', icon: FiShield, module: 'users' },
-  { path: '/admin/ai-settings', label: 'AI Settings', icon: FiSettings, module: 'users' },
-  { path: '/admin/email-settings', label: 'Email Settings', icon: FiSettings, module: 'users' },
-];
+// Settings group — always rendered LAST (pinned to bottom of the nav)
+// per mam's spec.  Same collapsible accordion behaviour as the others.
+const SIDEBAR_SETTINGS = { id: 'settings', label: 'Settings', icon: FiSettings, adminOnly: true, items: [
+  { path: '/admin/backups',        label: 'Backups',             icon: FiDatabase, module: 'users' },
+  { path: '/admin/ai-settings',    label: 'AI',                  icon: FiSettings, module: 'users' },
+  { path: '/admin/email-settings', label: 'Email',               icon: FiSettings, module: 'users' },
+  { path: '/admin/users',          label: 'Users',               icon: FiUsers,    module: 'users' },
+  { path: '/admin/roles',          label: 'Roles & Permissions', icon: FiShield,   module: 'users' },
+  { path: '/admin/audit',          label: 'Audit Log',           icon: FiShield,   module: 'users' },
+]};
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -196,8 +224,65 @@ export default function Layout() {
     };
   }, [user?.id]);
 
+  // ─── Sidebar accordion state ───────────────────────────────────────
+  // Each group is collapsible, INITIALLY CLOSED, expand independently
+  // (multiple can be open at once — not strict accordion).  We persist
+  // the open-set in localStorage so a refresh / new tab remembers what
+  // mam had open, but the default for a fresh user is everything closed.
+  const [openGroups, setOpenGroups] = useState(() => {
+    try {
+      const raw = localStorage.getItem('sidebar_open_groups');
+      if (raw) return new Set(JSON.parse(raw));
+    } catch (e) { /* ignore parse errors — fall through */ }
+    return new Set();
+  });
+  const toggleGroup = (id) => setOpenGroups(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    try { localStorage.setItem('sidebar_open_groups', JSON.stringify([...next])); } catch (e) {}
+    return next;
+  });
+  // Auto-open the group whose child route is currently active so a
+  // refresh on /cashflow shows Finance expanded with the active item
+  // highlighted — much less jarring than always starting closed when
+  // the user lands on a deep route.
+  useEffect(() => {
+    const path = location.pathname;
+    for (const g of SIDEBAR_GROUPS) {
+      if (g.items.some(it => it.path === path)) {
+        setOpenGroups(prev => {
+          if (prev.has(g.id)) return prev;
+          const next = new Set(prev);
+          next.add(g.id);
+          try { localStorage.setItem('sidebar_open_groups', JSON.stringify([...next])); } catch (e) {}
+          return next;
+        });
+        break;
+      }
+    }
+    // Same for Settings — if user lands on /admin/users etc.
+    if (SIDEBAR_SETTINGS.items.some(it => it.path === location.pathname)) {
+      setOpenGroups(prev => {
+        if (prev.has(SIDEBAR_SETTINGS.id)) return prev;
+        const next = new Set(prev);
+        next.add(SIDEBAR_SETTINGS.id);
+        try { localStorage.setItem('sidebar_open_groups', JSON.stringify([...next])); } catch (e) {}
+        return next;
+      });
+    }
+  }, [location.pathname]);
+
   // module === null means "always visible" (e.g. Help Tickets — open to everyone)
-  const visibleMenu = menuItems.filter(item => item.module == null || canView(item.module));
+  const itemVisible = (item) => item.module == null || canView(item.module);
+  // A group renders only if (a) it has at least one visible item and
+  // (b) the user passes any adminOnly gate. Hidden helper items (the
+  // 2 legacy CMD routes folded into Executive) don't count.
+  const groupVisible = (g) => {
+    if (g.adminOnly && !isAdmin()) return false;
+    return g.items.some(it => !it.hidden && itemVisible(it));
+  };
+  const visibleGroups = SIDEBAR_GROUPS.filter(groupVisible);
+  const showSettings = groupVisible(SIDEBAR_SETTINGS);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -242,25 +327,81 @@ export default function Layout() {
           {isMobile && <button className="p-1.5 hover:bg-white/10 rounded" onClick={() => setSidebarOpen(false)}><FiX size={18} /></button>}
         </div>
         <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
-          {visibleMenu.map(item => (
-            <Link key={item.path} to={item.path}
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === item.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
-              <item.icon size={16} />
-              <span className="truncate">{item.label}</span>
+          {/* Dashboard — always standalone at top, no group, single URL
+              (mam's spec). Highlighted when on the home route. */}
+          {(SIDEBAR_DASHBOARD.module == null || canView(SIDEBAR_DASHBOARD.module)) && (
+            <Link to={SIDEBAR_DASHBOARD.path}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === SIDEBAR_DASHBOARD.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
+              <SIDEBAR_DASHBOARD.icon size={16} />
+              <span className="truncate">{SIDEBAR_DASHBOARD.label}</span>
             </Link>
-          ))}
-          {isAdmin() && (
-            <>
-              <div className="pt-3 pb-1 px-3"><span className="text-[10px] font-semibold text-red-200 uppercase">Admin</span></div>
-              {adminItems.map(item => (
-                <Link key={item.path} to={item.path}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === item.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
-                  <item.icon size={16} />
-                  <span className="truncate">{item.label}</span>
-                </Link>
-              ))}
-            </>
           )}
+
+          {/* Collapsible accordion groups — initially closed, each opens
+              independently. The chevron rotates to indicate state. */}
+          {visibleGroups.map(g => {
+            const isOpen = openGroups.has(g.id);
+            const childItems = g.items.filter(it => !it.hidden && itemVisible(it));
+            const hasActiveChild = childItems.some(it => location.pathname === it.path);
+            return (
+              <div key={g.id} className="pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(g.id)}
+                  className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${hasActiveChild ? 'text-white font-semibold' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}
+                  title={`${isOpen ? 'Collapse' : 'Expand'} ${g.label}`}
+                >
+                  <g.icon size={16} />
+                  <span className="truncate flex-1 text-left">{g.label}</span>
+                  <FiChevronRight size={14} className={`transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                </button>
+                {isOpen && (
+                  <div className="ml-2 mt-0.5 mb-1 pl-3 border-l border-white/15 space-y-0.5">
+                    {childItems.map(item => (
+                      <Link key={item.path} to={item.path}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors ${location.pathname === item.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
+                        <item.icon size={14} />
+                        <span className="truncate">{item.label}</span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Settings group — pinned to the very bottom of the nav per
+              mam's spec.  Same collapsible accordion as the others. */}
+          {showSettings && (() => {
+            const isOpen = openGroups.has(SIDEBAR_SETTINGS.id);
+            const childItems = SIDEBAR_SETTINGS.items.filter(it => itemVisible(it));
+            const hasActiveChild = childItems.some(it => location.pathname === it.path);
+            return (
+              <div className="pt-3 mt-2 border-t border-white/10">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(SIDEBAR_SETTINGS.id)}
+                  className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${hasActiveChild ? 'text-white font-semibold' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}
+                  title={`${isOpen ? 'Collapse' : 'Expand'} Settings`}
+                >
+                  <SIDEBAR_SETTINGS.icon size={16} />
+                  <span className="truncate flex-1 text-left">{SIDEBAR_SETTINGS.label}</span>
+                  <FiChevronRight size={14} className={`transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                </button>
+                {isOpen && (
+                  <div className="ml-2 mt-0.5 mb-1 pl-3 border-l border-white/15 space-y-0.5">
+                    {childItems.map(item => (
+                      <Link key={item.path} to={item.path}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors ${location.pathname === item.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
+                        <item.icon size={14} />
+                        <span className="truncate">{item.label}</span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </nav>
         <div className="p-3 border-t border-white/10">
           <div className="text-sm text-red-50">{user?.name}</div>
@@ -327,7 +468,16 @@ export default function Layout() {
             {sidebarOpen ? <FiMenu size={20} /> : <FiChevronRight size={20} />}
           </button>
           <h2 className="text-sm md:text-lg font-semibold text-gray-800 truncate flex-1">
-            {[...menuItems, ...adminItems].find(m => m.path === location.pathname)?.label || 'SEPL ERP'}
+            {(() => {
+              // Header title — look up the current route across Dashboard +
+              // every group + Settings to find the matching label.
+              if (SIDEBAR_DASHBOARD.path === location.pathname) return SIDEBAR_DASHBOARD.label;
+              const allItems = [
+                ...SIDEBAR_GROUPS.flatMap(g => g.items),
+                ...SIDEBAR_SETTINGS.items,
+              ];
+              return allItems.find(m => m.path === location.pathname)?.label || 'SEPL ERP';
+            })()}
           </h2>
           {/* Push notification toggle — phone / laptop / desktop each
               need to be enabled separately. Mam's MD requirement. */}
