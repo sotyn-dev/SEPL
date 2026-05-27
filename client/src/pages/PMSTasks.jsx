@@ -3,6 +3,7 @@
 // auto-captures the CRM name from that project's latest Client PO.
 
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -20,7 +21,22 @@ export default function PMSTasks() {
   // Default scope = 'mine' (tasks the logged-in user is involved in,
   // either as assignee or assigner). Mirrors the Delegations page so
   // users land on their own queue, not the entire team's.
-  const [scope, setScope] = useState('mine');
+  //
+  // Scope persisted to URL ?scope=… (mam 2026-05-27: "when i open
+  // followup page when i refresh it it goes on front page"). Refresh
+  // now keeps the user on the same tab they were viewing.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const VALID_SCOPES = ['mine', 'given', 'followup', 'all'];
+  const urlScope = searchParams.get('scope');
+  const [scope, _setScope] = useState(VALID_SCOPES.includes(urlScope) ? urlScope : 'mine');
+  const setScope = (s) => {
+    _setScope(s);
+    setSearchParams(prev => {
+      const sp = new URLSearchParams(prev);
+      if (s === 'mine') sp.delete('scope'); else sp.set('scope', s);
+      return sp;
+    }, { replace: true });
+  };
   const [statusFilter, setStatusFilter] = useState('');
   // Mam-requested filters: CRM (creator), assignee, date range
   const [crmFilter, setCrmFilter] = useState('');
