@@ -388,6 +388,13 @@ export default function Procurement() {
   const [billsFuExpFrom, setBillsFuExpFrom]     = useState('');
   const [billsFuExpTo, setBillsFuExpTo]         = useState('');
   const [billsFuPage, setBillsFuPage]           = useState(1);
+  // Payment-status pill filter (mam 2026-05-27 follow-up): accounts needs
+  // to split the Follow-up list by payment urgency so they can chase the
+  // right vendors first, then once cleared, purchase team chases the bill.
+  //   all      → every PO awaiting bill (default)
+  //   urgent   → payment_block_status='pending' (advance OR old dues)
+  //   ok       → status='cleared' OR type='no_advance' OR NULL (ready for bill chase)
+  const [billsFuPayment, setBillsFuPayment]     = useState('all');
   const [billsListSearch, setBillsListSearch]   = useState('');
   const [billsListFrom, setBillsListFrom]       = useState('');
   const [billsListTo, setBillsListTo]           = useState('');
@@ -2341,9 +2348,26 @@ export default function Procurement() {
             return ax.localeCompare(bx);
           });
 
-        // Sub-tab filtering (mam 2026-05-25)
+        // Sub-tab filtering (mam 2026-05-25 + payment pill 2026-05-27)
         const fSearch = billsFuSearch.trim().toLowerCase();
+        // Payment-status classifier — mirrors the chip on the Vendor PO list.
+        // 'urgent' = accounts needs to clear payment before vendor ships;
+        // 'ok'     = either cleared, no_advance, or legacy NULL (chase bill).
+        const isPmtUrgent = (po) => (po.payment_block_status === 'pending');
+        const isPmtOk     = (po) => !isPmtUrgent(po);
+        const pendingCounts = {
+          all: pendingPos.length,
+          urgent: pendingPos.filter(isPmtUrgent).length,
+          ok: pendingPos.filter(isPmtOk).length,
+        };
+        const pendingSums = {
+          all:    pendingPos.reduce((s, p) => s + (+p.display_total || +p.total_amount || 0), 0),
+          urgent: pendingPos.filter(isPmtUrgent).reduce((s, p) => s + (+p.payment_block_amount || 0), 0),
+          ok:     pendingPos.filter(isPmtOk).reduce((s, p) => s + (+p.display_total || +p.total_amount || 0), 0),
+        };
         const filteredFu = pendingPos.filter(po => {
+          if (billsFuPayment === 'urgent' && !isPmtUrgent(po)) return false;
+          if (billsFuPayment === 'ok'     && !isPmtOk(po))     return false;
           if (billsFuExpFrom && po.expected_receipt_date && po.expected_receipt_date < billsFuExpFrom) return false;
           if (billsFuExpTo   && po.expected_receipt_date && po.expected_receipt_date > billsFuExpTo) return false;
           if (!fSearch) return true;
@@ -2412,6 +2436,46 @@ export default function Procurement() {
                 <span className="text-[11px] text-amber-700">Sorted by Expected Receipt Date — chase the oldest first</span>
               </div>
 
+              {/* Payment-status pill row (mam 2026-05-27) — splits the
+                  follow-up by who needs to act first: Accounts (clear
+                  payment) vs. Purchase (chase bill). Each pill shows
+                  count + ₹ sum so the team can scan urgency instantly. */}
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                {[
+                  { id: 'all',    label: 'All POs',           pillCls: 'bg-amber-600 text-white border-amber-700',     inactiveCls: 'bg-white text-amber-700 border-amber-300', amtKey: 'all' },
+                  { id: 'urgent', label: '🚨 Payment Urgent', pillCls: 'bg-red-600 text-white border-red-700',          inactiveCls: 'bg-white text-red-700 border-red-300',     amtKey: 'urgent' },
+                  { id: 'ok',     label: '✓ Payment OK',      pillCls: 'bg-emerald-600 text-white border-emerald-700', inactiveCls: 'bg-white text-emerald-700 border-emerald-300', amtKey: 'ok' },
+                ].map(p => {
+                  const active = billsFuPayment === p.id;
+                  const cnt = pendingCounts[p.amtKey];
+                  const sum = pendingSums[p.amtKey];
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => { setBillsFuPayment(p.id); setBillsFuPage(1); }}
+                      className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition ${active ? p.pillCls + ' shadow' : p.inactiveCls + ' hover:shadow-sm'}`}
+                      title={p.id === 'urgent' ? "Vendor won't ship until advance / old dues cleared — Accounts must act"
+                           : p.id === 'ok'     ? "Cleared / no-advance — Purchase team chases the bill"
+                           : 'Every PO awaiting a Purchase Bill'}
+                    >
+                      <span>{p.label}</span>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${active ? 'bg-white/20' : 'bg-current/10'}`}>
+                        {cnt}
+                      </span>
+                      {sum > 0 && (
+                        <span className={`text-[10px] ${active ? 'text-white/90' : 'opacity-70'}`}>
+                          · ₹{Math.round(sum).toLocaleString('en-IN')}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+                <span className="text-[10px] text-amber-900 italic ml-2">
+                  Urgent = Accounts unblocks payment first · OK = Purchase chases the bill
+                </span>
+              </div>
+
               {/* Search + expected-date filter (mam 2026-05-25) */}
               <div className="flex flex-wrap items-end gap-2 text-xs mb-3 pb-3 border-b border-amber-200">
                 <div className="flex-1 min-w-[200px]">
@@ -2449,6 +2513,10 @@ export default function Procurement() {
                     <th className="px-2 py-1 text-left">Vendor</th>
                     <th className="px-2 py-1">PO Date</th>
                     <th className="px-2 py-1">Expected Receipt</th>
+                    {/* Payment column (mam 2026-05-27) — surfaces the
+                        internal payment-block status so Accounts can act
+                        before Purchase chases the bill. */}
+                    <th className="px-2 py-1">Payment</th>
                     <th className="px-2 py-1">Status</th>
                     <th className="px-2 py-1 text-right">Amount</th>
                     <th className="px-2 py-1">File</th>
@@ -2475,6 +2543,26 @@ export default function Procurement() {
                           <td className="px-2 py-1.5 max-w-[220px] truncate">{po.vendor_name}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.po_date || <span className="text-gray-300">—</span>}</td>
                           <td className="px-2 py-1.5 text-center whitespace-nowrap">{po.expected_receipt_date || <span className="text-gray-300">—</span>}</td>
+                          {/* Payment column (mam 2026-05-27) — chip + quick
+                              clear button. Accounts uses this to unblock
+                              shipments without leaving the Follow-up view. */}
+                          <td className="px-2 py-1.5 whitespace-nowrap">
+                            <div className="flex flex-col items-start gap-0.5">
+                              <PaymentBlockChip v={po} />
+                              {po.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
+                                <button
+                                  onClick={() => markPaymentCleared(po.id)}
+                                  className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300 hover:bg-emerald-600 hover:text-white transition"
+                                  title="Mark advance / old payment as cleared (internal)"
+                                >
+                                  ✓ Clear pmt
+                                </button>
+                              )}
+                              {!po.payment_block_type && (
+                                <span className="text-[9px] text-gray-400 italic" title="No payment status recorded — edit the PO to set advance / no-advance / old-payment-hold">— not set —</span>
+                              )}
+                            </div>
+                          </td>
                           <td className="px-2 py-1.5 text-center">{chip}</td>
                           {/* Show the LIVE computed total (items × 1.18 GST)
                               from display_total — matches what the PO print
