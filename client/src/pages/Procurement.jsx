@@ -90,6 +90,43 @@ function ApprovalLevelRow({ label, status, name, at, waiting, isReject, reason }
   );
 }
 
+// Tiny chip rendered under the PO Number on the Vendor PO list so the
+// purchase team can see at a glance whether material is unblocked or
+// stuck on payment (mam 2026-05-27). Never rendered on the PO print —
+// this is internal-only. Returns null for legacy POs with no entry
+// (helps distinguish "no entry" from explicit "no advance").
+function PaymentBlockChip({ v }) {
+  if (!v || !v.payment_block_type) return null;
+  const fmt = (n) => '₹' + Math.round(+n || 0).toLocaleString('en-IN');
+  const cleared = v.payment_block_status === 'cleared';
+  const t = v.payment_block_type;
+  let cls = 'bg-gray-100 text-gray-600 border-gray-300';
+  let label = 'No advance';
+  if (cleared) {
+    cls = 'bg-emerald-50 text-emerald-700 border-emerald-300';
+    const when = v.payment_cleared_at ? new Date(v.payment_cleared_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+    label = `✓ Cleared${when ? ' ' + when : ''}`;
+  } else if (t === 'advance') {
+    cls = 'bg-amber-50 text-amber-800 border-amber-300';
+    label = `${fmt(v.payment_block_amount)} Adv pending`;
+  } else if (t === 'old_payment_clear') {
+    cls = 'bg-orange-50 text-orange-800 border-orange-300';
+    label = `${fmt(v.payment_block_amount)} Old due`;
+  }
+  const tooltipParts = [
+    label,
+    v.payment_block_notes,
+    cleared && v.payment_cleared_by_name ? `Cleared by ${v.payment_cleared_by_name}` : null,
+  ].filter(Boolean);
+  return (
+    <div className="mt-0.5">
+      <span className={`inline-block text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border ${cls}`} title={tooltipParts.join(' · ')}>
+        {label}
+      </span>
+    </div>
+  );
+}
+
 export default function Procurement() {
   const { canDelete, canCreate, canEdit, canApprove, user, isAdmin } = useAuth();
   // Site-engineer-style users see only "Raise Indent" — they don't enter
@@ -183,6 +220,11 @@ export default function Procurement() {
       total_amount: v.total_amount || 0,
       advance_required: v.advance_required || 0,
       remarks: v.remarks || '',
+      // Internal payment-block fields (mam 2026-05-27). Pre-fill so editing
+      // shows the current state and the user can change vendor stance mid-deal.
+      payment_block_type: v.payment_block_type || '',
+      payment_block_amount: v.payment_block_amount || '',
+      payment_block_notes: v.payment_block_notes || '',
     });
     setEditPoItems([]);
     setEditPoLocked(false);
@@ -964,6 +1006,10 @@ export default function Procurement() {
     if (form.remarks) fd.append('remarks', form.remarks);
     if (items.length) fd.append('items', JSON.stringify(items));
     if (form.po_file) fd.append('file', form.po_file);
+    // Internal payment-block fields (mam 2026-05-27). Never printed on PO.
+    if (form.payment_block_type) fd.append('payment_block_type', form.payment_block_type);
+    if (form.payment_block_amount) fd.append('payment_block_amount', form.payment_block_amount);
+    if (form.payment_block_notes) fd.append('payment_block_notes', form.payment_block_notes);
 
     try {
       const r = await api.post('/procurement/vendor-po', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
@@ -976,6 +1022,18 @@ export default function Procurement() {
         setTimeout(() => window.open(`/vendor-po/${r.data.id}/print`, '_blank'), 300);
       }
     } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
+  };
+
+  // Mark Payment Cleared — internal one-click action on the Vendor PO list
+  // (mam 2026-05-27). Flips payment_block_status to 'cleared' + stamps user
+  // and timestamp. Server is the source of truth; we just refire the load.
+  const markPaymentCleared = async (vpoId) => {
+    if (!confirm('Mark advance / old payment as CLEARED?\n\nThis is internal-only — it just unblocks material tracking on our side.')) return;
+    try {
+      const r = await api.patch(`/procurement/vendor-po/${vpoId}/clear-payment`);
+      toast.success(r.data?.already ? 'Already cleared' : 'Payment marked cleared');
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   const savePurchaseBill = async (e) => {
@@ -2172,7 +2230,10 @@ export default function Procurement() {
             <tbody>
               {listPg.rows.map(v => (
                 <tr key={v.id}>
-                  <td className="font-medium">{v.po_number}</td>
+                  <td className="font-medium">
+                    {v.po_number}
+                    <PaymentBlockChip v={v} />
+                  </td>
                   {/* Indent column (mam, 2026-05-20). */}
                   <td className="text-xs">
                     <div className="font-mono font-semibold text-blue-800">{v.indent_number || <span className="text-gray-300">—</span>}</div>
@@ -2205,6 +2266,17 @@ export default function Procurement() {
                         (only when already cancelled), Delete (hard, only when
                         no bills / delivery notes block it). */}
                     <div className="flex items-center gap-1">
+                      {/* Mark Payment Cleared (mam 2026-05-27) — internal
+                          one-click unblock when the advance / old payment
+                          has been settled. Only shows when a block is
+                          pending. Tiny green button so it doesn't dominate. */}
+                      {!v.cancelled && v.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
+                        <button onClick={() => markPaymentCleared(v.id)}
+                                className="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300 hover:bg-emerald-600 hover:text-white transition"
+                                title="Mark advance / old payment as cleared (internal)">
+                          ✓ Clear pmt
+                        </button>
+                      )}
                       {/* Edit (pencil) — mam (2026-05-20): "how can i
                           edit po after creation because some time
                           need".  Opens a modal with the safe-to-edit
@@ -3571,6 +3643,68 @@ export default function Procurement() {
             </div>
           )}
 
+          {/* ─── Payment before material (INTERNAL — mam 2026-05-27) ─────
+              Captures vendor's payment expectation for THIS PO. Never printed
+              on the vendor PO; the purchase team uses the chip on the list
+              to know if material is unblocked. Three real-world cases:
+                • No advance  — vendor ships on credit (default)
+                • Advance     — vendor wants ₹X before shipping
+                • Old payment — vendor blocks until old dues clear
+          */}
+          <div className="border border-amber-200 bg-amber-50/40 rounded-lg p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] uppercase font-bold tracking-wide text-amber-700">⚠ Internal — not printed on vendor PO</span>
+            </div>
+            <div className="text-xs font-semibold text-gray-700">Payment before material</div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+              {[
+                { id: 'no_advance',        label: 'No advance',          hint: 'Vendor ships on credit (default)' },
+                { id: 'advance',           label: 'Advance required',    hint: 'Vendor wants ₹X before shipping' },
+                { id: 'old_payment_clear', label: 'Old payment hold',    hint: 'Old dues must clear before shipment' },
+              ].map(opt => {
+                const active = (form.payment_block_type || '') === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, payment_block_type: opt.id, payment_block_amount: opt.id === 'no_advance' ? '' : f.payment_block_amount }))}
+                    className={`text-left rounded-lg border px-3 py-2 transition ${active ? 'bg-amber-600 text-white border-amber-700 shadow' : 'bg-white text-gray-700 border-gray-200 hover:border-amber-400'}`}
+                  >
+                    <div className="font-semibold text-[12px]">{opt.label}</div>
+                    <div className={`text-[10px] ${active ? 'text-white/90' : 'text-gray-500'}`}>{opt.hint}</div>
+                  </button>
+                );
+              })}
+            </div>
+            {(form.payment_block_type === 'advance' || form.payment_block_type === 'old_payment_clear') && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">
+                    {form.payment_block_type === 'advance' ? 'Advance amount (₹)' : 'Old dues amount (₹)'} <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="number" min="1" step="0.01"
+                    className="input text-xs"
+                    placeholder="e.g. 50000"
+                    value={form.payment_block_amount || ''}
+                    onChange={e => setForm(f => ({ ...f, payment_block_amount: e.target.value }))}
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Internal notes (optional)</label>
+                  <input
+                    type="text"
+                    className="input text-xs"
+                    placeholder='e.g. "Last 3 bills overdue 45 days" or "50% advance, balance on delivery"'
+                    value={form.payment_block_notes || ''}
+                    onChange={e => setForm(f => ({ ...f, payment_block_notes: e.target.value }))}
+                    maxLength={500}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
             <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
             <button type="submit" className="btn btn-primary">Create Vendor PO</button>
@@ -4229,6 +4363,68 @@ export default function Procurement() {
                         value={editPoForm.remarks || ''}
                         onChange={e => setEditPoForm({ ...editPoForm, remarks: e.target.value })}
                         placeholder="Any notes about this PO — change reason, supplier follow-up, etc." />
+            </div>
+
+            {/* Payment-before-material (INTERNAL — mam 2026-05-27).
+                Same UI block as Create modal. Vendor stance can change
+                mid-deal (e.g. they get paid for old dues, advance no
+                longer needed) — editing here re-syncs the chip. */}
+            <div className="border border-amber-200 bg-amber-50/40 rounded-lg p-3 space-y-2">
+              <div className="text-[10px] uppercase font-bold tracking-wide text-amber-700">⚠ Internal — not printed on vendor PO</div>
+              <div className="text-xs font-semibold text-gray-700">Payment before material</div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                {[
+                  { id: 'no_advance',        label: 'No advance',          hint: 'Vendor ships on credit (default)' },
+                  { id: 'advance',           label: 'Advance required',    hint: 'Vendor wants ₹X before shipping' },
+                  { id: 'old_payment_clear', label: 'Old payment hold',    hint: 'Old dues must clear before shipment' },
+                ].map(opt => {
+                  const active = (editPoForm.payment_block_type || '') === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setEditPoForm(f => ({ ...f, payment_block_type: opt.id, payment_block_amount: opt.id === 'no_advance' ? '' : f.payment_block_amount }))}
+                      className={`text-left rounded-lg border px-3 py-2 transition ${active ? 'bg-amber-600 text-white border-amber-700 shadow' : 'bg-white text-gray-700 border-gray-200 hover:border-amber-400'}`}
+                    >
+                      <div className="font-semibold text-[12px]">{opt.label}</div>
+                      <div className={`text-[10px] ${active ? 'text-white/90' : 'text-gray-500'}`}>{opt.hint}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              {(editPoForm.payment_block_type === 'advance' || editPoForm.payment_block_type === 'old_payment_clear') && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">
+                      {editPoForm.payment_block_type === 'advance' ? 'Advance amount (₹)' : 'Old dues amount (₹)'} <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number" min="1" step="0.01"
+                      className="input text-xs"
+                      placeholder="e.g. 50000"
+                      value={editPoForm.payment_block_amount || ''}
+                      onChange={e => setEditPoForm(f => ({ ...f, payment_block_amount: e.target.value }))}
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Internal notes (optional)</label>
+                    <input
+                      type="text"
+                      className="input text-xs"
+                      placeholder='e.g. "Last 3 bills overdue 45 days"'
+                      value={editPoForm.payment_block_notes || ''}
+                      onChange={e => setEditPoForm(f => ({ ...f, payment_block_notes: e.target.value }))}
+                      maxLength={500}
+                    />
+                  </div>
+                </div>
+              )}
+              {editPo.payment_block_status === 'cleared' && editPo.payment_cleared_by_name && (
+                <div className="text-[10px] text-emerald-700 italic pt-1">
+                  ✓ Marked cleared by {editPo.payment_cleared_by_name}
+                  {editPo.payment_cleared_at && ' on ' + new Date(editPo.payment_cleared_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                </div>
+              )}
             </div>
 
             {/* Line items — mam (2026-05-25): "i want edit the po after

@@ -2548,6 +2548,23 @@ function initializeDatabase() {
     ['vendor_pos', 'file_path TEXT'],
     ['vendor_pos', 'remarks TEXT'],
     ['vendor_pos', 'expected_receipt_date DATE'],
+    // ─── Payment-before-material tracker (mam 2026-05-27) ───
+    // Between PO sent → vendor ships → bill uploaded, there's a gap where
+    // payment terms control whether the vendor will release material.
+    // 3 real-world cases:
+    //   advance           → vendor wants ₹X advance before shipping
+    //   old_payment_clear → vendor blocks new shipment until old dues clear
+    //   no_advance        → standard credit, vendor ships on goodwill
+    // NULL = legacy PO (created before this field existed) — keeps the
+    // chip off the listing so we can tell legacy from explicit "no_advance".
+    // INTERNAL ONLY: PO print page never renders these (vendor already knows
+    // what they're owed; this is purely for the purchase team's tracker).
+    ['vendor_pos', 'payment_block_type TEXT'],            // 'advance' | 'old_payment_clear' | 'no_advance' | NULL
+    ['vendor_pos', 'payment_block_amount REAL'],          // ₹ owed (advance amt OR old dues)
+    ['vendor_pos', 'payment_block_notes TEXT'],           // internal context, never printed
+    ['vendor_pos', "payment_block_status TEXT DEFAULT 'na'"],  // 'pending' | 'cleared' | 'na'
+    ['vendor_pos', 'payment_cleared_at DATETIME'],        // when "Mark Cleared" clicked
+    ['vendor_pos', 'payment_cleared_by INTEGER REFERENCES users(id)'],
     // Purchase Bills also get an uploaded file (the bill PDF / image / excel)
     ['purchase_bills', 'file_path TEXT'],
     // Dispatch (delivery_notes) — upgraded from a simple "delivery record" to

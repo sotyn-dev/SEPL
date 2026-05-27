@@ -1350,6 +1350,7 @@ router.get('/vendor-po', (req, res) => {
   const rows = db.prepare(`
     SELECT vp.*, v.name as vendor_name,
            ind.indent_number, ind.site_name as indent_site_name,
+           pcu.name as payment_cleared_by_name,
            COALESCE((
              SELECT ROUND(SUM(vpi.amount) * 1.18, 2)
              FROM vendor_po_items vpi
@@ -1358,6 +1359,7 @@ router.get('/vendor-po', (req, res) => {
     FROM vendor_pos vp
     LEFT JOIN vendors v ON vp.vendor_id = v.id
     LEFT JOIN indents ind ON vp.indent_id = ind.id
+    LEFT JOIN users pcu ON vp.payment_cleared_by = pcu.id
     ORDER BY vp.created_at DESC
   `).all();
   // Surface drift so the frontend can show a small warning chip if
@@ -1677,13 +1679,29 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   const remarks = b.remarks || null;
   const expected_receipt_date = b.expected_receipt_date || null;
 
+  // ─── Payment-before-material (INTERNAL ONLY — mam 2026-05-27) ───
+  // Captures whether the vendor needs advance / wants old dues cleared
+  // before shipping, or is fine to ship on credit. Never printed on the
+  // vendor PO; surfaces only on the internal Vendor PO list/detail. NULL
+  // when the user doesn't pick (= legacy/unset, not "no_advance").
+  const VALID_BLOCK_TYPES = ['advance', 'old_payment_clear', 'no_advance'];
+  const pmtType = VALID_BLOCK_TYPES.includes(b.payment_block_type) ? b.payment_block_type : null;
+  const pmtAmount = (pmtType === 'advance' || pmtType === 'old_payment_clear') && +b.payment_block_amount > 0
+    ? +b.payment_block_amount : null;
+  const pmtNotes = b.payment_block_notes ? String(b.payment_block_notes).trim().slice(0, 500) : null;
+  // Status auto-derives: 'no_advance' or NULL → 'na' (nothing to clear);
+  // 'advance' or 'old_payment_clear' → 'pending' until Mark Cleared is hit.
+  const pmtStatus = (pmtType === 'advance' || pmtType === 'old_payment_clear') ? 'pending' : 'na';
+
   try {
     const tx = db.transaction(() => {
       const r = db.prepare(
         `INSERT INTO vendor_pos
-           (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks, expected_receipt_date)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`
-      ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks, expected_receipt_date);
+           (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks, expected_receipt_date,
+            payment_block_type, payment_block_amount, payment_block_notes, payment_block_status)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks, expected_receipt_date,
+            pmtType, pmtAmount, pmtNotes, pmtStatus);
       const vpoId = r.lastInsertRowid;
 
       // Only write line items if the uploader chose to link indent lines.
@@ -1743,6 +1761,24 @@ router.put('/vendor-po/:id', (req, res) => {
   if (b.expected_receipt_date !== undefined) set('expected_receipt_date', b.expected_receipt_date || null);
   if (b.remarks !== undefined)               set('remarks', b.remarks || null);
   if (b.advance_required !== undefined)      set('advance_required', +b.advance_required || 0);
+
+  // Payment-before-material (internal — mam 2026-05-27). Edited via the
+  // same form; if the user switches type from 'advance' → 'no_advance'
+  // we reset status to 'na' and zero the amount so the chip doesn't
+  // dangle. Clearing happens via the dedicated PATCH endpoint below.
+  if (b.payment_block_type !== undefined) {
+    const VALID = ['advance', 'old_payment_clear', 'no_advance'];
+    const pmtType = VALID.includes(b.payment_block_type) ? b.payment_block_type : null;
+    set('payment_block_type', pmtType);
+    set('payment_block_status', (pmtType === 'advance' || pmtType === 'old_payment_clear') ? 'pending' : 'na');
+    if (!(pmtType === 'advance' || pmtType === 'old_payment_clear')) {
+      set('payment_block_amount', null);
+      set('payment_cleared_at', null);
+      set('payment_cleared_by', null);
+    }
+  }
+  if (b.payment_block_amount !== undefined) set('payment_block_amount', +b.payment_block_amount > 0 ? +b.payment_block_amount : null);
+  if (b.payment_block_notes !== undefined)  set('payment_block_notes', b.payment_block_notes ? String(b.payment_block_notes).trim().slice(0, 500) : null);
 
   // High-impact edits: blocked when bills exist (would invalidate them)
   if (b.total_amount !== undefined) {
@@ -1811,6 +1847,32 @@ router.put('/vendor-po/:id', (req, res) => {
   if (sets.length === 0 && itemUpdates === 0) return res.status(400).json({ error: 'No fields to update' });
   if (sets.length > 0) db.prepare(`UPDATE vendor_pos SET ${sets.join(', ')} WHERE id=?`).run(...params, id);
   res.json({ message: 'Updated', header_changed: sets.length, items_changed: itemUpdates });
+});
+
+// PATCH /vendor-po/:id/clear-payment — internal Mark Payment Cleared
+// action (mam 2026-05-27). One-click flip of payment_block_status from
+// 'pending' → 'cleared' + audit stamp (who clicked, when). Lets the
+// purchase team know material is unblocked. Re-runnable: if already
+// cleared, returns the existing cleared row unchanged.
+router.patch('/vendor-po/:id/clear-payment', (req, res) => {
+  const db = getDb();
+  const id = req.params.id;
+  const cur = db.prepare('SELECT id, payment_block_type, payment_block_status FROM vendor_pos WHERE id=?').get(id);
+  if (!cur) return res.status(404).json({ error: 'Vendor PO not found' });
+  if (cur.payment_block_type !== 'advance' && cur.payment_block_type !== 'old_payment_clear') {
+    return res.status(400).json({ error: 'No payment block on this PO to clear' });
+  }
+  if (cur.payment_block_status === 'cleared') {
+    return res.json({ message: 'Already cleared', already: true });
+  }
+  db.prepare(
+    `UPDATE vendor_pos
+       SET payment_block_status='cleared',
+           payment_cleared_at=CURRENT_TIMESTAMP,
+           payment_cleared_by=?
+     WHERE id=?`
+  ).run(req.user.id, id);
+  res.json({ message: 'Payment marked cleared' });
 });
 
 // GET single Vendor PO with its line items — used by the Edit PO modal
