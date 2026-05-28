@@ -112,7 +112,7 @@ router.get('/users', authMiddleware, (req, res) => {
   const whereClause = activeOnly ? 'WHERE u.active = 1' : '';
   const users = db.prepare(`
     SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.active,
-           COALESCE(u.track_location, 1) as track_location, u.created_at,
+           COALESCE(u.track_location, 1) as track_location, u.created_at, u.approval_role,
     GROUP_CONCAT(r.name) as role_names
     FROM users u
     LEFT JOIN user_roles ur ON u.id = ur.user_id
@@ -134,7 +134,7 @@ router.patch('/users/:id/track-location', authMiddleware, adminOnly, (req, res) 
 
 // Update user (admin only)
 router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
-  const { name, email, username, department, phone, role, active, role_ids, password } = req.body;
+  const { name, email, username, department, phone, role, active, role_ids, password, approval_role } = req.body;
   const db = getDb();
 
   try {
@@ -153,6 +153,16 @@ router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
     } else {
       db.prepare('UPDATE users SET name=?, email=?, department=?, phone=?, role=?, active=? WHERE id=?')
         .run(name, email, department, phone, role, active ? 1 : 0, req.params.id);
+    }
+    // Indent approval role (mam 2026-05-28: Nitin Jain couldn't approve
+    // L1 because his approval_role was never set — the boot-time seed
+    // only auto-tags on first run with a NULL value, no admin UI to fix
+    // after). Accept 'l1' | 'l2' | null/'' to clear. Sent separately so
+    // omitting the field doesn't clobber an existing assignment.
+    if (approval_role !== undefined) {
+      const VALID = ['l1', 'l2'];
+      const cleaned = approval_role && VALID.includes(approval_role) ? approval_role : null;
+      db.prepare('UPDATE users SET approval_role=? WHERE id=?').run(cleaned, req.params.id);
     }
   } catch (e) {
     if (e.message.includes('UNIQUE')) {

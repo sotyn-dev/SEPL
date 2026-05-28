@@ -28,7 +28,7 @@ export default function UserManagement() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ name: '', email: '', username: '', password: '', role: 'user', department: '', phone: '', active: true });
+    setForm({ name: '', email: '', username: '', password: '', role: 'user', department: '', phone: '', active: true, approval_role: '' });
     setSelectedRoles([]);
     setModal(true);
   };
@@ -204,7 +204,11 @@ export default function UserManagement() {
                 <td className="font-mono text-xs text-red-700">{u.username || <span className="text-gray-300">—</span>}</td>
                 <td className="text-gray-600">{u.email}</td>
                 <td>{u.phone}</td>
-                <td><span className={`badge ${u.role === 'admin' ? 'badge-red' : u.role === 'manager' ? 'badge-purple' : 'badge-blue'}`}>{u.role}</span></td>
+                <td>
+                  <span className={`badge ${u.role === 'admin' ? 'badge-red' : u.role === 'manager' ? 'badge-purple' : 'badge-blue'}`}>{u.role}</span>
+                  {u.approval_role === 'l1' && <span className="ml-1 inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title="L1 Indent Approver">L1</span>}
+                  {u.approval_role === 'l2' && <span className="ml-1 inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 border border-purple-300" title="L2 Indent Approver">L2</span>}
+                </td>
                 <td>
                   <div className="flex flex-wrap gap-1">
                     {u.role_names ? u.role_names.split(',').map((r, i) => (
@@ -266,6 +270,18 @@ export default function UserManagement() {
                 <option value="manager">Manager</option>
                 <option value="admin">Admin</option>
               </select>
+            </div>
+            {/* Indent approval gate (mam 2026-05-28). Only L1-tagged users
+                can approve L1 step; only L2-tagged can approve L2.
+                Admin always passes either gate as a safety net. */}
+            <div>
+              <label className="label">Indent Approval Role</label>
+              <select className="select" value={form.approval_role || ''} onChange={e => setForm({...form, approval_role: e.target.value})}>
+                <option value="">— none —</option>
+                <option value="l1">L1 Approver (first sign-off)</option>
+                <option value="l2">L2 Approver (final sign-off)</option>
+              </select>
+              <p className="text-[10px] text-gray-400 mt-0.5">Two-level indent approval. Only one L1 and one L2 are active at a time.</p>
             </div>
           </div>
 

@@ -898,7 +898,12 @@ router.put('/indents/:id', (req, res) => {
           if (cur2.status === 'submitted' && cur2.l1_status === 'pending') {
             // L1 approve — gate by role, then write l1_* and flip status='l1_approved'.
             if (!canActL1) {
-              return res.status(403).json({ error: 'Only the designated L1 approver (Nitin Jain ji) can approve L1' });
+              // Surface WHO is blocked and WHY so admin can fix it from
+              // User Management without SSHing into the box (mam 2026-05-28).
+              const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
+              return res.status(403).json({
+                error: `Not authorised for L1 approval. You're signed in as "${actorName}" (approval_role=${actor.approval_role || 'none'}). Admin → User Management → edit your user → set Indent Approval Role = L1.`,
+              });
             }
             db.prepare(
               `UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP,
@@ -910,7 +915,10 @@ router.put('/indents/:id', (req, res) => {
           if (cur2.status === 'l1_approved' && cur2.l2_status === 'pending') {
             // L2 approve — gate by role + sequence + self-double-sign block.
             if (!canActL2) {
-              return res.status(403).json({ error: 'Only the designated L2 approver (Nitin Sir) can approve L2' });
+              const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
+              return res.status(403).json({
+                error: `Not authorised for L2 approval. You're signed in as "${actorName}" (approval_role=${actor.approval_role || 'none'}). Admin → User Management → edit your user → set Indent Approval Role = L2.`,
+              });
             }
             if (cur2.l1_by && cur2.l1_by === actor.id) {
               return res.status(400).json({ error: 'Same user cannot do both L1 and L2 — get a second pair of eyes' });
