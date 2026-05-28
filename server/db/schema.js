@@ -2888,6 +2888,22 @@ function initializeDatabase() {
     if (fix.changes > 0) console.log(`[migration] indents.raised_by_name — backfilled ${fix.changes} numeric rows to user names`);
   } catch (e) { console.error('[migration] raised_by_name backfill failed:', e.message); }
 
+  // Mam (2026-05-28 follow-up): "previous show wrong raise by name so
+  // blank here". The numeric→name recovery above isn't reliable — the
+  // form bug stored the picked-employee-id, but the indents were often
+  // raised by a DIFFERENT person, so mapping the id back gives the
+  // wrong name. Blank every existing raised_by_name once. New indents
+  // created via the fixed form will store the correct name from today
+  // onwards. Tracked by app_settings flag so it runs exactly once.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='blank_legacy_raised_by_name_v1'").get();
+    if (!done) {
+      const blanked = db.prepare(`UPDATE indents SET raised_by_name = NULL WHERE raised_by_name IS NOT NULL`).run();
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('blank_legacy_raised_by_name_v1', '1')").run();
+      if (blanked.changes > 0) console.log(`[migration] indents.raised_by_name — blanked ${blanked.changes} legacy rows (mam: previous names wrong)`);
+    }
+  } catch (e) { console.error('[migration] blank legacy raised_by_name failed:', e.message); }
+
   // Drop indents.status CHECK entirely (mam 2026-05-28: L1 Nitin Jain
   // hit "CHECK constraint failed: status IN (...)" on Approve L1).
   //

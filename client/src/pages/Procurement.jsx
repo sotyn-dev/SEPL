@@ -737,13 +737,13 @@ export default function Procurement() {
       const data = r.data;
       setForm({
         site_name: data.site_name || '',
-        // Legacy form bug stored numeric user-id in raised_by_name.
-        // When loading for edit, prefer created_by_name if the saved
-        // value looks numeric so the SearchableSelect doesn't show "10"
-        // as the picked employee.
+        // Legacy rows have raised_by_name blanked (mam 2026-05-28 —
+        // previous names were wrong). For edits, just show whatever's
+        // currently in the field, or empty if NULL — let the user pick
+        // the correct person from the SearchableSelect.
         raised_by_name: (data.raised_by_name && !/^\d+(\.\d+)?$/.test(String(data.raised_by_name).trim()))
           ? data.raised_by_name
-          : (data.created_by_name || ''),
+          : '',
         notes: data.notes || '',
         indent_category: data.indent_category || 'material',
       });
@@ -1627,13 +1627,15 @@ export default function Procurement() {
                     })()}
                   </td>
                   <td>{
-                    /* Display heuristic: if raised_by_name accidentally
-                       got saved as a numeric employee id (legacy form
-                       bug fixed above), fall back to created_by_name
-                       so the column never shows "10.0" / "54.0". */
+                    /* Show only the explicit raised_by_name. Mam
+                       2026-05-28: legacy rows had wrong names from
+                       the form bug, so we blank them at the DB level
+                       and rely on this exact field going forward. No
+                       fallback to created_by_name — that's a
+                       different person and would mislead. */
                     (i.raised_by_name && !/^\d+(\.\d+)?$/.test(String(i.raised_by_name).trim()))
                       ? i.raised_by_name
-                      : (i.created_by_name || <span className="text-gray-400">—</span>)
+                      : <span className="text-gray-400">—</span>
                   }</td>
                   <td>
                     {items.length === 0
