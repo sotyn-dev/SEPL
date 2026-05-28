@@ -357,7 +357,20 @@ export default function Layout() {
       {/* Sidebar — royal blue brand.  Second pass deepened from
           blue-800→blue-900 to blue-900→blue-950 to match the
           saturated tone in mam's reference image (2026-05-20). */}
-      <aside className={`fixed md:relative z-40 h-full bg-gradient-to-b from-blue-900 to-blue-950 text-white flex flex-col transition-transform duration-300 flex-shrink-0 ${isMobile ? 'w-[80vw] max-w-[260px]' : 'w-64'} ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      {/* Sidebar — width drops to 0 on desktop when collapsed so the
+          main content reclaims the 256px (mam 2026-05-28: "if i hide
+          slide bar then i think it should be expend dynamically").
+          Mobile still uses translate-x-full so the sidebar slides
+          out as an overlay rather than squeezing the page. */}
+      {/* transition-transform (not transition-all) — width changes
+          on flex items don't reflow reliably when 'all' is being
+          transitioned, so we let desktop's w-0 ↔ w-64 snap instantly
+          and reserve the animation for mobile's slide-in. */}
+      <aside className={`fixed md:relative z-40 h-full bg-gradient-to-b from-blue-900 to-blue-950 text-white flex flex-col transition-transform duration-300 flex-shrink-0 overflow-hidden min-w-0 ${
+        isMobile
+          ? `w-[80vw] max-w-[260px] ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`
+          : (sidebarOpen ? 'w-64' : 'w-0')
+      }`}>
         <div className="p-4 border-b border-white/10 flex justify-between items-center">
           <div>
             <div className="flex items-center gap-2">
