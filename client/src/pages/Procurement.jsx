@@ -3593,8 +3593,16 @@ export default function Procurement() {
                         {/* Desktop column headers — InfoTooltip on Sub-Item
                             explains what's required + warns about dept-mismatch
                             (mam 2026-05-25: "INFO BUTTON SHOW ON ITEM NAME ALSO"). */}
+                        {/* Required-by column removed (mam 2026-05-28: "in
+                            material required by date not need remove here so
+                            can item width big"). The 3 cols it occupied are
+                            given to Sub-Item so the picker doesn't truncate
+                            to "[FF2635] MS P…". required_date stays in the
+                            data model — flat-layout categories (RGP / Rental
+                            / Non-Schedule) still expose it, and the Vendor
+                            PO print handles null gracefully. */}
                         <div className="hidden md:grid gap-2 text-[10px] font-bold text-gray-500 uppercase px-1" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr)) auto' }}>
-                          <div className="col-span-4 flex items-center gap-1">
+                          <div className="col-span-7 flex items-center gap-1">
                             Sub-Item (Item Master) <span className="text-red-500">*</span>
                             <InfoTooltip text={`Pick from Item Master.  Each BOQ section locks to ONE sub-item — if you need more components under the same BOQ, click "+ Add another BOQ item" and pick this BOQ again.\n\nWarning: if the picked sub-item's department differs from the BOQ's category, you'll see a yellow toast — common cause of bad indents (e.g. picking a 12-way DB under a CPVC pipes BOQ).`} />
                           </div>
@@ -3602,7 +3610,6 @@ export default function Procurement() {
                           <div className="col-span-2">Type</div>
                           <div className="col-span-2">Qty</div>
                           <div className="col-span-2">Unit</div>
-                          <div className="col-span-3">Required by</div>
                           <div></div>
                         </div>
 
@@ -3664,11 +3671,8 @@ export default function Procurement() {
                           // emitZeroOnEmpty keeps the same number contract
                           // for downstream code that expects a numeric quantity.
                           const qtyInput = <NumInput className="input text-base font-bold text-right" min="0" placeholder="Qty" value={item.quantity} emitZeroOnEmpty onChange={v => { const n = [...indentItems]; n[i].quantity = v; setIndentItems(n); }} />;
-                          // Per-item required-by date — mam (2026-05-21):
-                          // each row on the Vendor PO print should show
-                          // its own "DUE ON" date, not one PO-level
-                          // date stamped on every line.
-                          const reqDateInput = <input className="input text-sm" type="date" value={item.required_date || ''} onChange={e => { const n = [...indentItems]; n[i].required_date = e.target.value; setIndentItems(n); }} />;
+                          // (Required-by date removed from BOQ-grouped layout
+                          // mam 2026-05-28 — see header note above.)
                           // Unit dropdown — UNIT_OPTIONS covers the common cases.
                           // If the BOQ / Item Master has pre-filled a unit that
                           // isn't in the list (e.g. 'metres'), keep it as an
@@ -3716,21 +3720,21 @@ export default function Procurement() {
                                   <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Unit</label>{unitInput}</div>
                                   <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Type</label>{typeBox}</div>
                                 </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                  <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Make</label>{makeInput}</div>
-                                  <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Required by</label>{reqDateInput}</div>
+                                <div>
+                                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-0.5">Make</label>
+                                  {makeInput}
                                 </div>
                               </div>
 
-                              {/* DESKTOP — single row */}
+                              {/* DESKTOP — single row (no Required by; see
+                                  header comment above for context) */}
                               <div className="hidden md:block">
                                 <div className="grid gap-2 items-center bg-white border rounded-lg p-2" style={{ gridTemplateColumns: 'repeat(15, minmax(0, 1fr)) auto' }}>
-                                  <div className="col-span-4">{masterPicker}</div>
+                                  <div className="col-span-7">{masterPicker}</div>
                                   <div className="col-span-2">{makeInput}</div>
                                   <div className="col-span-2">{typeBox}</div>
                                   <div className="col-span-2">{qtyInput}</div>
                                   <div className="col-span-2">{unitInput}</div>
-                                  <div className="col-span-3" title="Required-by date for this item — shows on Vendor PO 'DUE ON' column">{reqDateInput}</div>
                                   {removeBtn}
                                 </div>
                               </div>
