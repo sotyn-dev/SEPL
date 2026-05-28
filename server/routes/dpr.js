@@ -506,6 +506,18 @@ try { getDb().exec(`ALTER TABLE dpr ADD COLUMN week_plan_locked_by INTEGER REFER
 // from the item details when both are set.
 try { getDb().exec(`ALTER TABLE dpr ADD COLUMN planned_po_item_id INTEGER REFERENCES po_items(id)`); } catch (_) {}
 try { getDb().exec(`ALTER TABLE dpr ADD COLUMN planned_qty REAL DEFAULT 0`); } catch (_) {}
+// Separate planned cost column so the daily-submit upsert can preserve
+// the plan figure while overwriting grand_total_b with actuals (mam,
+// 2026-05-28: "DPR list — plan cost vs actual cost side-by-side").
+// One-time backfill: rows still in planned-only state had their plan
+// stored in grand_total_b under the old scheme; move it across once.
+try { getDb().exec(`ALTER TABLE dpr ADD COLUMN planned_cost_b REAL DEFAULT 0`); } catch (_) {}
+try {
+  getDb().prepare(
+    `UPDATE dpr SET planned_cost_b = grand_total_b, grand_total_b = 0
+     WHERE is_planned_template = 1 AND (planned_cost_b IS NULL OR planned_cost_b = 0) AND grand_total_b > 0`
+  ).run();
+} catch (_) {}
 
 // Returns Mon-Sun (or any 7 consecutive days starting at week_start)
 // for one site, blending planned + actual fields.  Multi-item per
@@ -573,14 +585,14 @@ router.post('/plan-week', requirePermission('dpr', 'create'), (req, res) => {
   // Day-level planned fields. Single planned_po_item_id is kept for
   // legacy callers but the multi-item flow lives in dpr_work_items.
   const updateRow = db.prepare(`
-    UPDATE dpr SET planned_description = ?, planned_manpower = ?, grand_total_b = ?,
+    UPDATE dpr SET planned_description = ?, planned_manpower = ?, planned_cost_b = ?,
                    week_plan_locked_at = CURRENT_TIMESTAMP, week_plan_locked_by = ?
     WHERE id = ?
   `);
   const insertRow = db.prepare(`
     INSERT INTO dpr (
       site_id, report_date, submitted_by, planned_description, planned_manpower,
-      grand_total_b, is_planned_template, week_plan_locked_at, week_plan_locked_by
+      planned_cost_b, is_planned_template, week_plan_locked_at, week_plan_locked_by
     ) VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, ?)
   `);
   // BOQ item metadata used to auto-format the planned summary text.

@@ -139,7 +139,7 @@ export default function DPR() {
   // Mam: 'AT LEAST OPTION OF 5 CONTRACTOR' — start with 5 blank rows; "+ Add"
   // appends more, "×" removes (only when more than 5). Empty rows are
   // dropped server-side so we never save junk.
-  const [contractors, setContractors] = useState(() => Array.from({ length: 5 }, () => ({ name: '', manpower: 0 })));
+  const [contractors, setContractors] = useState(() => [{ name: '', manpower: 0 }]);
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const [poItemsForSite, setPoItemsForSite] = useState([]);
   // Server-side diagnostic when po_items can't be fetched (no BB, no
@@ -449,8 +449,20 @@ export default function DPR() {
             <input type="date" className="input w-48" value={filterDate} onChange={e => { setFilterDate(e.target.value); setDateTouched(true); }} />
             <div className="flex gap-2">
               <button onClick={() => exportCsv('dpr-reports',
-                ['Site','Date','Shift','Submitted By','Status','Total A','Cost B','P/L','Approval'],
-                dprs.map(d => [d.site_name, d.report_date, d.shift, d.submitted_by_name, d.overall_status, d.grand_total_a, d.grand_total_b, d.profit_loss, d.approval_status]))}
+                ['Site','Date','By','Status','Plan Cost (B-plan)','Actual Cost (B-actual)','Actual Total (A)','Variance (B-act − B-plan)','Approval'],
+                dprs.map(d => {
+                  const planned = !!d.is_planned_template;
+                  const planB = +d.planned_cost_b || 0;
+                  const actB = planned ? '' : (+d.grand_total_b || 0);
+                  const actA = planned ? '' : (+d.grand_total_a || 0);
+                  const variance = (!planned && planB > 0) ? ((+d.grand_total_b || 0) - planB) : '';
+                  return [
+                    d.site_name, d.report_date, d.submitted_by_name,
+                    planned ? 'PLANNED' : 'SUBMITTED',
+                    planB || '', actB, actA, variance,
+                    planned ? '' : d.approval_status,
+                  ];
+                }))}
                 className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
               {/* Weekly planning entry-point (mam, 2026-05-16). Pre-fills
                   default site = the one in the daily form's site_id if
@@ -470,13 +482,20 @@ export default function DPR() {
                   { type: 'TA/DA', qty: 1, rate: 0, amount: 0, auto: true, ta_da_count: 0 },
                 ]);
                 setMachinery([{ equipment: '', quantity: 1, hours_used: 0, condition: 'working' }]);
-                setContractors(Array.from({ length: 5 }, () => ({ name: '', manpower: 0 })));
+                setContractors([{ name: '', manpower: 0 }]);
                 setModal(true);
               }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit DPR</button>
             </div>
           </div>
           <div className="card p-0"><table className="freeze-head">
-            <thead><tr><th>Site</th><th>Date</th><th>Shift</th><th>By</th><th>Status</th><th>Total(A)</th><th>Cost(B)</th><th>P/L</th><th>Approval</th><th>Actions</th></tr></thead>
+            <thead><tr>
+              <th>Site</th><th>Date</th><th>By</th><th>Status</th>
+              <th>Plan Cost<div className="text-[10px] font-normal text-gray-400">(B-plan)</div></th>
+              <th>Actual Cost<div className="text-[10px] font-normal text-gray-400">(B-actual)</div></th>
+              <th>Actual Total(A)<div className="text-[10px] font-normal text-gray-400">(revenue)</div></th>
+              <th>Variance<div className="text-[10px] font-normal text-gray-400">(B-act − B-plan)</div></th>
+              <th>Approval</th><th>Actions</th>
+            </tr></thead>
             <tbody>
               {dprs
                 .filter(d => {
@@ -485,17 +504,33 @@ export default function DPR() {
                   if (reportFilter === 'billing') return d.billing_ready === 1 || d.billing_ready === true;
                   return true;
                 })
-                .map(d => (
+                .map(d => {
+                  const planned = !!d.is_planned_template;
+                  const planB = +d.planned_cost_b || 0;
+                  const actB = +d.grand_total_b || 0;
+                  const actA = +d.grand_total_a || 0;
+                  const hasPlan = planB > 0;
+                  const variance = (!planned && hasPlan) ? (actB - planB) : null;
+                  return (
                 <tr key={d.id}>
-                  <td className="font-medium">{d.site_name}</td><td>{d.report_date}</td><td className="capitalize text-xs">{d.shift || '-'}</td>
-                  <td>{d.submitted_by_name}</td><td><StatusBadge status={d.overall_status} /></td>
-                  <td className="font-semibold text-emerald-600 text-sm">Rs {(d.grand_total_a || 0).toLocaleString()}</td>
-                  <td className="font-semibold text-red-600 text-sm">Rs {(d.grand_total_b || 0).toLocaleString()}</td>
-                  <td className={`font-bold text-sm ${(d.profit_loss || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>Rs {(d.profit_loss || 0).toLocaleString()}</td>
-                  <td><StatusBadge status={d.approval_status} /></td>
+                  <td className="font-medium">{d.site_name}</td>
+                  <td>{d.report_date}</td>
+                  <td>{d.submitted_by_name}</td>
+                  <td>
+                    {planned
+                      ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"><FiCalendar size={10}/> PLANNED</span>
+                      : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">✓ SUBMITTED</span>}
+                  </td>
+                  <td className="font-semibold text-sky-700 text-sm">{hasPlan ? `Rs ${planB.toLocaleString()}` : <span className="text-gray-300">—</span>}</td>
+                  <td className="font-semibold text-red-600 text-sm">{planned ? <span className="text-gray-300">—</span> : `Rs ${actB.toLocaleString()}`}</td>
+                  <td className="font-semibold text-emerald-600 text-sm">{planned ? <span className="text-gray-300">—</span> : `Rs ${actA.toLocaleString()}`}</td>
+                  <td className={`font-bold text-sm ${variance === null ? '' : (variance > 0 ? 'text-red-600' : variance < 0 ? 'text-emerald-600' : 'text-gray-500')}`}>
+                    {variance === null ? <span className="text-gray-300">—</span> : `${variance > 0 ? '+' : variance < 0 ? '−' : ''}Rs ${Math.abs(variance).toLocaleString()}`}
+                  </td>
+                  <td>{planned ? <span className="text-gray-300">—</span> : <StatusBadge status={d.approval_status} />}</td>
                   <td><div className="flex gap-1">
                     <button onClick={() => viewDpr(d.id)} className="p-1 hover:bg-red-50 rounded text-red-600"><FiEye size={14} /></button>
-                    {d.approval_status === 'pending' && canApprove('dpr') && <>
+                    {!planned && d.approval_status === 'pending' && canApprove('dpr') && <>
                       <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5">Approve+Bill</button>
                       <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5">Reject</button>
                     </>}
@@ -506,7 +541,8 @@ export default function DPR() {
                     }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
                   </div></td>
                 </tr>
-              ))}
+                  );
+                })}
               {dprs.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No DPR for this date</td></tr>}
             </tbody>
           </table></div>
@@ -612,7 +648,7 @@ export default function DPR() {
                       <input className="input col-span-4" type="number" placeholder="Manpower"
                         value={c.manpower || ''}
                         onChange={e => { const n = [...contractors]; n[i] = { ...n[i], manpower: +e.target.value || 0 }; setContractors(n); }} />
-                      {contractors.length > 5 ? (
+                      {contractors.length > 1 ? (
                         <button type="button"
                           onClick={() => setContractors(contractors.filter((_, idx) => idx !== i))}
                           className="col-span-1 text-gray-400 hover:text-red-600 text-lg leading-none">×</button>
