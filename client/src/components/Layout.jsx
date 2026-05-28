@@ -40,7 +40,9 @@ import {
   // Executive children
   FiCrosshair, FiMonitor, FiCompass,
   // Admin children + Settings children
-  FiActivity, FiMapPin, FiDatabase, FiMail, FiUserCheck, FiSearch
+  FiActivity, FiMapPin, FiDatabase, FiMail, FiUserCheck, FiSearch,
+  // HRMS · Sub-contractor Hiring workflow (mam 2026-05-28)
+  FiGitMerge,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 
@@ -112,6 +114,9 @@ const SIDEBAR_GROUPS = [
   // open-group localStorage continue to work without a one-off migration.
   { id: 'people', label: 'HRMS', icon: FiUsers, items: [
     { path: '/hr',              label: 'Hiring',                    icon: FiUserPlus,   module: 'hr' },
+    // Mam 2026-05-28: 14-step / 2-phase sub-con hiring tracker, mirrors
+    // the Hiring funnel but for sub-contractors (per the flowchart).
+    { path: '/subcon-hiring',   label: 'Sub-contractor Hiring',     icon: FiGitMerge,   module: 'subcon_hiring' },
     { path: '/induction',       label: 'Onboarding',                icon: FiHelpCircle, module: null },
     { path: '/training',        label: 'Training',                  icon: FiBookOpen,   module: null },
     { path: '/attendance',      label: 'Attendance',                icon: FiCalendar,   module: 'attendance' },

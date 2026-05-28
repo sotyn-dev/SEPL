@@ -3584,7 +3584,10 @@ in your first week. If a process feels broken, raise a Help Ticket
     // interviews / offers / onboarding.  Gated behind one permission
     // string so individual roles can be tuned (HR Manager full, Hiring
     // Manager view + create, Interviewer view + edit feedback).
-    'hr_system'
+    'hr_system',
+    // Mam (2026-05-28): Sub-contractor Hiring workflow tracker —
+    // 14-step pre-award + onboarding flow per site.
+    'subcon_hiring',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
