@@ -2867,6 +2867,62 @@ function initializeDatabase() {
     console.error(e.stack);
   }
 
+  // Drop indents.status CHECK entirely (mam 2026-05-28: L1 Nitin Jain
+  // hit "CHECK constraint failed: status IN (...)" on Approve L1).
+  //
+  // Root cause: original constraint listed
+  //   ('draft','submitted','approved','rejected','po_sent','dispatched','received')
+  // but the 2-level approval rollout added 'l1_approved' as an
+  // intermediate state. SQLite can't ALTER a CHECK so existing DBs
+  // hit the constraint the moment L1 fires. Strip the CHECK — the
+  // route layer validates statuses, and dropping it also future-
+  // proofs against any new states (e.g. 'l2_approved' if someone
+  // ever wants the L2-only intermediate).
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='indents'").get();
+    if (row && /CHECK\s*\(\s*status\s+IN/i.test(row.sql)) {
+      console.log('[migration] ════════════════════════════════════════════');
+      console.log('[migration] indents.status CHECK detected — rebuilding to drop CHECK');
+      db.pragma('foreign_keys = OFF');
+      try { db.exec('DROP TABLE IF EXISTS indents_new'); } catch (_) {}
+
+      // Handle both `CREATE TABLE indents` and `CREATE TABLE "indents"`
+      // shapes — SQLite normalises to the quoted form after a prior
+      // rebuild, and our regex must catch either.
+      const newSql = row.sql
+        .replace(/CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(?:"indents"|indents)/i, 'CREATE TABLE indents_new')
+        .replace(/,?\s*CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i, '');
+      if (newSql === row.sql || !/CREATE TABLE indents_new/.test(newSql)) {
+        throw new Error('regex did not produce indents_new — sql shape unexpected:\n' + row.sql.slice(0, 200));
+      }
+
+      const cols = db.prepare('PRAGMA table_info(indents)').all().map(c => c.name);
+      const colList = cols.map(c => `"${c}"`).join(', ');
+
+      db.exec('BEGIN');
+      db.exec(newSql);
+      db.exec(`INSERT INTO indents_new (${colList}) SELECT ${colList} FROM indents`);
+      db.exec('DROP TABLE indents');
+      db.exec('ALTER TABLE indents_new RENAME TO indents');
+      db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
+
+      const after = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='indents'").get();
+      if (after && /CHECK\s*\(\s*status\s+IN/i.test(after.sql)) {
+        throw new Error('verification failed — CHECK still present after rebuild');
+      }
+      console.log('[migration] ✓ indents.status CHECK removed — l1_approved now allowed');
+      console.log('[migration] ════════════════════════════════════════════');
+    } else if (row) {
+      console.log('[migration] indents.status CHECK already gone — skipping');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (_) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.error('[migration] ✗ indents.status CHECK drop FAILED:', e.message);
+    console.error(e.stack);
+  }
+
   // Relax attendance.status CHECK to allow 'short_day' (4-8 hours worked).
   // The punch-out code sets status='short_day' but the original CHECK
   // constraint omitted it, so existing DBs hit "CHECK constraint failed"
@@ -2929,9 +2985,16 @@ function initializeDatabase() {
   // Relax indents.status CHECK to allow 'l1_approved' — the intermediate
   // state when Nitin Jain ji has approved L1 but Nitin Sir's L2 sign-off
   // is still pending. Same rebuild pattern as attendance / leave above.
+  //
+  // Mam 2026-05-28 follow-up: the migration earlier in this file now
+  // STRIPS the CHECK entirely, so the table no longer has any status
+  // CHECK at all on freshly-migrated DBs. Guard this block with an
+  // extra "CHECK still present" condition so it doesn't keep firing
+  // on every boot and barfing 'table indents already exists' (the
+  // regex below doesn't handle the quoted "indents" form).
   try {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='indents'").get();
-    if (row && !/l1_approved/.test(row.sql)) {
+    if (row && /CHECK\s*\(\s*status\s+IN/i.test(row.sql) && !/l1_approved/.test(row.sql)) {
       db.exec('BEGIN');
       const newSql = row.sql
         .replace(/CREATE TABLE\s+indents/i, 'CREATE TABLE indents_new')
