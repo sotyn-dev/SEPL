@@ -87,7 +87,6 @@ const SIDEBAR_GROUPS = [
   // Dispatch" to match the page header.
   { id: 'procurement', label: 'Procurement', icon: FiShoppingBag, items: [
     { path: '/item-master',    label: 'Items',              icon: FiGrid,         module: 'item_master' },
-    { path: '/sub-contractors',label: 'Contractors',        icon: FiHexagon,      module: 'sub_contractors' },
     { path: '/price-required', label: 'RFQ Queue',          icon: FiInbox,        module: null },
     { path: '/vendors',        label: 'Vendors',            icon: FiTag,          module: 'vendors' },
     { path: '/procurement',    label: 'Indent to Dispatch', icon: FiTruck,        module: 'procurement' },
@@ -107,13 +106,18 @@ const SIDEBAR_GROUPS = [
     { path: '/cashflow',         label: 'Cash Flow',   icon: FiRefreshCw,  module: 'cashflow' },
     { path: '/expenses',         label: 'Expenses',    icon: FiPieChart,   module: 'expenses' },
   ]},
-  { id: 'people', label: 'People', icon: FiUsers, items: [
-    { path: '/hr',         label: 'Hiring',     icon: FiUserPlus,    module: 'hr' },
-    { path: '/induction',  label: 'Onboarding', icon: FiHelpCircle,  module: null },
-    { path: '/training',   label: 'Training',   icon: FiBookOpen,    module: null },
-    { path: '/attendance', label: 'Attendance', icon: FiCalendar,    module: 'attendance' },
-    { path: '/payroll',    label: 'Payroll',    icon: FiDollarSign,  module: 'payroll' },
-    { path: '/employees',  label: 'Employees',  icon: FiAtSign,      module: 'employees' },
+  // 'People' renamed → 'HRMS' (mam 2026-05-28). Sub-contractor Master
+  // moved here from Procurement — labour/manpower belongs with HR, not
+  // material procurement. id stays 'people' so saved accordion state +
+  // open-group localStorage continue to work without a one-off migration.
+  { id: 'people', label: 'HRMS', icon: FiUsers, items: [
+    { path: '/hr',              label: 'Hiring',                    icon: FiUserPlus,   module: 'hr' },
+    { path: '/induction',       label: 'Onboarding',                icon: FiHelpCircle, module: null },
+    { path: '/training',        label: 'Training',                  icon: FiBookOpen,   module: null },
+    { path: '/attendance',      label: 'Attendance',                icon: FiCalendar,   module: 'attendance' },
+    { path: '/payroll',         label: 'Payroll',                   icon: FiDollarSign, module: 'payroll' },
+    { path: '/employees',       label: 'Employees',                 icon: FiAtSign,     module: 'employees' },
+    { path: '/sub-contractors', label: 'Sub-contractor Master Detail', icon: FiHexagon, module: 'sub_contractors' },
   ]},
   { id: 'inventory', label: 'Inventory', icon: FiPackage, items: [
     { path: '/rental-tools',   label: 'Tool Rentals', icon: FiClock,    module: 'rental_tools' },
