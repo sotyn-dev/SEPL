@@ -2867,6 +2867,27 @@ function initializeDatabase() {
     console.error(e.stack);
   }
 
+  // One-time backfill: legacy form bug (mam 2026-05-28) stored the
+  // employee's numeric user_id in indents.raised_by_name instead of
+  // their name, so the column displayed "10.0" / "54.0" / "3.0".
+  // Recover the actual name by JOIN on users.id.
+  //
+  // Safety: only updates rows where raised_by_name contains ONLY
+  // digits + optional decimal, AND the integer value matches a real
+  // user. Won't touch legitimate names that happen to contain digits.
+  try {
+    const fix = db.prepare(`
+      UPDATE indents
+         SET raised_by_name = (SELECT name FROM users WHERE id = CAST(indents.raised_by_name AS INTEGER))
+       WHERE raised_by_name IS NOT NULL
+         AND raised_by_name NOT GLOB '*[^0-9.]*'   -- SQLite uses ^ for class negation, not !
+         AND raised_by_name GLOB '[0-9]*'
+         AND CAST(raised_by_name AS INTEGER) > 0
+         AND CAST(raised_by_name AS INTEGER) IN (SELECT id FROM users)
+    `).run();
+    if (fix.changes > 0) console.log(`[migration] indents.raised_by_name — backfilled ${fix.changes} numeric rows to user names`);
+  } catch (e) { console.error('[migration] raised_by_name backfill failed:', e.message); }
+
   // Drop indents.status CHECK entirely (mam 2026-05-28: L1 Nitin Jain
   // hit "CHECK constraint failed: status IN (...)" on Approve L1).
   //

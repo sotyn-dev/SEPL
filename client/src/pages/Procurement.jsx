@@ -737,8 +737,15 @@ export default function Procurement() {
       const data = r.data;
       setForm({
         site_name: data.site_name || '',
-        raised_by_name: data.raised_by_name || '',
+        // Legacy form bug stored numeric user-id in raised_by_name.
+        // When loading for edit, prefer created_by_name if the saved
+        // value looks numeric so the SearchableSelect doesn't show "10"
+        // as the picked employee.
+        raised_by_name: (data.raised_by_name && !/^\d+(\.\d+)?$/.test(String(data.raised_by_name).trim()))
+          ? data.raised_by_name
+          : (data.created_by_name || ''),
         notes: data.notes || '',
+        indent_category: data.indent_category || 'material',
       });
       // Fetch BOQ items inline so we have the list synchronously available
       // for the back-fill below.  reloadBoq() sets state but doesn't return
@@ -1559,7 +1566,7 @@ export default function Procurement() {
               to see Approval / Actions (mam 2026-05-25 — was "time wasting"
               to scroll-end-then-back to read row labels). */}
           <div className="card p-0 overflow-x-auto"><table className="freeze-head freeze-col">
-            <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
+            <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Category</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
             <tbody>
               {indPg.rows.map(i => {
                 const items = i.items || [];
@@ -1574,33 +1581,34 @@ export default function Procurement() {
                       </button>
                     )}
                   </td>
-                  <td className="font-medium">
-                    <div className="flex items-center gap-1 flex-wrap">
-                      <span>{i.indent_number}</span>
-                      {/* Category chip (mam 2026-05-26) — only shown for
-                          non-Material categories to keep the listing clean
-                          for the common case. Hover for the full label. */}
-                      {(() => {
-                        const c = i.indent_category || 'material';
-                        if (c === 'material') return null;
-                        const cfg = {
-                          rgp:                 { label: 'RGP',    color: 'bg-purple-100 text-purple-700 border-purple-200', full: 'RGP (return goods particulars)' },
-                          extra_schedule:      { label: 'EXT-S',  color: 'bg-amber-100 text-amber-700 border-amber-200',    full: 'Extra · Schedule (over-BOQ qty)' },
-                          extra_non_schedule:  { label: 'EXT-NS', color: 'bg-orange-100 text-orange-700 border-orange-200', full: 'Extra · Non-Schedule (outside BOQ)' },
-                          rental:              { label: 'RENT',   color: 'bg-cyan-100 text-cyan-700 border-cyan-200',       full: 'Rental (tools on rent)' },
-                        }[c];
-                        if (!cfg) return null;
-                        return (
-                          <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${cfg.color}`} title={cfg.full}>
-                            {cfg.label}
-                          </span>
-                        );
-                      })()}
-                    </div>
-                  </td>
+                  <td className="font-medium">{i.indent_number}</td>
                   <td className="text-xs text-gray-600">{i.created_at ? new Date(i.created_at).toLocaleString() : (i.indent_date || '—')}</td>
                   <td>{i.site_name || i.client_name || <span className="text-gray-400">—</span>}</td>
-                  <td>{i.raised_by_name || i.created_by_name}</td>
+                  {/* Dedicated Category column (mam 2026-05-28). Coloured
+                      pill mirrors the inline chip's palette so the table
+                      reads at a glance. */}
+                  <td>
+                    {(() => {
+                      const c = i.indent_category || 'material';
+                      const cfg = {
+                        material:           { label: 'Material',     color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+                        rgp:                { label: 'RGP',          color: 'bg-purple-50 text-purple-700 border-purple-200' },
+                        extra_schedule:     { label: 'Extra · Sched', color: 'bg-amber-50 text-amber-700 border-amber-200' },
+                        extra_non_schedule: { label: 'Extra · Non',   color: 'bg-orange-50 text-orange-700 border-orange-200' },
+                        rental:             { label: 'Rental',       color: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
+                      }[c] || { label: c, color: 'bg-gray-50 text-gray-700 border-gray-200' };
+                      return <span className={`inline-block text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${cfg.color}`}>{cfg.label}</span>;
+                    })()}
+                  </td>
+                  <td>{
+                    /* Display heuristic: if raised_by_name accidentally
+                       got saved as a numeric employee id (legacy form
+                       bug fixed above), fall back to created_by_name
+                       so the column never shows "10.0" / "54.0". */
+                    (i.raised_by_name && !/^\d+(\.\d+)?$/.test(String(i.raised_by_name).trim()))
+                      ? i.raised_by_name
+                      : (i.created_by_name || <span className="text-gray-400">—</span>)
+                  }</td>
                   <td>
                     {items.length === 0
                       ? <span className="text-gray-400 text-xs">—</span>
@@ -1785,7 +1793,7 @@ export default function Procurement() {
                 {expanded && items.length > 0 && (
                   <tr className="bg-gray-50">
                     <td></td>
-                    <td colSpan="10" className="p-3">
+                    <td colSpan="11" className="p-3">
                       <div className="text-xs font-semibold text-gray-600 mb-2">BoQ items raised in {i.indent_number}</div>
                       <table className="text-xs w-full">
                         <thead>
@@ -1855,8 +1863,8 @@ export default function Procurement() {
                 </Fragment>
               );
               })}
-              {indents.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No indents yet</td></tr>}
-              {indents.length > 0 && filteredIndents.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No indents match the current filters — try Reset</td></tr>}
+              {indents.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No indents yet</td></tr>}
+              {indents.length > 0 && filteredIndents.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No indents match the current filters — try Reset</td></tr>}
             </tbody>
           </table>
           <Pagination pg={indPg} setPerPage={setIndPerPage} className="border-t border-gray-100" />
@@ -3163,10 +3171,10 @@ export default function Procurement() {
                   </td>
                 </tr>
               ))}
-              {deliveryNotes.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
-              {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
+              {deliveryNotes.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
+              {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
             </tbody>
-            <tfoot><tr><td colSpan="11" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
+            <tfoot><tr><td colSpan="12" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
           </table></div>
             </>
           )}
@@ -3212,7 +3220,12 @@ export default function Procurement() {
             <div>
               <label className="label">Raised By *</label>
               <SearchableSelect
-                options={employees.map(e => ({ id: e.name, label: e.name, ...e }))}
+                /* CRITICAL: spread `e` FIRST then override id+label —
+                   otherwise the spread clobbers `id: e.name` with the
+                   employee's numeric id, and Raised By gets saved as
+                   "10" / "54" / "3" instead of the person's name
+                   (mam reported on production 2026-05-28). */
+                options={employees.map(e => ({ ...e, id: e.name, label: e.name }))}
                 value={form.raised_by_name || null}
                 valueKey="id" displayKey="label"
                 placeholder="Search employee…"
