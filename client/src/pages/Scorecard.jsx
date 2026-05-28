@@ -10,7 +10,8 @@ import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser } from 'react-icons/fi';
+import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload } from 'react-icons/fi';
+import { exportCsv } from '../utils/exportCsv';
 
 const lastMonday = (offsetWeeks = 0) => {
   const d = new Date();
@@ -161,11 +162,35 @@ export default function Scorecard() {
               <p className="text-lg font-bold">{scorecard.template?.name || <span className="text-amber-600">No template assigned</span>}</p>
               {scorecard.template?.description && <p className="text-xs text-gray-500">{scorecard.template.description}</p>}
             </div>
-            <div className="text-right">
-              <p className="text-xs text-gray-500">Weekly Score</p>
-              <p className={`text-3xl font-bold ${scorecard.score >= 0 ? 'text-emerald-700' : scorecard.score >= -50 ? 'text-amber-700' : 'text-red-700'}`}>
-                {scorecard.score?.toFixed(2) || '0.00'}%
-              </p>
+            <div className="flex items-center gap-3">
+              {scorecard.template && (scorecard.kpis || []).length > 0 && (
+                <button
+                  onClick={() => exportCsv(
+                    `scorecard-${(scorecard.user?.name || 'user').replace(/\s+/g, '-')}-${weekStart}`,
+                    ['Group', 'Team / Person', 'Weight %', 'Last Week %', 'Planned', 'Actual', 'Actual %', 'Total Up-to-date', 'Pending', 'Commitment'],
+                    (scorecard.kpis || []).map(k => [
+                      k.group_name || 'Other',
+                      k.metric_name || '',
+                      k.weightage ?? '',
+                      k.last_week_pct ?? '',
+                      k.planned ?? 0,
+                      k.actual ?? 0,
+                      k.actual_pct ?? '',
+                      k.total_uptodate ?? '',
+                      k.pending_uptodate ?? k.pending_work ?? '',
+                      k.commitment || '',
+                    ])
+                  )}
+                  className="btn btn-secondary text-xs flex items-center gap-1"
+                  title="Download this scorecard as CSV (opens in Excel)"
+                ><FiDownload size={14} /> Export Excel</button>
+              )}
+              <div className="text-right">
+                <p className="text-xs text-gray-500">Weekly Score</p>
+                <p className={`text-3xl font-bold ${scorecard.score >= 0 ? 'text-emerald-700' : scorecard.score >= -50 ? 'text-amber-700' : 'text-red-700'}`}>
+                  {scorecard.score?.toFixed(2) || '0.00'}%
+                </p>
+              </div>
             </div>
           </div>
 
