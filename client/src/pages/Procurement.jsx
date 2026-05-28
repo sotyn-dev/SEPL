@@ -920,16 +920,36 @@ export default function Procurement() {
     }
     setApproveSaving(true);
     try {
-      await api.put(`/procurement/indents/${approveTarget.id}`, {
+      const res = await api.put(`/procurement/indents/${approveTarget.id}`, {
         status: 'approved',
         quantity_overrides: changed,
       });
       toast.success(Object.keys(changed).length
         ? `Approved with ${Object.keys(changed).length} qty change(s)`
         : 'Approved');
+      // ─── Optimistic update (mam 2026-05-28) ─────────────────────────
+      // Server's response tells us which stage just completed:
+      //   stage='l1_done' → status becomes 'l1_approved'
+      //   else            → status becomes 'approved' (final or legacy single)
+      // Patch the local indents array IMMEDIATELY so the row's status,
+      // action buttons, and the tile counters all reflect the new state
+      // without waiting for the load() roundtrip. Otherwise mam sees the
+      // old "PENDING" row for ~1 second and thinks the click did nothing
+      // (her exact words: "i need to refresh its not good software indication").
+      const newStatus = res.data?.stage === 'l1_done' ? 'l1_approved' : 'approved';
+      setIndents(prev => prev.map(it => it.id === approveTarget.id ? ({
+        ...it,
+        status: newStatus,
+        l1_status: newStatus === 'l1_approved' || newStatus === 'approved' ? 'approved' : it.l1_status,
+        l1_by: it.l1_by || user?.id,
+        l1_at: it.l1_at || new Date().toISOString(),
+        l2_status: newStatus === 'approved' && it.approval_policy === 'two_level' ? 'approved' : it.l2_status,
+        l2_by: newStatus === 'approved' && it.approval_policy === 'two_level' ? user?.id : it.l2_by,
+        l2_at: newStatus === 'approved' && it.approval_policy === 'two_level' ? new Date().toISOString() : it.l2_at,
+      }) : it));
       setApproveTarget(null);
       setApproveQtyOverrides({});
-      load();
+      load();  // background refresh for canonical state
     } catch (err) {
       toast.error(err.response?.data?.error || 'Approve failed');
     } finally {
@@ -948,6 +968,12 @@ export default function Procurement() {
         reason: r,
       });
       toast.success('Indent rejected');
+      // Optimistic update — same reasoning as submitApprove above.
+      setIndents(prev => prev.map(it => it.id === rejectTarget.id ? ({
+        ...it,
+        status: 'rejected',
+        rejection_reason: r,
+      }) : it));
       setRejectTarget(null);
       setRejectReason('');
       load();
