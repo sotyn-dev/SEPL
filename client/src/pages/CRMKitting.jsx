@@ -167,6 +167,7 @@ export default function CRMKitting() {
     if (!modalCp || !modalProject) return;
     if (modalObsDate > todayISO()) { toast.error('Observation date cannot be in the future'); return; }
     if (modalObsDate < minObsISO()) { toast.error('Observation date cannot be more than 5 days in the past'); return; }
+    if (!modalPhoto) { toast.error('Please upload a file (photo or PDF) as evidence'); return; }
     setSaving(true);
     try {
       const fd = new FormData();
@@ -566,14 +567,16 @@ export default function CRMKitting() {
                 <p className="text-[10px] text-gray-500 mt-0.5">Today or up to 5 days back</p>
               </div>
               <div>
-                <label className="text-xs font-semibold text-gray-700">Photo (optional)</label>
+                <label className="text-xs font-semibold text-gray-700">Upload File <span className="text-red-600">*</span></label>
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/*,application/pdf"
                   capture="environment"
+                  required
                   onChange={e => setModalPhoto(e.target.files?.[0] || null)}
                   className="w-full mt-1 text-xs"
                 />
+                <p className="text-[10px] text-gray-500 mt-0.5">Photo or PDF — required as evidence</p>
               </div>
             </div>
 
