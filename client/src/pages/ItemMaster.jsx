@@ -4,7 +4,9 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiDownload, FiUpload, FiPackage, FiFilter, FiX, FiClock, FiAlertTriangle } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiDownload, FiUpload, FiPackage, FiFilter, FiX, FiClock, FiAlertTriangle, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
+
+const PAGE_SIZE = 100;
 
 // MD's Phase 1 (this week):
 //   "Right now Price is just a number — no date, no vendor, no bill.
@@ -50,6 +52,9 @@ function AgeBadge({ status, days }) {
 export default function ItemMaster() {
   const { canCreate, canEdit, canDelete } = useAuth();
   const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);  // 0-based
+  const [loading, setLoading] = useState(false);
   const [vendors, setVendors] = useState([]);
   const [modal, setModal] = useState(null);
   const [bulkModal, setBulkModal] = useState(false);
@@ -66,10 +71,20 @@ export default function ItemMaster() {
     if (search) params.set('search', search);
     if (filterDept) params.set('department', filterDept);
     if (statusFilter) params.set('status', statusFilter);
-    api.get(`/item-master?${params}`).then(r => setItems(r.data)).catch(() => {});
-  }, [search, filterDept, statusFilter]);
+    params.set('limit', PAGE_SIZE);
+    params.set('offset', page * PAGE_SIZE);
+    setLoading(true);
+    api.get(`/item-master?${params}`)
+      .then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [search, filterDept, statusFilter, page]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Snap back to page 1 whenever a filter or search changes so the user
+  // doesn't end up on page 14 of a 2-page result and see "No items".
+  useEffect(() => { setPage(0); }, [search, filterDept, statusFilter]);
   useEffect(() => {
     // Lazy-load vendors so the Vendor dropdown in the modal works.
     api.get('/procurement/vendors').then(r => setVendors(r.data || [])).catch(() => setVendors([]));
@@ -102,11 +117,25 @@ export default function ItemMaster() {
     } catch { toast.error('Could not load history'); }
   };
 
-  // CSV: matches the new column set MD asked for.
-  const exportCSV = () => {
-    if (items.length === 0) return toast.error('No data');
+  // CSV: matches the new column set MD asked for. Export pulls the
+  // ENTIRE filtered set in one go (limit=99999) rather than the
+  // currently-visible page — otherwise mam exports 100 rows and thinks
+  // 2,285 are missing.
+  const exportCSV = async () => {
+    if (total === 0) return toast.error('No data');
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    if (filterDept) params.set('department', filterDept);
+    if (statusFilter) params.set('status', statusFilter);
+    params.set('limit', 99999);
+    let all = [];
+    try {
+      const r = await api.get(`/item-master?${params}`);
+      all = r.data.items || [];
+    } catch { toast.error('Export failed'); return; }
+    if (all.length === 0) return toast.error('No data');
     const headers = ['Item Code', 'Department', 'Item Name', 'Specification', 'Size', 'UOM', 'GST', 'Type', 'Make', 'Model', 'Rate', 'Vendor Name', 'Source Type', 'Bill/PO Number', 'Bill/PO Date', 'Captured On', 'Captured By', 'Age (days)', 'Age Status'];
-    const rows = items.map(i => [
+    const rows = all.map(i => [
       i.item_code, i.department, i.item_name, i.specification, i.size, i.uom, i.gst, i.type,
       i.make, i.model_number, i.current_price,
       i.vendor_name || '', i.source_type || '', i.bill_po_number || '', i.bill_po_date || '',
@@ -116,7 +145,7 @@ export default function ItemMaster() {
     const csv = [headers, ...rows].map(r => r.map(c => `"${(c ?? '').toString().replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' }); const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = `item-master-${new Date().toISOString().split('T')[0]}.csv`; a.click();
-    toast.success('Exported');
+    toast.success(`Exported ${all.length} items`);
   };
 
   const downloadTemplate = () => {
@@ -182,7 +211,7 @@ export default function ItemMaster() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><FiPackage className="text-red-600" /> Item Master</h1>
-            <p className="text-sm text-gray-500">{items.length} items · with vendor + bill + age tracking</p>
+            <p className="text-sm text-gray-500">{total.toLocaleString('en-IN')} items · with vendor + bill + age tracking</p>
           </div>
           <div className="flex gap-2 flex-wrap">
             <button onClick={exportCSV} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export</button>
@@ -295,9 +324,30 @@ export default function ItemMaster() {
                 </tr>
               );
             })}
-            {items.length === 0 && <tr><td colSpan="10" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>No items found</p></td></tr>}
+            {items.length === 0 && <tr><td colSpan="10" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>{loading ? 'Loading…' : 'No items found'}</p></td></tr>}
           </tbody>
         </table>
+        {/* Paginator — keeps the page snappy even on 2,000+ item masters. */}
+        {total > PAGE_SIZE && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50 text-xs">
+            <div className="text-gray-600">
+              Showing <span className="font-semibold">{page * PAGE_SIZE + 1}</span>–<span className="font-semibold">{Math.min(total, (page + 1) * PAGE_SIZE)}</span> of <span className="font-semibold">{total.toLocaleString('en-IN')}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage(p => Math.max(0, p - 1))}
+                disabled={page === 0 || loading}
+                className="btn btn-secondary text-xs flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+              ><FiChevronLeft size={14} /> Prev</button>
+              <span className="text-gray-500">Page <b>{page + 1}</b> of <b>{Math.max(1, Math.ceil(total / PAGE_SIZE))}</b></span>
+              <button
+                onClick={() => setPage(p => ((p + 1) * PAGE_SIZE < total ? p + 1 : p))}
+                disabled={(page + 1) * PAGE_SIZE >= total || loading}
+                className="btn btn-secondary text-xs flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+              >Next <FiChevronRight size={14} /></button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Add / Edit Modal */}

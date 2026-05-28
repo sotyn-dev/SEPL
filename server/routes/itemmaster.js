@@ -32,10 +32,48 @@ function ageStatus(days) {
 // NULL when no price/bill is set so the row shows NEVER.
 const AGE_DATE_EXPR = `COALESCE(im.bill_po_date, im.priced_at, CASE WHEN im.current_price > 0 THEN im.updated_at END)`;
 
-// GET all items with filters + computed age + vendor name.
+// Speed-up indexes for the filter pills (mam, 2026-05-28: "items wise
+// master takes time to open like hang" — 2,385 rows × 5 filter columns
+// without indexes meant each click did a full scan).
+try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_department    ON item_master(department)`); } catch (_) {}
+try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_vendor_id     ON item_master(vendor_id)`); } catch (_) {}
+try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_make          ON item_master(make)`); } catch (_) {}
+try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_bill_po_date  ON item_master(bill_po_date)`); } catch (_) {}
+try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_item_code     ON item_master(item_code)`); } catch (_) {}
+
+// Builds the WHERE clause + params shared by the list endpoint and the
+// COUNT(*) for the paginator. Keeping them in one place ensures the
+// "Showing X-Y of Z" total always matches what the table shows.
+function buildItemFilters(query) {
+  const { department, type, search, status } = query;
+  const clauses = [];
+  const params = [];
+  if (department) { clauses.push('im.department=?'); params.push(department); }
+  if (type) { clauses.push('im.type=?'); params.push(type); }
+  if (search) {
+    clauses.push('(im.item_name LIKE ? OR im.specification LIKE ? OR im.size LIKE ? OR im.item_code LIKE ? OR im.make LIKE ?)');
+    const q = `%${search}%`;
+    params.push(q, q, q, q, q);
+  }
+  if (status === 'expired')    clauses.push(`(julianday('now','localtime') - julianday(${AGE_DATE_EXPR})) > 60`);
+  if (status === 'ageing')     clauses.push(`(julianday('now','localtime') - julianday(${AGE_DATE_EXPR})) BETWEEN 31 AND 60`);
+  if (status === 'fresh')      clauses.push(`(julianday('now','localtime') - julianday(${AGE_DATE_EXPR})) <= 30 AND ${AGE_DATE_EXPR} IS NOT NULL`);
+  if (status === 'never')      clauses.push(`(${AGE_DATE_EXPR} IS NULL OR im.current_price = 0)`);
+  if (status === 'make_blank') clauses.push(`(im.make IS NULL OR TRIM(im.make) = '')`);
+  if (status === 'no_vendor')  clauses.push('im.vendor_id IS NULL');
+  return { where: clauses.length ? ' WHERE ' + clauses.join(' AND ') : '', params };
+}
+
+// GET items, paginated. Response: { items, total, limit, offset }.
+// Defaults to 100 per page so the client doesn't paint 2,385 rows at
+// once (which is what was hanging the browser). Pass ?limit=99999 if
+// you genuinely need everything (export, scripts).
 router.get('/', requirePermission('item_master', 'view'), (req, res) => {
-  const { department, type, search, status } = req.query;
-  let sql = `
+  const { where, params } = buildItemFilters(req.query);
+  const limit  = Math.max(1, Math.min(99999, +req.query.limit  || 100));
+  const offset = Math.max(0, +req.query.offset || 0);
+
+  const sql = `
     SELECT im.*,
            v.name AS vendor_name,
            u.name AS priced_by_name,
@@ -45,28 +83,19 @@ router.get('/', requirePermission('item_master', 'view'), (req, res) => {
       FROM item_master im
       LEFT JOIN vendors v ON v.id = im.vendor_id
       LEFT JOIN users u ON u.id = im.priced_by
-     WHERE 1=1
+    ${where}
+    ORDER BY im.item_code
+    LIMIT ? OFFSET ?
   `;
-  const params = [];
-  if (department) { sql += ' AND im.department=?'; params.push(department); }
-  if (type) { sql += ' AND im.type=?'; params.push(type); }
-  if (search) {
-    sql += ' AND (im.item_name LIKE ? OR im.specification LIKE ? OR im.size LIKE ? OR im.item_code LIKE ? OR im.make LIKE ?)';
-    const q = `%${search}%`;
-    params.push(q, q, q, q, q);
-  }
-  // Filters key off the SAME age date (bill/PO date preferred) so the
-  // pill counts always match what the table shows.
-  if (status === 'expired') sql += ` AND (julianday('now','localtime') - julianday(${AGE_DATE_EXPR})) > 60`;
-  if (status === 'ageing') sql += ` AND (julianday('now','localtime') - julianday(${AGE_DATE_EXPR})) BETWEEN 31 AND 60`;
-  if (status === 'fresh') sql += ` AND (julianday('now','localtime') - julianday(${AGE_DATE_EXPR})) <= 30 AND ${AGE_DATE_EXPR} IS NOT NULL`;
-  if (status === 'never') sql += ` AND (${AGE_DATE_EXPR} IS NULL OR im.current_price = 0)`;
-  if (status === 'make_blank') sql += ` AND (im.make IS NULL OR TRIM(im.make) = '')`;
-  if (status === 'no_vendor') sql += ` AND im.vendor_id IS NULL`;
-  sql += ' ORDER BY im.item_code';
+  const countSql = `SELECT COUNT(*) AS n FROM item_master im ${where}`;
 
-  const rows = getDb().prepare(sql).all(...params);
-  res.json(rows.map(r => ({ ...r, age_status: ageStatus(r.age_days) })));
+  const db = getDb();
+  const rows  = db.prepare(sql).all(...params, limit, offset);
+  const total = db.prepare(countSql).get(...params).n;
+  res.json({
+    items: rows.map(r => ({ ...r, age_status: ageStatus(r.age_days) })),
+    total, limit, offset,
+  });
 });
 
 // Lightweight dropdown — unchanged shape so callers don't break.
