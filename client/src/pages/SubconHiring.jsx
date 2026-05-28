@@ -16,6 +16,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   FiPlus, FiTrash2, FiArrowLeft, FiUpload, FiDownload, FiPaperclip,
   FiUserPlus, FiCheckCircle, FiAlertTriangle, FiClock, FiAward, FiX,
+  FiFolder, FiPlayCircle,
 } from 'react-icons/fi';
 
 const PHASE_LABEL = { pre_award: 'Phase 1 · Pre-Award', onboarding: 'Phase 2 · Onboarding', done: 'Done' };
@@ -180,10 +181,18 @@ function CreateForm({ sites, onDone }) {
   );
 }
 
-// ─── DETAIL VIEW ──────────────────────────────────────────────────
+// ─── DETAIL VIEW (tabbed redesign, mam 2026-05-28: "i like tabs") ─
+// Layout:
+//   1. Header card  — site, scope, phase + step pill, awarded vendor
+//   2. Progress strip — 14 numbered circles with connector lines so
+//                       overall progress is visible regardless of tab
+//   3. Tab strip    — Pre-Award · Onboarding · Candidates · Files
+//   4. Tab body     — only the active tab's content (less scrolling)
+// Auto-selects the phase tab containing the current step on load.
 function DetailView({ id, onBack, canEdit }) {
   const [data, setData] = useState(null);
   const [vendors, setVendors] = useState([]);
+  const [tab, setTab] = useState(null); // pre_award | onboarding | candidates | files
 
   const load = useCallback(() => {
     api.get(`/subcon-hiring/${id}`).then(r => setData(r.data)).catch(() => toast.error('Failed to load'));
@@ -193,53 +202,217 @@ function DetailView({ id, onBack, canEdit }) {
     api.get('/sub-contractors').then(r => setVendors(r.data || [])).catch(() => setVendors([]));
   }, []);
 
+  // First load → jump to the phase tab that contains the current step.
+  // Don't override later (so user navigation between tabs sticks).
+  useEffect(() => {
+    if (data && tab === null) {
+      setTab(data.current_step <= 7 ? 'pre_award' : 'onboarding');
+    }
+  }, [data, tab]);
+
   if (!data) return <div className="card p-6 text-center text-gray-400">Loading…</div>;
+
+  const stepsPhase1 = data.steps_meta.filter(m => m.phase === 'pre_award');
+  const stepsPhase2 = data.steps_meta.filter(m => m.phase === 'onboarding');
+  const fileCount = data.files.length;
+  const candCount = data.candidates.length;
+
+  const tabs = [
+    { id: 'pre_award',   label: 'Pre-Award',  sub: 'Steps 1–7',   count: stepsPhase1.length,  icon: FiPlayCircle },
+    { id: 'onboarding',  label: 'Onboarding', sub: 'Steps 8–14',  count: stepsPhase2.length,  icon: FiCheckCircle },
+    { id: 'candidates',  label: 'Candidates', sub: 'Vendor shortlist', count: candCount,      icon: FiUserPlus },
+    { id: 'files',       label: 'Files',      sub: 'All uploads', count: fileCount,           icon: FiFolder },
+  ];
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <button onClick={onBack} className="btn btn-secondary text-xs flex items-center gap-1"><FiArrowLeft size={14} /> Back</button>
-          <div>
-            <h2 className="text-lg font-bold">{data.site_name}</h2>
-            <p className="text-xs text-gray-500">{data.scope_description || <em>No scope set</em>} · {data.client_name || '—'}</p>
+      {/* Header card */}
+      <div className="card p-3 flex flex-wrap items-start justify-between gap-3 bg-gradient-to-r from-red-50 to-amber-50 border border-red-100">
+        <div className="flex items-center gap-3 min-w-0">
+          <button onClick={onBack} className="btn btn-secondary text-xs flex items-center gap-1 flex-shrink-0"><FiArrowLeft size={14} /> Back</button>
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold truncate">{data.site_name}</h2>
+            <p className="text-xs text-gray-600 truncate">{data.scope_description || <em className="text-gray-400">No scope set</em>} · {data.client_name || '—'}</p>
           </div>
         </div>
-        <div className="text-right">
-          <div className="text-[10px] uppercase text-gray-500">{PHASE_LABEL[data.phase]}</div>
-          <div className="text-base font-bold text-red-700">Step {data.current_step} / 14</div>
+        <div className="text-right flex-shrink-0">
+          <div className="text-[10px] uppercase font-semibold text-gray-500">{PHASE_LABEL[data.phase]}</div>
+          <div className="text-2xl font-bold text-red-700 leading-tight">Step {data.current_step} <span className="text-sm text-gray-400 font-normal">/ 14</span></div>
           {data.awarded_vendor_name && (
             <div className="text-xs mt-0.5"><FiAward className="inline text-amber-600 mr-1" size={12} />Awarded: <b>{data.awarded_vendor_name}</b></div>
           )}
         </div>
       </div>
 
-      {/* Candidate vendors panel (Step 3-6) */}
-      <CandidatesPanel hiringId={id} data={data} vendors={vendors} canEdit={canEdit} onReload={load} />
+      {/* Horizontal progress strip — 14 circles with connectors */}
+      <ProgressStrip data={data} onJump={(stepNo) => setTab(stepNo <= 7 ? 'pre_award' : 'onboarding')} />
 
-      {/* 14-step stepper */}
+      {/* Tabs */}
       <div className="card p-0 overflow-hidden">
-        {data.steps_meta.map(meta => {
-          const step = data.steps.find(s => s.step_no === meta.no);
-          return (
-            <StepRow
-              key={meta.no}
-              meta={meta}
-              step={step}
-              hiringId={id}
-              files={data.files.filter(f => f.step_no === meta.no)}
-              canEdit={canEdit}
-              onReload={load}
-            />
-          );
-        })}
+        <div className="flex flex-wrap border-b border-gray-200 bg-gray-50">
+          {tabs.map(t => {
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`flex items-center gap-2 px-4 py-2.5 text-sm border-b-2 transition-colors ${
+                  active
+                    ? 'border-red-600 text-red-700 bg-white font-semibold'
+                    : 'border-transparent text-gray-600 hover:bg-white hover:text-red-700'
+                }`}
+              >
+                <t.icon size={14} />
+                <span>{t.label}</span>
+                {t.count > 0 && (
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${active ? 'bg-red-100 text-red-700' : 'bg-gray-200 text-gray-600'}`}>{t.count}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Tab body */}
+        <div className="p-3">
+          {tab === 'pre_award' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {stepsPhase1.map(meta => (
+                <StepCard
+                  key={meta.no}
+                  meta={meta}
+                  step={data.steps.find(s => s.step_no === meta.no)}
+                  hiringId={id}
+                  files={data.files.filter(f => f.step_no === meta.no)}
+                  canEdit={canEdit}
+                  onReload={load}
+                />
+              ))}
+            </div>
+          )}
+          {tab === 'onboarding' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {stepsPhase2.map(meta => (
+                <StepCard
+                  key={meta.no}
+                  meta={meta}
+                  step={data.steps.find(s => s.step_no === meta.no)}
+                  hiringId={id}
+                  files={data.files.filter(f => f.step_no === meta.no)}
+                  canEdit={canEdit}
+                  onReload={load}
+                />
+              ))}
+            </div>
+          )}
+          {tab === 'candidates' && (
+            <CandidatesPanel hiringId={id} data={data} vendors={vendors} canEdit={canEdit} onReload={load} />
+          )}
+          {tab === 'files' && (
+            <FilesPanel data={data} hiringId={id} canEdit={canEdit} onReload={load} />
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-// ─── ONE STEP ROW ─────────────────────────────────────────────────
-function StepRow({ meta, step, hiringId, files, canEdit, onReload }) {
+// ─── PROGRESS STRIP — 14-circle visualisation ─────────────────────
+function ProgressStrip({ data, onJump }) {
+  return (
+    <div className="card p-3 overflow-x-auto">
+      <div className="flex items-center min-w-fit">
+        {data.steps_meta.map((meta, idx) => {
+          const step = data.steps.find(s => s.step_no === meta.no);
+          const isDone = step?.status === 'done';
+          const isActive = step?.status === 'in_progress';
+          const isBlocked = step?.status === 'blocked';
+          const isGate = !!meta.gate;
+          return (
+            <div key={meta.no} className="flex items-center flex-shrink-0">
+              <button
+                onClick={() => onJump(meta.no)}
+                className="flex flex-col items-center group"
+                title={`${meta.label} · ${STATUS_LABEL[step?.status || 'pending']}`}
+              >
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2 transition ${
+                  isDone        ? 'bg-emerald-500 text-white border-emerald-500'
+                  : isActive    ? 'bg-amber-400 text-white border-amber-500 ring-2 ring-amber-200 animate-pulse'
+                  : isBlocked   ? 'bg-red-500 text-white border-red-500'
+                  : 'bg-white text-gray-400 border-gray-300 group-hover:border-red-300'
+                }`}>
+                  {isDone ? <FiCheckCircle size={14} /> : meta.no}
+                </div>
+                {isGate && (
+                  <span className="text-[8px] font-bold uppercase text-purple-600 mt-0.5">GATE</span>
+                )}
+              </button>
+              {idx < data.steps_meta.length - 1 && (
+                <div className={`h-0.5 w-6 sm:w-10 ${isDone ? 'bg-emerald-400' : 'bg-gray-200'}`} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[10px] text-gray-500 mt-2 text-center">Click any step to jump to its phase tab</p>
+    </div>
+  );
+}
+
+// ─── FILES PANEL — all uploads, grouped by step ───────────────────
+function FilesPanel({ data, hiringId, canEdit, onReload }) {
+  const filesByStep = {};
+  for (const f of data.files) {
+    (filesByStep[f.step_no] = filesByStep[f.step_no] || []).push(f);
+  }
+  const stepsWithFiles = Object.keys(filesByStep).map(Number).sort((a, b) => a - b);
+
+  const delFile = async (fileId) => {
+    if (!confirm('Delete this file?')) return;
+    try { await api.delete(`/subcon-hiring/file/${fileId}`); toast.success('Deleted'); onReload(); }
+    catch { toast.error('Failed'); }
+  };
+
+  if (stepsWithFiles.length === 0) {
+    return (
+      <div className="text-center py-10 text-gray-400 text-sm">
+        <FiFolder size={32} className="mx-auto mb-2 opacity-30" />
+        No files uploaded yet. Use the <b>Upload File</b> button on any step to attach evidence (photos, PDFs, KYC docs, MSA, etc.).
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {stepsWithFiles.map(stepNo => {
+        const meta = data.steps_meta.find(m => m.no === stepNo);
+        return (
+          <div key={stepNo} className="border border-gray-200 rounded-lg overflow-hidden">
+            <div className="bg-gray-50 px-3 py-1.5 border-b border-gray-200">
+              <span className="text-xs font-bold text-gray-700">Step {stepNo} · {meta?.label || 'Unknown'}</span>
+              <span className="text-[10px] text-gray-500 ml-2">{filesByStep[stepNo].length} file{filesByStep[stepNo].length === 1 ? '' : 's'}</span>
+            </div>
+            <div className="p-2 flex flex-wrap gap-1.5">
+              {filesByStep[stepNo].map(f => (
+                <span key={f.id} className="inline-flex items-center gap-1 text-[11px] bg-blue-50 text-blue-700 border border-blue-200 rounded px-2 py-1">
+                  <FiPaperclip size={11} />
+                  <a href={`/api/subcon-hiring/file/${f.id}`} target="_blank" rel="noreferrer" className="hover:underline truncate max-w-[260px]">{f.filename}</a>
+                  <span className="text-[9px] text-blue-400 ml-1">· {f.uploaded_by_name || '—'}</span>
+                  {canEdit && <button onClick={() => delFile(f.id)} className="text-blue-400 hover:text-red-600 ml-0.5"><FiX size={11} /></button>}
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── STEP CARD (replaces StepRow for the tabbed view) ─────────────
+// Same data + actions as StepRow, but laid out as a self-contained
+// card so two fit side-by-side on desktop and the active step stands
+// out clearly.
+function StepCard({ meta, step, hiringId, files, canEdit, onReload }) {
   const [editing, setEditing] = useState(false);
   const [notes, setNotes] = useState(step?.notes || '');
   const [statusDraft, setStatusDraft] = useState(step?.status || 'pending');
@@ -247,7 +420,8 @@ function StepRow({ meta, step, hiringId, files, canEdit, onReload }) {
   const [uploading, setUploading] = useState(false);
 
   const isGate = !!meta.gate;
-  const statusCls = STATUS_CLS[step?.status || 'pending'];
+  const status = step?.status || 'pending';
+  const statusCls = STATUS_CLS[status];
 
   const save = async () => {
     try {
@@ -260,10 +434,10 @@ function StepRow({ meta, step, hiringId, files, canEdit, onReload }) {
   };
 
   const decideGate = async (pass) => {
-    const reason = pass ? null : prompt('Reason for failing this gate (loops back)?');
+    const reason = pass ? null : prompt('Reason for failing this gate (loops back to earlier step)?');
     if (!pass && reason === null) return;
     try {
-      const gate = meta.gate; // 'prequalify' or 'docs'
+      const gate = meta.gate;
       await api.post(`/subcon-hiring/${hiringId}/gate/${gate}`, {
         pass, decision_value: decisionVal === '' ? null : +decisionVal,
         notes: reason ? `LOOP-BACK: ${reason}` : 'PASS',
@@ -290,110 +464,114 @@ function StepRow({ meta, step, hiringId, files, canEdit, onReload }) {
     catch { toast.error('Failed'); }
   };
 
+  // Border accent so the active step jumps out from completed / pending ones.
+  const cardCls = status === 'in_progress'
+    ? 'border-amber-300 bg-amber-50/40 ring-1 ring-amber-200'
+    : status === 'done'
+      ? 'border-emerald-200 bg-emerald-50/30'
+      : status === 'blocked'
+        ? 'border-red-300 bg-red-50/30'
+        : 'border-gray-200 bg-white';
+
   return (
-    <div className={`border-b border-gray-100 ${step?.status === 'in_progress' ? 'bg-amber-50/40' : ''}`}>
-      <div className="flex items-start gap-3 p-3">
-        {/* Step number bubble */}
-        <div className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
-          step?.status === 'done' ? 'bg-emerald-600 text-white' :
-          step?.status === 'in_progress' ? 'bg-amber-500 text-white animate-pulse' :
-          step?.status === 'blocked' ? 'bg-red-500 text-white' :
-          'bg-gray-200 text-gray-500'
-        }`}>
-          {step?.status === 'done' ? <FiCheckCircle size={18} /> : meta.no}
-        </div>
-
-        {/* Step body */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div>
-              <div className="font-semibold text-sm flex items-center gap-2">
-                {meta.label}
-                {isGate && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 border border-purple-300">GATE</span>}
-              </div>
-              <div className="text-[10px] text-gray-500 uppercase tracking-wide">{meta.owner}</div>
-            </div>
-            <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${statusCls}`}>
-              {STATUS_LABEL[step?.status || 'pending']}
-            </span>
+    <div className={`rounded-lg border ${cardCls} p-3 flex flex-col gap-2`}>
+      {/* Header row: number bubble, label, status pill */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm ${
+            status === 'done' ? 'bg-emerald-600 text-white' :
+            status === 'in_progress' ? 'bg-amber-500 text-white' :
+            status === 'blocked' ? 'bg-red-500 text-white' :
+            'bg-gray-200 text-gray-500'
+          }`}>
+            {status === 'done' ? <FiCheckCircle size={16} /> : meta.no}
           </div>
+          <div className="min-w-0">
+            <div className="font-semibold text-sm flex items-center gap-1.5">
+              <span className="truncate">{meta.label}</span>
+              {isGate && <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 border border-purple-300 flex-shrink-0">GATE</span>}
+            </div>
+            <div className="text-[10px] text-gray-500 uppercase tracking-wide">{meta.owner}</div>
+          </div>
+        </div>
+        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${statusCls} flex-shrink-0`}>
+          {STATUS_LABEL[status]}
+        </span>
+      </div>
 
-          {step?.notes && !editing && (
-            <p className="mt-1.5 text-xs text-gray-600 italic whitespace-pre-wrap">{step.notes}</p>
-          )}
-          {step?.decision_value != null && !editing && (
-            <p className="mt-0.5 text-[11px] text-purple-700"><b>Score / decision:</b> {step.decision_value}</p>
-          )}
+      {/* Body — notes, score, files (only when there's content to show) */}
+      {(step?.notes || step?.decision_value != null || step?.completed_by_name || files.length > 0) && !editing && (
+        <div className="text-xs space-y-1 border-t border-gray-100 pt-2">
+          {step?.notes && <p className="text-gray-700 italic whitespace-pre-wrap">{step.notes}</p>}
+          {step?.decision_value != null && <p className="text-purple-700"><b>Score / decision:</b> {step.decision_value}</p>}
           {step?.completed_by_name && step?.completed_at && (
-            <p className="mt-0.5 text-[10px] text-gray-400">Done by {step.completed_by_name} · {String(step.completed_at).replace('T', ' ').slice(0, 16)}</p>
+            <p className="text-[10px] text-gray-400">Done by {step.completed_by_name} · {String(step.completed_at).replace('T', ' ').slice(0, 16)}</p>
           )}
-
-          {/* Files */}
           {files.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1 pt-1">
               {files.map(f => (
-                <span key={f.id} className="inline-flex items-center gap-1 text-[11px] bg-blue-50 text-blue-700 border border-blue-200 rounded px-2 py-0.5">
-                  <FiPaperclip size={10} />
-                  <a href={`/api/subcon-hiring/file/${f.id}`} target="_blank" rel="noreferrer" className="hover:underline truncate max-w-[180px]">{f.filename}</a>
-                  {canEdit && <button onClick={() => delFile(f.id)} className="text-blue-400 hover:text-red-600 ml-0.5"><FiX size={10} /></button>}
+                <span key={f.id} className="inline-flex items-center gap-1 text-[10px] bg-blue-50 text-blue-700 border border-blue-200 rounded px-1.5 py-0.5">
+                  <FiPaperclip size={9} />
+                  <a href={`/api/subcon-hiring/file/${f.id}`} target="_blank" rel="noreferrer" className="hover:underline truncate max-w-[140px]">{f.filename}</a>
+                  {canEdit && <button onClick={() => delFile(f.id)} className="text-blue-400 hover:text-red-600 ml-0.5"><FiX size={9} /></button>}
                 </span>
               ))}
             </div>
           )}
+        </div>
+      )}
 
-          {/* Editor */}
-          {editing && (
-            <div className="mt-2 space-y-2 bg-gray-50 border border-gray-200 rounded p-2">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <div>
-                  <label className="text-[10px] font-semibold uppercase text-gray-500">Status</label>
-                  <select className="select text-xs" value={statusDraft} onChange={e => setStatusDraft(e.target.value)}>
-                    <option value="pending">Pending</option>
-                    <option value="in_progress">In Progress</option>
-                    <option value="done">Done</option>
-                    <option value="blocked">Blocked</option>
-                  </select>
-                </div>
-                {isGate && (
-                  <div>
-                    <label className="text-[10px] font-semibold uppercase text-gray-500">
-                      {meta.gate === 'prequalify' ? 'Vendor score (0–10)' : 'Docs % complete'}
-                    </label>
-                    <input type="number" min="0" max="10" step="0.1" className="input text-xs"
-                      value={decisionVal} onChange={e => setDecisionVal(e.target.value)} placeholder="e.g. 7.5" />
-                  </div>
-                )}
-              </div>
+      {/* Editor */}
+      {editing && (
+        <div className="border-t border-gray-200 pt-2 space-y-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] font-semibold uppercase text-gray-500">Status</label>
+              <select className="select text-xs" value={statusDraft} onChange={e => setStatusDraft(e.target.value)}>
+                <option value="pending">Pending</option>
+                <option value="in_progress">In Progress</option>
+                <option value="done">Done</option>
+                <option value="blocked">Blocked</option>
+              </select>
+            </div>
+            {isGate && (
               <div>
-                <label className="text-[10px] font-semibold uppercase text-gray-500">Notes</label>
-                <textarea className="input text-xs" rows="2" value={notes} onChange={e => setNotes(e.target.value)}
-                  placeholder="What happened on this step?" />
+                <label className="text-[10px] font-semibold uppercase text-gray-500">
+                  {meta.gate === 'prequalify' ? 'Vendor score (0–10)' : 'Docs % complete'}
+                </label>
+                <input type="number" min="0" max="10" step="0.1" className="input text-xs"
+                  value={decisionVal} onChange={e => setDecisionVal(e.target.value)} placeholder="e.g. 7.5" />
               </div>
-              <div className="flex justify-end gap-2">
-                <button onClick={() => setEditing(false)} className="btn btn-secondary text-xs">Cancel</button>
-                <button onClick={save} className="btn btn-primary text-xs">Save</button>
-              </div>
-            </div>
-          )}
+            )}
+          </div>
+          <div>
+            <label className="text-[10px] font-semibold uppercase text-gray-500">Notes</label>
+            <textarea className="input text-xs" rows="2" value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="What happened on this step?" />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setEditing(false)} className="btn btn-secondary text-xs">Cancel</button>
+            <button onClick={save} className="btn btn-primary text-xs">Save</button>
+          </div>
+        </div>
+      )}
 
-          {/* Action row */}
-          {canEdit && !editing && (
-            <div className="mt-2 flex flex-wrap gap-1.5 items-center">
-              <button onClick={() => setEditing(true)} className="btn btn-secondary text-xs">Edit · Notes</button>
-              <label className="btn btn-secondary text-xs flex items-center gap-1 cursor-pointer mb-0">
-                <FiUpload size={12} />{uploading ? 'Uploading…' : 'Upload File'}
-                <input type="file" className="hidden" onChange={upload} disabled={uploading} />
-              </label>
-              {isGate && step?.status !== 'done' && (
-                <>
-                  <button onClick={() => decideGate(true)} className="btn btn-success text-xs">Gate PASS → advance</button>
-                  <button onClick={() => decideGate(false)} className="btn btn-danger text-xs">Gate FAIL → loop back</button>
-                </>
-              )}
-            </div>
+      {/* Action row */}
+      {canEdit && !editing && (
+        <div className="flex flex-wrap gap-1.5 items-center border-t border-gray-100 pt-2">
+          <button onClick={() => setEditing(true)} className="btn btn-secondary text-xs">Edit · Notes</button>
+          <label className="btn btn-secondary text-xs flex items-center gap-1 cursor-pointer mb-0">
+            <FiUpload size={12} />{uploading ? 'Uploading…' : 'Upload'}
+            <input type="file" className="hidden" onChange={upload} disabled={uploading} />
+          </label>
+          {isGate && status !== 'done' && (
+            <>
+              <button onClick={() => decideGate(true)} className="btn btn-success text-xs">PASS → advance</button>
+              <button onClick={() => decideGate(false)} className="btn btn-danger text-xs">FAIL → loop back</button>
+            </>
           )}
         </div>
-      </div>
+      )}
     </div>
   );
 }
