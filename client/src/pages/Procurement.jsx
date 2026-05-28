@@ -1885,6 +1885,7 @@ export default function Procurement() {
             <div>
               <h3 className="font-semibold">Item-wise Vendor Rates</h3>
               <p className="text-xs text-gray-500">Step 1: enter up to 3 vendor quotes per indent item. Step 2: finalize the best rate.</p>
+              <p className="text-[11px] text-amber-700 mt-0.5">ⓘ Only indents that have cleared L1 + L2 approval appear here. Pending-approval indents will show up automatically after both approvers sign off.</p>
             </div>
             <div className="flex gap-1 flex-wrap">
               {['all','pending','quoted','finalized'].map(f => (

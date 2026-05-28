@@ -3020,6 +3020,41 @@ router.delete('/sales-bills/:id', (req, res) => {
 // List all indent items (not yet fully converted to vendor PO) with their
 // current rates row (one per item, joined). An item shows here once the
 // indent is submitted/approved.
+// Gate: an indent must be fully approved (status='approved' — which
+// requires BOTH L1 and L2 sign-offs in two-level mode, or the single
+// approval in legacy mode) before its items can flow into the 3-vendor
+// rate step. Mam (2026-05-28): "from now without approvals data dont
+// go to next step like 3 vendors rate". Returns null if OK, or an
+// {status,error} object the caller can hand to res.status(...).json(...).
+const APPROVED_FOR_RATES = "('approved','po_sent')";
+function assertIndentApprovedByItem(db, indentItemId) {
+  const row = db.prepare(
+    `SELECT i.indent_number, i.status
+       FROM indent_items ii
+       JOIN indents i ON i.id = ii.indent_id
+      WHERE ii.id = ?`
+  ).get(indentItemId);
+  if (!row) return { status: 404, error: 'Indent item not found' };
+  if (row.status !== 'approved' && row.status !== 'po_sent') {
+    return { status: 403, error: `Indent ${row.indent_number} is not fully approved yet (current: ${row.status}). Vendor rates can only be entered after L1 + L2 approval.` };
+  }
+  return null;
+}
+function assertIndentApprovedByRate(db, rateId) {
+  const row = db.prepare(
+    `SELECT i.indent_number, i.status
+       FROM indent_item_rates r
+       JOIN indent_items ii ON ii.id = r.indent_item_id
+       JOIN indents i ON i.id = ii.indent_id
+      WHERE r.id = ?`
+  ).get(rateId);
+  if (!row) return { status: 404, error: 'Rate row not found' };
+  if (row.status !== 'approved' && row.status !== 'po_sent') {
+    return { status: 403, error: `Indent ${row.indent_number} is not fully approved yet (current: ${row.status}). Cannot finalize until L1 + L2 approve.` };
+  }
+  return null;
+}
+
 router.get('/item-rates', (req, res) => {
   const db = getDb();
   // Also pull the parent BOQ item (po_items) so the UI can render
@@ -3055,6 +3090,7 @@ router.get('/item-rates', (req, res) => {
      LEFT JOIN users fu ON fu.id = r.finalized_by
      LEFT JOIN order_planning op ON op.id = i.planning_id
      LEFT JOIN business_book bb ON bb.id = op.business_book_id
+     WHERE i.status IN ${APPROVED_FOR_RATES}
      ORDER BY i.created_at DESC, ii.id`
   ).all();
   res.json(rows);
@@ -3067,6 +3103,11 @@ router.post('/item-rates', needsApprove, (req, res) => {
   const b = req.body || {};
   const iiId = parseInt(b.indent_item_id, 10);
   if (!iiId) return res.status(400).json({ error: 'indent_item_id is required' });
+
+  // Belt-and-suspenders gate: even if the UI didn't filter, refuse to
+  // write vendor rates for an indent that isn't fully approved yet.
+  const block = assertIndentApprovedByItem(db, iiId);
+  if (block) return res.status(block.status).json({ error: block.error });
 
   const existing = db.prepare('SELECT id FROM indent_item_rates WHERE indent_item_id=?').get(iiId);
   const fields = ['vendor1_name','vendor1_rate','vendor1_terms','vendor1_credit_days',
@@ -3102,6 +3143,11 @@ router.post('/item-rates/:id/finalize', needsApprove, (req, res) => {
   const b = req.body || {};
   const { final_rate, final_vendor_name, final_terms, final_credit_days } = b;
   if (!final_vendor_name || !final_rate) return res.status(400).json({ error: 'final_vendor_name and final_rate are required' });
+
+  // Same gate as the upsert — block finalization if the parent indent
+  // isn't fully approved (defends against direct API calls).
+  const block = assertIndentApprovedByRate(db, req.params.id);
+  if (block) return res.status(block.status).json({ error: block.error });
   db.prepare(
     `UPDATE indent_item_rates
      SET final_rate=?, final_vendor_name=?, final_terms=?, final_credit_days=?,
