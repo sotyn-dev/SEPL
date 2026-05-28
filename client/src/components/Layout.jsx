@@ -259,6 +259,18 @@ export default function Layout() {
     };
   }, [user?.id]);
 
+  // ─── Sidebar search (mam 2026-05-28: "users have issue to find") ───
+  // Type-anywhere search across every menu label so an MD who knows
+  // "Attendance exists somewhere" doesn't have to remember whether it
+  // lives under People or HR.  Matching is case-insensitive substring.
+  // When the box has text, the accordion state is overridden — every
+  // group with at least one matching child is force-expanded and
+  // non-matching siblings are hidden. Empty box restores the saved
+  // accordion state untouched.
+  const [navSearch, setNavSearch] = useState('');
+  const navQuery = navSearch.trim().toLowerCase();
+  const itemMatches = (item) => !navQuery || item.label.toLowerCase().includes(navQuery);
+
   // ─── Sidebar accordion state ───────────────────────────────────────
   // Each group is collapsible, INITIALLY CLOSED, expand independently
   // (multiple can be open at once — not strict accordion).  We persist
@@ -309,15 +321,21 @@ export default function Layout() {
 
   // module === null means "always visible" (e.g. Help Tickets — open to everyone)
   const itemVisible = (item) => item.module == null || canView(item.module);
-  // A group renders only if (a) it has at least one visible item and
-  // (b) the user passes any adminOnly gate. Hidden helper items (the
-  // 2 legacy CMD routes folded into Executive) don't count.
+  // A group renders only if (a) it has at least one visible item AND
+  // matches the current search (or search is empty), and (b) the user
+  // passes any adminOnly gate. Hidden helper items (the 2 legacy CMD
+  // routes folded into Executive) don't count.
   const groupVisible = (g) => {
     if (g.adminOnly && !isAdmin()) return false;
-    return g.items.some(it => !it.hidden && itemVisible(it));
+    return g.items.some(it => !it.hidden && itemVisible(it) && itemMatches(it));
   };
   const visibleGroups = SIDEBAR_GROUPS.filter(groupVisible);
   const showSettings = groupVisible(SIDEBAR_SETTINGS);
+  // While searching, every visible group is force-open so matches are
+  // immediately reachable without an extra click on each group header.
+  const isGroupOpen = (id) => navQuery ? true : openGroups.has(id);
+  const dashboardMatches = itemMatches(SIDEBAR_DASHBOARD);
+  const nothingMatches = navQuery && !dashboardMatches && visibleGroups.length === 0 && !showSettings;
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -361,10 +379,36 @@ export default function Layout() {
           </div>
           {isMobile && <button className="p-1.5 hover:bg-white/10 rounded" onClick={() => setSidebarOpen(false)}><FiX size={18} /></button>}
         </div>
+        {/* Sidebar search — mam 2026-05-28. Persistent across navigation
+            (state lives in Layout) but cleared on tab close. Press
+            Escape inside the box to clear quickly. */}
+        <div className="px-2 pt-2">
+          <div className="relative">
+            <FiSearch size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-red-200/70 pointer-events-none" />
+            <input
+              type="search"
+              value={navSearch}
+              onChange={e => setNavSearch(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Escape') setNavSearch(''); }}
+              placeholder="Search menu… (e.g. attendance)"
+              className="w-full bg-white/10 hover:bg-white/15 focus:bg-white/15 placeholder-red-200/60 text-white text-xs rounded-md pl-7 pr-7 py-1.5 outline-none focus:ring-1 focus:ring-white/30 transition"
+              aria-label="Search sidebar menu"
+            />
+            {navSearch && (
+              <button
+                type="button"
+                onClick={() => setNavSearch('')}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-red-200/70 hover:text-white"
+                title="Clear search"
+              ><FiX size={12} /></button>
+            )}
+          </div>
+        </div>
+
         <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
           {/* Dashboard — always standalone at top, no group, single URL
               (mam's spec). Highlighted when on the home route. */}
-          {(SIDEBAR_DASHBOARD.module == null || canView(SIDEBAR_DASHBOARD.module)) && (
+          {(SIDEBAR_DASHBOARD.module == null || canView(SIDEBAR_DASHBOARD.module)) && dashboardMatches && (
             <Link to={SIDEBAR_DASHBOARD.path}
               className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === SIDEBAR_DASHBOARD.path ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
               <SIDEBAR_DASHBOARD.icon size={16} />
@@ -372,11 +416,17 @@ export default function Layout() {
             </Link>
           )}
 
+          {nothingMatches && (
+            <div className="px-3 py-6 text-center text-[11px] text-red-200/70">
+              No menu items match <span className="text-white font-semibold">"{navSearch}"</span>
+            </div>
+          )}
+
           {/* Collapsible accordion groups — initially closed, each opens
               independently. The chevron rotates to indicate state. */}
           {visibleGroups.map(g => {
-            const isOpen = openGroups.has(g.id);
-            const childItems = g.items.filter(it => !it.hidden && itemVisible(it));
+            const isOpen = isGroupOpen(g.id);
+            const childItems = g.items.filter(it => !it.hidden && itemVisible(it) && itemMatches(it));
             const hasActiveChild = childItems.some(it => location.pathname === it.path);
             return (
               <div key={g.id} className="pt-0.5">
@@ -408,8 +458,8 @@ export default function Layout() {
           {/* Settings group — pinned to the very bottom of the nav per
               mam's spec.  Same collapsible accordion as the others. */}
           {showSettings && (() => {
-            const isOpen = openGroups.has(SIDEBAR_SETTINGS.id);
-            const childItems = SIDEBAR_SETTINGS.items.filter(it => itemVisible(it));
+            const isOpen = isGroupOpen(SIDEBAR_SETTINGS.id);
+            const childItems = SIDEBAR_SETTINGS.items.filter(it => itemVisible(it) && itemMatches(it));
             const hasActiveChild = childItems.some(it => location.pathname === it.path);
             return (
               <div className="pt-3 mt-2 border-t border-white/10">
