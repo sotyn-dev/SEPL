@@ -737,13 +737,13 @@ export default function Procurement() {
       const data = r.data;
       setForm({
         site_name: data.site_name || '',
-        // Legacy rows have raised_by_name blanked (mam 2026-05-28 —
-        // previous names were wrong). For edits, just show whatever's
-        // currently in the field, or empty if NULL — let the user pick
-        // the correct person from the SearchableSelect.
+        // Raised By is locked to logged-in user in the form (mam
+        // 2026-05-28). On edit: keep the existing name if it's valid
+        // (non-numeric, non-empty). Otherwise fall back to the
+        // editor's name — claims responsibility for the legacy row.
         raised_by_name: (data.raised_by_name && !/^\d+(\.\d+)?$/.test(String(data.raised_by_name).trim()))
           ? data.raised_by_name
-          : '',
+          : (user?.name || ''),
         notes: data.notes || '',
         indent_category: data.indent_category || 'material',
       });
@@ -3247,18 +3247,17 @@ export default function Procurement() {
             </div>
             <div>
               <label className="label">Raised By *</label>
-              <SearchableSelect
-                /* CRITICAL: spread `e` FIRST then override id+label —
-                   otherwise the spread clobbers `id: e.name` with the
-                   employee's numeric id, and Raised By gets saved as
-                   "10" / "54" / "3" instead of the person's name
-                   (mam reported on production 2026-05-28). */
-                options={employees.map(e => ({ ...e, id: e.name, label: e.name }))}
-                value={form.raised_by_name || null}
-                valueKey="id" displayKey="label"
-                placeholder="Search employee…"
-                onChange={(e) => setForm({ ...form, raised_by_name: e?.id || '' })}
-              />
+              {/* Auto-filled from the logged-in user and locked (mam
+                  2026-05-28): "Auto-fill from logged-in user, lock the
+                  field". Removes the entire class of "wrong person
+                  picked" bugs. The form's initial setForm() seeds
+                  raised_by_name to user.name on Raise Indent click, so
+                  the field is already correct — we just hide the
+                  picker and show the value as a read-only chip. */}
+              <div className="input bg-gray-50 text-gray-700 cursor-not-allowed select-none flex items-center justify-between">
+                <span className="font-medium">{form.raised_by_name || <em className="text-gray-400">(not signed in)</em>}</span>
+                <span className="text-[10px] text-gray-400 italic">auto-filled from your login</span>
+              </div>
             </div>
           </div>
 
