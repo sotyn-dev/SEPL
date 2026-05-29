@@ -179,6 +179,19 @@ try {
   console.warn('[hr-cron] Scheduler not started:', e.message);
 }
 
+// Procurement schedule reminder cron — mam (2026-05-29):
+// "only 1 day before reminder and suggestion".  Every weekday at
+// 09:00 (and 60 s after boot for catch-up) scans the schedule for
+// indent rows whose end_date == tomorrow's business day, and posts
+// an announcement + push for each.  Dedup table guarantees no
+// double-posts.  Skip via ERP_DISABLE_PROCSCH_REMINDER=1.
+try {
+  const { scheduleProcurementReminderCron } = require('./scripts/procurementReminderCron');
+  scheduleProcurementReminderCron();
+} catch (e) {
+  console.warn('[procsch-reminder] Scheduler not started:', e.message);
+}
+
 // Daily 09:00 CMD audit email — audit item B20 + TOC v3 P0 #5.
 // Reads the 07:30 snapshot JSON (falls back to live /audit/kpi if
 // the snapshot folder is missing) and emails the director address
@@ -190,6 +203,22 @@ try {
 } catch (e) {
   console.warn('[cmd-email] Scheduler not started:', e.message);
 }
+
+// Admin-triggered procurement reminder run — fires the 1-day-before
+// scan on demand so mam can verify the announcement + push delivery
+// without waiting for the 09:00 cron tick.  Uses the same auth
+// pattern as the CMD email manual trigger below.
+const { authMiddleware: _procReminderAuthMw } = require('./middleware/auth');
+app.post('/api/admin/procsch-reminder/run-now', _procReminderAuthMw, (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  try {
+    const { runOnce } = require('./scripts/procurementReminderCron');
+    const r = runOnce();
+    res.json({ message: 'Reminder scan complete', ...r });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Admin-triggered CMD email — sends the same daily summary on
 // demand so mam can verify SMTP + content without waiting for 9 AM.
