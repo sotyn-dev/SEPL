@@ -608,7 +608,12 @@ ${startDate && endDate ? `Total duration: ${Math.max(1, Math.round((new Date(end
 For EACH BOQ item below, predict three things:
   1. "trade" — exactly one of: Fire Fighting, Plumbing, Electrical, HVAC, Solar, Networking, CCTV, Cable, Civil, Other
   2. "dispatch_days" — typical business days from PO placed to material reaching site in Indian conditions (vendor lead + transport). Use real-world experience: standard items 5-10 d, imported/custom items 21-45 d, civil bulk 2-3 d, cable 5-7 d, fire pumps 14-21 d, AHUs 21-30 d. If the client requirements mention urgency / phasing / specific milestones, adjust accordingly.
-  3. "reasoning" — ONE short line (<= 80 chars) justifying your dispatch_days. Reference the project context when relevant ("imported AHU per Phase 2 spec", "standard local pipe — quick").
+  3. "reasoning" — ONE compact line (<= 140 chars). Mam 2026-05-29 wants the WEEKLY install/delivery breakdown surfaced here whenever it matters. Format guidance:
+       • If qty is high (e.g. 100+ valves, 500+ m of cable, 50+ DBs) → start with the weekly rate, e.g. "Install ~25/wk × 4 wks; ask vendor for staggered delivery (site storage tight)".
+       • If qty is small + one-shot (e.g. 1 pump, 3 AHUs) → mention it's a single delivery, e.g. "One-shot; 2 units used in week 6 commissioning".
+       • For bulk consumables (cable, pipe, brick) → suggest 2-3 delivery slots if the install window > 2 weeks.
+       • For imported / long-lead items → emphasise the lead time and any phasing hint from client requirements.
+       • Always reference project context when relevant ("imported AHU per Phase 2 spec", "standard local pipe — quick").
 
 ## BOQ items
 ${JSON.stringify(slim)}
@@ -649,7 +654,7 @@ Reply with ONLY a JSON array, no preamble, no markdown fences:
         item_unit: it?.unit,
         trade: s.trade || 'Other',
         dispatch_days: Math.max(1, Math.min(120, +s.dispatch_days || 7)),
-        reasoning: String(s.reasoning || '').slice(0, 240),
+        reasoning: String(s.reasoning || '').slice(0, 320),
       };
     });
     res.json({
