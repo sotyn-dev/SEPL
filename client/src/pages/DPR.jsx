@@ -1508,7 +1508,7 @@ function SiteDprHistoryModal({ siteId, siteName, engineerName, dateFrom, dateTo,
 
   useEffect(() => {
     setLoading(true);
-    api.get('/dpr', { params: { site_id: siteId, date_from: dateFrom, date_to: dateTo } })
+    api.get('/dpr', { params: { site_id: siteId, date_from: dateFrom, date_to: dateTo, include_siblings: 1 } })
       .then(r => setRows(Array.isArray(r.data) ? r.data : []))
       .catch(() => setRows([]))
       .finally(() => setLoading(false));

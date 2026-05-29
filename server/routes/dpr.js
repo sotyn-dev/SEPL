@@ -415,14 +415,34 @@ router.get('/', (req, res) => {
   // Engineer Compliance modal can pull every DPR for one site
   // across the filter range in one shot.  Existing single-date
   // callers (`date=`) still work — the params are independent.
-  const { site_id, date, date_from, date_to, status } = req.query;
+  //
+  // include_siblings=1: when set with site_id, expands the filter
+  // to every active site that shares the same name (legacy duplicate
+  // rows).  Mirrors the engineer-compliance aggregation so the
+  // drill-down modal count matches the card count.
+  const { site_id, date, date_from, date_to, status, include_siblings } = req.query;
   const db = getDb();
   const uid = req.user.id;
   const canSeeAll = dprCanSeeAll(db, req.user);
   let sql = `SELECT d.*, s.name as site_name, u.name as submitted_by_name, au.name as approved_by_name
     FROM dpr d LEFT JOIN sites s ON d.site_id=s.id LEFT JOIN users u ON d.submitted_by=u.id LEFT JOIN users au ON d.approved_by=au.id WHERE 1=1`;
   const params = [];
-  if (site_id) { sql += ' AND d.site_id=?'; params.push(site_id); }
+  if (site_id) {
+    if (include_siblings === '1') {
+      const siblings = db.prepare(`
+        SELECT DISTINCT s2.id FROM sites s1 JOIN sites s2 ON s2.name = s1.name
+         WHERE s1.id = ? AND s2.status = 'active'
+      `).all(site_id).map(r => r.id);
+      if (siblings.length) {
+        sql += ` AND d.site_id IN (${siblings.map(() => '?').join(',')})`;
+        params.push(...siblings);
+      } else {
+        sql += ' AND d.site_id=?'; params.push(site_id);
+      }
+    } else {
+      sql += ' AND d.site_id=?'; params.push(site_id);
+    }
+  }
   if (date) { sql += ' AND d.report_date=?'; params.push(date); }
   if (date_from) { sql += ' AND d.report_date >= ?'; params.push(String(date_from).slice(0, 10)); }
   if (date_to)   { sql += ' AND d.report_date <= ?'; params.push(String(date_to).slice(0, 10)); }
@@ -1095,48 +1115,52 @@ router.get('/engineer-compliance', (req, res) => {
     ORDER BY e.id, s.name
   `).all(...engineerIds);
 
-  // 3) Batched stats per (engineer × site).
-  //
-  //    Presence is the tricky one: in prod, engineers punch
-  //    attendance with EITHER a stale site_id (a legacy duplicate
-  //    row sharing the same site_name as the canonical one we just
-  //    resolved) OR with site_id NULL and only site_name as free
-  //    text.  v3 matched ONLY on canonical site_id → all 0/0/0.
-  //    v4 matches an attendance row to the engineer's site if ANY
-  //    of these line up:
-  //      a) att.site_id == canonical site_id we resolved
-  //      b) att.site_id is a same-name sibling of the canonical row
-  //      c) att.site_name (trimmed, lower) == site_name
-  //
-  //    Done in JS after one cheap fetch — attendance rows scoped to
-  //    the engineer set + date range stay small enough that the
-  //    name-matching loop is trivial.
+  // 3) Batched stats per (engineer × site).  Both attendance AND
+  //    DPR counts roll up across same-name SIBLING site rows (legacy
+  //    duplicates from PO re-uploads).  Production has many of these
+  //    — attendance gets logged against one site_id, DPRs against
+  //    another, but mam thinks of them as "one site".  Sum them.
   const allSiteIds = [...new Set(pairs.map(p => p.site_id))];
   const allEngIds  = [...new Set(pairs.map(p => p.engineer_id))];
   const presentMap = new Map();   // key: engineer_id|canonical_site_id → Set<date>
-  const dprMap     = new Map();   // key: site_id → days
-  const plMap      = new Map();   // key: site_id → profit_loss_sum
+  const dprMap     = new Map();   // key: canonical_site_id → Set<report_date>
+  const plMap      = new Map();   // key: canonical_site_id → profit_loss_sum
 
   if (allSiteIds.length && allEngIds.length) {
-    const sidP = allSiteIds.map(() => '?').join(',');
     const eidP = allEngIds.map(() => '?').join(',');
 
-    // (a) Pull every active site so we can map ANY attendance.site_id
-    //     back to its canonical (same-name) site_id used by pairs[].
-    const allActive = db.prepare(`SELECT id, name FROM sites WHERE status = 'active'`).all();
+    // Build a name → canonical-id-from-pairs lookup for every
+    // resolved (engineer, site) pair.  Also collect every active
+    // site so we can fan out "all sibling ids that share this name".
     const norm = (s) => (s || '').trim().toLowerCase();
-    const nameById = new Map();              // attendance.site_id → name
-    for (const r of allActive) nameById.set(r.id, r.name);
-
-    // For each engineer, build a name → canonical_site_id lookup so
-    // attendance can be steered to the right (engineer, site) bucket.
-    const engNameLookup = new Map();         // engId → Map<lower(name), canonical_site_id>
-    for (const p of pairs) {
-      if (!engNameLookup.has(p.engineer_id)) engNameLookup.set(p.engineer_id, new Map());
-      engNameLookup.get(p.engineer_id).set(norm(p.site_name), p.site_id);
+    const allActive = db.prepare(`SELECT id, name FROM sites WHERE status = 'active'`).all();
+    const nameById      = new Map();                 // any site_id → name
+    const siblingsByName = new Map();                 // lower(name) → [site_id, ...]
+    for (const r of allActive) {
+      nameById.set(r.id, r.name);
+      const k = norm(r.name);
+      if (!siblingsByName.has(k)) siblingsByName.set(k, []);
+      siblingsByName.get(k).push(r.id);
     }
 
-    // (b) Fetch attendance rows for these engineers in the range.
+    // canonical_site_id → [all sibling site_ids sharing its name]
+    const siblingsOfCanonical = new Map();
+    // attendance/dpr.site_id → canonical_site_id (any pair's canonical that shares the name)
+    const canonicalBySiteId = new Map();
+    // engineer → name → canonical_site_id (for the name-text path)
+    const engNameLookup = new Map();
+
+    for (const p of pairs) {
+      const k = norm(p.site_name);
+      const siblings = siblingsByName.get(k) || [p.site_id];
+      siblingsOfCanonical.set(p.site_id, siblings);
+      for (const sid of siblings) canonicalBySiteId.set(sid, p.site_id);
+      if (!engNameLookup.has(p.engineer_id)) engNameLookup.set(p.engineer_id, new Map());
+      engNameLookup.get(p.engineer_id).set(k, p.site_id);
+    }
+
+    // (a) Attendance — see v4 commit for the rationale on 3 paths:
+    //     direct id / sibling id / text name.
     const attRows = db.prepare(`
       SELECT user_id, date, site_id, site_name
         FROM attendance
@@ -1148,38 +1172,42 @@ router.get('/engineer-compliance', (req, res) => {
     for (const att of attRows) {
       const lookup = engNameLookup.get(att.user_id);
       if (!lookup) continue;
-      // Try paths a/b first via the attendance row's site_id
       let canonical = null;
       if (att.site_id != null) {
-        const nm = nameById.get(att.site_id);
-        if (nm) canonical = lookup.get(norm(nm));
+        canonical = canonicalBySiteId.get(att.site_id);     // direct or sibling
+        if (canonical == null) {                            // attendance points at a stale/inactive row — fall back to name lookup
+          const nm = nameById.get(att.site_id);
+          if (nm) canonical = lookup.get(norm(nm));
+        }
       }
-      // Path c — text site_name fallback when att.site_id was stale,
-      // NULL, or pointed at an inactive/deleted row.
-      if (canonical == null && att.site_name) {
-        canonical = lookup.get(norm(att.site_name));
-      }
-      if (canonical == null) continue;       // attendance for a site this engineer isn't assigned to
+      if (canonical == null && att.site_name) canonical = lookup.get(norm(att.site_name));
+      if (canonical == null) continue;
       const key = `${att.user_id}|${canonical}`;
       if (!presentMap.has(key)) presentMap.set(key, new Set());
       presentMap.get(key).add(att.date);
     }
 
-    // DPR + P&L roll-ups — site-scoped (any submitter), same as v1.
+    // (b) DPRs — fan out the canonical site_id to ALL siblings, then
+    //     fold their counts/sums back to the canonical id.  Without
+    //     this, DPRs filed against a legacy duplicate row are missed.
+    const expandedSiteIds = [...new Set(pairs.flatMap(p =>
+      siblingsOfCanonical.get(p.site_id) || [p.site_id]))];
+    const expP = expandedSiteIds.map(() => '?').join(',');
     const dprRows = db.prepare(`
-      SELECT site_id,
-             COUNT(DISTINCT report_date) AS days,
-             COALESCE(SUM(profit_loss), 0) AS pl
+      SELECT site_id, report_date, COALESCE(profit_loss, 0) AS pl
         FROM dpr
-       WHERE site_id IN (${sidP})
+       WHERE site_id IN (${expP})
          AND report_date BETWEEN ? AND ?
          AND COALESCE(is_planned_template, 0) = 0
-       GROUP BY site_id
-    `).all(...allSiteIds, from, to);
-    dprRows.forEach(r => {
-      dprMap.set(r.site_id, r.days);
-      plMap.set(r.site_id, r.pl);
-    });
+    `).all(...expandedSiteIds, from, to);
+
+    for (const d of dprRows) {
+      const canonical = canonicalBySiteId.get(d.site_id);
+      if (canonical == null) continue;
+      if (!dprMap.has(canonical)) dprMap.set(canonical, new Set());
+      dprMap.get(canonical).add(d.report_date);
+      plMap.set(canonical, (plMap.get(canonical) || 0) + d.pl);
+    }
   }
 
   // 4) Bucket sites into their engineer.  Engineers with no assigned
@@ -1199,7 +1227,7 @@ router.get('/engineer-compliance', (req, res) => {
     const bucket = byEng.get(p.engineer_id);
     if (!bucket) continue;
     const days_present    = presentMap.get(`${p.engineer_id}|${p.site_id}`)?.size || 0;
-    const days_dpr_filled = dprMap.get(p.site_id) || 0;
+    const days_dpr_filled = dprMap.get(p.site_id)?.size || 0;
     const profit_loss     = plMap.get(p.site_id) || 0;
     bucket.sites.push({
       site_id: p.site_id,
