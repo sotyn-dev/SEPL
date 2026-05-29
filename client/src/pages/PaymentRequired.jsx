@@ -189,14 +189,23 @@ export default function PaymentRequired() {
   };
 
   const [approvalRemarks, setApprovalRemarks] = useState('');
+  // Approver-side amount adjustment (mam 2026-05-28). String state so
+  // an empty input doesn't snap to 0 mid-typing.
+  const [approvalAmount, setApprovalAmount] = useState('');
 
   const handleApprove = async (id) => {
     if (!approvalRemarks || approvalRemarks.trim().length < 5) {
       return toast.error('Please enter approval reason (minimum 5 characters)');
     }
+    const original = +(viewData?.amount || 0);
+    const n = approvalAmount === '' ? null : +approvalAmount;
+    if (n !== null) {
+      if (!Number.isFinite(n) || n <= 0) return toast.error('Approved amount must be greater than 0');
+      if (n > original) return toast.error(`Approved amount cannot exceed the requested Rs ${original.toLocaleString('en-IN')}`);
+    }
     try {
-      const res = await api.put(`/payment-required/${id}/approve`, { remarks: approvalRemarks });
-      toast.success(res.data.message); setApprovalRemarks(''); load(); setModal(null); setViewData(null);
+      const res = await api.put(`/payment-required/${id}/approve`, { remarks: approvalRemarks, approved_amount: n });
+      toast.success(res.data.message); setApprovalRemarks(''); setApprovalAmount(''); load(); setModal(null); setViewData(null);
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -212,6 +221,12 @@ export default function PaymentRequired() {
 
   const viewRequest = async (id) => {
     const { data } = await api.get(`/payment-required/${id}`);
+    // Pre-fill the approval amount input with the latest agreed figure
+    // so the approver sees what they're carrying forward; they can edit
+    // before clicking Approve.
+    const current = data.approved_amount != null ? data.approved_amount : data.amount;
+    setApprovalAmount(current != null ? String(current) : '');
+    setApprovalRemarks('');
     setViewData(data); setModal('view');
   };
 
@@ -735,12 +750,27 @@ export default function PaymentRequired() {
               );
             })()}
 
-            {/* Approval trail */}
+            {/* Approval trail (now with per-step amount, mam 2026-05-28) */}
             {viewData.approvals?.length > 0 && (
-              <div><h5 className="font-semibold text-sm mb-2">Approval Trail</h5>
+              <div>
+                <h5 className="font-semibold text-sm mb-2 flex items-center justify-between">
+                  <span>Approval Trail</span>
+                  {viewData.approved_amount != null && viewData.approved_amount !== viewData.amount && (
+                    <span className="text-[11px] font-normal text-amber-700">
+                      Adjusted: Rs {(+viewData.amount).toLocaleString('en-IN')} → <b>Rs {(+viewData.approved_amount).toLocaleString('en-IN')}</b>
+                    </span>
+                  )}
+                </h5>
                 <div className="space-y-1">{viewData.approvals.map(a => (
-                  <div key={a.id} className={`text-xs p-2 rounded flex justify-between ${a.action === 'approved' ? 'bg-emerald-50' : 'bg-red-50'}`}>
-                    <span><strong>Step {a.step}:</strong> {a.step_name} - <span className={a.action === 'approved' ? 'text-emerald-600' : 'text-red-600'}>{a.action.toUpperCase()}</span> by {a.approved_by_name}</span>
+                  <div key={a.id} className={`text-xs p-2 rounded flex justify-between items-center ${a.action === 'approved' ? 'bg-emerald-50' : 'bg-red-50'}`}>
+                    <span>
+                      <strong>Step {a.step}:</strong> {a.step_name} —{' '}
+                      <span className={a.action === 'approved' ? 'text-emerald-700' : 'text-red-600'}>{a.action.toUpperCase()}</span>
+                      {' '}by {a.approved_by_name}
+                      {a.step_amount != null && (
+                        <span className="ml-2 text-[10px] font-semibold text-purple-700">@ Rs {(+a.step_amount).toLocaleString('en-IN')}</span>
+                      )}
+                    </span>
                     <span className="text-gray-400">{a.approved_at}</span>
                   </div>
                 ))}</div>
@@ -748,9 +778,49 @@ export default function PaymentRequired() {
             )}
 
             {/* Action buttons - role based */}
-            {viewData.status !== 'final_approved' && viewData.status !== 'rejected' && viewData.can_approve_current && (
+            {viewData.status !== 'final_approved' && viewData.status !== 'rejected' && viewData.can_approve_current && (() => {
+              const original = +(viewData.amount || 0);
+              const currentApproved = viewData.approved_amount != null ? +viewData.approved_amount : original;
+              const draft = approvalAmount === '' ? null : +approvalAmount;
+              const willReduce = draft != null && draft < currentApproved;
+              const reduceBy = willReduce ? currentApproved - draft : 0;
+              return (
               <div className="border-2 border-amber-300 rounded-lg p-4 bg-amber-50 space-y-3">
                 <h5 className="font-bold text-amber-800">Your Approval Required - Step {viewData.current_step}: {viewData.workflow?.[viewData.current_step - 1]?.name}</h5>
+
+                {/* Approver-side amount adjustment (mam 2026-05-28) */}
+                <div>
+                  <label className="label text-amber-700 flex items-center justify-between">
+                    <span>Approved Amount (₹) *</span>
+                    <span className="text-[10px] font-normal text-gray-500 normal-case">
+                      Original request: <b>Rs {original.toLocaleString('en-IN')}</b>
+                      {viewData.approved_amount != null && viewData.approved_amount !== viewData.amount && (
+                        <> · Already adjusted to <b>Rs {(+viewData.approved_amount).toLocaleString('en-IN')}</b></>
+                      )}
+                    </span>
+                  </label>
+                  <input
+                    type="number"
+                    className="input"
+                    min="1"
+                    max={original}
+                    step="0.01"
+                    value={approvalAmount}
+                    onChange={e => setApprovalAmount(e.target.value)}
+                    placeholder={`Defaults to Rs ${currentApproved.toLocaleString('en-IN')}`}
+                  />
+                  {willReduce && (
+                    <p className="text-[11px] text-amber-800 mt-1">
+                      ↓ Reducing by <b>Rs {reduceBy.toLocaleString('en-IN')}</b>. Final payment will be <b>Rs {draft.toLocaleString('en-IN')}</b>.
+                    </p>
+                  )}
+                  {draft != null && draft > original && (
+                    <p className="text-[11px] text-red-700 mt-1">
+                      ⚠️ Cannot approve more than the original request (Rs {original.toLocaleString('en-IN')}).
+                    </p>
+                  )}
+                </div>
+
                 <div>
                   <label className="label text-amber-700">Reason / Remarks (Required) *</label>
                   <textarea className="input" rows="3" value={approvalRemarks} onChange={e => setApprovalRemarks(e.target.value)}
@@ -761,7 +831,8 @@ export default function PaymentRequired() {
                   <button onClick={() => handleReject(viewData.id)} className="btn btn-danger flex-1 py-3 text-base font-bold">Reject</button>
                 </div>
               </div>
-            )}
+              );
+            })()}
           </div>
         )}
       </Modal>

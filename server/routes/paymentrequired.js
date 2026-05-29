@@ -4,6 +4,18 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
+// Approver-side amount adjustment (mam 2026-05-28: "at approval amount
+// can be changed by approver like if some one fill 600 at approval
+// approved amount 500"). Idempotent column adds at module-load time
+// so the schema is in place before any handler fires.
+//   payment_requests.approved_amount — latest amount agreed by approvers;
+//     NULL until first override. COALESCE(approved_amount, amount) is
+//     the figure used at final payment-release time.
+//   payment_approvals.step_amount    — what THIS step's approver agreed.
+//     Builds the per-step audit trail (Original 600 → HR 500 → Acct 500).
+try { getDb().exec(`ALTER TABLE payment_requests ADD COLUMN approved_amount REAL`); } catch (_) {}
+try { getDb().exec(`ALTER TABLE payment_approvals ADD COLUMN step_amount REAL`); } catch (_) {}
+
 // Helper: does the user see EVERY payment request, or only their own?
 // Admin always sees all. Otherwise the user sees all iff one of their
 // roles has either can_approve=1 OR can_see_all=1 on payment_required.
@@ -493,8 +505,12 @@ function advanceToNextStep(db, request, approvedBy) {
         const dr = db.prepare('INSERT INTO cash_flow_daily (date, opening_balance, closing_balance) VALUES (?,?,?)').run(today, prev?.closing_balance || 0, prev?.closing_balance || 0);
         daily = { id: dr.lastInsertRowid };
       }
+      // Pay out the latest approver-agreed amount, not the original
+      // request (mam 2026-05-28). Falls back to the original when no
+      // approver ever overrode.
+      const payoutAmount = (request.approved_amount != null) ? +request.approved_amount : +request.amount;
       db.prepare('INSERT INTO cash_flow_entries (daily_id, date, type, category, description, amount, party_name, created_by) VALUES (?,?,?,?,?,?,?,?)')
-        .run(daily.id, today, 'outflow', request.category, `Payment: ${request.request_no} - ${request.purpose}`, request.amount, request.employee_name, approvedBy);
+        .run(daily.id, today, 'outflow', request.category, `Payment: ${request.request_no} - ${request.purpose}`, payoutAmount, request.employee_name, approvedBy);
     } catch (e) {}
     return 'final_approved';
   }
@@ -527,7 +543,7 @@ function advanceToNextStep(db, request, approvedBy) {
 
 // PUT approve
 router.put('/:id/approve', requirePermission('payment_required', 'approve'), (req, res) => {
-  const { remarks } = req.body;
+  const { remarks, approved_amount } = req.body;
   if (!remarks || remarks.trim().length < 5) return res.status(400).json({ error: 'Remarks required (min 5 chars)' });
   const db = getDb();
   const request = db.prepare('SELECT * FROM payment_requests WHERE id=?').get(req.params.id);
@@ -540,13 +556,35 @@ router.put('/:id/approve', requirePermission('payment_required', 'approve'), (re
     return res.status(403).json({ error: `Not authorized. This step requires: ${stepInfo?.approver_role}` });
   }
 
+  // Resolve the amount this step is approving.
+  //  - approved_amount omitted → carry forward current approved amount
+  //    (or original if no prior override).
+  //  - approved_amount provided → validate: > 0 and ≤ original requested.
+  //    Decrease-only guard prevents an approver paying out MORE than
+  //    the requester asked for.
+  const currentApproved = (request.approved_amount != null) ? +request.approved_amount : +request.amount;
+  let stepAmount = currentApproved;
+  if (approved_amount !== undefined && approved_amount !== null && approved_amount !== '') {
+    const n = +approved_amount;
+    if (!Number.isFinite(n) || n <= 0) return res.status(400).json({ error: 'Approved amount must be a positive number' });
+    if (n > +request.amount) return res.status(400).json({ error: `Approved amount cannot exceed the original request (Rs ${(+request.amount).toLocaleString('en-IN')})` });
+    stepAmount = n;
+  }
+
   const workflow = WORKFLOW[request.category];
   const stepInfo = workflow.find(w => w.step === request.current_step);
-  db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, approved_by) VALUES (?,?,?,?,?,?)')
-    .run(request.id, request.current_step, stepInfo.name, 'approved', remarks, req.user.id);
+  db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, step_amount, approved_by) VALUES (?,?,?,?,?,?,?)')
+    .run(request.id, request.current_step, stepInfo.name, 'approved', remarks, stepAmount, req.user.id);
+
+  // Persist the new approved amount on the request itself so the next
+  // approver (and the final cash-flow entry) see the latest figure.
+  if (stepAmount !== currentApproved || request.approved_amount == null) {
+    db.prepare('UPDATE payment_requests SET approved_amount=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(stepAmount, request.id);
+    request.approved_amount = stepAmount;
+  }
 
   const result = advanceToNextStep(db, request, req.user.id);
-  res.json({ message: `${stepInfo.name} approved`, result });
+  res.json({ message: `${stepInfo.name} approved`, result, approved_amount: stepAmount });
 });
 
 // PUT reject
