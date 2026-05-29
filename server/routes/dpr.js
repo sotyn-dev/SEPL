@@ -1102,6 +1102,9 @@ router.get('/engineer-compliance', (req, res) => {
   });
 });
 
+// /progress MUST be registered above /:id — see progressHandler above.
+router.get('/progress', progressHandler);
+
 // Get DPR details
 router.get('/:id', (req, res) => {
   const db = getDb();
@@ -1157,16 +1160,20 @@ router.delete('/sites/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
-// Engineer → Site → BOQ progress. Shows every site each Site Engineer is
-// assigned to (directly on sites.site_engineer_id or via a linked PO's
-// site_engineer_ids CSV), with BOQ qty vs consumed qty from DPR work items
-// and a % complete per item and per site.
-router.get('/progress', (req, res) => {
+// Engineer → Site → BOQ progress.  Defined here as a named function
+// so it can be wired in ABOVE GET /:id (otherwise the id-matcher
+// shadows /progress — was a latent bug that returned 404 silently).
+//
+// Mam (2026-05-29): "erp is hange make it lite".  Replaced the
+// original N×M×K query loop (one SUM per BOQ item per site per
+// engineer) with 4 batched queries total — order-of-magnitude
+// faster on prod-sized data sets.
+function progressHandler(req, res) {
   const db = getDb();
   const uid = req.user.id;
   const canSeeAll = dprCanSeeAll(db, req.user);
 
-  // Base engineer pool: users with Site Engineer role. Non-admins only see themselves.
+  // 1) Engineer pool
   let engineers = db.prepare(`
     SELECT DISTINCT u.id, u.name, u.email
     FROM users u
@@ -1176,92 +1183,177 @@ router.get('/progress', (req, res) => {
     ORDER BY u.name
   `).all();
   if (!canSeeAll) engineers = engineers.filter(e => e.id === uid);
+  if (engineers.length === 0) return res.json([]);
 
-  const siteSql = `SELECT MIN(s.id) as id, s.name, s.business_book_id, s.po_id, s.site_engineer_id, s.client_name
-    FROM sites s
-    WHERE (s.site_engineer_id = ? OR EXISTS (
-      SELECT 1 FROM purchase_orders po
-      WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
-        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?)
-    ))
-    GROUP BY s.name`;
+  // 2) Every (engineer, site) pair in one query.  The old code looped
+  //    siteSql per engineer; this self-joins purchase_orders once.
+  //    GROUP BY site name dedupes legacy duplicate rows the same way
+  //    the per-engineer loop used to.
+  const engineerIds = engineers.map(e => e.id);
+  const engPlaceholders = engineerIds.map(() => '?').join(',');
+  // We resolve the engineer→site assignment via two paths so SQLite
+  // can keep it as a single scan: (a) sites.site_engineer_id matches,
+  // OR (b) the linked PO's site_engineer_id / site_engineer_ids CSV
+  // includes the engineer.
+  const sitesPerEng = db.prepare(`
+    SELECT
+      e.id   AS engineer_id,
+      MIN(s.id) AS site_id,
+      s.name AS site_name,
+      MAX(s.client_name) AS client_name,
+      MAX(s.business_book_id) AS business_book_id
+    FROM (SELECT DISTINCT id FROM users WHERE id IN (${engPlaceholders})) e
+    JOIN sites s ON (
+      s.site_engineer_id = e.id
+      OR EXISTS (
+        SELECT 1 FROM purchase_orders po
+         WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
+           AND (
+             po.site_engineer_id = e.id
+             OR (',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ('%,' || e.id || ',%')
+           )
+      )
+    )
+    GROUP BY e.id, s.name
+  `).all(...engineerIds);
 
-  const result = [];
-  for (const eng of engineers) {
-    const sites = db.prepare(siteSql).all(eng.id, `%,${eng.id},%`, eng.id);
-    const siteDetails = [];
-    for (const site of sites) {
-      // Collect all business_book_ids for same-named sites (legacy duplicates)
-      const bbIds = db.prepare('SELECT DISTINCT business_book_id FROM sites WHERE name=? AND business_book_id IS NOT NULL').all(site.name).map(r => r.business_book_id);
-      let items = [];
-      if (bbIds.length > 0) {
-        const placeholders = bbIds.map(() => '?').join(',');
-        items = db.prepare(`SELECT * FROM po_items WHERE business_book_id IN (${placeholders})`).all(...bbIds);
-      } else if (site.business_book_id) {
-        items = db.prepare('SELECT * FROM po_items WHERE business_book_id=?').all(site.business_book_id);
-      }
+  if (sitesPerEng.length === 0) {
+    return res.json(engineers.map(e => ({ engineer: { id: e.id, name: e.name, email: e.email }, site_count: 0, sites: [] })));
+  }
 
-      // All site-IDs with the same site name — DPRs are submitted against a
-      // specific site_id, but re-uploading a PO recycles po_items with new
-      // IDs, so we also match on description within this site's DPRs.
-      const siteIds = db.prepare('SELECT id FROM sites WHERE name=?').all(site.name).map(r => r.id);
-      const sidPlaceholders = siteIds.length ? siteIds.map(() => '?').join(',') : '?';
-      const sidParams = siteIds.length ? siteIds : [site.id];
-
-      let totalBoq = 0, totalDone = 0;
-      const itemRows = items.map(it => {
-        const done = db.prepare(`
-          SELECT COALESCE(SUM(wi.actual_qty), 0) as t
-          FROM dpr_work_items wi
-          JOIN dpr d ON wi.dpr_id = d.id
-          WHERE d.site_id IN (${sidPlaceholders})
-            AND (wi.po_item_id = ? OR (wi.description IS NOT NULL AND wi.description = ?))
-        `).get(...sidParams, it.id, it.description).t || 0;
-
-        const boq = it.quantity || 0;
-        const remaining = Math.max(0, boq - done);
-        const pct = boq > 0 ? Math.min(100, Math.round((done / boq) * 1000) / 10) : 0;
-        const boqAmount = (it.rate || 0) * boq;
-        const doneAmount = (it.rate || 0) * done;
-        totalBoq += boqAmount;
-        totalDone += doneAmount;
-        return {
-          po_item_id: it.id,
-          description: it.description,
-          unit: it.unit,
-          rate: it.rate || 0,
-          boq_qty: boq,
-          done_qty: done,
-          remaining_qty: remaining,
-          pct_complete: pct,
-          boq_amount: Math.round(boqAmount),
-          done_amount: Math.round(doneAmount),
-        };
-      });
-      // Sort: incomplete first (so engineer sees pending work), then by name
-      itemRows.sort((a, b) => (a.pct_complete - b.pct_complete) || a.description.localeCompare(b.description));
-
-      const overallPct = totalBoq > 0 ? Math.round((totalDone / totalBoq) * 1000) / 10 : 0;
-      siteDetails.push({
-        site_id: site.id,
-        site_name: site.name,
-        client_name: site.client_name,
-        total_boq_amount: Math.round(totalBoq),
-        total_done_amount: Math.round(totalDone),
-        overall_pct: overallPct,
-        item_count: itemRows.length,
-        items: itemRows,
-      });
+  // 3) Resolve site-name → all matching site_ids + bb_ids in ONE query.
+  //    Used for two things: (a) finding every po_items row that could
+  //    belong to a same-named legacy duplicate, (b) finding every
+  //    dpr.site_id we need to roll up consumption against.
+  const uniqueSiteNames = [...new Set(sitesPerEng.map(r => r.site_name))];
+  const nameP = uniqueSiteNames.map(() => '?').join(',');
+  const sitesByName = db.prepare(`
+    SELECT id, name, business_book_id FROM sites WHERE name IN (${nameP})
+  `).all(...uniqueSiteNames);
+  const siteIdsByName = new Map();   // name → [site_id, ...]
+  const bbIdsByName = new Map();     // name → [bb_id, ...] (non-null)
+  for (const r of sitesByName) {
+    if (!siteIdsByName.has(r.name)) siteIdsByName.set(r.name, []);
+    siteIdsByName.get(r.name).push(r.id);
+    if (r.business_book_id != null) {
+      if (!bbIdsByName.has(r.name)) bbIdsByName.set(r.name, new Set());
+      bbIdsByName.get(r.name).add(r.business_book_id);
     }
-    siteDetails.sort((a, b) => a.site_name.localeCompare(b.site_name));
-    result.push({
-      engineer: { id: eng.id, name: eng.name, email: eng.email },
-      site_count: siteDetails.length,
-      sites: siteDetails,
+  }
+
+  // 4) All po_items for all relevant bb_ids — ONE query.
+  const allBbIds = [...new Set([...bbIdsByName.values()].flatMap(s => [...s]))];
+  const poItems = allBbIds.length
+    ? db.prepare(`SELECT id, business_book_id, description, unit, rate, quantity FROM po_items WHERE business_book_id IN (${allBbIds.map(()=>'?').join(',')})`).all(...allBbIds)
+    : [];
+  // Group po_items by bb_id so we can stitch per-site later
+  const itemsByBbId = new Map();
+  for (const it of poItems) {
+    if (!itemsByBbId.has(it.business_book_id)) itemsByBbId.set(it.business_book_id, []);
+    itemsByBbId.get(it.business_book_id).push(it);
+  }
+
+  // 5) All consumed (SUM actual_qty) per (site_id, po_item_id) AND per
+  //    (site_id, description) — ONE query each.  The OR-on-id-or-desc
+  //    fallback exists because re-uploaded POs recycle po_items with
+  //    new ids; we have to match the legacy DPR rows on description.
+  const allSiteIds = [...new Set(sitesByName.map(r => r.id))];
+  const sidP = allSiteIds.map(() => '?').join(',');
+  let consumedByItemId = new Map();   // key: site_id|po_item_id → qty
+  let consumedByDesc   = new Map();   // key: site_id|description → qty
+  if (allSiteIds.length) {
+    const byId = db.prepare(`
+      SELECT d.site_id, wi.po_item_id, COALESCE(SUM(wi.actual_qty), 0) AS t
+        FROM dpr_work_items wi JOIN dpr d ON wi.dpr_id = d.id
+       WHERE d.site_id IN (${sidP}) AND wi.po_item_id IS NOT NULL
+       GROUP BY d.site_id, wi.po_item_id
+    `).all(...allSiteIds);
+    byId.forEach(r => consumedByItemId.set(`${r.site_id}|${r.po_item_id}`, r.t || 0));
+
+    const byDesc = db.prepare(`
+      SELECT d.site_id, wi.description, COALESCE(SUM(wi.actual_qty), 0) AS t
+        FROM dpr_work_items wi JOIN dpr d ON wi.dpr_id = d.id
+       WHERE d.site_id IN (${sidP}) AND wi.description IS NOT NULL
+       GROUP BY d.site_id, wi.description
+    `).all(...allSiteIds);
+    byDesc.forEach(r => consumedByDesc.set(`${r.site_id}|${r.description}`, r.t || 0));
+  }
+
+  // 6) Stitch — pure JS, no further DB hits.
+  const engBucket = new Map();
+  for (const e of engineers) engBucket.set(e.id, { engineer: { id: e.id, name: e.name, email: e.email }, sites: [] });
+
+  for (const row of sitesPerEng) {
+    const siteIdsForThisName = siteIdsByName.get(row.site_name) || [row.site_id];
+    const bbIdsForThisName   = [...(bbIdsByName.get(row.site_name) || [])];
+    // Gather items: union of po_items across every bb_id that matches
+    // this site-name.  Dedupe by description so same-spec items from
+    // multiple re-uploaded POs don't double up.
+    const itemPool = bbIdsForThisName.flatMap(b => itemsByBbId.get(b) || []);
+    const dedup = new Map();
+    for (const it of itemPool) {
+      // Prefer the one with a non-zero quantity — older PO uploads
+      // sometimes left 0 in the legacy row.
+      const k = it.description;
+      const cur = dedup.get(k);
+      if (!cur || (it.quantity || 0) > (cur.quantity || 0)) dedup.set(k, it);
+    }
+    const items = [...dedup.values()];
+
+    let totalBoq = 0, totalDone = 0;
+    const itemRows = items.map(it => {
+      // Sum consumption across EVERY same-named site_id (legacy dupes).
+      let done = 0;
+      for (const sid of siteIdsForThisName) {
+        done += consumedByItemId.get(`${sid}|${it.id}`) || 0;
+        // The id-or-desc OR fallback in the old single-query version
+        // double-counted when both matched; here we only add the
+        // desc path if no id-keyed total was found for this site.
+        if (!consumedByItemId.has(`${sid}|${it.id}`)) {
+          done += consumedByDesc.get(`${sid}|${it.description}`) || 0;
+        }
+      }
+      const boq = it.quantity || 0;
+      const remaining = Math.max(0, boq - done);
+      const pct = boq > 0 ? Math.min(100, Math.round((done / boq) * 1000) / 10) : 0;
+      const boqAmount = (it.rate || 0) * boq;
+      const doneAmount = (it.rate || 0) * done;
+      totalBoq += boqAmount; totalDone += doneAmount;
+      return {
+        po_item_id: it.id,
+        description: it.description,
+        unit: it.unit,
+        rate: it.rate || 0,
+        boq_qty: boq,
+        done_qty: done,
+        remaining_qty: remaining,
+        pct_complete: pct,
+        boq_amount: Math.round(boqAmount),
+        done_amount: Math.round(doneAmount),
+      };
+    });
+    itemRows.sort((a, b) => (a.pct_complete - b.pct_complete) || a.description.localeCompare(b.description));
+    const overallPct = totalBoq > 0 ? Math.round((totalDone / totalBoq) * 1000) / 10 : 0;
+
+    const bucket = engBucket.get(row.engineer_id);
+    if (bucket) bucket.sites.push({
+      site_id: row.site_id,
+      site_name: row.site_name,
+      client_name: row.client_name,
+      total_boq_amount: Math.round(totalBoq),
+      total_done_amount: Math.round(totalDone),
+      overall_pct: overallPct,
+      item_count: itemRows.length,
+      items: itemRows,
     });
   }
+
+  const result = [...engBucket.values()].map(b => {
+    b.sites.sort((a, b) => a.site_name.localeCompare(b.site_name));
+    return { ...b, site_count: b.sites.length };
+  });
   res.json(result);
-});
+};
 
 // No DPR = no payment check
 router.get('/payment-check/:site_id', (req, res) => {

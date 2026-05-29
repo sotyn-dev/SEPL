@@ -150,19 +150,52 @@ export default function DPR() {
   const [progress, setProgress] = useState([]);
   const [expandedSite, setExpandedSite] = useState({}); // { "engineerId-siteId": true }
 
-  const load = () => {
-    api.get('/dpr/summary').then(r => setSummary(r.data));
-    // Stat-card filter on & user hasn't picked a date yet → fetch ALL DPRs
-    // so Pending/Billing shows matches across every date by default.
-    // Otherwise scope to the date (either user-picked or today's default).
+  // Mam (2026-05-29): "erp is hange make it lite".  The page used to
+  // fire ALL FIVE endpoints in parallel on mount AND block the whole
+  // page on `if (!summary) Loading...` until the slowest one (the
+  // BOQ-progress widget — N×M×K SUM queries) returned.  Now each tab
+  // fetches only what it needs, and load() refreshes only the slices
+  // already in scope so submit/approve/delete actions don't re-fire
+  // dormant tabs.
+  const loadSummary  = () => api.get('/dpr/summary').then(r => setSummary(r.data)).catch(() => {});
+  const loadSites    = () => api.get('/dpr/sites').then(r => setSites(r.data)).catch(() => {});
+  const loadUsers    = () => api.get('/auth/users?active_only=1').then(r => setUsers(r.data)).catch(() => {});
+  const loadDprs     = () => {
     const params = (reportFilter && !dateTouched) ? {} : { date: filterDate };
-    api.get('/dpr', { params }).then(r => setDprs(r.data));
-    api.get('/dpr/sites').then(r => setSites(r.data));
-    // Mam (2026-05-22): hide inactive ex-employees from DPR assignment.
-    api.get('/auth/users?active_only=1').then(r => setUsers(r.data)).catch(() => {});
-    api.get('/dpr/progress').then(r => setProgress(r.data)).catch(() => setProgress([]));
+    return api.get('/dpr', { params }).then(r => setDprs(r.data)).catch(() => {});
   };
-  useEffect(() => { load(); }, [filterDate, reportFilter, dateTouched]);
+  const loadProgress = () => api.get('/dpr/progress').then(r => setProgress(r.data)).catch(() => setProgress([]));
+
+  // Refresh whatever is already on screen.  Called after submit /
+  // approve / delete actions.  Doesn't pull dormant tabs into scope.
+  const load = () => {
+    loadSummary();
+    loadSites();              // always needed: site picker in submit modal
+    loadUsers();               // always needed: engineer picker in site modal
+    if (tab === 'reports' || dprs.length)   loadDprs();
+    if (tab === 'dashboard' || progress.length) loadProgress();
+  };
+  // Mount: pull only the always-needed bits (summary tiles + sites
+  // picker + users for the Site modal) so the page paints instantly.
+  // Heavy slices (BOQ progress, DPR list) come in via the tab-change
+  // effect below — only when that tab is actually opened.
+  useEffect(() => { loadSummary(); loadSites(); loadUsers(); }, []);
+
+  // DPR list refetches whenever the date / status filter changes — but
+  // ONLY if the user is on (or has visited) the Daily Reports tab.
+  useEffect(() => {
+    if (tab === 'reports' || dprs.length) loadDprs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterDate, reportFilter, dateTouched, tab]);
+
+  // Heavy BOQ-progress widget loads only when the dashboard tab is
+  // active (and once loaded, refreshes on subsequent dashboard visits
+  // via the same effect re-firing).  This is the single biggest
+  // reason the page used to hang at "Loading...".
+  useEffect(() => {
+    if (tab === 'dashboard' && progress.length === 0) loadProgress();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   const handleSiteSelect = (siteId) => {
     setForm(f => ({ ...f, site_id: siteId }));
@@ -260,7 +293,10 @@ export default function DPR() {
   const approveDpr = async (id, status, billingReady) => { await api.put(`/dpr/${id}/approve`, { approval_status: status, billing_ready: billingReady }); toast.success(`DPR ${status}`); load(); };
   const viewDpr = async (id) => { const { data } = await api.get(`/dpr/${id}`); setSelectedDpr(data); setDetailModal(true); };
 
-  if (!summary) return <div className="text-center py-10">Loading...</div>;
+  // Mam (2026-05-29): we used to gate the WHOLE page on `summary`
+  // here — meaning the toolbar didn't even render until /dpr/summary
+  // returned.  Now we paint immediately and the Dashboard tab below
+  // shows a thin skeleton while summary loads.
 
   return (
     <div className="space-y-6">
@@ -286,26 +322,26 @@ export default function DPR() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <button type="button" onClick={() => { setReportFilter(''); setTab('sites'); }}
               className="card text-center border-l-4 border-red-500 text-left hover:shadow-md transition-shadow cursor-pointer">
-              <div className="text-3xl font-bold text-red-600">{summary.activeSites}</div>
+              <div className="text-3xl font-bold text-red-600">{summary ? summary.activeSites : '—'}</div>
               <div className="text-sm text-gray-500">Active Sites <span className="text-[10px] text-red-600 font-semibold">→ view</span></div>
             </button>
             <button type="button" onClick={() => { setFilterDate(new Date().toISOString().split('T')[0]); setDateTouched(true); setReportFilter(''); setTab('reports'); }}
               className="card text-center border-l-4 border-emerald-500 text-left hover:shadow-md transition-shadow cursor-pointer">
-              <div className="text-3xl font-bold text-emerald-600">{summary.todaySubmissions}</div>
+              <div className="text-3xl font-bold text-emerald-600">{summary ? summary.todaySubmissions : '—'}</div>
               <div className="text-sm text-gray-500">DPR Today <span className="text-[10px] text-emerald-600 font-semibold">→ view</span></div>
             </button>
             <button type="button" onClick={() => { setDateTouched(false); setReportFilter('pending'); setTab('reports'); }}
               className="card text-center border-l-4 border-amber-500 text-left hover:shadow-md transition-shadow cursor-pointer">
-              <div className="text-3xl font-bold text-amber-600">{summary.pendingApproval}</div>
+              <div className="text-3xl font-bold text-amber-600">{summary ? summary.pendingApproval : '—'}</div>
               <div className="text-sm text-gray-500">Pending Approval <span className="text-[10px] text-amber-600 font-semibold">→ view</span></div>
             </button>
             <button type="button" onClick={() => { setDateTouched(false); setReportFilter('billing'); setTab('reports'); }}
               className="card text-center border-l-4 border-purple-500 text-left hover:shadow-md transition-shadow cursor-pointer">
-              <div className="text-3xl font-bold text-purple-600">{summary.billingReady}</div>
+              <div className="text-3xl font-bold text-purple-600">{summary ? summary.billingReady : '—'}</div>
               <div className="text-sm text-gray-500">Billing Ready <span className="text-[10px] text-purple-600 font-semibold">→ view</span></div>
             </button>
           </div>
-          {summary.missingSites.length > 0 && (
+          {summary && summary.missingSites.length > 0 && (
             <div className="bg-red-50 border border-red-200 rounded-xl p-4">
               <div className="flex items-center gap-2 mb-2"><FiAlertTriangle className="text-red-600" size={20} /><h4 className="font-bold text-red-700">NO DPR - Payment Blocked!</h4></div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2">{summary.missingSites.map(s => (
@@ -313,8 +349,11 @@ export default function DPR() {
               ))}</div>
             </div>
           )}
-          {summary.missingSites.length === 0 && summary.activeSites > 0 && (
+          {summary && summary.missingSites.length === 0 && summary.activeSites > 0 && (
             <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center gap-3"><FiCheck className="text-emerald-600" size={24} /><h4 className="font-bold text-emerald-700">All sites submitted DPR today!</h4></div>
+          )}
+          {!summary && (
+            <div className="text-center py-4 text-gray-400 text-sm">Loading dashboard summary…</div>
           )}
 
           {/* BOQ vs DPR-consumed progress, grouped by engineer → site → item */}
