@@ -66,6 +66,10 @@ export default function ProcurementSchedule() {
   // Loaded per project, defaults to business_book's committed_* columns.
   const [meta, setMeta] = useState(null);
   const [metaDirty, setMetaDirty] = useState(false);
+  // Bundle B (mam 2026-05-28) — vision API on by default. Mam can opt out
+  // to keep the regenerate cheap (~₹2-5/call without drawings vs ~₹15-100
+  // when 5+ pages of PDFs are read).
+  const [skipDrawings, setSkipDrawings] = useState(false);
 
   const loadProjects = useCallback(() => {
     api.get('/procurement-schedule/projects').then(r => setProjects(r.data || [])).catch(() => {});
@@ -113,6 +117,7 @@ export default function ProcurementSchedule() {
         start_date: meta?.start_date || null,
         end_date:   meta?.end_date   || null,
         client_requirements: meta?.client_requirements || '',
+        skip_drawings: skipDrawings,
       });
       setAiDraft(r.data);
       toast.success(`AI proposed lead times for ${r.data.suggestions.length} items — review below`);
@@ -269,7 +274,15 @@ export default function ProcurementSchedule() {
                     <input type="file" className="hidden" accept="application/pdf,image/*" onChange={e => { uploadDrawing(e.target.files?.[0]); e.target.value = ''; }} />
                   </label>
                 )}
-                <p className="text-[10px] text-gray-500 mt-1">AI sees filenames only for now (e.g. "FF Layout L2.pdf" → expects fire-fighting items on level 2). Reading drawing contents is a heavier Bundle B feature.</p>
+                <p className="text-[10px] text-gray-500 mt-1">
+                  <b>AI reads drawing contents now.</b> PDF pages / images are sent to Claude's vision API so the model can cross-check the BOQ against the layout, spot missing items, and refine lead times. Cost: ~₹2–5 per page.
+                </p>
+                {meta.drawings && meta.drawings.length > 0 && canEdit('procurement_schedule') && (
+                  <label className="text-[11px] flex items-center gap-1.5 mt-2 cursor-pointer">
+                    <input type="checkbox" checked={skipDrawings} onChange={e => setSkipDrawings(e.target.checked)} />
+                    <span>Skip drawings this run (save tokens — filenames only, no vision)</span>
+                  </label>
+                )}
               </div>
 
               <div className="flex items-center justify-between pt-2 border-t border-blue-100">
@@ -362,6 +375,14 @@ function AiDraftReview({ draft, onApprove, onCancel, approving, canEdit }) {
               <> · {draft.input_tokens.toLocaleString('en-IN')} in + {draft.output_tokens.toLocaleString('en-IN')} out tokens</>
             )}
           </p>
+          {draft.vision && (
+            <p className="text-[10px] text-gray-500 mt-0.5">
+              {draft.vision.used
+                ? <>📐 AI saw <b>{draft.vision.sent}</b> drawing{draft.vision.sent === 1 ? '' : 's'} ({(draft.vision.bytes_used/1024/1024).toFixed(1)} MB){draft.vision.skipped?.length > 0 && <> · skipped {draft.vision.skipped.length}: {draft.vision.skipped.map(s => s.filename).join(', ')}</>}</>
+                : <>Vision skipped — AI saw filenames only</>
+              }
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           <button onClick={onCancel} disabled={approving} className="btn btn-secondary text-xs disabled:opacity-40">Cancel</button>

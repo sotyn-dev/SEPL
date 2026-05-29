@@ -481,7 +481,51 @@ router.post('/:project_id/ai-suggest', requirePermission('procurement_schedule',
   const startDate = req.body?.start_date || meta?.start_date || bbDates?.committed_start_date || null;
   const endDate   = req.body?.end_date   || meta?.end_date   || bbDates?.committed_completion_date || project.completion_date;
   const clientReq = (req.body?.client_requirements ?? meta?.client_requirements ?? '').toString().trim();
-  const drawings = db.prepare('SELECT filename, file_size FROM procurement_schedule_drawings WHERE project_id = ? ORDER BY uploaded_at').all(pid);
+  const drawings = db.prepare(
+    'SELECT id, filename, storage_path, file_type, file_size FROM procurement_schedule_drawings WHERE project_id = ? ORDER BY uploaded_at'
+  ).all(pid);
+  // Bundle B (mam 2026-05-28): vision API reads the drawings unless the
+  // client opted out for cost control. Anthropic accepts PDFs as base64
+  // 'document' blocks and images as 'image' blocks; size-cap below.
+  const useVision = req.body?.skip_drawings ? false : true;
+  const VISION_CAP_BYTES = 25 * 1024 * 1024;   // 25MB total per request
+  const visionBlocks = [];
+  let visionBytesUsed = 0;
+  let visionSkipped = [];
+  if (useVision && drawings.length > 0) {
+    for (const d of drawings) {
+      if (visionBytesUsed + d.file_size > VISION_CAP_BYTES) {
+        visionSkipped.push({ filename: d.filename, reason: 'budget exceeded' });
+        continue;
+      }
+      try {
+        const full = path.join(drawingDir, d.storage_path);
+        if (!fs.existsSync(full)) { visionSkipped.push({ filename: d.filename, reason: 'missing on disk' }); continue; }
+        const buf = fs.readFileSync(full);
+        const mime = d.file_type || (d.filename.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png');
+        if (mime === 'application/pdf') {
+          visionBlocks.push({
+            type: 'document',
+            source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') },
+            // Per-block title helps Claude reference which drawing it's reading.
+            title: d.filename,
+            citations: { enabled: false },
+          });
+        } else if (mime.startsWith('image/')) {
+          visionBlocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: mime, data: buf.toString('base64') },
+          });
+        } else {
+          visionSkipped.push({ filename: d.filename, reason: `unsupported type ${mime}` });
+          continue;
+        }
+        visionBytesUsed += d.file_size;
+      } catch (e) {
+        visionSkipped.push({ filename: d.filename, reason: e.message });
+      }
+    }
+  }
 
   // Trim payload so the model doesn't choke on huge prompts.
   const slim = items.map(it => ({
@@ -511,7 +555,19 @@ ${startDate && endDate ? `Total duration: ${Math.max(1, Math.round((new Date(end
     prompt += `\n## Client / project requirements (free-text from procurement team)\n${clientReq.slice(0, 4000)}\n`;
   }
   if (drawings.length > 0) {
-    prompt += `\n## Drawings attached (filenames only — vision not enabled in this call)\n${drawings.map((d, i) => `${i+1}. ${d.filename} (${(d.file_size/1024).toFixed(0)} KB)`).join('\n')}\nUse the filenames as hints (e.g. "FF Layout L2.pdf" suggests fire-fighting on level 2, expect more pumps + hydrants).\n`;
+    const visionList = drawings.map((d, i) => {
+      const sent = visionBlocks.find(b => (b.title || '') === d.filename || b.type === 'image');
+      const status = useVision && sent ? 'attached as image/PDF below'
+                   : visionSkipped.find(s => s.filename === d.filename) ? `skipped (${visionSkipped.find(s=>s.filename===d.filename).reason})`
+                   : 'filename only';
+      return `${i+1}. ${d.filename} (${(d.file_size/1024).toFixed(0)} KB) — ${status}`;
+    }).join('\n');
+    prompt += `\n## Drawings attached\n${visionList}\n`;
+    if (visionBlocks.length > 0) {
+      prompt += `\nYou can SEE the attached drawings above. Use them to (a) cross-check the BOQ for items that appear in the drawing but are missing from the list, (b) refine lead-time predictions when the drawing reveals make/spec/quantity details, and (c) note any unusual scope (imported equipment, special-purpose rooms, phasing) in the "reasoning" field.\n`;
+    } else {
+      prompt += `\nNo drawings were sent as images this call. Use the filenames as hints (e.g. "FF Layout L2.pdf" suggests fire-fighting on level 2).\n`;
+    }
   }
   prompt += `
 ## Your task
@@ -528,12 +584,17 @@ Reply with ONLY a JSON array, no preamble, no markdown fences:
 [{"item_id": <number>, "trade": "<string>", "dispatch_days": <number>, "reasoning": "<string>"}, ...]`;
 
   try {
-    const client = new Anthropic.default({ apiKey, timeout: 120000 });
+    const client = new Anthropic.default({ apiKey, timeout: 180000 });   // longer timeout — PDFs take longer
     const model = getAiSetting('ai_model') || 'claude-opus-4-7';
+    // Multimodal user message: drawings first (so model has them in
+    // context when reading the BOQ), then the text prompt last.
+    const userContent = visionBlocks.length > 0
+      ? [...visionBlocks, { type: 'text', text: prompt }]
+      : prompt;
     const resp = await client.messages.create({
       model,
       max_tokens: 8192,
-      messages: [{ role: 'user', content: prompt }],
+      messages: [{ role: 'user', content: userContent }],
     });
     const text = resp.content.map(c => c.text || '').join('').trim();
     // Defensive: strip ```json fences if the model added them anyway
@@ -561,6 +622,13 @@ Reply with ONLY a JSON array, no preamble, no markdown fences:
       project: { id: project.id, project_name: project.project_name, completion_date: project.completion_date },
       suggestions: enriched,
       model,
+      vision: {
+        sent: visionBlocks.length,
+        skipped: visionSkipped,
+        bytes_used: visionBytesUsed,
+        cap_bytes: VISION_CAP_BYTES,
+        used: useVision && visionBlocks.length > 0,
+      },
       input_tokens: resp.usage?.input_tokens,
       output_tokens: resp.usage?.output_tokens,
     });
