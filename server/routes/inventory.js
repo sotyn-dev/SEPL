@@ -74,7 +74,12 @@ router.put('/warehouses/:id', requirePermission('inventory', 'edit'), (req, res)
 router.get('/stock', requirePermission('inventory', 'view'), (req, res) => {
   const db = getDb();
   const { warehouse_id, search, low_only } = req.query;
-  const where = ['sb.quantity > 0 OR sb.reorder_level > 0'];
+  // Parens are REQUIRED — without them SQLite's OR/AND precedence makes
+  // `quantity > 0 OR reorder_level > 0 AND search_match` evaluate as
+  // `quantity > 0 OR (reorder_level > 0 AND search_match)` and every
+  // row with stock comes back regardless of the search/warehouse
+  // filters. Mam 2026-05-29: 'search item is not working'.
+  const where = ['(sb.quantity > 0 OR sb.reorder_level > 0)'];
   const params = [];
   if (warehouse_id) { where.push('sb.warehouse_id = ?'); params.push(+warehouse_id); }
   if (search) {
