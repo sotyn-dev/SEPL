@@ -32,6 +32,36 @@ router.use(authMiddleware);
 // to deriving from the last IN movement.
 try { getDb().exec(`ALTER TABLE stock_balance ADD COLUMN condition TEXT`); } catch (_) {}
 
+// Mam 2026-05-29: 'this all black is used so how can edit other you do
+// used'. Legacy stock has no condition flag anywhere — neither on
+// stock_balance.condition nor any IN movement's item_condition — so the
+// UI shows '—' and there's no obvious starting point for her to flip
+// individual items to Unused/Scrap. Backfill those rows to 'Used' so the
+// default is meaningful; she can then edit specific rows as needed.
+// Tracked via app_settings flag so this runs EXACTLY ONCE — a re-run
+// after mam manually flips a row would NOT clobber her edits because
+// the condition would no longer be NULL, but the flag adds a safety net
+// against accidental re-execution.
+try {
+  const db = getDb();
+  const done = db.prepare("SELECT value FROM app_settings WHERE key='stock_condition_used_backfill_v1'").get();
+  if (!done) {
+    const r = db.prepare(`
+      UPDATE stock_balance
+         SET condition = 'Used'
+       WHERE condition IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM stock_movements sm
+            WHERE sm.warehouse_id = stock_balance.warehouse_id
+              AND sm.item_master_id = stock_balance.item_master_id
+              AND sm.type = 'IN'
+              AND sm.item_condition IS NOT NULL
+         )`).run();
+    db.prepare("INSERT INTO app_settings (key, value) VALUES ('stock_condition_used_backfill_v1', '1')").run();
+    if (r.changes > 0) console.log(`[inventory] backfilled ${r.changes} legacy stock rows to condition='Used'`);
+  }
+} catch (e) { console.error('[inventory] condition backfill failed:', e.message); }
+
 // ---------- WAREHOUSES ----------
 
 router.get('/warehouses', requirePermission('inventory', 'view'), (req, res) => {
