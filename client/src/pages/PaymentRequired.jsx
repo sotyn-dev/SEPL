@@ -388,15 +388,20 @@ export default function PaymentRequired() {
               );
             };
 
+            // Tile labels mirror the workflow stage names exactly so
+            // mam can read the STEP column and the tile strip without
+            // translating 'Pending L2' → 'Accountant Approval' in her
+            // head. Mam 2026-05-29: 'stages name according to stages
+            // where approval pending go data their'.
             const tiles = [
-              { key: 'all',     label: 'Showing',          sub: 'all filters',                   status: null,                color: { border: 'border-blue-500',    label: 'text-gray-500', num: 'text-blue-700',    activeBg: 'bg-blue-50',    ring: 'ring-blue-300' } },
-              { key: 'hr',      label: 'Pending L1',       sub: 'awaiting HR approval',          status: 'pending',           color: { border: 'border-amber-500',   label: 'text-amber-700', num: 'text-amber-700',  activeBg: 'bg-amber-50',   ring: 'ring-amber-300' } },
-              { key: 'l2',      label: 'Pending L2',       sub: 'HR done · awaiting Accountant', status: 'step1_approved',    color: { border: 'border-orange-500',  label: 'text-orange-700', num: 'text-orange-700',activeBg: 'bg-orange-50',  ring: 'ring-orange-300' } },
-              { key: 'dues',    label: 'Pending L3',       sub: 'Accountant done · dues check',  status: 'accounts_approved', color: { border: 'border-purple-500',  label: 'text-purple-700', num: 'text-purple-700',activeBg: 'bg-purple-50',  ring: 'ring-purple-300' } },
-              { key: 'velo',    label: 'Pending L4',       sub: 'dues done · velocity check',    status: 'dues_checked',      color: { border: 'border-indigo-500',  label: 'text-indigo-700', num: 'text-indigo-700',activeBg: 'bg-indigo-50',  ring: 'ring-indigo-300' } },
-              { key: 'rel',     label: 'Pending Release',  sub: 'all checks done · awaiting payment', status: 'velocity_checked', color: { border: 'border-sky-500',  label: 'text-sky-700', num: 'text-sky-700',       activeBg: 'bg-sky-50',     ring: 'ring-sky-300' } },
-              { key: 'apr',     label: 'Final Approved',   sub: 'paid out',                      status: 'final_approved',    color: { border: 'border-emerald-500', label: 'text-emerald-700', num: 'text-emerald-700',activeBg: 'bg-emerald-50', ring: 'ring-emerald-300' } },
-              { key: 'rej',     label: 'Rejected',         sub: 'closed without payment',        status: 'rejected',          color: { border: 'border-rose-500',    label: 'text-rose-700', num: 'text-rose-700',    activeBg: 'bg-rose-50',    ring: 'ring-rose-300' } },
+              { key: 'all',     label: 'Showing',              sub: 'all stages combined',                  status: null,                color: { border: 'border-blue-500',    label: 'text-gray-500',     num: 'text-blue-700',    activeBg: 'bg-blue-50',    ring: 'ring-blue-300' } },
+              { key: 'hr',      label: 'HR Approval',          sub: 'waiting at Step 1 (HR / Purchase Head)', status: 'pending',         color: { border: 'border-amber-500',   label: 'text-amber-700',    num: 'text-amber-700',   activeBg: 'bg-amber-50',   ring: 'ring-amber-300' } },
+              { key: 'l2',      label: 'Accountant Approval', sub: 'waiting at Step 2 (Accountant)',        status: 'step1_approved',    color: { border: 'border-orange-500',  label: 'text-orange-700',   num: 'text-orange-700',  activeBg: 'bg-orange-50',  ring: 'ring-orange-300' } },
+              { key: 'dues',    label: 'Dues Check',          sub: 'waiting at Step 3 (Dues)',              status: 'accounts_approved', color: { border: 'border-purple-500',  label: 'text-purple-700',   num: 'text-purple-700',  activeBg: 'bg-purple-50',  ring: 'ring-purple-300' } },
+              { key: 'velo',    label: 'Velocity Check',      sub: 'waiting at Step 4 (Velocity / Billing)', status: 'dues_checked',     color: { border: 'border-indigo-500',  label: 'text-indigo-700',   num: 'text-indigo-700',  activeBg: 'bg-indigo-50',  ring: 'ring-indigo-300' } },
+              { key: 'rel',     label: 'Payment Release',     sub: 'waiting at Step 5 (Final payment)',     status: 'velocity_checked',  color: { border: 'border-sky-500',     label: 'text-sky-700',      num: 'text-sky-700',     activeBg: 'bg-sky-50',     ring: 'ring-sky-300' } },
+              { key: 'apr',     label: 'Approved',            sub: 'all stages cleared · paid out',         status: 'final_approved',    color: { border: 'border-emerald-500', label: 'text-emerald-700', num: 'text-emerald-700', activeBg: 'bg-emerald-50', ring: 'ring-emerald-300' } },
+              { key: 'rej',     label: 'Rejected',            sub: 'closed without payment',                 status: 'rejected',          color: { border: 'border-rose-500',    label: 'text-rose-700',     num: 'text-rose-700',    activeBg: 'bg-rose-50',    ring: 'ring-rose-300' } },
             ];
 
             return (
@@ -430,15 +435,19 @@ export default function PaymentRequired() {
               return true;
             });
             const cnt = (s) => s === null ? visible.length : visible.filter(r => r.status === s).length;
+            // Chip labels = workflow stage names (same as the tile
+            // strip + the table's STEP column). One vocabulary across
+            // the whole screen so mam doesn't have to mentally map
+            // 'Pending L2' → 'Accountant Approval'.
             const chips = [
-              { id: 'all',  status: '',                  label: 'All',          color: 'bg-blue-100 text-blue-700 border-blue-200' },
-              { id: 'pen',  status: 'pending',           label: 'Pending L1',   color: 'bg-amber-100 text-amber-700 border-amber-200' },
-              { id: 's1',   status: 'step1_approved',    label: 'Pending L2',   color: 'bg-orange-100 text-orange-700 border-orange-200' },
-              { id: 'acc',  status: 'accounts_approved', label: 'Pending L3',   color: 'bg-purple-100 text-purple-700 border-purple-200' },
-              { id: 'dues', status: 'dues_checked',      label: 'Pending L4',   color: 'bg-indigo-100 text-indigo-700 border-indigo-200' },
-              { id: 'velo', status: 'velocity_checked',  label: 'Pending Release', color: 'bg-sky-100 text-sky-700 border-sky-200' },
-              { id: 'fin',  status: 'final_approved',    label: 'Approved',     color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
-              { id: 'rej',  status: 'rejected',          label: 'Rejected',     color: 'bg-rose-100 text-rose-700 border-rose-200' },
+              { id: 'all',  status: '',                  label: 'All',                    color: 'bg-blue-100 text-blue-700 border-blue-200' },
+              { id: 'pen',  status: 'pending',           label: 'HR Approval',            color: 'bg-amber-100 text-amber-700 border-amber-200' },
+              { id: 's1',   status: 'step1_approved',    label: 'Accountant Approval',    color: 'bg-orange-100 text-orange-700 border-orange-200' },
+              { id: 'acc',  status: 'accounts_approved', label: 'Dues Check',             color: 'bg-purple-100 text-purple-700 border-purple-200' },
+              { id: 'dues', status: 'dues_checked',      label: 'Velocity Check',         color: 'bg-indigo-100 text-indigo-700 border-indigo-200' },
+              { id: 'velo', status: 'velocity_checked',  label: 'Payment Release',        color: 'bg-sky-100 text-sky-700 border-sky-200' },
+              { id: 'fin',  status: 'final_approved',    label: 'Approved',               color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+              { id: 'rej',  status: 'rejected',          label: 'Rejected',               color: 'bg-rose-100 text-rose-700 border-rose-200' },
             ];
             return (
               <div className="flex gap-1.5 flex-wrap items-center">
