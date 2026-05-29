@@ -146,7 +146,7 @@ function isInTop3Velocity(db, siteName) {
 
 // GET all with filters
 router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
-  const { status, category, search, step } = req.query;
+  const { status, category, search, step, date_from, date_to } = req.query;
   let sql = `SELECT pr.*, u.name as created_by_name FROM payment_requests pr LEFT JOIN users u ON pr.created_by=u.id WHERE 1=1`;
   const params = [];
   // Scope filter: non-approvers (e.g. site engineers) only see their own
@@ -155,6 +155,11 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
   if (status) { sql += ' AND pr.status=?'; params.push(status); }
   if (category) { sql += ' AND pr.category=?'; params.push(category); }
   if (step) { sql += ' AND pr.current_step=?'; params.push(step); }
+  // Mam 2026-05-29: date range filter on created_at so she can scope
+  // 'show me what came in last week' without scrolling the full list.
+  // Both bounds inclusive; partial spec OK (only from, only to, or both).
+  if (date_from) { sql += ' AND DATE(pr.created_at) >= DATE(?)'; params.push(date_from); }
+  if (date_to)   { sql += ' AND DATE(pr.created_at) <= DATE(?)'; params.push(date_to); }
   if (search) {
     sql += ' AND (pr.employee_name LIKE ? OR pr.request_no LIKE ? OR pr.purpose LIKE ?)';
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);

@@ -61,7 +61,7 @@ export default function PaymentRequired() {
   const [viewData, setViewData] = useState(null);
   const [form, setForm] = useState({ ...emptyForm });
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ status: '', category: '' });
+  const [filters, setFilters] = useState({ status: '', category: '', date_from: '', date_to: '' });
   const [uploading, setUploading] = useState(false);
 
   // Approval routing — admin-only (mam, 2026-05-16: "i want hr
@@ -339,11 +339,25 @@ export default function PaymentRequired() {
       {/* Request List */}
       {tab !== 'dashboard' && (
         <>
-          <div className="flex gap-3">
-            <div className="relative flex-1"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+          <div className="flex gap-3 flex-wrap items-end">
+            <div className="relative flex-1 min-w-[200px]"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
               <input className="input pl-10" placeholder="Search by employee, request no, purpose, site..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+            <div>
+              <label className="block text-[9px] font-bold uppercase text-gray-500 leading-none mb-0.5">From</label>
+              <input type="date" className="select w-36" value={filters.date_from} onChange={e => setFilters(f => ({ ...f, date_from: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-[9px] font-bold uppercase text-gray-500 leading-none mb-0.5">To</label>
+              <input type="date" className="select w-36" value={filters.date_to} onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))} />
+            </div>
             <select className="select w-40" value={filters.category} onChange={e => setFilters(f => ({ ...f, category: e.target.value }))}><option value="">All Categories</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
             <select className="select w-40" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}><option value="">All Status</option>{STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}</select>
+            {(filters.date_from || filters.date_to || filters.category || filters.status || search) && (
+              <button onClick={() => { setSearch(''); setFilters({ status: '', category: '', date_from: '', date_to: '' }); }}
+                className="btn btn-secondary text-xs flex items-center gap-1 text-red-600 whitespace-nowrap">
+                <FiX size={12} /> Clear filters
+              </button>
+            )}
           </div>
 
           {/* Mam (2026-05-22): "give me one small dashbaord of total
