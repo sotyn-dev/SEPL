@@ -99,6 +99,7 @@ try {
       end_date DATE NOT NULL,
       status TEXT NOT NULL DEFAULT 'planned',  -- planned | in_progress | done | overdue
       lead_days INTEGER,
+      ai_reasoning TEXT,          -- AI's one-line justification (mam 2026-05-28)
       generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_procsch_project ON procurement_schedule(project_id);
@@ -128,6 +129,15 @@ try {
   }
 } catch (e) {
   console.error('[procurement-schedule] schema init failed:', e.message);
+}
+// Idempotent column add for existing DBs where the original CREATE
+// landed before ai_reasoning was added.
+try { getDb().exec(`ALTER TABLE procurement_schedule ADD COLUMN ai_reasoning TEXT`); } catch (_) {}
+
+// Helper used by the AI endpoint — match aiAgent.js's pattern of
+// stashing the API key in app_settings so admin can paste it via UI.
+function getAiSetting(key) {
+  try { return getDb().prepare('SELECT value FROM app_settings WHERE key = ?').get(key)?.value; } catch (_) { return null; }
 }
 
 // ── Business-day arithmetic ───────────────────────────────────────
@@ -294,8 +304,115 @@ router.get('/:project_id', requirePermission('procurement_schedule', 'view'), (r
   res.json({ project, rows, generated_at: lastGen });
 });
 
+// POST /procurement-schedule/:project_id/ai-suggest
+// Calls Claude to predict trade + dispatch lead time + reasoning per
+// BOQ item. Returns the suggestions WITHOUT writing to procurement_schedule
+// so the user can review/edit before approving.
+router.post('/:project_id/ai-suggest', requirePermission('procurement_schedule', 'edit'), async (req, res) => {
+  const apiKey = getAiSetting('ai_api_key');
+  if (!apiKey) {
+    return res.status(503).json({
+      error: 'AI not configured. Admin → Settings → AI must paste an Anthropic API key first.',
+    });
+  }
+  let Anthropic;
+  try { Anthropic = require('@anthropic-ai/sdk'); }
+  catch (e) { return res.status(500).json({ error: '@anthropic-ai/sdk not installed — run npm install on the server' }); }
+
+  const db = getDb();
+  const pid = +req.params.project_id;
+  const project = db.prepare(
+    `SELECT id, company_name AS project_name, client_name, committed_completion_date AS completion_date
+       FROM business_book WHERE id = ?`
+  ).get(pid);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  if (!project.completion_date) return res.status(400).json({ error: 'Project has no completion_date set' });
+
+  const items = db.prepare(`
+    SELECT pi.id, pi.description, pi.unit, pi.quantity, pi.item_master_id,
+           im.department, im.item_code, im.item_name, im.specification, im.size, im.make
+      FROM purchase_orders po
+      JOIN po_items pi ON pi.po_id = po.id
+      LEFT JOIN item_master im ON im.id = pi.item_master_id
+     WHERE po.business_book_id = ?
+  `).all(pid);
+  if (items.length === 0) return res.status(400).json({ error: 'No BOQ items on this project — upload the Client PO first' });
+
+  // Trim payload so the model doesn't choke on huge prompts.
+  const slim = items.map(it => ({
+    id: it.id,
+    code: it.item_code || null,
+    name: it.item_name || it.description,
+    spec: it.specification || null,
+    size: it.size || null,
+    make: it.make || null,
+    qty: it.quantity,
+    unit: it.unit,
+    dept: it.department,
+  }));
+
+  const prompt = `You are a senior procurement planner for SEPL Engineers, an Indian MEPF (Mechanical, Electrical, Plumbing, Fire-fighting) subcontractor. The project "${project.project_name}" must finish on ${project.completion_date}.
+
+For EACH BOQ item below, predict:
+  1. "trade" — exactly one of: Fire Fighting, Plumbing, Electrical, HVAC, Solar, Networking, CCTV, Cable, Civil, Other
+  2. "dispatch_days" — typical business days from PO placed to material reaching the site in Indian conditions (vendor lead + transport). Use real-world experience: standard items 5-10 d, imported/custom items 21-45 d, civil bulk 2-3 d, cable 5-7 d, fire pumps 14-21 d, AHUs 21-30 d.
+  3. "reasoning" — ONE short line (<= 80 chars) justifying your dispatch_days number.
+
+Items: ${JSON.stringify(slim)}
+
+Reply with ONLY a JSON array, no preamble, no markdown fences:
+[{"item_id": <number>, "trade": "<string>", "dispatch_days": <number>, "reasoning": "<string>"}, ...]`;
+
+  try {
+    const client = new Anthropic.default({ apiKey, timeout: 120000 });
+    const model = getAiSetting('ai_model') || 'claude-opus-4-7';
+    const resp = await client.messages.create({
+      model,
+      max_tokens: 8192,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    const text = resp.content.map(c => c.text || '').join('').trim();
+    // Defensive: strip ```json fences if the model added them anyway
+    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+    const match = cleaned.match(/\[[\s\S]*\]/);
+    if (!match) throw new Error('AI returned no JSON array');
+    const suggestions = JSON.parse(match[0]);
+
+    // Attach the original item context so the UI can render rich rows
+    const byId = new Map(items.map(it => [it.id, it]));
+    const enriched = suggestions.map(s => {
+      const it = byId.get(s.item_id);
+      return {
+        item_id: s.item_id,
+        item_code: it?.item_code || null,
+        item_description: it?.item_name || it?.description || '(no description)',
+        item_qty: it?.quantity,
+        item_unit: it?.unit,
+        trade: s.trade || 'Other',
+        dispatch_days: Math.max(1, Math.min(120, +s.dispatch_days || 7)),
+        reasoning: String(s.reasoning || '').slice(0, 240),
+      };
+    });
+    res.json({
+      project: { id: project.id, project_name: project.project_name, completion_date: project.completion_date },
+      suggestions: enriched,
+      model,
+      input_tokens: resp.usage?.input_tokens,
+      output_tokens: resp.usage?.output_tokens,
+    });
+  } catch (e) {
+    console.error('[procurement-schedule] ai-suggest error:', e.message);
+    res.status(502).json({ error: 'AI call failed: ' + (e.message || 'unknown') });
+  }
+});
+
 // POST /procurement-schedule/:project_id/regenerate
 // Wipes old rows for this project and writes a fresh backward-pass.
+//
+// Body (optional): { suggestions: [{ item_id, trade, dispatch_days, reasoning }] }
+// When supplied (after the user approves an AI draft), each item uses the
+// per-item dispatch_days instead of the category default. Other 5 phase
+// days still come from the seeded fixed values.
 router.post('/:project_id/regenerate', requirePermission('procurement_schedule', 'edit'), (req, res) => {
   const db = getDb();
   const pid = +req.params.project_id;
@@ -303,8 +420,6 @@ router.post('/:project_id/regenerate', requirePermission('procurement_schedule',
   if (!project) return res.status(404).json({ error: 'Project not found' });
   if (!project.completion_date) return res.status(400).json({ error: 'Project has no completion_date — cannot anchor the backward-pass' });
 
-  // Pull every BOQ item for this project. Joined to item_master for the
-  // category, since po_items doesn't always carry its own.
   const items = db.prepare(`
     SELECT pi.id, pi.description, pi.unit, pi.quantity, pi.item_master_id,
            im.department AS category, im.item_code, im.item_name
@@ -319,19 +434,32 @@ router.post('/:project_id/regenerate', requirePermission('procurement_schedule',
 
   const holidays = loadHolidays(db);
   const rules = getPhaseDaysMap(db);
+  // Per-item AI overrides keyed by item_id → { trade, dispatch_days, reasoning }
+  const overrides = new Map();
+  if (Array.isArray(req.body?.suggestions)) {
+    for (const s of req.body.suggestions) {
+      if (!s || !s.item_id) continue;
+      overrides.set(+s.item_id, {
+        trade: s.trade || null,
+        dispatch_days: Math.max(1, Math.min(120, +s.dispatch_days || 0)),
+        reasoning: s.reasoning || null,
+      });
+    }
+  }
 
-  // Build the rows
   const newRows = [];
   for (const it of items) {
-    const cat = pickCategory(it, rules);
+    const ov = overrides.get(it.id);
+    const cat = ov?.trade || pickCategory(it, rules);
     const catRules = rules[cat] || rules['Other'] || {};
-    // Backward-pass — install ends ON completion_date.
+    const dispatchDays = ov?.dispatch_days || catRules.dispatch || 7;
+
     const installEnd     = project.completion_date;
     const installStart   = subBusinessDays(installEnd,    catRules.install  || 1, holidays);
     const receiveEnd     = addDaysISO(installStart, -1);
     const receiveStart   = subBusinessDays(receiveEnd,    catRules.receive  || 1, holidays);
     const dispatchEnd    = addDaysISO(receiveStart, -1);
-    const dispatchStart  = subBusinessDays(dispatchEnd,   catRules.dispatch || 7, holidays);
+    const dispatchStart  = subBusinessDays(dispatchEnd,   dispatchDays, holidays);
     const poEnd          = addDaysISO(dispatchStart, -1);
     const poStart        = subBusinessDays(poEnd,         catRules.po       || 2, holidays);
     const quotesEnd      = addDaysISO(poStart, -1);
@@ -339,33 +467,31 @@ router.post('/:project_id/regenerate', requirePermission('procurement_schedule',
     const indentEnd      = addDaysISO(quotesStart, -1);
     const indentStart    = subBusinessDays(indentEnd,     catRules.indent   || 3, holidays);
 
-    const itemRows = [
-      ['indent',   indentStart,   indentEnd,   catRules.indent   || 3],
-      ['quotes',   quotesStart,   quotesEnd,   catRules.quotes   || 2],
-      ['po',       poStart,       poEnd,       catRules.po       || 2],
-      ['dispatch', dispatchStart, dispatchEnd, catRules.dispatch || 7],
-      ['receive',  receiveStart,  receiveEnd,  catRules.receive  || 1],
-      ['install',  installStart,  installEnd,  catRules.install  || 1],
+    const reasoning = ov?.reasoning || null;
+    const phaseRows = [
+      ['indent',   indentStart,   indentEnd,   catRules.indent   || 3, null],
+      ['quotes',   quotesStart,   quotesEnd,   catRules.quotes   || 2, null],
+      ['po',       poStart,       poEnd,       catRules.po       || 2, null],
+      ['dispatch', dispatchStart, dispatchEnd, dispatchDays,           reasoning],
+      ['receive',  receiveStart,  receiveEnd,  catRules.receive  || 1, null],
+      ['install',  installStart,  installEnd,  catRules.install  || 1, null],
     ];
-    for (const [phase, start, end, days] of itemRows) {
-      newRows.push({ project_id: pid, item_id: it.id, trade: cat, phase, start_date: start, end_date: end, status: 'planned', lead_days: days });
+    for (const [phase, start, end, days, reason] of phaseRows) {
+      newRows.push({ project_id: pid, item_id: it.id, trade: cat, phase, start_date: start, end_date: end, status: 'planned', lead_days: days, ai_reasoning: reason });
     }
   }
 
-  // Replace existing schedule for this project
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM procurement_schedule WHERE project_id = ?').run(pid);
     const ins = db.prepare(`INSERT INTO procurement_schedule
-      (project_id, item_id, trade, phase, start_date, end_date, status, lead_days)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      (project_id, item_id, trade, phase, start_date, end_date, status, lead_days, ai_reasoning)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const r of newRows) {
-      ins.run(r.project_id, r.item_id, r.trade, r.phase, r.start_date, r.end_date, r.status, r.lead_days);
+      ins.run(r.project_id, r.item_id, r.trade, r.phase, r.start_date, r.end_date, r.status, r.lead_days, r.ai_reasoning);
     }
   });
   tx();
 
-  // Critical-output: earliest indent.start across all items — the
-  // "you must act by" date for the project.
   const earliestIndent = db.prepare(
     `SELECT MIN(start_date) AS d FROM procurement_schedule WHERE project_id = ? AND phase = 'indent'`
   ).get(pid).d;
@@ -375,6 +501,7 @@ router.post('/:project_id/regenerate', requirePermission('procurement_schedule',
     rows_written: newRows.length,
     earliest_indent_date: earliestIndent,
     anchor_date: project.completion_date,
+    used_ai_suggestions: overrides.size,
   });
 });
 

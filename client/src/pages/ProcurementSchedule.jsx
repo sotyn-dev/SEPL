@@ -13,7 +13,7 @@ import { useAuth } from '../context/AuthContext';
 import { useUrlTab } from '../hooks/useUrlTab';
 import {
   FiCalendar, FiRefreshCw, FiSettings, FiChevronDown, FiChevronRight,
-  FiAlertTriangle, FiClock, FiFlag, FiX,
+  FiAlertTriangle, FiClock, FiFlag, FiX, FiCpu, FiCheck,
 } from 'react-icons/fi';
 
 const PHASES = ['indent', 'quotes', 'po', 'dispatch', 'receive', 'install'];
@@ -48,7 +48,7 @@ const daysBetween = (a, b) => {
 
 export default function ProcurementSchedule() {
   const { isAdmin, canEdit } = useAuth();
-  const [tab, setTab] = useUrlTab('gantt');                 // gantt | rules | holidays
+  const [tab, setTab] = useUrlTab('gantt');                 // gantt | holidays
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useUrlTab('', 'project'); // ?project=42 persists across reloads
   const [data, setData] = useState(null);
@@ -56,30 +56,54 @@ export default function ProcurementSchedule() {
   const [expanded, setExpanded] = useState({});
   const [detail, setDetail] = useState(null);
 
+  // AI draft state — kept in this top-level component so the user can
+  // toggle to the Holidays tab and back without losing their AI run.
+  const [aiSuggesting, setAiSuggesting] = useState(false);
+  const [aiDraft, setAiDraft] = useState(null);   // { suggestions, model, input_tokens, output_tokens }
+  const [aiApproving, setAiApproving] = useState(false);
+
   const loadProjects = useCallback(() => {
     api.get('/procurement-schedule/projects').then(r => setProjects(r.data || [])).catch(() => {});
   }, []);
   useEffect(() => { loadProjects(); }, [loadProjects]);
 
   const loadSchedule = useCallback(() => {
-    if (!projectId) { setData(null); return; }
+    if (!projectId) { setData(null); setAiDraft(null); return; }
     setLoading(true);
     api.get(`/procurement-schedule/${projectId}`)
       .then(r => setData(r.data))
       .catch(err => toast.error(err.response?.data?.error || 'Failed to load'))
       .finally(() => setLoading(false));
   }, [projectId]);
-  useEffect(() => { loadSchedule(); }, [loadSchedule]);
+  useEffect(() => { loadSchedule(); setAiDraft(null); }, [loadSchedule]);
 
-  const regenerate = async () => {
+  const askAi = async () => {
     if (!projectId) { toast.error('Pick a project first'); return; }
-    if (!confirm('Regenerate the procurement schedule? This replaces any existing bars for this project.')) return;
+    setAiSuggesting(true);
+    setAiDraft(null);
     try {
-      const r = await api.post(`/procurement-schedule/${projectId}/regenerate`);
+      const r = await api.post(`/procurement-schedule/${projectId}/ai-suggest`);
+      setAiDraft(r.data);
+      toast.success(`AI proposed lead times for ${r.data.suggestions.length} items — review below`);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'AI call failed');
+    } finally {
+      setAiSuggesting(false);
+    }
+  };
+
+  const approveAiDraft = async (editedSuggestions) => {
+    if (!projectId || !editedSuggestions) return;
+    setAiApproving(true);
+    try {
+      const r = await api.post(`/procurement-schedule/${projectId}/regenerate`, { suggestions: editedSuggestions });
       toast.success(`Generated ${r.data.rows_written} bars across ${r.data.items_scheduled} items`);
+      setAiDraft(null);
       loadSchedule();
     } catch (e) {
-      toast.error(e.response?.data?.error || 'Regenerate failed');
+      toast.error(e.response?.data?.error || 'Generate failed');
+    } finally {
+      setAiApproving(false);
     }
   };
 
@@ -88,20 +112,14 @@ export default function ProcurementSchedule() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-xl font-bold flex items-center gap-2"><FiCalendar className="text-red-600" /> Procurement Schedule</h1>
-          <p className="text-xs text-gray-500">Backward-pass Gantt per project — surfaces the date by which you MUST raise each indent so the project finishes on time.</p>
+          <p className="text-xs text-gray-500">AI generates lead times from your BOQ; you review and approve; the Gantt then surfaces the date you MUST raise each indent so the project finishes on time.</p>
         </div>
-        {tab === 'gantt' && canEdit('procurement_schedule') && (
-          <button onClick={regenerate} disabled={!projectId} className="btn btn-primary text-sm flex items-center gap-1 disabled:opacity-40">
-            <FiRefreshCw size={14} /> Regenerate
-          </button>
-        )}
       </div>
 
       {/* Tab bar */}
       <div className="flex gap-1 border-b border-gray-200">
         {[
           { id: 'gantt',    label: 'Schedule (Gantt)', icon: FiCalendar },
-          { id: 'rules',    label: 'Lead-Time Rules',  icon: FiSettings },
           { id: 'holidays', label: 'Holidays',         icon: FiFlag },
         ].map(t => {
           const active = tab === t.id;
@@ -118,7 +136,7 @@ export default function ProcurementSchedule() {
 
       {tab === 'gantt' && (
         <>
-          {/* Project picker */}
+          {/* Project picker + AI button */}
           <div className="card p-3 flex flex-wrap items-end gap-3">
             <div className="flex-1 min-w-[260px]">
               <label className="text-[10px] font-bold uppercase text-gray-500 mb-1 block">Project</label>
@@ -129,7 +147,7 @@ export default function ProcurementSchedule() {
                 }))}
                 value={projectId ? +projectId : null}
                 valueKey="id" displayKey="label"
-                placeholder="Pick a project to view its Gantt…"
+                placeholder="Pick a project…"
                 onChange={v => setProjectId(v?.id ? String(v.id) : '')}
               />
             </div>
@@ -139,37 +157,143 @@ export default function ProcurementSchedule() {
                 <div className="font-bold text-red-700">{fmtDate(data.project.completion_date)}</div>
               </div>
             )}
+            {projectId && canEdit('procurement_schedule') && (
+              <button onClick={askAi} disabled={aiSuggesting} className="btn btn-primary text-sm flex items-center gap-1 disabled:opacity-40">
+                <FiCpu size={14} /> {aiSuggesting ? 'AI thinking…' : (data?.rows?.length ? 'Re-ask AI' : 'Generate with AI')}
+              </button>
+            )}
           </div>
 
           {!projectId && (
             <div className="card p-8 text-center text-gray-400">
               <FiCalendar size={36} className="mx-auto mb-2 opacity-30" />
-              Pick a project above to view its procurement schedule.
+              Pick a project above to view or generate its procurement schedule.
             </div>
           )}
 
-          {projectId && loading && <div className="card p-6 text-center text-gray-400">Loading…</div>}
+          {projectId && aiSuggesting && (
+            <div className="card p-8 text-center">
+              <FiCpu size={32} className="mx-auto mb-2 text-red-500 animate-pulse" />
+              <p className="font-semibold mb-1">AI is analysing your BOQ…</p>
+              <p className="text-xs text-gray-500">Predicting vendor lead times for each item. This takes 5–20 seconds depending on BOQ size.</p>
+            </div>
+          )}
 
-          {projectId && !loading && data && data.rows.length === 0 && (
+          {projectId && !aiSuggesting && aiDraft && (
+            <AiDraftReview
+              draft={aiDraft}
+              onApprove={approveAiDraft}
+              onCancel={() => setAiDraft(null)}
+              approving={aiApproving}
+              canEdit={canEdit('procurement_schedule')}
+            />
+          )}
+
+          {projectId && !aiSuggesting && !aiDraft && loading && (
+            <div className="card p-6 text-center text-gray-400">Loading existing schedule…</div>
+          )}
+
+          {projectId && !aiSuggesting && !aiDraft && !loading && data && data.rows.length === 0 && (
             <div className="card p-8 text-center">
               <FiAlertTriangle size={32} className="mx-auto mb-2 text-amber-500" />
-              <p className="font-semibold mb-1">No schedule generated yet</p>
-              <p className="text-xs text-gray-500 mb-3">Click <b>Regenerate</b> to compute the backward-pass for this project's BOQ items.</p>
+              <p className="font-semibold mb-1">No schedule yet</p>
+              <p className="text-xs text-gray-500 mb-3">Click <b>Generate with AI</b> above. AI will predict vendor lead times for each BOQ item; you review and approve before the Gantt is created.</p>
             </div>
           )}
 
-          {projectId && !loading && data && data.rows.length > 0 && (
+          {projectId && !aiSuggesting && !aiDraft && !loading && data && data.rows.length > 0 && (
             <GanttView data={data} expanded={expanded} setExpanded={setExpanded} onPickBar={setDetail} />
           )}
         </>
       )}
 
-      {tab === 'rules'    && <PhaseRulesEditor canEdit={canEdit('procurement_schedule')} />}
       {tab === 'holidays' && <HolidaysEditor canEdit={canEdit('procurement_schedule')} />}
 
       <Modal isOpen={!!detail} onClose={() => setDetail(null)} title={detail ? `${PHASE_LABEL[detail.phase]} · ${detail.item_description || 'Item'}` : 'Detail'}>
         {detail && <BarDetail row={detail} />}
       </Modal>
+    </div>
+  );
+}
+
+// ─── AI DRAFT REVIEW (mam 2026-05-28: AI proposes, mam approves) ──
+// Shows the model's per-item predictions. User can edit any number or
+// trade before clicking Approve. Each row carries the AI's reasoning
+// so mam knows WHY 14 days vs 7 days for similar-looking items.
+function AiDraftReview({ draft, onApprove, onCancel, approving, canEdit }) {
+  const [rows, setRows] = useState(draft.suggestions);
+  useEffect(() => { setRows(draft.suggestions); }, [draft]);
+
+  const update = (idx, key, value) => {
+    setRows(r => r.map((x, i) => i === idx ? { ...x, [key]: value } : x));
+  };
+
+  return (
+    <div className="card p-0 overflow-hidden">
+      <div className="px-3 py-2 bg-red-50 border-b border-red-100 flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h3 className="font-semibold text-sm flex items-center gap-1"><FiCpu className="text-red-600" /> AI Draft — review & approve</h3>
+          <p className="text-[11px] text-gray-600">
+            {rows.length} item{rows.length === 1 ? '' : 's'} · model: <code className="text-[10px]">{draft.model}</code>
+            {draft.input_tokens && draft.output_tokens && (
+              <> · {draft.input_tokens.toLocaleString('en-IN')} in + {draft.output_tokens.toLocaleString('en-IN')} out tokens</>
+            )}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onCancel} disabled={approving} className="btn btn-secondary text-xs disabled:opacity-40">Cancel</button>
+          <button onClick={() => onApprove(rows)} disabled={approving || !canEdit}
+            className="btn btn-success text-xs flex items-center gap-1 disabled:opacity-40">
+            <FiCheck size={12} /> {approving ? 'Generating…' : 'Approve & Generate Schedule'}
+          </button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-gray-50 text-[10px] uppercase text-gray-500">
+            <tr>
+              <th className="text-left p-2">Item</th>
+              <th className="text-center p-2 w-32">Trade</th>
+              <th className="text-center p-2 w-28">Dispatch (days)</th>
+              <th className="text-left p-2">AI Reasoning</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.item_id} className="border-t border-gray-100">
+                <td className="p-2">
+                  <div className="font-medium">{r.item_description}</div>
+                  <div className="text-[10px] text-gray-500 font-mono">
+                    {r.item_code || '—'} · {r.item_qty} {r.item_unit || ''}
+                  </div>
+                </td>
+                <td className="p-1 text-center">
+                  <select className="select text-xs"
+                    value={r.trade}
+                    disabled={!canEdit}
+                    onChange={e => update(i, 'trade', e.target.value)}>
+                    {['Fire Fighting','Plumbing','Electrical','HVAC','Solar','Networking','CCTV','Cable','Civil','Other'].map(t =>
+                      <option key={t} value={t}>{t}</option>
+                    )}
+                  </select>
+                </td>
+                <td className="p-1 text-center">
+                  <input type="number" min="1" max="120"
+                    className="input text-xs w-20 text-center mx-auto"
+                    value={r.dispatch_days}
+                    disabled={!canEdit}
+                    onChange={e => update(i, 'dispatch_days', Math.max(1, Math.min(120, +e.target.value || 1)))}
+                  />
+                </td>
+                <td className="p-2 text-gray-700 italic">{r.reasoning || <span className="text-gray-300">—</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[10px] text-gray-500 px-3 py-2 border-t border-gray-100">
+        Edit any value above before clicking <b>Approve</b>. Approving runs the backward-pass with these per-item lead times and writes the Gantt bars.
+      </p>
     </div>
   );
 }
@@ -390,71 +514,10 @@ function BarDetail({ row }) {
   );
 }
 
-// ─── PHASE RULES EDITOR (admin) ───────────────────────────────────
-function PhaseRulesEditor({ canEdit }) {
-  const [data, setData] = useState(null);
-  const [draft, setDraft] = useState({});
-  const [saving, setSaving] = useState(false);
-
-  const load = useCallback(() => {
-    api.get('/procurement-schedule/phase-rules').then(r => { setData(r.data); setDraft(JSON.parse(JSON.stringify(r.data.grouped))); }).catch(()=>{});
-  }, []);
-  useEffect(() => { load(); }, [load]);
-
-  if (!data) return <div className="card p-6 text-center text-gray-400">Loading…</div>;
-
-  const save = async () => {
-    const rules = [];
-    for (const cat of Object.keys(draft)) {
-      for (const phase of PHASES) {
-        rules.push({ category: cat, phase, days: +draft[cat][phase] || 0 });
-      }
-    }
-    setSaving(true);
-    try {
-      await api.put('/procurement-schedule/phase-rules', { rules });
-      toast.success('Lead times saved');
-      load();
-    } catch (e) { toast.error(e.response?.data?.error || 'Save failed'); }
-    setSaving(false);
-  };
-
-  return (
-    <div className="card p-0 overflow-x-auto">
-      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50">
-        <h3 className="font-semibold text-sm">Lead-Time Rules — days per phase, per category</h3>
-        {canEdit && <button onClick={save} disabled={saving} className="btn btn-primary text-xs">{saving ? 'Saving…' : 'Save'}</button>}
-      </div>
-      <table className="w-full text-sm">
-        <thead className="bg-gray-50 text-[10px] uppercase text-gray-500">
-          <tr>
-            <th className="text-left p-2">Category</th>
-            {PHASES.map(p => <th key={p} className="text-center p-2">{PHASE_LABEL[p]}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {data.categories.map(cat => (
-            <tr key={cat} className="border-t border-gray-100">
-              <td className="p-2 font-medium">{cat}</td>
-              {PHASES.map(p => (
-                <td key={p} className="p-1 text-center">
-                  <input type="number" min="0" max="365" disabled={!canEdit}
-                    className="input text-xs w-16 text-center mx-auto"
-                    value={draft[cat]?.[p] ?? 0}
-                    onChange={e => setDraft(d => ({ ...d, [cat]: { ...d[cat], [p]: +e.target.value || 0 } }))}
-                  />
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="text-[10px] text-gray-500 p-2 border-t border-gray-100">
-        Edits here only affect <b>future</b> regenerations. Existing schedules stay until you re-click <b>Regenerate</b> on the Gantt tab.
-      </p>
-    </div>
-  );
-}
+// PhaseRulesEditor removed (mam 2026-05-28). AI now infers lead times
+// per item via /ai-suggest, so the manual category × phase matrix is
+// no longer surfaced. The seeded fallback values still live in the DB
+// for any item the AI can't classify, but the UI doesn't expose them.
 
 // ─── HOLIDAYS EDITOR (admin) ──────────────────────────────────────
 function HolidaysEditor({ canEdit }) {
