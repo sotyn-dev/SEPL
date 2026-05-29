@@ -415,6 +415,56 @@ export default function PaymentRequired() {
             );
           })()}
 
+          {/* Mini stage-tabs strip — single-row chips for fast filtering
+              between the workflow stages without going up to the tiles.
+              Mam 2026-05-29: 'show me mini tabs according to stage so
+              that approved pending show easily'. Each chip shows the
+              stage's count next to the label. Click to toggle the
+              filter; the active chip ringed in red. */}
+          {(() => {
+            const source = tab === 'inbox' ? myInbox : requests;
+            const visible = source.filter(r => {
+              if (tab === 'pending')  return !['final_approved','rejected'].includes(r.status);
+              if (tab === 'approved') return r.status === 'final_approved';
+              if (tab === 'rejected') return r.status === 'rejected';
+              return true;
+            });
+            const cnt = (s) => s === null ? visible.length : visible.filter(r => r.status === s).length;
+            const chips = [
+              { id: 'all',  status: '',                  label: 'All',          color: 'bg-blue-100 text-blue-700 border-blue-200' },
+              { id: 'pen',  status: 'pending',           label: 'Pending L1',   color: 'bg-amber-100 text-amber-700 border-amber-200' },
+              { id: 's1',   status: 'step1_approved',    label: 'Pending L2',   color: 'bg-orange-100 text-orange-700 border-orange-200' },
+              { id: 'acc',  status: 'accounts_approved', label: 'Pending L3',   color: 'bg-purple-100 text-purple-700 border-purple-200' },
+              { id: 'dues', status: 'dues_checked',      label: 'Pending L4',   color: 'bg-indigo-100 text-indigo-700 border-indigo-200' },
+              { id: 'velo', status: 'velocity_checked',  label: 'Pending Release', color: 'bg-sky-100 text-sky-700 border-sky-200' },
+              { id: 'fin',  status: 'final_approved',    label: 'Approved',     color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+              { id: 'rej',  status: 'rejected',          label: 'Rejected',     color: 'bg-rose-100 text-rose-700 border-rose-200' },
+            ];
+            return (
+              <div className="flex gap-1.5 flex-wrap items-center">
+                <span className="text-[10px] uppercase font-semibold text-gray-500 mr-1">Filter:</span>
+                {chips.map(c => {
+                  const n = cnt(c.status === '' ? null : c.status);
+                  const active = (filters.status || '') === c.status;
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => setFilters(f => ({ ...f, status: active ? '' : c.status }))}
+                      className={`text-xs font-semibold px-2.5 py-1 rounded-full border transition flex items-center gap-1.5 ${
+                        active
+                          ? `${c.color} ring-2 ring-offset-1 ring-red-400`
+                          : `${c.color} opacity-70 hover:opacity-100`
+                      }`}
+                    >
+                      {c.label}
+                      <span className={`text-[10px] font-bold rounded-full bg-white/70 px-1.5 ${n === 0 ? 'text-gray-400' : ''}`}>{n}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody>
