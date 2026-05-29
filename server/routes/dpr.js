@@ -1095,28 +1095,77 @@ router.get('/engineer-compliance', (req, res) => {
     ORDER BY e.id, s.name
   `).all(...engineerIds);
 
-  // 3) Batched stats per (engineer × site) — three queries total,
-  //    regardless of fleet size.
+  // 3) Batched stats per (engineer × site).
+  //
+  //    Presence is the tricky one: in prod, engineers punch
+  //    attendance with EITHER a stale site_id (a legacy duplicate
+  //    row sharing the same site_name as the canonical one we just
+  //    resolved) OR with site_id NULL and only site_name as free
+  //    text.  v3 matched ONLY on canonical site_id → all 0/0/0.
+  //    v4 matches an attendance row to the engineer's site if ANY
+  //    of these line up:
+  //      a) att.site_id == canonical site_id we resolved
+  //      b) att.site_id is a same-name sibling of the canonical row
+  //      c) att.site_name (trimmed, lower) == site_name
+  //
+  //    Done in JS after one cheap fetch — attendance rows scoped to
+  //    the engineer set + date range stay small enough that the
+  //    name-matching loop is trivial.
   const allSiteIds = [...new Set(pairs.map(p => p.site_id))];
   const allEngIds  = [...new Set(pairs.map(p => p.engineer_id))];
-  const presentMap = new Map();   // key: user_id|site_id → days
+  const presentMap = new Map();   // key: engineer_id|canonical_site_id → Set<date>
   const dprMap     = new Map();   // key: site_id → days
   const plMap      = new Map();   // key: site_id → profit_loss_sum
 
   if (allSiteIds.length && allEngIds.length) {
     const sidP = allSiteIds.map(() => '?').join(',');
     const eidP = allEngIds.map(() => '?').join(',');
-    const presentRows = db.prepare(`
-      SELECT user_id, site_id, COUNT(DISTINCT date) AS days
+
+    // (a) Pull every active site so we can map ANY attendance.site_id
+    //     back to its canonical (same-name) site_id used by pairs[].
+    const allActive = db.prepare(`SELECT id, name FROM sites WHERE status = 'active'`).all();
+    const norm = (s) => (s || '').trim().toLowerCase();
+    const nameById = new Map();              // attendance.site_id → name
+    for (const r of allActive) nameById.set(r.id, r.name);
+
+    // For each engineer, build a name → canonical_site_id lookup so
+    // attendance can be steered to the right (engineer, site) bucket.
+    const engNameLookup = new Map();         // engId → Map<lower(name), canonical_site_id>
+    for (const p of pairs) {
+      if (!engNameLookup.has(p.engineer_id)) engNameLookup.set(p.engineer_id, new Map());
+      engNameLookup.get(p.engineer_id).set(norm(p.site_name), p.site_id);
+    }
+
+    // (b) Fetch attendance rows for these engineers in the range.
+    const attRows = db.prepare(`
+      SELECT user_id, date, site_id, site_name
         FROM attendance
        WHERE user_id IN (${eidP})
-         AND site_id IN (${sidP})
          AND date BETWEEN ? AND ?
          AND status IN ${PRESENT_STATUSES}
-       GROUP BY user_id, site_id
-    `).all(...allEngIds, ...allSiteIds, from, to);
-    presentRows.forEach(r => presentMap.set(`${r.user_id}|${r.site_id}`, r.days));
+    `).all(...allEngIds, from, to);
 
+    for (const att of attRows) {
+      const lookup = engNameLookup.get(att.user_id);
+      if (!lookup) continue;
+      // Try paths a/b first via the attendance row's site_id
+      let canonical = null;
+      if (att.site_id != null) {
+        const nm = nameById.get(att.site_id);
+        if (nm) canonical = lookup.get(norm(nm));
+      }
+      // Path c — text site_name fallback when att.site_id was stale,
+      // NULL, or pointed at an inactive/deleted row.
+      if (canonical == null && att.site_name) {
+        canonical = lookup.get(norm(att.site_name));
+      }
+      if (canonical == null) continue;       // attendance for a site this engineer isn't assigned to
+      const key = `${att.user_id}|${canonical}`;
+      if (!presentMap.has(key)) presentMap.set(key, new Set());
+      presentMap.get(key).add(att.date);
+    }
+
+    // DPR + P&L roll-ups — site-scoped (any submitter), same as v1.
     const dprRows = db.prepare(`
       SELECT site_id,
              COUNT(DISTINCT report_date) AS days,
@@ -1149,7 +1198,7 @@ router.get('/engineer-compliance', (req, res) => {
   for (const p of pairs) {
     const bucket = byEng.get(p.engineer_id);
     if (!bucket) continue;
-    const days_present    = presentMap.get(`${p.engineer_id}|${p.site_id}`) || 0;
+    const days_present    = presentMap.get(`${p.engineer_id}|${p.site_id}`)?.size || 0;
     const days_dpr_filled = dprMap.get(p.site_id) || 0;
     const profit_loss     = plMap.get(p.site_id) || 0;
     bucket.sites.push({
