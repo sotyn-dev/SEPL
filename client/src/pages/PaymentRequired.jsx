@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
@@ -46,7 +47,7 @@ const emptyForm = {
 
 export default function PaymentRequired() {
   const { canCreate, canApprove, canDelete, user } = useAuth();
-  const [tab, setTab] = useState('dashboard');
+  const [tab, setTab] = useUrlTab('dashboard');
   const [requests, setRequests] = useState([]);
   // Mam (2026-05-22): "My Inbox" — payment requests where the
   // current step's approver is THIS user.  Fetched separately so

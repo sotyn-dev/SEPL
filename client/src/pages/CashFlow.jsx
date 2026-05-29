@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { FiPlus, FiTrendingUp, FiTrendingDown, FiCalendar, FiTrash2, FiSearch, FiEdit2, FiCheck, FiX, FiDownload } from 'react-icons/fi';
@@ -9,7 +10,7 @@ import { exportCsv } from '../utils/exportCsv';
 
 export default function CashFlow() {
   const { isAdmin } = useAuth();
-  const [tab, setTab] = useState('projects');
+  const [tab, setTab] = useUrlTab('projects');
   const [projects, setProjects] = useState([]);
   const [summary, setSummary] = useState(null);
   const [dailySummary, setDailySummary] = useState(null);

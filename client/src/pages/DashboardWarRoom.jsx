@@ -12,6 +12,7 @@
 
 import { useState, useEffect } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import toast from 'react-hot-toast';
 
 // Palette — matches the HTML --vars exactly
@@ -232,7 +233,7 @@ function DecisionCard({ q, optA, optB, recommend, owner, deadline }) {
 export default function DashboardWarRoom() {
   const [data, setData] = useState(null);
   const [days, setDays] = useState(90);
-  const [tab, setTab] = useState('cmd');
+  const [tab, setTab] = useUrlTab('cmd');
   const [loading, setLoading] = useState(false);
 
   const load = async (d = days) => {

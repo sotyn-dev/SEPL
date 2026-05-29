@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -38,7 +39,7 @@ const scorePill = (s) => {
 
 export default function Scorecard() {
   const { user, isAdmin } = useAuth();
-  const [tab, setTab] = useState('my');
+  const [tab, setTab] = useUrlTab('my');
   const [weekStart, setWeekStart] = useState(lastMonday(0));
   const [viewUserId, setViewUserId] = useState(user?.id);
   const [scorecard, setScorecard] = useState(null);

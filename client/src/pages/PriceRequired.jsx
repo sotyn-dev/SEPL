@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
@@ -16,7 +17,7 @@ export default function PriceRequired() {
   const { user, isAdmin, canApprove } = useAuth();
   const isQuoter = isAdmin() || canApprove('procurement') || canApprove('item_master');
 
-  const [tab, setTab] = useState(isQuoter ? 'quotes' : 'raise');
+  const [tab, setTab] = useUrlTab(isQuoter ? 'quotes' : 'raise');
   const [requests, setRequests] = useState([]);
   const [grouped, setGrouped] = useState([]);
   const [vendors, setVendors] = useState([]);

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
@@ -25,7 +26,7 @@ function poMatches(p, q) {
 
 export default function Orders() {
   const { canDelete } = useAuth();
-  const [tab, setTab] = useState('po');
+  const [tab, setTab] = useUrlTab('po');
   const [pos, setPos] = useState([]);
   const [planning, setPlanning] = useState([]);
   const [bbEntries, setBbEntries] = useState([]);

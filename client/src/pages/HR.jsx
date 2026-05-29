@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import HiringRequestsTab from '../components/HiringRequestsTab';
@@ -70,7 +71,7 @@ export default function HR() {
   // Mam (2026-05-22 ATS Phase 1 spec): top-level tab inside /hr.  No
   // separate sidebar entry — keeps the single "HR & Hiring" entry
   // point per the duplication rule.
-  const [tab, setTab] = useState('candidates');         // 'candidates' | 'hiring-requests'
+  const [tab, setTab] = useUrlTab('candidates');         // 'candidates' | 'hiring-requests'
   const [candidates, setCandidates] = useState([]);
   const [contractors, setContractors] = useState([]);
   const [employees, setEmployees] = useState([]);

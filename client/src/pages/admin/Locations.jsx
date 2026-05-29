@@ -9,6 +9,7 @@
 
 import { useState, useEffect } from 'react';
 import api from '../../api';
+import { useUrlTab } from '../../hooks/useUrlTab';
 import toast from 'react-hot-toast';
 import { FiMapPin, FiRefreshCw, FiUser, FiCalendar, FiClock, FiNavigation, FiExternalLink, FiAlertCircle } from 'react-icons/fi';
 import RouteMap from '../../components/RouteMap';
@@ -42,7 +43,7 @@ const PHASE_PILL = {
 const PHASE_LABEL = { before: 'before in', during: 'during work', after: 'after out' };
 
 export default function Locations() {
-  const [tab, setTab] = useState('live');
+  const [tab, setTab] = useUrlTab('live');
 
   // ===== Live tab =====
   const [live, setLive] = useState(null);

@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiClock, FiCheck, FiAlertTriangle, FiPaperclip, FiEye, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { useUrlTab } from '../hooks/useUrlTab';
 
 // Cheque FMS — 3-stage cheque workflow.
 //   Stage 1: raise/issue a cheque (this page's "+ Issue Cheque" button)
@@ -36,7 +37,12 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 export default function ChequeFMS() {
   const { canCreate, canEdit, canDelete } = useAuth();
-  const [tab, setTab] = useState('action_due');  // action_due | pending | hold | clear | bounce | all
+  // Tab persisted in URL ?tab=... so a refresh keeps the user where
+  // they were (mam 2026-05-28: "when i refresh it it goes on first").
+  const [tab, setTab] = useUrlTab(
+    ['action_due', 'pending', 'hold', 'clear', 'bounce', 'all'],
+    'action_due',
+  );
   const [cheques, setCheques] = useState([]);
   const [stats, setStats] = useState({ by_status: [], action_due_count: 0 });
   const [search, setSearch] = useState('');

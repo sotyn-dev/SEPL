@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
@@ -9,7 +10,7 @@ import { exportCsv } from '../utils/exportCsv';
 
 export default function Billing() {
   const { canDelete } = useAuth();
-  const [tab, setTab] = useState('sales');
+  const [tab, setTab] = useUrlTab('sales');
   const [salesBills, setSalesBills] = useState([]);
   const [raBills, setRaBills] = useState([]);
   const [mbBills, setMbBills] = useState([]);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEye, FiSearch, FiAlertCircle, FiClock, FiCheckCircle, FiList, FiEdit2, FiTrash2, FiDownload, FiMessageSquare, FiUserCheck, FiKey, FiCopy, FiSend } from 'react-icons/fi';
@@ -37,7 +38,7 @@ export default function Complaints() {
   const [list, setList] = useState([]);
   const [stats, setStats] = useState({ total:0, open:0, inProgress:0, resolved:0, byCategory:[] });
   const [q, setQ] = useState({ search:'', status:'', category:'' });
-  const [tab, setTab] = useState('all');
+  const [tab, setTab] = useUrlTab('all');
   const [showAdd, setShowAdd] = useState(false);
   const [viewing, setViewing] = useState(null);
   const [form, setForm] = useState(emptyForm);

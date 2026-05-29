@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -88,7 +89,7 @@ const LABEL_PILL = {
 export default function Payroll() {
   const { user, canApprove } = useAuth();
   const isAdmin = user?.role === 'admin';
-  const [tab, setTab] = useState('monthly');
+  const [tab, setTab] = useUrlTab('monthly');
   const [month, setMonth] = useState(monthNow());
   const [settings, setSettings] = useState(null);
   const [savedSettings, setSavedSettings] = useState(null);

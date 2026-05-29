@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -22,7 +23,7 @@ const fmtMoney = (n) => '₹ ' + fmtNum(n);
 
 export default function Inventory() {
   const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
-  const [tab, setTab] = useState('stock');
+  const [tab, setTab] = useUrlTab('stock');
   const [warehouses, setWarehouses] = useState([]);
   const [sites, setSites] = useState([]);
   const [items, setItems] = useState([]);          // item_master dropdown source

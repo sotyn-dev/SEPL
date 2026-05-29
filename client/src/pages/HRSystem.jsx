@@ -13,6 +13,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -59,7 +60,7 @@ const fmtMoney = (n) => n != null ? `Rs ${(+n || 0).toLocaleString('en-IN')}` : 
 
 export default function HRSystem() {
   const { user, isAdmin, canCreate, canEdit, canDelete, canApprove } = useAuth();
-  const [tab, setTab] = useState('dashboard');
+  const [tab, setTab] = useUrlTab('dashboard');
 
   return (
     <div className="space-y-3 p-3 sm:p-4">

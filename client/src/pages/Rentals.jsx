@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
@@ -37,7 +38,7 @@ export default function Rentals() {
   // 'requests' is the primary workflow now (mam's "Raise Rent" flow).
   // Properties / Bookings / Payments stay as deeper tools but don't
   // open by default.
-  const [tab, setTab] = useState('requests');
+  const [tab, setTab] = useUrlTab('requests');
   const [requests, setRequests] = useState([]);
   const [requestStats, setRequestStats] = useState(null);
   const [requestModal, setRequestModal] = useState(false);

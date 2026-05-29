@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
@@ -39,7 +40,7 @@ const lastMonday = () => {
 
 export default function Tools() {
   const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
-  const [tab, setTab] = useState('catalog');
+  const [tab, setTab] = useUrlTab('catalog');
   const [tools, setTools] = useState([]);
   const [stats, setStats] = useState(null);
   const [sites, setSites] = useState([]);

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
@@ -44,7 +45,7 @@ export default function Vendors() {
   const { canCreate, canEdit, canDelete } = useAuth();
   const [vendors, setVendors] = useState([]);
   const [rates, setRates] = useState([]);
-  const [tab, setTab] = useState('vendors');
+  const [tab, setTab] = useUrlTab('vendors');
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({});

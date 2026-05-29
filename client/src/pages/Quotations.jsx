@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
@@ -12,7 +13,7 @@ const blankRow = () => ({ description: '', quantity: 1, unit: 'nos', rate: 0, it
 
 export default function Quotations() {
   const { canDelete } = useAuth();
-  const [tab, setTab] = useState('boq');
+  const [tab, setTab] = useUrlTab('boq');
   const [boqs, setBoqs] = useState([]);
   const [quotations, setQuotations] = useState([]);
   const [leads, setLeads] = useState([]);

@@ -12,6 +12,7 @@
 
 import { useState, useEffect } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -84,7 +85,7 @@ const fmt = (n) => `Rs ${(n || 0).toLocaleString('en-IN')}`;
 
 export default function FireNoc() {
   const { canCreate } = useAuth();
-  const [tab, setTab] = useState('dashboard');
+  const [tab, setTab] = useUrlTab('dashboard');
   const [dashboard, setDashboard] = useState(null);
   const [cycles, setCycles] = useState([]);
   const [filters, setFilters] = useState({ state: '', stage: '', status: 'active', q: '' });

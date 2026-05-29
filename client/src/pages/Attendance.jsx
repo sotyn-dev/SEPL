@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
@@ -9,7 +10,7 @@ import { exportCsv } from '../utils/exportCsv';
 
 export default function Attendance() {
   const { user, isAdmin, canDelete } = useAuth();
-  const [tab, setTab] = useState('punch');
+  const [tab, setTab] = useUrlTab('punch');
   const [myToday, setMyToday] = useState(null);
   // Mam: daily attendance detail (in/out times + leave) belongs on the
   // Attendance page next to the punch UI, not on the dashboard.

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
@@ -13,7 +14,7 @@ const EQUIPMENT_LIST = ['Welding Machine', 'Pipe Threading Machine', 'Drill Mach
 
 export default function DPR() {
   const { user, isAdmin, canEdit, canDelete, canApprove } = useAuth();
-  const [tab, setTab] = useState('dashboard');
+  const [tab, setTab] = useUrlTab('dashboard');
   const [reportFilter, setReportFilter] = useState(''); // when set by stat-card click, filters Daily Reports tab
   const [dateTouched, setDateTouched] = useState(false); // true once user explicitly picks a date
   const [summary, setSummary] = useState(null);

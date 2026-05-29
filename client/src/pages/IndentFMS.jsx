@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
@@ -21,7 +22,7 @@ export default function IndentFMS() {
   const [tracker, setTracker] = useState([]);
   const [pipeline, setPipeline] = useState({});
   const [grns, setGrns] = useState([]);
-  const [tab, setTab] = useState('pipeline');
+  const [tab, setTab] = useUrlTab('pipeline');
   const [modal, setModal] = useState(false);
   const [grnModal, setGrnModal] = useState(false);
   const [form, setForm] = useState({});

@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -56,7 +57,7 @@ const fmtD  = (iso) => iso ? new Date(iso).toLocaleDateString('en-IN', { dateSty
 
 export default function RentalTools() {
   const { user, canCreate } = useAuth();
-  const [tab, setTab] = useState('dashboard');
+  const [tab, setTab] = useUrlTab('dashboard');
   const [dashboard, setDashboard] = useState(null);
   const [enquiries, setEnquiries] = useState([]);
   const [filters, setFilters] = useState({ stage: '', status: 'open', q: '' });

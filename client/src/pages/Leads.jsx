@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
+import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
@@ -98,7 +99,7 @@ const PIE_COLORS = ['#3b82f6','#6366f1','#8b5cf6','#f59e0b','#f97316','#06b6d4',
 
 export default function Leads() {
   const { canCreate, canEdit, canDelete, user } = useAuth();
-  const [tab, setTab] = useState('dashboard');
+  const [tab, setTab] = useUrlTab('dashboard');
   const [stageTab, setStageTab] = useState('all');
   const [leads, setLeads] = useState([]);
   const [dashboard, setDashboard] = useState(null);
