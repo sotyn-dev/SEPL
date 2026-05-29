@@ -494,15 +494,15 @@ function GanttView({ data, expanded, setExpanded, onPickBar }) {
 
   return (
     <div className="card p-0 overflow-hidden" id="procurement-gantt-printable">
-      {/* Legend */}
+      {/* Legend — simplified to indent-only (mam 2026-05-28). The five
+          downstream phases (Quotes / PO / Dispatch / Receive / Install)
+          are still computed for the math but hidden from the chart so
+          mam sees only the action she has to take. */}
       <div className="px-3 py-2 border-b border-gray-100 flex flex-wrap items-center gap-3 bg-gray-50 print:hidden">
-        <span className="text-[10px] font-bold uppercase text-gray-500">Phases:</span>
-        {PHASES.map(p => (
-          <span key={p} className="text-[10px] flex items-center gap-1">
-            <span className="w-3 h-3 rounded" style={{ background: PHASE_COLOR[p].bg, border: `1px solid ${PHASE_COLOR[p].border}` }} />
-            {PHASE_LABEL[p]}
-          </span>
-        ))}
+        <span className="text-[10px] flex items-center gap-1.5">
+          <span className="w-3 h-3 rounded" style={{ background: PHASE_COLOR.indent.bg, border: `1px solid ${PHASE_COLOR.indent.border}` }} />
+          <b>Indent raise window</b> — bar shows the date range by which each indent MUST be raised
+        </span>
         {data.generated_at && (
           <span className="text-[10px] text-gray-400 ml-auto">
             Last generated: {String(data.generated_at).replace('T', ' ').slice(0, 16)}
@@ -561,49 +561,52 @@ function GanttView({ data, expanded, setExpanded, onPickBar }) {
               </div>
             )}
 
-            {/* Bars */}
+            {/* Bars — mam 2026-05-28: 'only indent raise'. The other 5
+                phases still get computed + stored (the backward-pass needs
+                them) but we hide them so the Gantt is the single source of
+                truth for the only action the user takes: raising indents. */}
             {rowList.map((r, i) => (
               <div key={i} className="h-7 border-b border-gray-100 relative" style={{ width: CHART_W }}>
-                {r.kind === 'item' && PHASES.map(phase => {
-                  const ph = r.phases[phase];
+                {r.kind === 'item' && (() => {
+                  const ph = r.phases.indent;
                   if (!ph) return null;
                   const startOffset = daysBetween(minDate, ph.start_date);
                   const widthDays = daysBetween(ph.start_date, ph.end_date) + 1;
-                  const c = PHASE_COLOR[phase];
+                  const c = PHASE_COLOR.indent;
                   return (
                     <button
-                      key={phase}
                       onClick={() => onPickBar({ ...ph, item_description: r.item_description })}
-                      title={`${PHASE_LABEL[phase]} · ${fmtDate(ph.start_date)} → ${fmtDate(ph.end_date)} (${widthDays}d)`}
+                      title={`Raise indent · ${fmtDate(ph.start_date)} → ${fmtDate(ph.end_date)} (${widthDays}d window)`}
                       className="absolute top-1 h-5 rounded text-[10px] font-bold flex items-center justify-center px-1 truncate hover:brightness-95"
                       style={{
                         left: startOffset * PX_PER_DAY,
-                        width: Math.max(8, widthDays * PX_PER_DAY - 1),
+                        width: Math.max(20, widthDays * PX_PER_DAY - 1),
                         background: c.bg, border: `1px solid ${c.border}`, color: c.text,
                       }}
                     >
-                      {widthDays * PX_PER_DAY > 50 ? PHASE_LABEL[phase] : ''}
+                      {widthDays * PX_PER_DAY > 60 ? `Raise by ${fmtDate(ph.end_date)}` : 'Indent'}
                     </button>
                   );
-                })}
-                {/* For trade headers, draw a faint span covering the trade's earliest-start → latest-end */}
+                })()}
+                {/* Trade rollup — span across the trade's earliest →
+                    latest INDENT window only (matches the item-row scope). */}
                 {r.kind === 'trade' && (() => {
                   let mn = null, mx = null;
                   for (const it of r.items) {
-                    for (const phase of PHASES) {
-                      const p = it.phases[phase]; if (!p) continue;
-                      if (!mn || p.start_date < mn) mn = p.start_date;
-                      if (!mx || p.end_date   > mx) mx = p.end_date;
-                    }
+                    const p = it.phases.indent; if (!p) continue;
+                    if (!mn || p.start_date < mn) mn = p.start_date;
+                    if (!mx || p.end_date   > mx) mx = p.end_date;
                   }
                   if (!mn || !mx) return null;
                   const startOffset = daysBetween(minDate, mn);
                   const widthDays = daysBetween(mn, mx) + 1;
                   return (
-                    <div className="absolute top-2 h-3 rounded bg-gray-200/60 border border-gray-300" style={{
-                      left: startOffset * PX_PER_DAY,
-                      width: Math.max(8, widthDays * PX_PER_DAY - 1),
-                    }} />
+                    <div className="absolute top-2 h-3 rounded bg-amber-200/40 border border-amber-300"
+                      title={`${r.trade} indents window: ${fmtDate(mn)} → ${fmtDate(mx)}`}
+                      style={{
+                        left: startOffset * PX_PER_DAY,
+                        width: Math.max(8, widthDays * PX_PER_DAY - 1),
+                      }} />
                   );
                 })()}
               </div>
