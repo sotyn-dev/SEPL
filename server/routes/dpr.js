@@ -1039,59 +1039,103 @@ router.get('/engineer-compliance', (req, res) => {
   // Excludes leave/absent/holiday — legitimately DPR-free.
   const PRESENT_STATUSES = "('present','half_day','short_day','late')";
 
-  // 1) Engineer pool — every active Site Engineer plus admins.
-  //    Non-admins only see themselves (canSeeAll gate).
+  // 1) Engineer pool — ONLY users with the Site Engineer role.
+  //    Mam (2026-05-29 v2): "only site eng here".  Admins were
+  //    leaking in via the `OR u.role='admin'` clause; dropped.
   let engineers = db.prepare(`
     SELECT DISTINCT u.id, u.name, u.email
       FROM users u
-      LEFT JOIN user_roles ur ON ur.user_id = u.id
-      LEFT JOIN roles r       ON r.id = ur.role_id
+      JOIN user_roles ur ON ur.user_id = u.id
+      JOIN roles r       ON r.id = ur.role_id
      WHERE u.active = 1
-       AND (r.name = 'Site Engineer' OR u.role = 'admin')
+       AND r.name = 'Site Engineer'
      ORDER BY u.name
   `).all();
   if (!canSeeAll) engineers = engineers.filter(e => e.id === uid);
+  if (engineers.length === 0) {
+    return res.json({
+      range: { date_from: from, date_to: to, calendar_days: calendarDays },
+      totals: { engineers: 0, sites: 0, days_present: 0, days_dpr_filled: 0, profit_loss: 0, gap_days: 0 },
+      engineers: [],
+    });
+  }
 
-  // 2) All active sites with their canonical engineer in one query.
-  //    Engineers with zero sites still appear (we left-join below).
-  const siteRows = db.prepare(`
+  // 2) Resolve (engineer, site) pairs via the same fallback chain
+  //    the /progress + LossReasons endpoints use.  In prod most
+  //    sites have NULL site_engineer_id and pin the engineer on the
+  //    linked PO (site_engineer_id OR site_engineer_ids CSV).  The
+  //    v1 query naively required `sites.site_engineer_id IS NOT NULL`
+  //    which wiped out all 26 active sites in prod → every card
+  //    showed 0/0/0.
+  //
+  //    Same-named sites get GROUPed (legacy duplicate rows) so each
+  //    (engineer, logical site) appears once.
+  const engineerIds = engineers.map(e => e.id);
+  const engP = engineerIds.map(() => '?').join(',');
+  const pairs = db.prepare(`
     SELECT
-      s.id                              AS site_id,
-      s.name                            AS site_name,
-      s.client_name                     AS client_name,
-      s.supervisor                      AS supervisor,
-      s.site_engineer_id                AS engineer_id,
-      COALESCE((
-        SELECT COUNT(DISTINCT a.date)
-          FROM attendance a
-         WHERE a.user_id = s.site_engineer_id
-           AND a.site_id = s.id
-           AND a.date BETWEEN ? AND ?
-           AND a.status IN ${PRESENT_STATUSES}
-      ), 0) AS days_present,
-      COALESCE((
-        SELECT COUNT(DISTINCT d.report_date)
-          FROM dpr d
-         WHERE d.site_id = s.id
-           AND d.report_date BETWEEN ? AND ?
-           AND COALESCE(d.is_planned_template, 0) = 0
-      ), 0) AS days_dpr_filled,
-      COALESCE((
-        SELECT SUM(d.profit_loss)
-          FROM dpr d
-         WHERE d.site_id = s.id
-           AND d.report_date BETWEEN ? AND ?
-           AND COALESCE(d.is_planned_template, 0) = 0
-      ), 0) AS profit_loss
-      FROM sites s
-     WHERE s.status = 'active'
-       AND s.site_engineer_id IS NOT NULL
-     ORDER BY s.name
-  `).all(from, to, from, to, from, to);
+      e.id               AS engineer_id,
+      MIN(s.id)          AS site_id,
+      s.name             AS site_name,
+      MAX(s.client_name) AS client_name,
+      MAX(s.supervisor)  AS supervisor
+    FROM (SELECT DISTINCT id FROM users WHERE id IN (${engP})) e
+    JOIN sites s ON s.status = 'active' AND (
+      s.site_engineer_id = e.id
+      OR EXISTS (
+        SELECT 1 FROM purchase_orders po
+         WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
+           AND (
+             po.site_engineer_id = e.id
+             OR (',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ('%,' || e.id || ',%')
+           )
+      )
+    )
+    GROUP BY e.id, s.name
+    ORDER BY e.id, s.name
+  `).all(...engineerIds);
 
-  // 3) Bucket sites into their engineer.  Engineers with no assigned
+  // 3) Batched stats per (engineer × site) — three queries total,
+  //    regardless of fleet size.
+  const allSiteIds = [...new Set(pairs.map(p => p.site_id))];
+  const allEngIds  = [...new Set(pairs.map(p => p.engineer_id))];
+  const presentMap = new Map();   // key: user_id|site_id → days
+  const dprMap     = new Map();   // key: site_id → days
+  const plMap      = new Map();   // key: site_id → profit_loss_sum
+
+  if (allSiteIds.length && allEngIds.length) {
+    const sidP = allSiteIds.map(() => '?').join(',');
+    const eidP = allEngIds.map(() => '?').join(',');
+    const presentRows = db.prepare(`
+      SELECT user_id, site_id, COUNT(DISTINCT date) AS days
+        FROM attendance
+       WHERE user_id IN (${eidP})
+         AND site_id IN (${sidP})
+         AND date BETWEEN ? AND ?
+         AND status IN ${PRESENT_STATUSES}
+       GROUP BY user_id, site_id
+    `).all(...allEngIds, ...allSiteIds, from, to);
+    presentRows.forEach(r => presentMap.set(`${r.user_id}|${r.site_id}`, r.days));
+
+    const dprRows = db.prepare(`
+      SELECT site_id,
+             COUNT(DISTINCT report_date) AS days,
+             COALESCE(SUM(profit_loss), 0) AS pl
+        FROM dpr
+       WHERE site_id IN (${sidP})
+         AND report_date BETWEEN ? AND ?
+         AND COALESCE(is_planned_template, 0) = 0
+       GROUP BY site_id
+    `).all(...allSiteIds, from, to);
+    dprRows.forEach(r => {
+      dprMap.set(r.site_id, r.days);
+      plMap.set(r.site_id, r.pl);
+    });
+  }
+
+  // 4) Bucket sites into their engineer.  Engineers with no assigned
   //    site stay empty — they still appear as a "no sites assigned"
-  //    card in the UI so mam can see them in the search.
+  //    card so mam can find them via search.
   const byEng = new Map();
   for (const e of engineers) byEng.set(e.id, {
     engineer_id: e.id,
@@ -1102,22 +1146,25 @@ router.get('/engineer-compliance', (req, res) => {
     days_dpr_filled_total: 0,
     profit_loss_total: 0,
   });
-  for (const r of siteRows) {
-    const bucket = byEng.get(r.engineer_id);
-    if (!bucket) continue;   // engineer filtered out by canSeeAll
+  for (const p of pairs) {
+    const bucket = byEng.get(p.engineer_id);
+    if (!bucket) continue;
+    const days_present    = presentMap.get(`${p.engineer_id}|${p.site_id}`) || 0;
+    const days_dpr_filled = dprMap.get(p.site_id) || 0;
+    const profit_loss     = plMap.get(p.site_id) || 0;
     bucket.sites.push({
-      site_id: r.site_id,
-      site_name: r.site_name,
-      client_name: r.client_name,
-      supervisor: r.supervisor,
-      days_present: r.days_present,
-      days_dpr_filled: r.days_dpr_filled,
-      profit_loss: r.profit_loss,
-      gap: Math.max(0, r.days_present - r.days_dpr_filled),
+      site_id: p.site_id,
+      site_name: p.site_name,
+      client_name: p.client_name,
+      supervisor: p.supervisor,
+      days_present,
+      days_dpr_filled,
+      profit_loss,
+      gap: Math.max(0, days_present - days_dpr_filled),
     });
-    bucket.days_present_total    += r.days_present;
-    bucket.days_dpr_filled_total += r.days_dpr_filled;
-    bucket.profit_loss_total     += r.profit_loss;
+    bucket.days_present_total    += days_present;
+    bucket.days_dpr_filled_total += days_dpr_filled;
+    bucket.profit_loss_total     += profit_loss;
   }
 
   // 4) Sort engineers: biggest gap first (offenders surface), then
