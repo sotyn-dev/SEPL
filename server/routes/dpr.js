@@ -420,7 +420,7 @@ router.get('/', (req, res) => {
   // to every active site that shares the same name (legacy duplicate
   // rows).  Mirrors the engineer-compliance aggregation so the
   // drill-down modal count matches the card count.
-  const { site_id, date, date_from, date_to, status, include_siblings } = req.query;
+  const { site_id, date, date_from, date_to, status, include_siblings, submitted_by } = req.query;
   const db = getDb();
   const uid = req.user.id;
   const canSeeAll = dprCanSeeAll(db, req.user);
@@ -447,6 +447,7 @@ router.get('/', (req, res) => {
   if (date_from) { sql += ' AND d.report_date >= ?'; params.push(String(date_from).slice(0, 10)); }
   if (date_to)   { sql += ' AND d.report_date <= ?'; params.push(String(date_to).slice(0, 10)); }
   if (status) { sql += ' AND d.approval_status=?'; params.push(status); }
+  if (submitted_by) { sql += ' AND d.submitted_by=?'; params.push(submitted_by); }
   if (!canSeeAll) {
     sql += ` AND (s.site_engineer_id = ? OR EXISTS (
       SELECT 1 FROM purchase_orders po
@@ -1187,26 +1188,43 @@ router.get('/engineer-compliance', (req, res) => {
       presentMap.get(key).add(att.date);
     }
 
-    // (b) DPRs — fan out the canonical site_id to ALL siblings, then
-    //     fold their counts/sums back to the canonical id.  Without
-    //     this, DPRs filed against a legacy duplicate row are missed.
+    // (b) DPRs — scoped to the engineer's OWN submissions.
+    //
+    //     Mam (2026-05-29 v6): "gagan present 4 days dpr 18 is it
+    //     possible?".  No — an engineer can't file a DPR on a day
+    //     they weren't on site.  v5 counted any DPR at the site,
+    //     so when a supervisor or co-engineer filed, every assigned
+    //     engineer's card inflated.  Now we filter by
+    //     dpr.submitted_by = engineer_id so the count reflects
+    //     THAT engineer's actual contribution.  Site-level "did
+    //     anyone file?" is still the Dashboard tab's job.
+    //
+    //     Sibling expansion still applies for the site_id, so DPRs
+    //     filed against a legacy duplicate row still count under
+    //     the engineer who filed them.  P&L sum reflects only the
+    //     engineer's own DPR profit_loss.
     const expandedSiteIds = [...new Set(pairs.flatMap(p =>
       siblingsOfCanonical.get(p.site_id) || [p.site_id]))];
     const expP = expandedSiteIds.map(() => '?').join(',');
     const dprRows = db.prepare(`
-      SELECT site_id, report_date, COALESCE(profit_loss, 0) AS pl
+      SELECT site_id, submitted_by, report_date, COALESCE(profit_loss, 0) AS pl
         FROM dpr
        WHERE site_id IN (${expP})
+         AND submitted_by IN (${eidP})
          AND report_date BETWEEN ? AND ?
          AND COALESCE(is_planned_template, 0) = 0
-    `).all(...expandedSiteIds, from, to);
+    `).all(...expandedSiteIds, ...allEngIds, from, to);
 
+    // Now keyed on (engineer_id|canonical_site_id) instead of just
+    // canonical_site_id — so two engineers at the same site each
+    // get credited for their own filings.
     for (const d of dprRows) {
       const canonical = canonicalBySiteId.get(d.site_id);
       if (canonical == null) continue;
-      if (!dprMap.has(canonical)) dprMap.set(canonical, new Set());
-      dprMap.get(canonical).add(d.report_date);
-      plMap.set(canonical, (plMap.get(canonical) || 0) + d.pl);
+      const key = `${d.submitted_by}|${canonical}`;
+      if (!dprMap.has(key)) dprMap.set(key, new Set());
+      dprMap.get(key).add(d.report_date);
+      plMap.set(key, (plMap.get(key) || 0) + d.pl);
     }
   }
 
@@ -1227,8 +1245,8 @@ router.get('/engineer-compliance', (req, res) => {
     const bucket = byEng.get(p.engineer_id);
     if (!bucket) continue;
     const days_present    = presentMap.get(`${p.engineer_id}|${p.site_id}`)?.size || 0;
-    const days_dpr_filled = dprMap.get(p.site_id)?.size || 0;
-    const profit_loss     = plMap.get(p.site_id) || 0;
+    const days_dpr_filled = dprMap.get(`${p.engineer_id}|${p.site_id}`)?.size || 0;
+    const profit_loss     = plMap.get(`${p.engineer_id}|${p.site_id}`) || 0;
     bucket.sites.push({
       site_id: p.site_id,
       site_name: p.site_name,
