@@ -1228,7 +1228,62 @@ router.get('/engineer-compliance', (req, res) => {
     }
   }
 
-  // 4) Bucket sites into their engineer.  Engineers with no assigned
+  // 4) ENGINEER-TOTAL stats (independent of site).
+  //
+  //    Mam (2026-05-29 v7): "look at gagan present 4 days dpr 18 is
+  //    it possible?" and then "do u think it correct".  Most engineers
+  //    punch attendance without picking a site (NULL site_id AND NULL
+  //    site_name), so the per-site name-fallback can't attribute
+  //    those days.  Result: PRESENT = 0 even though the engineer
+  //    clearly worked (and filed DPRs).
+  //
+  //    Card-level headline numbers now reflect the engineer's
+  //    overall activity in the range:
+  //      total_present = COUNT(DISTINCT date) FROM attendance
+  //                      WHERE user_id = engineer AND status in present-set
+  //      total_dpr     = COUNT(DISTINCT report_date) FROM dpr
+  //                      WHERE submitted_by = engineer
+  //      total_pl      = SUM(profit_loss) of the engineer's DPRs
+  //      gap_total     = total_present − total_dpr  (clamped ≥ 0)
+  //
+  //    Per-site PRESENT / DPR / P&L still reflect the matched portion
+  //    so mam can see WHICH site the activity was on — but card-level
+  //    totals are no longer the SUM of those (since unmatched days
+  //    count toward the engineer total but not any single site).
+  const totalPresentByEng = new Map();
+  const totalDprByEng     = new Map();
+  const totalPlByEng      = new Map();
+  if (allEngIds.length) {
+    const eidP2 = allEngIds.map(() => '?').join(',');
+    const PRESENT_STATUSES_INNER = "('present','half_day','short_day','late')";
+
+    const engPresent = db.prepare(`
+      SELECT user_id, COUNT(DISTINCT date) AS days
+        FROM attendance
+       WHERE user_id IN (${eidP2})
+         AND date BETWEEN ? AND ?
+         AND status IN ${PRESENT_STATUSES_INNER}
+       GROUP BY user_id
+    `).all(...allEngIds, from, to);
+    engPresent.forEach(r => totalPresentByEng.set(r.user_id, r.days));
+
+    const engDpr = db.prepare(`
+      SELECT submitted_by,
+             COUNT(DISTINCT report_date) AS days,
+             COALESCE(SUM(profit_loss), 0) AS pl
+        FROM dpr
+       WHERE submitted_by IN (${eidP2})
+         AND report_date BETWEEN ? AND ?
+         AND COALESCE(is_planned_template, 0) = 0
+       GROUP BY submitted_by
+    `).all(...allEngIds, from, to);
+    engDpr.forEach(r => {
+      totalDprByEng.set(r.submitted_by, r.days);
+      totalPlByEng.set(r.submitted_by, r.pl);
+    });
+  }
+
+  // 5) Bucket sites into their engineer.  Engineers with no assigned
   //    site stay empty — they still appear as a "no sites assigned"
   //    card so mam can find them via search.
   const byEng = new Map();
@@ -1237,9 +1292,15 @@ router.get('/engineer-compliance', (req, res) => {
     engineer_name: e.name,
     engineer_email: e.email,
     sites: [],
-    days_present_total: 0,
-    days_dpr_filled_total: 0,
-    profit_loss_total: 0,
+    // Headline numbers (engineer-wide, any site / no site link)
+    days_present_total:    totalPresentByEng.get(e.id) || 0,
+    days_dpr_filled_total: totalDprByEng.get(e.id)     || 0,
+    profit_loss_total:     totalPlByEng.get(e.id)      || 0,
+    // Per-site SUM for the expanded view footer.  May differ from
+    // the headline when some attendance/DPRs couldn't be matched
+    // to a specific site.
+    days_present_per_site_sum: 0,
+    days_dpr_filled_per_site_sum: 0,
   });
   for (const p of pairs) {
     const bucket = byEng.get(p.engineer_id);
@@ -1257,12 +1318,11 @@ router.get('/engineer-compliance', (req, res) => {
       profit_loss,
       gap: Math.max(0, days_present - days_dpr_filled),
     });
-    bucket.days_present_total    += days_present;
-    bucket.days_dpr_filled_total += days_dpr_filled;
-    bucket.profit_loss_total     += profit_loss;
+    bucket.days_present_per_site_sum    += days_present;
+    bucket.days_dpr_filled_per_site_sum += days_dpr_filled;
   }
 
-  // 4) Sort engineers: biggest gap first (offenders surface), then
+  // 6) Sort engineers: biggest gap first (offenders surface), then
   //    by name.  Inside each engineer, sort their sites the same way.
   const engineersOut = [...byEng.values()].map(b => {
     b.gap_total = Math.max(0, b.days_present_total - b.days_dpr_filled_total);

@@ -1432,6 +1432,16 @@ function EngineerComplianceTab() {
                 {/* Expanded site mini-tiles */}
                 {isOpen && (
                   <div className="border-t bg-gray-50 p-2 space-y-1.5">
+                    {/* Transparency note when per-site sums don't match the engineer total.
+                        Mam (2026-05-29 v7): engineers often punch attendance without
+                        picking a site, and DPRs may be filed against a sibling site row
+                        we couldn't fold in. */}
+                    {(eng.days_present_total > eng.days_present_per_site_sum
+                      || eng.days_dpr_filled_total > eng.days_dpr_filled_per_site_sum) && (
+                      <div className="text-[10px] text-gray-500 bg-white border-l-2 border-amber-400 px-2 py-1 rounded">
+                        Headline shows engineer total. Sites below sum to {eng.days_present_per_site_sum} present / {eng.days_dpr_filled_per_site_sum} DPR — rest are attendance / DPRs we couldn't link to a specific site.
+                      </div>
+                    )}
                     {eng.sites.length === 0 && (
                       <div className="text-center py-3 text-gray-400 text-xs italic">No sites assigned yet</div>
                     )}
