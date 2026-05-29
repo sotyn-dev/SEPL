@@ -352,7 +352,12 @@ export default function PaymentRequired() {
               table below.  Refreshes instantly as admin types in the
               search box or picks a different tab / category.
               My Inbox tab reads from the separately-fetched myInbox
-              array (server-filtered to current-step-approver = me). */}
+              array (server-filtered to current-step-approver = me).
+              Mam 2026-05-29: split the 'Pending' tile into per-stage
+              tiles so she can see WHERE each approval is stuck.
+              Each tile is clickable — clicking it applies the matching
+              status filter, so she can drill into 'who's holding up
+              the 142 requests waiting at Accountant?' in one click. */}
           {(() => {
             const source = tab === 'inbox' ? myInbox : requests;
             const visible = source.filter(r => {
@@ -361,31 +366,50 @@ export default function PaymentRequired() {
               if (tab === 'rejected') return r.status === 'rejected';
               return true;
             });
-            const totalAmount  = visible.reduce((s, r) => s + (+r.amount || 0), 0);
-            const pendingAmt   = visible.filter(r => !['final_approved','rejected'].includes(r.status)).reduce((s, r) => s + (+r.amount || 0), 0);
-            const approvedAmt  = visible.filter(r => r.status === 'final_approved').reduce((s, r) => s + (+r.amount || 0), 0);
-            const rejectedAmt  = visible.filter(r => r.status === 'rejected').reduce((s, r) => s + (+r.amount || 0), 0);
+            const byStatus = (s) => visible.filter(r => r.status === s);
+            const totalAmount = visible.reduce((s, r) => s + (+r.amount || 0), 0);
+            const tile = ({ key, label, sub, status, color }) => {
+              const rows = status ? byStatus(status) : visible;
+              const amt = rows.reduce((s, r) => s + (+r.amount || 0), 0);
+              const active = status && filters.status === status;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setFilters(f => ({ ...f, status: active ? '' : (status || '') }))}
+                  disabled={!status}
+                  className={`card p-3 border-l-4 text-left transition hover:shadow-md disabled:cursor-default disabled:hover:shadow-none ${color.border} ${active ? `${color.activeBg} ring-2 ${color.ring}` : ''}`}
+                >
+                  <div className={`text-[10px] uppercase font-semibold ${color.label}`}>{label}</div>
+                  <div className={`text-xl font-bold ${color.num}`}>{rows.length}<span className="text-[10px] font-normal text-gray-500 ml-1">{rows.length === 1 ? 'req' : 'reqs'}</span></div>
+                  <div className="text-[11px] text-gray-600 mt-0.5">Rs <b className={color.num}>{fmt(amt)}</b></div>
+                  {sub && <div className="text-[9px] text-gray-400 mt-0.5 uppercase tracking-wide">{sub}</div>}
+                </button>
+              );
+            };
+
+            const tiles = [
+              { key: 'all',     label: 'Showing',          sub: 'all filters',                   status: null,                color: { border: 'border-blue-500',    label: 'text-gray-500', num: 'text-blue-700',    activeBg: 'bg-blue-50',    ring: 'ring-blue-300' } },
+              { key: 'hr',      label: 'Pending L1',       sub: 'awaiting HR approval',          status: 'pending',           color: { border: 'border-amber-500',   label: 'text-amber-700', num: 'text-amber-700',  activeBg: 'bg-amber-50',   ring: 'ring-amber-300' } },
+              { key: 'l2',      label: 'Pending L2',       sub: 'HR done · awaiting Accountant', status: 'step1_approved',    color: { border: 'border-orange-500',  label: 'text-orange-700', num: 'text-orange-700',activeBg: 'bg-orange-50',  ring: 'ring-orange-300' } },
+              { key: 'dues',    label: 'Pending L3',       sub: 'Accountant done · dues check',  status: 'accounts_approved', color: { border: 'border-purple-500',  label: 'text-purple-700', num: 'text-purple-700',activeBg: 'bg-purple-50',  ring: 'ring-purple-300' } },
+              { key: 'velo',    label: 'Pending L4',       sub: 'dues done · velocity check',    status: 'dues_checked',      color: { border: 'border-indigo-500',  label: 'text-indigo-700', num: 'text-indigo-700',activeBg: 'bg-indigo-50',  ring: 'ring-indigo-300' } },
+              { key: 'rel',     label: 'Pending Release',  sub: 'all checks done · awaiting payment', status: 'velocity_checked', color: { border: 'border-sky-500',  label: 'text-sky-700', num: 'text-sky-700',       activeBg: 'bg-sky-50',     ring: 'ring-sky-300' } },
+              { key: 'apr',     label: 'Final Approved',   sub: 'paid out',                      status: 'final_approved',    color: { border: 'border-emerald-500', label: 'text-emerald-700', num: 'text-emerald-700',activeBg: 'bg-emerald-50', ring: 'ring-emerald-300' } },
+              { key: 'rej',     label: 'Rejected',         sub: 'closed without payment',        status: 'rejected',          color: { border: 'border-rose-500',    label: 'text-rose-700', num: 'text-rose-700',    activeBg: 'bg-rose-50',    ring: 'ring-rose-300' } },
+            ];
+
             return (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="card p-3 border-l-4 border-blue-500">
-                  <div className="text-[11px] text-gray-500 uppercase">Showing</div>
-                  <div className="text-xl font-bold text-blue-700">{visible.length} <span className="text-[11px] font-normal text-gray-500">{visible.length === 1 ? 'request' : 'requests'}</span></div>
-                  <div className="text-[12px] text-gray-600 mt-0.5">Rs <b className="text-blue-700">{fmt(totalAmount)}</b> total</div>
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {tiles.slice(0, 4).map(tile)}
                 </div>
-                <div className="card p-3 border-l-4 border-amber-500">
-                  <div className="text-[11px] text-gray-500 uppercase">Pending</div>
-                  <div className="text-xl font-bold text-amber-700">{visible.filter(r => !['final_approved','rejected'].includes(r.status)).length}</div>
-                  <div className="text-[12px] text-gray-600 mt-0.5">Rs <b className="text-amber-700">{fmt(pendingAmt)}</b></div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {tiles.slice(4).map(tile)}
                 </div>
-                <div className="card p-3 border-l-4 border-emerald-500">
-                  <div className="text-[11px] text-gray-500 uppercase">Approved</div>
-                  <div className="text-xl font-bold text-emerald-700">{visible.filter(r => r.status === 'final_approved').length}</div>
-                  <div className="text-[12px] text-gray-600 mt-0.5">Rs <b className="text-emerald-700">{fmt(approvedAmt)}</b></div>
-                </div>
-                <div className="card p-3 border-l-4 border-rose-500">
-                  <div className="text-[11px] text-gray-500 uppercase">Rejected</div>
-                  <div className="text-xl font-bold text-rose-700">{visible.filter(r => r.status === 'rejected').length}</div>
-                  <div className="text-[12px] text-gray-600 mt-0.5">Rs <b className="text-rose-700">{fmt(rejectedAmt)}</b></div>
+                {/* Topline total so admin can sanity-check the breakdown sums */}
+                <div className="text-[11px] text-gray-500 text-right">
+                  Total across all stages: Rs <b className="text-gray-800">{fmt(totalAmount)}</b>
                 </div>
               </div>
             );
