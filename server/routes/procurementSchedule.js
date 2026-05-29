@@ -68,7 +68,10 @@ const DEFAULT_CATEGORIES = [
 
 // Fixed-cost phases that don't vary per category. Admin can override per
 // category via the rules table if a particular trade needs different slack.
-const FIXED_PHASE_DAYS = { indent: 3, quotes: 2, po: 2, receive: 1, install: 1 };
+// Mam 2026-05-29: 'for indent raise only one day required'. Indent is a
+// single action that happens ON a date, not a multi-day window — the
+// L1+L2 approval slack lives inside the indent.end date math implicitly.
+const FIXED_PHASE_DAYS = { indent: 1, quotes: 2, po: 2, receive: 1, install: 1 };
 
 // Major 2026 Indian public holidays — seeded once so business-day math
 // is sane out of the box. Admin can add / remove via the holidays endpoint.
@@ -180,6 +183,19 @@ try {
     }
     console.log(`[procurement-schedule] seeded ${DEFAULT_CATEGORIES.length * PHASES.length} phase rules`);
   }
+
+  // One-time: flatten the legacy indent rules from 3 → 1 day (mam: 'only
+  // one day required'). Idempotent via app_settings flag so mam can
+  // still tune the indent days per category later via the admin UI
+  // without this overwriting her edits.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='procsch_indent_one_day_v1'").get();
+    if (!done) {
+      const r = db.prepare(`UPDATE procurement_phase_rules SET days=1 WHERE phase='indent' AND days <> 1`).run();
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('procsch_indent_one_day_v1', '1')").run();
+      if (r.changes > 0) console.log(`[procurement-schedule] flattened ${r.changes} indent rules to 1 day`);
+    }
+  } catch (_) {}
 
   // Seed Indian 2026 holidays if empty. Admin can add/remove later.
   const holCount = db.prepare('SELECT COUNT(*) AS n FROM procurement_holidays').get().n;
