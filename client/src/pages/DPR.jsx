@@ -266,15 +266,20 @@ export default function DPR() {
     <div className="space-y-6">
       <div className="sticky-toolbar">
         <div className="flex gap-2 flex-wrap">
-          {['dashboard', 'reports', 'sites', 'losses'].map(t => (
+          {['dashboard', 'reports', 'compliance', 'sites', 'losses'].map(t => (
             <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'}`}>
-              {t === 'dashboard' ? 'Dashboard' : t === 'reports' ? 'Daily Reports' : t === 'sites' ? 'Sites' : 'Loss Reasons'}
+              {t === 'dashboard' ? 'Dashboard'
+                : t === 'reports' ? 'Daily Reports'
+                : t === 'compliance' ? 'Engineer Compliance'
+                : t === 'sites' ? 'Sites'
+                : 'Loss Reasons'}
             </button>
           ))}
         </div>
       </div>
 
       {tab === 'losses' && <LossReasonsTab />}
+      {tab === 'compliance' && <EngineerComplianceTab />}
 
       {tab === 'dashboard' && (
         <>
@@ -1188,6 +1193,178 @@ const ownerFor = (row) => {
   }
   return HINDRANCE_OWNERS[row.hindrance_category] || '—';
 };
+
+// Engineer Compliance tab — mam (2026-05-29): "as per site eng
+// present and dpr filled as per filter dates".  For the chosen
+// date range, per active site: days the assigned engineer was
+// present (attendance) vs days a DPR was actually filed.  Worst
+// gap floats to the top so MD can spot offenders straight away.
+function EngineerComplianceTab() {
+  // Default range = last 30 days inclusive of today (matches the
+  // server default so the first paint has no flicker).
+  const [dateFrom, setDateFrom] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() - 29);
+    return d.toISOString().slice(0, 10);
+  });
+  const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [search, setSearch] = useState('');
+  const [data, setData] = useState({ rows: [], totals: { sites: 0, days_present: 0, days_dpr_filled: 0, gap_days: 0 }, range: {} });
+  const [loading, setLoading] = useState(false);
+
+  const load = () => {
+    setLoading(true);
+    api.get('/dpr/engineer-compliance', { params: { date_from: dateFrom, date_to: dateTo } })
+      .then(r => setData(r.data || { rows: [], totals: {} }))
+      .catch(e => toast.error(e.response?.data?.error || 'Failed to load'))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, [dateFrom, dateTo]); // refetch whenever dates change
+
+  const filtered = data.rows.filter(r => {
+    if (!search) return true;
+    const s = search.toLowerCase();
+    return (r.site_name || '').toLowerCase().includes(s)
+      || (r.engineer_name || '').toLowerCase().includes(s)
+      || (r.client_name || '').toLowerCase().includes(s);
+  });
+
+  // CSV export so mam can paste straight into the management
+  // review.  Reuses the existing exportCsv utility used elsewhere.
+  const exportRows = () => {
+    exportCsv(`engineer-compliance-${dateFrom}-to-${dateTo}.csv`, filtered.map(r => ({
+      Site: r.site_name,
+      Client: r.client_name || '',
+      Engineer: r.engineer_name || '',
+      'Days Present': r.days_present,
+      'Days DPR Filled': r.days_dpr_filled,
+      Gap: Math.max(0, r.days_present - r.days_dpr_filled),
+    })));
+  };
+
+  const setQuickRange = (days) => {
+    const to = new Date();
+    const from = new Date(); from.setDate(from.getDate() - (days - 1));
+    setDateFrom(from.toISOString().slice(0, 10));
+    setDateTo(to.toISOString().slice(0, 10));
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Filter strip — date range + search + quick-pick buttons */}
+      <div className="card p-3">
+        <div className="flex gap-3 flex-wrap items-end">
+          <div>
+            <label className="text-xs text-gray-600 block mb-1">From</label>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+              className="border rounded px-2 py-1.5 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-600 block mb-1">To</label>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+              className="border rounded px-2 py-1.5 text-sm" />
+          </div>
+          <div className="flex gap-1">
+            <button onClick={() => setQuickRange(7)}  className="btn btn-secondary text-xs px-2 py-1.5">7d</button>
+            <button onClick={() => setQuickRange(30)} className="btn btn-secondary text-xs px-2 py-1.5">30d</button>
+            <button onClick={() => setQuickRange(90)} className="btn btn-secondary text-xs px-2 py-1.5">90d</button>
+          </div>
+          <div className="flex-1 min-w-[180px]">
+            <label className="text-xs text-gray-600 block mb-1">Search site / engineer</label>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="e.g. Vikram, HVAC, Hero…"
+              className="border rounded px-2 py-1.5 text-sm w-full" />
+          </div>
+          <button onClick={exportRows} disabled={!filtered.length}
+            className="btn btn-secondary flex items-center gap-1.5"><FiDownload /> Export CSV</button>
+          <button onClick={load} className="btn btn-primary">Refresh</button>
+        </div>
+        <div className="text-[11px] text-gray-500 mt-2">
+          Window: <strong>{data.range?.date_from || dateFrom}</strong> → <strong>{data.range?.date_to || dateTo}</strong> ({data.range?.calendar_days || 0} days).
+          Present = attendance status present / half_day / short_day / late at the same site.
+          DPR Filled excludes plan-only week templates.
+        </div>
+      </div>
+
+      {/* Roll-up tiles */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="card text-center border-l-4 border-blue-500">
+          <div className="text-2xl font-bold text-blue-600">{data.totals?.sites || 0}</div>
+          <div className="text-xs text-gray-500">Active Sites</div>
+        </div>
+        <div className="card text-center border-l-4 border-emerald-500">
+          <div className="text-2xl font-bold text-emerald-600">{data.totals?.days_present || 0}</div>
+          <div className="text-xs text-gray-500">Total Days Present</div>
+        </div>
+        <div className="card text-center border-l-4 border-indigo-500">
+          <div className="text-2xl font-bold text-indigo-600">{data.totals?.days_dpr_filled || 0}</div>
+          <div className="text-xs text-gray-500">Total DPRs Filed</div>
+        </div>
+        <div className="card text-center border-l-4 border-red-500">
+          <div className="text-2xl font-bold text-red-600">{data.totals?.gap_days || 0}</div>
+          <div className="text-xs text-gray-500">Compliance Gap (days)</div>
+        </div>
+      </div>
+
+      {/* Main table */}
+      <div className="card p-0 overflow-x-auto">
+        <table className="freeze-head w-full text-sm">
+          <thead>
+            <tr>
+              <th className="text-left">Site</th>
+              <th className="text-left">Client</th>
+              <th className="text-left">Site Engineer</th>
+              <th className="text-right">Days Present</th>
+              <th className="text-right">DPR Filled</th>
+              <th className="text-right">Gap</th>
+              <th className="text-center">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr><td colSpan={7} className="text-center py-6 text-gray-400">Loading…</td></tr>
+            )}
+            {!loading && filtered.length === 0 && (
+              <tr><td colSpan={7} className="text-center py-8 text-gray-400">
+                No active sites with an assigned engineer in this range.
+              </td></tr>
+            )}
+            {!loading && filtered.map(r => {
+              const gap = Math.max(0, r.days_present - r.days_dpr_filled);
+              const fullCompliance = r.days_present === 0
+                ? 'noshow'
+                : (gap === 0 ? 'green' : (r.days_dpr_filled === 0 ? 'red' : 'amber'));
+              return (
+                <tr key={r.site_id}>
+                  <td className="font-medium">{r.site_name}</td>
+                  <td className="text-gray-600">{r.client_name || '—'}</td>
+                  <td>{r.engineer_name || <span className="text-gray-400 italic">unassigned</span>}</td>
+                  <td className="text-right font-semibold text-emerald-700">{r.days_present}</td>
+                  <td className="text-right font-semibold text-indigo-700">{r.days_dpr_filled}</td>
+                  <td className={`text-right font-bold ${gap > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                    {gap}
+                  </td>
+                  <td className="text-center">
+                    {fullCompliance === 'green' && (
+                      <span className="px-2 py-0.5 rounded-full text-[11px] bg-emerald-100 text-emerald-700">On track</span>
+                    )}
+                    {fullCompliance === 'amber' && (
+                      <span className="px-2 py-0.5 rounded-full text-[11px] bg-amber-100 text-amber-700">Partial — {gap} missing</span>
+                    )}
+                    {fullCompliance === 'red' && (
+                      <span className="px-2 py-0.5 rounded-full text-[11px] bg-red-100 text-red-700">No DPR filed</span>
+                    )}
+                    {fullCompliance === 'noshow' && (
+                      <span className="px-2 py-0.5 rounded-full text-[11px] bg-gray-100 text-gray-600">No attendance</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 function LossReasonsTab() {
   const [rows, setRows] = useState([]);

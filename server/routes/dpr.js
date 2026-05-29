@@ -987,6 +987,121 @@ router.patch('/:id/loss-addressed', (req, res) => {
   res.json({ message: next ? 'Marked as addressed' : 'Unmarked' });
 });
 
+// Per-site engineer compliance — mam (2026-05-29):
+// "as per site eng present and dpr filled as per filter dates".
+//
+// For the chosen date_from..date_to window, every active site rolls
+// up to one row showing how many days the assigned site engineer
+// punched attendance at that site vs how many days a DPR was filed.
+// The `gap` column (present − filled) surfaces engineers who showed
+// up but skipped the DPR — straight line to the Payment Blocked
+// dashboard above.
+//
+// MUST stay above GET /:id — otherwise the id-matcher eats the path.
+//
+// Permission: same canSeeAll gate as the rest of /dpr — engineers
+// see only their own sites; admins/managers see everything.
+router.get('/engineer-compliance', (req, res) => {
+  const db = getDb();
+  const uid = req.user.id;
+  const canSeeAll = dprCanSeeAll(db, req.user);
+
+  // Default range: last 30 days inclusive of today.  Caller can
+  // override either bound.
+  const today = new Date().toISOString().slice(0, 10);
+  const thirtyAgo = (() => {
+    const d = new Date(); d.setDate(d.getDate() - 29);
+    return d.toISOString().slice(0, 10);
+  })();
+  const from = String(req.query.date_from || thirtyAgo).slice(0, 10);
+  const to   = String(req.query.date_to   || today    ).slice(0, 10);
+  if (from > to) return res.status(400).json({ error: 'date_from must be on or before date_to' });
+
+  // Calendar-day count so the UI can show "12 / 30 days present"
+  // without re-computing on the client.
+  const calendarDays = (() => {
+    const a = new Date(from + 'T00:00:00');
+    const b = new Date(to   + 'T00:00:00');
+    return Math.round((b - a) / 86400000) + 1;
+  })();
+
+  // Attendance statuses that count as "engineer was on site".
+  // Excludes leave/absent/holiday — those are legitimately DPR-free.
+  const PRESENT_STATUSES = "('present','half_day','short_day','late')";
+
+  let sql = `
+    SELECT
+      s.id                              AS site_id,
+      s.name                            AS site_name,
+      s.client_name                     AS client_name,
+      s.status                          AS site_status,
+      s.supervisor                      AS supervisor,
+      s.site_engineer_id                AS engineer_id,
+      u.name                            AS engineer_name,
+      COALESCE((
+        SELECT COUNT(DISTINCT a.date)
+          FROM attendance a
+         WHERE a.user_id  = s.site_engineer_id
+           AND a.site_id  = s.id
+           AND a.date BETWEEN ? AND ?
+           AND a.status IN ${PRESENT_STATUSES}
+      ), 0) AS days_present,
+      COALESCE((
+        SELECT COUNT(DISTINCT d.report_date)
+          FROM dpr d
+         WHERE d.site_id = s.id
+           AND d.report_date BETWEEN ? AND ?
+           AND COALESCE(d.is_planned_template, 0) = 0
+      ), 0) AS days_dpr_filled
+      FROM sites s
+      LEFT JOIN users u ON u.id = s.site_engineer_id
+     WHERE s.status = 'active'
+       AND s.site_engineer_id IS NOT NULL
+  `;
+  const params = [from, to, from, to];
+
+  if (!canSeeAll) {
+    sql += ` AND (s.site_engineer_id = ? OR EXISTS (
+      SELECT 1 FROM purchase_orders po
+       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
+         AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?)
+    ))`;
+    params.push(uid, `%,${uid},%`, uid);
+  }
+
+  // Worst gap first so MD's eyeball-test catches offenders straight
+  // away.  Site name as tiebreaker for a stable, scan-friendly order.
+  sql += ` ORDER BY (
+      COALESCE((SELECT COUNT(DISTINCT a.date) FROM attendance a
+                 WHERE a.user_id = s.site_engineer_id AND a.site_id = s.id
+                   AND a.date BETWEEN ? AND ? AND a.status IN ${PRESENT_STATUSES}), 0)
+      -
+      COALESCE((SELECT COUNT(DISTINCT d.report_date) FROM dpr d
+                 WHERE d.site_id = s.id
+                   AND d.report_date BETWEEN ? AND ?
+                   AND COALESCE(d.is_planned_template, 0) = 0), 0)
+    ) DESC, s.name ASC`;
+  params.push(from, to, from, to);
+
+  const rows = db.prepare(sql).all(...params);
+
+  // Roll up totals so the header strip can show "X engineers
+  // present Y days but only filed Z DPRs" at a glance.
+  const totals = rows.reduce((acc, r) => {
+    acc.sites += 1;
+    acc.days_present += r.days_present;
+    acc.days_dpr_filled += r.days_dpr_filled;
+    return acc;
+  }, { sites: 0, days_present: 0, days_dpr_filled: 0 });
+  totals.gap_days = Math.max(0, totals.days_present - totals.days_dpr_filled);
+
+  res.json({
+    range: { date_from: from, date_to: to, calendar_days: calendarDays },
+    totals,
+    rows,
+  });
+});
+
 // Get DPR details
 router.get('/:id', (req, res) => {
   const db = getDb();
