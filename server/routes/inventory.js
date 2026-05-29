@@ -25,6 +25,13 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
+// Idempotent column add (mam 2026-05-29: 'unable to edit used, unused').
+// Lets us mutate condition on an existing balance row without forcing a
+// new IN/OUT movement (movements require qty > 0 by CHECK constraint).
+// GET /stock prefers this column; legacy rows where it's NULL fall back
+// to deriving from the last IN movement.
+try { getDb().exec(`ALTER TABLE stock_balance ADD COLUMN condition TEXT`); } catch (_) {}
+
 // ---------- WAREHOUSES ----------
 
 router.get('/warehouses', requirePermission('inventory', 'view'), (req, res) => {
@@ -93,15 +100,17 @@ router.get('/stock', requirePermission('inventory', 'view'), (req, res) => {
             w.name as warehouse_name, w.type as warehouse_type,
             im.item_code, im.item_name, im.specification, im.size, im.uom, im.make, im.type as item_type,
             im.current_price as master_price,
-            -- Latest condition (Used / Unused / Scrap) recorded for this (warehouse,
-            -- item) pair on its most recent IN movement. NULL for stock that was
-            -- entered before the condition field existed.
-            (SELECT sm.item_condition FROM stock_movements sm
-              WHERE sm.warehouse_id = sb.warehouse_id
-                AND sm.item_master_id = sb.item_master_id
-                AND sm.type = 'IN'
-                AND sm.item_condition IS NOT NULL
-              ORDER BY sm.created_at DESC LIMIT 1) AS latest_condition
+            -- Condition (Used / Unused / Scrap). Prefer the explicit column on
+            -- stock_balance (added 2026-05-29 so mam can edit inline); fall
+            -- back to the last IN movement's item_condition for legacy rows
+            -- where the column is still NULL.
+            COALESCE(sb.condition,
+              (SELECT sm.item_condition FROM stock_movements sm
+                WHERE sm.warehouse_id = sb.warehouse_id
+                  AND sm.item_master_id = sb.item_master_id
+                  AND sm.type = 'IN'
+                  AND sm.item_condition IS NOT NULL
+                ORDER BY sm.created_at DESC LIMIT 1)) AS latest_condition
        FROM stock_balance sb
        JOIN warehouses w ON w.id = sb.warehouse_id
        JOIN item_master im ON im.id = sb.item_master_id
@@ -356,13 +365,32 @@ router.patch('/stock/:id', requirePermission('inventory', 'edit'), (req, res) =>
   const id = +req.params.id;
   const newQty = req.body?.quantity != null ? +req.body.quantity : null;
   const newRate = req.body?.avg_rate != null ? +req.body.avg_rate : null;
+  const newCondition = req.body?.condition !== undefined ? req.body.condition : null;
   const notes = req.body?.notes || 'Manual stock adjustment';
-  if (newQty == null && newRate == null) return res.status(400).json({ error: 'quantity or avg_rate required' });
+  if (newQty == null && newRate == null && newCondition === null) {
+    return res.status(400).json({ error: 'quantity, avg_rate or condition required' });
+  }
   if (newQty != null && newQty < 0) return res.status(400).json({ error: 'Quantity cannot be negative' });
   if (newRate != null && newRate < 0) return res.status(400).json({ error: 'Rate cannot be negative' });
+  const VALID_CONDITIONS = ['Used', 'Unused', 'Scrap', null, ''];
+  if (newCondition !== null && !VALID_CONDITIONS.includes(newCondition)) {
+    return res.status(400).json({ error: 'condition must be Used, Unused, or Scrap' });
+  }
 
   const sb = db.prepare('SELECT * FROM stock_balance WHERE id=?').get(id);
   if (!sb) return res.status(404).json({ error: 'Stock row not found' });
+  // Condition-only edit (no qty / rate change) is the most common path
+  // for mam — handle it inline and skip the qty-movement bookkeeping.
+  if (newQty == null && newRate == null && newCondition !== null) {
+    db.prepare('UPDATE stock_balance SET condition=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+      .run(newCondition || null, id);
+    return res.json({ message: 'Condition updated', condition: newCondition || null });
+  }
+  // For combined qty/rate + condition edits, write the condition first so
+  // the transactional block below doesn't need to know about it.
+  if (newCondition !== null) {
+    db.prepare('UPDATE stock_balance SET condition=? WHERE id=?').run(newCondition || null, id);
+  }
 
   try {
     db.transaction(() => {

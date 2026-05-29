@@ -385,8 +385,34 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                       <td className={`px-3 py-2 text-right font-bold tabular-nums ${low ? 'text-amber-700' : 'text-gray-800'}`}>
                         {fmtNum(r.quantity)} {low && <FiAlertTriangle className="inline ml-1 text-amber-500" size={12} />}
                       </td>
+                      {/* Inline-edit Condition (mam 2026-05-29: 'unable
+                          to edit used, unused'). Click cell to open a
+                          small dropdown; changing the value PATCHes the
+                          row immediately. canEdit gate falls back to
+                          the read-only badge for non-editors. */}
                       <td className="px-3 py-2 text-center">
-                        {cond ? (
+                        {canEdit ? (
+                          <select
+                            value={cond}
+                            onChange={async (e) => {
+                              const next = e.target.value;
+                              try {
+                                await api.patch(`/inventory/stock/${r.id}`, { condition: next });
+                                toast.success(next ? `Marked ${next}` : 'Cleared');
+                                reload();
+                              } catch (err) {
+                                toast.error(err.response?.data?.error || 'Update failed');
+                              }
+                            }}
+                            className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border cursor-pointer outline-none ${cond ? condClass : 'bg-gray-50 text-gray-400 border-gray-200'}`}
+                            title="Click to change condition"
+                          >
+                            <option value="">—</option>
+                            <option value="Unused">Unused</option>
+                            <option value="Used">Used</option>
+                            <option value="Scrap">Scrap</option>
+                          </select>
+                        ) : cond ? (
                           <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${condClass}`}>{cond}</span>
                         ) : (
                           <span className="text-[10px] text-gray-300 italic">—</span>
