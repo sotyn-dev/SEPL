@@ -43,6 +43,8 @@ import {
   FiActivity, FiMapPin, FiDatabase, FiMail, FiUserCheck, FiSearch,
   // HRMS · Sub-contractor Hiring workflow (mam 2026-05-28)
   FiGitMerge,
+  // Procurement · backward-pass Gantt (mam 2026-05-28)
+  FiGitBranch,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 
@@ -88,11 +90,14 @@ const SIDEBAR_GROUPS = [
   // not quote/order workflow.  Dispatch renamed back to "Indent to
   // Dispatch" to match the page header.
   { id: 'procurement', label: 'Procurement', icon: FiShoppingBag, items: [
-    { path: '/item-master',    label: 'Items',              icon: FiGrid,         module: 'item_master' },
-    { path: '/price-required', label: 'RFQ Queue',          icon: FiInbox,        module: null },
-    { path: '/vendors',        label: 'Vendors',            icon: FiTag,          module: 'vendors' },
-    { path: '/procurement',    label: 'Indent to Dispatch', icon: FiTruck,        module: 'procurement' },
-    { path: '/orders',         label: 'Order to Planning',  icon: FiShoppingCart, module: 'orders' },
+    { path: '/item-master',          label: 'Items',              icon: FiGrid,         module: 'item_master' },
+    { path: '/price-required',       label: 'RFQ Queue',          icon: FiInbox,        module: null },
+    { path: '/vendors',              label: 'Vendors',            icon: FiTag,          module: 'vendors' },
+    { path: '/procurement',          label: 'Indent to Dispatch', icon: FiTruck,        module: 'procurement' },
+    { path: '/orders',               label: 'Order to Planning',  icon: FiShoppingCart, module: 'orders' },
+    // Mam (2026-05-28): backward-pass Gantt per project — surfaces
+    // 'must raise indent by' date for every BOQ item.
+    { path: '/procurement-schedule', label: 'Schedule (Gantt)',   icon: FiGitBranch,    module: 'procurement_schedule' },
   ]},
   { id: 'projects', label: 'Projects', icon: FiBriefcase, items: [
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },

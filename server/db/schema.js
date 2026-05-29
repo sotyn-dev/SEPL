@@ -3688,6 +3688,9 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-05-28): Sub-contractor Hiring workflow tracker —
     // 14-step pre-award + onboarding flow per site.
     'subcon_hiring',
+    // Mam (2026-05-28): Procurement Schedule — backward-pass Gantt
+    // per project so "raise indent by" dates are computed, not guessed.
+    'procurement_schedule',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

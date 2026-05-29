@@ -266,6 +266,7 @@ app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/ai-agent', require('./routes/aiAgent'));
 app.use('/api/sub-contractors', require('./routes/subcontractors'));
 app.use('/api/subcon-hiring', require('./routes/subconHiring'));
+app.use('/api/procurement-schedule', require('./routes/procurementSchedule'));
 app.use('/api/crm-funnel', require('./routes/crmFunnel'));
 app.use('/api/cheques', require('./routes/cheques'));
 app.use('/api/dashboards', require('./routes/dashboards'));
