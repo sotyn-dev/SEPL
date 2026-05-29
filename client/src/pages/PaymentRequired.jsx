@@ -368,7 +368,11 @@ export default function PaymentRequired() {
             });
             const byStatus = (s) => visible.filter(r => r.status === s);
             const totalAmount = visible.reduce((s, r) => s + (+r.amount || 0), 0);
-            const tile = ({ key, label, sub, status, color }) => {
+            // Compact tile (mam 2026-05-29: 'take it small size because
+            // i want to freeze the column'). Two short lines: label +
+            // count · amount. No subtitle. Saves ~220px of vertical
+            // space so the table header freeze gets useful real estate.
+            const tile = ({ key, label, status, color }) => {
               const rows = status ? byStatus(status) : visible;
               const amt = rows.reduce((s, r) => s + (+r.amount || 0), 0);
               const active = status && filters.status === status;
@@ -378,12 +382,14 @@ export default function PaymentRequired() {
                   type="button"
                   onClick={() => setFilters(f => ({ ...f, status: active ? '' : (status || '') }))}
                   disabled={!status}
-                  className={`card p-3 border-l-4 text-left transition hover:shadow-md disabled:cursor-default disabled:hover:shadow-none ${color.border} ${active ? `${color.activeBg} ring-2 ${color.ring}` : ''}`}
+                  className={`card px-2 py-1.5 border-l-4 text-left transition hover:shadow disabled:cursor-default disabled:hover:shadow-none ${color.border} ${active ? `${color.activeBg} ring-2 ${color.ring}` : ''}`}
+                  title={`${label} · ${rows.length} ${rows.length === 1 ? 'request' : 'requests'} · Rs ${fmt(amt)}`}
                 >
-                  <div className={`text-[10px] uppercase font-semibold ${color.label}`}>{label}</div>
-                  <div className={`text-xl font-bold ${color.num}`}>{rows.length}<span className="text-[10px] font-normal text-gray-500 ml-1">{rows.length === 1 ? 'req' : 'reqs'}</span></div>
-                  <div className="text-[11px] text-gray-600 mt-0.5">Rs <b className={color.num}>{fmt(amt)}</b></div>
-                  {sub && <div className="text-[9px] text-gray-400 mt-0.5 uppercase tracking-wide">{sub}</div>}
+                  <div className={`text-[9px] uppercase font-semibold leading-tight truncate ${color.label}`}>{label}</div>
+                  <div className="flex items-baseline gap-1.5 mt-0.5">
+                    <span className={`text-base font-bold leading-none ${color.num}`}>{rows.length}</span>
+                    <span className="text-[10px] text-gray-600 leading-none truncate">Rs {fmt(amt)}</span>
+                  </div>
                 </button>
               );
             };
@@ -404,18 +410,10 @@ export default function PaymentRequired() {
               { key: 'rej',     label: 'Rejected',            sub: 'closed without payment',                 status: 'rejected',          color: { border: 'border-rose-500',    label: 'text-rose-700',     num: 'text-rose-700',    activeBg: 'bg-rose-50',    ring: 'ring-rose-300' } },
             ];
 
+            // Single slim row of 8 tiles (4 on mobile, 8 from md up).
             return (
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {tiles.slice(0, 4).map(tile)}
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {tiles.slice(4).map(tile)}
-                </div>
-                {/* Topline total so admin can sanity-check the breakdown sums */}
-                <div className="text-[11px] text-gray-500 text-right">
-                  Total across all stages: Rs <b className="text-gray-800">{fmt(totalAmount)}</b>
-                </div>
+              <div className="grid grid-cols-4 md:grid-cols-8 gap-1.5">
+                {tiles.map(tile)}
               </div>
             );
           })()}
