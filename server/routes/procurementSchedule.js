@@ -145,6 +145,24 @@ try {
       uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_procsch_drawings_project ON procurement_schedule_drawings(project_id);
+
+    -- Bundle C (mam 2026-05-28): immutable snapshot of every approved
+    -- schedule so the user can browse the history, download as PDF, and
+    -- compare AI runs over time. rows_json + meta_json are full JSON dumps
+    -- so a restore is a one-line UPDATE on procurement_schedule.
+    CREATE TABLE IF NOT EXISTS procurement_schedule_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      label TEXT,
+      rows_json TEXT NOT NULL,
+      meta_json TEXT,
+      items_scheduled INTEGER,
+      earliest_indent_date DATE,
+      anchor_date DATE,
+      generated_by INTEGER REFERENCES users(id),
+      generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_procsch_snap_project ON procurement_schedule_snapshots(project_id, generated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_procsch_project ON procurement_schedule(project_id);
     CREATE INDEX IF NOT EXISTS idx_procsch_item    ON procurement_schedule(item_id);
   `);
@@ -733,6 +751,29 @@ router.post('/:project_id/regenerate', requirePermission('procurement_schedule',
   const earliestIndent = db.prepare(
     `SELECT MIN(start_date) AS d FROM procurement_schedule WHERE project_id = ? AND phase = 'indent'`
   ).get(pid).d;
+
+  // Bundle C (mam 2026-05-28): snapshot every approval so the user can
+  // browse history and download past Gantts. Stores the full row dump
+  // + meta context so future restore is one UPDATE without re-running AI.
+  try {
+    const metaForSnap = db.prepare('SELECT start_date, end_date, client_requirements FROM procurement_schedule_meta WHERE project_id = ?').get(pid);
+    const label = `${overrides.size > 0 ? 'AI · ' : ''}Approved by ${req.user?.name || 'user'} · ${new Date().toISOString().slice(0,16).replace('T',' ')}`;
+    db.prepare(`INSERT INTO procurement_schedule_snapshots
+      (project_id, label, rows_json, meta_json, items_scheduled, earliest_indent_date, anchor_date, generated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      pid,
+      label,
+      JSON.stringify(newRows),
+      JSON.stringify({ meta: metaForSnap || null, used_ai_suggestions: overrides.size }),
+      items.length,
+      earliestIndent,
+      project.completion_date,
+      req.user.id,
+    );
+  } catch (e) {
+    console.warn('[procurement-schedule] snapshot write failed:', e.message);
+  }
+
   res.json({
     ok: true,
     items_scheduled: items.length,
@@ -741,6 +782,72 @@ router.post('/:project_id/regenerate', requirePermission('procurement_schedule',
     anchor_date: project.completion_date,
     used_ai_suggestions: overrides.size,
   });
+});
+
+// GET /procurement-schedule/:project_id/snapshots — Records tab list.
+router.get('/:project_id/snapshots', requirePermission('procurement_schedule', 'view'), (req, res) => {
+  const rows = getDb().prepare(`
+    SELECT s.id, s.label, s.items_scheduled, s.earliest_indent_date, s.anchor_date,
+           s.generated_at, u.name AS generated_by_name
+      FROM procurement_schedule_snapshots s
+      LEFT JOIN users u ON u.id = s.generated_by
+     WHERE s.project_id = ?
+     ORDER BY s.generated_at DESC
+  `).all(+req.params.project_id);
+  res.json(rows);
+});
+
+// GET /procurement-schedule/snapshot/:id — load a specific snapshot for
+// viewing in the Gantt OR for PDF generation. Joins rows_json back into
+// the same shape the live schedule endpoint returns.
+router.get('/snapshot/:id', requirePermission('procurement_schedule', 'view'), (req, res) => {
+  const db = getDb();
+  const snap = db.prepare(`
+    SELECT s.*, u.name AS generated_by_name, bb.company_name AS project_name,
+           bb.client_name, bb.committed_completion_date
+      FROM procurement_schedule_snapshots s
+      LEFT JOIN users u ON u.id = s.generated_by
+      LEFT JOIN business_book bb ON bb.id = s.project_id
+     WHERE s.id = ?
+  `).get(+req.params.id);
+  if (!snap) return res.status(404).json({ error: 'Snapshot not found' });
+  let rows = [];
+  try { rows = JSON.parse(snap.rows_json) || []; } catch (_) {}
+  // Hydrate item descriptions by re-joining against po_items (since
+  // rows_json only stores item_id) — keeps the snapshot small.
+  if (rows.length > 0) {
+    const ids = [...new Set(rows.map(r => r.item_id).filter(Boolean))];
+    if (ids.length > 0) {
+      const items = db.prepare(`
+        SELECT pi.id, pi.description, pi.unit, pi.quantity, im.item_code, im.department
+          FROM po_items pi LEFT JOIN item_master im ON im.id = pi.item_master_id
+         WHERE pi.id IN (${ids.map(() => '?').join(',')})
+      `).all(...ids);
+      const byId = new Map(items.map(i => [i.id, i]));
+      rows = rows.map(r => {
+        const it = byId.get(r.item_id);
+        return { ...r, item_description: it?.description || null, unit: it?.unit, boq_qty: it?.quantity, item_code: it?.item_code, item_department: it?.department };
+      });
+    }
+  }
+  res.json({
+    snapshot: {
+      id: snap.id, label: snap.label, generated_at: snap.generated_at,
+      generated_by_name: snap.generated_by_name,
+      items_scheduled: snap.items_scheduled, anchor_date: snap.anchor_date,
+      earliest_indent_date: snap.earliest_indent_date,
+    },
+    project: { id: snap.project_id, project_name: snap.project_name, client_name: snap.client_name, completion_date: snap.committed_completion_date },
+    rows,
+    generated_at: snap.generated_at,
+    meta: (() => { try { return JSON.parse(snap.meta_json); } catch (_) { return null; } })(),
+  });
+});
+
+// DELETE /procurement-schedule/snapshot/:id — admin clean-up.
+router.delete('/snapshot/:id', requirePermission('procurement_schedule', 'delete'), (req, res) => {
+  getDb().prepare('DELETE FROM procurement_schedule_snapshots WHERE id = ?').run(+req.params.id);
+  res.json({ ok: true });
 });
 
 module.exports = router;

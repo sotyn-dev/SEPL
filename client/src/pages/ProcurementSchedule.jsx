@@ -14,7 +14,7 @@ import { useUrlTab } from '../hooks/useUrlTab';
 import {
   FiCalendar, FiRefreshCw, FiSettings, FiChevronDown, FiChevronRight,
   FiAlertTriangle, FiClock, FiFlag, FiX, FiCpu, FiCheck,
-  FiUpload, FiPaperclip, FiSave, FiFileText,
+  FiUpload, FiPaperclip, FiSave, FiFileText, FiArchive, FiDownload, FiEye, FiTrash2,
 } from 'react-icons/fi';
 
 const PHASES = ['indent', 'quotes', 'po', 'dispatch', 'receive', 'install'];
@@ -49,7 +49,7 @@ const daysBetween = (a, b) => {
 
 export default function ProcurementSchedule() {
   const { isAdmin, canEdit } = useAuth();
-  const [tab, setTab] = useUrlTab('gantt');                 // gantt | holidays
+  const [tab, setTab] = useUrlTab('gantt');                 // gantt | records | holidays
   const [projects, setProjects] = useState([]);
   const [projectId, setProjectId] = useUrlTab('', 'project'); // ?project=42 persists across reloads
   const [data, setData] = useState(null);
@@ -175,6 +175,7 @@ export default function ProcurementSchedule() {
       <div className="flex gap-1 border-b border-gray-200">
         {[
           { id: 'gantt',    label: 'Schedule (Gantt)', icon: FiCalendar },
+          { id: 'records',  label: 'Records (saved)',  icon: FiArchive },
           { id: 'holidays', label: 'Holidays',         icon: FiFlag },
         ].map(t => {
           const active = tab === t.id;
@@ -343,6 +344,7 @@ export default function ProcurementSchedule() {
         </>
       )}
 
+      {tab === 'records'  && <RecordsTab projects={projects} canDelete={canEdit('procurement_schedule')} />}
       {tab === 'holidays' && <HolidaysEditor canEdit={canEdit('procurement_schedule')} />}
 
       <Modal isOpen={!!detail} onClose={() => setDetail(null)} title={detail ? `${PHASE_LABEL[detail.phase]} · ${detail.item_description || 'Item'}` : 'Detail'}>
@@ -443,6 +445,10 @@ function AiDraftReview({ draft, onApprove, onCancel, approving, canEdit }) {
 }
 
 // ─── GANTT VIEW (custom SVG) ──────────────────────────────────────
+// Bundle C addition (mam 2026-05-28): a week-row underneath the month
+// axis showing W1 / W2 / W3 + Monday start dates. Download-PDF button
+// triggers a browser print with a tailored stylesheet so the chart
+// drops onto landscape A3/A4 cleanly.
 function GanttView({ data, expanded, setExpanded, onPickBar }) {
   // Bucket rows by trade then item
   const grouped = useMemo(() => {
@@ -487,9 +493,9 @@ function GanttView({ data, expanded, setExpanded, onPickBar }) {
   const todayOffsetDays = today >= minDate && today <= maxDate ? daysBetween(minDate, today) : null;
 
   return (
-    <div className="card p-0 overflow-hidden">
+    <div className="card p-0 overflow-hidden" id="procurement-gantt-printable">
       {/* Legend */}
-      <div className="px-3 py-2 border-b border-gray-100 flex flex-wrap items-center gap-3 bg-gray-50">
+      <div className="px-3 py-2 border-b border-gray-100 flex flex-wrap items-center gap-3 bg-gray-50 print:hidden">
         <span className="text-[10px] font-bold uppercase text-gray-500">Phases:</span>
         {PHASES.map(p => (
           <span key={p} className="text-[10px] flex items-center gap-1">
@@ -502,6 +508,10 @@ function GanttView({ data, expanded, setExpanded, onPickBar }) {
             Last generated: {String(data.generated_at).replace('T', ' ').slice(0, 16)}
           </span>
         )}
+        <button onClick={() => window.print()} className="btn btn-secondary text-xs flex items-center gap-1 ml-2"
+          title="Open browser print dialog → Save as PDF">
+          <FiDownload size={12} /> Download PDF
+        </button>
       </div>
 
       <div className="overflow-x-auto" style={{ maxHeight: '70vh' }}>
@@ -537,10 +547,11 @@ function GanttView({ data, expanded, setExpanded, onPickBar }) {
             {/* Date axis (month labels) */}
             <DateAxis minDate={minDate} totalDays={totalDays} pxPerDay={PX_PER_DAY} />
 
-            {/* Today line */}
+            {/* Today line — top offset matches DateAxis height (28 month row +
+                20 week row when week ticks render). */}
             {todayOffsetDays !== null && (
               <div className="absolute pointer-events-none" style={{
-                top: 32,
+                top: PX_PER_DAY * 7 >= 28 ? 48 : 28,
                 left: LEFT_LABEL_W + todayOffsetDays * PX_PER_DAY,
                 width: 2,
                 height: rowList.length * 28,
@@ -604,27 +615,59 @@ function GanttView({ data, expanded, setExpanded, onPickBar }) {
   );
 }
 
-// ─── DATE AXIS HEADER ─────────────────────────────────────────────
+// ─── DATE AXIS HEADER (two-row: months + weeks) ──────────────────
+// Bundle C (mam 2026-05-28): added a second row below the month ticks
+// with the Monday-start date of each week ("3 Mar", "10 Mar", …). This
+// is what mam meant by "show dates also week wise" — gives a finer
+// readout than just the month, especially for short-window projects.
 function DateAxis({ minDate, totalDays, pxPerDay }) {
-  // Render a month label tick every ~30 px-equivalent
-  const ticks = [];
+  // Row 1 — month ticks
+  const monthTicks = [];
   let lastMonth = '';
   for (let i = 0; i < totalDays; i++) {
     const d = new Date(minDate + 'T00:00:00');
     d.setDate(d.getDate() + i);
     const m = d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
     if (m !== lastMonth) {
-      ticks.push({ offset: i * pxPerDay, label: m });
+      monthTicks.push({ offset: i * pxPerDay, label: m });
       lastMonth = m;
     }
   }
+
+  // Row 2 — week ticks (every Monday). Skip if zoom is so dense that
+  // ticks would overlap (< 28 px between consecutive Mondays).
+  const weekTicks = [];
+  const pxPerWeek = pxPerDay * 7;
+  if (pxPerWeek >= 28) {
+    for (let i = 0; i < totalDays; i++) {
+      const d = new Date(minDate + 'T00:00:00');
+      d.setDate(d.getDate() + i);
+      // Mon = 1 in JS
+      if (d.getDay() === 1 || i === 0) {
+        const label = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+        weekTicks.push({ offset: i * pxPerDay, label });
+      }
+    }
+  }
+
   return (
-    <div className="h-8 relative border-b border-gray-200 bg-gray-50">
-      {ticks.map((t, i) => (
-        <div key={i} className="absolute top-0 text-[10px] font-semibold text-gray-600 border-l border-gray-300 pl-1" style={{ left: t.offset, height: '100%' }}>
-          {t.label}
+    <div className="relative border-b border-gray-200 bg-gray-50">
+      <div className="h-7 relative">
+        {monthTicks.map((t, i) => (
+          <div key={i} className="absolute top-0 text-[10px] font-semibold text-gray-700 border-l border-gray-300 pl-1 leading-7" style={{ left: t.offset, height: '100%' }}>
+            {t.label}
+          </div>
+        ))}
+      </div>
+      {weekTicks.length > 0 && (
+        <div className="h-5 relative border-t border-gray-200 bg-white">
+          {weekTicks.map((t, i) => (
+            <div key={i} className="absolute top-0 text-[9px] text-gray-500 border-l border-gray-200 pl-0.5 leading-5" style={{ left: t.offset, height: '100%' }}>
+              {t.label}
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -664,6 +707,128 @@ function BarDetail({ row }) {
 // for any item the AI can't classify, but the UI doesn't expose them.
 
 // ─── HOLIDAYS EDITOR (admin) ──────────────────────────────────────
+// ─── RECORDS TAB — saved schedule snapshots + PDF download ────────
+// Bundle C (mam 2026-05-28: "one tab when i approved saved and show
+// here where i can download pdf also"). Lists every snapshot ever
+// approved, across all projects. Click a row to open the historical
+// Gantt in the modal. Download triggers a print dialog with a print
+// stylesheet (see index.css's @media print rules) so the chart drops
+// onto landscape A3 cleanly without a heavy jsPDF dependency.
+function RecordsTab({ projects, canDelete }) {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [pickedProjectId, setPickedProjectId] = useState('');
+  const [viewing, setViewing] = useState(null);
+  const [viewData, setViewData] = useState(null);
+  const [expanded, setExpanded] = useState({});
+
+  const load = useCallback(() => {
+    if (!pickedProjectId) { setList([]); return; }
+    setLoading(true);
+    api.get(`/procurement-schedule/${pickedProjectId}/snapshots`)
+      .then(r => setList(r.data || []))
+      .catch(() => setList([]))
+      .finally(() => setLoading(false));
+  }, [pickedProjectId]);
+  useEffect(() => { load(); }, [load]);
+
+  const openSnapshot = async (snap) => {
+    try {
+      const r = await api.get(`/procurement-schedule/snapshot/${snap.id}`);
+      // Reshape for GanttView. steps_meta + project shape matches a
+      // live schedule payload exactly so we reuse the same component.
+      setViewData(r.data);
+      setViewing(snap);
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed to load snapshot'); }
+  };
+
+  const del = async (snap) => {
+    if (!confirm(`Delete this snapshot from ${fmtDate(snap.generated_at)}?`)) return;
+    try { await api.delete(`/procurement-schedule/snapshot/${snap.id}`); toast.success('Deleted'); load(); }
+    catch { toast.error('Failed'); }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="card p-3">
+        <label className="text-[10px] font-bold uppercase text-gray-500 mb-1 block">Project</label>
+        <SearchableSelect
+          options={projects.map(p => ({ id: p.id, label: `${p.company_name}${p.client_name ? ' · ' + p.client_name : ''}` }))}
+          value={pickedProjectId ? +pickedProjectId : null}
+          valueKey="id" displayKey="label"
+          placeholder="Pick a project to see its saved Gantts…"
+          onChange={v => setPickedProjectId(v?.id ? String(v.id) : '')}
+        />
+      </div>
+
+      {!pickedProjectId && (
+        <div className="card p-8 text-center text-gray-400">
+          <FiArchive size={36} className="mx-auto mb-2 opacity-30" />
+          Pick a project above to see its saved schedule history.
+        </div>
+      )}
+
+      {pickedProjectId && loading && <div className="card p-6 text-center text-gray-400">Loading…</div>}
+
+      {pickedProjectId && !loading && list.length === 0 && (
+        <div className="card p-8 text-center text-gray-400">
+          <FiArchive size={32} className="mx-auto mb-2 opacity-30" />
+          No saved schedules for this project yet. Every time you click <b>Approve & Generate</b> on the Gantt tab, a snapshot is saved automatically.
+        </div>
+      )}
+
+      {pickedProjectId && !loading && list.length > 0 && (
+        <div className="card p-0 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-[10px] uppercase text-gray-500">
+              <tr>
+                <th className="text-left p-2">When generated</th>
+                <th className="text-left p-2">By</th>
+                <th className="text-center p-2">Items</th>
+                <th className="text-center p-2">Earliest indent</th>
+                <th className="text-center p-2">Completion anchor</th>
+                <th className="text-center p-2 w-32">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map(r => (
+                <tr key={r.id} className="border-t border-gray-100 hover:bg-gray-50/60">
+                  <td className="p-2 font-mono text-xs">{String(r.generated_at).replace('T', ' ').slice(0, 16)}</td>
+                  <td className="p-2 text-xs">{r.generated_by_name || '—'}</td>
+                  <td className="p-2 text-center font-semibold">{r.items_scheduled}</td>
+                  <td className="p-2 text-center text-xs text-red-700">{fmtDate(r.earliest_indent_date)}</td>
+                  <td className="p-2 text-center text-xs">{fmtDate(r.anchor_date)}</td>
+                  <td className="p-2 text-center">
+                    <div className="flex justify-center gap-1">
+                      <button onClick={() => openSnapshot(r)} className="btn btn-secondary text-xs flex items-center gap-1"><FiEye size={11} /> Open</button>
+                      {canDelete && <button onClick={() => del(r)} className="p-1.5 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={12} /></button>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="text-[10px] text-gray-500 p-2 border-t border-gray-100">
+            Click <b>Open</b> to view a historical Gantt — same chart, same colours. <b>Download PDF</b> button at the top of the chart triggers your browser's print dialog (choose "Save as PDF" as the destination).
+          </p>
+        </div>
+      )}
+
+      {/* Snapshot view modal — reuses GanttView for visual parity */}
+      <Modal isOpen={!!viewing} onClose={() => { setViewing(null); setViewData(null); }} title={viewing ? `Saved schedule · ${String(viewing.generated_at).slice(0,16).replace('T',' ')}` : 'Snapshot'} wide>
+        {viewData && (
+          <div className="space-y-2">
+            <div className="text-xs text-gray-600">
+              <b>{viewData.project.project_name}</b> · {viewData.snapshot.items_scheduled} items · anchor <b>{fmtDate(viewData.snapshot.anchor_date)}</b> · earliest indent <b className="text-red-700">{fmtDate(viewData.snapshot.earliest_indent_date)}</b>
+            </div>
+            <GanttView data={viewData} expanded={expanded} setExpanded={setExpanded} onPickBar={() => {}} />
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
 function HolidaysEditor({ canEdit }) {
   const [list, setList] = useState([]);
   const [date, setDate] = useState('');
