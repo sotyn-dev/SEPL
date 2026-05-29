@@ -161,7 +161,7 @@ export default function PaymentRequired() {
   const requiredProofsMissing = (f) => {
     const missing = [];
     if (f.category === 'TA/DA') {
-      if (['Bus','Train','Flight'].includes(f.mode_of_travel) && !f.ticket_upload) {
+      if (['Bus','Bus / Rapido','Train','Flight'].includes(f.mode_of_travel) && !f.ticket_upload) {
         missing.push('Travel Ticket');
       }
       if (['Car','Bike'].includes(f.mode_of_travel)) {
@@ -728,7 +728,7 @@ export default function PaymentRequired() {
               // Each slot has: field (DB column), label, tint, and required flag.
               const slots = [];
               if (viewData.category === 'TA/DA') {
-                if (['Bus','Train','Flight'].includes(viewData.mode_of_travel)) {
+                if (['Bus','Bus / Rapido','Train','Flight'].includes(viewData.mode_of_travel)) {
                   slots.push({ field: 'ticket_upload', label: 'Travel Ticket', tint: 'purple', required: true });
                 }
                 if (['Car','Bike'].includes(viewData.mode_of_travel)) {
@@ -997,14 +997,14 @@ export default function PaymentRequired() {
                 <div><label className="label">Travel Dates *</label><input className="input" value={form.travel_dates} onChange={e => F('travel_dates', e.target.value)} required /></div>
                 <div><label className="label">Mode of Travel *</label>
                   <select className="select" value={form.mode_of_travel} onChange={e => F('mode_of_travel', e.target.value)} required>
-                    <option value="">Select</option><option>Bus</option><option>Train</option><option>Flight</option><option>Car</option><option>Bike</option><option>Auto</option>
+                    <option value="">Select</option><option>Bus / Rapido</option><option>Train</option><option>Flight</option><option>Car</option><option>Bike</option><option>Auto</option>
                   </select>
                 </div>
                 <div><label className="label">Stay Details</label><input className="input" value={form.stay_details} onChange={e => F('stay_details', e.target.value)} placeholder="Hotel name, duration..." /></div>
               </div>
 
               {/* Bus/Train/Flight → Ticket upload */}
-              {['Bus','Train','Flight'].includes(form.mode_of_travel) && (
+              {['Bus','Bus / Rapido','Train','Flight'].includes(form.mode_of_travel) && (
                 <div className="mt-3 p-3 bg-white rounded border border-purple-200">
                   <label className="label">Upload Ticket *</label>
                   {form.ticket_upload ? (
