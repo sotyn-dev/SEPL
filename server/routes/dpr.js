@@ -411,7 +411,11 @@ router.get('/sites/:site_id/po-items', (req, res) => {
 
 // ===== DPR =====
 router.get('/', (req, res) => {
-  const { site_id, date, status } = req.query;
+  // Mam (2026-05-29): added date_from / date_to range so the
+  // Engineer Compliance modal can pull every DPR for one site
+  // across the filter range in one shot.  Existing single-date
+  // callers (`date=`) still work — the params are independent.
+  const { site_id, date, date_from, date_to, status } = req.query;
   const db = getDb();
   const uid = req.user.id;
   const canSeeAll = dprCanSeeAll(db, req.user);
@@ -420,6 +424,8 @@ router.get('/', (req, res) => {
   const params = [];
   if (site_id) { sql += ' AND d.site_id=?'; params.push(site_id); }
   if (date) { sql += ' AND d.report_date=?'; params.push(date); }
+  if (date_from) { sql += ' AND d.report_date >= ?'; params.push(String(date_from).slice(0, 10)); }
+  if (date_to)   { sql += ' AND d.report_date <= ?'; params.push(String(date_to).slice(0, 10)); }
   if (status) { sql += ' AND d.approval_status=?'; params.push(status); }
   if (!canSeeAll) {
     sql += ` AND (s.site_engineer_id = ? OR EXISTS (
@@ -1006,8 +1012,14 @@ router.get('/engineer-compliance', (req, res) => {
   const uid = req.user.id;
   const canSeeAll = dprCanSeeAll(db, req.user);
 
-  // Default range: last 30 days inclusive of today.  Caller can
-  // override either bound.
+  // Mam (2026-05-29 v2): "show here all site eng as small boards with
+  // data".  Response is now engineer-grouped — every active Site
+  // Engineer appears, even those without an assigned site (empty
+  // sites array → still shows up as a card).  Each site row also
+  // carries profit_loss_total so the click-through can show "P&L for
+  // this site in the filter range".
+
+  // Default range: last 30 days inclusive of today.
   const today = new Date().toISOString().slice(0, 10);
   const thirtyAgo = (() => {
     const d = new Date(); d.setDate(d.getDate() - 29);
@@ -1017,8 +1029,6 @@ router.get('/engineer-compliance', (req, res) => {
   const to   = String(req.query.date_to   || today    ).slice(0, 10);
   if (from > to) return res.status(400).json({ error: 'date_from must be on or before date_to' });
 
-  // Calendar-day count so the UI can show "12 / 30 days present"
-  // without re-computing on the client.
   const calendarDays = (() => {
     const a = new Date(from + 'T00:00:00');
     const b = new Date(to   + 'T00:00:00');
@@ -1026,23 +1036,36 @@ router.get('/engineer-compliance', (req, res) => {
   })();
 
   // Attendance statuses that count as "engineer was on site".
-  // Excludes leave/absent/holiday — those are legitimately DPR-free.
+  // Excludes leave/absent/holiday — legitimately DPR-free.
   const PRESENT_STATUSES = "('present','half_day','short_day','late')";
 
-  let sql = `
+  // 1) Engineer pool — every active Site Engineer plus admins.
+  //    Non-admins only see themselves (canSeeAll gate).
+  let engineers = db.prepare(`
+    SELECT DISTINCT u.id, u.name, u.email
+      FROM users u
+      LEFT JOIN user_roles ur ON ur.user_id = u.id
+      LEFT JOIN roles r       ON r.id = ur.role_id
+     WHERE u.active = 1
+       AND (r.name = 'Site Engineer' OR u.role = 'admin')
+     ORDER BY u.name
+  `).all();
+  if (!canSeeAll) engineers = engineers.filter(e => e.id === uid);
+
+  // 2) All active sites with their canonical engineer in one query.
+  //    Engineers with zero sites still appear (we left-join below).
+  const siteRows = db.prepare(`
     SELECT
       s.id                              AS site_id,
       s.name                            AS site_name,
       s.client_name                     AS client_name,
-      s.status                          AS site_status,
       s.supervisor                      AS supervisor,
       s.site_engineer_id                AS engineer_id,
-      u.name                            AS engineer_name,
       COALESCE((
         SELECT COUNT(DISTINCT a.date)
           FROM attendance a
-         WHERE a.user_id  = s.site_engineer_id
-           AND a.site_id  = s.id
+         WHERE a.user_id = s.site_engineer_id
+           AND a.site_id = s.id
            AND a.date BETWEEN ? AND ?
            AND a.status IN ${PRESENT_STATUSES}
       ), 0) AS days_present,
@@ -1052,53 +1075,74 @@ router.get('/engineer-compliance', (req, res) => {
          WHERE d.site_id = s.id
            AND d.report_date BETWEEN ? AND ?
            AND COALESCE(d.is_planned_template, 0) = 0
-      ), 0) AS days_dpr_filled
+      ), 0) AS days_dpr_filled,
+      COALESCE((
+        SELECT SUM(d.profit_loss)
+          FROM dpr d
+         WHERE d.site_id = s.id
+           AND d.report_date BETWEEN ? AND ?
+           AND COALESCE(d.is_planned_template, 0) = 0
+      ), 0) AS profit_loss
       FROM sites s
-      LEFT JOIN users u ON u.id = s.site_engineer_id
      WHERE s.status = 'active'
        AND s.site_engineer_id IS NOT NULL
-  `;
-  const params = [from, to, from, to];
+     ORDER BY s.name
+  `).all(from, to, from, to, from, to);
 
-  if (!canSeeAll) {
-    sql += ` AND (s.site_engineer_id = ? OR EXISTS (
-      SELECT 1 FROM purchase_orders po
-       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
-         AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?)
-    ))`;
-    params.push(uid, `%,${uid},%`, uid);
+  // 3) Bucket sites into their engineer.  Engineers with no assigned
+  //    site stay empty — they still appear as a "no sites assigned"
+  //    card in the UI so mam can see them in the search.
+  const byEng = new Map();
+  for (const e of engineers) byEng.set(e.id, {
+    engineer_id: e.id,
+    engineer_name: e.name,
+    engineer_email: e.email,
+    sites: [],
+    days_present_total: 0,
+    days_dpr_filled_total: 0,
+    profit_loss_total: 0,
+  });
+  for (const r of siteRows) {
+    const bucket = byEng.get(r.engineer_id);
+    if (!bucket) continue;   // engineer filtered out by canSeeAll
+    bucket.sites.push({
+      site_id: r.site_id,
+      site_name: r.site_name,
+      client_name: r.client_name,
+      supervisor: r.supervisor,
+      days_present: r.days_present,
+      days_dpr_filled: r.days_dpr_filled,
+      profit_loss: r.profit_loss,
+      gap: Math.max(0, r.days_present - r.days_dpr_filled),
+    });
+    bucket.days_present_total    += r.days_present;
+    bucket.days_dpr_filled_total += r.days_dpr_filled;
+    bucket.profit_loss_total     += r.profit_loss;
   }
 
-  // Worst gap first so MD's eyeball-test catches offenders straight
-  // away.  Site name as tiebreaker for a stable, scan-friendly order.
-  sql += ` ORDER BY (
-      COALESCE((SELECT COUNT(DISTINCT a.date) FROM attendance a
-                 WHERE a.user_id = s.site_engineer_id AND a.site_id = s.id
-                   AND a.date BETWEEN ? AND ? AND a.status IN ${PRESENT_STATUSES}), 0)
-      -
-      COALESCE((SELECT COUNT(DISTINCT d.report_date) FROM dpr d
-                 WHERE d.site_id = s.id
-                   AND d.report_date BETWEEN ? AND ?
-                   AND COALESCE(d.is_planned_template, 0) = 0), 0)
-    ) DESC, s.name ASC`;
-  params.push(from, to, from, to);
+  // 4) Sort engineers: biggest gap first (offenders surface), then
+  //    by name.  Inside each engineer, sort their sites the same way.
+  const engineersOut = [...byEng.values()].map(b => {
+    b.gap_total = Math.max(0, b.days_present_total - b.days_dpr_filled_total);
+    b.sites.sort((a, b) => (b.gap - a.gap) || a.site_name.localeCompare(b.site_name));
+    return b;
+  }).sort((a, b) => (b.gap_total - a.gap_total) || a.engineer_name.localeCompare(b.engineer_name));
 
-  const rows = db.prepare(sql).all(...params);
-
-  // Roll up totals so the header strip can show "X engineers
-  // present Y days but only filed Z DPRs" at a glance.
-  const totals = rows.reduce((acc, r) => {
-    acc.sites += 1;
-    acc.days_present += r.days_present;
-    acc.days_dpr_filled += r.days_dpr_filled;
+  // 5) Overall roll-up for the header tiles.
+  const totals = engineersOut.reduce((acc, e) => {
+    acc.engineers       += 1;
+    acc.sites           += e.sites.length;
+    acc.days_present    += e.days_present_total;
+    acc.days_dpr_filled += e.days_dpr_filled_total;
+    acc.profit_loss     += e.profit_loss_total;
     return acc;
-  }, { sites: 0, days_present: 0, days_dpr_filled: 0 });
+  }, { engineers: 0, sites: 0, days_present: 0, days_dpr_filled: 0, profit_loss: 0 });
   totals.gap_days = Math.max(0, totals.days_present - totals.days_dpr_filled);
 
   res.json({
     range: { date_from: from, date_to: to, calendar_days: calendarDays },
     totals,
-    rows,
+    engineers: engineersOut,
   });
 });
 

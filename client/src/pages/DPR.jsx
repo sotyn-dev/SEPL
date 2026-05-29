@@ -1233,51 +1233,81 @@ const ownerFor = (row) => {
   return HINDRANCE_OWNERS[row.hindrance_category] || '—';
 };
 
-// Engineer Compliance tab — mam (2026-05-29): "as per site eng
-// present and dpr filled as per filter dates".  For the chosen
-// date range, per active site: days the assigned engineer was
-// present (attendance) vs days a DPR was actually filed.  Worst
-// gap floats to the top so MD can spot offenders straight away.
+// Engineer Compliance tab — mam (2026-05-29 v2): "show here all site
+// eng as small boards with data … and when click on site show
+// previous data and sum of profit loss as per filter data".
+//
+// Layout:
+//   1. Filter strip (date range + 7/30/90 quick chips + search + CSV)
+//   2. 4 roll-up tiles
+//   3. Grid of engineer cards — one per active Site Engineer (incl.
+//      those with no assigned site yet, so the search hits them)
+//   4. Click a card → expand inline to show site mini-tiles for that
+//      engineer with their per-site stats + P&L for the range
+//   5. Click a site mini-tile → modal listing every DPR for that site
+//      in the date range, with a totals footer (P&L sum)
+const fmtINR = (n) => {
+  const v = Number(n || 0);
+  if (Math.abs(v) >= 1e7) return `${v < 0 ? '-' : ''}₹${(Math.abs(v) / 1e7).toFixed(2)} cr`;
+  if (Math.abs(v) >= 1e5) return `${v < 0 ? '-' : ''}₹${(Math.abs(v) / 1e5).toFixed(2)} L`;
+  if (Math.abs(v) >= 1e3) return `${v < 0 ? '-' : ''}₹${(Math.abs(v) / 1e3).toFixed(1)} K`;
+  return `${v < 0 ? '-' : ''}₹${Math.abs(Math.round(v)).toLocaleString('en-IN')}`;
+};
+
 function EngineerComplianceTab() {
-  // Default range = last 30 days inclusive of today (matches the
-  // server default so the first paint has no flicker).
+  // Default range = last 30 days inclusive of today.
   const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date(); d.setDate(d.getDate() - 29);
     return d.toISOString().slice(0, 10);
   });
   const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [search, setSearch] = useState('');
-  const [data, setData] = useState({ rows: [], totals: { sites: 0, days_present: 0, days_dpr_filled: 0, gap_days: 0 }, range: {} });
+  const [data, setData] = useState({ engineers: [], totals: {}, range: {} });
   const [loading, setLoading] = useState(false);
+
+  // Which engineer cards are expanded (engineer_id → bool).  We let
+  // mam expand multiple at once because she often compares engineers
+  // side-by-side during reviews.
+  const [openEng, setOpenEng] = useState({});
+
+  // Site drill-down modal — null = closed; { siteId, siteName, engineerName } open.
+  const [siteModal, setSiteModal] = useState(null);
 
   const load = () => {
     setLoading(true);
     api.get('/dpr/engineer-compliance', { params: { date_from: dateFrom, date_to: dateTo } })
-      .then(r => setData(r.data || { rows: [], totals: {} }))
+      .then(r => setData(r.data || { engineers: [], totals: {}, range: {} }))
       .catch(e => toast.error(e.response?.data?.error || 'Failed to load'))
       .finally(() => setLoading(false));
   };
-  useEffect(load, [dateFrom, dateTo]); // refetch whenever dates change
+  useEffect(load, [dateFrom, dateTo]);
 
-  const filtered = data.rows.filter(r => {
+  // Search filter — keeps an engineer if her name OR any of her
+  // sites / clients match.  Manoj-with-no-sites still matches by name.
+  const filtered = (data.engineers || []).filter(e => {
     if (!search) return true;
     const s = search.toLowerCase();
-    return (r.site_name || '').toLowerCase().includes(s)
-      || (r.engineer_name || '').toLowerCase().includes(s)
-      || (r.client_name || '').toLowerCase().includes(s);
+    if ((e.engineer_name || '').toLowerCase().includes(s)) return true;
+    return e.sites.some(st =>
+      (st.site_name || '').toLowerCase().includes(s)
+      || (st.client_name || '').toLowerCase().includes(s));
   });
 
-  // CSV export so mam can paste straight into the management
-  // review.  Reuses the existing exportCsv utility used elsewhere.
+  // CSV export — one row per (engineer, site) so mam can pivot in Excel.
   const exportRows = () => {
-    exportCsv(`engineer-compliance-${dateFrom}-to-${dateTo}.csv`, filtered.map(r => ({
-      Site: r.site_name,
-      Client: r.client_name || '',
-      Engineer: r.engineer_name || '',
-      'Days Present': r.days_present,
-      'Days DPR Filled': r.days_dpr_filled,
-      Gap: Math.max(0, r.days_present - r.days_dpr_filled),
-    })));
+    const rows = [];
+    filtered.forEach(e => {
+      if (e.sites.length === 0) {
+        rows.push({ Engineer: e.engineer_name, Site: '(no sites assigned)', Client: '', 'Days Present': 0, 'DPR Filled': 0, Gap: 0, 'Profit/Loss': 0 });
+      } else {
+        e.sites.forEach(s => rows.push({
+          Engineer: e.engineer_name, Site: s.site_name, Client: s.client_name || '',
+          'Days Present': s.days_present, 'DPR Filled': s.days_dpr_filled, Gap: s.gap,
+          'Profit/Loss': s.profit_loss,
+        }));
+      }
+    });
+    exportCsv(`engineer-compliance-${dateFrom}-to-${dateTo}.csv`, rows);
   };
 
   const setQuickRange = (days) => {
@@ -1287,9 +1317,11 @@ function EngineerComplianceTab() {
     setDateTo(to.toISOString().slice(0, 10));
   };
 
+  const toggleEng = (id) => setOpenEng(prev => ({ ...prev, [id]: !prev[id] }));
+
   return (
     <div className="space-y-4">
-      {/* Filter strip — date range + search + quick-pick buttons */}
+      {/* Filter strip */}
       <div className="card p-3">
         <div className="flex gap-3 flex-wrap items-end">
           <div>
@@ -1303,13 +1335,15 @@ function EngineerComplianceTab() {
               className="border rounded px-2 py-1.5 text-sm" />
           </div>
           <div className="flex gap-1">
-            <button onClick={() => setQuickRange(7)}  className="btn btn-secondary text-xs px-2 py-1.5">7d</button>
-            <button onClick={() => setQuickRange(30)} className="btn btn-secondary text-xs px-2 py-1.5">30d</button>
-            <button onClick={() => setQuickRange(90)} className="btn btn-secondary text-xs px-2 py-1.5">90d</button>
+            <button onClick={() => setQuickRange(7)}   className="btn btn-secondary text-xs px-2 py-1.5">7d</button>
+            <button onClick={() => setQuickRange(30)}  className="btn btn-secondary text-xs px-2 py-1.5">30d</button>
+            <button onClick={() => setQuickRange(90)}  className="btn btn-secondary text-xs px-2 py-1.5">90d</button>
+            <button onClick={() => setQuickRange(180)} className="btn btn-secondary text-xs px-2 py-1.5">6m</button>
+            <button onClick={() => setQuickRange(365)} className="btn btn-secondary text-xs px-2 py-1.5">1y</button>
           </div>
           <div className="flex-1 min-w-[180px]">
-            <label className="text-xs text-gray-600 block mb-1">Search site / engineer</label>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="e.g. Vikram, HVAC, Hero…"
+            <label className="text-xs text-gray-600 block mb-1">Search engineer / site / client</label>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="e.g. Manoj, Hero, HVAC…"
               className="border rounded px-2 py-1.5 text-sm w-full" />
           </div>
           <button onClick={exportRows} disabled={!filtered.length}
@@ -1318,90 +1352,240 @@ function EngineerComplianceTab() {
         </div>
         <div className="text-[11px] text-gray-500 mt-2">
           Window: <strong>{data.range?.date_from || dateFrom}</strong> → <strong>{data.range?.date_to || dateTo}</strong> ({data.range?.calendar_days || 0} days).
-          Present = attendance status present / half_day / short_day / late at the same site.
-          DPR Filled excludes plan-only week templates.
+          Click any engineer card to see her sites · click a site tile to drill into the DPRs + Profit/Loss for that range.
         </div>
       </div>
 
-      {/* Roll-up tiles */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="card text-center border-l-4 border-blue-500">
-          <div className="text-2xl font-bold text-blue-600">{data.totals?.sites || 0}</div>
+      {/* Roll-up tiles — added 5th tile for total P&L */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="card text-center border-l-4 border-blue-500 py-2">
+          <div className="text-2xl font-bold text-blue-600">{data.totals?.engineers || 0}</div>
+          <div className="text-xs text-gray-500">Site Engineers</div>
+        </div>
+        <div className="card text-center border-l-4 border-teal-500 py-2">
+          <div className="text-2xl font-bold text-teal-600">{data.totals?.sites || 0}</div>
           <div className="text-xs text-gray-500">Active Sites</div>
         </div>
-        <div className="card text-center border-l-4 border-emerald-500">
+        <div className="card text-center border-l-4 border-emerald-500 py-2">
           <div className="text-2xl font-bold text-emerald-600">{data.totals?.days_present || 0}</div>
-          <div className="text-xs text-gray-500">Total Days Present</div>
+          <div className="text-xs text-gray-500">Days Present</div>
         </div>
-        <div className="card text-center border-l-4 border-indigo-500">
+        <div className="card text-center border-l-4 border-indigo-500 py-2">
           <div className="text-2xl font-bold text-indigo-600">{data.totals?.days_dpr_filled || 0}</div>
-          <div className="text-xs text-gray-500">Total DPRs Filed</div>
+          <div className="text-xs text-gray-500">DPRs Filed</div>
         </div>
-        <div className="card text-center border-l-4 border-red-500">
-          <div className="text-2xl font-bold text-red-600">{data.totals?.gap_days || 0}</div>
-          <div className="text-xs text-gray-500">Compliance Gap (days)</div>
+        <div className={`card text-center border-l-4 ${(data.totals?.profit_loss || 0) >= 0 ? 'border-emerald-500' : 'border-red-500'} py-2`}>
+          <div className={`text-xl font-bold ${(data.totals?.profit_loss || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+            {fmtINR(data.totals?.profit_loss || 0)}
+          </div>
+          <div className="text-xs text-gray-500">Net Profit / Loss</div>
         </div>
       </div>
 
-      {/* Main table */}
-      <div className="card p-0 overflow-x-auto">
-        <table className="freeze-head w-full text-sm">
-          <thead>
-            <tr>
-              <th className="text-left">Site</th>
-              <th className="text-left">Client</th>
-              <th className="text-left">Site Engineer</th>
-              <th className="text-right">Days Present</th>
-              <th className="text-right">DPR Filled</th>
-              <th className="text-right">Gap</th>
-              <th className="text-center">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr><td colSpan={7} className="text-center py-6 text-gray-400">Loading…</td></tr>
-            )}
-            {!loading && filtered.length === 0 && (
-              <tr><td colSpan={7} className="text-center py-8 text-gray-400">
-                No active sites with an assigned engineer in this range.
-              </td></tr>
-            )}
-            {!loading && filtered.map(r => {
-              const gap = Math.max(0, r.days_present - r.days_dpr_filled);
-              const fullCompliance = r.days_present === 0
-                ? 'noshow'
-                : (gap === 0 ? 'green' : (r.days_dpr_filled === 0 ? 'red' : 'amber'));
-              return (
-                <tr key={r.site_id}>
-                  <td className="font-medium">{r.site_name}</td>
-                  <td className="text-gray-600">{r.client_name || '—'}</td>
-                  <td>{r.engineer_name || <span className="text-gray-400 italic">unassigned</span>}</td>
-                  <td className="text-right font-semibold text-emerald-700">{r.days_present}</td>
-                  <td className="text-right font-semibold text-indigo-700">{r.days_dpr_filled}</td>
-                  <td className={`text-right font-bold ${gap > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                    {gap}
-                  </td>
-                  <td className="text-center">
-                    {fullCompliance === 'green' && (
-                      <span className="px-2 py-0.5 rounded-full text-[11px] bg-emerald-100 text-emerald-700">On track</span>
+      {/* Engineer cards grid */}
+      {loading && <div className="text-center py-6 text-gray-400 text-sm">Loading engineers…</div>}
+      {!loading && filtered.length === 0 && (
+        <div className="card text-center py-8 text-gray-400">No engineers match your search.</div>
+      )}
+      {!loading && filtered.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {filtered.map(eng => {
+            const isOpen = !!openEng[eng.engineer_id];
+            const pnl = eng.profit_loss_total || 0;
+            return (
+              <div key={eng.engineer_id}
+                className={`card p-0 overflow-hidden border-l-4 ${eng.gap_total > 0 ? 'border-red-500' : (eng.sites.length === 0 ? 'border-gray-300' : 'border-emerald-500')}`}>
+                {/* Card header — click to expand */}
+                <button onClick={() => toggleEng(eng.engineer_id)}
+                  className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold text-sm truncate">{eng.engineer_name}</div>
+                    <div className="text-[11px] text-gray-500 truncate">{eng.engineer_email}</div>
+                  </div>
+                  <span className="text-xs text-gray-400">{isOpen ? '▴' : '▾'}</span>
+                </button>
+                {/* Stat strip */}
+                <div className="grid grid-cols-4 gap-1 px-3 pb-2 text-center">
+                  <div>
+                    <div className="text-lg font-bold text-teal-600">{eng.sites.length}</div>
+                    <div className="text-[10px] text-gray-500 uppercase">Sites</div>
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-emerald-600">{eng.days_present_total}</div>
+                    <div className="text-[10px] text-gray-500 uppercase">Present</div>
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-indigo-600">{eng.days_dpr_filled_total}</div>
+                    <div className="text-[10px] text-gray-500 uppercase">DPR</div>
+                  </div>
+                  <div>
+                    <div className={`text-lg font-bold ${eng.gap_total > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{eng.gap_total}</div>
+                    <div className="text-[10px] text-gray-500 uppercase">Gap</div>
+                  </div>
+                </div>
+                {/* P&L band */}
+                <div className={`px-3 py-1.5 text-xs flex justify-between ${pnl >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                  <span>Profit / Loss</span>
+                  <strong>{fmtINR(pnl)}</strong>
+                </div>
+
+                {/* Expanded site mini-tiles */}
+                {isOpen && (
+                  <div className="border-t bg-gray-50 p-2 space-y-1.5">
+                    {eng.sites.length === 0 && (
+                      <div className="text-center py-3 text-gray-400 text-xs italic">No sites assigned yet</div>
                     )}
-                    {fullCompliance === 'amber' && (
-                      <span className="px-2 py-0.5 rounded-full text-[11px] bg-amber-100 text-amber-700">Partial — {gap} missing</span>
-                    )}
-                    {fullCompliance === 'red' && (
-                      <span className="px-2 py-0.5 rounded-full text-[11px] bg-red-100 text-red-700">No DPR filed</span>
-                    )}
-                    {fullCompliance === 'noshow' && (
-                      <span className="px-2 py-0.5 rounded-full text-[11px] bg-gray-100 text-gray-600">No attendance</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                    {eng.sites.map(s => (
+                      <button key={s.site_id}
+                        onClick={() => setSiteModal({ siteId: s.site_id, siteName: s.site_name, engineerName: eng.engineer_name })}
+                        className="w-full text-left bg-white rounded-lg px-2.5 py-2 border hover:border-blue-400 hover:shadow-sm transition-all">
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold text-xs truncate">{s.site_name}</div>
+                            <div className="text-[10px] text-gray-500 truncate">{s.client_name || '—'}</div>
+                          </div>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold whitespace-nowrap ${
+                            s.days_present === 0 ? 'bg-gray-100 text-gray-600'
+                              : s.gap === 0 ? 'bg-emerald-100 text-emerald-700'
+                              : s.days_dpr_filled === 0 ? 'bg-red-100 text-red-700'
+                              : 'bg-amber-100 text-amber-700'}`}>
+                            {s.days_present === 0 ? 'no attendance'
+                              : s.gap === 0 ? 'on track'
+                              : s.days_dpr_filled === 0 ? 'no DPR'
+                              : `${s.gap} missing`}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-4 gap-1 mt-1.5 text-center">
+                          <div>
+                            <div className="text-xs font-bold text-emerald-700">{s.days_present}</div>
+                            <div className="text-[9px] text-gray-500">PRESENT</div>
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-indigo-700">{s.days_dpr_filled}</div>
+                            <div className="text-[9px] text-gray-500">DPR</div>
+                          </div>
+                          <div>
+                            <div className={`text-xs font-bold ${s.gap > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{s.gap}</div>
+                            <div className="text-[9px] text-gray-500">GAP</div>
+                          </div>
+                          <div>
+                            <div className={`text-xs font-bold ${s.profit_loss >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{fmtINR(s.profit_loss)}</div>
+                            <div className="text-[9px] text-gray-500">P&L</div>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Site drill-down modal */}
+      {siteModal && (
+        <SiteDprHistoryModal
+          siteId={siteModal.siteId}
+          siteName={siteModal.siteName}
+          engineerName={siteModal.engineerName}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onClose={() => setSiteModal(null)}
+        />
+      )}
     </div>
+  );
+}
+
+// SiteDprHistoryModal — pulls every DPR for one site_id in the chosen
+// date range and shows a compact history with a P&L totals footer.
+// Mam (2026-05-29): "when click on site show previous data and sum of
+// profit loss as per filter data".
+function SiteDprHistoryModal({ siteId, siteName, engineerName, dateFrom, dateTo, onClose }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    api.get('/dpr', { params: { site_id: siteId, date_from: dateFrom, date_to: dateTo } })
+      .then(r => setRows(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
+  }, [siteId, dateFrom, dateTo]);
+
+  // Sort newest first — most recent activity is what mam wants on top.
+  const sorted = [...rows].sort((a, b) => (b.report_date || '').localeCompare(a.report_date || ''));
+  const totals = sorted.reduce((acc, r) => {
+    acc.a += Number(r.grand_total_a || 0);
+    acc.b += Number(r.grand_total_b || 0);
+    acc.pl += Number(r.profit_loss || 0);
+    return acc;
+  }, { a: 0, b: 0, pl: 0 });
+
+  const statusPill = (s) => {
+    const cls = s === 'approved' ? 'bg-emerald-100 text-emerald-700'
+              : s === 'rejected' ? 'bg-red-100 text-red-700'
+              : 'bg-amber-100 text-amber-700';
+    return <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${cls}`}>{s || 'pending'}</span>;
+  };
+
+  return (
+    <Modal isOpen={true} onClose={onClose} title={`${siteName} — DPR history`} wide>
+      <div className="space-y-3">
+        <div className="text-xs text-gray-500">
+          Engineer: <strong>{engineerName || '—'}</strong> · Window: <strong>{dateFrom}</strong> → <strong>{dateTo}</strong>
+        </div>
+        <div className="overflow-x-auto border rounded-lg">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left px-3 py-2">Date</th>
+                <th className="text-left px-3 py-2">Status</th>
+                <th className="text-right px-3 py-2">A Total</th>
+                <th className="text-right px-3 py-2">B Total</th>
+                <th className="text-right px-3 py-2">Profit / Loss</th>
+                <th className="text-left px-3 py-2">Submitted By</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && <tr><td colSpan={6} className="text-center py-6 text-gray-400">Loading…</td></tr>}
+              {!loading && sorted.length === 0 && (
+                <tr><td colSpan={6} className="text-center py-6 text-gray-400">No DPRs filed for this site in the chosen range.</td></tr>
+              )}
+              {!loading && sorted.map(r => (
+                <tr key={r.id} className="border-t">
+                  <td className="px-3 py-1.5 font-medium">{r.report_date}</td>
+                  <td className="px-3 py-1.5">{statusPill(r.approval_status)}</td>
+                  <td className="px-3 py-1.5 text-right">{fmtINR(r.grand_total_a)}</td>
+                  <td className="px-3 py-1.5 text-right">{fmtINR(r.grand_total_b)}</td>
+                  <td className={`px-3 py-1.5 text-right font-bold ${Number(r.profit_loss || 0) >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                    {fmtINR(r.profit_loss)}
+                  </td>
+                  <td className="px-3 py-1.5 text-gray-600 text-xs">{r.submitted_by_name || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+            {!loading && sorted.length > 0 && (
+              <tfoot className="bg-gray-50 border-t-2">
+                <tr>
+                  <td className="px-3 py-2 font-bold" colSpan={2}>Total ({sorted.length} DPR{sorted.length === 1 ? '' : 's'})</td>
+                  <td className="px-3 py-2 text-right font-bold">{fmtINR(totals.a)}</td>
+                  <td className="px-3 py-2 text-right font-bold">{fmtINR(totals.b)}</td>
+                  <td className={`px-3 py-2 text-right font-extrabold text-base ${totals.pl >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                    {fmtINR(totals.pl)}
+                  </td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+        <div className="flex justify-end">
+          <button onClick={onClose} className="btn btn-secondary">Close</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
