@@ -14,6 +14,7 @@ import { useUrlTab } from '../hooks/useUrlTab';
 import {
   FiCalendar, FiRefreshCw, FiSettings, FiChevronDown, FiChevronRight,
   FiAlertTriangle, FiClock, FiFlag, FiX, FiCpu, FiCheck,
+  FiUpload, FiPaperclip, FiSave, FiFileText,
 } from 'react-icons/fi';
 
 const PHASES = ['indent', 'quotes', 'po', 'dispatch', 'receive', 'install'];
@@ -61,6 +62,10 @@ export default function ProcurementSchedule() {
   const [aiSuggesting, setAiSuggesting] = useState(false);
   const [aiDraft, setAiDraft] = useState(null);   // { suggestions, model, input_tokens, output_tokens }
   const [aiApproving, setAiApproving] = useState(false);
+  // Bundle A meta — start/end dates, client requirements text, drawings.
+  // Loaded per project, defaults to business_book's committed_* columns.
+  const [meta, setMeta] = useState(null);
+  const [metaDirty, setMetaDirty] = useState(false);
 
   const loadProjects = useCallback(() => {
     api.get('/procurement-schedule/projects').then(r => setProjects(r.data || [])).catch(() => {});
@@ -77,12 +82,38 @@ export default function ProcurementSchedule() {
   }, [projectId]);
   useEffect(() => { loadSchedule(); setAiDraft(null); }, [loadSchedule]);
 
+  const loadMeta = useCallback(() => {
+    if (!projectId) { setMeta(null); return; }
+    api.get(`/procurement-schedule/${projectId}/meta`)
+      .then(r => { setMeta(r.data); setMetaDirty(false); })
+      .catch(() => setMeta(null));
+  }, [projectId]);
+  useEffect(() => { loadMeta(); }, [loadMeta]);
+
+  const saveMeta = async () => {
+    if (!projectId || !meta) return;
+    try {
+      await api.put(`/procurement-schedule/${projectId}/meta`, {
+        start_date: meta.start_date || null,
+        end_date:   meta.end_date   || null,
+        client_requirements: meta.client_requirements || '',
+      });
+      toast.success('Setup saved');
+      setMetaDirty(false);
+    } catch (e) { toast.error(e.response?.data?.error || 'Save failed'); }
+  };
+
   const askAi = async () => {
     if (!projectId) { toast.error('Pick a project first'); return; }
+    if (metaDirty) await saveMeta();        // auto-save meta before AI call
     setAiSuggesting(true);
     setAiDraft(null);
     try {
-      const r = await api.post(`/procurement-schedule/${projectId}/ai-suggest`);
+      const r = await api.post(`/procurement-schedule/${projectId}/ai-suggest`, {
+        start_date: meta?.start_date || null,
+        end_date:   meta?.end_date   || null,
+        client_requirements: meta?.client_requirements || '',
+      });
       setAiDraft(r.data);
       toast.success(`AI proposed lead times for ${r.data.suggestions.length} items — review below`);
     } catch (e) {
@@ -96,7 +127,10 @@ export default function ProcurementSchedule() {
     if (!projectId || !editedSuggestions) return;
     setAiApproving(true);
     try {
-      const r = await api.post(`/procurement-schedule/${projectId}/regenerate`, { suggestions: editedSuggestions });
+      const r = await api.post(`/procurement-schedule/${projectId}/regenerate`, {
+        suggestions: editedSuggestions,
+        end_date: meta?.end_date || null,
+      });
       toast.success(`Generated ${r.data.rows_written} bars across ${r.data.items_scheduled} items`);
       setAiDraft(null);
       loadSchedule();
@@ -105,6 +139,22 @@ export default function ProcurementSchedule() {
     } finally {
       setAiApproving(false);
     }
+  };
+
+  const uploadDrawing = async (file) => {
+    if (!projectId || !file) return;
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      await api.post(`/procurement-schedule/${projectId}/drawings`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      toast.success('Drawing uploaded');
+      loadMeta();
+    } catch (e) { toast.error(e.response?.data?.error || 'Upload failed'); }
+  };
+
+  const deleteDrawing = async (id) => {
+    if (!confirm('Remove this drawing?')) return;
+    try { await api.delete(`/procurement-schedule/drawing/${id}`); toast.success('Removed'); loadMeta(); }
+    catch { toast.error('Failed'); }
   };
 
   return (
@@ -136,33 +186,106 @@ export default function ProcurementSchedule() {
 
       {tab === 'gantt' && (
         <>
-          {/* Project picker + AI button */}
-          <div className="card p-3 flex flex-wrap items-end gap-3">
-            <div className="flex-1 min-w-[260px]">
-              <label className="text-[10px] font-bold uppercase text-gray-500 mb-1 block">Project</label>
-              <SearchableSelect
-                options={projects.map(p => ({
-                  id: p.id,
-                  label: `${p.company_name}${p.client_name ? ' · ' + p.client_name : ''} — completes ${fmtDate(p.completion_date)}${p.scheduled_rows > 0 ? ' · scheduled' : ''}`,
-                }))}
-                value={projectId ? +projectId : null}
-                valueKey="id" displayKey="label"
-                placeholder="Pick a project…"
-                onChange={v => setProjectId(v?.id ? String(v.id) : '')}
-              />
-            </div>
-            {data?.project && (
-              <div className="text-right text-xs">
-                <div className="text-gray-500">Anchor (completion)</div>
-                <div className="font-bold text-red-700">{fmtDate(data.project.completion_date)}</div>
-              </div>
-            )}
-            {projectId && canEdit('procurement_schedule') && (
-              <button onClick={askAi} disabled={aiSuggesting} className="btn btn-primary text-sm flex items-center gap-1 disabled:opacity-40">
-                <FiCpu size={14} /> {aiSuggesting ? 'AI thinking…' : (data?.rows?.length ? 'Re-ask AI' : 'Generate with AI')}
-              </button>
-            )}
+          {/* Project picker */}
+          <div className="card p-3">
+            <label className="text-[10px] font-bold uppercase text-gray-500 mb-1 block">Project</label>
+            <SearchableSelect
+              options={projects.map(p => ({
+                id: p.id,
+                label: `${p.company_name}${p.client_name ? ' · ' + p.client_name : ''} — completes ${fmtDate(p.completion_date)}${p.scheduled_rows > 0 ? ' · scheduled' : ''}`,
+              }))}
+              value={projectId ? +projectId : null}
+              valueKey="id" displayKey="label"
+              placeholder="Pick a project…"
+              onChange={v => setProjectId(v?.id ? String(v.id) : '')}
+            />
           </div>
+
+          {/* SETUP CARD — Bundle A inputs that flow into the AI prompt
+              (mam 2026-05-28). Start/end default from business_book's
+              committed dates but the user can override. Client
+              requirements + drawings let the AI see context beyond just
+              the BOQ list. */}
+          {projectId && meta && (
+            <div className="card p-3 space-y-3 bg-blue-50/40 border border-blue-100">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-sm flex items-center gap-2"><FiSettings className="text-blue-700" size={14} /> Setup — feeds the AI</h3>
+                {metaDirty && canEdit('procurement_schedule') && (
+                  <button onClick={saveMeta} className="btn btn-secondary text-xs flex items-center gap-1"><FiSave size={12} /> Save</button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-gray-500 mb-1 block">Project start date</label>
+                  <input type="date" className="input text-sm"
+                    value={meta.start_date || ''}
+                    disabled={!canEdit('procurement_schedule')}
+                    onChange={e => { setMeta(m => ({ ...m, start_date: e.target.value })); setMetaDirty(true); }}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-gray-500 mb-1 block">End / completion date *</label>
+                  <input type="date" className="input text-sm"
+                    value={meta.end_date || ''}
+                    disabled={!canEdit('procurement_schedule')}
+                    onChange={e => { setMeta(m => ({ ...m, end_date: e.target.value })); setMetaDirty(true); }}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase text-gray-500 mb-1 block">Client / project requirements (free text)</label>
+                <textarea
+                  className="input text-sm"
+                  rows="3"
+                  placeholder="e.g. Phase 2 handover required by 15 May; AHUs imported from Malaysia; rooftop access restricted on Sundays; client has fire NOC inspection on 1 May…"
+                  value={meta.client_requirements || ''}
+                  disabled={!canEdit('procurement_schedule')}
+                  onChange={e => { setMeta(m => ({ ...m, client_requirements: e.target.value })); setMetaDirty(true); }}
+                />
+                <p className="text-[10px] text-gray-500 mt-0.5">Free-form text — mention urgency, phasing, milestones, vendor preferences. AI reads this to adjust lead times.</p>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase text-gray-500 mb-1 block">Drawings + reference docs</label>
+                {meta.drawings && meta.drawings.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {meta.drawings.map(d => (
+                      <span key={d.id} className="inline-flex items-center gap-1 text-xs bg-white border border-blue-200 rounded px-2 py-1">
+                        <FiFileText size={11} className="text-blue-600" />
+                        <a href={`/api/procurement-schedule/drawing/${d.id}`} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline truncate max-w-[220px]">{d.filename}</a>
+                        <span className="text-[9px] text-gray-400">{(d.file_size/1024).toFixed(0)} KB</span>
+                        {canEdit('procurement_schedule') && (
+                          <button onClick={() => deleteDrawing(d.id)} className="text-gray-400 hover:text-red-600"><FiX size={11} /></button>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {canEdit('procurement_schedule') && (
+                  <label className="btn btn-secondary text-xs flex items-center gap-1 cursor-pointer w-fit mb-0">
+                    <FiUpload size={12} /> Attach drawing / spec PDF
+                    <input type="file" className="hidden" accept="application/pdf,image/*" onChange={e => { uploadDrawing(e.target.files?.[0]); e.target.value = ''; }} />
+                  </label>
+                )}
+                <p className="text-[10px] text-gray-500 mt-1">AI sees filenames only for now (e.g. "FF Layout L2.pdf" → expects fire-fighting items on level 2). Reading drawing contents is a heavier Bundle B feature.</p>
+              </div>
+
+              <div className="flex items-center justify-between pt-2 border-t border-blue-100">
+                <p className="text-[11px] text-gray-600">
+                  {data?.project && (
+                    <>Current anchor: <b className="text-red-700">{fmtDate(meta.end_date || data.project.completion_date)}</b></>
+                  )}
+                </p>
+                {canEdit('procurement_schedule') && (
+                  <button onClick={askAi} disabled={aiSuggesting || !meta.end_date} className="btn btn-primary text-sm flex items-center gap-1 disabled:opacity-40">
+                    <FiCpu size={14} /> {aiSuggesting ? 'AI thinking…' : (data?.rows?.length ? 'Re-ask AI with this context' : 'Generate with AI')}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {!projectId && (
             <div className="card p-8 text-center text-gray-400">

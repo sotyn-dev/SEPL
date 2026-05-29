@@ -24,11 +24,29 @@
 //   indent-deadline alerts, AI drawing extraction.
 
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 
 const router = express.Router();
 router.use(authMiddleware);
+
+// Drawing uploads — Bundle A (mam 2026-05-28). Stored only for now;
+// vision-API reading is Bundle B if mam wants to pay the token cost.
+const drawingDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'procurement-schedule');
+if (!fs.existsSync(drawingDir)) fs.mkdirSync(drawingDir, { recursive: true });
+const drawingUpload = multer({
+  storage: multer.diskStorage({
+    destination: drawingDir,
+    filename: (req, file, cb) => {
+      const safe = (file.originalname || 'drawing').replace(/[^a-zA-Z0-9._-]/g, '_');
+      cb(null, `psd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`);
+    },
+  }),
+  limits: { fileSize: 30 * 1024 * 1024 },
+});
 
 // Six phase IDs in execution order. Backward-pass walks them right→left.
 const PHASES = ['indent', 'quotes', 'po', 'dispatch', 'receive', 'install'];
@@ -102,6 +120,31 @@ try {
       ai_reasoning TEXT,          -- AI's one-line justification (mam 2026-05-28)
       generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    -- Bundle A (mam 2026-05-28): per-project user-overridable start/end +
+    -- client requirements text. Falls back to business_book's committed
+    -- dates when this row is absent. Single row per project_id.
+    CREATE TABLE IF NOT EXISTS procurement_schedule_meta (
+      project_id INTEGER PRIMARY KEY,
+      start_date DATE,
+      end_date DATE,
+      client_requirements TEXT,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    -- Drawings linked to a project. Stored as files for now; AI reads
+    -- only the filename + count as a context hint (cheap). Vision-API
+    -- ingestion of the file BYTES is Bundle B.
+    CREATE TABLE IF NOT EXISTS procurement_schedule_drawings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      filename TEXT NOT NULL,
+      storage_path TEXT NOT NULL,
+      file_type TEXT,
+      file_size INTEGER,
+      uploaded_by INTEGER REFERENCES users(id),
+      uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_procsch_drawings_project ON procurement_schedule_drawings(project_id);
     CREATE INDEX IF NOT EXISTS idx_procsch_project ON procurement_schedule(project_id);
     CREATE INDEX IF NOT EXISTS idx_procsch_item    ON procurement_schedule(item_id);
   `);
@@ -267,6 +310,98 @@ router.delete('/holidays/:id', requirePermission('procurement_schedule', 'edit')
   res.json({ ok: true });
 });
 
+// ── META (per-project user overrides) + DRAWINGS endpoints ───────
+
+// GET /procurement-schedule/:project_id/meta — pull the user-saved
+// dates + client requirements + uploaded drawings list. Falls back to
+// business_book.committed_* when nothing has been saved yet.
+router.get('/:project_id/meta', requirePermission('procurement_schedule', 'view'), (req, res) => {
+  const db = getDb();
+  const pid = +req.params.project_id;
+  const project = db.prepare(
+    `SELECT bb.id, bb.company_name AS project_name, bb.client_name,
+            bb.committed_start_date, bb.committed_completion_date
+       FROM business_book bb WHERE bb.id = ?`
+  ).get(pid);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  const meta = db.prepare('SELECT start_date, end_date, client_requirements, updated_at FROM procurement_schedule_meta WHERE project_id = ?').get(pid);
+  const drawings = db.prepare(
+    `SELECT d.id, d.filename, d.file_size, d.uploaded_at, u.name AS uploaded_by_name
+       FROM procurement_schedule_drawings d
+       LEFT JOIN users u ON u.id = d.uploaded_by
+      WHERE d.project_id = ?
+      ORDER BY d.uploaded_at DESC`
+  ).all(pid);
+  res.json({
+    project,
+    start_date: meta?.start_date || project.committed_start_date || null,
+    end_date:   meta?.end_date   || project.committed_completion_date || null,
+    client_requirements: meta?.client_requirements || '',
+    drawings,
+  });
+});
+
+// PUT /procurement-schedule/:project_id/meta — save user overrides.
+// Body: { start_date?, end_date?, client_requirements? } — any subset.
+router.put('/:project_id/meta', requirePermission('procurement_schedule', 'edit'), (req, res) => {
+  const db = getDb();
+  const pid = +req.params.project_id;
+  const { start_date, end_date, client_requirements } = req.body || {};
+  const project = db.prepare('SELECT id FROM business_book WHERE id = ?').get(pid);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+  db.prepare(
+    `INSERT INTO procurement_schedule_meta (project_id, start_date, end_date, client_requirements, updated_by)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(project_id) DO UPDATE SET
+       start_date          = COALESCE(excluded.start_date, procurement_schedule_meta.start_date),
+       end_date            = COALESCE(excluded.end_date,   procurement_schedule_meta.end_date),
+       client_requirements = COALESCE(excluded.client_requirements, procurement_schedule_meta.client_requirements),
+       updated_by          = excluded.updated_by,
+       updated_at          = CURRENT_TIMESTAMP`
+  ).run(pid, start_date || null, end_date || null, client_requirements ?? null, req.user.id);
+  res.json({ ok: true });
+});
+
+// POST /procurement-schedule/:project_id/drawings — multipart upload.
+router.post('/:project_id/drawings', requirePermission('procurement_schedule', 'edit'),
+  drawingUpload.single('file'), (req, res) => {
+    const db = getDb();
+    const pid = +req.params.project_id;
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const project = db.prepare('SELECT id FROM business_book WHERE id = ?').get(pid);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const r = db.prepare(
+      `INSERT INTO procurement_schedule_drawings
+         (project_id, filename, storage_path, file_type, file_size, uploaded_by)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(pid, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size, req.user.id);
+    res.status(201).json({ id: r.lastInsertRowid, filename: req.file.originalname });
+  });
+
+// GET /procurement-schedule/drawing/:fileId — stream the file (admin-readable
+// only, since drawings can be commercially sensitive).
+router.get('/drawing/:fileId', requirePermission('procurement_schedule', 'view'), (req, res) => {
+  const db = getDb();
+  const f = db.prepare('SELECT filename, storage_path, file_type FROM procurement_schedule_drawings WHERE id = ?')
+    .get(+req.params.fileId);
+  if (!f) return res.status(404).json({ error: 'File not found' });
+  const fullPath = path.join(drawingDir, f.storage_path);
+  if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File missing on disk' });
+  res.setHeader('Content-Type', f.file_type || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(f.filename)}"`);
+  res.sendFile(fullPath);
+});
+
+// DELETE /procurement-schedule/drawing/:fileId
+router.delete('/drawing/:fileId', requirePermission('procurement_schedule', 'edit'), (req, res) => {
+  const db = getDb();
+  const f = db.prepare('SELECT storage_path FROM procurement_schedule_drawings WHERE id = ?').get(+req.params.fileId);
+  if (!f) return res.status(404).json({ error: 'File not found' });
+  try { fs.unlinkSync(path.join(drawingDir, f.storage_path)); } catch (_) {}
+  db.prepare('DELETE FROM procurement_schedule_drawings WHERE id = ?').run(+req.params.fileId);
+  res.json({ ok: true });
+});
+
 // GET /procurement-schedule/projects — projects ELIGIBLE for scheduling.
 // A project must have a completion_date and at least one BOQ item.
 router.get('/projects', requirePermission('procurement_schedule', 'view'), (req, res) => {
@@ -338,6 +473,16 @@ router.post('/:project_id/ai-suggest', requirePermission('procurement_schedule',
   `).all(pid);
   if (items.length === 0) return res.status(400).json({ error: 'No BOQ items on this project — upload the Client PO first' });
 
+  // Bundle A context — user-overridable dates + client requirements +
+  // drawing filename hints. body fields take precedence over the saved
+  // meta, which in turn takes precedence over business_book defaults.
+  const meta = db.prepare('SELECT start_date, end_date, client_requirements FROM procurement_schedule_meta WHERE project_id = ?').get(pid);
+  const bbDates = db.prepare('SELECT committed_start_date, committed_completion_date FROM business_book WHERE id = ?').get(pid);
+  const startDate = req.body?.start_date || meta?.start_date || bbDates?.committed_start_date || null;
+  const endDate   = req.body?.end_date   || meta?.end_date   || bbDates?.committed_completion_date || project.completion_date;
+  const clientReq = (req.body?.client_requirements ?? meta?.client_requirements ?? '').toString().trim();
+  const drawings = db.prepare('SELECT filename, file_size FROM procurement_schedule_drawings WHERE project_id = ? ORDER BY uploaded_at').all(pid);
+
   // Trim payload so the model doesn't choke on huge prompts.
   const slim = items.map(it => ({
     id: it.id,
@@ -351,15 +496,34 @@ router.post('/:project_id/ai-suggest', requirePermission('procurement_schedule',
     dept: it.department,
   }));
 
-  const prompt = `You are a senior procurement planner for SEPL Engineers, an Indian MEPF (Mechanical, Electrical, Plumbing, Fire-fighting) subcontractor. The project "${project.project_name}" must finish on ${project.completion_date}.
+  // Bundle A prompt — same backbone, more context blocks. Each block
+  // is wrapped in a clear header so the model can locate it. Drawings
+  // are listed by NAME only (no bytes sent yet — vision API is Bundle B).
+  let prompt = `You are a senior procurement planner for SEPL Engineers, an Indian MEPF (Mechanical, Electrical, Plumbing, Fire-fighting) subcontractor.
 
-For EACH BOQ item below, predict:
+## Project window
+Project: "${project.project_name}"${project.client_name ? ' (client: ' + project.client_name + ')' : ''}
+${startDate ? `Start date: ${startDate}` : 'Start date: not specified'}
+End / completion date: ${endDate}
+${startDate && endDate ? `Total duration: ${Math.max(1, Math.round((new Date(endDate) - new Date(startDate)) / (1000*60*60*24)))} calendar days` : ''}
+`;
+  if (clientReq) {
+    prompt += `\n## Client / project requirements (free-text from procurement team)\n${clientReq.slice(0, 4000)}\n`;
+  }
+  if (drawings.length > 0) {
+    prompt += `\n## Drawings attached (filenames only — vision not enabled in this call)\n${drawings.map((d, i) => `${i+1}. ${d.filename} (${(d.file_size/1024).toFixed(0)} KB)`).join('\n')}\nUse the filenames as hints (e.g. "FF Layout L2.pdf" suggests fire-fighting on level 2, expect more pumps + hydrants).\n`;
+  }
+  prompt += `
+## Your task
+For EACH BOQ item below, predict three things:
   1. "trade" — exactly one of: Fire Fighting, Plumbing, Electrical, HVAC, Solar, Networking, CCTV, Cable, Civil, Other
-  2. "dispatch_days" — typical business days from PO placed to material reaching the site in Indian conditions (vendor lead + transport). Use real-world experience: standard items 5-10 d, imported/custom items 21-45 d, civil bulk 2-3 d, cable 5-7 d, fire pumps 14-21 d, AHUs 21-30 d.
-  3. "reasoning" — ONE short line (<= 80 chars) justifying your dispatch_days number.
+  2. "dispatch_days" — typical business days from PO placed to material reaching site in Indian conditions (vendor lead + transport). Use real-world experience: standard items 5-10 d, imported/custom items 21-45 d, civil bulk 2-3 d, cable 5-7 d, fire pumps 14-21 d, AHUs 21-30 d. If the client requirements mention urgency / phasing / specific milestones, adjust accordingly.
+  3. "reasoning" — ONE short line (<= 80 chars) justifying your dispatch_days. Reference the project context when relevant ("imported AHU per Phase 2 spec", "standard local pipe — quick").
 
-Items: ${JSON.stringify(slim)}
+## BOQ items
+${JSON.stringify(slim)}
 
+## Output format
 Reply with ONLY a JSON array, no preamble, no markdown fences:
 [{"item_id": <number>, "trade": "<string>", "dispatch_days": <number>, "reasoning": "<string>"}, ...]`;
 
@@ -418,7 +582,13 @@ router.post('/:project_id/regenerate', requirePermission('procurement_schedule',
   const pid = +req.params.project_id;
   const project = db.prepare('SELECT id, company_name AS project_name, committed_completion_date AS completion_date FROM business_book WHERE id = ?').get(pid);
   if (!project) return res.status(404).json({ error: 'Project not found' });
-  if (!project.completion_date) return res.status(400).json({ error: 'Project has no completion_date — cannot anchor the backward-pass' });
+  // Anchor priority: explicit end_date in body → saved meta → business_book.
+  // Bundle A (mam 2026-05-28) — user override always wins so AI-suggested
+  // adjustments stay coupled to whatever date the user agreed to.
+  const meta = db.prepare('SELECT end_date FROM procurement_schedule_meta WHERE project_id = ?').get(pid);
+  const anchorEnd = req.body?.end_date || meta?.end_date || project.completion_date;
+  if (!anchorEnd) return res.status(400).json({ error: 'Project has no end date — set one in the Setup card or fill committed_completion_date on the Business Book row' });
+  project.completion_date = anchorEnd;
 
   const items = db.prepare(`
     SELECT pi.id, pi.description, pi.unit, pi.quantity, pi.item_master_id,
