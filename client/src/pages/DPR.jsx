@@ -9,6 +9,13 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
+// Mam (2026-05-30): the PO/BOQ rate is the FULL SITC value (Supply +
+// Installation + Testing & Commissioning) and already includes labour.
+// The DPR's Table A rate should carry only the labour portion, taken as
+// 6% of the SITC rate (e.g. 1810 → 108.6). Until real labour rates are
+// collected, this 6% is the agreed placeholder.
+const LABOUR_RATE_PCT = 0.06;
+
 const SYSTEMS = ['Electrical', 'Fire Fighting', 'Fire Alarm', 'CCTV', 'Access Control', 'PA System', 'Plumbing', 'HVAC', 'Solar', 'Networking', 'Combined'];
 const EQUIPMENT_LIST = ['Welding Machine', 'Pipe Threading Machine', 'Drill Machine', 'Grinder', 'Ladder', 'Scaffolding', 'Pipe Bending Machine', 'Cable Pulling Machine', 'Multimeter', 'Megger', 'Earth Tester', 'Hydro Test Pump', 'Generator', 'Compressor'];
 
@@ -245,10 +252,14 @@ export default function DPR() {
     n[i].boq_qty = item?.quantity || 0;
     n[i].remaining_qty = item?.remaining_qty ?? item?.quantity ?? 0;
     n[i].filled_qty = item?.filled_qty || 0;
-    // Auto-fill SITC rate from po_items so the site engineer doesn't
-    // have to re-type it. Can still be overridden inline.
+    // Auto-fill the DPR rate from the PO item. The PO rate is the full
+    // SITC value (incl. labour); the DPR carries only the labour portion
+    // = 6% of SITC (LABOUR_RATE_PCT). Keep the original SITC on the row
+    // so the UI can show "6% of SITC ₹X". Rate can still be overridden.
     if (item) {
-      n[i].rate = +item.rate || 0;
+      const sitc = +item.rate || 0;
+      n[i].sitc_rate = sitc;
+      n[i].rate = Math.round(sitc * LABOUR_RATE_PCT * 100) / 100;
       n[i].amount = (+n[i].qty || 0) * n[i].rate;
     }
     setWorkItems(n);
@@ -815,6 +826,11 @@ export default function DPR() {
                     <div className="col-span-6 md:col-span-2">
                       <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Rate (Rs)</div>
                       <input className="input text-sm w-full" type="number" placeholder="Rate" value={w.rate || ''} onChange={e => updateWork(i, 'rate', +e.target.value)} />
+                      {w.sitc_rate > 0 && (
+                        <div className="text-[9px] leading-tight mt-0.5 text-gray-500">
+                          Labour = 6% of SITC ₹{(+w.sitc_rate).toLocaleString('en-IN')}
+                        </div>
+                      )}
                     </div>
                     {/* Amount — col-span-5 mobile */}
                     <div className="col-span-5 md:col-span-2">
