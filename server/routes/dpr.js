@@ -1256,6 +1256,7 @@ router.get('/engineer-compliance', (req, res) => {
   const totalPresentByEng = new Map();
   const totalDprByEng     = new Map();
   const totalPlByEng      = new Map();
+  const totalManpowerByEng = new Map();   // contractor + skilled + helper, across the engineer's DPRs
   if (allEngIds.length) {
     const eidP2 = allEngIds.map(() => '?').join(',');
     const PRESENT_STATUSES_INNER = "('present','half_day','short_day','late')";
@@ -1284,6 +1285,41 @@ router.get('/engineer-compliance', (req, res) => {
       totalDprByEng.set(r.submitted_by, r.days);
       totalPlByEng.set(r.submitted_by, r.pl);
     });
+
+    // Total manpower across the engineer's own DPRs in the range:
+    //   contractor manpower + Skilled Manpower qty + Helper qty.
+    // Mam (2026-05-30): card column "Total Manpower".
+    // (a) Contractor manpower — prefer the dpr_contractors rows per DPR;
+    //     fall back to the legacy dpr.contractor_manpower when a DPR has
+    //     no contractor rows (older reports predate the multi-contractor table).
+    const engContractorMp = db.prepare(`
+      SELECT eng, COALESCE(SUM(cmp), 0) AS mp FROM (
+        SELECT d.id, d.submitted_by AS eng,
+               CASE WHEN COALESCE(SUM(dc.manpower), 0) > 0
+                    THEN SUM(dc.manpower)
+                    ELSE COALESCE(d.contractor_manpower, 0) END AS cmp
+          FROM dpr d
+          LEFT JOIN dpr_contractors dc ON dc.dpr_id = d.id
+         WHERE d.submitted_by IN (${eidP2})
+           AND d.report_date BETWEEN ? AND ?
+           AND COALESCE(d.is_planned_template, 0) = 0
+         GROUP BY d.id
+      ) GROUP BY eng
+    `).all(...allEngIds, from, to);
+    engContractorMp.forEach(r => totalManpowerByEng.set(r.eng, r.mp));
+
+    // (b) Skilled Manpower + Helper headcount from Table B (dpr_manpower.required).
+    const engCrewMp = db.prepare(`
+      SELECT d.submitted_by AS eng, COALESCE(SUM(dm.required), 0) AS mp
+        FROM dpr d
+        JOIN dpr_manpower dm ON dm.dpr_id = d.id
+       WHERE d.submitted_by IN (${eidP2})
+         AND d.report_date BETWEEN ? AND ?
+         AND COALESCE(d.is_planned_template, 0) = 0
+         AND LOWER(TRIM(dm.trade)) IN ('skilled manpower', 'helper')
+       GROUP BY d.submitted_by
+    `).all(...allEngIds, from, to);
+    engCrewMp.forEach(r => totalManpowerByEng.set(r.eng, (totalManpowerByEng.get(r.eng) || 0) + r.mp));
   }
 
   // 5) Bucket sites into their engineer.  Engineers with no assigned
@@ -1299,6 +1335,7 @@ router.get('/engineer-compliance', (req, res) => {
     days_present_total:    totalPresentByEng.get(e.id) || 0,
     days_dpr_filled_total: totalDprByEng.get(e.id)     || 0,
     profit_loss_total:     totalPlByEng.get(e.id)      || 0,
+    manpower_total:        totalManpowerByEng.get(e.id) || 0,
     // Per-site SUM for the expanded view footer.  May differ from
     // the headline when some attendance/DPRs couldn't be matched
     // to a specific site.
@@ -1340,8 +1377,9 @@ router.get('/engineer-compliance', (req, res) => {
     acc.days_present    += e.days_present_total;
     acc.days_dpr_filled += e.days_dpr_filled_total;
     acc.profit_loss     += e.profit_loss_total;
+    acc.manpower        += e.manpower_total;
     return acc;
-  }, { engineers: 0, sites: 0, days_present: 0, days_dpr_filled: 0, profit_loss: 0 });
+  }, { engineers: 0, sites: 0, days_present: 0, days_dpr_filled: 0, profit_loss: 0, manpower: 0 });
   totals.gap_days = Math.max(0, totals.days_present - totals.days_dpr_filled);
 
   res.json({
