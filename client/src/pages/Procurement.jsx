@@ -2975,6 +2975,33 @@ export default function Procurement() {
           });
           setModal('receive');
         };
+        // Quick dispatch — mam (2026-05-30): "this dispatch all also go to
+        // receiving so that rec never miss, because we sometimes create the
+        // delivery note / sales bill later." One click records a Challan
+        // dispatch (sales_bill_pending=1) with just a Challan/DC number, so
+        // the PO moves into Dispatch & Receiving immediately. The formal
+        // Sales Bill is filled in later via the SB-PENDING row's
+        // "Add Sales Bill" action — the full item/GST flow stays on the
+        // main "Dispatch" button.
+        const quickDispatch = async (po) => {
+          const docNo = window.prompt(
+            `Quick dispatch ${po.po_number} — bill later.\n\nEnter the Challan / DC number (required).\nThe Sales Bill can be added later from the Dispatch & Receiving list.`
+          );
+          if (docNo === null) return;                 // cancelled
+          if (!docNo.trim()) { toast.error('Challan / document number is required'); return; }
+          const fd = new FormData();
+          fd.append('vendor_po_id', po.id);
+          fd.append('document_type', 'challan');
+          fd.append('document_number', docNo.trim());
+          fd.append('delivery_date', new Date().toISOString().slice(0, 10));
+          fd.append('sales_bill_pending', '1');
+          try {
+            await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+            toast.success(`${po.po_number} dispatched (${docNo.trim()}) — Sales Bill pending. Now in Dispatch & Receiving.`);
+            setDispatchSubTab('list');
+            load();
+          } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+        };
         return (
         <>
           {/* Sub-tabs (mam 2026-05-25) */}
@@ -3049,7 +3076,10 @@ export default function Procurement() {
                           )}
                         </td>
                         <td className="px-2 py-1.5">
-                          <button onClick={() => openAddDispatch(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap">Dispatch</button>
+                          <div className="flex flex-col gap-1 items-stretch">
+                            <button onClick={() => openAddDispatch(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap" title="Create the full Sales Bill / Delivery Note now (items, GST, file).">Dispatch</button>
+                            <button onClick={() => quickDispatch(po)} className="btn btn-secondary text-[10px] px-2 py-1 whitespace-nowrap" title="Move this PO into Dispatch & Receiving now with just a Challan/DC number; add the Sales Bill later so receiving is never missed.">Dispatch (bill later)</button>
+                          </div>
                         </td>
                       </tr>
                     ))}
