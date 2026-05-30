@@ -2996,10 +2996,20 @@ export default function Procurement() {
           fd.append('delivery_date', new Date().toISOString().slice(0, 10));
           fd.append('sales_bill_pending', '1');
           try {
-            await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-            toast.success(`${po.po_number} dispatched (${docNo.trim()}) — Sales Bill pending. Now in Dispatch & Receiving.`);
+            const r = await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+            toast.success(`${po.po_number} dispatched (${docNo.trim()}) — in Dispatch & Receiving. Sales Bill pending.`);
             setDispatchSubTab('list');
             load();
+            // Open the generated Delivery Note so it can be printed / shared,
+            // and the site engineer uploads the signed receipt against this
+            // row via "Mark Received". Same blob-open the main Dispatch uses.
+            if (r.data?.id) {
+              try {
+                const printRes = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'arraybuffer' });
+                const blob = new Blob([printRes.data], { type: 'text/html;charset=utf-8' });
+                window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+              } catch (_) { /* user can still click 🖨 Print in the Dispatch & Receiving list */ }
+            }
           } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
         };
         return (
