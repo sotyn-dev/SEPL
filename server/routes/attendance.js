@@ -295,6 +295,10 @@ router.post('/admin-mark', (req, res) => {
   const { user_id, date, status, remarks } = req.body;
   if (!user_id || !date) return res.status(400).json({ error: 'user_id and date are required' });
 
+  // Admin may backfill any PAST date, but never a future one.
+  const todayStr = new Date().toISOString().split('T')[0];
+  if (date > todayStr) return res.status(400).json({ error: 'Cannot mark a future date' });
+
   // Permission gate: admin OR a role with attendance.approve
   const db = getDb();
   if (req.user.role !== 'admin') {

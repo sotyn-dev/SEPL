@@ -388,6 +388,17 @@ export default function Attendance() {
             <div className="card p-3 border-l-4 border-purple-500"><p className="text-xs text-gray-500">On Leave</p><p className="text-2xl font-bold text-purple-600">{dashboard.onLeave}</p></div>
           </div>
 
+          {/* Backfill any user's attendance for a PAST date (phone dead /
+              forgot to punch / on-site with no network). Opens a modal that
+              hits the same admin-mark endpoint the per-day button uses. */}
+          <div className="flex justify-end">
+            <button
+              onClick={() => { setForm({ user_id: '', date: today, status: 'present', remarks: '' }); setModal('admin-mark'); }}
+              className="btn btn-primary text-sm flex items-center gap-1">
+              <FiCheckCircle size={14} /> Mark / Backfill Attendance
+            </button>
+          </div>
+
           {/* Not Punched In */}
           {dashboard.notPunched?.length > 0 && (
             <div className="card bg-red-50 border border-red-200">
@@ -862,6 +873,58 @@ export default function Attendance() {
             <div><label className="label">Active</label><select className="select" value={form.active ? '1' : '0'} onChange={e => setForm({ ...form, active: e.target.value === '1' })}><option value="1">Yes</option><option value="0">No</option></select></div>
           </div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Update</button></div>
+        </form>
+      </Modal>
+
+      {/* Admin Mark / Backfill Attendance — pick any user + any PAST date.
+          Hits /attendance/admin-mark (admin_marked=1, hidden from the user's
+          own view). The endpoint refuses to overwrite a real punch. */}
+      <Modal isOpen={modal === 'admin-mark'} onClose={() => setModal(null)} title="Mark / Backfill Attendance">
+        <form onSubmit={async (e) => {
+          e.preventDefault();
+          if (!form.user_id) return toast.error('Please select an employee');
+          if (!form.date) return toast.error('Please pick a date');
+          if (form.date > today) return toast.error('Cannot mark a future date');
+          try {
+            await api.post('/attendance/admin-mark', {
+              user_id: +form.user_id, date: form.date,
+              status: form.status || 'present', remarks: form.remarks || '',
+            });
+            const who = allUsers.find(u => u.id === +form.user_id)?.name || 'Employee';
+            toast.success(`${who} marked ${(form.status || 'present').replace('_', ' ')} for ${form.date}`);
+            setModal(null); load();
+          } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+        }} className="space-y-4">
+          <div>
+            <label className="label">Employee *</label>
+            <select className="select" value={form.user_id || ''} onChange={e => setForm({ ...form, user_id: e.target.value })} required>
+              <option value="">-- Select employee --</option>
+              {allUsers.map(u => <option key={u.id} value={u.id}>{u.name}{u.department ? ` · ${u.department}` : ''}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Date *</label>
+              <input className="input" type="date" max={today} value={form.date || ''} onChange={e => setForm({ ...form, date: e.target.value })} required />
+            </div>
+            <div>
+              <label className="label">Status *</label>
+              <select className="select" value={form.status || 'present'} onChange={e => setForm({ ...form, status: e.target.value })}>
+                <option value="present">Present</option>
+                <option value="half_day">Half Day</option>
+                <option value="short_day">Short Day</option>
+                <option value="absent">Absent</option>
+                <option value="leave">Leave</option>
+                <option value="holiday">Holiday</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="label">Reason / Remarks (for audit)</label>
+            <textarea className="input" rows="2" placeholder="e.g. phone dead, on site without network" value={form.remarks || ''} onChange={e => setForm({ ...form, remarks: e.target.value })} />
+          </div>
+          <p className="text-[11px] text-gray-500 italic">Admin-marked rows are hidden from the employee's own dashboard / month view and won't overwrite a real punch.</p>
+          <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>
       </Modal>
 
