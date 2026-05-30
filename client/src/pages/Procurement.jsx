@@ -1212,6 +1212,26 @@ export default function Procurement() {
     e.preventDefault();
     if (!form.received_by_name || !form.received_by_name.trim()) return toast.error('Receiver name is required');
     if (!form.receipt_file) return toast.error('Receipt proof photo is required — attach the stamped + signed document');
+
+    // Receiving a Ready-to-Dispatch PO directly (mam 2026-05-30: "show
+    // ready POs here + upload receiving"). No dispatch record exists yet,
+    // so create a Challan dispatch first with an AUTO-generated DC number
+    // (sales_bill_pending=1 — office adds the formal Sales Bill later),
+    // then mark THAT received with the uploaded proof.
+    let receiveId = form.receive_id;
+    if (!receiveId && form.receive_po_id) {
+      try {
+        const fd0 = new FormData();
+        fd0.append('vendor_po_id', form.receive_po_id);
+        fd0.append('document_type', 'challan');                 // blank doc# → server auto-generates DC/YYYY/####
+        fd0.append('delivery_date', new Date().toISOString().slice(0, 10));
+        fd0.append('sales_bill_pending', '1');
+        const dn = await api.post('/procurement/delivery-notes', fd0, { headers: { 'Content-Type': 'multipart/form-data' } });
+        receiveId = dn.data?.id;
+      } catch (err) { return toast.error(err.response?.data?.error || 'Could not create dispatch record'); }
+    }
+    if (!receiveId) return toast.error('No dispatch to receive against');
+
     const fd = new FormData();
     fd.append('received_by_name', form.received_by_name);
     if (form.received_at) fd.append('received_at', form.received_at);
@@ -1224,7 +1244,7 @@ export default function Procurement() {
     // dispatch shows the amber "📋 SB PENDING" chip until SB is uploaded.
     if (form.sales_bill_pending) fd.append('sales_bill_pending', '1');
     try {
-      const r = await api.patch(`/procurement/delivery-notes/${form.receive_id}/receive`, fd, {
+      const r = await api.patch(`/procurement/delivery-notes/${receiveId}/receive`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       const ins = r.data?.stock_ins || 0;
@@ -2975,6 +2995,19 @@ export default function Procurement() {
           });
           setModal('receive');
         };
+        // Upload receiving for a Ready-to-Dispatch PO directly (no dispatch
+        // doc yet). The receive modal collects the receiver + signed proof;
+        // markReceived() auto-creates the Challan dispatch (auto DC number)
+        // then records the receipt against it.
+        const openReceivePo = (po) => {
+          setForm({
+            receive_po_id: po.id,
+            receive_doc: `${po.po_number}${po.vendor_name ? ' · ' + po.vendor_name : ''}`,
+            received_by_name: '',
+            received_at: new Date().toISOString().slice(0, 10),
+          });
+          setModal('receive');
+        };
         return (
         <>
           {/* Sub-tabs (mam 2026-05-25) */}
@@ -2986,7 +3019,7 @@ export default function Procurement() {
               </button>
               <button onClick={() => setDispatchSubTab('list')}
                 className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'list' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                Dispatch &amp; Receiving <span className="ml-1 text-[10px] opacity-80">({deliveryNotes.length})</span>
+                Dispatch &amp; Receiving <span className="ml-1 text-[10px] opacity-80">({deliveryNotes.length + readyToDispatch.length})</span>
               </button>
             </div>
           </div>
@@ -3118,6 +3151,27 @@ export default function Procurement() {
           <div className="card p-0 overflow-x-auto"><table className="freeze-head freeze-col">
             <thead><tr><th>ID</th><th>Type</th><th>Doc No</th><th>PO</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
+              {/* Ready-to-Dispatch POs awaiting receipt (mam 2026-05-30:
+                  "show ready POs here + upload receiving"). Uploading the
+                  signed receipt auto-creates the Challan dispatch (auto DC
+                  number) and records the receipt in one step. */}
+              {readyToDispatch.map(po => (
+                <tr key={`ready-${po.id}`} className="bg-amber-50/40">
+                  <td className="text-gray-400">—</td>
+                  <td><span className="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-200">AWAITING</span></td>
+                  <td className="text-gray-400">—</td>
+                  <td className="text-xs">{po.po_number}<div className="text-[10px] text-gray-500">{po.vendor_name || ''}</div></td>
+                  <td className="text-xs">{po.po_date || '—'}</td>
+                  <td className="text-gray-300 text-xs">—</td>
+                  <td className="text-gray-300 text-xs">—</td>
+                  <td className="text-gray-300 text-xs">—</td>
+                  <td className="text-gray-300 text-xs">—</td>
+                  <td><span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">Awaiting receipt</span></td>
+                  <td className="whitespace-nowrap">
+                    <button onClick={() => openReceivePo(po)} className="btn btn-success text-[10px] px-2 py-1" title="Upload the signed receipt — auto-creates the dispatch (auto DC no.) and marks it received.">Upload Receiving</button>
+                  </td>
+                </tr>
+              ))}
               {dispListPg.rows.map(d => (
                 <tr key={d.id}>
                   <td>#{d.id}</td>
@@ -3199,7 +3253,7 @@ export default function Procurement() {
                   </td>
                 </tr>
               ))}
-              {deliveryNotes.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
+              {deliveryNotes.length === 0 && readyToDispatch.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
               {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
             </tbody>
             <tfoot><tr><td colSpan="12" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
