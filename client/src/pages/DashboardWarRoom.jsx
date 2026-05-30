@@ -63,8 +63,9 @@ function trafficLights(data) {
   const sysLight = 'amber';
   const sysEv = 'Sentry not wired on 8 critical flows · P95 OK';
 
-  // DATA QUALITY — junk POs + missing fields
-  const junkCount = data_quality.junk_pos.length;
+  // DATA QUALITY — junk POs + missing fields. Use the full count (not the
+  // capped display list) so the banner reflects every junk PO.
+  const junkCount = data_quality.junk_po_count ?? data_quality.junk_pos.length;
   const dqLight = junkCount === 0 ? 'green' : junkCount < 3 ? 'amber' : 'red';
   const dqEv = `${junkCount} junk PO numbers · ${fmtINR(data_quality.junk_po_total)} affected`;
 
@@ -122,7 +123,7 @@ function bottlenecks(data) {
   if (data_quality.junk_pos.length > 0) {
     out.push({
       rank: out.length + 1,
-      title: `${data_quality.junk_pos.length} junk PO numbers in book (${data_quality.junk_pos.slice(0, 4).map(p => p.po_number).join(', ')})`,
+      title: `${data_quality.junk_po_count ?? data_quality.junk_pos.length} junk PO numbers in book (${data_quality.junk_pos.slice(0, 4).map(p => p.po_number).join(', ')})`,
       who: 'Purchase Head + IT Head (validation now blocks NEW; legacy to clean)',
       why: `Test / dummy data co-mingled with live transactions worth ${fmtINR(data_quality.junk_po_total)}. Reconciliation nightmare if left for 90 days.`,
       evidence: 'Business Book · Recent Orders · validator on PO field now active for new entries',
@@ -479,7 +480,7 @@ export default function DashboardWarRoom() {
               <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Anomalies (&gt;2σ today)</h2>
               <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: C.ink2, lineHeight: 1.6 }}>
                 {data_quality.junk_pos.length > 0 && (
-                  <li><strong>{data_quality.junk_pos.length} PO numbers</strong> below the 10-char alphanumeric rule (junk pattern).</li>
+                  <li><strong>{data_quality.junk_po_count ?? data_quality.junk_pos.length} PO numbers</strong> below the 10-char alphanumeric rule (junk pattern).</li>
                 )}
                 {sales.funnel.leads <= 1 && (
                   <li><strong>{sales.funnel.leads} lead{sales.funnel.leads === 1 ? '' : 's'}</strong> in funnel for the {data.window.days}-day window — pipeline dry.</li>

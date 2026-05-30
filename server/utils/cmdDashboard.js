@@ -48,7 +48,20 @@ function computeCmdDetail(db, daysRaw) {
   const runwayDays = dailyBurn > 0 ? Math.round(cashOnHand / dailyBurn) : null;
 
   // Active sites / order book / revenue MTD / open snags
-  const activeSites = num(safeGet(db, `SELECT COUNT(*) c FROM sites WHERE status='active'`)?.c);
+  // UNIQUE sites, not raw rows. Mam (2026-05-30): "pick unique sites from
+  // business book." The `sites` table carries legacy duplicates from PO
+  // re-uploads (same project, stray-quote name variants) that inflate the
+  // count (was 81). Dedupe by the linked business_book project; active
+  // sites with no BB link fall back to a normalized name.
+  const activeSites = num(safeGet(db, `
+    SELECT COUNT(*) c FROM (
+      SELECT DISTINCT CAST(business_book_id AS TEXT) k
+        FROM sites WHERE status='active' AND business_book_id IS NOT NULL
+      UNION
+      SELECT DISTINCT 'name:' || TRIM(LOWER(name)) k
+        FROM sites WHERE status='active' AND COALESCE(business_book_id,0)=0
+    )
+  `)?.c);
   const orderBook = num(safeGet(db, `
     SELECT COALESCE(SUM(total_amount),0) c FROM purchase_orders WHERE status NOT IN ('completed','rejected')
   `)?.c);
@@ -448,14 +461,25 @@ function computeCmdDetail(db, daysRaw) {
   }
 
   // ── Junk-PO list (Stage 1 escalation banner) ───────────────────
+  // A PO number is "junk" if it's a known dummy, blank, or implausibly
+  // short (< 10 chars). Mam (2026-05-30): "if po number junk then check."
+  // The COUNT + total now scan ALL junk rows (not just the 5 displayed),
+  // so the escalation banner shows the true count and ₹ affected.
+  const junkWhere = `po_number IS NOT NULL
+      AND (TRIM(po_number) = ''
+           OR po_number IN ('5252525','141414','1111111111','00','0','1234567890')
+           OR length(TRIM(po_number)) < 10)`;
   const junkPos = safeAll(db, `
     SELECT lead_no, client_name, po_number, po_amount FROM business_book
-    WHERE po_number IS NOT NULL
-      AND (po_number IN ('5252525','141414','1111111111','00','0','1234567890')
-           OR length(po_number) < 10)
-    ORDER BY po_amount DESC LIMIT 5
+    WHERE ${junkWhere}
+    ORDER BY po_amount DESC LIMIT 10
   `);
-  const junkPoTotal = junkPos.reduce((s, r) => s + num(r.po_amount), 0);
+  const junkAgg = safeGet(db, `
+    SELECT COUNT(*) c, COALESCE(SUM(po_amount), 0) total FROM business_book
+    WHERE ${junkWhere}
+  `);
+  const junkPoCount = num(junkAgg?.c);
+  const junkPoTotal = num(junkAgg?.total);
 
   // ── Cost-of-inaction estimate ──────────────────────────────────
   const costOfInactionDaily = Math.round(
@@ -557,6 +581,7 @@ function computeCmdDetail(db, daysRaw) {
 
     data_quality: {
       junk_pos: junkPos,
+      junk_po_count: junkPoCount,
       junk_po_total: junkPoTotal,
     },
   };
