@@ -27,6 +27,18 @@ const TADA_STEPS = [
   { step: 5, name: 'Payment Release' },
 ];
 
+// Canonical order of LIVE workflow stages for the dashboard tiles/chips
+// (union of the 5-step and TA/DA workflows). Mam (2026-05-30): the stage
+// tiles used to count by the coarse `status`, which stays 'pending' for
+// every in-flight request — so everything piled into "HR Approval" and
+// the later stages showed 0. A request's true stage is its live
+// current_step_name; terminal states fall back to status.
+const STAGE_SEQ = ['HR Approval', 'Category Approval', 'Accountant Approval', 'Velocity Check (Auto)', 'Billing Engineer', 'Payment Release'];
+const stageOf = (r) =>
+  r.status === 'final_approved' ? 'Approved'
+  : r.status === 'rejected' ? 'Rejected'
+  : (r.current_step_name || STAGE_SEQ[0]);
+
 // Default 'Required By Date' is today + 5 days — immediate payments can't be
 // processed so we set a realistic lead time.
 const defaultRequiredByDate = () => {
@@ -62,6 +74,9 @@ export default function PaymentRequired() {
   const [form, setForm] = useState({ ...emptyForm });
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({ status: '', category: '', date_from: '', date_to: '' });
+  // Client-side filter by LIVE workflow stage (current_step_name / Approved /
+  // Rejected). Set by clicking a stage tile or chip. Empty = all stages.
+  const [stageFilter, setStageFilter] = useState('');
   const [uploading, setUploading] = useState(false);
 
   // Approval routing — admin-only (mam, 2026-05-16: "i want hr
@@ -352,8 +367,8 @@ export default function PaymentRequired() {
             </div>
             <select className="select w-40" value={filters.category} onChange={e => setFilters(f => ({ ...f, category: e.target.value }))}><option value="">All Categories</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
             <select className="select w-40" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}><option value="">All Status</option>{STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}</select>
-            {(filters.date_from || filters.date_to || filters.category || filters.status || search) && (
-              <button onClick={() => { setSearch(''); setFilters({ status: '', category: '', date_from: '', date_to: '' }); }}
+            {(filters.date_from || filters.date_to || filters.category || filters.status || stageFilter || search) && (
+              <button onClick={() => { setSearch(''); setStageFilter(''); setFilters({ status: '', category: '', date_from: '', date_to: '' }); }}
                 className="btn btn-secondary text-xs flex items-center gap-1 text-red-600 whitespace-nowrap">
                 <FiX size={12} /> Clear filters
               </button>
@@ -380,22 +395,37 @@ export default function PaymentRequired() {
               if (tab === 'rejected') return r.status === 'rejected';
               return true;
             });
-            const byStatus = (s) => visible.filter(r => r.status === s);
-            const totalAmount = visible.reduce((s, r) => s + (+r.amount || 0), 0);
-            // Compact tile (mam 2026-05-29: 'take it small size because
-            // i want to freeze the column'). Two short lines: label +
-            // count · amount. No subtitle. Saves ~220px of vertical
-            // space so the table header freeze gets useful real estate.
-            const tile = ({ key, label, status, color }) => {
-              const rows = status ? byStatus(status) : visible;
+            // Count + sum by LIVE stage (current_step_name) instead of the
+            // coarse status — so each request lands in the step it's
+            // actually at. stage===null means "all".
+            const rowsOf = (stage) => stage == null ? visible : visible.filter(r => stageOf(r) === stage);
+            const PALETTE = [
+              { border: 'border-amber-500',  label: 'text-amber-700',  num: 'text-amber-700',  activeBg: 'bg-amber-50',  ring: 'ring-amber-300' },
+              { border: 'border-orange-500', label: 'text-orange-700', num: 'text-orange-700', activeBg: 'bg-orange-50', ring: 'ring-orange-300' },
+              { border: 'border-purple-500', label: 'text-purple-700', num: 'text-purple-700', activeBg: 'bg-purple-50', ring: 'ring-purple-300' },
+              { border: 'border-indigo-500', label: 'text-indigo-700', num: 'text-indigo-700', activeBg: 'bg-indigo-50', ring: 'ring-indigo-300' },
+              { border: 'border-sky-500',    label: 'text-sky-700',    num: 'text-sky-700',    activeBg: 'bg-sky-50',    ring: 'ring-sky-300' },
+            ];
+            // Only show in-flight stages that actually have rows (canonical
+            // order), plus Showing / Approved / Rejected — so the strip
+            // mirrors the live workflow, never a phantom 0-stage.
+            const presentStages = STAGE_SEQ.filter(st => visible.some(r => stageOf(r) === st));
+            const tiles = [
+              { key: 'all', label: 'Showing', stage: null, color: { border: 'border-blue-500', label: 'text-gray-500', num: 'text-blue-700', activeBg: 'bg-blue-50', ring: 'ring-blue-300' } },
+              ...presentStages.map((st, i) => ({ key: st, label: st, stage: st, color: PALETTE[i % PALETTE.length] })),
+              { key: 'Approved', label: 'Approved', stage: 'Approved', color: { border: 'border-emerald-500', label: 'text-emerald-700', num: 'text-emerald-700', activeBg: 'bg-emerald-50', ring: 'ring-emerald-300' } },
+              { key: 'Rejected', label: 'Rejected', stage: 'Rejected', color: { border: 'border-rose-500', label: 'text-rose-700', num: 'text-rose-700', activeBg: 'bg-rose-50', ring: 'ring-rose-300' } },
+            ];
+            const tile = ({ key, label, stage, color }) => {
+              const rows = rowsOf(stage);
               const amt = rows.reduce((s, r) => s + (+r.amount || 0), 0);
-              const active = status && filters.status === status;
+              const active = stage != null && stageFilter === stage;
               return (
                 <button
                   key={key}
                   type="button"
-                  onClick={() => setFilters(f => ({ ...f, status: active ? '' : (status || '') }))}
-                  disabled={!status}
+                  onClick={() => setStageFilter(active ? '' : (stage || ''))}
+                  disabled={stage == null}
                   className={`card px-2 py-1.5 border-l-4 text-left transition hover:shadow disabled:cursor-default disabled:hover:shadow-none ${color.border} ${active ? `${color.activeBg} ring-2 ${color.ring}` : ''}`}
                   title={`${label} · ${rows.length} ${rows.length === 1 ? 'request' : 'requests'} · Rs ${fmt(amt)}`}
                 >
@@ -407,24 +437,6 @@ export default function PaymentRequired() {
                 </button>
               );
             };
-
-            // Tile labels mirror the workflow stage names exactly so
-            // mam can read the STEP column and the tile strip without
-            // translating 'Pending L2' → 'Accountant Approval' in her
-            // head. Mam 2026-05-29: 'stages name according to stages
-            // where approval pending go data their'.
-            const tiles = [
-              { key: 'all',     label: 'Showing',              sub: 'all stages combined',                  status: null,                color: { border: 'border-blue-500',    label: 'text-gray-500',     num: 'text-blue-700',    activeBg: 'bg-blue-50',    ring: 'ring-blue-300' } },
-              { key: 'hr',      label: 'HR Approval',          sub: 'waiting at Step 1 (HR / Purchase Head)', status: 'pending',         color: { border: 'border-amber-500',   label: 'text-amber-700',    num: 'text-amber-700',   activeBg: 'bg-amber-50',   ring: 'ring-amber-300' } },
-              { key: 'l2',      label: 'Accountant Approval', sub: 'waiting at Step 2 (Accountant)',        status: 'step1_approved',    color: { border: 'border-orange-500',  label: 'text-orange-700',   num: 'text-orange-700',  activeBg: 'bg-orange-50',  ring: 'ring-orange-300' } },
-              { key: 'dues',    label: 'Dues Check',          sub: 'waiting at Step 3 (Dues)',              status: 'accounts_approved', color: { border: 'border-purple-500',  label: 'text-purple-700',   num: 'text-purple-700',  activeBg: 'bg-purple-50',  ring: 'ring-purple-300' } },
-              { key: 'velo',    label: 'Velocity Check',      sub: 'waiting at Step 4 (Velocity / Billing)', status: 'dues_checked',     color: { border: 'border-indigo-500',  label: 'text-indigo-700',   num: 'text-indigo-700',  activeBg: 'bg-indigo-50',  ring: 'ring-indigo-300' } },
-              { key: 'rel',     label: 'Payment Release',     sub: 'waiting at Step 5 (Final payment)',     status: 'velocity_checked',  color: { border: 'border-sky-500',     label: 'text-sky-700',      num: 'text-sky-700',     activeBg: 'bg-sky-50',     ring: 'ring-sky-300' } },
-              { key: 'apr',     label: 'Approved',            sub: 'all stages cleared · paid out',         status: 'final_approved',    color: { border: 'border-emerald-500', label: 'text-emerald-700', num: 'text-emerald-700', activeBg: 'bg-emerald-50', ring: 'ring-emerald-300' } },
-              { key: 'rej',     label: 'Rejected',            sub: 'closed without payment',                 status: 'rejected',          color: { border: 'border-rose-500',    label: 'text-rose-700',     num: 'text-rose-700',    activeBg: 'bg-rose-50',    ring: 'ring-rose-300' } },
-            ];
-
-            // Single slim row of 8 tiles (4 on mobile, 8 from md up).
             return (
               <div className="grid grid-cols-4 md:grid-cols-8 gap-1.5">
                 {tiles.map(tile)}
@@ -446,31 +458,32 @@ export default function PaymentRequired() {
               if (tab === 'rejected') return r.status === 'rejected';
               return true;
             });
-            const cnt = (s) => s === null ? visible.length : visible.filter(r => r.status === s).length;
-            // Chip labels = workflow stage names (same as the tile
-            // strip + the table's STEP column). One vocabulary across
-            // the whole screen so mam doesn't have to mentally map
-            // 'Pending L2' → 'Accountant Approval'.
+            // Count by LIVE stage (current_step_name), same as the tiles.
+            const cnt = (stage) => stage === '' ? visible.length : visible.filter(r => stageOf(r) === stage).length;
+            const CHIP_PALETTE = [
+              'bg-amber-100 text-amber-700 border-amber-200',
+              'bg-orange-100 text-orange-700 border-orange-200',
+              'bg-purple-100 text-purple-700 border-purple-200',
+              'bg-indigo-100 text-indigo-700 border-indigo-200',
+              'bg-sky-100 text-sky-700 border-sky-200',
+            ];
+            const presentStages = STAGE_SEQ.filter(st => visible.some(r => stageOf(r) === st));
             const chips = [
-              { id: 'all',  status: '',                  label: 'All',                    color: 'bg-blue-100 text-blue-700 border-blue-200' },
-              { id: 'pen',  status: 'pending',           label: 'HR Approval',            color: 'bg-amber-100 text-amber-700 border-amber-200' },
-              { id: 's1',   status: 'step1_approved',    label: 'Accountant Approval',    color: 'bg-orange-100 text-orange-700 border-orange-200' },
-              { id: 'acc',  status: 'accounts_approved', label: 'Dues Check',             color: 'bg-purple-100 text-purple-700 border-purple-200' },
-              { id: 'dues', status: 'dues_checked',      label: 'Velocity Check',         color: 'bg-indigo-100 text-indigo-700 border-indigo-200' },
-              { id: 'velo', status: 'velocity_checked',  label: 'Payment Release',        color: 'bg-sky-100 text-sky-700 border-sky-200' },
-              { id: 'fin',  status: 'final_approved',    label: 'Approved',               color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
-              { id: 'rej',  status: 'rejected',          label: 'Rejected',               color: 'bg-rose-100 text-rose-700 border-rose-200' },
+              { id: 'all', stage: '', label: 'All', color: 'bg-blue-100 text-blue-700 border-blue-200' },
+              ...presentStages.map((st, i) => ({ id: st, stage: st, label: st, color: CHIP_PALETTE[i % CHIP_PALETTE.length] })),
+              { id: 'fin', stage: 'Approved', label: 'Approved', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+              { id: 'rej', stage: 'Rejected', label: 'Rejected', color: 'bg-rose-100 text-rose-700 border-rose-200' },
             ];
             return (
               <div className="flex gap-1.5 flex-wrap items-center">
                 <span className="text-[10px] uppercase font-semibold text-gray-500 mr-1">Filter:</span>
                 {chips.map(c => {
-                  const n = cnt(c.status === '' ? null : c.status);
-                  const active = (filters.status || '') === c.status;
+                  const n = cnt(c.stage);
+                  const active = (stageFilter || '') === c.stage && c.stage !== '';
                   return (
                     <button
                       key={c.id}
-                      onClick={() => setFilters(f => ({ ...f, status: active ? '' : c.status }))}
+                      onClick={() => setStageFilter(active ? '' : c.stage)}
                       className={`text-xs font-semibold px-2.5 py-1 rounded-full border transition flex items-center gap-1.5 ${
                         active
                           ? `${c.color} ring-2 ring-offset-1 ring-red-400`
@@ -490,9 +503,11 @@ export default function PaymentRequired() {
             <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody>
               {(tab === 'inbox' ? myInbox : requests).filter(r => {
-                if (tab === 'pending') return !['final_approved', 'rejected'].includes(r.status);
-                if (tab === 'approved') return r.status === 'final_approved';
-                if (tab === 'rejected') return r.status === 'rejected';
+                if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
+                if (tab === 'approved' && r.status !== 'final_approved') return false;
+                if (tab === 'rejected' && r.status !== 'rejected') return false;
+                // Live-stage filter set by clicking a stage tile / chip.
+                if (stageFilter && stageOf(r) !== stageFilter) return false;
                 return true;
               }).map(r => (
                 <tr key={r.id}>
