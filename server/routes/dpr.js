@@ -1460,14 +1460,18 @@ function progressHandler(req, res) {
   const uid = req.user.id;
   const canSeeAll = dprCanSeeAll(db, req.user);
 
-  // 1) Engineer pool
+  // 1) Engineer pool — ONLY users with the Site Engineer role.
+  //    Mam (2026-05-30): "why admin here" — the generic Admin account
+  //    (0 sites) was leaking in via the old `OR u.role='admin'` clause.
+  //    Dropped, to match the Engineer Compliance pool above.
   let engineers = db.prepare(`
     SELECT DISTINCT u.id, u.name, u.email
-    FROM users u
-    LEFT JOIN user_roles ur ON u.id = ur.user_id
-    LEFT JOIN roles r ON ur.role_id = r.id
-    WHERE u.active=1 AND (r.name='Site Engineer' OR u.role='admin')
-    ORDER BY u.name
+      FROM users u
+      JOIN user_roles ur ON ur.user_id = u.id
+      JOIN roles r       ON r.id = ur.role_id
+     WHERE u.active = 1
+       AND r.name = 'Site Engineer'
+     ORDER BY u.name
   `).all();
   if (!canSeeAll) engineers = engineers.filter(e => e.id === uid);
   if (engineers.length === 0) return res.json([]);
