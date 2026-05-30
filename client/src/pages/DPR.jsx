@@ -12,9 +12,9 @@ import { exportCsv } from '../utils/exportCsv';
 // Mam (2026-05-30): the PO/BOQ rate is the FULL SITC value (Supply +
 // Installation + Testing & Commissioning) and already includes labour.
 // The DPR's Table A rate should carry only the labour portion, taken as
-// 6% of the SITC rate (e.g. 1810 → 108.6). Until real labour rates are
-// collected, this 6% is the agreed placeholder.
-const LABOUR_RATE_PCT = 0.06;
+// 11% of the SITC rate (e.g. 1810 → 199.1). Until real labour rates are
+// collected, this 11% is the agreed placeholder.
+const LABOUR_RATE_PCT = 0.11;
 
 const SYSTEMS = ['Electrical', 'Fire Fighting', 'Fire Alarm', 'CCTV', 'Access Control', 'PA System', 'Plumbing', 'HVAC', 'Solar', 'Networking', 'Combined'];
 const EQUIPMENT_LIST = ['Welding Machine', 'Pipe Threading Machine', 'Drill Machine', 'Grinder', 'Ladder', 'Scaffolding', 'Pipe Bending Machine', 'Cable Pulling Machine', 'Multimeter', 'Megger', 'Earth Tester', 'Hydro Test Pump', 'Generator', 'Compressor'];
@@ -254,8 +254,8 @@ export default function DPR() {
     n[i].filled_qty = item?.filled_qty || 0;
     // Auto-fill the DPR rate from the PO item. The PO rate is the full
     // SITC value (incl. labour); the DPR carries only the labour portion
-    // = 6% of SITC (LABOUR_RATE_PCT). Keep the original SITC on the row
-    // so the UI can show "6% of SITC ₹X". Rate can still be overridden.
+    // = 11% of SITC (LABOUR_RATE_PCT). Keep the original SITC on the row
+    // so the UI can show "11% of SITC ₹X". Rate can still be overridden.
     if (item) {
       const sitc = +item.rate || 0;
       n[i].sitc_rate = sitc;
@@ -828,7 +828,7 @@ export default function DPR() {
                       <input className="input text-sm w-full" type="number" placeholder="Rate" value={w.rate || ''} onChange={e => updateWork(i, 'rate', +e.target.value)} />
                       {w.sitc_rate > 0 && (
                         <div className="text-[9px] leading-tight mt-0.5 text-gray-500">
-                          Labour = 6% of SITC ₹{(+w.sitc_rate).toLocaleString('en-IN')}
+                          Labour = 11% of SITC ₹{(+w.sitc_rate).toLocaleString('en-IN')}
                         </div>
                       )}
                     </div>

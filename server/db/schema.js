@@ -2471,6 +2471,11 @@ function initializeDatabase() {
     ['business_book', 'labour_rate_file_link TEXT'],
     ['dpr_work_items', 'labour_rate REAL DEFAULT 0'],
     ['dpr_work_items', 'labour_amount REAL DEFAULT 0'],
+    // Marks a DPR whose Table A rate already represents the labour portion
+    // (11% of SITC) rather than the full SITC. New DPRs are saved with this
+    // = 1; the one-time labour-pct backfill (below) converts pre-existing
+    // DPRs (where it's 0) exactly once, so it never double-scales on restart.
+    ['dpr', 'labour_pct_applied INTEGER DEFAULT 0'],
     // Indent items now pick from item_master; keeps backward-compat description too
     ['indent_items', 'item_master_id INTEGER REFERENCES item_master(id)'],
     ['indent_items', 'make TEXT'],                 // e.g. "Schneider", "L&T"
@@ -3148,6 +3153,63 @@ function initializeDatabase() {
     if (r.changes > 0) console.log(`[backfill] po_items.po_id: linked ${r.changes} orphan items to their most-recent PO`);
   } catch (e) {
     console.warn('[backfill] po_items.po_id link failed:', e.message);
+  }
+
+  // ─── One-time backfill: historical DPR Table A → labour (11% of SITC) ──
+  // Mam (2026-05-30): the BOQ/PO rate is the full SITC value (Supply +
+  // Installation + T&C) and already includes labour; the DPR should carry
+  // only the labour portion = 11% of SITC. New DPRs are saved by the app
+  // already in labour terms (dpr.labour_pct_applied = 1). This block scales
+  // every PRE-EXISTING DPR's Table A — dpr_work_items.rate/amount and
+  // dpr.grand_total_a — by 11% and recomputes profit_loss = grand_total_a − B,
+  // so past Profit/Loss reflects labour cost. Guarded by labour_pct_applied
+  // so each DPR converts EXACTLY ONCE (never double-scales, even on restart).
+  const LABOUR_PCT = 0.11;
+  try {
+    const pending = db.prepare(`SELECT COUNT(*) AS c FROM dpr WHERE COALESCE(labour_pct_applied,0) = 0`).get();
+    if (pending.c > 0) {
+      // Safety backup BEFORE mutating financial history. Checkpoint the WAL
+      // into the main file first so the copy is complete, then snapshot to
+      // /backups. If the backup can't be written, ABORT — never convert
+      // irreversibly without a restore point.
+      const fs = require('fs');
+      try {
+        db.pragma('wal_checkpoint(TRUNCATE)');
+        const backupsDir = path.join(__dirname, '..', '..', 'backups');
+        if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
+        const d = new Date();
+        const p2 = (n) => String(n).padStart(2, '0');
+        const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+        const backupPath = path.join(backupsDir, `erp-before-labour-pct-${stamp}.db`);
+        fs.copyFileSync(DB_PATH, backupPath);
+        console.log(`[labour-pct] DB backed up to ${backupPath} before conversion`);
+      } catch (be) {
+        console.error('[labour-pct] BACKUP FAILED — aborting conversion to protect data:', be.message);
+        throw be;
+      }
+
+      const convert = db.transaction(() => {
+        db.prepare(`
+          UPDATE dpr_work_items
+             SET rate   = ROUND(rate   * ${LABOUR_PCT}, 2),
+                 amount = ROUND(amount * ${LABOUR_PCT}, 2)
+           WHERE dpr_id IN (SELECT id FROM dpr WHERE COALESCE(labour_pct_applied,0) = 0)
+        `).run();
+        // RHS reads the ORIGINAL row values, so profit_loss uses the
+        // pre-scale grand_total_a while grand_total_a is itself scaled.
+        db.prepare(`
+          UPDATE dpr
+             SET profit_loss        = ROUND(grand_total_a * ${LABOUR_PCT}, 2) - grand_total_b,
+                 grand_total_a      = ROUND(grand_total_a * ${LABOUR_PCT}, 2),
+                 labour_pct_applied = 1
+           WHERE COALESCE(labour_pct_applied,0) = 0
+        `).run();
+      });
+      convert();
+      console.log(`[labour-pct] Converted ${pending.c} historical DPR(s) to labour rate (${Math.round(LABOUR_PCT * 100)}% of SITC)`);
+    }
+  } catch (e) {
+    console.error('[labour-pct] conversion failed:', e.message);
   }
 
   // ─── PERFORMANCE INDEXES on hot tables (fast page loads) ───────────

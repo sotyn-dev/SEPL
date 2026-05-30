@@ -738,7 +738,10 @@ router.post('/', (req, res) => {
         grand_total_a = ?, grand_total_b = ?, profit_loss = ?,
         floor_zone = ?, system_type = ?, safety_toolbox_talk = ?, safety_ppe_compliance = ?,
         safety_incidents = ?, next_day_plan = ?, hindrances = ?, hindrance_category = ?, remarks = ?,
-        is_planned_template = 0
+        is_planned_template = 0,
+        -- Rates sent by the app are already the labour portion (11% of SITC),
+        -- so flag this DPR as converted — the labour-pct backfill skips it.
+        labour_pct_applied = 1
       WHERE id = ?`)
       .run(req.user.id, weather || 'clear', overall_status || 'on_track',
         shift || 'day', contractor_name, contractor_manpower || 0, mb_sheet_no,
@@ -751,7 +754,7 @@ router.post('/', (req, res) => {
     const r = db.prepare(`INSERT INTO dpr (site_id, report_date, submitted_by, submission_time, weather, overall_status,
       shift, contractor_name, contractor_manpower, mb_sheet_no, grand_total_a, grand_total_b, profit_loss,
       floor_zone, system_type, safety_toolbox_talk, safety_ppe_compliance, safety_incidents,
-      next_day_plan, hindrances, hindrance_category, remarks) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      next_day_plan, hindrances, hindrance_category, remarks, labour_pct_applied) VALUES (?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`)
       .run(site_id, report_date, req.user.id, weather || 'clear', overall_status || 'on_track',
         shift || 'day', contractor_name, contractor_manpower || 0, mb_sheet_no,
         grand_total_a || 0, grand_total_b || 0, profit_loss || 0,
