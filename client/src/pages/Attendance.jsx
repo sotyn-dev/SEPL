@@ -39,6 +39,9 @@ export default function Attendance() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [modal, setModal] = useState(null);
+  // Click any attendance selfie thumbnail to open it enlarged. Holds
+  // { src, label } of the photo being viewed, or null when closed.
+  const [lightbox, setLightbox] = useState(null);
   const [form, setForm] = useState({});
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const videoRef = useRef(null);
@@ -424,7 +427,7 @@ export default function Attendance() {
                   <td className="text-red-600 text-xs">{r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}{r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                   <td className="font-semibold">{r.total_hours || '-'}</td>
                   <td><StatusBadge status={r.status} /></td>
-                  <td>{r.punch_in_photo && <img src={r.punch_in_photo} alt="" className="w-10 h-8 rounded object-cover" />}</td>
+                  <td>{r.punch_in_photo && <img src={r.punch_in_photo} alt="" onClick={() => setLightbox({ src: r.punch_in_photo, label: `${r.user_name} — Punch In` })} className="w-10 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" />}</td>
                 </tr>
               ))}</tbody>
             </table></div>
@@ -452,8 +455,8 @@ export default function Attendance() {
                 <td className="font-semibold">{r.total_hours || '-'}</td>
                 <td className="text-xs">{r.site_name || '-'}</td>
                 <td><StatusBadge status={r.status} /></td>
-                <td>{r.punch_in_photo && <img src={r.punch_in_photo} alt="" className="w-10 h-8 rounded object-cover" />}</td>
-                <td>{r.punch_out_photo && <img src={r.punch_out_photo} alt="" className="w-10 h-8 rounded object-cover" />}</td>
+                <td>{r.punch_in_photo && <img src={r.punch_in_photo} alt="" onClick={() => setLightbox({ src: r.punch_in_photo, label: `${r.user_name} — Punch In` })} className="w-10 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" />}</td>
+                <td>{r.punch_out_photo && <img src={r.punch_out_photo} alt="" onClick={() => setLightbox({ src: r.punch_out_photo, label: `${r.user_name} — Punch Out` })} className="w-10 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" />}</td>
                 <td>{canDelete('attendance') && <button onClick={async () => {
                   if (!confirm(`Delete attendance record for "${r.user_name}" on ${r.date}?`)) return;
                   try { await api.delete(`/attendance/${r.id}`); toast.success('Deleted'); load(); }
@@ -586,8 +589,8 @@ export default function Attendance() {
                           <td className="px-2 py-2 text-center"><StatusBadge status={r.status} /></td>
                           <td className="px-2 py-2">
                             <div className="flex gap-1 justify-center">
-                              {r.punch_in_photo && <img src={r.punch_in_photo} alt="In" className="w-8 h-8 rounded object-cover" title="Punch In" />}
-                              {r.punch_out_photo && <img src={r.punch_out_photo} alt="Out" className="w-8 h-8 rounded object-cover" title="Punch Out" />}
+                              {r.punch_in_photo && <img src={r.punch_in_photo} alt="In" onClick={() => setLightbox({ src: r.punch_in_photo, label: `Punch In — ${r.date || ''}` })} className="w-8 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" title="Punch In" />}
+                              {r.punch_out_photo && <img src={r.punch_out_photo} alt="Out" onClick={() => setLightbox({ src: r.punch_out_photo, label: `Punch Out — ${r.date || ''}` })} className="w-8 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" title="Punch Out" />}
                             </div>
                           </td>
                         </tr>
@@ -878,6 +881,27 @@ export default function Attendance() {
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save Geofence</button></div>
         </form>
       </Modal>
+
+      {/* Photo lightbox — click any attendance selfie to view it full-size.
+          Click the backdrop or the × to close. */}
+      {lightbox && (
+        <div
+          onClick={() => setLightbox(null)}
+          className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4"
+        >
+          <div className="relative max-w-2xl w-full" onClick={e => e.stopPropagation()}>
+            <button
+              onClick={() => setLightbox(null)}
+              className="absolute -top-3 -right-3 bg-white text-gray-700 rounded-full w-8 h-8 flex items-center justify-center shadow-lg hover:bg-gray-100 text-lg font-bold"
+              aria-label="Close"
+            >×</button>
+            <img src={lightbox.src} alt={lightbox.label || 'Attendance photo'} className="w-full max-h-[80vh] object-contain rounded-lg bg-white" />
+            {lightbox.label && (
+              <div className="mt-2 text-center text-white text-sm font-medium">{lightbox.label}</div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
