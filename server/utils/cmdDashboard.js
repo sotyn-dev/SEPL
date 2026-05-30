@@ -175,16 +175,22 @@ function computeCmdDetail(db, daysRaw) {
   ];
 
   // ── Funnel + Sales ─────────────────────────────────────────────
-  // Leads / quoted / won counts in the window
-  const leadsCount = num(safeGet(db, `SELECT COUNT(*) c FROM leads WHERE date(created_at) >= ?`, from)?.c);
-  const wonCount = num(safeGet(db, `SELECT COUNT(*) c FROM leads WHERE date(created_at) >= ? AND status='won'`, from)?.c);
+  // Leads / qualified / won counts in the window — sourced from the LIVE
+  // Sales Funnel (sales_funnel, 11-stage), NOT the legacy `leads` table.
+  // Mam (2026-05-30): the War Room showed "1 leads" because it counted the
+  // near-empty legacy `leads` table instead of the real funnel. "won" here
+  // = funnel deals reaching contract_signed / won.
+  const WON_STAGES = "('contract_signed','won')";
+  const leadsCount = num(safeGet(db, `SELECT COUNT(*) c FROM sales_funnel WHERE date(created_at) >= ?`, from)?.c);
+  const qualifiedCount = num(safeGet(db, `SELECT COUNT(*) c FROM sales_funnel WHERE date(created_at) >= ? AND is_qualified = 1`, from)?.c);
+  const wonCount = num(safeGet(db, `SELECT COUNT(*) c FROM sales_funnel WHERE date(created_at) >= ? AND current_stage IN ${WON_STAGES}`, from)?.c);
   const quotedCount = num(safeGet(db, `SELECT COUNT(*) c FROM quotations WHERE date(created_at) >= ?`, from)?.c);
   const negotiationCount = num(safeGet(db, `SELECT COUNT(*) c FROM crm_funnel WHERE date(created_at) >= ? AND quotation_submitted = 1 AND (final_status IS NULL OR final_status='')`, from)?.c);
   const billedCount = num(safeGet(db, `SELECT COUNT(*) c FROM sales_bills WHERE date(bill_date) >= ?`, from)?.c);
   const collectedCount = num(safeGet(db, `SELECT COUNT(*) c FROM sales_bills WHERE date(bill_date) >= ? AND payment_status='paid'`, from)?.c);
   const funnel = {
     leads: leadsCount,
-    qualified: Math.round(leadsCount * 0.78),  // proxy; no qualified flag yet
+    qualified: qualifiedCount,  // live sales_funnel.is_qualified count
     quoted: quotedCount,
     pos: num(safeGet(db, `SELECT COUNT(*) c FROM purchase_orders WHERE date(created_at) >= ?`, from)?.c),
     in_execution: num(safeGet(db, `SELECT COUNT(*) c FROM purchase_orders WHERE status='in_progress'`)?.c),
@@ -240,14 +246,15 @@ function computeCmdDetail(db, daysRaw) {
     ORDER BY q.created_at ASC LIMIT 8
   `);
 
-  // Conversion by lead source — from leads + lead_sources, status='won'
+  // Conversion by source — from the LIVE sales_funnel (source text column),
+  // won = stage reached contract_signed / won.
   const conversionBySource = safeAll(db, `
-    SELECT ls.name source,
+    SELECT COALESCE(NULLIF(TRIM(source),''),'Unknown') source,
            COUNT(*) total,
-           SUM(CASE WHEN l.status='won' THEN 1 ELSE 0 END) won
-    FROM leads l JOIN lead_sources ls ON l.source_id = ls.id
-    WHERE date(l.created_at) >= ?
-    GROUP BY ls.name HAVING total > 0
+           SUM(CASE WHEN current_stage IN ${WON_STAGES} THEN 1 ELSE 0 END) won
+    FROM sales_funnel
+    WHERE date(created_at) >= ?
+    GROUP BY COALESCE(NULLIF(TRIM(source),''),'Unknown') HAVING total > 0
     ORDER BY (1.0 * won / total) DESC
   `, from).map(r => ({
     source: r.source, total: r.total, won: r.won,
@@ -298,12 +305,12 @@ function computeCmdDetail(db, daysRaw) {
     GROUP BY category ORDER BY value DESC LIMIT 6
   `);
 
-  // Lead source mix
+  // Lead source mix — live sales_funnel.source
   const leadSourceMix = safeAll(db, `
-    SELECT ls.name source, COUNT(*) cnt
-    FROM leads l JOIN lead_sources ls ON l.source_id = ls.id
-    WHERE date(l.created_at) >= ?
-    GROUP BY ls.name ORDER BY cnt DESC
+    SELECT COALESCE(NULLIF(TRIM(source),''),'Unknown') source, COUNT(*) cnt
+    FROM sales_funnel
+    WHERE date(created_at) >= ?
+    GROUP BY COALESCE(NULLIF(TRIM(source),''),'Unknown') ORDER BY cnt DESC
   `, from);
 
   // ── Site execution ────────────────────────────────────────────
