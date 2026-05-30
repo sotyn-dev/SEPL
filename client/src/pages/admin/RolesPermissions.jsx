@@ -42,6 +42,7 @@ const ALL_MODULES = [
   { key: 'sub_contractors', label: 'Sub-Contractors' },
   { key: 'customers', label: 'Customers' },
   { key: 'procurement', label: 'Indent to Dispatch' },
+  { key: 'procurement_schedule', label: 'Schedule (Gantt)' },
   { key: 'indent_fms', label: 'Indent FMS (legacy)' },
   { key: 'inventory', label: 'Inventory' },
 
@@ -55,6 +56,7 @@ const ALL_MODULES = [
 
   // — HR / People
   { key: 'hr_system', label: 'HR System (recruitment / ATS / offers)' },
+  { key: 'subcon_hiring', label: 'Sub-contractor Hiring' },
   { key: 'hr', label: 'HR & Hiring (legacy)' },
   { key: 'payroll', label: 'Payroll' },
   { key: 'scoring', label: 'Weekly Score' },

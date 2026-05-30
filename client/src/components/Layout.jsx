@@ -91,7 +91,7 @@ const SIDEBAR_GROUPS = [
   // Dispatch" to match the page header.
   { id: 'procurement', label: 'Procurement', icon: FiShoppingBag, items: [
     { path: '/item-master',          label: 'Items',              icon: FiGrid,         module: 'item_master' },
-    { path: '/price-required',       label: 'RFQ Queue',          icon: FiInbox,        module: null },
+    { path: '/price-required',       label: 'RFQ Queue',          icon: FiInbox,        module: null, open: true },
     { path: '/vendors',              label: 'Vendors',            icon: FiTag,          module: 'vendors' },
     { path: '/procurement',          label: 'Indent to Dispatch', icon: FiTruck,        module: 'procurement' },
     { path: '/orders',               label: 'Order to Planning',  icon: FiShoppingCart, module: 'orders' },
@@ -122,8 +122,8 @@ const SIDEBAR_GROUPS = [
     // Mam 2026-05-28: 14-step / 2-phase sub-con hiring tracker, mirrors
     // the Hiring funnel but for sub-contractors (per the flowchart).
     { path: '/subcon-hiring',   label: 'Sub-contractor Hiring',     icon: FiGitMerge,   module: 'subcon_hiring' },
-    { path: '/induction',       label: 'Onboarding',                icon: FiHelpCircle, module: null },
-    { path: '/training',        label: 'Training',                  icon: FiBookOpen,   module: null },
+    { path: '/induction',       label: 'Onboarding',                icon: FiHelpCircle, module: null, open: true },
+    { path: '/training',        label: 'Training',                  icon: FiBookOpen,   module: null, open: true },
     { path: '/attendance',      label: 'Attendance',                icon: FiCalendar,   module: 'attendance' },
     { path: '/payroll',         label: 'Payroll',                   icon: FiDollarSign, module: 'payroll' },
     { path: '/employees',       label: 'Employees',                 icon: FiAtSign,     module: 'employees' },
@@ -144,7 +144,7 @@ const SIDEBAR_GROUPS = [
   ]},
   { id: 'service_desk', label: 'Service Desk', icon: FiPhoneCall, items: [
     { path: '/complaints',   label: 'Complaints',   icon: FiAlertTriangle,  module: 'complaints' },
-    { path: '/help-tickets', label: 'Help Tickets', icon: FiMessageCircle,  module: null },
+    { path: '/help-tickets', label: 'Help Tickets', icon: FiMessageCircle,  module: null, open: true },
   ]},
   // Executive group — 3 dashboards (mam 2026-05-27).
   { id: 'executive', label: 'Executive', icon: FiStar, adminOnly: true, items: [
@@ -333,8 +333,15 @@ export default function Layout() {
     }
   }, [location.pathname]);
 
-  // module === null means "always visible" (e.g. Help Tickets — open to everyone)
-  const itemVisible = (item) => item.module == null || canView(item.module);
+  // Visibility (mam 2026-05-30: "when i create new module it shows to
+  // everyone"). A new module is now HIDDEN by default until it's granted
+  // in Roles & Permissions. An item is visible only if:
+  //   • it's explicitly flagged `open: true` (the few features open to all
+  //     staff — Help Tickets, Onboarding, Training, RFQ Queue), OR
+  //   • the role can view its `module` (admin passes everything via canView).
+  // An item with no `open` flag and no/unknown module is hidden for
+  // non-admins — so forgetting to wire a permission key no longer leaks it.
+  const itemVisible = (item) => item.open === true || canView(item.module);
   // A group renders only if (a) it has at least one visible item AND
   // matches the current search (or search is empty), and (b) the user
   // passes any adminOnly gate. Hidden helper items (the 2 legacy CMD

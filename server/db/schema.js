@@ -3837,7 +3837,17 @@ in your first week. If a process feels broken, raise a Help Ticket
     }
   }
 
-  // Migration: ensure ALL modules have permission rows for ALL roles
+  // Migration: ensure ALL modules have permission rows for ALL roles.
+  //
+  // Mam (2026-05-30): "when i create new module it shows to everyone."
+  // The old default below granted can_view=1 to EVERY role for EVERY
+  // module, so each newly added module auto-appeared for all roles. The
+  // default is now DENY (can_view=0) for non-admins — a new module stays
+  // hidden until an admin grants it in Roles & Permissions. INSERT OR
+  // IGNORE means this only writes rows that don't exist yet, so existing
+  // access (already-seeded modules) is preserved — nobody is locked out.
+  // Admin always gets full access; the few role-specific seeds below are
+  // first-run conveniences for known modules only.
   const allRoles = db.prepare('SELECT id, name FROM roles').all();
   const insertPermIfMissing = db.prepare('INSERT OR IGNORE INTO role_permissions (role_id, module, can_view, can_create, can_edit, can_delete, can_approve) VALUES (?,?,?,?,?,?,?)');
   for (const role of allRoles) {
@@ -3853,7 +3863,8 @@ in your first week. If a process feels broken, raise a Help Ticket
         } else if (role.name === 'Accountant' && (mod === 'cashflow' || mod === 'collections' || mod === 'payment_required')) {
           insertPermIfMissing.run(role.id, mod, 1, 1, 1, 0, 1);
         } else {
-          insertPermIfMissing.run(role.id, mod, 1, 0, 0, 0, 0);
+          // Default DENY — new modules are hidden until explicitly granted.
+          insertPermIfMissing.run(role.id, mod, 0, 0, 0, 0, 0);
         }
       }
     }
