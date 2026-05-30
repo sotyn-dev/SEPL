@@ -38,12 +38,16 @@ function isPunchLate(db, whenIso) {
 }
 
 // GET today's attendance for current user.
-// Admin-marked rows are intentionally hidden from the user (mam's request:
-// admin can back-fill present without the user seeing they were marked).
+// Manual admin back-fills DO show on the user's own view now (mam 2026-05-30:
+// "i marked previous attendance but not show") — so a day an admin marked
+// present/half-day appears on the employee's calendar. Only the silent
+// auto-mark allow-list rows stay hidden (they're a convenience flag, not a
+// real presence the user should see).
 router.get('/my-today', (req, res) => {
   const today = new Date().toISOString().split('T')[0];
   const record = getDb().prepare(
-    'SELECT * FROM attendance WHERE user_id=? AND date=? AND COALESCE(admin_marked,0)=0'
+    `SELECT * FROM attendance WHERE user_id=? AND date=?
+        AND NOT (COALESCE(admin_marked,0)=1 AND COALESCE(remarks,'')='Auto-marked (allow-list)')`
   ).get(req.user.id, today);
   res.json(record || null);
 });
@@ -63,13 +67,14 @@ router.get('/my-month', (req, res) => {
   const monthEnd = `${year}-${pad(month)}-${pad(lastDay)}`;
 
   // Pull attendance + leave records for this user, this month.
-  // Skip admin_marked rows so user-facing views don't reveal admin-overridden
-  // presence (mam's policy).
+  // Manual admin back-fills are included so they show on the calendar
+  // (mam 2026-05-30: "i marked previous attendance but not show").
+  // Only the silent auto-mark allow-list rows stay hidden.
   const attendance = db.prepare(
     `SELECT date, status, punch_in_time, punch_out_time, total_hours
        FROM attendance
       WHERE user_id=? AND date BETWEEN ? AND ?
-        AND COALESCE(admin_marked,0)=0
+        AND NOT (COALESCE(admin_marked,0)=1 AND COALESCE(remarks,'')='Auto-marked (allow-list)')
       ORDER BY date`
   ).all(req.user.id, monthStart, monthEnd);
 
