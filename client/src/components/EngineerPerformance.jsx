@@ -69,8 +69,9 @@ export default function EngineerPerformance() {
       || (st.client_name || '').toLowerCase().includes(s));
   });
 
-  // CSV export — one row per (engineer, site) so mam can pivot in Excel.
-  // Includes Avg Manpower so the spreadsheet matches the card.
+  // CSV export — one row per (engineer, site).  Mam (2026-05-30):
+  // "not need 60 total only avg manpower" — only the per-DPR average
+  // ships in the spreadsheet now.
   const exportRows = () => {
     const rows = [];
     filtered.forEach(e => {
@@ -79,7 +80,6 @@ export default function EngineerPerformance() {
         rows.push({
           Engineer: e.engineer_name, Site: '(no sites assigned)', Client: '',
           'Days Present': 0, 'DPR Filled': 0, Gap: 0,
-          'Total Manpower': e.manpower_total || 0,
           'Avg Manpower / DPR': avg,
           'Profit/Loss': 0,
         });
@@ -87,7 +87,6 @@ export default function EngineerPerformance() {
         e.sites.forEach(s => rows.push({
           Engineer: e.engineer_name, Site: s.site_name, Client: s.client_name || '',
           'Days Present': s.days_present, 'DPR Filled': s.days_dpr_filled, Gap: s.gap,
-          'Total Manpower (engineer)': e.manpower_total || 0,
           'Avg Manpower / DPR (engineer)': avg,
           'Profit/Loss': s.profit_loss,
         }));
@@ -164,11 +163,12 @@ export default function EngineerPerformance() {
           <div className="text-2xl font-bold text-indigo-600">{data.totals?.days_dpr_filled || 0}</div>
           <div className="text-xs text-gray-500">DPRs Filed</div>
         </div>
+        {/* Mam (2026-05-30): "not need 60 total only avg manpower" —
+            drop the big total, lead with the avg / DPR figure. */}
         <div className="card text-center border-l-4 border-amber-500 py-2"
-             title="Total manpower = contractor + skilled + helper across all DPRs in range. Avg = total / DPRs filed.">
-          <div className="text-2xl font-bold text-amber-600">{data.totals?.manpower || 0}</div>
-          <div className="text-xs text-gray-500">Total Manpower</div>
-          <div className="text-[10px] text-amber-700 font-semibold mt-0.5">avg {overallAvgMp} / DPR</div>
+             title="Avg manpower per DPR = total manpower (contractor + skilled + helper) ÷ DPRs filed in range.">
+          <div className="text-2xl font-bold text-amber-600">{overallAvgMp}</div>
+          <div className="text-xs text-gray-500">Avg Manpower / DPR</div>
         </div>
         <div className={`card text-center border-l-4 ${(data.totals?.profit_loss || 0) >= 0 ? 'border-emerald-500' : 'border-red-500'} py-2`}>
           <div className={`text-xl font-bold ${(data.totals?.profit_loss || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
@@ -220,14 +220,12 @@ export default function EngineerPerformance() {
                     <div className={`text-lg font-bold ${eng.gap_total > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{eng.gap_total}</div>
                     <div className="text-[10px] text-gray-500 uppercase">Gap</div>
                   </div>
+                  {/* Mam (2026-05-30): show ONLY avg manpower per DPR,
+                      drop the total.  Tooltip still spells out the math
+                      so the calculation is verifiable on hover. */}
                   <div title={`Total ${eng.manpower_total || 0} ÷ ${eng.days_dpr_filled_total || 0} DPRs = ${avgMp} avg`}>
-                    <div className="text-lg font-bold text-amber-600">{eng.manpower_total || 0}</div>
-                    <div className="text-[10px] text-gray-500 uppercase">Manpower</div>
-                    {/* Mam (2026-05-30): "i need avg manpower like
-                        gurcharan if 60 total manpower 60/5 avg is 12". */}
-                    <div className="text-[10px] text-amber-700 font-semibold leading-tight">
-                      avg {avgMp}
-                    </div>
+                    <div className="text-lg font-bold text-amber-600">{avgMp}</div>
+                    <div className="text-[10px] text-gray-500 uppercase">Avg MP</div>
                   </div>
                 </div>
                 {/* P&L band */}
