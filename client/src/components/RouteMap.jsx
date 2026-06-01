@@ -28,9 +28,31 @@ const colored = (color) =>
     iconAnchor: [7, 7],
   });
 
+// Coerce + validate a ping's lat/lng — Leaflet's LatLng constructor
+// internally accesses `.lat` on the input, so a single null or NaN
+// coord blows up the whole map render with "Cannot read properties of
+// null (reading 'lat')".  Mam hit this in prod on the Timeline tab
+// when one of the day's pings had NULL coordinates (cell-tower
+// triangulation glitch, GPS_OFF marker rows, or schema-default rows).
+function isValidCoord(p) {
+  if (!p) return false;
+  const lat = Number(p.latitude);
+  const lng = Number(p.longitude);
+  return Number.isFinite(lat) && Number.isFinite(lng)
+    && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180
+    && !(lat === 0 && lng === 0);  // (0,0) is almost always a GPS-off sentinel
+}
+
 export default function RouteMap({ pings = [], geofences = [], height = 360 }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
+
+  // Filter to only pings with usable coordinates BEFORE anything
+  // touches Leaflet.  Empty result → friendly empty state.  We
+  // recompute inside the effect too so the effect's deps stay
+  // referentially stable (original prop arrays).
+  const validPings = (pings || []).filter(isValidCoord);
+  const validGeofences = (geofences || []).filter(isValidCoord);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -38,7 +60,9 @@ export default function RouteMap({ pings = [], geofences = [], height = 360 }) {
       mapRef.current.remove();
       mapRef.current = null;
     }
-    if (pings.length === 0) return;
+    const validPings    = (pings    || []).filter(isValidCoord);
+    const validGeofences = (geofences || []).filter(isValidCoord);
+    if (validPings.length === 0) return;
 
     // Initialise map centred on the first ping
     const map = L.map(containerRef.current, { zoomControl: true });
@@ -49,8 +73,7 @@ export default function RouteMap({ pings = [], geofences = [], height = 360 }) {
     }).addTo(map);
 
     // Office geofences (faint blue circles)
-    for (const g of geofences) {
-      if (g.latitude == null || g.longitude == null) continue;
+    for (const g of validGeofences) {
       L.circle([g.latitude, g.longitude], {
         radius: g.radius_meters || 200,
         color: '#3b82f6',
@@ -63,7 +86,7 @@ export default function RouteMap({ pings = [], geofences = [], height = 360 }) {
     }
 
     // Day's route as red polyline
-    const latlngs = pings.map((p) => [p.latitude, p.longitude]);
+    const latlngs = validPings.map((p) => [Number(p.latitude), Number(p.longitude)]);
     const route = L.polyline(latlngs, {
       color: '#dc2626',
       weight: 4,
@@ -72,11 +95,12 @@ export default function RouteMap({ pings = [], geofences = [], height = 360 }) {
     }).addTo(map);
 
     // Direction arrows along the line — manual midpoint markers every Nth ping
-    const arrowEvery = Math.max(1, Math.floor(pings.length / 10));
-    pings.forEach((p, i) => {
-      if (i === 0 || i === pings.length - 1) return;
+    const arrowEvery = Math.max(1, Math.floor(validPings.length / 10));
+    validPings.forEach((p, i) => {
+      if (i === 0 || i === validPings.length - 1) return;
       if (i % arrowEvery !== 0) return;
-      L.circleMarker([p.latitude, p.longitude], {
+      const lat = Number(p.latitude), lng = Number(p.longitude);
+      L.circleMarker([lat, lng], {
         radius: 3,
         color: '#dc2626',
         fillColor: '#dc2626',
@@ -84,32 +108,32 @@ export default function RouteMap({ pings = [], geofences = [], height = 360 }) {
         weight: 0,
       })
         .bindTooltip(
-          `${p.time_str || p.time || ''}<br>${p.address || `${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}`}`,
+          `${p.time_str || p.time || ''}<br>${p.address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`}`,
           { direction: 'top' }
         )
         .addTo(map);
     });
 
     // Start (green) and End (red) markers
-    const start = pings[0];
-    const end = pings[pings.length - 1];
-    L.marker([start.latitude, start.longitude], { icon: colored('#10b981') })
+    const start = validPings[0];
+    const end = validPings[validPings.length - 1];
+    L.marker([Number(start.latitude), Number(start.longitude)], { icon: colored('#10b981') })
       .bindPopup(`<b>Start</b><br>${start.time_str || start.time || ''}<br>${start.address || ''}`)
       .addTo(map);
-    if (pings.length > 1) {
-      L.marker([end.latitude, end.longitude], { icon: colored('#dc2626') })
+    if (validPings.length > 1) {
+      L.marker([Number(end.latitude), Number(end.longitude)], { icon: colored('#dc2626') })
         .bindPopup(`<b>Last seen</b><br>${end.time_str || end.time || ''}<br>${end.address || ''}`)
         .addTo(map);
     }
 
     // Fit map to the polyline + geofences
     try {
-      const group = L.featureGroup([route, ...geofences.filter(g => g.latitude != null).map(g =>
+      const group = L.featureGroup([route, ...validGeofences.map(g =>
         L.circle([g.latitude, g.longitude], { radius: g.radius_meters || 200 })
       )]);
       map.fitBounds(group.getBounds(), { padding: [24, 24] });
     } catch {
-      map.setView([start.latitude, start.longitude], 14);
+      map.setView([Number(start.latitude), Number(start.longitude)], 14);
     }
 
     // Cleanup when component unmounts or pings change
@@ -121,10 +145,13 @@ export default function RouteMap({ pings = [], geofences = [], height = 360 }) {
     };
   }, [pings, geofences]);
 
-  if (!pings || pings.length === 0) {
+  if (validPings.length === 0) {
+    const droppedCount = (pings || []).length - validPings.length;
     return (
       <div className="card p-6 text-center text-gray-400 text-sm">
-        No GPS pings to plot on the map yet.
+        {droppedCount > 0
+          ? `No mappable GPS pings (${droppedCount} ping${droppedCount > 1 ? 's' : ''} had missing or invalid coordinates).`
+          : 'No GPS pings to plot on the map yet.'}
       </div>
     );
   }
