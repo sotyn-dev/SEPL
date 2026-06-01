@@ -49,6 +49,11 @@ export default function Locations() {
   const [live, setLive] = useState(null);
   const [staleMin, setStaleMin] = useState(30);
   const [liveLoading, setLiveLoading] = useState(false);
+  // Mam (2026-05-29): "not proper working" — page mixed Active /
+  // GPS Off / Offline alphabetically so the working employees were
+  // buried.  Status filter lets her drill into just one bucket.
+  // null = show all.
+  const [statusFilter, setStatusFilter] = useState(null);
 
   const loadLive = async () => {
     setLiveLoading(true);
@@ -167,9 +172,83 @@ export default function Locations() {
             </div>
           )}
 
+          {/* Status chip strip (counts + filter).
+              Mam (2026-05-29): "not proper working" — when most users
+              are GPS Off or Offline the page reads as broken even
+              though it's accurate.  Chips surface the breakdown and
+              let her drill into one bucket at a time. */}
+          {(() => {
+            if (!live || live.users.length === 0) return null;
+            const classify = (u) => {
+              const gpsOff = u.site_name === 'GPS_OFF' || u.latitude == null || u.longitude == null;
+              if (gpsOff) return 'gps_off';
+              if (u.minutes_ago != null && u.minutes_ago > FRESH_MAX_MIN) return 'offline';
+              return 'active';
+            };
+            const buckets = { active: 0, gps_off: 0, offline: 0 };
+            for (const u of live.users) buckets[classify(u)]++;
+            const chip = (key, label, color) => {
+              const active = statusFilter === key;
+              return (
+                <button key={key}
+                  onClick={() => setStatusFilter(active ? null : key)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${active
+                    ? `${color.activeBg} ${color.activeText} ${color.activeBorder}`
+                    : `${color.idleBg} ${color.idleText} ${color.idleBorder} hover:opacity-80`}`}>
+                  {label} <span className="ml-1 font-bold">{buckets[key]}</span>
+                </button>
+              );
+            };
+            return (
+              <div className="flex flex-wrap gap-2 items-center">
+                <button onClick={() => setStatusFilter(null)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${statusFilter === null
+                    ? 'bg-gray-800 text-white border-gray-800'
+                    : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
+                  All <span className="ml-1 font-bold">{live.users.length}</span>
+                </button>
+                {chip('active', 'Active now', {
+                  activeBg: 'bg-emerald-600', activeText: 'text-white', activeBorder: 'border-emerald-600',
+                  idleBg: 'bg-emerald-50', idleText: 'text-emerald-700', idleBorder: 'border-emerald-200',
+                })}
+                {chip('gps_off', 'GPS Off', {
+                  activeBg: 'bg-red-600', activeText: 'text-white', activeBorder: 'border-red-600',
+                  idleBg: 'bg-red-50', idleText: 'text-red-700', idleBorder: 'border-red-200',
+                })}
+                {chip('offline', 'Offline', {
+                  activeBg: 'bg-gray-600', activeText: 'text-white', activeBorder: 'border-gray-600',
+                  idleBg: 'bg-gray-100', idleText: 'text-gray-700', idleBorder: 'border-gray-300',
+                })}
+                {statusFilter && (
+                  <span className="text-[11px] text-gray-500 ml-1">click chip again to clear</span>
+                )}
+              </div>
+            );
+          })()}
+
           {live && live.users.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {live.users.map(u => {
+              {(() => {
+                // Sort: Active first (by recency), then GPS Off
+                // (by recency), then Offline (least-stale first).
+                // Inside each bucket, freshest pings rank higher
+                // so mam scans the most relevant rows first.
+                const STATUS_RANK = { active: 0, gps_off: 1, offline: 2 };
+                return [...live.users]
+                  .map(u => {
+                    const gpsOff = u.site_name === 'GPS_OFF' || u.latitude == null || u.longitude == null;
+                    const status = gpsOff ? 'gps_off'
+                                 : (u.minutes_ago != null && u.minutes_ago > FRESH_MAX_MIN ? 'offline' : 'active');
+                    return { u, status };
+                  })
+                  .filter(x => !statusFilter || x.status === statusFilter)
+                  .sort((a, b) => {
+                    const r = STATUS_RANK[a.status] - STATUS_RANK[b.status];
+                    if (r !== 0) return r;
+                    return (a.u.minutes_ago ?? 9e9) - (b.u.minutes_ago ?? 9e9);
+                  })
+                  .map(({ u }) => u);
+              })().map(u => {
                 // GPS_OFF = browser couldn't get a GPS fix though network
                 // reached us (permission denied / timed out). Red card.
                 const gpsOff = u.site_name === 'GPS_OFF' || u.latitude == null || u.longitude == null;
