@@ -18,6 +18,21 @@ import EngineerPerformance from '../components/EngineerPerformance';
 const LABOUR_RATE_PCT = 0.11;
 
 const SYSTEMS = ['Electrical', 'Fire Fighting', 'Fire Alarm', 'CCTV', 'Access Control', 'PA System', 'Plumbing', 'HVAC', 'Solar', 'Networking', 'Combined'];
+
+// Mam (2026-05-30): "MEPF System only :- Fire Fighting, Electrical,
+// Low Voltage, Plumbing, HVAC, Solar advance radio type button".
+// Tight 6-system list rendered as colour-coded chip radios instead
+// of a free-form dropdown.  Each entry carries the Tailwind colour
+// classes used when that chip is selected — pure CSS, no extra
+// dependency.
+const MEPF_SYSTEMS = [
+  { key: 'Fire Fighting', icon: '🔥', sel: 'bg-red-600 text-white border-red-600',          dot: 'bg-red-500' },
+  { key: 'Electrical',    icon: '⚡', sel: 'bg-yellow-500 text-white border-yellow-500',    dot: 'bg-yellow-400' },
+  { key: 'Low Voltage',   icon: '📡', sel: 'bg-blue-600 text-white border-blue-600',        dot: 'bg-blue-500' },
+  { key: 'Plumbing',      icon: '💧', sel: 'bg-cyan-600 text-white border-cyan-600',        dot: 'bg-cyan-500' },
+  { key: 'HVAC',          icon: '❄️', sel: 'bg-indigo-600 text-white border-indigo-600',    dot: 'bg-indigo-500' },
+  { key: 'Solar',         icon: '☀️', sel: 'bg-amber-500 text-white border-amber-500',      dot: 'bg-amber-400' },
+];
 const EQUIPMENT_LIST = ['Welding Machine', 'Pipe Threading Machine', 'Drill Machine', 'Grinder', 'Ladder', 'Scaffolding', 'Pipe Bending Machine', 'Cable Pulling Machine', 'Multimeter', 'Megger', 'Earth Tester', 'Hydro Test Pump', 'Generator', 'Compressor'];
 
 export default function DPR() {
@@ -817,10 +832,40 @@ export default function DPR() {
                   ))}
                 </div>
               </div>
-              <div><label className="label">MEPF System</label>
-                <select className="select" value={form.system_type || ''} onChange={e => setForm({ ...form, system_type: e.target.value })}>
-                  <option value="">Select</option>{SYSTEMS.map(s => <option key={s}>{s}</option>)}
-                </select>
+              {/* MEPF System — chip-radio picker.  Spans the whole
+                  row on md+ so 6 chips fit comfortably; wraps to
+                  multiple rows on narrow screens.  Mam (2026-05-30):
+                  "advance radio type button". */}
+              <div className="sm:col-span-2 md:col-span-3">
+                <label className="label">MEPF System</label>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {MEPF_SYSTEMS.map(s => {
+                    const active = form.system_type === s.key;
+                    return (
+                      <button key={s.key} type="button"
+                        onClick={() => setForm({ ...form, system_type: active ? '' : s.key })}
+                        className={`px-3 py-1.5 rounded-full text-sm font-semibold border-2 transition flex items-center gap-1.5 ${
+                          active
+                            ? `${s.sel} shadow-sm`
+                            : 'bg-white text-gray-700 border-gray-300 hover:border-gray-400 hover:bg-gray-50'
+                        }`}>
+                        <span className="text-base leading-none">{s.icon}</span>
+                        {s.key}
+                        {!active && <span className={`w-2 h-2 rounded-full ${s.dot}`} aria-hidden />}
+                      </button>
+                    );
+                  })}
+                </div>
+                {form.system_type && !MEPF_SYSTEMS.find(s => s.key === form.system_type) && (
+                  /* Legacy DPRs may have an old system label (Fire Alarm,
+                     CCTV, etc.).  Show it inline so re-opening a draft
+                     doesn't silently wipe the value. */
+                  <div className="text-[11px] text-gray-500 mt-1.5">
+                    Legacy value: <strong>{form.system_type}</strong>
+                    <button type="button" onClick={() => setForm({ ...form, system_type: '' })}
+                      className="ml-2 text-red-600 hover:underline">clear</button>
+                  </div>
+                )}
               </div>
               <div><label className="label">Weather</label>
                 <select className="select" value={form.weather || 'clear'} onChange={e => setForm({ ...form, weather: e.target.value })}>
