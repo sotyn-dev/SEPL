@@ -99,6 +99,58 @@ function calculateForEmployee(db, settings, employee, month) {
   const [year, mm] = month.split('-').map(Number);
   const totalDays = daysInMonth(month);
 
+  // ─── Salary-exempt short-circuit (mam 2026-06-01) ────────────────
+  // "this person every month make salary full" — Parul Goyal, Rajat
+  // Sir, Nitin Jain, Ankur Kaplesh, Pooja Kaplesh, D.S Kaplesh, Soma
+  // Kaplesh.  When employees.salary_exempt=1, we bypass every
+  // attendance / late / leave deduction and return the full base
+  // salary as net pay.  Earnings split still respects the BASIC /
+  // CONVEYANCE / HRA / Adhoc / Misc percentages from settings so the
+  // slip stays compliant.  Future months still return 0 — no advance
+  // payout — admin-marked exempt rows still respect time.
+  if (employee.salary_exempt) {
+    const istNow = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
+    const tY = istNow.getUTCFullYear(), tM = istNow.getUTCMonth() + 1;
+    const isFuture = year > tY || (year === tY && mm > tM);
+    const baseSalary = employee.salary || 0;
+    const grossEarned = isFuture ? 0 : baseSalary;
+    const basicPay  = round2(grossEarned * (settings.basic_pct       || 0) / 100);
+    const conveyance = round2(grossEarned * (settings.conveyance_pct || 0) / 100);
+    const hra       = round2(grossEarned * (settings.hra_pct         || 0) / 100);
+    const adhoc     = round2(grossEarned * (settings.adhoc_pct       || 0) / 100);
+    const misc      = round2(grossEarned * (settings.misc_pct        || 0) / 100);
+    return {
+      employee_id: employee.id,
+      employee_name: employee.name,
+      department: employee.department,
+      designation: employee.designation,
+      join_date: employee.join_date,
+      base_salary: baseSalary,
+      per_day_rate: round2(settings.working_days_per_month > 0 ? baseSalary / settings.working_days_per_month : 0),
+      working_days: settings.working_days_per_month,
+      total_days_in_month: totalDays,
+      days_counted: totalDays,
+      is_current_month: (year === tY && mm === tM),
+      is_future_month: isFuture,
+      user_linked: !!employee.user_id,
+      user_id: employee.user_id || null,
+      salary_exempt: 1,
+      salary_exempt_reason: 'Full salary regardless of attendance (mam directive)',
+      paid_days: isFuture ? 0 : settings.working_days_per_month,
+      half_days: 0, absent_days: 0,
+      late_marks: 0, lates_converted_absent: 0, late_penalty: 0, late_days: [],
+      paid_leaves: 0, unpaid_leaves: 0, sunday_count: 0,
+      ot_hours: 0, ot_pay: 0,
+      gross_earned: grossEarned,
+      basic_pay: basicPay, conveyance, hra, adhoc, misc,
+      total_earnings: round2(basicPay + conveyance + hra + adhoc + misc),
+      total_deductions: 0, deductions: 0,
+      net_pay: grossEarned,
+      cl_used: 0, sl_used: 0, pl_used: 0, short_leave_used: 0,
+      breakdown: [{ date: month + '-01', day: '—', label: 'salary_exempt', pay: 0, note: 'Flat monthly salary; daily breakdown not applicable' }],
+    };
+  }
+
   // Don't penalise employees for days that haven't happened yet. For the
   // CURRENT month, stop the day-loop at today's date so May 5-31 (still in
   // the future on May 4) aren't counted as absent. Past months use all

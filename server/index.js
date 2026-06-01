@@ -186,6 +186,17 @@ try {
   console.warn('[itemwise-rate-import-v3] failed to start:', e.message);
 }
 
+// One-time backfill — mam (2026-06-01): "this person every month
+// make salary full" for Parul Goyal, Rajat Sir, Nitin Jain, Ankur
+// Kaplesh, Pooja Kaplesh, D.S Kaplesh, Soma Kaplesh.  Sets
+// employees.salary_exempt=1 for matches.  Skip via
+// ERP_DISABLE_PAYROLL_EXEMPT_BACKFILL=1.
+try {
+  require('./scripts/payrollExemptBackfill').runOnce();
+} catch (e) {
+  console.warn('[payroll-exempt] failed to start:', e.message);
+}
+
 // Fire NOC auto-pilot — mam (2026-05-16): "i need easy to user for
 // update but automatically things which you can done".  Backfills
 // existing rows once on boot (idempotent via app_settings flag),

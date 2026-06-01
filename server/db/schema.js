@@ -2423,6 +2423,27 @@ function initializeDatabase() {
     ['employees', 'aadhar_file TEXT'],
     ['employees', 'pan_file TEXT'],
     ['employees', 'qualification_file TEXT'],
+    // Mam (2026-06-01 payroll rules): per-employee flags that the
+    // payroll engine respects when computing the monthly net pay.
+    //   salary_exempt=1     → always full salary regardless of
+    //                          attendance / late / absent / leave.
+    //                          (Parul Goyal, Rajat Sir, Nitin Jain,
+    //                          Ankur Kaplesh, Pooja Kaplesh, D.S.
+    //                          Kaplesh, Soma Kaplesh start ON.)
+    //   cl_eligible=1       → entitled to monthly CL accrual + carry
+    //                          forward.  Default ON.
+    //   ot_eligible=0       → only employees with this flag get OT
+    //                          pay added to their net.  Default OFF
+    //                          per mam (2026-06-01: "over time also
+    //                          we give some person") — admin opts
+    //                          each person in.
+    //   cl_opening_balance  → carry-forward CL count from previous
+    //                          period.  Admin imports per mam's
+    //                          file (coming separately).
+    ['employees', 'salary_exempt INTEGER DEFAULT 0'],
+    ['employees', 'cl_eligible INTEGER DEFAULT 1'],
+    ['employees', 'ot_eligible INTEGER DEFAULT 0'],
+    ['employees', 'cl_opening_balance REAL DEFAULT 0'],
     // can_see_all on role_permissions: explicit per-role-per-module toggle
     // for "scope = ALL records" vs "scope = OWN only". Decoupled from
     // can_approve so admin can grant a role full visibility without giving
