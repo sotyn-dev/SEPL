@@ -245,7 +245,9 @@ export default function DashboardCMDToc() {
                   <td style={{ padding: '8px 5px' }}>{d.client_name?.slice(0, 22)}</td>
                   <td style={{ padding: '8px 5px', textAlign: 'right', fontWeight: 600 }}>{fmtINR(d.amt)}</td>
                   <td style={{ padding: '8px 5px', textAlign: 'right', color: d.days > 90 ? C.red : C.amber }}>{d.days}d</td>
-                  <td style={{ padding: '8px 5px', fontSize: 11 }}>{d.days > 90 ? 'Director call · escalate' : d.days > 60 ? 'Stop new dispatch · meet' : 'Reconcile + chase'}</td>
+                  {/* Action text derived live in cmdDashboard.js from
+                      ageing_days bucket (mam 2026-05-30 audit). */}
+                  <td style={{ padding: '8px 5px', fontSize: 11 }}>{d.action_today || (d.days > 90 ? 'Director call · escalate' : d.days > 60 ? 'Stop new dispatch · meet' : 'Reconcile + chase')}</td>
                 </tr>
               ))}</tbody>
             </table>

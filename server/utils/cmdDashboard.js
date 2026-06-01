@@ -151,13 +151,24 @@ function computeCmdDetail(db, daysRaw) {
     bucket_61_90:   num(safeGet(db, `SELECT COALESCE(SUM(outstanding_amount),0) c FROM receivables WHERE ageing_bucket='61-90'`)?.c),
     bucket_90_plus: num(safeGet(db, `SELECT COALESCE(SUM(outstanding_amount),0) c FROM receivables WHERE ageing_bucket='90+'`)?.c),
   };
-  const topDebtors = safeAll(db, `
+  const topDebtorsRaw = safeAll(db, `
     SELECT id, client_name, project_name, invoice_number,
            outstanding_amount amt, ageing_days days, follow_up_status status, owner_id
     FROM receivables
     WHERE outstanding_amount > 0
     ORDER BY outstanding_amount DESC LIMIT 5
   `);
+  // Mam (2026-05-30 audit): derive the "Action today" column per
+  // debtor live from days-overdue instead of hardcoding it in the
+  // TOC view JSX.  Buckets: 90+ legal · 60-89 CEO call · 30-59 site
+  // visit · <30 follow-up.
+  const topDebtors = topDebtorsRaw.map(d => ({
+    ...d,
+    action_today: (d.days ?? 0) > 90 ? 'Legal notice today'
+                : (d.days ?? 0) > 60 ? 'CEO call today'
+                : (d.days ?? 0) > 30 ? 'Site visit today'
+                : 'Follow-up email today',
+  }));
 
   // 30-day cash forecast — naive: bank + expected receipts (AR within
   // due_date) − expected dues.  Returned as a 30-point series for chart.
@@ -177,14 +188,38 @@ function computeCmdDetail(db, daysRaw) {
     cashForecast.push({ day: `D${i}`, no_action: Math.round((cashOnHand - expectOut * i / 30) / 100000), with_actions: Math.round((cashOnHand + expectIn * 0.6 - expectOut * 0.4) / 100000) });
   }
 
-  // Statutory dues — heuristic: extract from cash_flow_entries.category if present
+  // Statutory dues — mam (2026-05-30 audit): "audit all this i need
+  // to live data".  Used to be 4 hardcoded {amount: null} rows.  Now
+  // pulled live from the statutory_dues_calendar table; each row
+  // resolves to "GST due 20-Jun" using the current month + the
+  // configured due_day.  Status reds when within 7 days of the date.
+  const _monthShort = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const _todayD = new Date();
+  const _thisMonth = _todayD.getMonth();
+  const _thisYear = _todayD.getFullYear();
+  const statRows = safeAll(db,
+    `SELECT label, due_day, amount FROM statutory_dues_calendar
+      WHERE active = 1 ORDER BY due_day, label`);
   const statutoryDues = [
-    { label: 'GST due 20-May',  amount: null, status: null },
-    { label: 'TDS due 7-May',   amount: null, status: null },
-    { label: 'PF / ESI due 15-May', amount: null, status: null },
-    { label: 'Salary 7-May',    amount: null, status: null },
-    { label: 'Vendor AP 30d',   amount: dues30, status: dues30 > 0 ? 'amber' : 'green' },
-    { label: 'Bank closing',    amount: cashOnHand, status: cashOnHand > 1000000 ? 'green' : 'amber' },
+    ...statRows.map(r => {
+      // due_date for current month; if already past, surface NEXT month's
+      const dueThis = new Date(_thisYear, _thisMonth, r.due_day);
+      const dueNext = dueThis < _todayD
+        ? new Date(_thisYear, _thisMonth + 1, r.due_day)
+        : dueThis;
+      const daysOut = Math.round((dueNext - _todayD) / 86400000);
+      const status = daysOut <= 3 ? 'red' : daysOut <= 10 ? 'amber' : 'green';
+      return {
+        label: `${r.label} due ${r.due_day}-${_monthShort[dueNext.getMonth()]}`,
+        amount: r.amount > 0 ? r.amount : null,
+        status,
+        // Surface days_out so the UI can show "in 3 days" for context.
+        days_out: daysOut,
+        unconfigured: r.amount <= 0,
+      };
+    }),
+    { label: 'Vendor AP 30d', amount: dues30, status: dues30 > 0 ? 'amber' : 'green' },
+    { label: 'Bank closing',  amount: cashOnHand, status: cashOnHand > 1000000 ? 'green' : 'amber' },
   ];
 
   // ── Funnel + Sales ─────────────────────────────────────────────
@@ -253,7 +288,11 @@ function computeCmdDetail(db, daysRaw) {
            CAST(julianday('now') - julianday(q.created_at) AS INTEGER) days_open
     FROM quotations q
     LEFT JOIN leads l ON q.lead_id = l.id
-    LEFT JOIN customers c ON c.id IS NULL  -- placeholder; no FK to customers
+    -- Mam (2026-05-30 audit): try a name-match against customers so a
+    -- lead that's been converted shows the canonical company name.
+    -- (No FK between leads and customers, so fall through to the lead
+    -- when no name match is found — the COALESCE handles both.)
+    LEFT JOIN customers c ON LOWER(TRIM(c.company_name)) = LOWER(TRIM(l.company_name))
     WHERE NOT EXISTS (SELECT 1 FROM purchase_orders po WHERE po.quotation_id = q.id)
       AND q.status NOT IN ('rejected', 'won')
     ORDER BY q.created_at ASC LIMIT 8
@@ -488,6 +527,25 @@ function computeCmdDetail(db, daysRaw) {
     + (dues30 > cashOnHand ? (dues30 - cashOnHand) * 0.0003 : 0)  // 0.03% on cash gap
   );
 
+  // ── Live counts that War Room COO view used to show as "—" ───────
+  // Mam (2026-05-30 audit): Material-in-Transit and Tools-Out tiles
+  // were rendering literal em-dashes.  Now sourced live.
+  const materialsInTransit = num(safeGet(db, `
+    SELECT COUNT(*) c FROM indents WHERE status IN ('po_sent','dispatched')
+  `)?.c);
+  const toolsOut = num(safeGet(db, `
+    SELECT COUNT(*) c FROM tools WHERE status='in_use'
+  `)?.c);
+
+  // ── IT systems status (sentry, etc.) ─────────────────────────────
+  // Mam (2026-05-30 audit): War Room "Systems" traffic light used to
+  // be hardcoded amber.  Live boolean now: green if Sentry DSN is
+  // configured in app_settings, amber otherwise.
+  const sentryDsn = safeGet(db, `SELECT value FROM app_settings WHERE key='sentry_dsn'`);
+  const itStatus = {
+    sentry_active: !!(sentryDsn && sentryDsn.value && String(sentryDsn.value).trim().length > 0),
+  };
+
   return {
     spec_version: 'v3',
     generated_at: new Date().toISOString(),
@@ -547,7 +605,11 @@ function computeCmdDetail(db, daysRaw) {
       dpr: dprStatus,
       on_time_milestone_pct: onTimePct,
       sites_past_target: sitesPastTarget,
+      materials_in_transit: materialsInTransit,
+      tools_out: toolsOut,
     },
+
+    it: itStatus,
 
     inventory: {
       total: inventoryTotal,

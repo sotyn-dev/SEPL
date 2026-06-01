@@ -59,9 +59,14 @@ function trafficLights(data) {
   const peopleLight = absencePct < 5 ? 'green' : absencePct < 15 ? 'amber' : 'red';
   const peopleEv = `${att.total} employees · ${att.present} present · ${att.absent} absent`;
 
-  // SYSTEMS — placeholder (until Sentry wires up) — always amber for now
-  const sysLight = 'amber';
-  const sysEv = 'Sentry not wired on 8 critical flows · P95 OK';
+  // SYSTEMS — live boolean from /api/dashboards/cmd-detail#it.sentry_active.
+  // Mam (2026-05-30 audit): "i need to live data" — light flips to green
+  // the moment the admin pastes a Sentry DSN into app_settings.
+  const sentryOn = !!data.it?.sentry_active;
+  const sysLight = sentryOn ? 'green' : 'amber';
+  const sysEv = sentryOn
+    ? 'Sentry DSN configured · errors captured'
+    : 'Sentry not configured · set app_settings.sentry_dsn';
 
   // DATA QUALITY — junk POs + missing fields. Use the full count (not the
   // capped display list) so the banner reflects every junk PO.
@@ -353,27 +358,41 @@ export default function DashboardWarRoom() {
             ))}
           </div>
 
-          {/* Section 3 — Today's 3 Decisions */}
+          {/* Section 3 — Today's 3 Decisions
+              Mam (2026-05-30 audit): "i need to live data" — the 3
+              cards used to be static JSX no matter what the data said.
+              Now driven from bottlenecks(data) computed above (which
+              walks live pulse / sales / operations / data_quality and
+              returns up to 3 ranked items). If fewer than 3 bottlenecks
+              fire, we fill the rest with a "all-clear" placeholder so
+              the layout stays steady. */}
           <div style={sectionTitle}>Section 3 · Today's 3 Decisions</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
-            <DecisionCard
-              q="D1: Sales pipeline rescue"
-              optA="Run 2-week field blitz, COO leads, target 25 leads."
-              optB="Hire 1 sales head ₹18 L CTC, 8-week ramp."
-              recommend="→ RECOMMEND: A (cost ₹3 L, week-1 results)"
-              owner="CMD" deadline="17:00" />
-            <DecisionCard
-              q="D2: Installation throughput"
-              optA="Pause new orders > ₹5 L until 10 closures done."
-              optB="Add 2 installation engineers on contract ₹65 K/mo."
-              recommend="→ RECOMMEND: B (faster, reversible)"
-              owner="COO" deadline="17:00" />
-            <DecisionCard
-              q="D3: PO field validation"
-              optA="Block free-text PO input today (1-line code change)."
-              optB="Audit + clean junk POs first, validate later."
-              recommend="→ RECOMMEND: A (already shipped) + B (cleanup ongoing)"
-              owner="IT Head" deadline="today EoD" />
+            {(() => {
+              const tops = bn; // computed at top of render via bottlenecks(data)
+              const cards = tops.map((b, i) => (
+                <DecisionCard
+                  key={i}
+                  q={`D${i + 1}: ${b.title}`}
+                  optA={b.why}
+                  optB={`Cost of inaction: ${fmtINR(b.cost)} ${b.costLabel || ''}`.trim()}
+                  recommend={`→ ACTION: ${b.who}`}
+                  owner={(b.owner || '').split('·')[0].trim() || '—'}
+                  deadline={(b.owner || '').split('·')[1]?.trim() || '17:00'}
+                />
+              ));
+              while (cards.length < 3) {
+                cards.push(
+                  <DecisionCard key={`empty-${cards.length}`}
+                    q={`D${cards.length + 1}: No active red flag`}
+                    optA="Pulse, cash, sales, delivery + data quality all green."
+                    optB="Use the spare cycle for forward-looking work."
+                    recommend="→ ALL CLEAR"
+                    owner="—" deadline="—" />
+                );
+              }
+              return cards;
+            })()}
           </div>
 
           {/* Section 4 — Cash · Sales · Delivery */}
@@ -587,8 +606,8 @@ export default function DashboardWarRoom() {
               { lbl: 'Snags Open',    val: pulse.open_snags, delta: pulse.oldest_snag_days ? `oldest ${pulse.oldest_snag_days}d` : '—', bad: pulse.open_snags > 10 },
               { lbl: 'Sites Live',    val: operations.active_sites, delta: `of ${pulse.order_book_count} active POs`, bad: false },
               { lbl: 'Manpower Today', val: `${people.attendance_today.present}/${people.attendance_today.total}`, delta: `${people.attendance_today.absent} absent · ${people.attendance_today.late} late`, bad: people.attendance_today.absent > 2 },
-              { lbl: 'Material in Transit', val: '—', delta: 'indents pending dispatch', bad: false },
-              { lbl: 'Tools Out', val: '—', delta: 'data gap · tools module', bad: false },
+              { lbl: 'Material in Transit', val: operations.materials_in_transit ?? 0, delta: 'indents po_sent / dispatched', bad: (operations.materials_in_transit ?? 0) > 10 },
+              { lbl: 'Tools Out', val: operations.tools_out ?? 0, delta: 'tools.status=in_use', bad: false },
             ].map((k, i) => (
               <div key={i} style={cardStyle}>
                 <h3 style={{ margin: 0, fontSize: 11, letterSpacing: 1, color: C.ink2, textTransform: 'uppercase', fontWeight: 600 }}>{k.lbl}</h3>

@@ -2059,6 +2059,74 @@ function initializeDatabase() {
     -- WAL mode = better concurrency under load (multiple reads while one
     -- write is happening). NORMAL sync = faster, still crash-safe.
 
+    -- Statutory dues calendar — mam (2026-05-30 dashboard audit):
+    -- "audit all this i need to live data".  The Operating Console
+    -- + TOC View used to show 4 hardcoded {amount: null} rows
+    -- (GST / TDS / PF / Salary) so the page silently leaked stale
+    -- data into finance reviews.  This tiny table holds the
+    -- expected monthly amount + due day per category; cmdDashboard
+    -- pulls it live and computes "due {DD-Mon}" for the current month.
+    -- Seeded with 4 default rows at 0 so the structure exists;
+    -- admin sets real amounts via SQL or a future Finance Settings UI.
+    CREATE TABLE IF NOT EXISTS statutory_dues_calendar (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      label TEXT NOT NULL UNIQUE,
+      due_day INTEGER NOT NULL CHECK(due_day BETWEEN 1 AND 31),
+      amount REAL NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    -- Seed defaults only on first run; INSERT OR IGNORE preserves any
+    -- admin edits across redeploys.
+    INSERT OR IGNORE INTO statutory_dues_calendar (label, due_day, amount) VALUES
+      ('GST',        20, 0),
+      ('TDS',         7, 0),
+      ('PF / ESI',   15, 0),
+      ('Salary',      7, 0);
+
+    -- Labour Payment Indents — mam (2026-05-30): "create a module labour
+    -- indent-Payment under Projects".  Site Engineer raises a payment
+    -- request for sub-contractor labour, manager approves (with optional
+    -- amount adjustment), accounts releases payment.
+    --   pending  → approved → paid
+    --   pending  → rejected (terminal)
+    CREATE TABLE IF NOT EXISTS labour_payment_indents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      indent_no TEXT UNIQUE,                        -- LPI-YYYY-####
+      site_id INTEGER REFERENCES sites(id),
+      site_name TEXT,                                -- denormalized for fast list display
+      sub_contractor_id INTEGER REFERENCES sub_contractors(id),
+      sub_contractor_name TEXT NOT NULL,             -- denormalized + supports off-master names
+      trade TEXT,                                    -- HVAC / Electrical / … (from sub_con type)
+      work_description TEXT,
+      period_from DATE NOT NULL,
+      period_to DATE NOT NULL,
+      manpower_count INTEGER DEFAULT 0,
+      man_days REAL DEFAULT 0,
+      rate REAL DEFAULT 0,                           -- ₹ per man-day or lumpsum unit
+      amount REAL NOT NULL,                          -- requested
+      approved_amount REAL,                          -- approver may adjust
+      attachment_url TEXT,                           -- measurement sheet / photo proof
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','approved','rejected','paid')),
+      approved_by INTEGER REFERENCES users(id),
+      approved_at DATETIME,
+      approval_remarks TEXT,
+      paid_by INTEGER REFERENCES users(id),
+      paid_at DATETIME,
+      payment_ref TEXT,                              -- UTR / cheque number
+      rejected_reason TEXT,
+      raised_by INTEGER REFERENCES users(id),
+      raised_by_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_lpi_status ON labour_payment_indents(status);
+    CREATE INDEX IF NOT EXISTS idx_lpi_site   ON labour_payment_indents(site_id);
+    CREATE INDEX IF NOT EXISTS idx_lpi_subcon ON labour_payment_indents(sub_contractor_id);
+    CREATE INDEX IF NOT EXISTS idx_lpi_raised ON labour_payment_indents(raised_by);
+    CREATE INDEX IF NOT EXISTS idx_lpi_created ON labour_payment_indents(created_at DESC);
+
     -- Announcements — admin posts, everyone reads. Pinned items rise to the top.
     -- expires_at is optional; rows without it stay visible forever until deleted.
     CREATE TABLE IF NOT EXISTS announcements (
@@ -3753,6 +3821,9 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-05-28): Procurement Schedule — backward-pass Gantt
     // per project so "raise indent by" dates are computed, not guessed.
     'procurement_schedule',
+    // Mam (2026-05-30): Labour Payment Indents — site engineer raises,
+    // manager approves, accounts pays.  Under Projects sidebar group.
+    'labour_payment',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
