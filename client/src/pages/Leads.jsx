@@ -3,6 +3,7 @@ import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
+import TimePicker from '../components/TimePicker';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -478,7 +479,7 @@ export default function Leads() {
             <div className="flex justify-between items-center"><h5 className="font-bold text-sm">Follow-ups</h5></div>
             <div className="flex gap-2 items-end">
               <div className="flex-1"><input className="input text-xs" type="date" value={fuForm.followup_date} onChange={e=>setFuForm({...fuForm,followup_date:e.target.value})}/></div>
-              <div><input className="input text-xs" type="time" value={fuForm.followup_time||''} onChange={e=>setFuForm({...fuForm,followup_time:e.target.value})}/></div>
+              <div><TimePicker value={fuForm.followup_time||''} onChange={v=>setFuForm({...fuForm,followup_time:v})} placeholder="Time" className="input text-xs flex items-center gap-2 cursor-pointer"/></div>
               <select className="select text-xs w-24" value={fuForm.type} onChange={e=>setFuForm({...fuForm,type:e.target.value})}><option value="call">Call</option><option value="email">Email</option><option value="whatsapp">WhatsApp</option><option value="visit">Visit</option></select>
               <input className="input text-xs flex-1" placeholder="Notes" value={fuForm.notes||''} onChange={e=>setFuForm({...fuForm,notes:e.target.value})}/>
               <button onClick={addFollowup} className="btn btn-primary text-xs px-3">Add</button>

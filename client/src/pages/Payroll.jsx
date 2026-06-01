@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiSettings, FiDollarSign, FiEye, FiLock, FiUnlock, FiSave, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
+import TimePicker from '../components/TimePicker';
 
 const monthNow = () => {
   const d = new Date();
@@ -289,7 +290,7 @@ export default function Payroll() {
                         <option value={0}>No (0)</option>
                       </select>
                     ) : f.type === 'time' ? (
-                      <input type="time" className="input" value={settings[f.key] || ''} onChange={e => setSettings(s => ({ ...s, [f.key]: e.target.value }))} />
+                      <TimePicker value={settings[f.key] || ''} onChange={v => setSettings(s => ({ ...s, [f.key]: v }))} />
                     ) : (
                       <input type="number" step={f.step || 1} className="input" value={settings[f.key] ?? 0} onChange={e => setSettings(s => ({ ...s, [f.key]: +e.target.value }))} />
                     )}

@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCircle, FiPlus, FiAlertTriangle, FiTrash2, FiEdit2, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import TimePicker from '../components/TimePicker';
 
 export default function Attendance() {
   const { user, isAdmin, canDelete } = useAuth();
@@ -767,11 +768,11 @@ export default function Attendance() {
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="label">From Time</label>
-                  <input type="time" className="input" value={leaveEditForm.from_time || ''} onChange={e => setLeaveEditForm({ ...leaveEditForm, from_time: e.target.value })} />
+                  <TimePicker value={leaveEditForm.from_time || ''} onChange={v => setLeaveEditForm({ ...leaveEditForm, from_time: v })} />
                 </div>
                 <div>
                   <label className="label">To Time</label>
-                  <input type="time" className="input" value={leaveEditForm.to_time || ''} onChange={e => setLeaveEditForm({ ...leaveEditForm, to_time: e.target.value })} />
+                  <TimePicker value={leaveEditForm.to_time || ''} onChange={v => setLeaveEditForm({ ...leaveEditForm, to_time: v })} />
                 </div>
                 <div>
                   <label className="label">Hours</label>
@@ -850,8 +851,8 @@ export default function Attendance() {
           </div>
           {form.leave_type === 'short_leave' && (
             <div className="grid grid-cols-2 gap-3 bg-amber-50 p-3 rounded">
-              <div><label className="label">From Time *</label><input className="input" type="time" value={form.from_time || ''} onChange={e => setForm({ ...form, from_time: e.target.value })} required /></div>
-              <div><label className="label">To Time *</label><input className="input" type="time" value={form.to_time || ''} onChange={e => setForm({ ...form, to_time: e.target.value })} required /></div>
+              <div><label className="label">From Time *</label><TimePicker value={form.from_time || ''} onChange={v => setForm({ ...form, from_time: v })} required /></div>
+              <div><label className="label">To Time *</label><TimePicker value={form.to_time || ''} onChange={v => setForm({ ...form, to_time: v })} required /></div>
               <p className="col-span-2 text-xs text-amber-600">Monthly limit: 4 hours. Exceeding will be rejected.</p>
             </div>
           )}

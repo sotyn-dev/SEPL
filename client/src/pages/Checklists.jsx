@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiExternalLink, FiDownload, FiCalendar, FiCheck, FiX, FiClock } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import TimePicker from '../components/TimePicker';
 
 // Mam (2026-05-22): "department will on drop down :- Sales, Accounts,
 // Marketing, Finance, IT, MDO, Operations, Admin" + Purchase added
@@ -831,12 +832,12 @@ export default function Checklists() {
             {/* For 'once' tasks we keep the Due Date. For recurring (daily/weekly/…),
                 we show Time of Day instead since the date is derived from the frequency. */}
             {form.frequency === 'daily' ? (
-              <div><label className="label">Time of Day</label><input className="input" type="time" value={form.due_time || ''} onChange={e => setForm({...form, due_time: e.target.value})} /><p className="text-[10px] text-gray-400 mt-0.5">When should this task be done each day?</p></div>
+              <div><label className="label">Time of Day</label><TimePicker value={form.due_time || ''} onChange={v => setForm({...form, due_time: v})} /><p className="text-[10px] text-gray-400 mt-0.5">When should this task be done each day?</p></div>
             ) : (
               <div><label className="label">Due Date</label><input className="input" type="date" value={form.due_date || ''} onChange={e => setForm({...form, due_date: e.target.value})} /></div>
             )}
             {form.frequency !== 'daily' && (
-              <div><label className="label">Time of Day <span className="text-gray-400 font-normal">(optional)</span></label><input className="input" type="time" value={form.due_time || ''} onChange={e => setForm({...form, due_time: e.target.value})} /></div>
+              <div><label className="label">Time of Day <span className="text-gray-400 font-normal">(optional)</span></label><TimePicker value={form.due_time || ''} onChange={v => setForm({...form, due_time: v})} /></div>
             )}
             {/* Mam (2026-05-22): fortnightly = twice a month on two
                 specific day-of-month slots ("5 & 20" / "2 & 16").
@@ -1106,7 +1107,7 @@ Send WhatsApp report                                  ← uses shared settings b
             </div>
             <div>
               <label className="label">Time of Day <span className="text-gray-400 font-normal text-[10px]">(optional)</span></label>
-              <input type="time" className="input" value={bulkForm.due_time || ''} onChange={e => setBulkForm({ ...bulkForm, due_time: e.target.value })}/>
+              <TimePicker value={bulkForm.due_time || ''} onChange={v => setBulkForm({ ...bulkForm, due_time: v })}/>
             </div>
             {/* Mam (2026-05-22): "if here is month then you dont think
                 selection of month if quartly" — anchor date drives:
