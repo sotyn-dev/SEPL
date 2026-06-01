@@ -177,6 +177,15 @@ try {
   console.warn('[itemwise-rate-import-v2] failed to start:', e.message);
 }
 
+// v3 — third-pass rate import (mam 2026-06-01): 101 daybook-matched
+// rows from final item.xlsx.  Separate flag, code-ci fallback added.
+// Skip via ERP_DISABLE_ITEM_RATE_IMPORT=1 (same env var).
+try {
+  require('./scripts/itemwiseRateImportV3').runOnce();
+} catch (e) {
+  console.warn('[itemwise-rate-import-v3] failed to start:', e.message);
+}
+
 // Fire NOC auto-pilot — mam (2026-05-16): "i need easy to user for
 // update but automatically things which you can done".  Backfills
 // existing rows once on boot (idempotent via app_settings flag),
