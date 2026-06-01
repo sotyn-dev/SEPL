@@ -471,7 +471,25 @@ export default function Leads() {
           {viewData.mom_notes&&<div className="bg-violet-50 p-2 rounded text-xs"><strong>MOM:</strong> {viewData.mom_notes} {viewData.mom_file_link&&<a href={viewData.mom_file_link} className="text-red-600 underline" target="_blank" rel="noreferrer">File</a>}</div>}
           {viewData.drawing_file1&&<div className="bg-amber-50 p-2 rounded text-xs"><strong>Drawings:</strong> <a href={viewData.drawing_file1} className="text-red-600 underline" target="_blank" rel="noreferrer">1</a> {viewData.drawing_file2&&<a href={viewData.drawing_file2} className="text-red-600 underline ml-2" target="_blank" rel="noreferrer">2</a>} {viewData.drawing_file3&&<a href={viewData.drawing_file3} className="text-red-600 underline ml-2" target="_blank" rel="noreferrer">3</a>}</div>}
           {viewData.boq_file_link&&<div className="bg-orange-50 p-2 rounded text-xs"><strong>BOQ:</strong> Rs {viewData.boq_amount?.toLocaleString()} <a href={viewData.boq_file_link} className="text-red-600 underline" target="_blank" rel="noreferrer">View</a></div>}
-          {viewData.quotation_number&&<div className="bg-cyan-50 p-2 rounded text-xs"><strong>Quotation:</strong> {viewData.quotation_number} - Rs {viewData.quotation_amount?.toLocaleString()}</div>}
+          {/* Quote-sent summary — mam (2026-06-01): "NOT SHOWING QUOTE
+              SENT FILE WHEN SHOWING FILE THEN I AUDIT".  Surface the
+              uploaded quotation PDF as a clickable link so any later
+              stage (Tech Clarify, Negotiation, Contract, Kickoff) can
+              open it directly without going back to Stage 7. */}
+          {(viewData.quotation_number || viewData.quotation_file_link) && (
+            <div className="bg-cyan-50 p-2 rounded text-xs flex items-center gap-2 flex-wrap">
+              <strong>Quotation:</strong>
+              {viewData.quotation_number && <span>{viewData.quotation_number}</span>}
+              {viewData.quotation_amount > 0 && <span>· Rs {viewData.quotation_amount.toLocaleString()}</span>}
+              {viewData.quotation_sent_date && <span className="text-gray-500">· sent {fmtDateIST(viewData.quotation_sent_date)}</span>}
+              {viewData.quotation_file_link
+                ? <a href={viewData.quotation_file_link} target="_blank" rel="noreferrer"
+                     className="ml-auto inline-flex items-center gap-1 text-cyan-700 font-semibold underline hover:text-cyan-900">
+                    📄 View quote file
+                  </a>
+                : <span className="ml-auto text-gray-400 italic">no file uploaded</span>}
+            </div>
+          )}
           {viewData.result&&<div className={`p-3 rounded font-bold text-center text-lg ${viewData.result==='won'?'bg-emerald-100 text-emerald-700':'bg-red-100 text-red-700'}`}>{viewData.result.toUpperCase()} {viewData.won_amount>0&&`- ${fmt(viewData.won_amount)}`}</div>}
 
           {/* Follow-ups */}
@@ -667,8 +685,27 @@ export default function Leads() {
                 <input type="file" onChange={async(e)=>{const f=e.target.files[0];if(!f)return;try{stageForm.quotation_file_link=await uploadFile(f);toast.success('Uploaded');}catch{toast.error('Failed');}}} className="text-xs"/>
                 <button onClick={()=>advanceStage(viewData.id,'technical_clarification',stageForm)} className="btn btn-primary w-full">Send Quote &amp; Open Clarification Round</button>
               </div>)}
-              {/* Stage 7 → Stage 8: Technical Clarification — stub */}
+              {/* Stage 7 → Stage 8: Technical Clarification — stub.
+                  Mam (2026-06-01): show the previously-sent quote
+                  here so the audit happens against the actual file
+                  (was hidden, mam couldn't verify what client got). */}
               {activeStage==='technical_clarification'&&(<div className="space-y-2">
+                {(viewData.quotation_number || viewData.quotation_file_link) && (
+                  <div className="bg-cyan-50 border border-cyan-200 rounded p-2 text-xs flex items-center justify-between gap-2 flex-wrap">
+                    <div>
+                      <strong>Quote sent to audit:</strong>{' '}
+                      {viewData.quotation_number || '(no number)'}
+                      {viewData.quotation_amount > 0 && <span> · Rs {viewData.quotation_amount.toLocaleString()}</span>}
+                      {viewData.quotation_sent_date && <span className="text-gray-500"> · {fmtDateIST(viewData.quotation_sent_date)}</span>}
+                    </div>
+                    {viewData.quotation_file_link
+                      ? <a href={viewData.quotation_file_link} target="_blank" rel="noreferrer"
+                           className="inline-flex items-center gap-1 px-2 py-1 rounded bg-cyan-600 text-white font-semibold hover:bg-cyan-700">
+                          📄 Open quote file
+                        </a>
+                      : <span className="text-red-600 font-semibold">⚠ No file uploaded</span>}
+                  </div>
+                )}
                 <div className="text-[11px] bg-sky-50 border border-sky-200 rounded p-2 text-sky-800">
                   Track customer queries + replies + revision rounds here. Full clarification log will be added when mam requests Stage 8.
                 </div>
