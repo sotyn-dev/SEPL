@@ -172,25 +172,35 @@ router.post('/', requirePermission('leads', 'create'), (req, res) => {
   const subTrades = Array.isArray(b.sub_trades_scope) ? b.sub_trades_scope.join(',') : (b.sub_trades_scope || null);
   const leadKind = b.lead_kind === 'government' ? 'government' : 'private';
 
+  // Mam (2026-06-01) Stage-1 form additions: building_category +
+  // influencer_id/_name (denormalised name keeps history readable
+  // if a partner row is renamed in the master).  GST + PAN remain
+  // in the column list for backward-compat reads, but the UI no
+  // longer collects them; NULLs are persisted on new rows.
   const r = db.prepare(`INSERT INTO sales_funnel
     (lead_no, client_name, company_name, phone, email, category, lead_type, lead_kind,
      gst_number, pan_number, project_name, project_location, pin_code,
-     estimated_value, tentative_timeline, sub_trades_scope,
+     estimated_value, tentative_timeline, sub_trades_scope, building_category,
      tender_id, bid_deadline, emd_amount, pbg_required,
-     city, address, district, state, source,
+     city, address, district, state, source, influencer_id, influencer_name,
      assigned_sc, assigned_asm, assigned_asm_id,
      remarks, created_by,
      current_stage, stage_entered_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new_lead', CURRENT_TIMESTAMP)`).run(
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new_lead', CURRENT_TIMESTAMP)`).run(
     leadNo, b.client_name, b.company_name || null, b.phone || null, b.email || null,
     b.category || null, b.lead_type || null, leadKind,
     b.gst_number ? String(b.gst_number).toUpperCase() : null,
     b.pan_number ? String(b.pan_number).toUpperCase() : null,
     b.project_name || null, b.project_location || null, b.pin_code || null,
     +b.estimated_value || 0, b.tentative_timeline || null, subTrades,
+    b.building_category || null,
     b.tender_id || null, b.bid_deadline || null, +b.emd_amount || 0, b.pbg_required ? 1 : 0,
     b.city || null, b.address || null, b.district || null, b.state || null,
     b.source || null,
+    // Influencer only stored when source='Influencer' — guards
+    // against stale ids when the user toggles source between options.
+    b.source === 'Influencer' ? (b.influencer_id || null) : null,
+    b.source === 'Influencer' ? (b.influencer_name || null) : null,
     b.assigned_sc || null, b.assigned_asm || null, b.assigned_asm_id || null,
     b.remarks || null,
     req.user.id

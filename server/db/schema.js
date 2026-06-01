@@ -2476,6 +2476,19 @@ function initializeDatabase() {
     // Commercial header
     ['sales_funnel', 'estimated_value REAL DEFAULT 0'],
     ['sales_funnel', 'tentative_timeline TEXT'],
+    // Mam (2026-06-01): "PIC 2 BUILDING CATEGORY ALSO ADD AND GIVE
+    // PIC DROP DOWN" — new field on Stage 1 lead capture, picked
+    // from a 15-option list (Residential / Commercial / Educational
+    // / Healthcare / Industrial / Government / Religious /
+    // Transportation / Recreational / Financial / Hospitality /
+    // Cultural / Agricultural / Utility / Emergency Services).
+    ['sales_funnel', 'building_category TEXT'],
+    // Influencer reference — when source='Influencer' the user picks
+    // a partner from the influencers table; we denormalize both id +
+    // name so historical leads keep displaying the partner even if
+    // the master row is renamed later.
+    ['sales_funnel', 'influencer_id INTEGER REFERENCES influencers(id)'],
+    ['sales_funnel', 'influencer_name TEXT'],
     // Sub-trades scope as CSV: M,E,P,F,BMS,ELV,Solar
     ['sales_funnel', 'sub_trades_scope TEXT'],
     // Government-only fields

@@ -121,6 +121,24 @@ function nextFormId(db) {
   }
 }
 
+// ─── GET /api/influencers/lookup ─────────────────────────────────
+// Mam (2026-06-01): "SOURCE :- INFLUCER ADD AND IF IT SELECT NAME
+// DROP DOWN FROM PARTNERS".  Sales reps need to fill the partner
+// dropdown on the Lead Capture form without having full
+// influencers:view permission (which is admin-only).  This
+// lightweight endpoint returns just id / name / company / primary
+// category for active rows.  MUST be registered above /:id so the
+// id-matcher doesn't eat the path.
+router.get('/lookup', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT id, full_name, company_name, primary_category
+       FROM influencers
+      ORDER BY full_name COLLATE NOCASE`
+  ).all();
+  res.json(rows);
+});
+
 // ─── GET /api/influencers ────────────────────────────────────────
 router.get('/', requirePermission('influencers', 'view'), (req, res) => {
   const db = getDb();

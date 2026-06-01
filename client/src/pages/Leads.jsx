@@ -97,6 +97,25 @@ const GATE_STAGES = new Set(['pricing_review', 'contract_signed']);
 const CATEGORIES = ['Low Voltage','Fire Fighting','Fire NOC','Electrical','SOLAR','MEP','HVAC','Plumbing'];
 const PIE_COLORS = ['#3b82f6','#6366f1','#8b5cf6','#f59e0b','#f97316','#06b6d4','#10b981','#ef4444','#ec4899'];
 
+// Mam (2026-06-01) · Stage 1 Lead Capture changes:
+//   3) Tentative timeline now a dropdown of fixed buckets.
+//   4) Source list gains "Influencer"; partner dropdown reveals when picked.
+//   5) Building Category dropdown — 15 options from mam's screenshot.
+const TIMELINE_OPTIONS  = ['15 days', '30 days', '60 days', '90 days', '180 days', '365 days'];
+const SOURCE_OPTIONS    = ['Website','Referral','Cold','IPC','GeM','CPPP','State Portal','Repeat','Influencer'];
+const BUILDING_CATEGORIES = [
+  'Residential Buildings', 'Commercial Buildings', 'Educational Buildings',
+  'Healthcare Buildings',  'Industrial Buildings',  'Government Buildings',
+  'Religious Buildings',   'Transportation Buildings', 'Recreational Buildings',
+  'Financial Buildings',   'Hospitality Buildings',   'Cultural Buildings',
+  'Agricultural Buildings','Utility Buildings',       'Emergency Services Buildings',
+];
+
+// Validators for the phone + email "verified or correct" check
+// (mam 2026-06-01).  Indian mobile = 10 digits starting 6/7/8/9.
+const isValidIndianPhone = (s) => /^[6-9]\d{9}$/.test(String(s || '').replace(/\s+/g, ''));
+const isValidEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').trim());
+
 export default function Leads() {
   const { canCreate, canEdit, canDelete, user } = useAuth();
   const [tab, setTab] = useUrlTab('dashboard');
@@ -119,6 +138,12 @@ export default function Leads() {
   // Each option carries user_id so the lead row stores both the display
   // name and the FK to users(id) for "My Planned Meetings" filtering.
   const [employees, setEmployees] = useState([]);
+  // Mam (2026-06-01) — influencers list for the Source → Partner
+  // cascade.  Lazy-fetched the first time the lead modal opens
+  // (engineers / sales reps shouldn't pay the cost while just
+  // browsing the funnel).  No `influencers:view` perm required —
+  // backend exposes a public /lookup path.
+  const [influencers, setInfluencers] = useState([]);
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -138,11 +163,36 @@ export default function Leads() {
       .catch(() => setEmployees([]));
   }, []);
 
+  // Lazy-fetch influencers the first time the lead modal opens.
+  // Cached for the rest of the session.  Mam (2026-06-01).
+  useEffect(() => {
+    if ((modal === 'add' || modal === 'edit') && influencers.length === 0) {
+      api.get('/influencers/lookup').then(r => setInfluencers(r.data || [])).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modal]);
+
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const fmt = n => `Rs ${(n||0).toLocaleString('en-IN')}`;
 
   const saveLead = async (e) => {
     e.preventDefault();
+    // Mam (2026-06-01): "mobile number and email verified or
+    // correct" — block submission if either is present but invalid.
+    // Both fields stay optional (blank = OK); only filled-in
+    // garbage gets rejected.
+    if (form.phone && !isValidIndianPhone(form.phone)) {
+      toast.error('Enter a valid 10-digit Indian mobile (starts with 6/7/8/9)');
+      return;
+    }
+    if (form.email && !isValidEmail(form.email)) {
+      toast.error('Enter a valid email address');
+      return;
+    }
+    if (form.source === 'Influencer' && !form.influencer_id) {
+      toast.error('Pick a partner from the Influencer list, or change the source');
+      return;
+    }
     try {
       if (form.id) { await api.put(`/sales-funnel/${form.id}`, form); toast.success('Updated'); }
       else { const res = await api.post('/sales-funnel', form); toast.success(`Lead ${res.data.lead_no} created`); }
@@ -681,15 +731,37 @@ export default function Leads() {
             </div>
           </div>
 
-          {/* Customer block */}
+          {/* Customer block — mam (2026-06-01): "gst & pan not
+              recuired" (dropped), "mobile number and email
+              verified or correct" (validators below). */}
           <div className="border-t pt-3"><h5 className="font-bold text-sm text-red-700 mb-2">Customer</h5></div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             <div><label className="label">Customer Name *</label><input className="input" value={form.client_name||''} onChange={e=>F('client_name',e.target.value)} required/></div>
             <div><label className="label">Company / Entity</label><input className="input" value={form.company_name||''} onChange={e=>F('company_name',e.target.value)}/></div>
-            <div><label className="label">Phone</label><input className="input" value={form.phone||''} onChange={e=>F('phone',e.target.value)}/></div>
-            <div><label className="label">Email</label><input className="input" type="email" value={form.email||''} onChange={e=>F('email',e.target.value)}/></div>
-            <div><label className="label">GST Number</label><input className="input font-mono uppercase" value={form.gst_number||''} onChange={e=>F('gst_number',e.target.value.toUpperCase())} placeholder="03ABCDE1234F1Z5" maxLength="15"/></div>
-            <div><label className="label">PAN Number</label><input className="input font-mono uppercase" value={form.pan_number||''} onChange={e=>F('pan_number',e.target.value.toUpperCase())} placeholder="ABCDE1234F" maxLength="10"/></div>
+            <div>
+              <label className="label">Phone</label>
+              <input className={`input ${form.phone && !isValidIndianPhone(form.phone) ? 'border-red-500 focus:border-red-500' : ''}`}
+                value={form.phone||''} onChange={e=>F('phone',e.target.value)}
+                placeholder="10 digits, starts 6-9" inputMode="numeric" maxLength="10" />
+              {form.phone && !isValidIndianPhone(form.phone) && (
+                <div className="text-[10px] text-red-600 mt-0.5">Enter 10-digit Indian mobile (must start with 6, 7, 8 or 9)</div>
+              )}
+              {form.phone && isValidIndianPhone(form.phone) && (
+                <div className="text-[10px] text-emerald-600 mt-0.5">✓ valid</div>
+              )}
+            </div>
+            <div>
+              <label className="label">Email</label>
+              <input className={`input ${form.email && !isValidEmail(form.email) ? 'border-red-500 focus:border-red-500' : ''}`}
+                type="email" value={form.email||''} onChange={e=>F('email',e.target.value)}
+                placeholder="name@example.com" />
+              {form.email && !isValidEmail(form.email) && (
+                <div className="text-[10px] text-red-600 mt-0.5">Enter a valid email (e.g. name@example.com)</div>
+              )}
+              {form.email && isValidEmail(form.email) && (
+                <div className="text-[10px] text-emerald-600 mt-0.5">✓ valid</div>
+              )}
+            </div>
           </div>
 
           {/* Project block */}
@@ -717,7 +789,28 @@ export default function Leads() {
               />
             </div>
             <div><label className="label">Estimated Value (₹)</label><input className="input" type="number" min="0" value={form.estimated_value||0} onChange={e=>F('estimated_value',+e.target.value)}/></div>
-            <div className="md:col-span-3"><label className="label">Tentative Timeline</label><input className="input" value={form.tentative_timeline||''} onChange={e=>F('tentative_timeline',e.target.value)} placeholder="e.g. 4 months / Q3 2026"/></div>
+            {/* Mam (2026-06-01): tentative timeline locked to a
+                6-option dropdown — was a freeform text field. */}
+            <div>
+              <label className="label">Tentative Timeline</label>
+              <select className="select" value={form.tentative_timeline||''} onChange={e=>F('tentative_timeline',e.target.value)}>
+                <option value="">Select…</option>
+                {TIMELINE_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            {/* Building Category — mam (2026-06-01): "PIC 2 BUILDING
+                CATEGORY ALSO ADD AND GIVE PIC DROP DOWN" — 15-option
+                list of the building types lead/project belongs to. */}
+            <div className="md:col-span-2">
+              <label className="label">Building Category</label>
+              <SearchableSelect
+                options={BUILDING_CATEGORIES.map(b => ({ value: b, label: b }))}
+                value={form.building_category || ''}
+                valueKey="value" displayKey="label"
+                placeholder="Choose building category…"
+                onChange={(opt) => F('building_category', opt?.value || '')}
+              />
+            </div>
           </div>
 
           {/* Category + Sub-trades */}
@@ -757,13 +850,43 @@ export default function Leads() {
           {/* Source + assignment */}
           <div className="border-t pt-3"><h5 className="font-bold text-sm text-red-700 mb-2">Source &amp; Assignment</h5></div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            {/* Source — mam (2026-06-01): "SOURCE :- INFLUCER ADD AND
+                IF IT SELECT NAME DROP DOWN FROM PARTNERS".  Added
+                'Influencer' to the list; partner picker reveals when
+                that option is selected. */}
             <div>
               <label className="label">Source</label>
-              <select className="select" value={form.source||''} onChange={e=>F('source',e.target.value)}>
+              <select className="select" value={form.source||''} onChange={e=>{
+                F('source', e.target.value);
+                // When source changes away from Influencer, blank the partner.
+                if (e.target.value !== 'Influencer') {
+                  F('influencer_id', null);
+                  F('influencer_name', '');
+                }
+              }}>
                 <option value="">Select</option>
-                {['Website','Referral','Cold','IPC','GeM','CPPP','State Portal','Repeat'].map(s => <option key={s}>{s}</option>)}
+                {SOURCE_OPTIONS.map(s => <option key={s}>{s}</option>)}
               </select>
             </div>
+            {form.source === 'Influencer' && (
+              <div>
+                <label className="label">Partner *</label>
+                <SearchableSelect
+                  options={influencers.map(p => ({
+                    value: p.id,
+                    label: p.company_name ? `${p.full_name} — ${p.company_name}` : p.full_name,
+                    name: p.full_name,
+                  }))}
+                  value={form.influencer_id || ''}
+                  valueKey="value" displayKey="label"
+                  placeholder={influencers.length ? 'Pick partner…' : 'No partners in master yet'}
+                  onChange={(opt) => {
+                    F('influencer_id', opt?.value || null);
+                    F('influencer_name', opt?.name || '');
+                  }}
+                />
+              </div>
+            )}
             <div><label className="label">SC (Sales Coordinator)</label><input className="input" value={form.assigned_sc||''} onChange={e=>F('assigned_sc',e.target.value)}/></div>
             <div>
               <label className="label">ASM (Area Sales Mgr / BD)</label>
