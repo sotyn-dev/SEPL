@@ -81,6 +81,11 @@ export default function Locations() {
   const [timelineDate, setTimelineDate] = useState(todayIso());
   const [timeline, setTimeline] = useState(null);
   const [tlLoading, setTlLoading] = useState(false);
+  // Mam (2026-05-29): picking an employee fired the auto-load but
+  // showed nothing during the request / on error → page looked
+  // broken.  Keep the last error message in state so the body
+  // renders a clear failure card instead of silent blank space.
+  const [tlError, setTlError] = useState(null);
 
   useEffect(() => {
     if (tab !== 'timeline') return;
@@ -90,12 +95,15 @@ export default function Locations() {
   const loadTimeline = async () => {
     if (!timelineUserId) return;
     setTlLoading(true);
+    setTlError(null);
     try {
       const r = await api.get('/admin/locations/timeline', { params: { user_id: timelineUserId, date: timelineDate } });
       setTimeline(r.data);
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to load');
+      const msg = err.response?.data?.error || err.message || 'Failed to load timeline';
+      toast.error(msg);
       setTimeline(null);
+      setTlError(msg);
     }
     setTlLoading(false);
   };
@@ -377,6 +385,35 @@ export default function Locations() {
           {!timelineUserId && (
             <div className="card p-6 text-center text-gray-400 text-sm">
               Pick an employee above to see their GPS movement on the selected date.
+            </div>
+          )}
+
+          {/* Loading skeleton — mam (2026-05-29): screen used to go
+              blank between "picked employee" and "data arrived". */}
+          {timelineUserId && tlLoading && (
+            <div className="card p-6 text-center text-gray-500 text-sm flex items-center justify-center gap-2">
+              <FiRefreshCw className="animate-spin" size={14} />
+              Loading timeline for {users.find(u => String(u.id) === String(timelineUserId))?.name || 'employee'} · {timelineDate}…
+            </div>
+          )}
+
+          {/* Error state — visible card even if mam dismissed the toast. */}
+          {timelineUserId && !tlLoading && tlError && (
+            <div className="card p-4 bg-red-50 border-l-4 border-red-500 flex items-start gap-2 text-sm text-red-800">
+              <FiAlertCircle className="mt-0.5 flex-shrink-0" />
+              <div>
+                <div className="font-semibold">Couldn't load this timeline.</div>
+                <div className="text-xs mt-1">{tlError} — pick a different date or click Load Timeline to retry.</div>
+              </div>
+            </div>
+          )}
+
+          {/* "Picked but never loaded" hint — covers the case where
+              auto-load didn't fire (rare) or the user landed here with
+              a stale state. */}
+          {timelineUserId && !tlLoading && !tlError && !timeline && (
+            <div className="card p-6 text-center text-gray-400 text-sm">
+              Click <span className="font-semibold text-blue-600">Load Timeline</span> to fetch GPS history for the selected employee + date.
             </div>
           )}
 
