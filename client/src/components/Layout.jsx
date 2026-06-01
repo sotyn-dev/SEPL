@@ -127,6 +127,9 @@ const SIDEBAR_GROUPS = [
     { path: '/attendance',      label: 'Attendance',                icon: FiCalendar,   module: 'attendance' },
     { path: '/payroll',         label: 'Payroll',                   icon: FiDollarSign, module: 'payroll' },
     { path: '/employees',       label: 'Employees',                 icon: FiAtSign,     module: 'employees' },
+    // Mam (2026-05-30): "performance is under HRMS" — moved from
+    // the Tasks group so the scorecard sits with the rest of HR.
+    { path: '/scorecard',       label: 'Performance',               icon: FiAward,      module: 'scoring' },
     { path: '/sub-contractors', label: 'Sub-contractor Master Detail', icon: FiHexagon, module: 'sub_contractors' },
   ]},
   { id: 'inventory', label: 'Inventory', icon: FiPackage, items: [
@@ -137,7 +140,7 @@ const SIDEBAR_GROUPS = [
     { path: '/rentals',        label: 'Room Rentals', icon: FiBookmark, module: 'rentals' },
   ]},
   { id: 'tasks', label: 'Tasks', icon: FiCheckSquare, items: [
-    { path: '/scorecard',   label: 'Performance', icon: FiAward,         module: 'scoring' },
+    // Performance was here; moved to HRMS group (mam 2026-05-30).
     { path: '/delegations', label: 'Delegations', icon: FiPaperclip,     module: 'delegations' },
     { path: '/pms-tasks',   label: 'PMS Tasks',   icon: FiLayers,        module: 'pms_tasks' },
     { path: '/checklists',  label: 'Checklists',  icon: FiCheckCircle,   module: 'checklists' },
