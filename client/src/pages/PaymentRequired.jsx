@@ -60,6 +60,12 @@ const emptyForm = {
 export default function PaymentRequired() {
   const { canCreate, canApprove, canDelete, user } = useAuth();
   const [tab, setTab] = useUrlTab('dashboard');
+  // Mam (2026-05-30): My Inbox tab removed.  Old bookmarks pointing
+  // at ?tab=inbox land back on Dashboard so they don't dead-end.
+  useEffect(() => {
+    if (tab === 'inbox') setTab('dashboard');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
   const [requests, setRequests] = useState([]);
   // Mam (2026-05-22): "My Inbox" — payment requests where the
   // current step's approver is THIS user.  Fetched separately so
@@ -144,22 +150,10 @@ export default function PaymentRequired() {
     Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
     api.get(`/payment-required?${params}`).then(r => setRequests(r.data)).catch(() => {});
     api.get('/payment-required/stats').then(r => setStats(r.data)).catch(() => {});
-    // Mam (2026-05-22): refresh My Inbox + badge count on every load.
-    // Badge is also polled every 60s via setInterval below so it stays
-    // current when the page is left open.
-    api.get('/payment-required/my-inbox').then(r => setMyInbox(r.data || [])).catch(() => {});
-    api.get('/payment-required/my-inbox-count').then(r => setMyInboxCount(r.data?.count || 0)).catch(() => {});
+    // Mam (2026-05-30): My Inbox tab removed → no need to fetch the
+    // inbox list or poll the count.  Endpoints remain on the server
+    // for any external consumer / future re-introduction.
   }, [search, filters]);
-
-  // Mam (2026-05-22): poll the inbox count every 60s so the tab
-  // badge updates when someone else approves and a new item lands
-  // on this user's desk without them refreshing the page.
-  useEffect(() => {
-    const id = setInterval(() => {
-      api.get('/payment-required/my-inbox-count').then(r => setMyInboxCount(r.data?.count || 0)).catch(() => {});
-    }, 60_000);
-    return () => clearInterval(id);
-  }, []);
 
   useEffect(() => {
     load();
@@ -272,23 +266,19 @@ export default function PaymentRequired() {
         </div>
       </div>
 
-      {/* Mam (2026-05-22): "My Inbox" tab pinned first so approvers
-          land on their pending items.  Red badge = count of requests
-          waiting on this user.  Other tabs unchanged. */}
+      {/* Mam (2026-05-30): "in this delete my inbox" — removed the
+          📥 My Inbox tab + badge from the strip.  The per-user
+          /payment-required/my-inbox(*) endpoints stay on the server
+          (no migration needed) — they're just no longer surfaced
+          here.  If anyone lands on ?tab=inbox via bookmark, the
+          redirect effect just below kicks them to Dashboard. */}
       <div className="flex gap-2 flex-wrap">
-        {['dashboard', 'inbox', 'all', 'pending', 'approved', 'rejected'].map(t => {
-          const isInbox = t === 'inbox';
+        {['dashboard', 'all', 'pending', 'approved', 'rejected'].map(t => {
           const label = t === 'all' ? 'All Requests'
-                      : isInbox ? 'My Inbox'
                       : t.charAt(0).toUpperCase() + t.slice(1);
           return (
-            <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1.5`}>
-              {isInbox && '📥 '}{label}
-              {isInbox && myInboxCount > 0 && (
-                <span className={`text-[10px] font-bold rounded-full min-w-[20px] h-[18px] px-1.5 flex items-center justify-center ${tab === t ? 'bg-white text-red-600' : 'bg-red-600 text-white'}`}>
-                  {myInboxCount > 99 ? '99+' : myInboxCount}
-                </span>
-              )}
+            <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'} text-sm`}>
+              {label}
             </button>
           );
         })}
