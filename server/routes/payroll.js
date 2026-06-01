@@ -360,13 +360,53 @@ function calculateForEmployee(db, settings, employee, month) {
     }
   }
 
+  // ─── Sandwich rule (mam 2026-06-01) ──────────────────────────────
+  // "if some one full day on saturday and monday sunday deduct" —
+  // i.e. the standard Indian labour sandwich: Sunday is PAID by
+  // default, but if either the preceding Saturday or the following
+  // Monday is absent / half-day, the Sunday becomes UNPAID.
+  // Walk the breakdown post-loop because we need each day's
+  // outcome (pay 0 / 0.5 / 1) before deciding the Sundays.
+  for (let i = 0; i < breakdown.length; i++) {
+    const b = breakdown[i];
+    if (b.day !== 'Sun') continue;
+    const prev = i > 0 ? breakdown[i - 1] : null;
+    const next = i < breakdown.length - 1 ? breakdown[i + 1] : null;
+    const prevOk = !prev || prev.pay >= 1; // Saturday must be FULL day
+    const nextOk = !next || next.pay >= 1; // Monday must be FULL day
+    if (prevOk && nextOk) {
+      // Sandwich satisfied → Sunday paid.  Only flip if it wasn't
+      // already (preserves any existing sundays_paid behaviour).
+      if (b.pay < 1) {
+        paidDays += (1 - b.pay);
+        sundayCount += 1;
+        b.pay = 1;
+        b.label = 'sunday_paid_sandwich';
+      }
+    } else {
+      // Sandwich broken → Sunday unpaid.
+      if (b.pay > 0) {
+        paidDays -= b.pay;
+        if (b.label === 'sunday_paid') sundayCount -= 1;
+        b.pay = 0;
+        b.label = 'sunday_sandwich_break';
+      }
+    }
+  }
+
+  // ─── Per-day rate (mam 2026-06-01) ───────────────────────────────
+  // "one per day we count = full salary / total days in month".
+  // Switched from working_days_per_month (typically 26) to the actual
+  // calendar days (28/29/30/31).  Sundays are already paid via the
+  // sandwich rule above, so the salary covers the full month evenly.
   const baseSalary = employee.salary || 0;
-  const perDayRate = settings.working_days_per_month > 0 ? baseSalary / settings.working_days_per_month : 0;
+  const perDayRate = totalDays > 0 ? baseSalary / totalDays : 0;
   const grossEarned = perDayRate * paidDays;
 
-  // Overtime pay
-  const perHourRate = settings.working_days_per_month > 0
-    ? baseSalary / (settings.working_days_per_month * settings.ot_threshold_hours)
+  // Overtime pay — hourly rate derived from the same monthly base so
+  // it stays consistent with the new per-day formula.
+  const perHourRate = totalDays > 0
+    ? baseSalary / (totalDays * settings.ot_threshold_hours)
     : 0;
   const otPay = otHours * perHourRate * (settings.ot_rate_multiplier || 1);
 
