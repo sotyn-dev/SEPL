@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import EngineerPerformance from '../components/EngineerPerformance';
 
 // Mam (2026-05-30): the PO/BOQ rate is the FULL SITC value (Supply +
 // Installation + Testing & Commissioning) and already includes labour.
@@ -22,13 +23,6 @@ const EQUIPMENT_LIST = ['Welding Machine', 'Pipe Threading Machine', 'Drill Mach
 export default function DPR() {
   const { user, isAdmin, canEdit, canDelete, canApprove } = useAuth();
   const [tab, setTab] = useUrlTab('dashboard');
-  // Mam (2026-05-30): old ?tab=compliance URLs now point at HR
-  // System → Performance.  Bookmarks land back on Dashboard so
-  // nobody hits a dead state.
-  useEffect(() => {
-    if (tab === 'compliance') setTab('dashboard');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
   const [reportFilter, setReportFilter] = useState(''); // when set by stat-card click, filters Daily Reports tab
   const [dateTouched, setDateTouched] = useState(false); // true once user explicitly picks a date
   const [summary, setSummary] = useState(null);
@@ -422,10 +416,11 @@ export default function DPR() {
     <div className="space-y-6">
       <div className="sticky-toolbar">
         <div className="flex gap-2 flex-wrap">
-          {['dashboard', 'reports', 'sites', 'losses'].map(t => (
+          {['dashboard', 'reports', 'compliance', 'sites', 'losses'].map(t => (
             <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'}`}>
               {t === 'dashboard' ? 'Dashboard'
                 : t === 'reports' ? 'Daily Reports'
+                : t === 'compliance' ? 'Engineer Compliance'
                 : t === 'sites' ? 'Sites'
                 : 'Loss Reasons'}
             </button>
@@ -433,10 +428,11 @@ export default function DPR() {
         </div>
       </div>
 
-      {/* Mam (2026-05-30): "Performance is in under HRMS".  The old
-          Engineer Compliance tab moved to HR System → Performance.
-          Component lives in client/src/components/EngineerPerformance.jsx. */}
+      {/* Mam (2026-05-30): keep Engineer Compliance HERE in Daily
+          Reports AND under HR System → Performance.  Same shared
+          component drives both — single source of truth. */}
       {tab === 'losses' && <LossReasonsTab />}
+      {tab === 'compliance' && <EngineerPerformance />}
 
       {tab === 'dashboard' && (
         <>
