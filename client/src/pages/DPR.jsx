@@ -33,6 +33,18 @@ const MEPF_SYSTEMS = [
   { key: 'HVAC',          icon: '❄️', sel: 'bg-indigo-600 text-white border-indigo-600',    dot: 'bg-indigo-500' },
   { key: 'Solar',         icon: '☀️', sel: 'bg-amber-500 text-white border-amber-500',      dot: 'bg-amber-400' },
 ];
+
+// Mam (2026-05-30): "same radio button as weather type" — Weather
+// becomes the same chip-radio shape as MEPF System.  Value stays
+// lowercase (clear / rainy / …) for backward compat with existing
+// DPR rows; only the display label is title-case.
+const WEATHER_OPTIONS = [
+  { key: 'clear',  label: 'Clear',  icon: '☀️',  sel: 'bg-yellow-500 text-white border-yellow-500', dot: 'bg-yellow-400' },
+  { key: 'rainy',  label: 'Rainy',  icon: '🌧️', sel: 'bg-blue-600 text-white border-blue-600',     dot: 'bg-blue-500' },
+  { key: 'cloudy', label: 'Cloudy', icon: '☁️',  sel: 'bg-gray-500 text-white border-gray-500',     dot: 'bg-gray-400' },
+  { key: 'hot',    label: 'Hot',    icon: '🥵',  sel: 'bg-orange-600 text-white border-orange-600', dot: 'bg-orange-500' },
+  { key: 'windy',  label: 'Windy',  icon: '💨',  sel: 'bg-teal-600 text-white border-teal-600',     dot: 'bg-teal-500' },
+];
 const EQUIPMENT_LIST = ['Welding Machine', 'Pipe Threading Machine', 'Drill Machine', 'Grinder', 'Ladder', 'Scaffolding', 'Pipe Bending Machine', 'Cable Pulling Machine', 'Multimeter', 'Megger', 'Earth Tester', 'Hydro Test Pump', 'Generator', 'Compressor'];
 
 export default function DPR() {
@@ -867,10 +879,29 @@ export default function DPR() {
                   </div>
                 )}
               </div>
-              <div><label className="label">Weather</label>
-                <select className="select" value={form.weather || 'clear'} onChange={e => setForm({ ...form, weather: e.target.value })}>
-                  <option value="clear">Clear</option><option value="rainy">Rainy</option><option value="cloudy">Cloudy</option><option value="hot">Hot</option><option value="windy">Windy</option>
-                </select>
+              {/* Weather — same chip-radio as MEPF, spans full row so
+                  all 5 chips sit on one line on desktop.  Mam (2026-
+                  05-30): "same radio button as weather type". */}
+              <div className="sm:col-span-2 md:col-span-3">
+                <label className="label">Weather</label>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {WEATHER_OPTIONS.map(w => {
+                    const active = (form.weather || 'clear') === w.key;
+                    return (
+                      <button key={w.key} type="button"
+                        onClick={() => setForm({ ...form, weather: w.key })}
+                        className={`px-3 py-1.5 rounded-full text-sm font-semibold border-2 transition flex items-center gap-1.5 ${
+                          active
+                            ? `${w.sel} shadow-sm`
+                            : 'bg-white text-gray-700 border-gray-300 hover:border-gray-400 hover:bg-gray-50'
+                        }`}>
+                        <span className="text-base leading-none">{w.icon}</span>
+                        {w.label}
+                        {!active && <span className={`w-2 h-2 rounded-full ${w.dot}`} aria-hidden />}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>
