@@ -20,8 +20,12 @@ import { useAuth } from '../context/AuthContext';
 import {
   FiPlus, FiUsers, FiBriefcase, FiCalendar, FiFileText, FiCheckCircle,
   FiXCircle, FiClock, FiUpload, FiEye, FiEdit2, FiTrash2, FiAward,
-  FiDownload, FiSearch, FiBarChart2, FiVideo, FiUserCheck,
+  FiDownload, FiSearch, FiBarChart2, FiVideo, FiUserCheck, FiTrendingUp,
 } from 'react-icons/fi';
+// Mam (2026-05-30): "Performance is in under HRMS".  Engineer
+// Performance was the old "Engineer Compliance" tab on the DPR
+// page; moved here so HR has one home for headcount + performance.
+import EngineerPerformance from '../components/EngineerPerformance';
 import { LuIndianRupee } from 'react-icons/lu';
 import { fmtIST, fmtDateIST } from '../utils/dateIST';
 
@@ -46,14 +50,15 @@ const HR_REQ_STATUS = {
 };
 
 const TABS = [
-  { id: 'dashboard',  label: 'Dashboard',         icon: FiBarChart2 },
-  { id: 'hiring',     label: 'Hiring Requests',   icon: FiBriefcase },
-  { id: 'candidates', label: 'Candidates (ATS)',  icon: FiUsers },
-  { id: 'interviews', label: 'Interviews',        icon: FiCalendar },
-  { id: 'offers',     label: 'Offers',            icon: FiFileText },
-  { id: 'onboarding', label: 'Onboarding',        icon: FiCheckCircle },
-  { id: 'training',   label: 'Training',          icon: FiVideo },
-  { id: 'employees',  label: 'Employees',         icon: FiUserCheck },
+  { id: 'dashboard',   label: 'Dashboard',         icon: FiBarChart2 },
+  { id: 'performance', label: 'Performance',       icon: FiTrendingUp },
+  { id: 'hiring',      label: 'Hiring Requests',   icon: FiBriefcase },
+  { id: 'candidates',  label: 'Candidates (ATS)',  icon: FiUsers },
+  { id: 'interviews',  label: 'Interviews',        icon: FiCalendar },
+  { id: 'offers',      label: 'Offers',            icon: FiFileText },
+  { id: 'onboarding',  label: 'Onboarding',        icon: FiCheckCircle },
+  { id: 'training',    label: 'Training',          icon: FiVideo },
+  { id: 'employees',   label: 'Employees',         icon: FiUserCheck },
 ];
 
 const fmtMoney = (n) => n != null ? `Rs ${(+n || 0).toLocaleString('en-IN')}` : '—';
@@ -89,8 +94,9 @@ export default function HRSystem() {
         })}
       </div>
 
-      {tab === 'dashboard'  && <DashboardTab />}
-      {tab === 'hiring'     && <HiringRequestsTab user={user} isAdmin={isAdmin} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} canApprove={canApprove} />}
+      {tab === 'dashboard'   && <DashboardTab />}
+      {tab === 'performance' && <EngineerPerformance />}
+      {tab === 'hiring'      && <HiringRequestsTab user={user} isAdmin={isAdmin} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} canApprove={canApprove} />}
       {tab === 'candidates' && <CandidatesTab user={user} isAdmin={isAdmin} canCreate={canCreate} canEdit={canEdit} canDelete={canDelete} />}
       {tab === 'interviews' && <InterviewsTab user={user} canCreate={canCreate} canEdit={canEdit} />}
       {tab === 'offers'     && <OffersTab user={user} canCreate={canCreate} canEdit={canEdit} />}
