@@ -844,60 +844,52 @@ export default function DPR() {
                   ))}
                 </div>
               </div>
-              {/* MEPF System — chip-radio picker.  Spans the whole
-                  row on md+ so 6 chips fit comfortably; wraps to
-                  multiple rows on narrow screens.  Mam (2026-05-30):
-                  "advance radio type button". */}
+              {/* MEPF System — compact chip-radio.  Mam (2026-05-30):
+                  "mepf system , weather look consume space more" —
+                  shrunk padding + dropped the unselected color dot. */}
               <div className="sm:col-span-2 md:col-span-3">
                 <label className="label">MEPF System</label>
-                <div className="flex flex-wrap gap-2 mt-1">
+                <div className="flex flex-wrap gap-1.5 mt-1">
                   {MEPF_SYSTEMS.map(s => {
                     const active = form.system_type === s.key;
                     return (
                       <button key={s.key} type="button"
                         onClick={() => setForm({ ...form, system_type: active ? '' : s.key })}
-                        className={`px-3 py-1.5 rounded-full text-sm font-semibold border-2 transition flex items-center gap-1.5 ${
+                        className={`px-2 py-1 rounded-full text-xs font-medium border transition inline-flex items-center gap-1 ${
                           active
                             ? `${s.sel} shadow-sm`
-                            : 'bg-white text-gray-700 border-gray-300 hover:border-gray-400 hover:bg-gray-50'
+                            : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
                         }`}>
-                        <span className="text-base leading-none">{s.icon}</span>
+                        <span className="text-sm leading-none">{s.icon}</span>
                         {s.key}
-                        {!active && <span className={`w-2 h-2 rounded-full ${s.dot}`} aria-hidden />}
                       </button>
                     );
                   })}
                 </div>
                 {form.system_type && !MEPF_SYSTEMS.find(s => s.key === form.system_type) && (
-                  /* Legacy DPRs may have an old system label (Fire Alarm,
-                     CCTV, etc.).  Show it inline so re-opening a draft
-                     doesn't silently wipe the value. */
-                  <div className="text-[11px] text-gray-500 mt-1.5">
+                  <div className="text-[11px] text-gray-500 mt-1">
                     Legacy value: <strong>{form.system_type}</strong>
                     <button type="button" onClick={() => setForm({ ...form, system_type: '' })}
                       className="ml-2 text-red-600 hover:underline">clear</button>
                   </div>
                 )}
               </div>
-              {/* Weather — same chip-radio as MEPF, spans full row so
-                  all 5 chips sit on one line on desktop.  Mam (2026-
-                  05-30): "same radio button as weather type". */}
+              {/* Weather — same compact chip pattern as MEPF. */}
               <div className="sm:col-span-2 md:col-span-3">
                 <label className="label">Weather</label>
-                <div className="flex flex-wrap gap-2 mt-1">
+                <div className="flex flex-wrap gap-1.5 mt-1">
                   {WEATHER_OPTIONS.map(w => {
                     const active = (form.weather || 'clear') === w.key;
                     return (
                       <button key={w.key} type="button"
                         onClick={() => setForm({ ...form, weather: w.key })}
-                        className={`px-3 py-1.5 rounded-full text-sm font-semibold border-2 transition flex items-center gap-1.5 ${
+                        className={`px-2 py-1 rounded-full text-xs font-medium border transition inline-flex items-center gap-1 ${
                           active
                             ? `${w.sel} shadow-sm`
-                            : 'bg-white text-gray-700 border-gray-300 hover:border-gray-400 hover:bg-gray-50'
+                            : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
                         }`}>
-                        <span className="text-base leading-none">{w.icon}</span>
+                        <span className="text-sm leading-none">{w.icon}</span>
                         {w.label}
-                        {!active && <span className={`w-2 h-2 rounded-full ${w.dot}`} aria-hidden />}
                       </button>
                     );
                   })}
