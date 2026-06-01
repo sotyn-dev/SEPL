@@ -155,6 +155,11 @@ export default function DPR() {
   // items, or rates not set). Surfaced as a yellow banner above the
   // work items grid so mam knows exactly what to fix.
   const [poItemsDiag, setPoItemsDiag] = useState(null);
+  // Sub-contractor master list for the DPR contractor-name picker.
+  // Mam (2026-05-30): "contractor name drop down from master sub-
+  // contactor".  Lazy-loaded the first time the DPR submit modal opens
+  // (engineers won't hit the lookup endpoint while just browsing DPRs).
+  const [subcons, setSubcons] = useState([]);
   const [progress, setProgress] = useState([]);
   const [expandedSite, setExpandedSite] = useState({}); // { "engineerId-siteId": true }
   // Progress widget grouping — 'engineer' (default) or 'site'. Mam
@@ -596,6 +601,11 @@ export default function DPR() {
                 ]);
                 setMachinery([{ equipment: '', quantity: 1, hours_used: 0, condition: 'working' }]);
                 setContractors([{ name: '', manpower: 0 }]);
+                // Lazy-fetch the sub-contractor master so the contractor
+                // dropdown lands populated.  Cached after first open.
+                if (subcons.length === 0) {
+                  api.get('/sub-contractors/lookup').then(r => setSubcons(r.data || [])).catch(() => {});
+                }
                 setModal(true);
               }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit DPR</button>
             </div>
@@ -755,9 +765,36 @@ export default function DPR() {
                 <div className="space-y-1.5">
                   {contractors.map((c, i) => (
                     <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                      <input className="input col-span-7" placeholder={`Contractor ${i + 1} name`}
-                        value={c.name}
-                        onChange={e => { const n = [...contractors]; n[i] = { ...n[i], name: e.target.value }; setContractors(n); }} />
+                      {/* Mam (2026-05-30): "contractor name drop down from
+                          master sub-contactor".  SearchableSelect lists every
+                          active sub-contractor with their trade in the label
+                          so engineers can find by company OR by trade type.
+                          We bind by name (string) — keeps backward compat
+                          with legacy contractor_name TEXT in older DPRs. */}
+                      <div className="col-span-7">
+                        <SearchableSelect
+                          options={[
+                            // Existing free-text values from legacy DPRs land
+                            // here too, so re-opening a draft doesn't lose them.
+                            ...(c.name && !subcons.find(s => s.name === c.name)
+                              ? [{ name: c.name, label: `${c.name} (manual)` }]
+                              : []),
+                            ...subcons.map(s => ({
+                              ...s,
+                              label: s.contractor_type ? `${s.name} — ${s.contractor_type}` : s.name,
+                            })),
+                          ]}
+                          value={c.name || ''}
+                          valueKey="name"
+                          displayKey="label"
+                          placeholder={`Contractor ${i + 1}…`}
+                          onChange={(s) => {
+                            const n = [...contractors];
+                            n[i] = { ...n[i], name: s?.name || '' };
+                            setContractors(n);
+                          }}
+                        />
+                      </div>
                       <input className="input col-span-4" type="number" placeholder="Manpower"
                         value={c.manpower || ''}
                         onChange={e => { const n = [...contractors]; n[i] = { ...n[i], manpower: +e.target.value || 0 }; setContractors(n); }} />

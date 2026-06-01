@@ -8,6 +8,23 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
+// Lightweight picker endpoint — any authenticated user can use it,
+// no sub_contractors:view permission required.  Mam (2026-05-30):
+// the DPR submission form needs site engineers to pick from the
+// master, but engineers don't (and shouldn't) have full master
+// access.  Returns just id / name / type / district so dropdowns
+// stay small.  MUST be registered above the `/:id` route so the
+// id-matcher doesn't eat it.
+router.get('/lookup', (req, res) => {
+  const rows = getDb().prepare(
+    `SELECT id, name, contractor_type, district
+       FROM sub_contractors
+      WHERE active = 1
+      ORDER BY name COLLATE NOCASE`
+  ).all();
+  res.json(rows);
+});
+
 // GET list — optional filters: q (name/number/type search), state,
 // contractor_type, active=0|1 (default: active only).
 router.get('/', requirePermission('sub_contractors', 'view'), (req, res) => {
