@@ -167,6 +167,16 @@ try {
   console.warn('[itemwise-rate-import] failed to start:', e.message);
 }
 
+// v2 — second-pass rate import (mam 2026-06-01): broader CSV
+// export with 2,496 rate rows.  Separate flag so v1 stays
+// settled.  Skip via ERP_DISABLE_ITEM_RATE_IMPORT=1 (same env
+// var as v1 — disables both).
+try {
+  require('./scripts/itemwiseRateImportV2').runOnce();
+} catch (e) {
+  console.warn('[itemwise-rate-import-v2] failed to start:', e.message);
+}
+
 // Fire NOC auto-pilot — mam (2026-05-16): "i need easy to user for
 // update but automatically things which you can done".  Backfills
 // existing rows once on boot (idempotent via app_settings flag),
