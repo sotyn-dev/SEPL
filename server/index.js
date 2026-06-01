@@ -156,6 +156,17 @@ try {
   console.warn('[item-master-cleanup] failed to start:', e.message);
 }
 
+// One-time rate import — mam (2026-06-01): "according to this excel
+// update rate in item wise in erp".  Reads data/itemwise-rates-
+// 2026-06-01.json and updates item_master.current_price for the 140
+// rows mam shared.  Guarded by an app_settings flag so it runs
+// exactly once after deploy.  Skip via ERP_DISABLE_ITEM_RATE_IMPORT=1.
+try {
+  require('./scripts/itemwiseRateImport').runOnce();
+} catch (e) {
+  console.warn('[itemwise-rate-import] failed to start:', e.message);
+}
+
 // Fire NOC auto-pilot — mam (2026-05-16): "i need easy to user for
 // update but automatically things which you can done".  Backfills
 // existing rows once on boot (idempotent via app_settings flag),
