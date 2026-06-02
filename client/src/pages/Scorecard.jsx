@@ -490,6 +490,42 @@ function TemplateKpiEditor({ templateId, onChange }) {
       .finally(() => setPreviewLoading(false));
   }, [previewUserId]);
 
+  // Per-user KPI target overrides — mam (2026-06-02): "same target
+  // weekly but per-user (different per engineer)".  When a preview
+  // user is selected, fetch their override map so the Target column
+  // can render the user-specific value (with fallback to template
+  // default_planned).  Updated locally + persisted via the
+  // /scoring/users/:user/kpi-targets/:kpi endpoint.
+  const [userTargets, setUserTargets] = useState({});  // { kpi_id: planned_value }
+  useEffect(() => {
+    if (!previewUserId) { setUserTargets({}); return; }
+    api.get(`/scoring/users/${previewUserId}/kpi-targets`, { params: { template_id: templateId } })
+      .then(r => {
+        const map = {};
+        for (const row of (r.data || [])) map[row.kpi_id] = row.planned_value;
+        setUserTargets(map);
+      })
+      .catch(() => setUserTargets({}));
+  }, [previewUserId, templateId]);
+
+  const saveUserTarget = async (kpiId, value) => {
+    if (!previewUserId) return;
+    try {
+      // Empty string → server removes override + falls back to template default.
+      const body = value === '' || value == null ? { planned_value: null } : { planned_value: +value };
+      await api.put(`/scoring/users/${previewUserId}/kpi-targets/${kpiId}`, body);
+      setUserTargets(prev => {
+        const next = { ...prev };
+        if (body.planned_value == null) delete next[kpiId];
+        else next[kpiId] = +body.planned_value;
+        return next;
+      });
+      toast.success('Target saved');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save target');
+    }
+  };
+
   const addKpi = async (e) => {
     e.preventDefault();
     try {
@@ -567,35 +603,72 @@ function TemplateKpiEditor({ templateId, onChange }) {
               <td className="p-2"><input className="input text-xs" defaultValue={k.group_name} onBlur={e => updateKpi(k, { group_name: e.target.value })} /></td>
               <td className="p-2"><input className="input text-xs" defaultValue={k.metric_name} onBlur={e => updateKpi(k, { metric_name: e.target.value })} /></td>
               <td className="p-2"><input type="number" className="input text-xs text-center" defaultValue={k.weightage} onBlur={e => updateKpi(k, { weightage: +e.target.value })} /></td>
-              {/* Target column — auto-locked when the data source pulls
-                  the planned value from live ERP data (mam, 2026-05-16:
-                  "delegation plan pick from delegation task give by
-                  days same in every where").  Same treatment applied to
-                  every auto:* source whose computeAutoCount returns a
-                  non-null `given` — only auto:dpr_profit_by_user keeps
-                  the manual target editable (its given=null pattern). */}
+              {/* Target column — three modes:
+                  1. Auto source (locked): shows "auto" pill, target comes
+                     from computeAutoCount's `given`.
+                  2. Manual + no preview user: edits the TEMPLATE default
+                     (k.default_planned) — fallback for everyone.
+                  3. Manual + preview user picked: edits the PER-USER
+                     override (mam 2026-06-02: "same target weekly but
+                     per-user").  Empty → falls back to template default.
+                     A small chip below the input shows which mode is
+                     active so mam doesn't accidentally change the wrong
+                     one. */}
               <td className="p-2">
                 {(() => {
                   const isAuto = k.data_source && k.data_source.startsWith('auto:');
-                  // Auto sources whose `given` is null in computeAutoCount —
-                  // for those the admin's default_planned is still used.
                   const AUTO_KEEPS_MANUAL_TARGET = ['auto:dpr_profit_by_user'];
                   const autoLocksTarget = isAuto && !AUTO_KEEPS_MANUAL_TARGET.includes(k.data_source);
                   if (autoLocksTarget) {
                     return (
                       <div className="text-center text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-1 py-1 cursor-help"
-                           title={`Target is computed live from ${k.data_source.replace('auto:', '')} — count of items given to the user in the scoring period. Editing here has no effect for auto sources.`}>
+                           title={`Target is computed live from ${k.data_source.replace('auto:', '')} — count of items given to the user in the scoring period.`}>
                         auto
                       </div>
                     );
                   }
+                  // Per-user override mode (preview user picked)
+                  if (previewUserId) {
+                    const overrideVal = userTargets[k.id];
+                    const hasOverride = overrideVal != null;
+                    return (
+                      <div>
+                        <input
+                          type="number" step="0.1"
+                          className={`input text-xs text-center ${hasOverride ? 'border-emerald-400 bg-emerald-50' : ''}`}
+                          // controlled via key so switching user remounts the input with fresh defaultValue
+                          key={`utg-${previewUserId}-${k.id}-${overrideVal ?? 'def'}`}
+                          defaultValue={hasOverride ? overrideVal : (k.default_planned || 0)}
+                          onBlur={e => {
+                            const v = e.target.value;
+                            const num = +v;
+                            // Save only if value differs from current state
+                            if (hasOverride) {
+                              if (v === '' || num === 0) saveUserTarget(k.id, '');         // remove override
+                              else if (num !== +overrideVal) saveUserTarget(k.id, num);
+                            } else {
+                              // No override yet — only save if mam typed a NON-default value
+                              if (v !== '' && num !== (+k.default_planned || 0)) saveUserTarget(k.id, num);
+                            }
+                          }}
+                          title={hasOverride ? `Per-user target (override of template default ${k.default_planned})` : `Falls back to template default (${k.default_planned}). Edit to override for this user.`}
+                        />
+                        <div className="text-[9px] mt-0.5 text-center">
+                          {hasOverride
+                            ? <span className="text-emerald-700 font-semibold">user override</span>
+                            : <span className="text-gray-400">default: {k.default_planned || 0}</span>}
+                        </div>
+                      </div>
+                    );
+                  }
+                  // No preview user — editing the TEMPLATE default for everyone.
                   return (
                     <input
                       type="number" step="0.1"
                       className="input text-xs text-center"
                       defaultValue={k.default_planned || 0}
                       onBlur={e => updateKpi(k, { default_planned: +e.target.value })}
-                      title="Fixed weekly Planned target"
+                      title="Template default — applies to every user assigned to this template (unless overridden per-user)."
                     />
                   );
                 })()}

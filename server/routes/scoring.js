@@ -114,6 +114,59 @@ router.delete('/kpis/:id', adminOnly, (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+// ---------- PER-USER KPI TARGETS ----------
+// mam (2026-06-02): "Same target weekly but per-user (different per
+// engineer)".  Override of score_kpis.default_planned for a specific
+// user — scorecard endpoint reads this first, falls back to template
+// default.  Lets the same KPI on the same template carry different
+// targets per assigned engineer.
+
+// List overrides for a user (optionally scoped to one template).
+router.get('/users/:user_id/kpi-targets', (req, res) => {
+  const db = getDb();
+  const tplId = req.query.template_id ? +req.query.template_id : null;
+  const sql = tplId
+    ? `SELECT t.kpi_id, t.planned_value, t.updated_at,
+              k.metric_name, k.default_planned
+         FROM score_user_kpi_target t
+         JOIN score_kpis k ON k.id = t.kpi_id
+        WHERE t.user_id = ? AND k.template_id = ?`
+    : `SELECT t.kpi_id, t.planned_value, t.updated_at,
+              k.metric_name, k.default_planned
+         FROM score_user_kpi_target t
+         JOIN score_kpis k ON k.id = t.kpi_id
+        WHERE t.user_id = ?`;
+  const params = tplId ? [req.params.user_id, tplId] : [req.params.user_id];
+  res.json(db.prepare(sql).all(...params));
+});
+
+// Upsert one override.  Body: { planned_value }.  Sending null / 0
+// is treated as "remove the override and fall back to template default".
+router.put('/users/:user_id/kpi-targets/:kpi_id', adminOnly, (req, res) => {
+  const db = getDb();
+  const userId = +req.params.user_id;
+  const kpiId = +req.params.kpi_id;
+  const raw = req.body?.planned_value;
+  // null / undefined / empty string → delete override (fall through to default)
+  if (raw == null || raw === '') {
+    db.prepare('DELETE FROM score_user_kpi_target WHERE user_id=? AND kpi_id=?').run(userId, kpiId);
+    return res.json({ message: 'Override removed — falls back to template default' });
+  }
+  const planned = +raw;
+  if (!Number.isFinite(planned) || planned < 0) {
+    return res.status(400).json({ error: 'planned_value must be a non-negative number' });
+  }
+  db.prepare(
+    `INSERT INTO score_user_kpi_target (user_id, kpi_id, planned_value, updated_by)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, kpi_id) DO UPDATE SET
+       planned_value = excluded.planned_value,
+       updated_by    = excluded.updated_by,
+       updated_at    = CURRENT_TIMESTAMP`
+  ).run(userId, kpiId, planned, req.user.id);
+  res.json({ message: 'Override saved', user_id: userId, kpi_id: kpiId, planned_value: planned });
+});
+
 // ---------- ASSIGNMENTS ----------
 // List all users with their assigned template
 router.get('/assignments', (req, res) => {
@@ -537,9 +590,22 @@ router.get('/scorecard', (req, res) => {
       const entry = db.prepare('SELECT * FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(userId, k.id, weekStart);
       const lastEntry = db.prepare('SELECT actual_pct FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(userId, k.id, lastWeekStart);
 
-      // If no weekly entry yet, fall back to the template's default Planned
-      // target (mam's "this plan is fix" — Monika's ROI=1, Auto=4, etc.).
-      let planned = (entry?.planned != null && entry?.planned !== 0) ? entry.planned : (k.default_planned || 0);
+      // Resolution order for Planned (mam 2026-06-02):
+      //   1. Weekly entry's `planned`  — explicit override for that week
+      //   2. Per-user KPI target       — score_user_kpi_target (different
+      //                                   engineers can have different targets
+      //                                   on the same KPI)
+      //   3. Template default_planned  — fallback for everyone
+      // The user-level override lets mam say "Ajmer's Indent vs Bill = 5,
+      // Aakash's = 3" without spawning two templates.
+      const userOverride = db.prepare(
+        'SELECT planned_value FROM score_user_kpi_target WHERE user_id=? AND kpi_id=?'
+      ).get(userId, k.id);
+      let planned = (entry?.planned != null && entry?.planned !== 0)
+        ? entry.planned
+        : (userOverride?.planned_value != null
+            ? userOverride.planned_value
+            : (k.default_planned || 0));
       let actual = entry?.actual ?? 0;
 
       // Auto-fill from ERP if data_source is 'auto:*'. Wrap in try/catch

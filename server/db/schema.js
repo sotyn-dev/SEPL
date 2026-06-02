@@ -1535,6 +1535,22 @@ function initializeDatabase() {
       assigned_by INTEGER REFERENCES users(id)
     );
 
+    -- Per-user KPI target override — mam (2026-06-02): "Same target
+    -- weekly but per-user (different per engineer)".  When a user is
+    -- assigned to a template, mam can override the KPI's
+    -- default_planned with a user-specific value (e.g. Ajmer's
+    -- "Indent vs Bill" target = 5, Aakash's target = 3 — same KPI,
+    -- same template).  Scorecard reads this override first; falls
+    -- back to score_kpis.default_planned when no row exists.
+    CREATE TABLE IF NOT EXISTS score_user_kpi_target (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kpi_id  INTEGER NOT NULL REFERENCES score_kpis(id) ON DELETE CASCADE,
+      planned_value REAL NOT NULL DEFAULT 0,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, kpi_id)
+    );
+
     -- Weekly entries: one row per (user, kpi, week_start_monday)
     CREATE TABLE IF NOT EXISTS score_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
