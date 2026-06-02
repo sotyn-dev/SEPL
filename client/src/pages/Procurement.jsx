@@ -2627,7 +2627,7 @@ export default function Procurement() {
                   Showing <span className="font-semibold">{filteredPending.length}</span> of {pendingPoItems.length}
                 </div>
               </div>
-              <div className="overflow-x-auto">
+              <div className="hidden md:block overflow-x-auto">
                 <table className="text-xs">
                   <thead><tr className="bg-amber-100/50">
                     <th className="px-2 py-1 text-left">Indent</th>
@@ -2671,6 +2671,43 @@ export default function Procurement() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Mobile card list — mam (2026-06-02): "same card type
+                  indent show on mobile view update in all indent to
+                  dispatch".  Mirrors the Indents-tab card pattern. */}
+              <div className="md:hidden space-y-2">
+                {pendingPg.rows.map(p => {
+                  const displayName = [p.master_name || p.description, p.specification, p.size].filter(Boolean).join(' / ');
+                  return (
+                    <div key={p.indent_item_id} className="bg-white border border-amber-200 rounded-lg p-2.5 shadow-sm">
+                      <div className="flex items-start justify-between gap-2 mb-1.5">
+                        <div className="min-w-0">
+                          <div className="font-mono font-bold text-red-700 text-sm">{p.indent_number}</div>
+                          {p.site_name && <div className="text-[10px] text-gray-500 truncate">{p.site_name}</div>}
+                        </div>
+                        <span className={`badge text-[9px] ${p.rate_status === 'finalized' ? 'badge-green' : 'badge-yellow'}`}>{p.rate_status || 'pending'}</span>
+                      </div>
+                      <div className="text-xs">
+                        {p.item_code && <span className="font-mono text-[10px] text-gray-500">[{p.item_code}] </span>}
+                        <span className="font-medium">{displayName || '—'}</span>
+                      </div>
+                      <div className="text-[10px] text-gray-500 mt-0.5 flex flex-wrap gap-x-2">
+                        {p.make && <span>Make: {p.make}</span>}
+                        {p.item_type && <span className={`font-bold ${p.item_type === 'FOC' ? 'text-emerald-600' : p.item_type === 'RGP' ? 'text-amber-600' : 'text-red-600'}`}>{p.item_type}</span>}
+                        <span>Qty: <b className="text-gray-700">{p.quantity} {p.unit || p.uom}</b></span>
+                      </div>
+                      <div className="mt-1.5 grid grid-cols-2 gap-2 text-[11px] pt-1.5 border-t border-gray-100">
+                        <div><span className="text-gray-400">Final Rate:</span> <b className="text-gray-700">{p.final_rate ? `Rs ${p.final_rate}` : '—'}</b></div>
+                        <div className="truncate" title={p.final_vendor_name}><span className="text-gray-400">Vendor:</span> <b className="text-gray-700">{p.final_vendor_name || '—'}</b></div>
+                      </div>
+                      <button onClick={() => openCreateVendorPo(p.indent_id)} className="btn btn-primary text-xs px-3 py-1 w-full mt-2">+ Create PO</button>
+                    </div>
+                  );
+                })}
+                {filteredPending.length === 0 && (
+                  <div className="text-center py-6 text-amber-700 text-xs">No items match the current filters.</div>
+                )}
+              </div>
               <Pagination pg={pendingPg} setPerPage={setVpoPendingPerPage} className="border-t border-amber-200 pt-2" />
             </div>
           )}
@@ -2713,7 +2750,7 @@ export default function Procurement() {
                 </div>
               </div>
 
-          <div className="card p-0 overflow-x-auto"><table className="freeze-head freeze-col">
+          <div className="card p-0 overflow-x-auto hidden md:block"><table className="freeze-head freeze-col">
             <thead><tr><th>PO Number</th><th>Indent</th><th>PO Date</th><th>Vendor</th><th>Amount</th><th>File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {listPg.rows.map(v => (
@@ -2808,6 +2845,84 @@ export default function Procurement() {
             </tbody>
             <tfoot><tr><td colSpan="8" className="border-t border-gray-100"><Pagination pg={listPg} setPerPage={setVpoListPerPage} /></td></tr></tfoot>
           </table></div>
+
+          {/* Mobile card list for Vendor POs — mam (2026-06-02). */}
+          <div className="md:hidden space-y-2">
+            {listPg.rows.map(v => (
+              <div key={v.id} className={`bg-white border rounded-lg p-2.5 shadow-sm ${v.cancelled ? 'border-gray-300 opacity-70' : 'border-gray-200'}`}>
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <div className="min-w-0">
+                    <div className="font-mono font-bold text-red-700 text-sm">{v.po_number}</div>
+                    <PaymentBlockChip v={v} />
+                  </div>
+                  {v.cancelled
+                    ? <span className="text-[9px] font-bold uppercase px-2 py-0.5 rounded bg-gray-200 text-gray-600 border border-gray-300" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
+                    : <StatusBadge status={v.status} />}
+                </div>
+                <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px] pb-1.5 border-b border-gray-100">
+                  <div><span className="text-gray-400">Indent:</span> <b className="font-mono text-blue-800">{v.indent_number || '—'}</b></div>
+                  <div><span className="text-gray-400">PO Date:</span> <b className="text-gray-700">{v.po_date || '—'}</b></div>
+                  <div className="col-span-2 truncate" title={v.vendor_name}><span className="text-gray-400">Vendor:</span> <b className="text-gray-700">{v.vendor_name || '—'}</b></div>
+                  {v.indent_site_name && <div className="col-span-2 truncate"><span className="text-gray-400">Site:</span> {v.indent_site_name}</div>}
+                  <div className="col-span-2"><span className="text-gray-400">Amount:</span> <b className="text-emerald-700">Rs {(+v.total_amount || 0).toLocaleString('en-IN')}</b></div>
+                </div>
+                {/* Links row */}
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] mt-1.5">
+                  <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 underline flex items-center gap-1">
+                    <FiPrinter size={11} /> Print PO
+                  </a>
+                  <a href={`/vendor-po/${v.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline flex items-center gap-1">
+                    🚚 Delivery Note
+                  </a>
+                  {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">PDF</a>}
+                </div>
+                {/* Actions */}
+                <div className="flex flex-wrap items-center gap-1.5 mt-2 pt-1.5 border-t border-gray-100">
+                  {!v.cancelled && v.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
+                    <button onClick={() => markPaymentCleared(v.id)} className="text-[10px] font-semibold px-2 py-1 rounded bg-emerald-100 text-emerald-700 border border-emerald-300">
+                      ✓ Clear pmt
+                    </button>
+                  )}
+                  {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
+                    <button onClick={() => openEditVendorPo(v)} className="text-[10px] px-2 py-1 rounded border border-gray-300 text-gray-700 flex items-center gap-1">
+                      <FiEdit2 size={11} /> Edit
+                    </button>
+                  )}
+                  {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
+                    <button onClick={async () => {
+                      const reason = prompt(`Cancel Vendor PO "${v.po_number}"?\n\nReason (optional):`);
+                      if (reason === null) return;
+                      try { await api.post(`/procurement/vendor-po/${v.id}/cancel`, { reason }); toast.success('PO cancelled'); load(); }
+                      catch (err) { toast.error(err.response?.data?.error || 'Cancel failed'); }
+                    }} className="text-[10px] px-2 py-1 rounded border border-amber-300 text-amber-700 flex items-center gap-1">
+                      <FiX size={11} /> Cancel
+                    </button>
+                  )}
+                  {v.cancelled && (canApprove('procurement') || isAdmin()) && (
+                    <button onClick={async () => {
+                      if (!confirm(`Restore Vendor PO "${v.po_number}" from cancelled?`)) return;
+                      try { await api.post(`/procurement/vendor-po/${v.id}/uncancel`); toast.success('PO restored'); load(); }
+                      catch (err) { toast.error(err.response?.data?.error || 'Restore failed'); }
+                    }} className="text-[10px] px-2 py-1 rounded border border-emerald-300 text-emerald-700 flex items-center gap-1">
+                      <FiCheck size={11} /> Restore
+                    </button>
+                  )}
+                  {canDelete('procurement') && (
+                    <button onClick={async () => {
+                      if (!confirm(`Permanently delete vendor PO "${v.po_number}"?`)) return;
+                      try { await api.delete(`/procurement/vendor-po/${v.id}`); toast.success('Deleted'); load(); }
+                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                    }} className="text-[10px] px-2 py-1 rounded border border-red-300 text-red-700 flex items-center gap-1">
+                      <FiTrash2 size={11} /> Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {vendorPos.length === 0 && <div className="text-center py-8 text-gray-400 text-xs">No vendor POs yet — click "Create Vendor PO"</div>}
+            {vendorPos.length > 0 && filteredList.length === 0 && <div className="text-center py-8 text-gray-400 text-xs">No POs match the current filters.</div>}
+            <Pagination pg={listPg} setPerPage={setVpoListPerPage} />
+          </div>
             </>
           )}
         </>
@@ -3122,7 +3237,7 @@ export default function Procurement() {
                   Showing <span className="font-semibold">{filteredFu.length}</span> of {pendingPos.length}
                 </div>
               </div>
-              <div className="overflow-x-auto">
+              <div className="hidden md:block overflow-x-auto">
                 <table className="text-xs">
                   <thead><tr className="bg-amber-100/50">
                     <th className="px-2 py-1 text-left">PO Number</th>
@@ -3197,6 +3312,49 @@ export default function Procurement() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Mobile cards (mam 2026-06-02). */}
+              <div className="md:hidden space-y-2">
+                {fuPg.rows.map(po => {
+                  const d = daysDiff(po.expected_receipt_date);
+                  let chip;
+                  if (!po.expected_receipt_date) chip = <span className="text-[9px] text-gray-400">no date</span>;
+                  else if (d < 0) chip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">OVERDUE {-d}d</span>;
+                  else if (d === 0) chip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300">DUE TODAY</span>;
+                  else if (d <= 3) chip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 border border-orange-200">in {d}d</span>;
+                  else chip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">in {d}d</span>;
+                  return (
+                    <div key={po.id} className="bg-white border border-amber-200 rounded-lg p-2.5 shadow-sm">
+                      <div className="flex justify-between items-start gap-2 mb-1">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-red-700 text-sm">{po.po_number}</div>
+                          <div className="font-mono text-[10px] text-blue-800">{po.indent_number || '—'}</div>
+                          {po.indent_site_name && <div className="text-[10px] text-gray-500 truncate">{po.indent_site_name}</div>}
+                        </div>
+                        {chip}
+                      </div>
+                      <div className="text-[11px] truncate" title={po.vendor_name}><span className="text-gray-400">Vendor:</span> <b>{po.vendor_name}</b></div>
+                      <div className="grid grid-cols-2 gap-x-2 text-[11px] mt-1">
+                        <div><span className="text-gray-400">PO Date:</span> {po.po_date || '—'}</div>
+                        <div><span className="text-gray-400">Expected:</span> {po.expected_receipt_date || '—'}</div>
+                      </div>
+                      <div className="text-[11px] mt-1">
+                        <span className="text-gray-400">Amount:</span> <b className="text-emerald-700">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</b>
+                        {+po.total_amount_drift > 1 && <span className="text-[9px] text-amber-700 ml-1">⚠ drift</span>}
+                      </div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] mt-1.5 pt-1.5 border-t border-gray-100">
+                        <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 underline">📄 PO</a>
+                        <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline">🚚 DN</a>
+                        {po.file_path && <a href={po.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">📎 File</a>}
+                      </div>
+                      <button onClick={() => openUploadBill(po)} className="btn btn-primary text-xs px-3 py-1 w-full mt-2">+ Upload Bill</button>
+                    </div>
+                  );
+                })}
+                {filteredFu.length === 0 && (
+                  <div className="text-center py-6 text-amber-700 text-xs">No POs match the current filters.</div>
+                )}
+              </div>
               <Pagination pg={fuPg} setPerPage={setBillsFuPerPage} className="border-t border-amber-200 pt-2" />
             </div>
           )}
@@ -3228,7 +3386,7 @@ export default function Procurement() {
                   Showing <span className="font-semibold text-gray-700">{filteredBills.length}</span> of {purchaseBills.length}
                 </div>
               </div>
-          <div className="card p-0 overflow-x-auto"><table className="freeze-head freeze-col">
+          <div className="card p-0 overflow-x-auto hidden md:block"><table className="freeze-head freeze-col">
             <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
               {billsListPg.rows.map(b => (
@@ -3254,6 +3412,42 @@ export default function Procurement() {
             </tbody>
             <tfoot><tr><td colSpan="9" className="border-t border-gray-100"><Pagination pg={billsListPg} setPerPage={setBillsListPerPage} /></td></tr></tfoot>
           </table></div>
+
+          {/* Mobile cards for Purchase Bills (mam 2026-06-02). */}
+          <div className="md:hidden space-y-2">
+            {billsListPg.rows.map(b => (
+              <div key={b.id} className="bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm">
+                <div className="flex justify-between items-start gap-2 mb-1">
+                  <div className="min-w-0">
+                    <div className="font-semibold text-sm">{b.bill_number}</div>
+                    <div className="text-[10px] text-gray-500 truncate" title={b.vendor_name}>{b.vendor_name}</div>
+                  </div>
+                  <StatusBadge status={b.payment_status} />
+                </div>
+                <div className="grid grid-cols-3 gap-x-2 text-[11px] mt-1 pb-1.5 border-b border-gray-100">
+                  <div><span className="text-gray-400">Date:</span><br/><b>{b.bill_date || '—'}</b></div>
+                  <div><span className="text-gray-400">Amount:</span><br/><b>Rs {(+b.amount || 0).toLocaleString('en-IN')}</b></div>
+                  <div><span className="text-gray-400">GST:</span><br/><b>Rs {(+b.gst_amount || 0).toLocaleString('en-IN')}</b></div>
+                </div>
+                <div className="text-xs mt-1.5">
+                  <span className="text-gray-400">Total:</span> <b className="text-emerald-700">Rs {(+b.total_amount || 0).toLocaleString('en-IN')}</b>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                  {b.file_path && <a href={b.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-[10px]">📄 View Bill</a>}
+                  {canDelete('procurement') && (
+                    <button onClick={async () => {
+                      if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
+                      try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); load(); }
+                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                    }} className="text-[10px] text-red-600 ml-auto flex items-center gap-1"><FiTrash2 size={11} /> Delete</button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {purchaseBills.length === 0 && <div className="text-center py-8 text-gray-400 text-xs">No bills yet</div>}
+            {purchaseBills.length > 0 && filteredBills.length === 0 && <div className="text-center py-8 text-gray-400 text-xs">No bills match the current filters.</div>}
+            <Pagination pg={billsListPg} setPerPage={setBillsListPerPage} />
+          </div>
             </>
           )}
         </>
@@ -3434,7 +3628,7 @@ export default function Procurement() {
                   Showing <span className="font-semibold">{filteredReady.length}</span> of {readyToDispatch.length}
                 </div>
               </div>
-              <div className="overflow-x-auto">
+              <div className="hidden md:block overflow-x-auto">
                 <table className="text-xs">
                   <thead><tr className="bg-indigo-100/50">
                     <th className="px-2 py-1 text-left">PO Number</th>
@@ -3473,6 +3667,36 @@ export default function Procurement() {
                     )}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Mobile cards for Ready-to-Dispatch (mam 2026-06-02). */}
+              <div className="md:hidden space-y-2">
+                {readyPg.rows.map(po => (
+                  <div key={po.id} className="bg-white border border-indigo-200 rounded-lg p-2.5 shadow-sm">
+                    <div className="flex justify-between items-start gap-2 mb-1">
+                      <div>
+                        <div className="font-semibold text-red-700 text-sm">{po.po_number}</div>
+                        <div className="text-[10px] text-gray-500 truncate" title={po.vendor_name}>{po.vendor_name}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[11px] font-bold text-emerald-700 whitespace-nowrap">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
+                        {+po.total_amount_drift > 1 && <div className="text-[9px] text-amber-700">⚠ drift</div>}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-2 text-[11px] mt-0.5">
+                      <div><span className="text-gray-400">PO Date:</span> {po.po_date || '—'}</div>
+                      <div><span className="text-gray-400">Expected:</span> {po.expected_receipt_date || '—'}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] mt-1.5 pt-1.5 border-t border-gray-100">
+                      <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 underline">📄 PO</a>
+                      <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline">🚚 Delivery Note</a>
+                    </div>
+                    <button onClick={() => openAddDispatch(po)} className="btn btn-primary text-xs px-3 py-1 w-full mt-2">Dispatch</button>
+                  </div>
+                ))}
+                {filteredReady.length === 0 && (
+                  <div className="text-center py-6 text-indigo-700 text-xs">No POs match the current filters.</div>
+                )}
               </div>
               <Pagination pg={readyPg} setPerPage={setDispReadyPerPage} className="border-t border-indigo-200 pt-2" />
             </div>
@@ -3530,7 +3754,7 @@ export default function Procurement() {
                   Showing <span className="font-semibold text-gray-700">{filteredDispatch.length}</span> of {deliveryNotes.length}
                 </div>
               </div>
-          <div className="card p-0 overflow-x-auto"><table className="freeze-head freeze-col">
+          <div className="card p-0 overflow-x-auto hidden md:block"><table className="freeze-head freeze-col">
             <thead><tr><th>ID</th><th>Type</th><th>Doc No</th><th>PO</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {/* Ready-to-Dispatch POs awaiting receipt (mam 2026-05-30:
@@ -3640,6 +3864,87 @@ export default function Procurement() {
             </tbody>
             <tfoot><tr><td colSpan="12" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
           </table></div>
+
+          {/* Mobile cards for Dispatch & Receiving list (mam 2026-06-02). */}
+          <div className="md:hidden space-y-2">
+            {/* Ready-to-Dispatch POs (awaiting receipt) shown at the top */}
+            {readyToDispatch.map(po => (
+              <div key={`ready-${po.id}`} className="bg-amber-50/60 border border-amber-300 rounded-lg p-2.5 shadow-sm">
+                <div className="flex justify-between items-start gap-2 mb-1">
+                  <div className="min-w-0">
+                    <div className="font-semibold text-sm">{po.po_number}</div>
+                    <div className="text-[10px] text-gray-500 truncate" title={po.vendor_name}>{po.vendor_name || ''}</div>
+                  </div>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300">AWAITING</span>
+                </div>
+                <div className="text-[11px]"><span className="text-gray-400">PO Date:</span> {po.po_date || '—'}</div>
+                <button onClick={() => openReceivePo(po)} className="btn btn-success text-xs px-3 py-1 w-full mt-2">Upload Receiving</button>
+              </div>
+            ))}
+            {/* Existing dispatches */}
+            {dispListPg.rows.map(d => (
+              <div key={d.id} className="bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm">
+                <div className="flex justify-between items-start gap-2 mb-1">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                        {d.document_type === 'sales_bill' ? 'SALES BILL' : d.document_type === 'challan' ? 'CHALLAN' : '—'}
+                      </span>
+                      <span className="text-[10px] text-gray-400">#{d.id}</span>
+                    </div>
+                    <div className="font-semibold text-sm">{d.document_number || <span className="text-gray-300">—</span>}</div>
+                    <div className="text-[10px] text-gray-500">{d.vendor_po_number || '—'} {d.vendor_name ? `· ${d.vendor_name}` : ''}</div>
+                  </div>
+                  <StatusBadge status={d.status} />
+                </div>
+                {d.sales_bill_pending === 1 && !d.sales_bill_number && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300 inline-block mt-0.5">📋 SB PENDING</span>
+                )}
+                {d.sales_bill_number && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200 inline-block mt-0.5">✓ SB {d.sales_bill_number}</span>
+                )}
+                <div className="grid grid-cols-2 gap-x-2 text-[11px] mt-1 pt-1 border-t border-gray-100">
+                  <div><span className="text-gray-400">Date:</span> {d.delivery_date || '—'}</div>
+                  <div><span className="text-gray-400">Received:</span> {d.received_at ? new Date(d.received_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—'}</div>
+                  <div className="col-span-2"><span className="text-gray-400">By:</span> {d.received_by_name || '—'}</div>
+                </div>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] mt-1.5">
+                  {d.file_path && <a href={d.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">📄 Doc</a>}
+                  {d.receipt_file_path && <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline font-semibold">Signed ✓</a>}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 mt-1.5 pt-1.5 border-t border-gray-100">
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' });
+                        const blob = new Blob([res.data], { type: 'text/html;charset=utf-8' });
+                        window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+                      } catch (err) {
+                        toast.error(err.response?.data?.error || 'Could not generate document');
+                      }
+                    }}
+                    className="text-[10px] px-2 py-1 rounded border border-gray-300 text-gray-700 flex items-center gap-1"
+                  >🖨 Print</button>
+                  {!d.received_by_name && (
+                    <button onClick={() => openMarkReceived(d)} className="text-[10px] px-2 py-1 rounded bg-emerald-100 text-emerald-700 border border-emerald-300 font-semibold">Mark Received</button>
+                  )}
+                  {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
+                    <button onClick={() => { setSbTarget(d); setSbForm({ sales_bill_number: '', file: null }); }} className="text-[10px] px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-300 font-semibold">Add SB</button>
+                  )}
+                  {canDelete('procurement') && (
+                    <button onClick={async () => {
+                      if (!confirm(`Delete dispatch #${d.id}?`)) return;
+                      try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); load(); }
+                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                    }} className="text-[10px] text-red-600 ml-auto"><FiTrash2 size={11} /></button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {deliveryNotes.length === 0 && readyToDispatch.length === 0 && <div className="text-center py-8 text-gray-400 text-xs">No dispatches yet</div>}
+            {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <div className="text-center py-8 text-gray-400 text-xs">No dispatches match the current filters.</div>}
+            <Pagination pg={dispListPg} setPerPage={setDispListPerPage} />
+          </div>
             </>
           )}
         </>
