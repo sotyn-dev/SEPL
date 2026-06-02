@@ -3019,8 +3019,8 @@ export default function Procurement() {
               </div>
             </div>
 
-            {/* Table */}
-            <div className="card p-0 overflow-x-auto">
+            {/* Desktop table (mobile gets card list below — mam 2026-06-02) */}
+            <div className="card p-0 overflow-x-auto hidden md:block">
               <table className="text-xs">
                 <thead><tr className="bg-gray-50">
                   <th className="px-3 py-2 text-left">PO Number</th>
@@ -3098,6 +3098,75 @@ export default function Procurement() {
                   )}
                 </tbody>
               </table>
+            </div>
+
+            {/* Mobile card list — same data as the desktop Payment table
+                (mam 2026-06-02: "vendor po, purchase, payment, dispatch
+                & receiving not update and change according to mobile
+                view like cards"). */}
+            <div className="md:hidden space-y-2">
+              {visible.map(po => (
+                <div key={po.id} className={`bg-white border rounded-lg p-2.5 shadow-sm ${po.payment_block_status === 'pending' ? 'border-red-200' : 'border-emerald-200'}`}>
+                  <div className="flex justify-between items-start gap-2 mb-1">
+                    <div className="min-w-0">
+                      <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="font-semibold text-red-700 text-sm underline">{po.po_number}</a>
+                      <div className="font-mono text-[10px] text-blue-800 mt-0.5">{po.indent_number || '—'}</div>
+                      {po.indent_site_name && <div className="text-[10px] text-gray-500 truncate" title={po.indent_site_name}>{po.indent_site_name}</div>}
+                    </div>
+                    <div className="text-right">
+                      <PaymentBlockChip v={po} />
+                      {!po.payment_block_type && (
+                        <div className="text-[9px] text-gray-400 italic">— not set —</div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-[11px] truncate" title={po.vendor_name}><span className="text-gray-400">Vendor:</span> <b>{po.vendor_name}</b></div>
+                  <div className="grid grid-cols-2 gap-x-2 text-[11px] mt-1 pb-1.5 border-b border-gray-100">
+                    <div><span className="text-gray-400">PO Date:</span> {po.po_date || '—'}</div>
+                    <div className="text-right">
+                      <span className="text-gray-400">Owed:</span>{' '}
+                      {po.payment_block_amount > 0
+                        ? <b className={po.payment_block_status === 'pending' ? 'text-red-700' : 'text-emerald-700'}>₹{Math.round(+po.payment_block_amount).toLocaleString('en-IN')}</b>
+                        : <span className="text-gray-300">—</span>}
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-gray-400 mt-0.5">PO total ₹{Math.round(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
+                  {po.payment_block_notes && (
+                    <div className="text-[10px] text-gray-600 italic mt-1 line-clamp-2" title={po.payment_block_notes}>"{po.payment_block_notes}"</div>
+                  )}
+                  {po.payment_block_status === 'cleared' && po.payment_cleared_by_name && (
+                    <div className="text-[10px] text-emerald-700 mt-0.5">
+                      ✓ by {po.payment_cleared_by_name}
+                      {po.payment_cleared_at && ' · ' + new Date(po.payment_cleared_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2 pt-1.5 border-t border-gray-100">
+                    {po.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
+                      <button
+                        onClick={() => markPaymentCleared(po.id)}
+                        className="text-[11px] font-semibold px-2.5 py-1 rounded bg-emerald-600 text-white"
+                      >
+                        ✓ Mark Cleared
+                      </button>
+                    )}
+                    {(canApprove('procurement') || isAdmin()) && (
+                      <button
+                        onClick={() => openEditVendorPo(po)}
+                        className="text-[10px] px-2 py-1 rounded border border-blue-300 text-blue-700 flex items-center gap-1"
+                      >
+                        <FiEdit2 size={11} /> Edit
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {visible.length === 0 && (
+                <div className="text-center py-8 text-gray-400 text-xs">
+                  {effectivePill === 'urgent'
+                    ? '🎉 No urgent payments — every blocked PO is cleared.'
+                    : 'No cleared payments yet.'}
+                </div>
+              )}
             </div>
           </>
         );
