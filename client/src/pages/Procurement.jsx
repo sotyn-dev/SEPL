@@ -3965,15 +3965,52 @@ export default function Procurement() {
               </div>
           <div className="card p-0 overflow-x-auto hidden md:block"><table className="freeze-head freeze-col">
             {/* Mam (2026-06-02): "site name also show here delivery note
-                number and against it we will upload receiving".  Site
-                column added.  Synthetic AWAITING rows dropped because
-                every billed PO now has a REAL delivery_notes row (with
-                a DC/YYYY/#### number) auto-created at bill-upload time
-                — those rows show in this same list with status='pending'
-                so mam can upload the signed receipt directly against the
-                visible DN number. */}
+                number and against it we will upload receiving".  Bill-
+                upload now auto-creates the DN row (commit c7e86ac).
+                For legacy billed POs that don't have a DN yet (the
+                backfill in schema.js may not have fired on the VPS),
+                we ALSO render synthetic "AWAITING" rows below — so
+                mam always sees the data and can still Upload Receiving
+                which creates the DN inline. */}
             <thead><tr><th>Delivery Note No</th><th>Type</th><th>PO</th><th>Site / Company</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
+              {/* Synthetic fallback rows — POs that have a bill but no
+                  delivery_notes row yet.  The Delivery Note No column
+                  shows "auto on receive" so mam knows ERP will assign
+                  the next DC/YYYY/#### the moment she clicks Upload
+                  Receiving.  Once the backfill runs (or a new bill
+                  comes in post-c7e86ac), these become real DN rows. */}
+              {readyToDispatch.map(po => (
+                <tr key={`ready-${po.id}`} className="bg-amber-50/30">
+                  <td className="font-mono text-amber-700">
+                    <span className="text-xs">— auto on receive —</span>
+                    <div className="text-[10px] text-amber-600 font-sans font-normal">next DC/{new Date().getFullYear()}/####</div>
+                  </td>
+                  <td>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-sky-50 text-sky-700 border-sky-200">CHALLAN</span>
+                  </td>
+                  <td className="text-xs">
+                    {po.po_number}
+                    <div className="text-[10px] text-gray-500">{po.vendor_name || ''}</div>
+                  </td>
+                  <td className="text-xs">{po.indent_site_name || <span className="text-gray-300">—</span>}</td>
+                  <td className="text-xs">{po.po_date || '—'}</td>
+                  <td className="text-gray-300 text-xs">—</td>
+                  <td className="text-gray-300 text-xs">—</td>
+                  <td className="text-gray-300 text-xs">—</td>
+                  <td className="text-gray-300 text-xs">—</td>
+                  <td><span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">Awaiting receipt</span></td>
+                  <td className="whitespace-nowrap">
+                    <button
+                      onClick={() => openReceivePo(po)}
+                      className="btn btn-success text-[10px] px-2 py-1"
+                      title="Upload the signed receipt — auto-creates the Delivery Note with DC/YYYY/#### and marks it received."
+                    >
+                      Upload Receiving
+                    </button>
+                  </td>
+                </tr>
+              ))}
               {dispListPg.rows.map(d => (
                 <tr key={d.id}>
                   <td className="font-mono font-semibold text-blue-800">
@@ -4059,18 +4096,54 @@ export default function Procurement() {
                   </td>
                 </tr>
               ))}
-              {deliveryNotes.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
+              {deliveryNotes.length === 0 && readyToDispatch.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
               {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
             </tbody>
             <tfoot><tr><td colSpan="11" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
           </table></div>
 
-          {/* Mobile cards — every billed PO now has a REAL DN row with a
-              DC/YYYY/#### number auto-created at bill-upload time, so
-              the synthetic AWAITING rows are no longer needed.  Each
-              card leads with the DN number (mam 2026-06-02: "delivery
-              note number and against it we will upload receiving"). */}
+          {/* Mobile cards.  Each card leads with the DN number (mam
+              2026-06-02: "delivery note number and against it we will
+              upload receiving").  Synthetic AWAITING cards appear at
+              the top as a fallback for billed POs that don't yet have
+              a delivery_notes row — they still let mam Upload Receiving
+              and ERP will mint the real DN number on submit. */}
           <div className="md:hidden space-y-3">
+            {readyToDispatch.map(po => (
+              <div key={`ready-${po.id}`} className="card p-3 space-y-2 bg-amber-50/30 border-amber-200">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Delivery Note No</div>
+                    <div className="text-sm font-mono text-amber-700">— auto on receive —</div>
+                    <div className="text-[10px] text-amber-600 mt-0.5">next DC/{new Date().getFullYear()}/####</div>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-300 bg-amber-50 text-amber-700 uppercase">Awaiting</span>
+                </div>
+                {po.indent_site_name && (
+                  <div className="flex items-start gap-1.5 text-xs">
+                    <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase text-gray-400">Site / Company</div>
+                      <div className="font-medium text-gray-800">{po.indent_site_name}</div>
+                    </div>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">PO</div>
+                    <div className="font-mono font-semibold text-blue-800">{po.po_number}</div>
+                    {po.vendor_name && <div className="text-[10px] text-gray-500 truncate">{po.vendor_name}</div>}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] uppercase text-gray-400">PO Date</div>
+                    <div className="font-medium text-gray-700">{po.po_date || '—'}</div>
+                  </div>
+                </div>
+                <button onClick={() => openReceivePo(po)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">
+                  Upload Receiving
+                </button>
+              </div>
+            ))}
             {dispListPg.rows.map(d => (
               <div key={d.id} className="card p-3 space-y-2">
                 <div className="flex justify-between items-start gap-2">
@@ -4157,7 +4230,7 @@ export default function Procurement() {
                 </div>
               </div>
             ))}
-            {deliveryNotes.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No dispatches yet</div>}
+            {deliveryNotes.length === 0 && readyToDispatch.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No dispatches yet</div>}
             {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No dispatches match the current filters.</div>}
             <Pagination pg={dispListPg} setPerPage={setDispListPerPage} />
           </div>
