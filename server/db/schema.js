@@ -2888,13 +2888,31 @@ function initializeDatabase() {
     // Existing approved_by / approved_at / rejected_by / rejection_reason
     // continue to capture the FINAL state — L1/L2 fields capture per-level
     // detail. Audit + Approval column stay backward-compatible.
-    ['indents', "approval_policy TEXT DEFAULT 'single'"],   // 'single' | 'two_level'
+    ['indents', "approval_policy TEXT DEFAULT 'single'"],   // 'single' | 'two_level' | 'crm_two_level'
     ['indents', 'l1_status TEXT'],                           // 'pending' | 'approved' | 'rejected'
     ['indents', 'l1_by INTEGER REFERENCES users(id)'],
     ['indents', 'l1_at DATETIME'],
     ['indents', 'l2_status TEXT'],
     ['indents', 'l2_by INTEGER REFERENCES users(id)'],
     ['indents', 'l2_at DATETIME'],
+    // Mam (2026-06-02): "in extra item crm will approv first indent
+    // after then l1, l2 and data automatically go to crm funnel".
+    // Extra-Schedule / Extra-Non-Schedule indents are CLIENT-BILLABLE,
+    // not company expense, so CRM has to sign off FIRST (revenue
+    // gatekeeper) before L1/L2 approve the spend.  When CRM approves,
+    // a new BoQ line is auto-added to the project's Client PO so it
+    // bills automatically.  Flow:
+    //   submitted → crm_approved → l1_approved → approved
+    // Non-extra indents keep their existing single / two_level paths
+    // — crm_status stays 'n/a' there.
+    ['indents', "crm_status TEXT DEFAULT 'n/a'"],            // 'n/a' | 'pending' | 'approved' | 'rejected'
+    ['indents', 'crm_by INTEGER REFERENCES users(id)'],
+    ['indents', 'crm_at DATETIME'],
+    ['indents', 'crm_reason TEXT'],
+    // When CRM approves, we INSERT a po_items row tagged with this id
+    // so the billable line can be tracked back to the originating indent
+    // (and reversed if the indent later goes wrong).
+    ['indents', 'crm_billable_po_item_id INTEGER REFERENCES po_items(id)'],
     // Tags the two Nitins (seeded below) as the designated approvers so
     // the UI / API can gate Approve L1 / L2 to them. NULL = ordinary user.
     ['users', 'approval_role TEXT'],

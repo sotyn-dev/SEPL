@@ -1803,12 +1803,32 @@ export default function Procurement() {
               // exactly so the L1 / L2 / single-approval / Re-reject flow
               // works identically on phone.
               const isTwoLevel = i.approval_policy === 'two_level';
+              // Phase A+B (mam 2026-06-02): Extra-Schedule / Extra-Non-Schedule
+              // indents route through CRM first.  Detect that policy here so
+              // the approve buttons render in the right order: CRM → L1 → L2.
+              const isCrmTwoLevel = i.approval_policy === 'crm_two_level';
+              const needsCrm = isCrmTwoLevel && i.crm_status === 'pending';
               const isCreator = i.created_by === user?.id;
               const canActL1 = isAdmin() || user?.approval_role === 'l1';
               const canActL2 = isAdmin() || user?.approval_role === 'l2';
+              // CRM action allowed for anyone with CRM module access
+              // (mam's pick: "anyone with CRM module access" — the
+              // permission live-check uses canApprove('crm') from the
+              // user's loaded permissions map).
+              const canActCrm = isAdmin() || canApprove('crm');
               const blockSelfL2 = i.l1_by && i.l1_by === user?.id;
 
               const renderActionButtons = () => {
+                // CRM stage (Extra-billable indents) — fires first, before L1/L2.
+                if (needsCrm && i.status === 'submitted' && !isCreator) {
+                  if (canActCrm) return (
+                    <>
+                      <button onClick={() => openApproveModal(i)} className="btn text-xs py-1 px-2 flex-1 bg-purple-600 text-white hover:bg-purple-700">Approve as CRM</button>
+                      <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject CRM</button>
+                    </>
+                  );
+                  return <span className="text-[10px] text-purple-600 italic">Awaiting CRM (Extra-billable)</span>;
+                }
                 if (i.status === 'submitted' && !isCreator) {
                   if (isTwoLevel) {
                     if (canActL1) return (
@@ -1825,6 +1845,16 @@ export default function Procurement() {
                       <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject</button>
                     </>
                   );
+                }
+                // CRM-approved → behaves like 'submitted' for L1.
+                if ((i.status === 'crm_approved') && !isCreator) {
+                  if (canActL1) return (
+                    <>
+                      <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve L1</button>
+                      <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject L1</button>
+                    </>
+                  );
+                  return <span className="text-[10px] text-amber-600 italic">CRM ✓ · Awaiting L1</span>;
                 }
                 if (i.status === 'l1_approved' && !isCreator) {
                   if (canActL2 && !blockSelfL2) return (
@@ -1942,12 +1972,19 @@ export default function Procurement() {
                     </div>
                   )}
 
-                  {/* Approval row — L1/L2 stacked for two-level, single for legacy */}
+                  {/* Approval row — CRM (Extra-billable) + L1 + L2 stack
+                      for crm_two_level / two_level, single line for legacy. */}
                   <div className="pt-1 border-t border-gray-100 text-[11px]">
                     <div className="text-[9px] uppercase text-gray-400 mb-0.5">Approval</div>
-                    {isTwoLevel ? (
+                    {(isTwoLevel || isCrmTwoLevel) ? (
                       <div className="space-y-0.5">
+                        {isCrmTwoLevel && (
+                          <ApprovalLevelRow label="CRM" status={i.crm_status}
+                            name={i.crm_by_name} at={i.crm_at}
+                            isReject={i.status === 'rejected' && i.crm_status === 'rejected'} reason={i.crm_reason || i.rejection_reason} />
+                        )}
                         <ApprovalLevelRow label="L1" status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at}
+                          waiting={isCrmTwoLevel && i.crm_status !== 'approved' && i.l1_status === 'pending'}
                           isReject={i.status === 'rejected' && i.l1_status === 'rejected'} reason={i.rejection_reason} />
                         <ApprovalLevelRow label="L2" status={i.l2_status} name={i.l2_by_name || i.approver_names?.l2} at={i.l2_at}
                           waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}

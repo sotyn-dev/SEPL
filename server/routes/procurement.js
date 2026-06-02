@@ -451,13 +451,15 @@ router.get('/indents', (req, res) => {
             au.name as approved_by_name,
             ru.name as rejected_by_name,
             l1u.name as l1_by_name,
-            l2u.name as l2_by_name
+            l2u.name as l2_by_name,
+            cu.name as crm_by_name
      FROM indents i
      LEFT JOIN users u ON i.created_by = u.id
      LEFT JOIN users au ON i.approved_by = au.id
      LEFT JOIN users ru ON i.rejected_by = ru.id
      LEFT JOIN users l1u ON i.l1_by = l1u.id
      LEFT JOIN users l2u ON i.l2_by = l2u.id
+     LEFT JOIN users cu ON i.crm_by = cu.id
      ${where}
      ORDER BY i.created_at DESC`
   ).all(...params);
@@ -777,21 +779,30 @@ router.post('/indents', (req, res) => {
   // 2-level approval policy (mam 2026-05-26): indents raised ON OR AFTER
   // 2026-05-25 go through L1 (Nitin Jain ji) then L2 (Nitin Sir). Older
   // indents stay on the legacy single-approval flow.
+  //
+  // Mam (2026-06-02): "in extra item crm will approv first indent after
+  // then l1, l2" — Extra-Schedule / Extra-Non-Schedule indents are
+  // CLIENT-BILLABLE so they route through CRM first (revenue gatekeeper)
+  // before L1/L2 sign off on the spend.  Policy becomes 'crm_two_level'.
+  // Material / RGP / Rental keep the existing two_level path.
   const TWO_LEVEL_CUTOFF = '2026-05-25';
   const today = new Date().toISOString().slice(0, 10);
-  const policy = today >= TWO_LEVEL_CUTOFF ? 'two_level' : 'single';
+  const isBillable = category === 'extra_schedule' || category === 'extra_non_schedule';
+  const basePolicy = today >= TWO_LEVEL_CUTOFF ? 'two_level' : 'single';
+  const policy = isBillable && basePolicy === 'two_level' ? 'crm_two_level' : basePolicy;
   const r = db.prepare(
     `INSERT INTO indents
        (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,
-        approval_policy, l1_status, l2_status, indent_category)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+        approval_policy, l1_status, l2_status, indent_category, crm_status)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     resolvedPlanningId, indentNum, 'submitted',
     notes || '', site_name || '', raised_by_name || '', site_name || '', req.user.id,
     policy,
-    policy === 'two_level' ? 'pending' : null,
-    policy === 'two_level' ? 'pending' : null,
+    policy === 'two_level' || policy === 'crm_two_level' ? 'pending' : null,
+    policy === 'two_level' || policy === 'crm_two_level' ? 'pending' : null,
     category,
+    policy === 'crm_two_level' ? 'pending' : 'n/a',
   );
 
   // Seed the indent_tracker with the approval_pending stage so the IndentFMS
@@ -907,18 +918,110 @@ router.put('/indents/:id', (req, res) => {
     //                  legacy Approval-column display keep working.
     if (status === 'approved' || status === 'rejected') {
       const cur2 = db.prepare(
-        `SELECT created_by, approval_policy, status, l1_status, l2_status, l1_by
+        `SELECT created_by, approval_policy, status, l1_status, l2_status, l1_by,
+                crm_status, indent_category, planning_id
            FROM indents WHERE id=?`
       ).get(id);
-      if (cur2 && cur2.approval_policy === 'two_level') {
+      if (cur2 && (cur2.approval_policy === 'two_level' || cur2.approval_policy === 'crm_two_level')) {
         const actor = db.prepare('SELECT id, role, approval_role FROM users WHERE id=?').get(req.user.id) || req.user;
         const isAdminUser = actor.role === 'admin';
         const canActL1 = isAdminUser || actor.approval_role === 'l1';
         const canActL2 = isAdminUser || actor.approval_role === 'l2';
+        // Mam (2026-06-02): "anyone with CRM module access" can approve
+        // Extra indents at the CRM stage.  We check the runtime permission
+        // via the same requirePermission helper used elsewhere — but
+        // because middleware was already passed, we re-check here using
+        // the cached user.permissions / module_permissions if available,
+        // OR fall through to admin gate.  In practice the canApproveCrm
+        // role is set on Aanchal + sales staff so they can sign off
+        // billable indents.
+        const userPerms = db.prepare(
+          `SELECT action FROM user_permissions WHERE user_id=? AND module='crm'`
+        ).all(actor.id).map(r => r.action);
+        const canActCrm = isAdminUser || userPerms.includes('approve') || userPerms.includes('edit');
+
+        // CRM stage — only for crm_two_level policy.  Must complete BEFORE
+        // L1 can act.  When CRM approves, auto-INSERT a po_items row on
+        // the linked Client PO so the billable line tracks in the project's
+        // revenue pipeline.
+        if (status === 'approved' && cur2.approval_policy === 'crm_two_level'
+            && cur2.crm_status === 'pending') {
+          if (!canActCrm) {
+            const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
+            return res.status(403).json({
+              error: `Extra-Schedule / Extra-Non-Schedule indents require CRM approval first. You're signed in as "${actorName}" — no CRM module access. Admin → User Management → grant CRM access.`,
+            });
+          }
+          // Resolve the linked Client PO via planning_id → order_planning → purchase_orders.
+          // We add the Extra item as a new billable po_items row with item_type='extra'
+          // so collections + DPR + Sales Bill rates auto-pick it up.
+          let billablePoItemId = null;
+          try {
+            const indentRow = db.prepare(
+              `SELECT i.planning_id, op.po_id
+                 FROM indents i
+                 LEFT JOIN order_planning op ON op.id = i.planning_id
+                WHERE i.id = ?`
+            ).get(id);
+            const clientPoId = indentRow?.po_id || null;
+            if (clientPoId) {
+              // Sum the indent_items for this indent → total billable
+              // amount.  Auto-line carries indent's total qty (or 1 if
+              // multi-line) + the total amount as rate.  mam can refine
+              // later via the Client PO BoQ editor.
+              const items = db.prepare(
+                `SELECT description, SUM(quantity) as qty, SUM(amount) as amount,
+                        AVG(NULLIF(rate, 0)) as avg_rate, MIN(unit) as unit
+                   FROM indent_items WHERE indent_id = ?`
+              ).get(id);
+              const totalAmt = +items?.amount || 0;
+              const totalQty = +items?.qty || 1;
+              const ins = db.prepare(
+                `INSERT INTO po_items (po_id, description, quantity, unit, rate, amount, item_type)
+                 VALUES (?, ?, ?, ?, ?, ?, 'extra')`
+              ).run(
+                clientPoId,
+                `[EXTRA · ${cur2.indent_category}] from indent ${id}`,
+                totalQty,
+                items?.unit || 'nos',
+                totalQty > 0 ? totalAmt / totalQty : totalAmt,
+                totalAmt,
+              );
+              billablePoItemId = ins.lastInsertRowid;
+            }
+          } catch (e) {
+            console.error('[crm-approve] auto-billable line failed (CRM approval saved anyway):', e.message);
+          }
+          db.prepare(
+            `UPDATE indents
+               SET crm_status='approved',
+                   crm_by=?,
+                   crm_at=CURRENT_TIMESTAMP,
+                   crm_billable_po_item_id=?,
+                   status='crm_approved'
+             WHERE id=?`
+          ).run(actor.id, billablePoItemId, id);
+          return res.json({
+            message: 'CRM approved — awaiting L1 sign-off',
+            stage: 'crm_done',
+            billable_po_item_id: billablePoItemId,
+          });
+        }
+        // Once CRM is approved the row is in status='crm_approved' AND
+        // crm_status='approved'.  L1 acts next — treat it the same as
+        // the two_level path's "submitted → l1_approved" branch.
+        // We normalise status here so the existing L1 branch below
+        // matches without duplication.
+        const effectiveStatus = (cur2.approval_policy === 'crm_two_level' && cur2.status === 'crm_approved')
+          ? 'submitted'  // L1 branch expects 'submitted' as its trigger
+          : cur2.status;
 
         if (status === 'approved') {
           // Which level are we acting on? Drive off the current status.
-          if (cur2.status === 'submitted' && cur2.l1_status === 'pending') {
+          // For crm_two_level we mapped crm_approved → submitted above so
+          // the L1 branch reuses without changes.
+          if (effectiveStatus === 'submitted' && cur2.l1_status === 'pending'
+              && (cur2.approval_policy !== 'crm_two_level' || cur2.crm_status === 'approved')) {
             // L1 approve — gate by role, then write l1_* and flip status='l1_approved'.
             if (!canActL1) {
               // Surface WHO is blocked and WHY so admin can fix it from
@@ -952,12 +1055,14 @@ router.put('/indents/:id', (req, res) => {
             ).run(actor.id, id);
             // Fall through to the existing approve path → it sets status='approved',
             // approved_by, approved_at, and applies quantity_overrides.
-          } else if (cur2.status !== 'submitted') {
-            // Trying to "approve" a row that isn't waiting for L1 or L2 (e.g.
-            // already approved, rejected, po_sent, or stuck in an exotic state
-            // like l1_approved + l2_rejected). Reject the call so the legacy
-            // approve path can't accidentally bulldoze a final state.
-            return res.status(400).json({ error: `Cannot approve from status='${cur2.status}' (l1=${cur2.l1_status}, l2=${cur2.l2_status})` });
+          } else if (cur2.status !== 'submitted' && cur2.status !== 'crm_approved') {
+            // Trying to "approve" a row that isn't waiting for CRM / L1 / L2
+            // (e.g. already approved, rejected, po_sent, or stuck in an exotic
+            // state like l1_approved + l2_rejected). Reject the call so the
+            // legacy approve path can't accidentally bulldoze a final state.
+            // crm_approved is intentionally allowed-through so the L1 branch
+            // (which keys on effectiveStatus='submitted') can fire next.
+            return res.status(400).json({ error: `Cannot approve from status='${cur2.status}' (crm=${cur2.crm_status}, l1=${cur2.l1_status}, l2=${cur2.l2_status})` });
           }
         }
 
