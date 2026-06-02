@@ -5,7 +5,7 @@
 //   - Templates     : admin manages KPI templates per role
 //   - Assign        : admin maps each user to a template
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -566,41 +566,69 @@ function TemplateKpiEditor({ templateId, onChange }) {
       .finally(() => setPreviewLoading(false));
   }, [previewUserId]);
 
-  // Per-user KPI target overrides — mam (2026-06-02): "same target
-  // weekly but per-user (different per engineer)".  When a preview
-  // user is selected, fetch their override map so the Target column
-  // can render the user-specific value (with fallback to template
-  // default_planned).  Updated locally + persisted via the
-  // /scoring/users/:user/kpi-targets/:kpi endpoint.
-  const [userTargets, setUserTargets] = useState({});  // { kpi_id: planned_value }
+  // Per-user KPI overrides — mam (2026-06-02): "every person different
+  // KPIs" (Option B).  Three things mam can override per user:
+  //   - planned_value  → custom target
+  //   - weight_override → custom weight (e.g. demote a KPI to 0% so
+  //                       it stays visible but doesn't count toward score)
+  //   - enabled         → 0 hides the KPI entirely (struck-through row)
+  // All three flow through the same /scoring/users/:uid/kpi-targets
+  // endpoint (composite-PK row in score_user_kpi_target).
+  const [userOverrides, setUserOverrides] = useState({}); // { kpi_id: {planned_value, enabled, weight_override} }
   useEffect(() => {
-    if (!previewUserId) { setUserTargets({}); return; }
+    if (!previewUserId) { setUserOverrides({}); return; }
     api.get(`/scoring/users/${previewUserId}/kpi-targets`, { params: { template_id: templateId } })
       .then(r => {
         const map = {};
-        for (const row of (r.data || [])) map[row.kpi_id] = row.planned_value;
-        setUserTargets(map);
+        for (const row of (r.data || [])) {
+          map[row.kpi_id] = {
+            planned_value: row.planned_value,
+            enabled: row.enabled != null ? row.enabled : 1,
+            weight_override: row.weight_override,
+          };
+        }
+        setUserOverrides(map);
       })
-      .catch(() => setUserTargets({}));
+      .catch(() => setUserOverrides({}));
   }, [previewUserId, templateId]);
 
-  const saveUserTarget = async (kpiId, value) => {
+  // Convenience accessors so existing per-target render paths keep working.
+  const userTargets = useMemo(() => {
+    const o = {};
+    for (const [kid, v] of Object.entries(userOverrides)) {
+      if (v.planned_value != null) o[kid] = v.planned_value;
+    }
+    return o;
+  }, [userOverrides]);
+
+  // Patch one field; backend handles partial-PUT (other fields stay put).
+  const saveUserSetting = async (kpiId, patch) => {
     if (!previewUserId) return;
     try {
-      // Empty string → server removes override + falls back to template default.
-      const body = value === '' || value == null ? { planned_value: null } : { planned_value: +value };
-      await api.put(`/scoring/users/${previewUserId}/kpi-targets/${kpiId}`, body);
-      setUserTargets(prev => {
+      await api.put(`/scoring/users/${previewUserId}/kpi-targets/${kpiId}`, patch);
+      setUserOverrides(prev => {
         const next = { ...prev };
-        if (body.planned_value == null) delete next[kpiId];
-        else next[kpiId] = +body.planned_value;
+        const cur = next[kpiId] || { planned_value: null, enabled: 1, weight_override: null };
+        // Apply the patch locally to keep the UI snappy
+        const merged = { ...cur };
+        if ('planned_value' in patch)   merged.planned_value   = patch.planned_value === '' ? null : (patch.planned_value == null ? null : +patch.planned_value);
+        if ('enabled' in patch)         merged.enabled         = patch.enabled ? 1 : 0;
+        if ('weight_override' in patch) merged.weight_override = patch.weight_override === '' ? null : (patch.weight_override == null ? null : +patch.weight_override);
+        // If row is back to defaults (enabled=1 + no overrides), drop it locally too
+        if (merged.enabled === 1 && merged.planned_value == null && merged.weight_override == null) {
+          delete next[kpiId];
+        } else {
+          next[kpiId] = merged;
+        }
         return next;
       });
-      toast.success('Target saved');
+      toast.success('Saved');
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to save target');
+      toast.error(err.response?.data?.error || 'Failed to save');
     }
   };
+  const saveUserTarget = (kpiId, value) =>
+    saveUserSetting(kpiId, { planned_value: value === '' || value == null ? null : +value });
 
   const addKpi = async (e) => {
     e.preventDefault();
@@ -674,11 +702,72 @@ function TemplateKpiEditor({ templateId, onChange }) {
           </tr>
         </thead>
         <tbody>
-          {tpl.kpis.map(k => (
-            <tr key={k.id} className="border-t">
-              <td className="p-2"><input className="input text-xs" defaultValue={k.group_name} onBlur={e => updateKpi(k, { group_name: e.target.value })} /></td>
+          {tpl.kpis.map(k => {
+            // Per-user override snapshot for this row (only used when
+            // previewUserId is set).  Drives the enable toggle + the
+            // weight override input + the visual "disabled" dimming.
+            const userRow = previewUserId ? userOverrides[k.id] : null;
+            const userEnabled = userRow ? userRow.enabled !== 0 : true;
+            const userWeight = userRow?.weight_override;
+            const hasWeightOverride = userWeight != null;
+            return (
+            <tr key={k.id} className={`border-t ${previewUserId && !userEnabled ? 'opacity-40 line-through' : ''}`}>
+              <td className="p-2">
+                <div className="flex items-center gap-2">
+                  {/* Mam (2026-06-02): per-user enable toggle.  When a
+                      preview user is picked, this controls whether the
+                      KPI counts for THAT user.  Disabled rows render
+                      dimmed + struck-through.  Hidden when no user
+                      picked (template editor mode). */}
+                  {previewUserId && (
+                    <input
+                      type="checkbox"
+                      checked={userEnabled}
+                      onChange={e => saveUserSetting(k.id, { enabled: e.target.checked ? 1 : 0 })}
+                      className="cursor-pointer flex-shrink-0"
+                      title={userEnabled
+                        ? `Untick to hide this KPI from ${previewUsers.find(u => u.user_id === previewUserId)?.name || 'this user'}'s scorecard.`
+                        : 'Tick to include this KPI in the scorecard again.'}
+                    />
+                  )}
+                  <input className="input text-xs" defaultValue={k.group_name} onBlur={e => updateKpi(k, { group_name: e.target.value })} />
+                </div>
+              </td>
               <td className="p-2"><input className="input text-xs" defaultValue={k.metric_name} onBlur={e => updateKpi(k, { metric_name: e.target.value })} /></td>
-              <td className="p-2"><input type="number" className="input text-xs text-center" defaultValue={k.weightage} onBlur={e => updateKpi(k, { weightage: +e.target.value })} /></td>
+              <td className="p-2">
+                {previewUserId ? (
+                  /* Per-user weight override (Option B).  Empty = falls
+                     back to template default. */
+                  <div>
+                    <input
+                      type="number" step="0.1"
+                      className={`input text-xs text-center ${hasWeightOverride ? 'border-emerald-400 bg-emerald-50' : ''}`}
+                      key={`uw-${previewUserId}-${k.id}-${userWeight ?? 'def'}`}
+                      defaultValue={hasWeightOverride ? userWeight : k.weightage}
+                      onBlur={e => {
+                        const v = e.target.value;
+                        const num = +v;
+                        if (hasWeightOverride) {
+                          if (v === '') saveUserSetting(k.id, { weight_override: null });
+                          else if (num !== +userWeight) saveUserSetting(k.id, { weight_override: num });
+                        } else {
+                          if (v !== '' && num !== (+k.weightage || 0)) saveUserSetting(k.id, { weight_override: num });
+                        }
+                      }}
+                      title={hasWeightOverride
+                        ? `Per-user weight (template default: ${k.weightage}%)`
+                        : `Falls back to template weight ${k.weightage}%.  Edit to override for this user.`}
+                    />
+                    <div className="text-[9px] mt-0.5 text-center">
+                      {hasWeightOverride
+                        ? <span className="text-emerald-700 font-semibold">user weight</span>
+                        : <span className="text-gray-400">default: {k.weightage}</span>}
+                    </div>
+                  </div>
+                ) : (
+                  <input type="number" className="input text-xs text-center" defaultValue={k.weightage} onBlur={e => updateKpi(k, { weightage: +e.target.value })} />
+                )}
+              </td>
               {/* Target column — three modes:
                   1. Auto source (locked): shows "auto" pill, target comes
                      from computeAutoCount's `given`.
@@ -892,7 +981,8 @@ function TemplateKpiEditor({ templateId, onChange }) {
               </td>
               <td className="p-2"><button onClick={() => delKpi(k)} className="text-red-500 hover:text-red-700"><FiTrash2 size={12} /></button></td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
 

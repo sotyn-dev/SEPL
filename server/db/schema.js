@@ -3189,6 +3189,17 @@ function initializeDatabase() {
     ['sub_contractors', 'active INTEGER DEFAULT 1'],
     ['sub_contractors', 'created_by INTEGER REFERENCES users(id)'],
     ['sub_contractors', 'updated_at DATETIME'],
+    // ─── Per-user KPI settings — mam (2026-06-02 follow-up) ───────────
+    // Initial table (score_user_kpi_target) only held planned_value
+    // overrides.  Mam confirmed "every person different KPIs" — Option B:
+    // shared template, per-user enable/disable + weight override.  Two
+    // new columns reuse the same composite-PK table:
+    //   enabled         — 0 hides this KPI from the user entirely.
+    //   weight_override — overrides score_kpis.weightage for this user.
+    // Backwards compatible: existing rows default to enabled=1 + NULL
+    // weight_override → behave exactly as before this change.
+    ['score_user_kpi_target', 'enabled INTEGER DEFAULT 1'],
+    ['score_user_kpi_target', 'weight_override REAL'],
     // ─── Indent line source split — store vs procure ────────────────────
     // Mam (2026-06-02): when an indent line needs 20 pcs and 5 are
     // already in office stock, the L1/L2 approver can now split the line

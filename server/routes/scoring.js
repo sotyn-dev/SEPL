@@ -126,13 +126,13 @@ router.get('/users/:user_id/kpi-targets', (req, res) => {
   const db = getDb();
   const tplId = req.query.template_id ? +req.query.template_id : null;
   const sql = tplId
-    ? `SELECT t.kpi_id, t.planned_value, t.updated_at,
-              k.metric_name, k.default_planned
+    ? `SELECT t.kpi_id, t.planned_value, t.enabled, t.weight_override, t.updated_at,
+              k.metric_name, k.default_planned, k.weightage
          FROM score_user_kpi_target t
          JOIN score_kpis k ON k.id = t.kpi_id
         WHERE t.user_id = ? AND k.template_id = ?`
-    : `SELECT t.kpi_id, t.planned_value, t.updated_at,
-              k.metric_name, k.default_planned
+    : `SELECT t.kpi_id, t.planned_value, t.enabled, t.weight_override, t.updated_at,
+              k.metric_name, k.default_planned, k.weightage
          FROM score_user_kpi_target t
          JOIN score_kpis k ON k.id = t.kpi_id
         WHERE t.user_id = ?`;
@@ -140,31 +140,65 @@ router.get('/users/:user_id/kpi-targets', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
-// Upsert one override.  Body: { planned_value }.  Sending null / 0
-// is treated as "remove the override and fall back to template default".
+// Upsert per-user KPI settings — mam (2026-06-02): "every person
+// different KPIs".  Body can carry any combination of:
+//   planned_value   — target override (null/'' removes override)
+//   enabled         — 0 hides this KPI from the user, 1 shows it
+//   weight_override — overrides k.weightage for this user, null clears
+// If ALL three fields are null/cleared AND enabled defaults back to 1,
+// the row is deleted (clean fallback to template defaults).
 router.put('/users/:user_id/kpi-targets/:kpi_id', adminOnly, (req, res) => {
   const db = getDb();
   const userId = +req.params.user_id;
   const kpiId = +req.params.kpi_id;
-  const raw = req.body?.planned_value;
-  // null / undefined / empty string → delete override (fall through to default)
-  if (raw == null || raw === '') {
-    db.prepare('DELETE FROM score_user_kpi_target WHERE user_id=? AND kpi_id=?').run(userId, kpiId);
-    return res.json({ message: 'Override removed — falls back to template default' });
-  }
-  const planned = +raw;
-  if (!Number.isFinite(planned) || planned < 0) {
+  const b = req.body || {};
+
+  // Read current row so we only patch the supplied fields.  Lets a
+  // single-field PUT (e.g. only "enabled") not blow away an earlier
+  // planned_value override.
+  const cur = db.prepare(
+    'SELECT planned_value, enabled, weight_override FROM score_user_kpi_target WHERE user_id=? AND kpi_id=?'
+  ).get(userId, kpiId);
+
+  // Normalise inputs
+  const clean = (v) => (v == null || v === '') ? null : +v;
+  let planned = b.planned_value !== undefined ? clean(b.planned_value) : (cur?.planned_value ?? null);
+  let weight  = b.weight_override !== undefined ? clean(b.weight_override) : (cur?.weight_override ?? null);
+  let enabled = b.enabled !== undefined
+    ? (b.enabled === 0 || b.enabled === false || b.enabled === '0' ? 0 : 1)
+    : (cur?.enabled ?? 1);
+
+  // Validation
+  if (planned != null && (!Number.isFinite(planned) || planned < 0)) {
     return res.status(400).json({ error: 'planned_value must be a non-negative number' });
   }
+  if (weight != null && (!Number.isFinite(weight) || weight < 0 || weight > 100)) {
+    return res.status(400).json({ error: 'weight_override must be between 0 and 100' });
+  }
+
+  // Zero-state cleanup: enabled=1 + no overrides → delete the row to
+  // keep the table sparse + readers happy with simple "row exists =
+  // user has customisations".
+  if (enabled === 1 && planned == null && weight == null) {
+    db.prepare('DELETE FROM score_user_kpi_target WHERE user_id=? AND kpi_id=?').run(userId, kpiId);
+    return res.json({ message: 'Override removed — falls back to template defaults' });
+  }
+
   db.prepare(
-    `INSERT INTO score_user_kpi_target (user_id, kpi_id, planned_value, updated_by)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO score_user_kpi_target (user_id, kpi_id, planned_value, enabled, weight_override, updated_by)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(user_id, kpi_id) DO UPDATE SET
-       planned_value = excluded.planned_value,
-       updated_by    = excluded.updated_by,
-       updated_at    = CURRENT_TIMESTAMP`
-  ).run(userId, kpiId, planned, req.user.id);
-  res.json({ message: 'Override saved', user_id: userId, kpi_id: kpiId, planned_value: planned });
+       planned_value   = excluded.planned_value,
+       enabled         = excluded.enabled,
+       weight_override = excluded.weight_override,
+       updated_by      = excluded.updated_by,
+       updated_at      = CURRENT_TIMESTAMP`
+  ).run(userId, kpiId, planned, enabled, weight, req.user.id);
+  res.json({
+    message: 'Saved',
+    user_id: userId, kpi_id: kpiId,
+    planned_value: planned, enabled, weight_override: weight,
+  });
 });
 
 // ---------- ASSIGNMENTS ----------
@@ -585,22 +619,35 @@ router.get('/scorecard', (req, res) => {
       return { given: null, done: null };
     };
 
+    // Load every per-user override row for this user in ONE query so the
+    // per-KPI loop below doesn't fan out to 20 small SELECTs.  Indexed by
+    // kpi_id for O(1) lookup.
+    const userOverridesArr = db.prepare(
+      'SELECT kpi_id, planned_value, enabled, weight_override FROM score_user_kpi_target WHERE user_id=?'
+    ).all(userId);
+    const userOverrides = {};
+    for (const o of userOverridesArr) userOverrides[o.kpi_id] = o;
+
+    // Per-user filter — mam (2026-06-02): "every person different KPIs".
+    // If the user has enabled=0 on a KPI, skip it entirely (not just
+    // suppress display — also pull from the score calculation so total
+    // weight doesn't include disabled rows).
+    const activeKpis = kpis.filter(k => {
+      const o = userOverrides[k.id];
+      return !o || o.enabled !== 0;
+    });
+
     let totalScore = 0, totalWeight = 0;
-    const result = kpis.map(k => {
+    const result = activeKpis.map(k => {
       const entry = db.prepare('SELECT * FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(userId, k.id, weekStart);
       const lastEntry = db.prepare('SELECT actual_pct FROM score_entries WHERE user_id=? AND kpi_id=? AND week_start=?').get(userId, k.id, lastWeekStart);
 
       // Resolution order for Planned (mam 2026-06-02):
       //   1. Weekly entry's `planned`  — explicit override for that week
-      //   2. Per-user KPI target       — score_user_kpi_target (different
-      //                                   engineers can have different targets
-      //                                   on the same KPI)
+      //   2. Per-user KPI target       — score_user_kpi_target
       //   3. Template default_planned  — fallback for everyone
-      // The user-level override lets mam say "Ajmer's Indent vs Bill = 5,
-      // Aakash's = 3" without spawning two templates.
-      const userOverride = db.prepare(
-        'SELECT planned_value FROM score_user_kpi_target WHERE user_id=? AND kpi_id=?'
-      ).get(userId, k.id);
+      // Same fallback chain for weight: per-user weight_override → k.weightage.
+      const userOverride = userOverrides[k.id];
       let planned = (entry?.planned != null && entry?.planned !== 0)
         ? entry.planned
         : (userOverride?.planned_value != null
@@ -643,7 +690,13 @@ router.get('/scorecard', (req, res) => {
         actualPct = 0;
       }
 
-      const weight = k.weightage || 0;
+      // Weight resolution: per-user weight_override → k.weightage default.
+      // Mam (2026-06-02): "every person different KPIs" — Option B per-user
+      // weight override.  weight_override=0 is valid (intentionally muted
+      // KPI without disabling); only NULL/undefined falls back.
+      const weight = (userOverride?.weight_override != null)
+        ? +userOverride.weight_override
+        : (k.weightage || 0);
       totalWeight += weight;
       totalScore += weight * actualPct;
 
@@ -651,7 +704,10 @@ router.get('/scorecard', (req, res) => {
         kpi_id: k.id,
         group_name: k.group_name,
         metric_name: k.metric_name,
-        weightage: k.weightage,
+        weightage: weight,                  // effective weight for THIS user
+        template_weightage: k.weightage,    // raw template value for reference
+        has_weight_override: userOverride?.weight_override != null,
+        has_target_override: userOverride?.planned_value != null,
         direction: k.direction,
         data_source: k.data_source,
         default_planned: k.default_planned || 0,
