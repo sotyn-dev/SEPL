@@ -37,6 +37,82 @@ const scorePill = (s) => {
   return 'bg-red-100 text-red-700';
 };
 
+// Mam (2026-06-02): "how plan actual say in template that pick from
+// here".  For every auto:* source, this map explains in plain English
+// which DB field feeds the Plan (target) and which feeds the Actual
+// (achievement) for the scoring period.  Rendered as a small chip
+// under the source dropdown so the admin doesn't have to guess what
+// each abbreviated source name means.  Keep keys identical to the
+// `value` attributes on the <option> elements in the source dropdown.
+const SOURCE_INFO = {
+  manual:                       { plan: 'You set (Target column)',           actual: 'You enter weekly in the scorecard' },
+  // Tasks & Tickets — Plan = items assigned this week, Actual = items completed
+  'auto:delegations':           { plan: 'Delegations assigned to user',       actual: 'Delegations completed (status=approved)' },
+  'auto:pms':                   { plan: 'PMS tasks assigned to user',         actual: 'PMS tasks completed (status=approved)' },
+  'auto:checklists':            { plan: 'Active checklists × 6 days',         actual: 'Checklist completions by user' },
+  'auto:tickets':               { plan: 'Help tickets assigned to user',      actual: 'Tickets resolved / closed by user' },
+  // DPR
+  'auto:dpr_profit':            { plan: 'Σ planned cost (DPR Table B)',       actual: 'Σ actual cost (DPR Table B)' },
+  'auto:dpr_count':             { plan: '6 days/week target',                 actual: 'DPR submissions for this site' },
+  'auto:dpr_by_user':           { plan: '6 DPRs/week target',                 actual: 'DPRs submitted BY this user' },
+  'auto:dpr_profit_by_user':    { plan: 'You set (Target column)',            actual: 'Σ profit/loss across user\'s DPRs' },
+  'auto:dpr_cost_by_user':      { plan: 'DPRs submitted',                     actual: 'DPRs approved' },
+  // Sales / CRM
+  'auto:leads_created':         { plan: 'You set',                            actual: 'Leads assigned to user this week' },
+  'auto:leads_qualified':       { plan: 'You set',                            actual: 'Leads moved to qualified by user' },
+  'auto:quotations_sent':       { plan: 'You set',                            actual: 'Quotations sent by user' },
+  'auto:meetings_planned':      { plan: 'You set',                            actual: 'Meetings scheduled this week' },
+  // Business Book
+  'auto:bb_entries':            { plan: 'You set',                            actual: 'Business Book entries created by user' },
+  'auto:bb_po_amount':          { plan: 'You set',                            actual: 'Σ PO amount on user\'s BB entries' },
+  'auto:bb_sale_amount':        { plan: 'You set',                            actual: 'Σ Sale amount on user\'s BB entries' },
+  'auto:bb_advance':            { plan: 'You set',                            actual: 'Σ Advance received on user\'s BB entries' },
+  // Procurement
+  'auto:indents_in_week':       { plan: 'You set',                            actual: 'Indents created for user\'s site' },
+  'auto:indents_approved':      { plan: 'You set',                            actual: 'Indents approved by user' },
+  'auto:vendor_pos_created':    { plan: 'You set',                            actual: 'Vendor POs created by user' },
+  'auto:purchase_bills':        { plan: 'You set',                            actual: 'Purchase bills received this week' },
+  'auto:dispatch_sent':         { plan: 'You set',                            actual: 'Delivery notes dispatched' },
+  'auto:material_received':     { plan: 'You set',                            actual: 'Material receipts at user\'s site' },
+  // Inventory
+  'auto:stock_in':              { plan: 'You set',                            actual: 'Stock IN movements (count)' },
+  'auto:stock_out':             { plan: 'You set',                            actual: 'Stock OUT movements (count)' },
+  'auto:stock_to_site':         { plan: 'You set',                            actual: 'Stock issued from office → site' },
+  'auto:stock_updates':         { plan: 'You set',                            actual: 'Stock update events per site/week' },
+  'auto:tools_list':            { plan: 'You set',                            actual: 'Tools list rows per site' },
+  'auto:stock_at_site':         { plan: 'You set',                            actual: 'Stock-at-site flag (0/1)' },
+  // Installation & Billing
+  'auto:installations_started': { plan: 'You set',                            actual: 'Installation start dates this week' },
+  'auto:installations_completed':{ plan: 'You set',                           actual: 'Installations marked complete this week' },
+  'auto:sales_bills':           { plan: 'You set',                            actual: 'Sales bills raised this week' },
+  'auto:ra_bills':              { plan: 'You set',                            actual: 'RA bills raised for user\'s site' },
+  'auto:mb_filed':              { plan: 'You set',                            actual: 'MB sheets filed (count)' },
+  'auto:mb_signed':             { plan: 'You set',                            actual: 'MBs signed by client at user\'s site' },
+  // Cash Flow
+  'auto:amount_received':       { plan: 'You set',                            actual: 'Σ collections amount (by user)' },
+  'auto:amount_received_all':   { plan: 'You set',                            actual: 'Σ collections amount (everyone)' },
+  'auto:collections_count':     { plan: 'You set',                            actual: 'Number of collections (by user)' },
+  'auto:receivables_outstanding':{ plan: 'You set',                           actual: 'Σ open receivables (owner)' },
+  'auto:receivables_count':     { plan: 'You set',                            actual: 'Count of open receivables (owner)' },
+  // Payments
+  'auto:payments_raised':       { plan: 'You set',                            actual: 'Payment requests raised by user' },
+  'auto:payments_approved':     { plan: 'You set',                            actual: 'Payment requests final-approved by user' },
+  'auto:payments_rejected':     { plan: 'You set',                            actual: 'Payment requests rejected' },
+  // HR Hiring
+  'auto:candidates_added':      { plan: 'You set',                            actual: 'Candidates added this week' },
+  'auto:candidates_shortlisted':{ plan: 'You set',                            actual: 'Candidates shortlisted this week' },
+  'auto:candidates_onboarded':  { plan: 'You set',                            actual: 'Candidates onboarded this week' },
+  // Attendance
+  'auto:attendance_present_days':{ plan: '6 days target',                     actual: 'Present days this week' },
+  'auto:attendance_late_days':  { plan: 'You set (lower better)',             actual: 'Late days this week' },
+  'auto:attendance_absent_days':{ plan: '0 days target',                      actual: 'Absent days this week' },
+  'auto:leaves_applied':        { plan: 'You set',                            actual: 'Leave requests filed by user' },
+  // Master Data
+  'auto:customers_added':       { plan: 'You set',                            actual: 'Customers added by user' },
+  'auto:vendors_added':         { plan: 'You set',                            actual: 'Vendors added by user' },
+};
+const sourceInfoFor = (src) => SOURCE_INFO[src] || { plan: '—', actual: '—' };
+
 export default function Scorecard() {
   const { user, isAdmin } = useAuth();
   const [tab, setTab] = useUrlTab('my');
@@ -763,6 +839,26 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:vendors_added">vendors added</option>
                   </optgroup>
                 </select>
+                {/* Mam (2026-06-02): "how plan actual say in template that
+                    pick from here".  Plain-English mapping so admin sees
+                    exactly which DB field feeds Plan vs Actual for this
+                    KPI source.  Pulled from the SOURCE_INFO map at top
+                    of file. */}
+                {(() => {
+                  const info = sourceInfoFor(k.data_source);
+                  return (
+                    <div className="mt-1 space-y-0.5 text-[9px] leading-tight">
+                      <div className="flex items-start gap-1">
+                        <span className="font-bold text-blue-700 whitespace-nowrap">Plan:</span>
+                        <span className="text-gray-600">{info.plan}</span>
+                      </div>
+                      <div className="flex items-start gap-1">
+                        <span className="font-bold text-emerald-700 whitespace-nowrap">Actual:</span>
+                        <span className="text-gray-600">{info.actual}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </td>
               {/* Actual preview (mam 2026-06-02) — live value from the
                   computeAutoCount path for the selected preview user.
