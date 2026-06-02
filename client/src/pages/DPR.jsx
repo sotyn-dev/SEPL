@@ -161,6 +161,11 @@ export default function DPR() {
   const [form, setForm] = useState({});
   // Table A: Installation items from PO
   const [workItems, setWorkItems] = useState([]);
+  // Phase 4 (mam 2026-06-02): active Work Orders across all projects.
+  // Each Table-A row can optionally pick the WO its work belongs to —
+  // the dpr_work_items.work_order_id link feeds the Indent Labour
+  // Payment dashboard's contractor-progress rollup.
+  const [activeWorkOrders, setActiveWorkOrders] = useState([]);
   // Table B: Costs — Skilled @ Rs 800/qty, Helper @ Rs 500/qty (fixed company rates)
   // Staff Cost rate is auto-pulled from the SITE's PO engineers (sum of their
   // monthly salary / 30). Individual salaries are never exposed to the client.
@@ -224,7 +229,19 @@ export default function DPR() {
   // picker + users for the Site modal) so the page paints instantly.
   // Heavy slices (BOQ progress, DPR list) come in via the tab-change
   // effect below — only when that tab is actually opened.
-  useEffect(() => { loadSummary(); loadSites(); loadUsers(); }, []);
+  useEffect(() => {
+    loadSummary();
+    loadSites();
+    loadUsers();
+    // Phase 4 — load active Work Orders once on mount so the work-item
+    // picker has data the first time mam expands the submit modal.
+    // Best-effort fetch: if mam doesn't have indent_labour_payment.view
+    // permission, the catch silently falls back to an empty list (the
+    // WO picker simply doesn't render — DPR still saves as before).
+    api.get('/indent-labour-payment/active-work-orders')
+      .then(r => setActiveWorkOrders(r.data || []))
+      .catch(() => setActiveWorkOrders([]));
+  }, []);
 
   // DPR list refetches whenever the date / status filter changes — but
   // ONLY if the user is on (or has visited) the Daily Reports tab.
@@ -1078,6 +1095,42 @@ export default function DPR() {
                     <div className="col-span-1 flex justify-center pt-2 md:pt-0">
                       <button type="button" onClick={() => removeWorkItem(i)} className="p-1 text-red-400 hover:text-red-600"><FiTrash2 size={14} /></button>
                     </div>
+                    {/* Phase 4 — Work Order picker.  Spans the full row
+                        below the qty / rate / amount inputs so it doesn't
+                        squeeze the existing layout, and only renders when
+                        the project has at least one active Work Order to
+                        choose from (mam 2026-06-02: DPR → Indent Labour
+                        Payment progress link). */}
+                    {activeWorkOrders.length > 0 && (
+                      <div className="col-span-12 flex items-center gap-2 mt-1.5 pt-1.5 border-t border-gray-100">
+                        <span className="text-[10px] font-semibold text-gray-500 uppercase whitespace-nowrap">Work Order</span>
+                        <div className="flex-1 min-w-0">
+                          <SearchableSelect
+                            options={activeWorkOrders.map(wo => ({
+                              id: wo.id,
+                              label: `${wo.wo_number || `WO#${wo.id}`} · ${wo.sub_contractor_name || '—'}${wo.project_name ? ' · ' + wo.project_name : ''}${wo.scope ? ' — ' + wo.scope.slice(0, 40) : ''}`,
+                              ...wo,
+                            }))}
+                            value={w.work_order_id || null}
+                            valueKey="id"
+                            displayKey="label"
+                            placeholder="— optional · link to sub-contractor WO —"
+                            buttonClassName="input text-xs w-full text-left flex items-center justify-between gap-1 cursor-pointer"
+                            onChange={(wo) => updateWork(i, 'work_order_id', wo?.id || '')}
+                          />
+                        </div>
+                        {w.work_order_id && (
+                          <button
+                            type="button"
+                            onClick={() => updateWork(i, 'work_order_id', '')}
+                            className="text-[10px] text-gray-400 hover:text-red-600 px-1"
+                            title="Unlink Work Order"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
                 {workItems.length === 0 && <p className="text-xs text-gray-400 text-center py-3">Click "+ Add Item" for items installed today</p>}

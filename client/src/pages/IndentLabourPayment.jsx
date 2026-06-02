@@ -628,11 +628,28 @@ function AddDailyWage({ kind, projectId, onClose, onSaved }) {
 function L3WorkOrders({ projectId, onChange }) {
   const [rows, setRows] = useState([]);
   const [editing, setEditing] = useState(null); // null | { id?: number, ... }
+  // Phase 4 (mam 2026-06-02): when mam clicks the "Linked DPRs" badge
+  // on a WO row we open a slide-out / modal listing every DPR work
+  // line that referenced that WO — site, date, qty, amount, who
+  // submitted.  Lets her audit the progress claim before releasing
+  // the next payment.
+  const [dprLinksFor, setDprLinksFor] = useState(null); // { wo, items: [] }
 
   const load = () => {
     api.get(`/indent-labour-payment/projects/${projectId}/work-orders`).then(r => setRows(r.data || []));
   };
   useEffect(load, [projectId]);
+
+  const openDprLinks = async (wo) => {
+    setDprLinksFor({ wo, items: null });  // null = loading
+    try {
+      const r = await api.get(`/indent-labour-payment/work-orders/${wo.id}/dpr-items`);
+      setDprLinksFor({ wo, items: r.data || [] });
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Could not load linked DPRs');
+      setDprLinksFor({ wo, items: [] });
+    }
+  };
 
   const remove = async (id) => {
     if (!confirm('Delete this Work Order?')) return;
@@ -661,35 +678,65 @@ function L3WorkOrders({ projectId, onChange }) {
               <th className="text-right px-2 py-1.5">Value</th>
               <th className="text-right px-2 py-1.5">Paid</th>
               <th className="text-right px-2 py-1.5">Balance</th>
+              {/* Phase 4 — DPR progress badge column */}
+              <th className="text-center px-2 py-1.5">DPR Progress</th>
               <th className="text-left px-2 py-1.5">File</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && <tr><td colSpan={8} className="text-center py-4 text-gray-400">No work orders yet</td></tr>}
-            {rows.map(r => (
-              <tr key={r.id} className="border-t">
-                <td className="px-2 py-1.5 font-mono text-xs">{r.wo_number || '—'}</td>
-                <td className="px-2 py-1.5">{r.sub_contractor_name || '—'}</td>
-                <td className="px-2 py-1.5 text-xs">{r.scope || '—'}</td>
-                <td className="px-2 py-1.5 text-right">{fmtINRFull(r.planned_value)}</td>
-                <td className="px-2 py-1.5 text-right text-emerald-700 font-semibold">{fmtINRFull(r.amount_paid)}</td>
-                <td className={`px-2 py-1.5 text-right font-semibold ${r.balance > 0 ? 'text-amber-700' : 'text-gray-400'}`}>
-                  {fmtINRFull(r.balance)}
-                </td>
-                <td className="px-2 py-1.5">
-                  {r.work_order_file_url
-                    ? <a href={r.work_order_file_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 text-xs">
-                        <FiExternalLink size={11} /> View
-                      </a>
-                    : <span className="text-gray-300 text-xs">—</span>}
-                </td>
-                <td className="px-2 py-1.5 text-right flex gap-2 justify-end">
-                  <button onClick={() => setEditing(r)} className="text-blue-500 hover:text-blue-700"><FiEdit2 size={12} /></button>
-                  <button onClick={() => remove(r.id)} className="text-red-500 hover:text-red-700"><FiTrash2 size={12} /></button>
-                </td>
-              </tr>
-            ))}
+            {rows.length === 0 && <tr><td colSpan={9} className="text-center py-4 text-gray-400">No work orders yet</td></tr>}
+            {rows.map(r => {
+              const pct = +r.dpr_progress_pct || 0;
+              const cnt = +r.dpr_linked_count || 0;
+              // Colour the chip by claim health vs payment:
+              //   green   — claim ≤ paid (you're ahead, fully paid)
+              //   amber   — claim > paid (sub-con has earned more, release)
+              //   red     — claim > 110% of WO value (sanity warn)
+              //   gray    — no DPR yet
+              let chipCls = 'bg-gray-100 text-gray-500 border-gray-200';
+              if (cnt > 0) {
+                if (pct > 110) chipCls = 'bg-red-100 text-red-700 border-red-300';
+                else if ((+r.dpr_linked_amount || 0) > (+r.amount_paid || 0)) chipCls = 'bg-amber-100 text-amber-700 border-amber-300';
+                else chipCls = 'bg-emerald-100 text-emerald-700 border-emerald-300';
+              }
+              return (
+                <tr key={r.id} className="border-t">
+                  <td className="px-2 py-1.5 font-mono text-xs">{r.wo_number || '—'}</td>
+                  <td className="px-2 py-1.5">{r.sub_contractor_name || '—'}</td>
+                  <td className="px-2 py-1.5 text-xs">{r.scope || '—'}</td>
+                  <td className="px-2 py-1.5 text-right">{fmtINRFull(r.planned_value)}</td>
+                  <td className="px-2 py-1.5 text-right text-emerald-700 font-semibold">{fmtINRFull(r.amount_paid)}</td>
+                  <td className={`px-2 py-1.5 text-right font-semibold ${r.balance > 0 ? 'text-amber-700' : 'text-gray-400'}`}>
+                    {fmtINRFull(r.balance)}
+                  </td>
+                  <td className="px-2 py-1.5 text-center">
+                    {cnt > 0 ? (
+                      <button
+                        onClick={() => openDprLinks(r)}
+                        className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${chipCls} hover:shadow-sm`}
+                        title="Click to see each DPR line that contributed to this %"
+                      >
+                        {pct.toFixed(1)}% · {cnt} DPR{cnt === 1 ? '' : 's'}
+                      </button>
+                    ) : (
+                      <span className="text-[10px] text-gray-400 italic">no DPR yet</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-1.5">
+                    {r.work_order_file_url
+                      ? <a href={r.work_order_file_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 text-xs">
+                          <FiExternalLink size={11} /> View
+                        </a>
+                      : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  <td className="px-2 py-1.5 text-right flex gap-2 justify-end">
+                    <button onClick={() => setEditing(r)} className="text-blue-500 hover:text-blue-700"><FiEdit2 size={12} /></button>
+                    <button onClick={() => remove(r.id)} className="text-red-500 hover:text-red-700"><FiTrash2 size={12} /></button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -699,7 +746,91 @@ function L3WorkOrders({ projectId, onChange }) {
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); load(); onChange(); }} />
       )}
+
+      {dprLinksFor && (
+        <DprLinksModal data={dprLinksFor} onClose={() => setDprLinksFor(null)} />
+      )}
     </div>
+  );
+}
+
+// Phase 4 modal — shows every DPR work line that touched this WO.
+// Each row is the contractor's claim of work-done that mam is verifying.
+function DprLinksModal({ data, onClose }) {
+  const { wo, items } = data;
+  const totalAmount = (items || []).reduce((s, it) => s + (+it.amount || 0), 0);
+  return (
+    <Modal isOpen={true} onClose={onClose} title={`Linked DPRs — ${wo.wo_number || `WO #${wo.id}`}`} wide>
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-3 text-xs">
+          <div className="bg-gray-50 rounded p-2">
+            <div className="text-[10px] text-gray-500 uppercase">Sub-contractor</div>
+            <div className="font-semibold">{wo.sub_contractor_name || '—'}</div>
+          </div>
+          <div className="bg-gray-50 rounded p-2">
+            <div className="text-[10px] text-gray-500 uppercase">WO Value</div>
+            <div className="font-semibold text-gray-800">{fmtINRFull(wo.planned_value)}</div>
+          </div>
+          <div className="bg-gray-50 rounded p-2">
+            <div className="text-[10px] text-gray-500 uppercase">Already Paid</div>
+            <div className="font-semibold text-emerald-700">{fmtINRFull(wo.amount_paid)}</div>
+          </div>
+        </div>
+        {items === null && <div className="text-center py-6 text-gray-400 text-sm">Loading linked DPRs…</div>}
+        {items && items.length === 0 && (
+          <div className="text-center py-6 text-gray-400 text-sm">
+            No DPR work items linked to this WO yet.
+            <div className="text-[10px] text-gray-400 mt-1">Once site engineers tag work lines against this WO in their DPRs, they'll show up here.</div>
+          </div>
+        )}
+        {items && items.length > 0 && (
+          <div className="overflow-x-auto border rounded">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50 text-gray-600">
+                <tr>
+                  <th className="text-left px-2 py-1.5">Date</th>
+                  <th className="text-left px-2 py-1.5">Site</th>
+                  <th className="text-left px-2 py-1.5">Description</th>
+                  <th className="text-left px-2 py-1.5">Location</th>
+                  <th className="text-right px-2 py-1.5">Qty</th>
+                  <th className="text-left px-2 py-1.5">Unit</th>
+                  <th className="text-right px-2 py-1.5">Rate</th>
+                  <th className="text-right px-2 py-1.5">Amount</th>
+                  <th className="text-left px-2 py-1.5">By</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map(it => (
+                  <tr key={it.id} className="border-t">
+                    <td className="px-2 py-1.5 whitespace-nowrap">
+                      {it.report_date ? new Date(it.report_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'}
+                    </td>
+                    <td className="px-2 py-1.5">{it.site_name || '—'}</td>
+                    <td className="px-2 py-1.5">{it.description || '—'}</td>
+                    <td className="px-2 py-1.5 text-gray-500">{it.floor_zone || '—'}</td>
+                    <td className="px-2 py-1.5 text-right font-semibold">{(+it.actual_qty || 0).toLocaleString('en-IN')}</td>
+                    <td className="px-2 py-1.5">{it.unit || '—'}</td>
+                    <td className="px-2 py-1.5 text-right">₹{(+it.rate || 0).toLocaleString('en-IN')}</td>
+                    <td className="px-2 py-1.5 text-right font-semibold text-emerald-700">{fmtINRFull(it.amount)}</td>
+                    <td className="px-2 py-1.5 text-[10px] text-gray-500">{it.submitted_by_name || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-emerald-50 font-semibold">
+                <tr>
+                  <td colSpan={7} className="px-2 py-2 text-right">Total claimed via DPR →</td>
+                  <td className="px-2 py-2 text-right text-emerald-700">{fmtINRFull(totalAmount)}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+        <div className="flex justify-end pt-2 border-t">
+          <button onClick={onClose} className="btn btn-secondary">Close</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

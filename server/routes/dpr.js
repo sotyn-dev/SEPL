@@ -775,16 +775,35 @@ router.post('/', (req, res) => {
   }
 
   // Table A: Installation work items from PO.
-  const insertWork = db.prepare('INSERT INTO dpr_work_items (dpr_id, po_item_id, description, unit, floor_zone, boq_qty, rate, amount, planned_qty, actual_qty, cumulative_qty, variance_pct, remarks) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  // Phase 4 (mam 2026-06-02): each DPR work line can optionally link to
+  // a Work Order (proj_work_orders.id) so the sub-contractor's progress
+  // rolls up into the Indent Labour Payment dashboard.  work_order_id
+  // is validated against proj_work_orders to avoid orphan FKs.
+  const insertWork = db.prepare(
+    `INSERT INTO dpr_work_items
+        (dpr_id, po_item_id, work_order_id, description, unit, floor_zone,
+         boq_qty, rate, amount, planned_qty, actual_qty,
+         cumulative_qty, variance_pct, remarks)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  );
   for (const w of (work_items || [])) {
     if (!w.description && !w.po_item_id) continue;
     const qty = w.qty || 0;
     const rate = w.rate || 0;
     const amount = qty * rate;
     // Verify po_item_id exists, set null if not.
-    const validPoItemId = w.po_item_id ? (db.prepare('SELECT id FROM po_items WHERE id=?').get(w.po_item_id) ? w.po_item_id : null) : null;
-    insertWork.run(dprId, validPoItemId, w.description, w.unit, w.location || w.floor_zone,
-      w.boq_qty || 0, rate, amount, qty, qty, w.cumulative_qty || 0, 0, w.remarks);
+    const validPoItemId = w.po_item_id
+      ? (db.prepare('SELECT id FROM po_items WHERE id=?').get(w.po_item_id) ? w.po_item_id : null)
+      : null;
+    // Same FK guard for work_order_id — silently drop the link if the
+    // referenced WO no longer exists (mam may have deleted it).
+    const validWoId = w.work_order_id
+      ? (db.prepare('SELECT id FROM proj_work_orders WHERE id=?').get(+w.work_order_id) ? +w.work_order_id : null)
+      : null;
+    insertWork.run(
+      dprId, validPoItemId, validWoId, w.description, w.unit, w.location || w.floor_zone,
+      w.boq_qty || 0, rate, amount, qty, qty, w.cumulative_qty || 0, 0, w.remarks,
+    );
   }
 
   // Table B: Costs (stored in manpower table - trade=type, required=qty, deployed=rate, shortage=amount)

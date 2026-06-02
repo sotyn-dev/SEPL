@@ -246,16 +246,89 @@ router.delete('/daily-wages/:id', requirePermission('indent_labour_payment', 'ed
 // ════════════════════════════════════════════════════════════════
 router.get('/projects/:pid/work-orders', requirePermission('indent_labour_payment', 'view'), (req, res) => {
   const db = getDb();
+  // Phase 4 (mam 2026-06-02): each WO row now carries a rollup of the
+  // DPR work items that have been logged against it:
+  //   dpr_linked_count    — distinct DPR submissions touching this WO
+  //   dpr_linked_amount   — Σ(actual_qty × labour rate) across those rows
+  //   dpr_linked_qty      — Σ actual_qty (raw quantity claim, no rate)
+  //   dpr_progress_pct    — dpr_linked_amount / planned_value × 100,
+  //                         capped at 999 so a runaway claim doesn't
+  //                         break the badge UI.
+  // Mam sees this on the L3 Work Orders tab as a "Linked DPRs · X%"
+  // badge; if amount_paid lags progress, that's the cue to release
+  // the next contractor payment.
   res.json(db.prepare(
     `SELECT wo.id, wo.wo_number, wo.sub_contractor_id, wo.sub_contractor_name,
             wo.scope, wo.planned_value, COALESCE(wo.amount_paid, 0) AS amount_paid,
             (COALESCE(wo.planned_value, 0) - COALESCE(wo.amount_paid, 0)) AS balance,
             wo.work_order_file_url, wo.planned_start, wo.planned_end, wo.status,
-            wo.created_at, wo.updated_at
+            wo.created_at, wo.updated_at,
+            COALESCE((
+              SELECT COUNT(DISTINCT dwi.dpr_id) FROM dpr_work_items dwi
+               WHERE dwi.work_order_id = wo.id
+            ), 0) AS dpr_linked_count,
+            COALESCE((
+              SELECT SUM(dwi.amount) FROM dpr_work_items dwi
+               WHERE dwi.work_order_id = wo.id
+            ), 0) AS dpr_linked_amount,
+            COALESCE((
+              SELECT SUM(dwi.actual_qty) FROM dpr_work_items dwi
+               WHERE dwi.work_order_id = wo.id
+            ), 0) AS dpr_linked_qty,
+            CASE
+              WHEN COALESCE(wo.planned_value, 0) <= 0 THEN 0
+              ELSE MIN(999,
+                ROUND(
+                  COALESCE((
+                    SELECT SUM(dwi.amount) FROM dpr_work_items dwi
+                     WHERE dwi.work_order_id = wo.id
+                  ), 0) * 100.0 / wo.planned_value,
+                  1
+                )
+              )
+            END AS dpr_progress_pct
        FROM proj_work_orders wo
       WHERE wo.project_id = ?
       ORDER BY wo.created_at DESC`
   ).all(req.params.pid));
+});
+
+// Phase 4 · All active Work Orders across every project — used by the
+// DPR form's per-line Work Order picker.  Site engineer raises a daily
+// report and tags each work line against the WO the sub-contractor is
+// performing.  Inactive / closed / cancelled WOs are filtered out so
+// the picker stays short.
+router.get('/active-work-orders', requirePermission('indent_labour_payment', 'view'), (req, res) => {
+  res.json(getDb().prepare(
+    `SELECT wo.id, wo.wo_number, wo.sub_contractor_name, wo.scope,
+            wo.planned_value, wo.status,
+            p.name as project_name
+       FROM proj_work_orders wo
+       LEFT JOIN proj_projects p ON p.id = wo.project_id
+      WHERE COALESCE(wo.status, 'active') NOT IN ('closed','cancelled')
+      ORDER BY wo.wo_number, wo.id DESC`
+  ).all());
+});
+
+// Phase 4 · DPR breakdown per Work Order — mam clicks a WO row and
+// sees every DPR line that's been logged against it (date, site,
+// qty, amount, who submitted) so she can audit the progress claim
+// before releasing the next contractor payment.
+router.get('/work-orders/:id/dpr-items', requirePermission('indent_labour_payment', 'view'), (req, res) => {
+  const db = getDb();
+  res.json(db.prepare(
+    `SELECT dwi.id, dwi.dpr_id, dwi.description, dwi.unit, dwi.floor_zone,
+            dwi.actual_qty, dwi.planned_qty, dwi.rate, dwi.amount, dwi.remarks,
+            d.report_date, d.site_id,
+            s.name as site_name,
+            u.name as submitted_by_name
+       FROM dpr_work_items dwi
+       LEFT JOIN dpr d  ON d.id = dwi.dpr_id
+       LEFT JOIN sites s ON s.id = d.site_id
+       LEFT JOIN users u ON u.id = d.submitted_by
+      WHERE dwi.work_order_id = ?
+      ORDER BY d.report_date DESC, dwi.id DESC`
+  ).all(req.params.id));
 });
 
 router.post('/projects/:pid/work-orders', requirePermission('indent_labour_payment', 'create'), (req, res) => {
