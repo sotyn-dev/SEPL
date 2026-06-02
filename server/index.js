@@ -380,13 +380,38 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Serve React build in production
+// Serve React build in production.
+// Mam (2026-06-02): mobile-card sweep landed but mam's iPhone kept
+// showing the old desktop tables.  Root cause: express.static() used
+// default cache headers, so browsers cached index.html itself.  Since
+// index.html points at the content-hashed bundle name (e.g.
+// index-CEasqyYx.js), a cached index.html keeps loading the OLD JS
+// even after deploy.  Fix:
+//   - Hashed asset files (under /assets/*) → cache forever (immutable)
+//   - index.html + other root files → no-cache so a refresh ALWAYS
+//     fetches the current bundle name.
 const clientBuild = path.join(__dirname, '..', 'client', 'dist');
 const fs2 = require('fs');
 if (fs2.existsSync(clientBuild)) {
-  app.use(express.static(clientBuild));
+  app.use(express.static(clientBuild, {
+    setHeaders: (res, filePath) => {
+      // Vite emits hashed filenames into /assets/* — safe to cache hard.
+      // Everything else (index.html, manifest.json, sw.js, favicons) is
+      // served no-cache so a re-deploy is picked up on next page load.
+      if (filePath.includes(`${path.sep}assets${path.sep}`) || filePath.includes('/assets/')) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      }
+    },
+  }));
   app.get('*', (req, res) => {
     if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.sendFile(path.join(clientBuild, 'index.html'));
     } else {
       // CRITICAL: must close the response for unmatched /api/* paths.
