@@ -2702,8 +2702,8 @@ export default function Procurement() {
                   Showing <span className="font-semibold">{filteredPending.length}</span> of {pendingPoItems.length}
                 </div>
               </div>
-              <div className="hidden md:block overflow-x-auto">
-                <table className="text-xs">
+              <div className="hidden md:block overflow-auto max-h-[70vh]">
+                <table className="text-xs freeze-head">
                   <thead><tr className="bg-amber-100/50">
                     <th className="px-2 py-1 text-left">Indent</th>
                     <th className="px-2 py-1 text-left">Item</th>
@@ -3456,8 +3456,8 @@ export default function Procurement() {
                   Showing <span className="font-semibold">{filteredFu.length}</span> of {pendingPos.length}
                 </div>
               </div>
-              <div className="hidden md:block overflow-x-auto">
-                <table className="text-xs">
+              <div className="hidden md:block overflow-auto max-h-[70vh]">
+                <table className="text-xs freeze-head">
                   <thead><tr className="bg-amber-100/50">
                     <th className="px-2 py-1 text-left">PO Number</th>
                     {/* Indent column added (mam, 2026-05-20: "show here
@@ -3960,8 +3960,8 @@ export default function Procurement() {
                   Showing <span className="font-semibold">{filteredReady.length}</span> of {readyToDispatch.length}
                 </div>
               </div>
-              <div className="hidden md:block overflow-x-auto">
-                <table className="text-xs">
+              <div className="hidden md:block overflow-auto max-h-[70vh]">
+                <table className="text-xs freeze-head">
                   <thead><tr className="bg-indigo-100/50">
                     <th className="px-2 py-1 text-left">PO Number</th>
                     <th className="px-2 py-1 text-left">Vendor</th>

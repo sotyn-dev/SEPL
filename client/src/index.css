@@ -255,6 +255,14 @@ th {
   z-index: 6;
   background: #f3f4f6;
 }
+/* Preserve themed thead row backgrounds (amber for Pending sub-tabs,
+   indigo for Ready-to-Dispatch, sky / etc.) — mam expects the visual
+   tint to stay when the header sticks. */
+.freeze-head thead tr.bg-amber-100\/50 > th { background: #fde68a; }      /* amber-200 — opaque equivalent */
+.freeze-head thead tr.bg-indigo-100\/50 > th { background: #c7d2fe; }     /* indigo-200 */
+.freeze-head thead tr.bg-sky-100\/50 > th { background: #bae6fd; }        /* sky-200 */
+.freeze-head thead tr.bg-emerald-100\/50 > th { background: #a7f3d0; }    /* emerald-200 */
+.freeze-head thead tr.bg-gray-50 > th { background: #f3f4f6; }            /* gray-100 */
 td {
   @apply px-4 py-3 border-t border-gray-50;
 }
