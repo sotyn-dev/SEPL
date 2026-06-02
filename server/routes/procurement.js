@@ -2328,9 +2328,12 @@ router.delete('/purchase-bills/:id', (req, res) => {
 // (for PO items sold to client) or a Delivery Challan (FOC / RGP items).
 // After dispatch, mam records who received it via the /receive endpoint.
 router.get('/delivery-notes', (req, res) => {
-  // Mam (2026-06-02): "site name also show here" — JOIN through
-  // vendor_po → indent → site so every dispatch row carries its
-  // destination site name on the Dispatch & Receiving list.
+  // Mam (2026-06-02 follow-up): "company name also show which we fill
+  // indent which is our site name".  Use the indent's own site_name
+  // text (what mam typed when raising the indent — e.g. "Emerald land
+  // india pvt ltd (Imperial Golf)") as the primary label, falling back
+  // to sites.name (short master name) only if the indent didn't snapshot
+  // a value.  COALESCE picks the first non-NULL non-empty option.
   res.json(getDb().prepare(`
     SELECT dn.*,
       u.name as received_by_user_name,
@@ -2338,7 +2341,7 @@ router.get('/delivery-notes', (req, res) => {
       vp.indent_id as vendor_po_indent_id,
       v.name as vendor_name,
       i.indent_number as indent_number,
-      s.name as site_name
+      COALESCE(NULLIF(TRIM(i.site_name), ''), s.name) as site_name
     FROM delivery_notes dn
     LEFT JOIN users u ON dn.received_by = u.id
     LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id

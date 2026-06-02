@@ -3972,7 +3972,7 @@ export default function Procurement() {
                 — those rows show in this same list with status='pending'
                 so mam can upload the signed receipt directly against the
                 visible DN number. */}
-            <thead><tr><th>DN No</th><th>Type</th><th>PO</th><th>Site</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Delivery Note No</th><th>Type</th><th>PO</th><th>Site / Company</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {dispListPg.rows.map(d => (
                 <tr key={d.id}>
