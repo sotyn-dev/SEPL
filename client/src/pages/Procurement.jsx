@@ -3815,28 +3815,37 @@ export default function Procurement() {
         const loadReceiveItems = async (vendorPoId) => {
           if (!vendorPoId) { setReceiveItems([blankManualRow()]); return; }
           try {
-            const r = await api.get(`/procurement/vendor-po/${vendorPoId}/with-items`);
+            // Mam (2026-06-02): "only qty show but editable like if
+            // challan then show same items".  Source items from the
+            // SAME endpoint that drives the printed Delivery Note PDF
+            // (/vendor-po/:id/delivery-note-data) — guarantees the
+            // modal shows exactly the rows mam sees on the challan
+            // she's holding.  Description / unit / qty are locked;
+            // only Received qty (and Short reason on shortage) edit.
+            const r = await api.get(`/procurement/vendor-po/${vendorPoId}/delivery-note-data`);
             const raw = r.data?.items || [];
             if (raw.length === 0) {
-              console.warn(`[receive-items] PO ${vendorPoId} returned 0 items — seeding 1 blank manual row.`);
+              console.warn(`[receive-items] PO ${vendorPoId} delivery-note-data returned 0 items — seeding 1 blank manual row.`);
               setReceiveItems([blankManualRow()]);
               return;
             }
             const items = raw.map(it => ({
               vpi_id: it.id,
-              description: it.indent_description || it.description || it.master_name || '—',
-              master_name: it.master_name || '',
+              description: it.description || it.master_name || '—',
+              master_name: it.description || '',  // DN uses 'description' as primary label
               item_code: it.item_code || '',
               specification: it.specification || '',
               size: it.size || '',
-              unit: it.unit || '',
+              make: it.make || '',
+              unit: it.uom || '',
+              hsn: it.hsn_code || it.gst_text || '',
               ordered_qty: +it.quantity || 0,
               received_qty: +it.quantity || 0,   // defaults to full delivery
               short_reason: '',
             }));
             setReceiveItems(items);
           } catch (err) {
-            console.error('[receive-items] fetch failed:', err?.response?.status, err?.message);
+            console.error('[receive-items] delivery-note-data fetch failed:', err?.response?.status, err?.message);
             // Even on fetch failure, seed a blank row so mam isn't blocked.
             setReceiveItems([blankManualRow()]);
           }
