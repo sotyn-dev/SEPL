@@ -430,7 +430,7 @@ export default function Attendance() {
           {/* Today's Records */}
           <div className="card p-0 overflow-x-auto">
             <div className="p-3 border-b"><h4 className="font-semibold">Today's Attendance</h4></div>
-            <div className="overflow-x-auto"><table className="text-sm">
+            <div className="overflow-x-auto hidden md:block"><table className="text-sm">
               <thead><tr><th>Name</th><th>Dept</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th><th>Photo</th></tr></thead>
               <tbody>{dashboard.todayRecords?.map(r => (
                 <tr key={r.id}>
@@ -443,6 +443,53 @@ export default function Attendance() {
                 </tr>
               ))}</tbody>
             </table></div>
+            {/* Mobile cards — Today's Attendance (mam 2026-06-02). */}
+            <div className="md:hidden p-3 space-y-3">
+              {(dashboard.todayRecords || []).length === 0 && (
+                <div className="text-center text-gray-400 text-sm py-4">No punches today yet.</div>
+              )}
+              {(dashboard.todayRecords || []).map(r => (
+                <div key={r.id} className="border border-gray-200 rounded-lg p-2.5 space-y-1.5 bg-white">
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
+                      <div className="text-base font-bold text-gray-900 truncate flex items-center gap-1">
+                        {r.user_name}
+                        {r.admin_marked && (
+                          <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold" title="Admin marked">ADMIN</span>
+                        )}
+                      </div>
+                      {r.department && <div className="text-[11px] text-gray-500">{r.department}</div>}
+                    </div>
+                    <StatusBadge status={r.status} />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                    <div>
+                      <div className="text-[9px] uppercase text-gray-400">In</div>
+                      <div className="font-semibold text-emerald-700">
+                        {r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[9px] uppercase text-gray-400">Out</div>
+                      <div className="font-semibold text-red-700">
+                        {r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[9px] uppercase text-gray-400">Hours</div>
+                      <div className="font-semibold text-gray-800">{r.total_hours || '—'}</div>
+                    </div>
+                  </div>
+                  {r.punch_in_photo && (
+                    <div className="pt-1 border-t border-gray-100">
+                      <img src={r.punch_in_photo} alt="" onClick={() => setLightbox({ src: r.punch_in_photo, label: `${r.user_name} — Punch In` })}
+                        className="w-16 h-16 rounded object-cover cursor-pointer ring-1 ring-gray-200" />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </>
       )}
@@ -457,7 +504,8 @@ export default function Attendance() {
               records.map(r => [r.user_name, r.date, r.punch_in_time, r.punch_out_time, r.total_hours, r.site_name, r.status]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
           </div>
-          <div className="card p-0 overflow-auto max-h-[70vh]"><table className="text-sm">
+          {/* Desktop table (mobile gets card list below — mam 2026-06-02). */}
+          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="text-sm">
             <thead className="sticky top-0 z-10 bg-gray-100"><tr><th>Name</th><th>Date</th><th>In</th><th>Out</th><th>Hours</th><th>Site</th><th>Status</th><th>In Photo</th><th>Out Photo</th><th>Actions</th></tr></thead>
             <tbody>{records.map(r => (
               <tr key={r.id}>
@@ -477,6 +525,94 @@ export default function Attendance() {
               </tr>
             ))}</tbody>
           </table></div>
+
+          {/* Mobile cards — polished pattern (mam 2026-06-02): small
+              "Employee" label → big bold name → status pill, calendar
+              row, 3-col In/Out/Hours grid, site pin row, photo strip,
+              delete action at bottom. */}
+          <div className="md:hidden space-y-3">
+            {records.length === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">No attendance records for the selected date.</div>
+            )}
+            {records.map(r => (
+              <div key={r.id} className="card p-3 space-y-2">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
+                    <div className="text-lg font-bold text-gray-900 truncate flex items-center gap-1">
+                      {r.user_name}
+                      {r.admin_marked && (
+                        <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold" title="Admin marked — hidden from user">ADMIN</span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                      <FiCalendar size={10} className="text-gray-400" />
+                      {r.date || '—'}
+                    </div>
+                  </div>
+                  <StatusBadge status={r.status} />
+                </div>
+                {r.site_name && (
+                  <div className="flex items-start gap-1.5 text-xs">
+                    <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase text-gray-400">Site</div>
+                      <div className="font-medium text-gray-800">{r.site_name}</div>
+                    </div>
+                  </div>
+                )}
+                <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">In</div>
+                    <div className="font-semibold text-emerald-700">
+                      {r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      {r.auto_punched_in && <span className="ml-1 text-[8px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span>}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Out</div>
+                    <div className="font-semibold text-red-700">
+                      {r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      {r.auto_punched_out && <span className="ml-1 text-[8px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span>}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] uppercase text-gray-400">Hours</div>
+                    <div className="font-semibold text-gray-800">{r.total_hours || '—'}</div>
+                  </div>
+                </div>
+                {(r.punch_in_photo || r.punch_out_photo) && (
+                  <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
+                    {r.punch_in_photo && (
+                      <div className="flex flex-col items-center gap-0.5">
+                        <span className="text-[9px] uppercase text-emerald-600 font-semibold">In</span>
+                        <img src={r.punch_in_photo} alt="" onClick={() => setLightbox({ src: r.punch_in_photo, label: `${r.user_name} — Punch In` })}
+                          className="w-14 h-14 rounded object-cover cursor-pointer ring-1 ring-emerald-200" />
+                      </div>
+                    )}
+                    {r.punch_out_photo && (
+                      <div className="flex flex-col items-center gap-0.5">
+                        <span className="text-[9px] uppercase text-red-600 font-semibold">Out</span>
+                        <img src={r.punch_out_photo} alt="" onClick={() => setLightbox({ src: r.punch_out_photo, label: `${r.user_name} — Punch Out` })}
+                          className="w-14 h-14 rounded object-cover cursor-pointer ring-1 ring-red-200" />
+                      </div>
+                    )}
+                  </div>
+                )}
+                {canDelete('attendance') && (
+                  <div className="flex items-center justify-end pt-2 border-t border-gray-100">
+                    <button onClick={async () => {
+                      if (!confirm(`Delete attendance record for "${r.user_name}" on ${r.date}?`)) return;
+                      try { await api.delete(`/attendance/${r.id}`); toast.success('Deleted'); load(); }
+                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                    }} className="text-red-600 hover:underline flex items-center gap-1 text-xs font-semibold">
+                      <FiTrash2 size={11} /> Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </>
       )}
 
@@ -621,19 +757,57 @@ export default function Attendance() {
 
       {/* MONTHLY REPORT */}
       {tab === 'report' && (
-        <div className="card p-0"><table className="text-sm freeze-head">
-          <thead><tr><th>Employee</th><th>Dept</th><th>Present</th><th>Late</th><th>Half Day</th><th>Absent</th><th>Avg Hours</th></tr></thead>
-          <tbody>{report.map(r => (
-            <tr key={r.user_id}>
-              <td className="font-medium">{r.name}</td><td className="text-xs">{r.department}</td>
-              <td className="text-emerald-600 font-bold">{r.present_days}</td>
-              <td className="text-amber-600">{r.late_days}</td>
-              <td>{r.half_days}</td>
-              <td className="text-red-600">{r.absent_days}</td>
-              <td className="font-semibold">{r.avg_hours || '-'}h</td>
-            </tr>
-          ))}</tbody>
-        </table></div>
+        <>
+          <div className="card p-0 hidden md:block"><table className="text-sm freeze-head">
+            <thead><tr><th>Employee</th><th>Dept</th><th>Present</th><th>Late</th><th>Half Day</th><th>Absent</th><th>Avg Hours</th></tr></thead>
+            <tbody>{report.map(r => (
+              <tr key={r.user_id}>
+                <td className="font-medium">{r.name}</td><td className="text-xs">{r.department}</td>
+                <td className="text-emerald-600 font-bold">{r.present_days}</td>
+                <td className="text-amber-600">{r.late_days}</td>
+                <td>{r.half_days}</td>
+                <td className="text-red-600">{r.absent_days}</td>
+                <td className="font-semibold">{r.avg_hours || '-'}h</td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+          {/* Mobile cards (mam 2026-06-02) */}
+          <div className="md:hidden space-y-3">
+            {report.length === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">No report rows yet — pick a month / year.</div>
+            )}
+            {report.map(r => (
+              <div key={r.user_id} className="card p-3 space-y-2">
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
+                  <div className="text-lg font-bold text-gray-900 truncate">{r.name}</div>
+                  {r.department && <div className="text-[11px] text-gray-500">{r.department}</div>}
+                </div>
+                <div className="grid grid-cols-4 gap-2 pt-1 border-t border-gray-100 text-center">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Present</div>
+                    <div className="text-base font-bold text-emerald-700">{r.present_days || 0}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Late</div>
+                    <div className="text-base font-bold text-amber-700">{r.late_days || 0}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Half</div>
+                    <div className="text-base font-bold text-gray-700">{r.half_days || 0}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Absent</div>
+                    <div className="text-base font-bold text-red-700">{r.absent_days || 0}</div>
+                  </div>
+                </div>
+                <div className="text-center text-[11px] text-gray-500 pt-1 border-t border-gray-100">
+                  Avg hours/day: <b className="text-gray-800">{r.avg_hours || '—'}h</b>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
 
       {/* GEOFENCE SETTINGS */}
@@ -661,7 +835,8 @@ export default function Attendance() {
 
       {/* LEAVES TAB */}
       {tab === 'leaves' && (
-        <div className="card p-0 overflow-x-auto"><table className="text-sm">
+        <>
+        <div className="card p-0 overflow-x-auto hidden md:block"><table className="text-sm">
           <thead><tr><th>Employee</th><th>Type</th><th>From</th><th>To</th><th>Hrs / Days</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>{leaves.map(l => {
             // For short_leave show from-time → to-time so admin can audit
@@ -729,6 +904,80 @@ export default function Attendance() {
             );
           })}</tbody>
         </table></div>
+
+        {/* Mobile cards (mam 2026-06-02) — Leaves */}
+        <div className="md:hidden space-y-3">
+          {leaves.length === 0 && (
+            <div className="card p-6 text-center text-gray-400 text-sm">No leave requests yet.</div>
+          )}
+          {leaves.map(l => {
+            const isShort = l.leave_type === 'short_leave' || l.leave_type === 'half_day';
+            return (
+              <div key={l.id} className="card p-3 space-y-2">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
+                    <div className="text-lg font-bold text-gray-900 truncate">{l.user_name}</div>
+                    <div className="text-[11px] capitalize text-gray-600 mt-0.5">{(l.leave_type || '').replace('_', ' ')}</div>
+                  </div>
+                  <StatusBadge status={l.status} />
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">From</div>
+                    <div className="font-semibold text-gray-700">{l.from_date || '—'}</div>
+                    {isShort && l.from_time && <div className="text-[10px] text-blue-600 font-semibold">{l.from_time}</div>}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] uppercase text-gray-400">To</div>
+                    <div className="font-semibold text-gray-700">{l.to_date || '—'}</div>
+                    {isShort && l.to_time && <div className="text-[10px] text-blue-600 font-semibold">{l.to_time}</div>}
+                  </div>
+                </div>
+                <div className="text-[11px] pt-1 border-t border-gray-100">
+                  <span className="text-gray-400">Duration:</span>{' '}
+                  {isShort
+                    ? <b className="text-amber-700">{l.hours ? `${(+l.hours).toFixed(2).replace(/\.?0+$/, '')} hr${l.hours !== 1 ? 's' : ''}` : '—'}</b>
+                    : <b className="text-gray-800">{l.days} day{l.days !== 1 ? 's' : ''}</b>
+                  }
+                </div>
+                {l.reason && (
+                  <div className="text-[11px] text-gray-600 italic pt-1 border-t border-gray-100 line-clamp-2">"{l.reason}"</div>
+                )}
+                {l.status === 'pending' && (
+                  <div className="flex items-center gap-2 pt-1">
+                    <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'approved' }); toast.success('Approved'); load(); }}
+                      className="btn btn-success text-xs py-1.5 px-3 flex-1">Approve</button>
+                    <button onClick={async () => { await api.put(`/attendance/leave/${l.id}/approve`, { status: 'rejected' }); toast.success('Rejected'); load(); }}
+                      className="btn btn-danger text-xs py-1.5 px-3 flex-1">Reject</button>
+                  </div>
+                )}
+                <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
+                  <button onClick={() => {
+                    setEditingLeave(l);
+                    setLeaveEditForm({
+                      leave_type: l.leave_type || 'casual',
+                      from_date: l.from_date || '', to_date: l.to_date || '',
+                      from_time: l.from_time || '', to_time: l.to_time || '',
+                      days: l.days || 0, hours: l.hours ? +(+l.hours).toFixed(2) : 0,
+                      reason: l.reason || '',
+                    });
+                  }} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+                    <FiEdit2 size={11} /> Edit
+                  </button>
+                  <button onClick={async () => {
+                    if (!confirm(`Delete this leave request for ${l.user_name}?`)) return;
+                    try { await api.delete(`/attendance/leave/${l.id}`); toast.success('Deleted'); load(); }
+                    catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                  }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                    <FiTrash2 size={11} /> Delete
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        </>
       )}
 
       {/* EDIT LEAVE MODAL — admin / approver fixes typos, wrong dates,

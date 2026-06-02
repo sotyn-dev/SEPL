@@ -216,7 +216,7 @@ export default function Payroll() {
             )}
           </div>
 
-          <div className="card p-0">
+          <div className="card p-0 hidden md:block">
             <table className="freeze-head">
               <thead>
                 <tr>
@@ -262,6 +262,77 @@ export default function Payroll() {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* Mobile cards (mam 2026-06-02) — Payroll monthly slip list */}
+          <div className="md:hidden space-y-3">
+            {loading && <div className="card p-6 text-center text-gray-400 text-sm">Calculating…</div>}
+            {!loading && list.length === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">No active employees with salary set.</div>
+            )}
+            {!loading && list.map(r => (
+              <div key={r.employee_id} className={`card p-3 space-y-2 ${r.locked ? 'border-emerald-300' : (r.user_linked === false ? 'border-amber-300' : '')}`}>
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
+                    <div className="text-lg font-bold text-gray-900 truncate flex items-center gap-1">
+                      {r.employee_name}
+                      {r.locked && <FiLock size={11} className="text-emerald-600" title="Finalised" />}
+                    </div>
+                    {r.department && <div className="text-[11px] text-gray-500">{r.department}</div>}
+                    {r.user_linked === false && (
+                      <div className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded inline-block mt-0.5">⚠ no login</div>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] uppercase text-gray-400">Net Pay</div>
+                    <div className="text-lg font-bold text-emerald-700">{fmt(r.net_pay)}</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px] text-center">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Base</div>
+                    <div className="font-semibold text-gray-700">{fmt(r.base_salary)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Paid Days</div>
+                    <div className="font-semibold text-gray-800">{r.paid_days}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">OT</div>
+                    <div className="font-semibold text-blue-700">{r.ot_hours || 0}h{r.ot_pay ? ` +${fmt(r.ot_pay)}` : ''}</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-4 gap-2 pt-1 border-t border-gray-100 text-[11px] text-center">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Half</div>
+                    <div className="font-semibold text-gray-700">{r.half_days || 0}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Absent</div>
+                    <div className="font-semibold text-red-600">{r.absent_days || 0}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Late</div>
+                    <div className="font-semibold text-amber-600">{r.late_marks || 0}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Leaves</div>
+                    <div className="font-semibold text-purple-600">{(r.paid_leaves || 0) + (r.unpaid_leaves || 0)}</div>
+                  </div>
+                </div>
+                {r.late_penalty > 0 && (
+                  <div className="text-[11px] text-amber-700 font-semibold pt-1 border-t border-gray-100">
+                    Late penalty: {fmt(r.late_penalty)}
+                  </div>
+                )}
+                <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
+                  <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs py-1.5 px-3 flex-1">Detail</button>
+                  <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer"
+                    className="btn btn-primary text-xs py-1.5 px-3 flex-1 text-center">SEPL Slip</a>
+                </div>
+              </div>
+            ))}
           </div>
         </>
       )}

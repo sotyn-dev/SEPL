@@ -209,7 +209,7 @@ export default function Employees() {
       </div>
 
       {/* Table */}
-      <div className="card p-0"><table className="freeze-head">
+      <div className="card p-0 hidden md:block"><table className="freeze-head">
         <thead><tr>
           <th>Name</th><th>Phone</th><th>Email</th><th>Designation</th><th>Department</th><th>Join Date</th>
           <th title="Linked user login — needed for DPR Staff Cost auto-calc">Linked User</th>
@@ -241,6 +241,72 @@ export default function Employees() {
           {filtered.length === 0 && <tr><td colSpan={canSeeSalary ? 10 : 9} className="text-center py-8 text-gray-400">No employees found</td></tr>}
         </tbody>
       </table></div>
+
+      {/* Mobile cards (mam 2026-06-02) — polished employee card list */}
+      <div className="md:hidden space-y-3">
+        {filtered.length === 0 && (
+          <div className="card p-6 text-center text-gray-400 text-sm">No employees found</div>
+        )}
+        {filtered.map(e => (
+          <div key={e.id} className="card p-3 space-y-2">
+            <div className="flex justify-between items-start gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
+                <div className="text-lg font-bold text-gray-900 truncate">{e.name}</div>
+                {e.designation && <div className="text-[11px] text-gray-600">{e.designation}</div>}
+                {e.department && <div className="text-[10px] text-gray-400">{e.department}</div>}
+              </div>
+              <StatusBadge status={e.status} />
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+              {e.phone && (
+                <a href={`tel:${e.phone}`} className="text-blue-600 hover:underline">
+                  <div className="text-[9px] uppercase text-gray-400">Phone</div>
+                  <div className="font-semibold">📞 {e.phone}</div>
+                </a>
+              )}
+              {e.email && (
+                <a href={`mailto:${e.email}`} className="text-blue-600 hover:underline truncate" title={e.email}>
+                  <div className="text-[9px] uppercase text-gray-400">Email</div>
+                  <div className="font-semibold truncate">✉ {e.email}</div>
+                </a>
+              )}
+              {e.join_date && (
+                <div>
+                  <div className="text-[9px] uppercase text-gray-400">Join Date</div>
+                  <div className="font-semibold text-gray-700">{e.join_date}</div>
+                </div>
+              )}
+              {canSeeSalary && (
+                <div>
+                  <div className="text-[9px] uppercase text-gray-400">Salary</div>
+                  <div className="font-semibold text-emerald-700">Rs {(e.salary || 0).toLocaleString('en-IN')}</div>
+                </div>
+              )}
+            </div>
+            <div className="pt-1 border-t border-gray-100">
+              <div className="text-[9px] uppercase text-gray-400">Linked User</div>
+              {e.linked_user_name
+                ? <span className="text-[11px] font-semibold text-emerald-700 flex items-center gap-1"><FiLink size={10} /> {e.linked_user_name}</span>
+                : <span className="text-[11px] font-semibold text-red-600">Not linked — DPR Staff Cost won't include this employee</span>}
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
+              <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+                <FiEdit2 size={11} /> Edit
+              </button>
+              {canDelete('employees') && (
+                <button onClick={async () => {
+                  if (!confirm(`Delete employee "${e.name}"?`)) return;
+                  try { await api.delete(`/hr/employees/${e.id}`); toast.success('Deleted'); load(); }
+                  catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                  <FiTrash2 size={11} /> Delete
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
 
       {/* Add/Edit Modal */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit Employee' : 'Add Employee'}>
