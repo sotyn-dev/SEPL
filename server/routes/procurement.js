@@ -2267,11 +2267,52 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
   }
 
   try {
-    const r = getDb().prepare(
+    const db = getDb();
+    const r = db.prepare(
       `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, file_path)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, filePath);
-    res.status(201).json({ id: r.lastInsertRowid, file_path: filePath });
+
+    // Mam (2026-06-02): "in rec. against delivery note show here ok
+    // site name also show here delivery note number and against it
+    // we will upload receiving".  As soon as a Purchase Bill is
+    // uploaded for a PO, auto-create a placeholder Challan Delivery
+    // Note (status='pending', auto DC/YYYY/####) so the row appears in
+    // Dispatch & Receiving with a real DN number that mam can:
+    //   - see in the list straight away (no more "—" doc-no column),
+    //   - hand to the storekeeper as the printable challan, and
+    //   - upload the signed receipt against without an extra Dispatch
+    //     click.
+    // Guarded so re-uploading a bill on the same PO doesn't spawn
+    // duplicate DN rows.
+    let autoDnId = null, autoDnNumber = null;
+    if (vendor_po_id) {
+      const existingDn = db.prepare(
+        'SELECT id, document_number FROM delivery_notes WHERE vendor_po_id = ? LIMIT 1'
+      ).get(vendor_po_id);
+      if (existingDn) {
+        autoDnId = existingDn.id;
+        autoDnNumber = existingDn.document_number;
+      } else {
+        const { nextSequence } = require('../db/nextSequence');
+        const year = new Date().getFullYear();
+        autoDnNumber = nextSequence(db, 'delivery_notes', 'document_number', `DC/${year}/`, { pad: 4 });
+        const today = new Date().toISOString().slice(0, 10);
+        const ins = db.prepare(
+          `INSERT INTO delivery_notes
+              (vendor_po_id, delivery_date, document_type, document_number, status, notes)
+           VALUES (?, ?, 'challan', ?, 'pending', ?)`
+        ).run(vendor_po_id, today, autoDnNumber, `Auto-created from Purchase Bill ${bill_number || '#' + r.lastInsertRowid}`);
+        autoDnId = ins.lastInsertRowid;
+      }
+    }
+
+    res.status(201).json({
+      id: r.lastInsertRowid,
+      file_path: filePath,
+      delivery_note_id: autoDnId,
+      delivery_note_number: autoDnNumber,
+    });
   } catch (err) {
     if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
     res.status(500).json({ error: err.message });
@@ -2287,15 +2328,23 @@ router.delete('/purchase-bills/:id', (req, res) => {
 // (for PO items sold to client) or a Delivery Challan (FOC / RGP items).
 // After dispatch, mam records who received it via the /receive endpoint.
 router.get('/delivery-notes', (req, res) => {
+  // Mam (2026-06-02): "site name also show here" — JOIN through
+  // vendor_po → indent → site so every dispatch row carries its
+  // destination site name on the Dispatch & Receiving list.
   res.json(getDb().prepare(`
     SELECT dn.*,
       u.name as received_by_user_name,
       vp.po_number as vendor_po_number,
-      v.name as vendor_name
+      vp.indent_id as vendor_po_indent_id,
+      v.name as vendor_name,
+      i.indent_number as indent_number,
+      s.name as site_name
     FROM delivery_notes dn
     LEFT JOIN users u ON dn.received_by = u.id
     LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
     LEFT JOIN vendors v ON vp.vendor_id = v.id
+    LEFT JOIN indents i ON vp.indent_id = i.id
+    LEFT JOIN sites s ON i.site_id = s.id
     ORDER BY dn.created_at DESC
   `).all());
 });

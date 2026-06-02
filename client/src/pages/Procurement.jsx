@@ -3964,32 +3964,22 @@ export default function Procurement() {
                 </div>
               </div>
           <div className="card p-0 overflow-x-auto hidden md:block"><table className="freeze-head freeze-col">
-            <thead><tr><th>ID</th><th>Type</th><th>Doc No</th><th>PO</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
+            {/* Mam (2026-06-02): "site name also show here delivery note
+                number and against it we will upload receiving".  Site
+                column added.  Synthetic AWAITING rows dropped because
+                every billed PO now has a REAL delivery_notes row (with
+                a DC/YYYY/#### number) auto-created at bill-upload time
+                — those rows show in this same list with status='pending'
+                so mam can upload the signed receipt directly against the
+                visible DN number. */}
+            <thead><tr><th>DN No</th><th>Type</th><th>PO</th><th>Site</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-              {/* Ready-to-Dispatch POs awaiting receipt (mam 2026-05-30:
-                  "show ready POs here + upload receiving"). Uploading the
-                  signed receipt auto-creates the Challan dispatch (auto DC
-                  number) and records the receipt in one step. */}
-              {readyToDispatch.map(po => (
-                <tr key={`ready-${po.id}`} className="bg-amber-50/40">
-                  <td className="text-gray-400">—</td>
-                  <td><span className="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-200">AWAITING</span></td>
-                  <td className="text-gray-400">—</td>
-                  <td className="text-xs">{po.po_number}<div className="text-[10px] text-gray-500">{po.vendor_name || ''}</div></td>
-                  <td className="text-xs">{po.po_date || '—'}</td>
-                  <td className="text-gray-300 text-xs">—</td>
-                  <td className="text-gray-300 text-xs">—</td>
-                  <td className="text-gray-300 text-xs">—</td>
-                  <td className="text-gray-300 text-xs">—</td>
-                  <td><span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">Awaiting receipt</span></td>
-                  <td className="whitespace-nowrap">
-                    <button onClick={() => openReceivePo(po)} className="btn btn-success text-[10px] px-2 py-1" title="Upload the signed receipt — auto-creates the dispatch (auto DC no.) and marks it received.">Upload Receiving</button>
-                  </td>
-                </tr>
-              ))}
               {dispListPg.rows.map(d => (
                 <tr key={d.id}>
-                  <td>#{d.id}</td>
+                  <td className="font-mono font-semibold text-blue-800">
+                    {d.document_number || <span className="text-gray-300 font-sans">—</span>}
+                    <div className="text-[10px] text-gray-400 font-sans font-normal">#{d.id}</div>
+                  </td>
                   <td>
                     <div className="flex flex-col gap-1 items-start">
                       <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
@@ -4011,8 +4001,9 @@ export default function Procurement() {
                       )}
                     </div>
                   </td>
-                  <td className="font-medium">{d.document_number || <span className="text-gray-300">—</span>}</td>
                   <td className="text-xs">{d.vendor_po_number || <span className="text-gray-300">—</span>}<div className="text-[10px] text-gray-500">{d.vendor_name || ''}</div></td>
+                  {/* Site (mam 2026-06-02) — pulled from indents.site_id via the GET /delivery-notes JOIN */}
+                  <td className="text-xs">{d.site_name || <span className="text-gray-300">—</span>}</td>
                   <td>{d.delivery_date}</td>
                   <td>
                     {d.file_path
@@ -4068,38 +4059,18 @@ export default function Procurement() {
                   </td>
                 </tr>
               ))}
-              {deliveryNotes.length === 0 && readyToDispatch.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
-              {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
+              {deliveryNotes.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
+              {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
             </tbody>
-            <tfoot><tr><td colSpan="12" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
+            <tfoot><tr><td colSpan="11" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
           </table></div>
 
-          {/* Mobile cards — polished pattern matching Indents (mam). */}
+          {/* Mobile cards — every billed PO now has a REAL DN row with a
+              DC/YYYY/#### number auto-created at bill-upload time, so
+              the synthetic AWAITING rows are no longer needed.  Each
+              card leads with the DN number (mam 2026-06-02: "delivery
+              note number and against it we will upload receiving"). */}
           <div className="md:hidden space-y-3">
-            {/* Ready-to-Dispatch POs (awaiting receipt) shown at the top */}
-            {readyToDispatch.map(po => (
-              <div key={`ready-${po.id}`} className="card p-3 space-y-2 bg-amber-50/30 border-amber-200">
-                <div className="flex justify-between items-start gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">PO Number</div>
-                    <div className="text-lg font-bold text-gray-900 truncate">{po.po_number}</div>
-                    <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
-                      <FiCalendar size={10} className="text-gray-400" />
-                      {po.po_date || '—'}
-                    </div>
-                  </div>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-300 bg-amber-50 text-amber-700 uppercase">Awaiting</span>
-                </div>
-                {po.vendor_name && (
-                  <div className="text-xs">
-                    <div className="text-[10px] uppercase text-gray-400">Vendor</div>
-                    <div className="font-medium text-gray-800 truncate">{po.vendor_name}</div>
-                  </div>
-                )}
-                <button onClick={() => openReceivePo(po)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">Upload Receiving</button>
-              </div>
-            ))}
-            {/* Existing dispatches */}
             {dispListPg.rows.map(d => (
               <div key={d.id} className="card p-3 space-y-2">
                 <div className="flex justify-between items-start gap-2">
@@ -4110,7 +4081,7 @@ export default function Procurement() {
                       </span>
                       <span className="text-[10px] text-gray-400">#{d.id}</span>
                     </div>
-                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Doc Number</div>
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Delivery Note No</div>
                     <div className="text-lg font-bold text-gray-900 truncate">{d.document_number || <span className="text-gray-300 text-sm">— pending —</span>}</div>
                     <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
                       <FiCalendar size={10} className="text-gray-400" />
@@ -4119,6 +4090,16 @@ export default function Procurement() {
                   </div>
                   <StatusBadge status={d.status} />
                 </div>
+                {/* Site (mam 2026-06-02) */}
+                {d.site_name && (
+                  <div className="flex items-start gap-1.5 text-xs">
+                    <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase text-gray-400">Site</div>
+                      <div className="font-medium text-gray-800">{d.site_name}</div>
+                    </div>
+                  </div>
+                )}
                 {(d.sales_bill_pending === 1 && !d.sales_bill_number) && (
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-300 inline-block">📋 SB Pending</span>
                 )}
@@ -4176,7 +4157,7 @@ export default function Procurement() {
                 </div>
               </div>
             ))}
-            {deliveryNotes.length === 0 && readyToDispatch.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No dispatches yet</div>}
+            {deliveryNotes.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No dispatches yet</div>}
             {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No dispatches match the current filters.</div>}
             <Pagination pg={dispListPg} setPerPage={setDispListPerPage} />
           </div>

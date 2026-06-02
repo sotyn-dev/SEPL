@@ -4544,6 +4544,50 @@ in your first week. If a process feels broken, raise a Help Ticket
     console.warn('[rental_tools] migrations skipped (non-fatal):', e.message);
   }
 
+  // ─── Auto-DN backfill — mam (2026-06-02) ──────────────────────────────
+  // "in rec. against delivery note show here ok site name also show here
+  // delivery note number and against it we will upload receiving".
+  // The Purchase-Bill endpoint now auto-creates a Challan DN at bill
+  // upload time so a real DN number is visible in Dispatch & Receiving
+  // from day one.  This backfill catches any pre-existing POs that were
+  // already in the "billed but no DN" state (the 3 AWAITING rows mam
+  // showed me) and gives them DN numbers so they look identical to
+  // post-fix data.  Guarded with app_settings so it runs ONCE.
+  try {
+    const guard = db.prepare("SELECT value FROM app_settings WHERE key='auto_dn_backfill_v1'").get();
+    if (!guard) {
+      const { nextSequence } = require('./nextSequence');
+      const orphanPos = db.prepare(`
+        SELECT vp.id as po_id
+          FROM vendor_pos vp
+         WHERE COALESCE(vp.cancelled, 0) = 0
+           AND EXISTS (SELECT 1 FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id)
+           AND NOT EXISTS (SELECT 1 FROM delivery_notes dn WHERE dn.vendor_po_id = vp.id)
+      `).all();
+      let created = 0;
+      const today = new Date().toISOString().slice(0, 10);
+      const ins = db.prepare(
+        `INSERT INTO delivery_notes
+            (vendor_po_id, delivery_date, document_type, document_number, status, notes)
+         VALUES (?, ?, 'challan', ?, 'pending', ?)`
+      );
+      const tx = db.transaction(() => {
+        for (const row of orphanPos) {
+          const year = new Date().getFullYear();
+          const dnNum = nextSequence(db, 'delivery_notes', 'document_number', `DC/${year}/`, { pad: 4 });
+          ins.run(row.po_id, today, dnNum, `Auto-backfilled — bill uploaded before auto-DN feature`);
+          created++;
+        }
+        db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('auto_dn_backfill_v1', ?)")
+          .run(String(Date.now()));
+      });
+      tx();
+      if (created > 0) console.log(`[backfill] Auto-created ${created} placeholder Delivery Notes for billed POs without a DN.`);
+    }
+  } catch (e) {
+    console.warn('[auto_dn_backfill] skipped (non-fatal):', e.message);
+  }
+
   console.log('Database initialized successfully');
   return db;
 }
