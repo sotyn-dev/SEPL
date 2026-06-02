@@ -483,6 +483,14 @@ router.get('/indents', (req, res) => {
             ii.unit, ii.item_type, ii.item_master_id,
             ii.is_extra_schedule, ii.is_extra_non_schedule,
             ii.rental_days, ii.rental_rate_per_day,
+            -- Source split (mam 2026-06-02): 'store' lines came from
+            -- existing office inventory at approval; 'procure' lines
+            -- continue through the normal vendor PO flow. parent_item_id
+            -- ties a 'store' child to its 'procure' sibling on the same
+            -- BOQ line.  sin.note_number is the printable SI/####.
+            ii.source, ii.parent_item_id, ii.stock_issue_note_id,
+            sin.note_number as stock_issue_number,
+            sin.issued_at as stock_issued_at,
             im.item_code, im.item_name as master_name,
             im.specification as master_specification, im.size as master_size,
             COALESCE(
@@ -512,6 +520,7 @@ router.get('/indents', (req, res) => {
             ) * COALESCE(ii.quantity, 0) as line_budget
      FROM indent_items ii
      LEFT JOIN item_master im ON ii.item_master_id = im.id
+     LEFT JOIN stock_issue_notes sin ON sin.id = ii.stock_issue_note_id
      ORDER BY ii.id`
   ).all();
   const itemsByIndent = new Map();
@@ -872,7 +881,7 @@ router.post('/indents', (req, res) => {
 //      Vendor PO has been created against it. Once approved or POed,
 //      it's frozen.
 router.put('/indents/:id', (req, res) => {
-  const { status, items, site_name, raised_by_name, notes, reason, quantity_overrides } = req.body;
+  const { status, items, site_name, raised_by_name, notes, reason, quantity_overrides, store_qty_per_item } = req.body;
   const db = getDb();
   const id = req.params.id;
 
@@ -1021,13 +1030,23 @@ router.put('/indents/:id', (req, res) => {
 
     // Approve path — mam (2026-05-25): "can edit qty at approval time".
     // quantity_overrides is an optional { indent_item_id: new_qty } map.
-    // We apply every override inside a single transaction with the
-    // status flip so an approver can trim quantities before the indent
-    // becomes purchase-orderable.  Each override must be a positive
-    // finite number; invalid entries are rejected up front so we
-    // don't half-apply.
+    // store_qty_per_item is an optional { indent_item_id: from_store_qty }
+    // map — mam (2026-06-02): "if one item required 20 pc 5 in from
+    // store approved and 15 new to buy how much we match".  When an
+    // approver issues from existing office stock, we split the indent
+    // line into:
+    //   - parent row: source='procure', quantity = approved - from_store
+    //   - child  row: source='store',   quantity = from_store
+    // and atomically:
+    //   - decrement stock_balance across office warehouses (FIFO by id)
+    //   - log stock_movements OUT rows (reference_type='ISSUE')
+    //   - create one stock_issue_notes header (SI/YYYY/####) that the
+    //     storekeeper can print as a challan
+    // Everything goes in ONE transaction with the approve flip so a
+    // partial failure can't half-issue from stock.
     if (status === 'approved') {
       const overrides = quantity_overrides && typeof quantity_overrides === 'object' ? quantity_overrides : {};
+      const storeQtys = store_qty_per_item && typeof store_qty_per_item === 'object' ? store_qty_per_item : {};
       const valid = [];
       for (const [k, v] of Object.entries(overrides)) {
         const itemId = +k;
@@ -1038,12 +1057,194 @@ router.put('/indents/:id', (req, res) => {
         }
         valid.push([itemId, qty]);
       }
+
+      // ── Validate store-issue requests up front ────────────────────────
+      // Each entry must reference an indent_item that:
+      //   1. Belongs to THIS indent
+      //   2. Has an item_master_id (manual entries cannot draw from stock)
+      //   3. Has enough stock in office warehouses across SUM(stock_balance)
+      // We compute the FINAL approved qty (post-override) to validate
+      // from_store <= approved.
+      const storePlans = [];   // [{ itemId, fromStore, finalQty, masterId, rate }]
+      for (const [k, v] of Object.entries(storeQtys)) {
+        const itemId = +k;
+        const fromStore = +v;
+        if (!Number.isFinite(itemId) || itemId <= 0) continue;
+        if (!Number.isFinite(fromStore) || fromStore < 0) {
+          return res.status(400).json({ error: `From-store quantity for item #${itemId} must be ≥ 0.` });
+        }
+        if (fromStore === 0) continue;
+        const row = db.prepare(
+          'SELECT id, indent_id, item_master_id, quantity, unit, rate, description FROM indent_items WHERE id=?'
+        ).get(itemId);
+        if (!row || +row.indent_id !== +id) {
+          return res.status(400).json({ error: `Item #${itemId} does not belong to this indent.` });
+        }
+        if (!row.item_master_id) {
+          return res.status(400).json({ error: `Cannot issue from store: item "${row.description}" has no Item Master link.` });
+        }
+        // Final approved qty = override (if any) else current quantity
+        const finalQty = valid.find(([id]) => id === itemId)?.[1] ?? +row.quantity;
+        if (fromStore > finalQty) {
+          return res.status(400).json({
+            error: `From-store qty (${fromStore}) exceeds approved qty (${finalQty}) for "${row.description}".`,
+          });
+        }
+        // Check available office stock — SUM across all office warehouses.
+        const avail = db.prepare(
+          `SELECT COALESCE(SUM(sb.quantity), 0) as qty
+             FROM stock_balance sb
+             JOIN warehouses w ON w.id = sb.warehouse_id AND COALESCE(w.active, 1) = 1
+            WHERE sb.item_master_id = ? AND w.type='office'`
+        ).get(row.item_master_id);
+        if (fromStore > +avail.qty) {
+          return res.status(400).json({
+            error: `Only ${+avail.qty} pcs of "${row.description}" available in office store — cannot issue ${fromStore}.`,
+          });
+        }
+        storePlans.push({ itemId, fromStore, finalQty, masterId: row.item_master_id, rate: +row.rate || 0 });
+      }
+
       try {
+        let issueNoteId = null;
+        let issueNoteNumber = null;
+        let totalStoreQty = 0;
+        let totalStoreValue = 0;
+
         const tx = db.transaction(() => {
+          // 1. Apply non-split quantity overrides first.
           if (valid.length) {
             const upd = db.prepare('UPDATE indent_items SET quantity = ? WHERE id = ? AND indent_id = ?');
             for (const [itemId, qty] of valid) upd.run(qty, itemId, id);
           }
+
+          // 2. Execute each store-split: decrement stock, log movements,
+          //    split or convert the indent_items row.
+          if (storePlans.length) {
+            // Generate SI number first (used as reference on movements).
+            const yr = new Date().getFullYear();
+            const lastNum = db.prepare(
+              `SELECT note_number FROM stock_issue_notes
+                WHERE note_number LIKE ?
+                ORDER BY id DESC LIMIT 1`
+            ).get(`SI/${yr}/%`);
+            let seq = 1;
+            if (lastNum && lastNum.note_number) {
+              const m = lastNum.note_number.match(/(\d+)$/);
+              if (m) seq = parseInt(m[1], 10) + 1;
+            }
+            issueNoteNumber = `SI/${yr}/${String(seq).padStart(4, '0')}`;
+
+            // Pull the indent's destination site (for the note header).
+            const indentSite = db.prepare(
+              `SELECT s.id as site_id FROM indents i
+                 LEFT JOIN sites s ON s.id = i.site_id
+                WHERE i.id = ?`
+            ).get(id) || {};
+
+            // Insert placeholder header — totals updated at the end.
+            const noteRes = db.prepare(
+              `INSERT INTO stock_issue_notes
+                  (note_number, indent_id, from_warehouse_id, to_site_id, total_qty, total_value, issued_by)
+               VALUES (?, ?, NULL, ?, 0, 0, ?)`
+            ).run(issueNoteNumber, id, indentSite.site_id || null, req.user.id);
+            issueNoteId = noteRes.lastInsertRowid;
+
+            // For each split:
+            //   a. Greedy-decrement stock_balance across office warehouses (smallest id first)
+            //   b. Write one stock_movements OUT row per warehouse touched
+            //   c. Split indent_items: parent stays procure with remaining qty,
+            //      child created with source='store' (or convert parent if 100% from store)
+            const balRows = db.prepare(
+              `SELECT sb.id, sb.warehouse_id, sb.quantity, sb.avg_rate
+                 FROM stock_balance sb
+                 JOIN warehouses w ON w.id = sb.warehouse_id AND COALESCE(w.active, 1) = 1
+                WHERE sb.item_master_id = ? AND w.type='office' AND sb.quantity > 0
+                ORDER BY sb.warehouse_id ASC`
+            );
+            const decBal = db.prepare('UPDATE stock_balance SET quantity = quantity - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+            const insertMv = db.prepare(
+              `INSERT INTO stock_movements
+                  (warehouse_id, item_master_id, type, quantity, rate, total_value,
+                   reference_type, reference_id, site_id, notes, created_by)
+               VALUES (?, ?, 'OUT', ?, ?, ?, 'ISSUE', ?, ?, ?, ?)`
+            );
+            // Read the full parent row so the child can inherit columns.
+            const getItem = db.prepare('SELECT * FROM indent_items WHERE id=?');
+            const updateParent = db.prepare(
+              `UPDATE indent_items SET quantity = ?, source = 'procure' WHERE id = ?`
+            );
+            const convertParent = db.prepare(
+              `UPDATE indent_items
+                  SET source = 'store',
+                      stock_issue_note_id = ?
+                WHERE id = ?`
+            );
+            const insertChild = db.prepare(
+              `INSERT INTO indent_items
+                  (indent_id, description, quantity, unit, rate, amount, vendor_id,
+                   item_master_id, make, is_foc, is_tool, item_type, po_item_id,
+                   required_date, source, parent_item_id, stock_issue_note_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'store', ?, ?)`
+            );
+            let lastWarehouseId = null;
+            for (const plan of storePlans) {
+              const bal = balRows.all(plan.masterId);
+              let remaining = plan.fromStore;
+              let valueOut = 0;
+              for (const b of bal) {
+                if (remaining <= 0) break;
+                const take = Math.min(remaining, +b.quantity);
+                if (take <= 0) continue;
+                const rate = +b.avg_rate || plan.rate || 0;
+                decBal.run(take, b.id);
+                insertMv.run(
+                  b.warehouse_id, plan.masterId, take, rate, take * rate,
+                  issueNoteNumber, indentSite.site_id || null,
+                  `Issued for indent #${id} (${issueNoteNumber})`,
+                  req.user.id,
+                );
+                valueOut += take * rate;
+                remaining -= take;
+                lastWarehouseId = b.warehouse_id;
+              }
+              // Should be zero — guard validated availability up front; if
+              // it isn't, abort the transaction.
+              if (remaining > 0.0001) {
+                throw new Error(`Stock dropped during transaction for item #${plan.itemId} — aborted.`);
+              }
+              totalStoreQty += plan.fromStore;
+              totalStoreValue += valueOut;
+
+              // Split or convert the indent_items row.
+              const remainProcure = plan.finalQty - plan.fromStore;
+              const parent = getItem.get(plan.itemId);
+              if (remainProcure <= 0.0001) {
+                // 100% from store — just flip the row's source.
+                convertParent.run(issueNoteId, plan.itemId);
+              } else {
+                // Partial — shrink parent to remaining procure qty + add a
+                // store child carrying the from-store qty.
+                updateParent.run(remainProcure, plan.itemId);
+                insertChild.run(
+                  parent.indent_id, parent.description, plan.fromStore,
+                  parent.unit, parent.rate, plan.fromStore * (+parent.rate || 0),
+                  parent.vendor_id, parent.item_master_id, parent.make,
+                  parent.is_foc, parent.is_tool, parent.item_type,
+                  parent.po_item_id, parent.required_date,
+                  parent.id, issueNoteId,
+                );
+              }
+            }
+            // Update the header with rollup + source warehouse (last used).
+            db.prepare(
+              `UPDATE stock_issue_notes
+                  SET total_qty = ?, total_value = ?, from_warehouse_id = ?
+                WHERE id = ?`
+            ).run(totalStoreQty, totalStoreValue, lastWarehouseId, issueNoteId);
+          }
+
+          // 3. Flip the indent to approved.
           db.prepare(
             `UPDATE indents
                SET status = 'approved',
@@ -1056,10 +1257,17 @@ router.put('/indents/:id', (req, res) => {
           ).run(req.user.id, id);
         });
         tx();
+
+        return res.json({
+          message: 'Approved',
+          qty_changes: valid.length,
+          stock_issued: storePlans.length,
+          stock_issue_note: issueNoteNumber,
+          stock_qty: totalStoreQty,
+        });
       } catch (err) {
         return res.status(500).json({ error: err.message });
       }
-      return res.json({ message: 'Approved', qty_changes: valid.length });
     }
 
     // Any other status flip (draft → submitted, etc.) — keep legacy behaviour.
@@ -1329,6 +1537,10 @@ router.get('/indents/:id', (req, res) => {
             v.name as vendor_name,
             im.item_code, im.item_name as master_name,
             im.specification as master_specification, im.size as master_size,
+            -- Mam (2026-06-02): expose SI number on store-source rows so
+            -- the approve modal + dispatch view can show "Issued SI/####".
+            sin.note_number as stock_issue_number,
+            sin.issued_at as stock_issued_at,
             COALESCE(
               NULLIF(im.current_price, 0),
               (SELECT iph.rate FROM item_price_history iph
@@ -1346,6 +1558,7 @@ router.get('/indents/:id', (req, res) => {
      FROM indent_items ii
      LEFT JOIN vendors v ON ii.vendor_id = v.id
      LEFT JOIN item_master im ON ii.item_master_id = im.id
+     LEFT JOIN stock_issue_notes sin ON sin.id = ii.stock_issue_note_id
      WHERE ii.indent_id = ?`
   ).all(req.params.id);
 

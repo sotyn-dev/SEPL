@@ -144,6 +144,10 @@ function MobileItemRow({ item, idx }) {
   const qty = Number(item.quantity || item.qty || 0);
   const hasMaster = !!(item.item_code || item.master_name || item.master_specification || item.master_size);
   const subLine = [item.master_size, item.master_specification].filter(Boolean).join(' / ');
+  // Mam (2026-06-02): source badge.  'store' = issued from existing
+  // office inventory (no vendor PO needed); 'procure' = goes through
+  // normal vendor flow.  Stamped at L1/L2 approval time.
+  const isStore = item.source === 'store';
   return (
     <div className="pb-1 border-b border-gray-50 last:border-0">
       <button
@@ -157,12 +161,28 @@ function MobileItemRow({ item, idx }) {
             {desc}
           </span>
         </div>
-        <div className="text-right whitespace-nowrap text-gray-800 font-medium">
-          {qty} {item.unit || ''}
+        <div className="text-right whitespace-nowrap flex items-center gap-1">
+          {isStore && (
+            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300" title={`Issued from office store · ${item.stock_issue_number || ''}`}>
+              STORE
+            </span>
+          )}
+          <span className="text-gray-800 font-medium">{qty} {item.unit || ''}</span>
         </div>
       </button>
       {open && (
-        <div className="mt-1 ml-2 pl-2 border-l-2 border-blue-200 space-y-0.5 text-[10.5px] text-gray-600">
+        <div className={`mt-1 ml-2 pl-2 border-l-2 space-y-0.5 text-[10.5px] text-gray-600 ${isStore ? 'border-emerald-300' : 'border-blue-200'}`}>
+          {/* Source line — emphasised so mam can tell at a glance whether
+              the item already arrived from store or is still being procured. */}
+          {isStore ? (
+            <div className="text-emerald-700 font-semibold">
+              🟢 Issued from Office Store
+              {item.stock_issue_number && <span className="ml-1 font-mono">· {item.stock_issue_number}</span>}
+              {item.stock_issued_at && <span className="ml-1 text-gray-500 font-normal">({new Date(item.stock_issued_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })})</span>}
+            </div>
+          ) : (
+            <div className="text-blue-700 font-semibold">🛒 Fresh procurement</div>
+          )}
           {hasMaster ? (
             <>
               {(item.item_code || item.master_name) && (
@@ -391,6 +411,12 @@ export default function Procurement() {
   // rejectTarget holds the indent row + the mandatory reason field.
   const [approveTarget, setApproveTarget] = useState(null);
   const [approveQtyOverrides, setApproveQtyOverrides] = useState({});
+  // Mam (2026-06-02): per-line "From Store" qty.  When > 0 the approver
+  // is saying "issue N pcs of this line from existing office stock and
+  // procure the rest as a fresh vendor PO".  Auto-seeded to min(office,
+  // approved) when the modal opens; mam can override anywhere from 0 to
+  // min(approved, office_stock).
+  const [approveFromStore, setApproveFromStore] = useState({});
   const [approveSaving, setApproveSaving] = useState(false);
   const [rejectTarget, setRejectTarget] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
@@ -959,8 +985,21 @@ export default function Procurement() {
       // Use the list-loaded row; the modal still works, just without stock.
     }
     const seed = {};
-    for (const it of (detail.items || [])) seed[it.id] = it.quantity;
+    // Auto-suggest From Store qty = min(office_stock, approved_qty) for
+    // every line where item_master_id is set.  Mam can override to 0 if
+    // she wants to procure fresh anyway (e.g. stock reserved for another
+    // job) or to a smaller number for partial issue.
+    const seedStore = {};
+    for (const it of (detail.items || [])) {
+      seed[it.id] = it.quantity;
+      if (it.item_master_id && +it.office_stock > 0) {
+        seedStore[it.id] = Math.min(+it.office_stock, +it.quantity);
+      } else {
+        seedStore[it.id] = 0;
+      }
+    }
     setApproveQtyOverrides(seed);
+    setApproveFromStore(seedStore);
     setApproveTarget(detail);
   };
   // Open the Reject modal — empty reason; saves on submit only if non-empty.
@@ -986,15 +1025,33 @@ export default function Procurement() {
       }
       if (newQty !== oldQty) changed[k] = newQty;
     }
+    // Mam (2026-06-02): collect per-line From Store qty.  Only send
+    // entries where mam intends to issue from stock (qty > 0).  Server
+    // validates qty ≤ approved AND qty ≤ available office stock before
+    // splitting the line + decrementing inventory.
+    const storeQty = {};
+    let storeLineCount = 0;
+    let storeTotalQty = 0;
+    for (const it of (approveTarget.items || [])) {
+      const fs = +approveFromStore[it.id];
+      if (Number.isFinite(fs) && fs > 0) {
+        storeQty[it.id] = fs;
+        storeLineCount++;
+        storeTotalQty += fs;
+      }
+    }
     setApproveSaving(true);
     try {
       const res = await api.put(`/procurement/indents/${approveTarget.id}`, {
         status: 'approved',
         quantity_overrides: changed,
+        store_qty_per_item: storeQty,
       });
-      toast.success(Object.keys(changed).length
-        ? `Approved with ${Object.keys(changed).length} qty change(s)`
-        : 'Approved');
+      const noteSuffix = res.data?.stock_issue_note ? ` · Store issue ${res.data.stock_issue_note} (${storeTotalQty} pcs)` : '';
+      toast.success(
+        (Object.keys(changed).length ? `Approved with ${Object.keys(changed).length} qty change(s)` : 'Approved')
+        + (storeLineCount > 0 ? `${noteSuffix}` : '')
+      );
       // ─── Optimistic update (mam 2026-05-28) ─────────────────────────
       // Server's response tells us which stage just completed:
       //   stage='l1_done' → status becomes 'l1_approved'
@@ -1017,6 +1074,7 @@ export default function Procurement() {
       }) : it));
       setApproveTarget(null);
       setApproveQtyOverrides({});
+      setApproveFromStore({});
       load();  // background refresh for canonical state
     } catch (err) {
       toast.error(err.response?.data?.error || 'Approve failed');
@@ -2153,6 +2211,7 @@ export default function Procurement() {
                             <th className="text-left py-1 pr-3 w-10">#</th>
                             <th className="text-left py-1 pr-3">BOQ Description</th>
                             <th className="text-left py-1 pr-3">Sub-Item (Item Master)</th>
+                            <th className="text-left py-1 pr-3 w-24">Source</th>
                             <th className="text-left py-1 pr-3">Make</th>
                             <th className="text-right py-1 pr-3 w-20">Qty</th>
                             <th className="text-left py-1 pr-3 w-16">Unit</th>
@@ -2163,7 +2222,7 @@ export default function Procurement() {
                         </thead>
                         <tbody>
                           {items.map((it, idx) => (
-                            <tr key={it.id} className="border-b border-gray-100 last:border-0 align-top">
+                            <tr key={it.id} className={`border-b border-gray-100 last:border-0 align-top ${it.source === 'store' ? 'bg-emerald-50/30' : ''}`}>
                               <td className="py-1 pr-3 text-gray-500">{idx + 1}</td>
                               <td className="py-1 pr-3">{it.description || <span className="text-gray-400">—</span>}</td>
                               <td className="py-1 pr-3">
@@ -2180,6 +2239,23 @@ export default function Procurement() {
                                     )}
                                   </div>
                                 ) : <span className="text-gray-400 italic">manual entry</span>}
+                              </td>
+                              {/* Source cell (mam 2026-06-02): tells site
+                                  engineer + MD where this line is coming
+                                  from.  'STORE' rows already have stock
+                                  on hand (SI number visible); 'PROCURE'
+                                  goes through normal vendor PO flow. */}
+                              <td className="py-1 pr-3">
+                                {it.source === 'store' ? (
+                                  <div>
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300">🟢 STORE</span>
+                                    {it.stock_issue_number && (
+                                      <div className="text-[9px] font-mono text-gray-500 mt-0.5">{it.stock_issue_number}</div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 border border-blue-300">🛒 PROCURE</span>
+                                )}
                               </td>
                               <td className="py-1 pr-3">{it.make || <span className="text-gray-400">—</span>}</td>
                               <td className="py-1 pr-3 text-right">{it.quantity}</td>
@@ -5189,7 +5265,7 @@ export default function Procurement() {
           approval time".  Approver sees the full line list with editable
           qty inputs + a live budget total at the bottom.  Only changed
           quantities go up in the request body. */}
-      <Modal isOpen={!!approveTarget} onClose={() => { setApproveTarget(null); setApproveQtyOverrides({}); }} title={approveTarget ? `Approve Indent ${approveTarget.indent_number}` : 'Approve Indent'} wide>
+      <Modal isOpen={!!approveTarget} onClose={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); }} title={approveTarget ? `Approve Indent ${approveTarget.indent_number}` : 'Approve Indent'} wide>
         {approveTarget && (() => {
           const items = approveTarget.items || [];
           const liveBudget = items.reduce((sum, it) => {
@@ -5249,9 +5325,17 @@ export default function Procurement() {
                           item is already on hand. */}
                       <th className="text-right px-2 py-1 w-24">Office<br/><span className="text-[9px] font-normal text-gray-400 normal-case">Stock</span></th>
                       <th className="text-right px-2 py-1 w-24">Site<br/><span className="text-[9px] font-normal text-gray-400 normal-case">Stock</span></th>
-                      <th className="text-right px-2 py-1 w-28">Original Qty</th>
-                      <th className="text-right px-2 py-1 w-28">Approved Qty</th>
-                      <th className="text-right px-2 py-1 w-28">Line Budget</th>
+                      <th className="text-right px-2 py-1 w-24">Original Qty</th>
+                      <th className="text-right px-2 py-1 w-24">Approved Qty</th>
+                      {/* Mam (2026-06-02): split-source columns.  "From
+                          Store" = qty issued from existing office stock
+                          (auto-seeded to min(office, approved)).  "To
+                          Procure" = remaining qty that goes to vendor PO.
+                          The two must sum to Approved Qty — the cell
+                          shows red if not. */}
+                      <th className="text-right px-2 py-1 w-24 bg-emerald-50">From<br/><span className="text-[9px] font-normal text-emerald-600 normal-case">Store</span></th>
+                      <th className="text-right px-2 py-1 w-24 bg-blue-50">To<br/><span className="text-[9px] font-normal text-blue-600 normal-case">Procure</span></th>
+                      <th className="text-right px-2 py-1 w-24">Line Budget</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -5317,6 +5401,38 @@ export default function Procurement() {
                               onChange={(v) => setApproveQtyOverrides(prev => ({ ...prev, [it.id]: v }))}
                               className="border border-gray-300 rounded px-2 py-1 w-20 text-right text-xs focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
                           </td>
+                          {/* From Store cell — disabled when no master link
+                              or no office stock.  Clamped to [0, min(office,
+                              approved)] so mam can't ask for more than what
+                              exists or more than what's approved. */}
+                          {(() => {
+                            const office = +it.office_stock || 0;
+                            const canIssue = !!it.item_master_id && office > 0;
+                            const fs = +approveFromStore[it.id] || 0;
+                            const maxFs = Math.min(office, usedQty);
+                            const toProc = Math.max(0, usedQty - fs);
+                            const overshoot = fs > maxFs + 0.0001;
+                            return (
+                              <>
+                                <td className="px-2 py-1 text-right bg-emerald-50/40">
+                                  {canIssue ? (
+                                    <div>
+                                      <NumInput step="any" min="0" max={maxFs}
+                                        value={approveFromStore[it.id] ?? 0}
+                                        onChange={(v) => setApproveFromStore(prev => ({ ...prev, [it.id]: v }))}
+                                        className={`border rounded px-2 py-1 w-20 text-right text-xs focus:ring-1 focus:ring-emerald-500 ${overshoot ? 'border-red-400 bg-red-50' : 'border-gray-300 focus:border-emerald-500'}`} />
+                                      <div className="text-[9px] text-gray-400 mt-0.5">max {maxFs}</div>
+                                    </div>
+                                  ) : (
+                                    <span className="text-gray-300" title={it.item_master_id ? 'No office stock available' : 'Manual entry — cannot issue from store'}>—</span>
+                                  )}
+                                </td>
+                                <td className="px-2 py-1 text-right bg-blue-50/40 font-medium text-blue-700">
+                                  {toProc > 0 ? toProc.toLocaleString('en-IN') : <span className="text-emerald-700" title="100% issued from store, no vendor PO needed">0</span>}
+                                </td>
+                              </>
+                            );
+                          })()}
                           <td className="px-2 py-1 text-right font-medium">
                             {+it.master_price > 0 ? `₹${Math.round(lineBudget).toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}
                           </td>
@@ -5325,8 +5441,30 @@ export default function Procurement() {
                     })}
                   </tbody>
                   <tfoot>
+                    {/* Roll-up of From Store + To Procure totals so mam
+                        sees at a glance "5 issued from store, 15 to buy"
+                        across the whole indent.  Helps her sanity-check
+                        before clicking Approve. */}
+                    {(() => {
+                      let totalStore = 0, totalProcure = 0;
+                      for (const it of items) {
+                        const editedQ = +approveQtyOverrides[it.id];
+                        const usedQ = Number.isFinite(editedQ) ? editedQ : +it.quantity;
+                        const fs = +approveFromStore[it.id] || 0;
+                        totalStore += fs;
+                        totalProcure += Math.max(0, usedQ - fs);
+                      }
+                      return (
+                        <tr className="bg-gray-100 font-semibold text-xs">
+                          <td colSpan="8" className="px-2 py-1 text-right text-gray-500">Split totals →</td>
+                          <td className="px-2 py-1 text-right text-emerald-700 bg-emerald-50">{totalStore.toLocaleString('en-IN')}</td>
+                          <td className="px-2 py-1 text-right text-blue-700 bg-blue-50">{totalProcure.toLocaleString('en-IN')}</td>
+                          <td></td>
+                        </tr>
+                      );
+                    })()}
                     <tr className="bg-emerald-50 font-semibold">
-                      <td colSpan="8" className="px-2 py-2 text-right">Approved Budget Total</td>
+                      <td colSpan="10" className="px-2 py-2 text-right">Approved Budget Total</td>
                       <td className="px-2 py-2 text-right text-emerald-700">₹{Math.round(liveBudget).toLocaleString('en-IN')}</td>
                     </tr>
                   </tfoot>
@@ -5340,7 +5478,7 @@ export default function Procurement() {
               )}
 
               <div className="flex justify-end gap-3 pt-2 border-t">
-                <button type="button" onClick={() => { setApproveTarget(null); setApproveQtyOverrides({}); }} className="btn btn-secondary">Cancel</button>
+                <button type="button" onClick={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); }} className="btn btn-secondary">Cancel</button>
                 <button type="button" onClick={submitApprove} disabled={approveSaving} className="btn btn-success flex items-center gap-1">
                   <FiCheck /> {approveSaving ? 'Approving…' : 'Approve Indent'}
                 </button>

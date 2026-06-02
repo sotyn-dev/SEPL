@@ -2047,6 +2047,31 @@ function initializeDatabase() {
     );
     -- stock_movements indexes are created post-migration in safeIndexes
 
+    -- ─── Stock Issue Note — header row for "indent split: X from store" ──
+    -- Mam (2026-06-02): when an approver decides to issue N pcs of an
+    -- indent line from existing office stock instead of buying new, the
+    -- ERP records:
+    --   1. This stock_issue_notes header (gives MD an SI/YYYY/#### number
+    --      to put on a printed challan for the storekeeper).
+    --   2. Per-line OUT entries in stock_movements (reference_type='ISSUE',
+    --      reference_id=<note_number>) — same path as transfers/GRNs so
+    --      Inventory dashboards roll it up automatically.
+    --   3. A child indent_items row with source='store',
+    --      stock_issue_note_id pointing here, so the site engineer sees
+    --      "5 issued SI/2026/0001 + 15 in PO #..." on one indent.
+    CREATE TABLE IF NOT EXISTS stock_issue_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      note_number TEXT UNIQUE,                                 -- SI/2026/0001 format
+      indent_id INTEGER REFERENCES indents(id) ON DELETE SET NULL,
+      from_warehouse_id INTEGER REFERENCES warehouses(id),     -- office store we issued from
+      to_site_id INTEGER REFERENCES sites(id),                 -- destination site
+      total_qty REAL DEFAULT 0,
+      total_value REAL DEFAULT 0,
+      notes TEXT,
+      issued_by INTEGER REFERENCES users(id),
+      issued_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- ─── PERFORMANCE INDEXES on hot tables (fast page loads) ────────────
     -- These were originally inline here, but some prod DBs were created
     -- before certain columns existed (e.g. audit_log.user_id, vendor_pos
@@ -3130,6 +3155,18 @@ function initializeDatabase() {
     ['sub_contractors', 'active INTEGER DEFAULT 1'],
     ['sub_contractors', 'created_by INTEGER REFERENCES users(id)'],
     ['sub_contractors', 'updated_at DATETIME'],
+    // ─── Indent line source split — store vs procure ────────────────────
+    // Mam (2026-06-02): when an indent line needs 20 pcs and 5 are
+    // already in office stock, the L1/L2 approver can now split the line
+    // into two children: 5 issued from store (auto-decrements stock_balance,
+    // writes a stock_issue_note + an OUT row in stock_movements) and 15
+    // continuing through the normal vendor PO flow.  Lets MD see the full
+    // audit trail of "what came from store vs what we bought new" on
+    // the same indent number.
+    ['indent_items', `source TEXT NOT NULL DEFAULT 'procure'`],   // 'procure' | 'store'
+    ['indent_items', 'parent_item_id INTEGER REFERENCES indent_items(id)'],
+    ['indent_items', 'stock_issue_note_id INTEGER REFERENCES stock_issue_notes(id)'],
+    ['indent_items', 'stock_movement_id INTEGER REFERENCES stock_movements(id)'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}
