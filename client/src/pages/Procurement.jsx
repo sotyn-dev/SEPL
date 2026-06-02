@@ -2672,40 +2672,78 @@ export default function Procurement() {
                 </table>
               </div>
 
-              {/* Mobile card list — mam (2026-06-02): "same card type
-                  indent show on mobile view update in all indent to
-                  dispatch".  Mirrors the Indents-tab card pattern. */}
-              <div className="md:hidden space-y-2">
+              {/* Mobile cards — mam (2026-06-02): "i want mobile view
+                  changes like this type cards in all steps in indent
+                  to dispatch".  Same visual language as the Indents
+                  card: small "LABEL" header, big bold ID, status pill
+                  on right, site row with pin, 3-col info grid, links
+                  row with border-top, big full-width action button. */}
+              <div className="md:hidden space-y-3">
                 {pendingPg.rows.map(p => {
                   const displayName = [p.master_name || p.description, p.specification, p.size].filter(Boolean).join(' / ');
+                  const stat = p.rate_status || 'pending';
                   return (
-                    <div key={p.indent_item_id} className="bg-white border border-amber-200 rounded-lg p-2.5 shadow-sm">
-                      <div className="flex items-start justify-between gap-2 mb-1.5">
-                        <div className="min-w-0">
-                          <div className="font-mono font-bold text-red-700 text-sm">{p.indent_number}</div>
-                          {p.site_name && <div className="text-[10px] text-gray-500 truncate">{p.site_name}</div>}
+                    <div key={p.indent_item_id} className="card p-3 space-y-2">
+                      {/* Header: indent # · status */}
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Indent No</div>
+                          <div className="text-lg font-bold text-gray-900 truncate">{p.indent_number}</div>
                         </div>
-                        <span className={`badge text-[9px] ${p.rate_status === 'finalized' ? 'badge-green' : 'badge-yellow'}`}>{p.rate_status || 'pending'}</span>
+                        <StatusBadge status={stat} />
                       </div>
-                      <div className="text-xs">
-                        {p.item_code && <span className="font-mono text-[10px] text-gray-500">[{p.item_code}] </span>}
-                        <span className="font-medium">{displayName || '—'}</span>
+                      {/* Site */}
+                      {p.site_name && (
+                        <div className="flex items-start gap-1.5 text-xs">
+                          <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
+                          <div className="min-w-0">
+                            <div className="text-[10px] uppercase text-gray-400">Site</div>
+                            <div className="font-medium text-gray-800">{p.site_name}</div>
+                          </div>
+                        </div>
+                      )}
+                      {/* Sub-item description */}
+                      <div className="pt-1 border-t border-gray-100">
+                        <div className="text-[10px] uppercase text-gray-400 mb-0.5">Sub-Item</div>
+                        {p.item_code && <div className="text-[10px] font-mono text-gray-500">[{p.item_code}]</div>}
+                        <div className="text-sm font-medium text-gray-800 leading-snug">{displayName || '—'}</div>
+                        <div className="text-[10px] text-gray-500 mt-0.5 flex flex-wrap gap-x-2">
+                          {p.make && <span>Make: <b className="text-gray-700">{p.make}</b></span>}
+                          {p.item_type && (
+                            <span className={`font-bold ${p.item_type === 'FOC' ? 'text-emerald-600' : p.item_type === 'RGP' ? 'text-amber-600' : 'text-red-600'}`}>
+                              {p.item_type}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-[10px] text-gray-500 mt-0.5 flex flex-wrap gap-x-2">
-                        {p.make && <span>Make: {p.make}</span>}
-                        {p.item_type && <span className={`font-bold ${p.item_type === 'FOC' ? 'text-emerald-600' : p.item_type === 'RGP' ? 'text-amber-600' : 'text-red-600'}`}>{p.item_type}</span>}
-                        <span>Qty: <b className="text-gray-700">{p.quantity} {p.unit || p.uom}</b></span>
+                      {/* 3-col info grid: Qty · Rate · Vendor */}
+                      <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                        <div>
+                          <div className="text-[9px] uppercase text-gray-400">Qty</div>
+                          <div className="font-semibold text-gray-800">{p.quantity} {p.unit || p.uom || ''}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] uppercase text-gray-400">Final Rate</div>
+                          <div className="font-semibold text-gray-800">{p.final_rate ? `Rs ${p.final_rate}` : <span className="text-gray-300">—</span>}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[9px] uppercase text-gray-400">Vendor</div>
+                          <div className="font-medium text-gray-700 truncate" title={p.final_vendor_name}>{p.final_vendor_name || <span className="text-gray-300">—</span>}</div>
+                        </div>
                       </div>
-                      <div className="mt-1.5 grid grid-cols-2 gap-2 text-[11px] pt-1.5 border-t border-gray-100">
-                        <div><span className="text-gray-400">Final Rate:</span> <b className="text-gray-700">{p.final_rate ? `Rs ${p.final_rate}` : '—'}</b></div>
-                        <div className="truncate" title={p.final_vendor_name}><span className="text-gray-400">Vendor:</span> <b className="text-gray-700">{p.final_vendor_name || '—'}</b></div>
-                      </div>
-                      <button onClick={() => openCreateVendorPo(p.indent_id)} className="btn btn-primary text-xs px-3 py-1 w-full mt-2">+ Create PO</button>
+                      {/* Action — same green primary as Approve buttons */}
+                      <button
+                        onClick={() => openCreateVendorPo(p.indent_id)}
+                        disabled={stat !== 'finalized'}
+                        className="btn btn-primary text-sm py-2 px-3 w-full mt-1 disabled:opacity-50"
+                      >
+                        + Create Vendor PO
+                      </button>
                     </div>
                   );
                 })}
                 {filteredPending.length === 0 && (
-                  <div className="text-center py-6 text-amber-700 text-xs">No items match the current filters.</div>
+                  <div className="card p-6 text-center text-gray-400 text-sm">No items match the current filters.</div>
                 )}
               </div>
               <Pagination pg={pendingPg} setPerPage={setVpoPendingPerPage} className="border-t border-amber-200 pt-2" />
@@ -2846,45 +2884,70 @@ export default function Procurement() {
             <tfoot><tr><td colSpan="8" className="border-t border-gray-100"><Pagination pg={listPg} setPerPage={setVpoListPerPage} /></td></tr></tfoot>
           </table></div>
 
-          {/* Mobile card list for Vendor POs — mam (2026-06-02). */}
-          <div className="md:hidden space-y-2">
+          {/* Mobile cards — polished pattern matching Indents card. */}
+          <div className="md:hidden space-y-3">
             {listPg.rows.map(v => (
-              <div key={v.id} className={`bg-white border rounded-lg p-2.5 shadow-sm ${v.cancelled ? 'border-gray-300 opacity-70' : 'border-gray-200'}`}>
-                <div className="flex items-start justify-between gap-2 mb-1">
-                  <div className="min-w-0">
-                    <div className="font-mono font-bold text-red-700 text-sm">{v.po_number}</div>
+              <div key={v.id} className={`card p-3 space-y-2 ${v.cancelled ? 'opacity-60' : ''}`}>
+                {/* Header: PO # · status */}
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Vendor PO No</div>
+                    <div className="text-lg font-bold text-gray-900 truncate">{v.po_number}</div>
+                    <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                      <FiCalendar size={10} className="text-gray-400" />
+                      {v.po_date || '—'}
+                    </div>
                     <PaymentBlockChip v={v} />
                   </div>
                   {v.cancelled
-                    ? <span className="text-[9px] font-bold uppercase px-2 py-0.5 rounded bg-gray-200 text-gray-600 border border-gray-300" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
+                    ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border border-gray-300 text-gray-600 bg-gray-50" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
                     : <StatusBadge status={v.status} />}
                 </div>
-                <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[11px] pb-1.5 border-b border-gray-100">
-                  <div><span className="text-gray-400">Indent:</span> <b className="font-mono text-blue-800">{v.indent_number || '—'}</b></div>
-                  <div><span className="text-gray-400">PO Date:</span> <b className="text-gray-700">{v.po_date || '—'}</b></div>
-                  <div className="col-span-2 truncate" title={v.vendor_name}><span className="text-gray-400">Vendor:</span> <b className="text-gray-700">{v.vendor_name || '—'}</b></div>
-                  {v.indent_site_name && <div className="col-span-2 truncate"><span className="text-gray-400">Site:</span> {v.indent_site_name}</div>}
-                  <div className="col-span-2"><span className="text-gray-400">Amount:</span> <b className="text-emerald-700">Rs {(+v.total_amount || 0).toLocaleString('en-IN')}</b></div>
+                {/* Site */}
+                {v.indent_site_name && (
+                  <div className="flex items-start gap-1.5 text-xs">
+                    <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase text-gray-400">Site</div>
+                      <div className="font-medium text-gray-800">{v.indent_site_name}</div>
+                    </div>
+                  </div>
+                )}
+                {/* 3-col info: Indent · Vendor · Amount */}
+                <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Indent</div>
+                    <div className="font-mono font-semibold text-blue-800 truncate">{v.indent_number || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Vendor</div>
+                    <div className="font-medium text-gray-700 truncate" title={v.vendor_name}>{v.vendor_name || '—'}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] uppercase text-gray-400">Amount</div>
+                    <div className="font-semibold text-emerald-700">Rs {(+v.total_amount || 0).toLocaleString('en-IN')}</div>
+                  </div>
                 </div>
                 {/* Links row */}
-                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] mt-1.5">
-                  <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 underline flex items-center gap-1">
+                <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
+                  <a href={`/vendor-po/${v.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
                     <FiPrinter size={11} /> Print PO
                   </a>
-                  <a href={`/vendor-po/${v.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline flex items-center gap-1">
+                  <a href={`/vendor-po/${v.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
                     🚚 Delivery Note
                   </a>
-                  {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">PDF</a>}
+                  {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-semibold">📎 PDF</a>}
                 </div>
-                {/* Actions */}
-                <div className="flex flex-wrap items-center gap-1.5 mt-2 pt-1.5 border-t border-gray-100">
-                  {!v.cancelled && v.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
-                    <button onClick={() => markPaymentCleared(v.id)} className="text-[10px] font-semibold px-2 py-1 rounded bg-emerald-100 text-emerald-700 border border-emerald-300">
-                      ✓ Clear pmt
-                    </button>
-                  )}
+                {/* Primary action — Mark Cleared (when payment pending) */}
+                {!v.cancelled && v.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
+                  <button onClick={() => markPaymentCleared(v.id)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">
+                    ✓ Mark Payment Cleared
+                  </button>
+                )}
+                {/* Secondary actions: Edit / Cancel / Restore / Delete */}
+                <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
                   {!v.cancelled && (canApprove('procurement') || isAdmin()) && (
-                    <button onClick={() => openEditVendorPo(v)} className="text-[10px] px-2 py-1 rounded border border-gray-300 text-gray-700 flex items-center gap-1">
+                    <button onClick={() => openEditVendorPo(v)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
                       <FiEdit2 size={11} /> Edit
                     </button>
                   )}
@@ -2894,7 +2957,7 @@ export default function Procurement() {
                       if (reason === null) return;
                       try { await api.post(`/procurement/vendor-po/${v.id}/cancel`, { reason }); toast.success('PO cancelled'); load(); }
                       catch (err) { toast.error(err.response?.data?.error || 'Cancel failed'); }
-                    }} className="text-[10px] px-2 py-1 rounded border border-amber-300 text-amber-700 flex items-center gap-1">
+                    }} className="text-amber-600 hover:underline flex items-center gap-1 font-semibold">
                       <FiX size={11} /> Cancel
                     </button>
                   )}
@@ -2903,7 +2966,7 @@ export default function Procurement() {
                       if (!confirm(`Restore Vendor PO "${v.po_number}" from cancelled?`)) return;
                       try { await api.post(`/procurement/vendor-po/${v.id}/uncancel`); toast.success('PO restored'); load(); }
                       catch (err) { toast.error(err.response?.data?.error || 'Restore failed'); }
-                    }} className="text-[10px] px-2 py-1 rounded border border-emerald-300 text-emerald-700 flex items-center gap-1">
+                    }} className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
                       <FiCheck size={11} /> Restore
                     </button>
                   )}
@@ -2912,15 +2975,15 @@ export default function Procurement() {
                       if (!confirm(`Permanently delete vendor PO "${v.po_number}"?`)) return;
                       try { await api.delete(`/procurement/vendor-po/${v.id}`); toast.success('Deleted'); load(); }
                       catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                    }} className="text-[10px] px-2 py-1 rounded border border-red-300 text-red-700 flex items-center gap-1">
+                    }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
                       <FiTrash2 size={11} /> Delete
                     </button>
                   )}
                 </div>
               </div>
             ))}
-            {vendorPos.length === 0 && <div className="text-center py-8 text-gray-400 text-xs">No vendor POs yet — click "Create Vendor PO"</div>}
-            {vendorPos.length > 0 && filteredList.length === 0 && <div className="text-center py-8 text-gray-400 text-xs">No POs match the current filters.</div>}
+            {vendorPos.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No vendor POs yet — click "Create Vendor PO"</div>}
+            {vendorPos.length > 0 && filteredList.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No POs match the current filters.</div>}
             <Pagination pg={listPg} setPerPage={setVpoListPerPage} />
           </div>
             </>
@@ -3100,68 +3163,80 @@ export default function Procurement() {
               </table>
             </div>
 
-            {/* Mobile card list — same data as the desktop Payment table
-                (mam 2026-06-02: "vendor po, purchase, payment, dispatch
-                & receiving not update and change according to mobile
-                view like cards"). */}
-            <div className="md:hidden space-y-2">
+            {/* Mobile cards — same polished pattern as Indents (mam). */}
+            <div className="md:hidden space-y-3">
               {visible.map(po => (
-                <div key={po.id} className={`bg-white border rounded-lg p-2.5 shadow-sm ${po.payment_block_status === 'pending' ? 'border-red-200' : 'border-emerald-200'}`}>
-                  <div className="flex justify-between items-start gap-2 mb-1">
-                    <div className="min-w-0">
-                      <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="font-semibold text-red-700 text-sm underline">{po.po_number}</a>
-                      <div className="font-mono text-[10px] text-blue-800 mt-0.5">{po.indent_number || '—'}</div>
-                      {po.indent_site_name && <div className="text-[10px] text-gray-500 truncate" title={po.indent_site_name}>{po.indent_site_name}</div>}
+                <div key={po.id} className="card p-3 space-y-2">
+                  {/* Header: PO # · payment chip */}
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Vendor PO No</div>
+                      <div className="text-lg font-bold text-gray-900 truncate">{po.po_number}</div>
+                      <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                        <FiCalendar size={10} className="text-gray-400" />
+                        {po.po_date || '—'}
+                      </div>
                     </div>
-                    <div className="text-right">
+                    <div className="flex flex-col items-end gap-1">
                       <PaymentBlockChip v={po} />
-                      {!po.payment_block_type && (
-                        <div className="text-[9px] text-gray-400 italic">— not set —</div>
-                      )}
+                      {!po.payment_block_type && <span className="text-[9px] text-gray-400 italic">— not set —</span>}
                     </div>
                   </div>
-                  <div className="text-[11px] truncate" title={po.vendor_name}><span className="text-gray-400">Vendor:</span> <b>{po.vendor_name}</b></div>
-                  <div className="grid grid-cols-2 gap-x-2 text-[11px] mt-1 pb-1.5 border-b border-gray-100">
-                    <div><span className="text-gray-400">PO Date:</span> {po.po_date || '—'}</div>
+                  {/* Site */}
+                  {po.indent_site_name && (
+                    <div className="flex items-start gap-1.5 text-xs">
+                      <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
+                      <div className="min-w-0">
+                        <div className="text-[10px] uppercase text-gray-400">Site</div>
+                        <div className="font-medium text-gray-800">{po.indent_site_name}</div>
+                      </div>
+                    </div>
+                  )}
+                  {/* 3-col: Indent · Vendor · Owed */}
+                  <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                    <div>
+                      <div className="text-[9px] uppercase text-gray-400">Indent</div>
+                      <div className="font-mono font-semibold text-blue-800 truncate">{po.indent_number || '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-[9px] uppercase text-gray-400">Vendor</div>
+                      <div className="font-medium text-gray-700 truncate" title={po.vendor_name}>{po.vendor_name}</div>
+                    </div>
                     <div className="text-right">
-                      <span className="text-gray-400">Owed:</span>{' '}
+                      <div className="text-[9px] uppercase text-gray-400">Amount Owed</div>
                       {po.payment_block_amount > 0
-                        ? <b className={po.payment_block_status === 'pending' ? 'text-red-700' : 'text-emerald-700'}>₹{Math.round(+po.payment_block_amount).toLocaleString('en-IN')}</b>
-                        : <span className="text-gray-300">—</span>}
+                        ? <div className={`font-semibold ${po.payment_block_status === 'pending' ? 'text-red-700' : 'text-emerald-700'}`}>₹{Math.round(+po.payment_block_amount).toLocaleString('en-IN')}</div>
+                        : <div className="text-gray-300">—</div>}
                     </div>
                   </div>
-                  <div className="text-[10px] text-gray-400 mt-0.5">PO total ₹{Math.round(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
+                  <div className="text-[10px] text-gray-400 -mt-1">PO total ₹{Math.round(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
                   {po.payment_block_notes && (
-                    <div className="text-[10px] text-gray-600 italic mt-1 line-clamp-2" title={po.payment_block_notes}>"{po.payment_block_notes}"</div>
+                    <div className="text-[11px] text-gray-600 italic line-clamp-2 pt-1 border-t border-gray-100" title={po.payment_block_notes}>"{po.payment_block_notes}"</div>
                   )}
                   {po.payment_block_status === 'cleared' && po.payment_cleared_by_name && (
-                    <div className="text-[10px] text-emerald-700 mt-0.5">
-                      ✓ by {po.payment_cleared_by_name}
-                      {po.payment_cleared_at && ' · ' + new Date(po.payment_cleared_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                    <div className="text-[11px] text-emerald-700 font-medium flex items-center gap-1">
+                      <FiCheck size={11} /> by {po.payment_cleared_by_name}
+                      {po.payment_cleared_at && <span className="text-[10px] text-gray-500 ml-1">{new Date(po.payment_cleared_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</span>}
                     </div>
                   )}
-                  <div className="flex flex-wrap items-center gap-1.5 mt-2 pt-1.5 border-t border-gray-100">
-                    {po.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
-                      <button
-                        onClick={() => markPaymentCleared(po.id)}
-                        className="text-[11px] font-semibold px-2.5 py-1 rounded bg-emerald-600 text-white"
-                      >
-                        ✓ Mark Cleared
-                      </button>
-                    )}
-                    {(canApprove('procurement') || isAdmin()) && (
-                      <button
-                        onClick={() => openEditVendorPo(po)}
-                        className="text-[10px] px-2 py-1 rounded border border-blue-300 text-blue-700 flex items-center gap-1"
-                      >
+                  {/* Primary action — Mark Cleared */}
+                  {po.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
+                    <button onClick={() => markPaymentCleared(po.id)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">
+                      ✓ Mark Payment Cleared
+                    </button>
+                  )}
+                  {/* Secondary — Edit */}
+                  {(canApprove('procurement') || isAdmin()) && (
+                    <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
+                      <button onClick={() => openEditVendorPo(po)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
                         <FiEdit2 size={11} /> Edit
                       </button>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               ))}
               {visible.length === 0 && (
-                <div className="text-center py-8 text-gray-400 text-xs">
+                <div className="card p-6 text-center text-gray-400 text-sm">
                   {effectivePill === 'urgent'
                     ? '🎉 No urgent payments — every blocked PO is cleared.'
                     : 'No cleared payments yet.'}
@@ -3382,46 +3457,71 @@ export default function Procurement() {
                 </table>
               </div>
 
-              {/* Mobile cards (mam 2026-06-02). */}
-              <div className="md:hidden space-y-2">
+              {/* Mobile cards — polished pattern matching Indents (mam). */}
+              <div className="md:hidden space-y-3">
                 {fuPg.rows.map(po => {
                   const d = daysDiff(po.expected_receipt_date);
                   let chip;
-                  if (!po.expected_receipt_date) chip = <span className="text-[9px] text-gray-400">no date</span>;
-                  else if (d < 0) chip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">OVERDUE {-d}d</span>;
-                  else if (d === 0) chip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300">DUE TODAY</span>;
-                  else if (d <= 3) chip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 border border-orange-200">in {d}d</span>;
-                  else chip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">in {d}d</span>;
+                  if (!po.expected_receipt_date) chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-200 bg-gray-50 text-gray-500 uppercase">no date</span>;
+                  else if (d < 0)  chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-red-300 bg-red-50 text-red-700 uppercase">Overdue {-d}d</span>;
+                  else if (d === 0) chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-300 bg-amber-50 text-amber-700 uppercase">Due Today</span>;
+                  else if (d <= 3)  chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-orange-300 bg-orange-50 text-orange-700 uppercase">In {d}d</span>;
+                  else              chip = <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-gray-300 bg-gray-50 text-gray-600 uppercase">In {d}d</span>;
                   return (
-                    <div key={po.id} className="bg-white border border-amber-200 rounded-lg p-2.5 shadow-sm">
-                      <div className="flex justify-between items-start gap-2 mb-1">
-                        <div className="min-w-0">
-                          <div className="font-semibold text-red-700 text-sm">{po.po_number}</div>
-                          <div className="font-mono text-[10px] text-blue-800">{po.indent_number || '—'}</div>
-                          {po.indent_site_name && <div className="text-[10px] text-gray-500 truncate">{po.indent_site_name}</div>}
+                    <div key={po.id} className="card p-3 space-y-2">
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">PO Number</div>
+                          <div className="text-lg font-bold text-gray-900 truncate">{po.po_number}</div>
+                          <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                            <FiCalendar size={10} className="text-gray-400" />
+                            {po.po_date || '—'}
+                          </div>
                         </div>
                         {chip}
                       </div>
-                      <div className="text-[11px] truncate" title={po.vendor_name}><span className="text-gray-400">Vendor:</span> <b>{po.vendor_name}</b></div>
-                      <div className="grid grid-cols-2 gap-x-2 text-[11px] mt-1">
-                        <div><span className="text-gray-400">PO Date:</span> {po.po_date || '—'}</div>
-                        <div><span className="text-gray-400">Expected:</span> {po.expected_receipt_date || '—'}</div>
+                      {po.indent_site_name && (
+                        <div className="flex items-start gap-1.5 text-xs">
+                          <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
+                          <div className="min-w-0">
+                            <div className="text-[10px] uppercase text-gray-400">Site</div>
+                            <div className="font-medium text-gray-800">{po.indent_site_name}</div>
+                          </div>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                        <div>
+                          <div className="text-[9px] uppercase text-gray-400">Indent</div>
+                          <div className="font-mono font-semibold text-blue-800 truncate">{po.indent_number || '—'}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] uppercase text-gray-400">Vendor</div>
+                          <div className="font-medium text-gray-700 truncate" title={po.vendor_name}>{po.vendor_name}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[9px] uppercase text-gray-400">Amount</div>
+                          <div className="font-semibold text-emerald-700">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
+                          {+po.total_amount_drift > 1 && <div className="text-[9px] text-amber-700">⚠ drift</div>}
+                        </div>
                       </div>
-                      <div className="text-[11px] mt-1">
-                        <span className="text-gray-400">Amount:</span> <b className="text-emerald-700">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</b>
-                        {+po.total_amount_drift > 1 && <span className="text-[9px] text-amber-700 ml-1">⚠ drift</span>}
+                      <div className="text-[11px] text-gray-500 pt-1 border-t border-gray-100">
+                        <span className="text-gray-400">Expected receipt:</span> <b className="text-gray-700">{po.expected_receipt_date || '—'}</b>
                       </div>
-                      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] mt-1.5 pt-1.5 border-t border-gray-100">
-                        <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 underline">📄 PO</a>
-                        <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline">🚚 DN</a>
-                        {po.file_path && <a href={po.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">📎 File</a>}
+                      <div className="flex items-center gap-3 text-xs flex-wrap">
+                        <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                          <FiPrinter size={11} /> Print PO
+                        </a>
+                        <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
+                          🚚 Delivery Note
+                        </a>
+                        {po.file_path && <a href={po.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-semibold">📎 File</a>}
                       </div>
-                      <button onClick={() => openUploadBill(po)} className="btn btn-primary text-xs px-3 py-1 w-full mt-2">+ Upload Bill</button>
+                      <button onClick={() => openUploadBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">+ Upload Bill</button>
                     </div>
                   );
                 })}
                 {filteredFu.length === 0 && (
-                  <div className="text-center py-6 text-amber-700 text-xs">No POs match the current filters.</div>
+                  <div className="card p-6 text-center text-amber-700 text-sm">No POs match the current filters.</div>
                 )}
               </div>
               <Pagination pg={fuPg} setPerPage={setBillsFuPerPage} className="border-t border-amber-200 pt-2" />
@@ -3482,39 +3582,63 @@ export default function Procurement() {
             <tfoot><tr><td colSpan="9" className="border-t border-gray-100"><Pagination pg={billsListPg} setPerPage={setBillsListPerPage} /></td></tr></tfoot>
           </table></div>
 
-          {/* Mobile cards for Purchase Bills (mam 2026-06-02). */}
-          <div className="md:hidden space-y-2">
+          {/* Mobile cards — polished pattern matching Indents (mam). */}
+          <div className="md:hidden space-y-3">
             {billsListPg.rows.map(b => (
-              <div key={b.id} className="bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm">
-                <div className="flex justify-between items-start gap-2 mb-1">
-                  <div className="min-w-0">
-                    <div className="font-semibold text-sm">{b.bill_number}</div>
-                    <div className="text-[10px] text-gray-500 truncate" title={b.vendor_name}>{b.vendor_name}</div>
+              <div key={b.id} className="card p-3 space-y-2">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Bill No</div>
+                    <div className="text-lg font-bold text-gray-900 truncate">{b.bill_number || '—'}</div>
+                    <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                      <FiCalendar size={10} className="text-gray-400" />
+                      {b.bill_date || '—'}
+                    </div>
                   </div>
                   <StatusBadge status={b.payment_status} />
                 </div>
-                <div className="grid grid-cols-3 gap-x-2 text-[11px] mt-1 pb-1.5 border-b border-gray-100">
-                  <div><span className="text-gray-400">Date:</span><br/><b>{b.bill_date || '—'}</b></div>
-                  <div><span className="text-gray-400">Amount:</span><br/><b>Rs {(+b.amount || 0).toLocaleString('en-IN')}</b></div>
-                  <div><span className="text-gray-400">GST:</span><br/><b>Rs {(+b.gst_amount || 0).toLocaleString('en-IN')}</b></div>
+                {b.vendor_name && (
+                  <div className="text-xs">
+                    <div className="text-[10px] uppercase text-gray-400">Vendor</div>
+                    <div className="font-medium text-gray-800 truncate" title={b.vendor_name}>{b.vendor_name}</div>
+                  </div>
+                )}
+                <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Amount</div>
+                    <div className="font-semibold text-gray-800">Rs {(+b.amount || 0).toLocaleString('en-IN')}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">GST</div>
+                    <div className="font-semibold text-gray-800">Rs {(+b.gst_amount || 0).toLocaleString('en-IN')}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] uppercase text-gray-400">Total</div>
+                    <div className="font-semibold text-emerald-700">Rs {(+b.total_amount || 0).toLocaleString('en-IN')}</div>
+                  </div>
                 </div>
-                <div className="text-xs mt-1.5">
-                  <span className="text-gray-400">Total:</span> <b className="text-emerald-700">Rs {(+b.total_amount || 0).toLocaleString('en-IN')}</b>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                  {b.file_path && <a href={b.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-[10px]">📄 View Bill</a>}
-                  {canDelete('procurement') && (
+                {b.file_path && (
+                  <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100">
+                    <a href={b.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+                      📄 View Bill
+                    </a>
+                  </div>
+                )}
+                {canDelete('procurement') && (
+                  <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
                     <button onClick={async () => {
                       if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
                       try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); load(); }
                       catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                    }} className="text-[10px] text-red-600 ml-auto flex items-center gap-1"><FiTrash2 size={11} /> Delete</button>
-                  )}
-                </div>
+                    }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                      <FiTrash2 size={11} /> Delete
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
-            {purchaseBills.length === 0 && <div className="text-center py-8 text-gray-400 text-xs">No bills yet</div>}
-            {purchaseBills.length > 0 && filteredBills.length === 0 && <div className="text-center py-8 text-gray-400 text-xs">No bills match the current filters.</div>}
+            {purchaseBills.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No bills yet</div>}
+            {purchaseBills.length > 0 && filteredBills.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No bills match the current filters.</div>}
             <Pagination pg={billsListPg} setPerPage={setBillsListPerPage} />
           </div>
             </>
@@ -3738,33 +3862,49 @@ export default function Procurement() {
                 </table>
               </div>
 
-              {/* Mobile cards for Ready-to-Dispatch (mam 2026-06-02). */}
-              <div className="md:hidden space-y-2">
+              {/* Mobile cards — polished pattern matching Indents (mam). */}
+              <div className="md:hidden space-y-3">
                 {readyPg.rows.map(po => (
-                  <div key={po.id} className="bg-white border border-indigo-200 rounded-lg p-2.5 shadow-sm">
-                    <div className="flex justify-between items-start gap-2 mb-1">
+                  <div key={po.id} className="card p-3 space-y-2">
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">PO Number</div>
+                        <div className="text-lg font-bold text-gray-900 truncate">{po.po_number}</div>
+                        <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                          <FiCalendar size={10} className="text-gray-400" />
+                          {po.po_date || '—'}
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-indigo-300 bg-indigo-50 text-indigo-700 uppercase">Ready</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
                       <div>
-                        <div className="font-semibold text-red-700 text-sm">{po.po_number}</div>
-                        <div className="text-[10px] text-gray-500 truncate" title={po.vendor_name}>{po.vendor_name}</div>
+                        <div className="text-[9px] uppercase text-gray-400">Vendor</div>
+                        <div className="font-medium text-gray-700 truncate" title={po.vendor_name}>{po.vendor_name || '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-[9px] uppercase text-gray-400">Expected</div>
+                        <div className="font-medium text-gray-700">{po.expected_receipt_date || '—'}</div>
                       </div>
                       <div className="text-right">
-                        <div className="text-[11px] font-bold text-emerald-700 whitespace-nowrap">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
+                        <div className="text-[9px] uppercase text-gray-400">Amount</div>
+                        <div className="font-semibold text-emerald-700">Rs {(+po.display_total || +po.total_amount || 0).toLocaleString('en-IN')}</div>
                         {+po.total_amount_drift > 1 && <div className="text-[9px] text-amber-700">⚠ drift</div>}
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-x-2 text-[11px] mt-0.5">
-                      <div><span className="text-gray-400">PO Date:</span> {po.po_date || '—'}</div>
-                      <div><span className="text-gray-400">Expected:</span> {po.expected_receipt_date || '—'}</div>
+                    <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
+                      <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                        <FiPrinter size={11} /> Print PO
+                      </a>
+                      <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">
+                        🚚 Delivery Note
+                      </a>
                     </div>
-                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] mt-1.5 pt-1.5 border-t border-gray-100">
-                      <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 underline">📄 PO</a>
-                      <a href={`/vendor-po/${po.id}/delivery-note`} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline">🚚 Delivery Note</a>
-                    </div>
-                    <button onClick={() => openAddDispatch(po)} className="btn btn-primary text-xs px-3 py-1 w-full mt-2">Dispatch</button>
+                    <button onClick={() => openAddDispatch(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">Dispatch</button>
                   </div>
                 ))}
                 {filteredReady.length === 0 && (
-                  <div className="text-center py-6 text-indigo-700 text-xs">No POs match the current filters.</div>
+                  <div className="card p-6 text-center text-indigo-700 text-sm">No POs match the current filters.</div>
                 )}
               </div>
               <Pagination pg={readyPg} setPerPage={setDispReadyPerPage} className="border-t border-indigo-200 pt-2" />
@@ -3934,54 +4074,81 @@ export default function Procurement() {
             <tfoot><tr><td colSpan="12" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
           </table></div>
 
-          {/* Mobile cards for Dispatch & Receiving list (mam 2026-06-02). */}
-          <div className="md:hidden space-y-2">
+          {/* Mobile cards — polished pattern matching Indents (mam). */}
+          <div className="md:hidden space-y-3">
             {/* Ready-to-Dispatch POs (awaiting receipt) shown at the top */}
             {readyToDispatch.map(po => (
-              <div key={`ready-${po.id}`} className="bg-amber-50/60 border border-amber-300 rounded-lg p-2.5 shadow-sm">
-                <div className="flex justify-between items-start gap-2 mb-1">
-                  <div className="min-w-0">
-                    <div className="font-semibold text-sm">{po.po_number}</div>
-                    <div className="text-[10px] text-gray-500 truncate" title={po.vendor_name}>{po.vendor_name || ''}</div>
+              <div key={`ready-${po.id}`} className="card p-3 space-y-2 bg-amber-50/30 border-amber-200">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">PO Number</div>
+                    <div className="text-lg font-bold text-gray-900 truncate">{po.po_number}</div>
+                    <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                      <FiCalendar size={10} className="text-gray-400" />
+                      {po.po_date || '—'}
+                    </div>
                   </div>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300">AWAITING</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-300 bg-amber-50 text-amber-700 uppercase">Awaiting</span>
                 </div>
-                <div className="text-[11px]"><span className="text-gray-400">PO Date:</span> {po.po_date || '—'}</div>
-                <button onClick={() => openReceivePo(po)} className="btn btn-success text-xs px-3 py-1 w-full mt-2">Upload Receiving</button>
+                {po.vendor_name && (
+                  <div className="text-xs">
+                    <div className="text-[10px] uppercase text-gray-400">Vendor</div>
+                    <div className="font-medium text-gray-800 truncate">{po.vendor_name}</div>
+                  </div>
+                )}
+                <button onClick={() => openReceivePo(po)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">Upload Receiving</button>
               </div>
             ))}
             {/* Existing dispatches */}
             {dispListPg.rows.map(d => (
-              <div key={d.id} className="bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm">
-                <div className="flex justify-between items-start gap-2 mb-1">
-                  <div className="min-w-0">
+              <div key={d.id} className="card p-3 space-y-2">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 mb-0.5">
                       <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
                         {d.document_type === 'sales_bill' ? 'SALES BILL' : d.document_type === 'challan' ? 'CHALLAN' : '—'}
                       </span>
                       <span className="text-[10px] text-gray-400">#{d.id}</span>
                     </div>
-                    <div className="font-semibold text-sm">{d.document_number || <span className="text-gray-300">—</span>}</div>
-                    <div className="text-[10px] text-gray-500">{d.vendor_po_number || '—'} {d.vendor_name ? `· ${d.vendor_name}` : ''}</div>
+                    <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Doc Number</div>
+                    <div className="text-lg font-bold text-gray-900 truncate">{d.document_number || <span className="text-gray-300 text-sm">— pending —</span>}</div>
+                    <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                      <FiCalendar size={10} className="text-gray-400" />
+                      {d.delivery_date || '—'}
+                    </div>
                   </div>
                   <StatusBadge status={d.status} />
                 </div>
-                {d.sales_bill_pending === 1 && !d.sales_bill_number && (
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-300 inline-block mt-0.5">📋 SB PENDING</span>
+                {(d.sales_bill_pending === 1 && !d.sales_bill_number) && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-300 inline-block">📋 SB Pending</span>
                 )}
                 {d.sales_bill_number && (
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200 inline-block mt-0.5">✓ SB {d.sales_bill_number}</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 inline-block">✓ SB {d.sales_bill_number}</span>
                 )}
-                <div className="grid grid-cols-2 gap-x-2 text-[11px] mt-1 pt-1 border-t border-gray-100">
-                  <div><span className="text-gray-400">Date:</span> {d.delivery_date || '—'}</div>
-                  <div><span className="text-gray-400">Received:</span> {d.received_at ? new Date(d.received_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—'}</div>
-                  <div className="col-span-2"><span className="text-gray-400">By:</span> {d.received_by_name || '—'}</div>
+                <div className="grid grid-cols-2 gap-2 pt-1 border-t border-gray-100 text-[11px]">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">PO</div>
+                    <div className="font-mono font-semibold text-blue-800 truncate">{d.vendor_po_number || '—'}</div>
+                    {d.vendor_name && <div className="text-[10px] text-gray-500 truncate" title={d.vendor_name}>{d.vendor_name}</div>}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] uppercase text-gray-400">Received By</div>
+                    <div className="font-medium text-gray-700 truncate">{d.received_by_name || <span className="text-gray-300">—</span>}</div>
+                    {d.received_at && <div className="text-[10px] text-gray-500">{new Date(d.received_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</div>}
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] mt-1.5">
-                  {d.file_path && <a href={d.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">📄 Doc</a>}
-                  {d.receipt_file_path && <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline font-semibold">Signed ✓</a>}
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5 mt-1.5 pt-1.5 border-t border-gray-100">
+                {(d.file_path || d.receipt_file_path) && (
+                  <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100 flex-wrap">
+                    {d.file_path && <a href={d.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">📄 Doc</a>}
+                    {d.receipt_file_path && <a href={d.receipt_file_path} target="_blank" rel="noopener noreferrer" className="text-emerald-700 hover:underline flex items-center gap-1 font-semibold">✓ Signed Receipt</a>}
+                  </div>
+                )}
+                {/* Primary action — Mark Received (when not yet received) */}
+                {!d.received_by_name && (
+                  <button onClick={() => openMarkReceived(d)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">Mark Received</button>
+                )}
+                {/* Secondary actions row */}
+                <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs flex-wrap">
                   <button
                     onClick={async () => {
                       try {
@@ -3992,26 +4159,25 @@ export default function Procurement() {
                         toast.error(err.response?.data?.error || 'Could not generate document');
                       }
                     }}
-                    className="text-[10px] px-2 py-1 rounded border border-gray-300 text-gray-700 flex items-center gap-1"
+                    className="text-gray-600 hover:underline flex items-center gap-1 font-semibold"
                   >🖨 Print</button>
-                  {!d.received_by_name && (
-                    <button onClick={() => openMarkReceived(d)} className="text-[10px] px-2 py-1 rounded bg-emerald-100 text-emerald-700 border border-emerald-300 font-semibold">Mark Received</button>
-                  )}
                   {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
-                    <button onClick={() => { setSbTarget(d); setSbForm({ sales_bill_number: '', file: null }); }} className="text-[10px] px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-300 font-semibold">Add SB</button>
+                    <button onClick={() => { setSbTarget(d); setSbForm({ sales_bill_number: '', file: null }); }} className="text-amber-700 hover:underline flex items-center gap-1 font-semibold">+ Add Sales Bill</button>
                   )}
                   {canDelete('procurement') && (
                     <button onClick={async () => {
                       if (!confirm(`Delete dispatch #${d.id}?`)) return;
                       try { await api.delete(`/procurement/delivery-notes/${d.id}`); toast.success('Deleted'); load(); }
                       catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                    }} className="text-[10px] text-red-600 ml-auto"><FiTrash2 size={11} /></button>
+                    }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                      <FiTrash2 size={11} /> Delete
+                    </button>
                   )}
                 </div>
               </div>
             ))}
-            {deliveryNotes.length === 0 && readyToDispatch.length === 0 && <div className="text-center py-8 text-gray-400 text-xs">No dispatches yet</div>}
-            {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <div className="text-center py-8 text-gray-400 text-xs">No dispatches match the current filters.</div>}
+            {deliveryNotes.length === 0 && readyToDispatch.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No dispatches yet</div>}
+            {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No dispatches match the current filters.</div>}
             <Pagination pg={dispListPg} setPerPage={setDispListPerPage} />
           </div>
             </>
