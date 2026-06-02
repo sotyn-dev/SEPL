@@ -266,6 +266,14 @@ export default function Procurement() {
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
   const [warehouses, setWarehouses] = useState([]);  // for Mark Received auto-IN
+  // Mam (2026-06-02): "according to delivery note all items and qty
+  // show here may delivery note item of qty 10 but when erec its 9".
+  // Per-line received qty + short-reason override for partial deliveries.
+  // Populated when Mark Received modal opens (via openMarkReceived /
+  // openReceivePo) — each entry: {vpi_id, description, ordered_qty,
+  // received_qty (editable), short_reason (editable), unit, item_code,
+  // master_name, make}.
+  const [receiveItems, setReceiveItems] = useState([]);
   const [indentItems, setIndentItems] = useState([{ ...EMPTY_ITEM }]);
   // Editable per-line items for the Sales Bill / Delivery Note modal.
   // Pre-filled from Client PO (po_items) so the rate column shows the
@@ -1371,13 +1379,34 @@ export default function Procurement() {
     // sales_bill_pending — mam (2026-05-25): flag at receipt time so the
     // dispatch shows the amber "📋 SB PENDING" chip until SB is uploaded.
     if (form.sales_bill_pending) fd.append('sales_bill_pending', '1');
+    // Per-line received qty + short reason (mam 2026-06-02).  Server
+    // persists this to delivery_notes.items_json AND uses received_qty
+    // (not ordered) for the stock-IN amount, so a 10-ordered/9-received
+    // PO only adds 9 to inventory.
+    if (Array.isArray(receiveItems) && receiveItems.length > 0) {
+      const payload = receiveItems.map(it => ({
+        vendor_po_item_id: it.vpi_id,
+        ordered_qty:       +it.ordered_qty || 0,
+        received_qty:      +it.received_qty || 0,
+        short_reason:      it.short_reason || null,
+        description:       it.description || null,
+      }));
+      fd.append('items_received', JSON.stringify(payload));
+    }
     try {
       const r = await api.patch(`/procurement/delivery-notes/${receiveId}/receive`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       const ins = r.data?.stock_ins || 0;
-      toast.success(ins > 0 ? `Marked as received · ${ins} item${ins === 1 ? '' : 's'} added to stock` : 'Marked as received');
-      setModal(false); load();
+      // Count short receipts so mam sees them in the toast — useful audit cue.
+      const shortLines = receiveItems.filter(it => +it.received_qty < +it.ordered_qty).length;
+      const shortNote = shortLines > 0 ? ` · ${shortLines} short` : '';
+      toast.success(ins > 0
+        ? `Marked as received · ${ins} item${ins === 1 ? '' : 's'} added to stock${shortNote}`
+        : `Marked as received${shortNote}`);
+      setModal(false);
+      setReceiveItems([]);
+      load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -3755,13 +3784,44 @@ export default function Procurement() {
             }).finally(() => setDispatchItemsLoading(false));
           }
         };
+        // Helper — fetch the items on the linked vendor PO so mam can
+        // adjust received qty per line in the modal (mam 2026-06-02:
+        // "delivery note item of qty 10 but when erec its 9").
+        const loadReceiveItems = async (vendorPoId) => {
+          if (!vendorPoId) { setReceiveItems([]); return; }
+          try {
+            const r = await api.get(`/procurement/vendor-po/${vendorPoId}/with-items`);
+            const items = (r.data?.items || []).map(it => ({
+              vpi_id: it.id,
+              description: it.indent_description || it.description || it.master_name || '—',
+              master_name: it.master_name || '',
+              item_code: it.item_code || '',
+              specification: it.specification || '',
+              size: it.size || '',
+              unit: it.unit || '',
+              ordered_qty: +it.quantity || 0,
+              received_qty: +it.quantity || 0,   // defaults to full delivery
+              short_reason: '',
+            }));
+            setReceiveItems(items);
+          } catch (err) {
+            setReceiveItems([]);
+            // Modal still opens — items table just shows "No items
+            // available" so mam isn't blocked.  Server stock-IN falls
+            // back to ordered qty when items_received is empty.
+          }
+        };
+
         const openMarkReceived = (d) => {
           setForm({
             receive_id: d.id,
+            receive_vendor_po_id: d.vendor_po_id,
             receive_doc: `${d.document_type === 'challan' ? 'Challan' : 'Sales Bill'} ${d.document_number || '#' + d.id}`,
             received_by_name: '',
             received_at: new Date().toISOString().slice(0, 10),
           });
+          setReceiveItems([]);
+          loadReceiveItems(d.vendor_po_id);
           setModal('receive');
         };
         // Upload receiving for a Ready-to-Dispatch PO directly (no dispatch
@@ -3771,10 +3831,13 @@ export default function Procurement() {
         const openReceivePo = (po) => {
           setForm({
             receive_po_id: po.id,
+            receive_vendor_po_id: po.id,
             receive_doc: `${po.po_number}${po.vendor_name ? ' · ' + po.vendor_name : ''}`,
             received_by_name: '',
             received_at: new Date().toISOString().slice(0, 10),
           });
+          setReceiveItems([]);
+          loadReceiveItems(po.id);
           setModal('receive');
         };
         return (
@@ -5503,11 +5566,87 @@ export default function Procurement() {
           client's stamped + signed receipt photo as proof of delivery. This
           receipt is critical for mam because without it clients sometimes
           deny receiving the material and SEPL has to absorb the loss. */}
-      <Modal isOpen={modal === 'receive'} onClose={() => setModal(false)} title="Mark Received">
+      <Modal isOpen={modal === 'receive'} onClose={() => { setModal(false); setReceiveItems([]); }} title="Mark Received" wide>
         <form onSubmit={markReceived} className="space-y-3">
           <div className="bg-indigo-50 border border-indigo-200 rounded px-3 py-2 text-xs text-indigo-700">
             Recording receipt for <b>{form.receive_doc}</b>.
           </div>
+          {/* Per-line received qty (mam 2026-06-02: "according to
+              delivery note all items and qty show here may delivery
+              note item of qty 10 but when erec its 9").  Editable
+              received qty + optional short reason per item. */}
+          {receiveItems.length > 0 && (
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <div className="flex items-center justify-between bg-gray-50 px-3 py-2 border-b border-gray-200">
+                <span className="text-xs font-semibold text-gray-700">Items received <span className="text-gray-400 font-normal">({receiveItems.length})</span></span>
+                {(() => {
+                  const short = receiveItems.filter(it => +it.received_qty < +it.ordered_qty).length;
+                  return short > 0
+                    ? <span className="text-[10px] font-bold text-amber-700">⚠ {short} short line{short === 1 ? '' : 's'}</span>
+                    : <span className="text-[10px] text-emerald-700">Full delivery</span>;
+                })()}
+              </div>
+              <div className="overflow-x-auto">
+                <table className="text-xs w-full">
+                  <thead className="bg-gray-50 text-gray-600">
+                    <tr>
+                      <th className="text-left px-2 py-1 w-8">#</th>
+                      <th className="text-left px-2 py-1">Item</th>
+                      <th className="text-right px-2 py-1 w-20">Ordered</th>
+                      <th className="text-right px-2 py-1 w-24">Received</th>
+                      <th className="text-left px-2 py-1 w-12">Unit</th>
+                      <th className="text-left px-2 py-1">Short reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {receiveItems.map((it, idx) => {
+                      const isShort = +it.received_qty < +it.ordered_qty;
+                      return (
+                        <tr key={it.vpi_id || idx} className={`border-b border-gray-100 ${isShort ? 'bg-amber-50/30' : ''}`}>
+                          <td className="px-2 py-1.5 text-gray-500">{idx + 1}</td>
+                          <td className="px-2 py-1.5">
+                            {it.item_code && <span className="font-mono text-[10px] text-gray-500">[{it.item_code}] </span>}
+                            <span className="font-medium">{it.master_name || it.description}</span>
+                            {(it.specification || it.size) && (
+                              <div className="text-[10px] text-gray-500">{[it.size, it.specification].filter(Boolean).join(' / ')}</div>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5 text-right text-gray-700 font-medium">{it.ordered_qty}</td>
+                          <td className="px-2 py-1.5 text-right">
+                            <NumInput
+                              step="any" min="0" max={it.ordered_qty}
+                              value={it.received_qty}
+                              onChange={(v) => {
+                                const clamped = Math.max(0, Math.min(+it.ordered_qty, +v || 0));
+                                setReceiveItems(prev => prev.map((r, i) => i === idx ? { ...r, received_qty: clamped } : r));
+                              }}
+                              className={`border rounded px-2 py-1 w-20 text-right text-xs focus:ring-1 focus:ring-emerald-500 ${isShort ? 'border-amber-400 bg-amber-50 text-amber-800 font-semibold' : 'border-gray-300 focus:border-emerald-500'}`}
+                            />
+                          </td>
+                          <td className="px-2 py-1.5">{it.unit || '—'}</td>
+                          <td className="px-2 py-1.5">
+                            <input
+                              className="input text-xs py-1 px-2"
+                              placeholder={isShort ? 'damaged / short / etc.' : '— (no shortage)'}
+                              value={it.short_reason}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setReceiveItems(prev => prev.map((r, i) => i === idx ? { ...r, short_reason: v } : r));
+                              }}
+                              disabled={!isShort}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="bg-gray-50/60 px-3 py-1.5 text-[10px] text-gray-500 border-t border-gray-100">
+                Tip: lower the Received qty if the delivery is short. Short lines turn amber and unlock the reason field.
+              </div>
+            </div>
+          )}
           <div>
             <label className="label">Received By (name) *</label>
             <input className="input" placeholder="e.g. Site engineer / customer rep name" value={form.received_by_name || ''} onChange={e => setForm({...form, received_by_name: e.target.value})} required />
@@ -5561,7 +5700,7 @@ export default function Procurement() {
             </div>
           )}
           <div className="flex justify-end gap-3">
-            <button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
+            <button type="button" onClick={() => { setModal(false); setReceiveItems([]); }} className="btn btn-secondary">Cancel</button>
             <button type="submit" className="btn btn-primary">Mark as Received</button>
           </div>
         </form>

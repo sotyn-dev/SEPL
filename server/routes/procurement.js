@@ -2537,6 +2537,35 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
   // arrives via /sales-bill endpoint.
   const sbPendingFlag = (b.sales_bill_pending === '1' || b.sales_bill_pending === 1 || b.sales_bill_pending === true) ? 1 : null;
 
+  // Mam (2026-06-02): "according to delivery note all items and qty
+  // show here may delivery note item of qty 10 but when erec its 9".
+  // The receive form now sends `items_received` — a JSON array per
+  // line with { vendor_po_item_id, ordered_qty, received_qty,
+  // short_reason }.  We persist it to delivery_notes.items_json for
+  // the audit trail (claim vs received) AND use received_qty as the
+  // stock-IN amount instead of vendor_po_items.quantity, so partial
+  // receipts (delivery short by 1) don't over-credit inventory.
+  let itemsReceivedJson = null;
+  let itemsReceivedArr = null;
+  if (b.items_received) {
+    try {
+      const raw = typeof b.items_received === 'string' ? JSON.parse(b.items_received) : b.items_received;
+      if (Array.isArray(raw)) {
+        // Coerce and clamp received_qty: must be ≥ 0 and ≤ ordered_qty.
+        itemsReceivedArr = raw.map(r => ({
+          vendor_po_item_id: r.vendor_po_item_id ? +r.vendor_po_item_id : null,
+          ordered_qty:       Number.isFinite(+r.ordered_qty) ? +r.ordered_qty : 0,
+          received_qty:      Number.isFinite(+r.received_qty) ? Math.max(0, +r.received_qty) : 0,
+          short_reason:      r.short_reason ? String(r.short_reason).slice(0, 200) : null,
+          description:       r.description || null,
+        }));
+        itemsReceivedJson = JSON.stringify(itemsReceivedArr);
+      }
+    } catch (e) {
+      // Bad JSON — ignore silently and fall back to ordered qty stock-IN.
+    }
+  }
+
   try {
     db.prepare(
       `UPDATE delivery_notes
@@ -2545,23 +2574,34 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
              receipt_file_path = COALESCE(?, receipt_file_path),
              status = 'received',
              warehouse_id = COALESCE(?, warehouse_id),
-             sales_bill_pending = COALESCE(?, sales_bill_pending)
+             sales_bill_pending = COALESCE(?, sales_bill_pending),
+             items_json = COALESCE(?, items_json)
        WHERE id = ?`
-    ).run(String(received_by_name).trim(), received_at || null, receiptPath, warehouseId, sbPendingFlag, req.params.id);
+    ).run(String(received_by_name).trim(), received_at || null, receiptPath, warehouseId, sbPendingFlag, itemsReceivedJson, req.params.id);
 
     // INVENTORY AUTO-IN — best effort; never blocks the receipt save.
     let stockIns = 0;
     if (warehouseId) {
       try {
-        // Pull the line items via vendor_po → vendor_po_items → indent_items
+        // Pull the line items via vendor_po → vendor_po_items → indent_items.
+        // When mam sent per-line received_qty (items_received), build a
+        // {vendor_po_item_id → received_qty} map and use it for stock IN.
+        // Falls back to ordered qty (vpi.quantity) if no override sent.
         const dn = db.prepare('SELECT vendor_po_id FROM delivery_notes WHERE id=?').get(req.params.id);
         if (dn?.vendor_po_id) {
           const items = db.prepare(
-            `SELECT vpi.quantity, vpi.rate, ii.item_master_id, ii.description
+            `SELECT vpi.id as vpi_id, vpi.quantity, vpi.rate, ii.item_master_id, ii.description
                FROM vendor_po_items vpi
                LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
               WHERE vpi.vendor_po_id = ?`
           ).all(dn.vendor_po_id);
+
+          const receivedByVpi = new Map();
+          if (Array.isArray(itemsReceivedArr)) {
+            for (const r of itemsReceivedArr) {
+              if (r.vendor_po_item_id != null) receivedByVpi.set(+r.vendor_po_item_id, +r.received_qty);
+            }
+          }
 
           // Idempotency: skip if movements for this delivery_note already exist
           const refId = `DN-${req.params.id}`;
@@ -2571,22 +2611,30 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
           if (!existingMv) {
             const tx = db.transaction(() => {
               for (const i of items) {
-                if (!i.item_master_id || !(+i.quantity > 0)) continue;
+                if (!i.item_master_id) continue;
+                // Prefer per-line received qty when mam supplied it; else
+                // ordered qty.  Skip rows that ended up at 0 (e.g. 10
+                // ordered, 0 received → don't increment stock).
+                const recOverride = receivedByVpi.has(i.vpi_id) ? receivedByVpi.get(i.vpi_id) : null;
+                const qty = recOverride != null ? +recOverride : +i.quantity;
+                if (!(qty > 0)) continue;
                 const cur = db.prepare('SELECT * FROM stock_balance WHERE warehouse_id=? AND item_master_id=?').get(warehouseId, i.item_master_id);
                 const prevQty = cur ? +cur.quantity : 0;
                 const prevRate = cur ? +cur.avg_rate : 0;
-                const qty = +i.quantity;
                 const rate = +(i.rate || 0);
                 const newQty = prevQty + qty;
                 const newAvg = newQty > 0 ? ((prevQty * prevRate) + (qty * rate)) / newQty : 0;
                 if (cur) db.prepare('UPDATE stock_balance SET quantity=?, avg_rate=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(newQty, newAvg, cur.id);
                 else db.prepare('INSERT INTO stock_balance (warehouse_id, item_master_id, quantity, avg_rate) VALUES (?,?,?,?)').run(warehouseId, i.item_master_id, newQty, newAvg);
+                const noteSuffix = recOverride != null && recOverride < +i.quantity
+                  ? ` (short receipt: ${recOverride}/${i.quantity})`
+                  : '';
                 db.prepare(
                   `INSERT INTO stock_movements
                     (warehouse_id, item_master_id, type, quantity, rate, total_value,
                      reference_type, reference_id, notes, created_by)
                    VALUES (?,?,?,?,?,?,?,?,?,?)`
-                ).run(warehouseId, i.item_master_id, 'IN', qty, rate, qty * rate, 'RECEIVE', refId, `Auto-IN from delivery note #${req.params.id}`, req.user.id);
+                ).run(warehouseId, i.item_master_id, 'IN', qty, rate, qty * rate, 'RECEIVE', refId, `Auto-IN from delivery note #${req.params.id}${noteSuffix}`, req.user.id);
                 stockIns += 1;
               }
             });
