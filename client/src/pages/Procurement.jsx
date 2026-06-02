@@ -3786,12 +3786,18 @@ export default function Procurement() {
         };
         // Helper — fetch the items on the linked vendor PO so mam can
         // adjust received qty per line in the modal (mam 2026-06-02:
-        // "delivery note item of qty 10 but when erec its 9").
+        // "delivery note item of qty 10 but when erec its 9" +
+        // "item wise not showing" — added explicit console.warn so
+        // browser dev tools surface the cause when items don't load).
         const loadReceiveItems = async (vendorPoId) => {
           if (!vendorPoId) { setReceiveItems([]); return; }
           try {
             const r = await api.get(`/procurement/vendor-po/${vendorPoId}/with-items`);
-            const items = (r.data?.items || []).map(it => ({
+            const raw = r.data?.items || [];
+            if (raw.length === 0) {
+              console.warn(`[receive-items] PO ${vendorPoId} returned 0 items — neither vendor_po_items nor indent_items has rows.`);
+            }
+            const items = raw.map(it => ({
               vpi_id: it.id,
               description: it.indent_description || it.description || it.master_name || '—',
               master_name: it.master_name || '',
@@ -3805,10 +3811,8 @@ export default function Procurement() {
             }));
             setReceiveItems(items);
           } catch (err) {
+            console.error('[receive-items] fetch failed:', err?.response?.status, err?.message);
             setReceiveItems([]);
-            // Modal still opens — items table just shows "No items
-            // available" so mam isn't blocked.  Server stock-IN falls
-            // back to ordered qty when items_received is empty.
           }
         };
 
@@ -5574,19 +5578,28 @@ export default function Procurement() {
           {/* Per-line received qty (mam 2026-06-02: "according to
               delivery note all items and qty show here may delivery
               note item of qty 10 but when erec its 9").  Editable
-              received qty + optional short reason per item. */}
-          {receiveItems.length > 0 && (
-            <div className="border border-gray-200 rounded-lg overflow-hidden">
-              <div className="flex items-center justify-between bg-gray-50 px-3 py-2 border-b border-gray-200">
-                <span className="text-xs font-semibold text-gray-700">Items received <span className="text-gray-400 font-normal">({receiveItems.length})</span></span>
-                {(() => {
-                  const short = receiveItems.filter(it => +it.received_qty < +it.ordered_qty).length;
-                  return short > 0
-                    ? <span className="text-[10px] font-bold text-amber-700">⚠ {short} short line{short === 1 ? '' : 's'}</span>
-                    : <span className="text-[10px] text-emerald-700">Full delivery</span>;
-                })()}
+              received qty + optional short reason per item.  Section
+              always renders so mam can see whether items loaded or
+              not (mam follow-up: "item wise not showing"). */}
+          <div className="border border-gray-200 rounded-lg overflow-hidden">
+            <div className="flex items-center justify-between bg-gray-50 px-3 py-2 border-b border-gray-200">
+              <span className="text-xs font-semibold text-gray-700">Items received <span className="text-gray-400 font-normal">({receiveItems.length})</span></span>
+              {receiveItems.length > 0 && (() => {
+                const short = receiveItems.filter(it => +it.received_qty < +it.ordered_qty).length;
+                return short > 0
+                  ? <span className="text-[10px] font-bold text-amber-700">⚠ {short} short line{short === 1 ? '' : 's'}</span>
+                  : <span className="text-[10px] text-emerald-700">Full delivery</span>;
+              })()}
+            </div>
+            {receiveItems.length === 0 && (
+              <div className="text-center py-4 text-xs text-gray-500 italic">
+                No line items linked to this PO — quantity will be recorded at the PO level only.
+                <div className="text-[10px] text-gray-400 mt-1">If you expected items here, the PO may have been created without a linked indent.</div>
               </div>
-              <div className="overflow-x-auto">
+            )}
+            {receiveItems.length > 0 && (
+              <>
+                <div className="overflow-x-auto">
                 <table className="text-xs w-full">
                   <thead className="bg-gray-50 text-gray-600">
                     <tr>
@@ -5642,11 +5655,12 @@ export default function Procurement() {
                   </tbody>
                 </table>
               </div>
-              <div className="bg-gray-50/60 px-3 py-1.5 text-[10px] text-gray-500 border-t border-gray-100">
-                Tip: lower the Received qty if the delivery is short. Short lines turn amber and unlock the reason field.
-              </div>
-            </div>
-          )}
+                <div className="bg-gray-50/60 px-3 py-1.5 text-[10px] text-gray-500 border-t border-gray-100">
+                  Tip: lower the Received qty if the delivery is short. Short lines turn amber and unlock the reason field.
+                </div>
+              </>
+            )}
+          </div>
           <div>
             <label className="label">Received By (name) *</label>
             <input className="input" placeholder="e.g. Site engineer / customer rep name" value={form.received_by_name || ''} onChange={e => setForm({...form, received_by_name: e.target.value})} required />

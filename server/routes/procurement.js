@@ -2158,7 +2158,7 @@ router.get('/vendor-po/:id/with-items', (req, res) => {
      WHERE vp.id = ?
   `).get(req.params.id);
   if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
-  const items = db.prepare(`
+  let items = db.prepare(`
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.description, vpi.hsn_code,
            ii.description as indent_description, ii.unit,
            im.item_code, im.item_name as master_name, im.specification, im.size
@@ -2168,6 +2168,28 @@ router.get('/vendor-po/:id/with-items', (req, res) => {
      WHERE vpi.vendor_po_id = ?
      ORDER BY vpi.id
   `).all(req.params.id);
+
+  // Mam (2026-06-02): "item wise not showing" — legacy POs created
+  // before vendor_po_items was populated have an empty items array.
+  // Fall back to the linked indent's items so the Mark Received modal
+  // still shows per-line qty for those POs.  Each indent_items row
+  // becomes a synthetic "vpi" with id = `ind-<indent_item_id>` so the
+  // frontend can still address it; backend ignores these synthetic
+  // ids on stock-IN (vendor_po_item_id won't be found → falls back to
+  // ordered qty).
+  if (items.length === 0 && po.indent_id) {
+    items = db.prepare(`
+      SELECT 'ind-' || ii.id as id, ii.quantity, ii.rate, ii.amount,
+             ii.description, NULL as hsn_code,
+             ii.description as indent_description, ii.unit,
+             im.item_code, im.item_name as master_name,
+             im.specification, im.size
+        FROM indent_items ii
+        LEFT JOIN item_master im ON im.id = ii.item_master_id
+       WHERE ii.indent_id = ?
+       ORDER BY ii.id
+    `).all(po.indent_id);
+  }
   // Block-edit warnings — surface bill / DN count so the UI can disable
   // line-item editing fields when downstream documents already reference
   // this PO.
