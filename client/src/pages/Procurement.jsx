@@ -985,18 +985,20 @@ export default function Procurement() {
       // Use the list-loaded row; the modal still works, just without stock.
     }
     const seed = {};
-    // Auto-suggest From Store qty = min(office_stock, approved_qty) for
-    // every line where item_master_id is set.  Mam can override to 0 if
-    // she wants to procure fresh anyway (e.g. stock reserved for another
-    // job) or to a smaller number for partial issue.
+    // Mam (2026-06-02 follow-up): "5 (auto-suggested) store not auto
+    // assigned some time our store have but place is so far then also
+    // approved or editable suggest store qty".  We DO NOT pre-fill the
+    // From Store column anymore — sometimes the office store is too
+    // far from site (transport > fresh-buy cost), or stock is reserved
+    // for another job, or it's used/scrap quality.  So:
+    //   - Default = 0 (no auto-assign).  Indent flows like before
+    //     unless the approver consciously decides to issue from stock.
+    //   - The cell still shows "📦 N avail" as a one-click chip that
+    //     fills the input with min(stock, approved) on tap.
     const seedStore = {};
     for (const it of (detail.items || [])) {
       seed[it.id] = it.quantity;
-      if (it.item_master_id && +it.office_stock > 0) {
-        seedStore[it.id] = Math.min(+it.office_stock, +it.quantity);
-      } else {
-        seedStore[it.id] = 0;
-      }
+      seedStore[it.id] = 0;
     }
     setApproveQtyOverrides(seed);
     setApproveFromStore(seedStore);
@@ -5401,10 +5403,12 @@ export default function Procurement() {
                               onChange={(v) => setApproveQtyOverrides(prev => ({ ...prev, [it.id]: v }))}
                               className="border border-gray-300 rounded px-2 py-1 w-20 text-right text-xs focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
                           </td>
-                          {/* From Store cell — disabled when no master link
-                              or no office stock.  Clamped to [0, min(office,
-                              approved)] so mam can't ask for more than what
-                              exists or more than what's approved. */}
+                          {/* From Store cell (mam 2026-06-02 follow-up):
+                              defaults to 0 — approver consciously picks.
+                              The "📦 N avail · use" chip below the input
+                              applies min(stock, approved) on one tap for
+                              the common case.  Disabled when no master
+                              link or no office stock. */}
                           {(() => {
                             const office = +it.office_stock || 0;
                             const canIssue = !!it.item_master_id && office > 0;
@@ -5421,7 +5425,23 @@ export default function Procurement() {
                                         value={approveFromStore[it.id] ?? 0}
                                         onChange={(v) => setApproveFromStore(prev => ({ ...prev, [it.id]: v }))}
                                         className={`border rounded px-2 py-1 w-20 text-right text-xs focus:ring-1 focus:ring-emerald-500 ${overshoot ? 'border-red-400 bg-red-50' : 'border-gray-300 focus:border-emerald-500'}`} />
-                                      <div className="text-[9px] text-gray-400 mt-0.5">max {maxFs}</div>
+                                      {/* Quick-pick chip — only show when
+                                          the input is below the available
+                                          max, so it disappears after the
+                                          approver has already taken stock. */}
+                                      {fs < maxFs && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setApproveFromStore(prev => ({ ...prev, [it.id]: maxFs }))}
+                                          className="mt-0.5 inline-flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300 hover:bg-emerald-200"
+                                          title={`Use ${maxFs} from office store (${office} available)`}
+                                        >
+                                          📦 {office} avail · use {maxFs}
+                                        </button>
+                                      )}
+                                      {fs >= maxFs && (
+                                        <div className="text-[9px] text-emerald-600 mt-0.5">using max</div>
+                                      )}
                                     </div>
                                   ) : (
                                     <span className="text-gray-300" title={it.item_master_id ? 'No office stock available' : 'Manual entry — cannot issue from store'}>—</span>
