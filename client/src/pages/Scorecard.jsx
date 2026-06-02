@@ -447,11 +447,48 @@ function TemplateKpiEditor({ templateId, onChange }) {
   const [tpl, setTpl] = useState(null);
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ group_name: 'Weekly', metric_name: '', weightage: 0, direction: 'higher_better', data_source: 'manual', default_planned: 0 });
+  // Mam (2026-06-02): "here we done with it plan fill but from where
+  // is actual we not show".  Live actual preview — pick any user
+  // assigned to THIS template, fetch their current-week scorecard,
+  // and merge the actual values into the KPI rows so mam can verify
+  // each data source returns real data.
+  const [previewUsers, setPreviewUsers] = useState([]);   // users assigned to this template
+  const [previewUserId, setPreviewUserId] = useState('');
+  const [previewKpis, setPreviewKpis] = useState({});     // { kpi_id: { planned, actual, score } }
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const load = useCallback(() => {
     api.get(`/scoring/templates/${templateId}`).then(r => setTpl(r.data));
   }, [templateId]);
   useEffect(() => { load(); }, [load]);
+
+  // Load users assigned to this template — we use the assignments
+  // endpoint and filter client-side.  Auto-select the first one so
+  // mam doesn't have to pick before seeing data.
+  useEffect(() => {
+    api.get('/scoring/assignments').then(r => {
+      const onThis = (r.data || []).filter(a => a.template_id === templateId);
+      setPreviewUsers(onThis);
+      if (onThis.length > 0 && !previewUserId) setPreviewUserId(onThis[0].user_id);
+    }).catch(() => setPreviewUsers([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateId]);
+
+  // When user picked, fetch their scorecard and build a {kpi_id → row} lookup.
+  useEffect(() => {
+    if (!previewUserId) { setPreviewKpis({}); return; }
+    setPreviewLoading(true);
+    api.get('/scoring/scorecard', { params: { user_id: previewUserId } })
+      .then(r => {
+        const map = {};
+        for (const k of (r.data?.kpis || [])) {
+          map[k.kpi_id || k.id] = k;
+        }
+        setPreviewKpis(map);
+      })
+      .catch(() => setPreviewKpis({}))
+      .finally(() => setPreviewLoading(false));
+  }, [previewUserId]);
 
   const addKpi = async (e) => {
     e.preventDefault();
@@ -480,9 +517,36 @@ function TemplateKpiEditor({ templateId, onChange }) {
 
   return (
     <div className="space-y-3 max-h-[70vh] overflow-y-auto">
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-center flex-wrap gap-2">
         <p className="text-xs text-gray-500">Total weight: <span className={`font-bold ${totalWeight === 100 ? 'text-emerald-600' : 'text-amber-600'}`}>{totalWeight}%</span> {totalWeight !== 100 && '(should be 100)'}</p>
         <button onClick={() => setAdding(true)} className="btn btn-primary text-xs flex items-center gap-1"><FiPlus size={12} /> Add KPI</button>
+      </div>
+      {/* Mam (2026-06-02): "from where is actual we not show".  Pick a
+          user assigned to this template → the Actual column below
+          renders their current-week computed value per KPI so mam
+          can verify each data source is wired correctly. */}
+      <div className="bg-blue-50/40 border border-blue-200 rounded p-2 flex items-center gap-2 flex-wrap text-xs">
+        <span className="font-semibold text-blue-800">Preview actuals for:</span>
+        {previewUsers.length === 0 ? (
+          <span className="text-gray-500 italic">No users assigned to this template yet — assign one from "Assign Templates" tab to preview actual values.</span>
+        ) : (
+          <>
+            <select
+              className="select text-xs py-1 px-2"
+              value={previewUserId}
+              onChange={e => setPreviewUserId(+e.target.value)}
+            >
+              {previewUsers.map(u => (
+                <option key={u.user_id} value={u.user_id}>
+                  {u.name}{u.department ? ` · ${u.department}` : ''}
+                </option>
+              ))}
+            </select>
+            <span className="text-[10px] text-gray-500">
+              {previewLoading ? 'loading…' : 'current week, live from ERP data'}
+            </span>
+          </>
+        )}
       </div>
       <table className="w-full text-xs">
         <thead className="bg-gray-50">
@@ -493,6 +557,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
             <th className="text-center p-2 w-20">Target</th>
             <th className="text-center p-2 w-24">Direction</th>
             <th className="text-center p-2 w-32">Source</th>
+            <th className="text-center p-2 w-24">Actual<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(this week)</span></th>
             <th></th>
           </tr>
         </thead>
@@ -625,6 +690,36 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:vendors_added">vendors added</option>
                   </optgroup>
                 </select>
+              </td>
+              {/* Actual preview (mam 2026-06-02) — live value from the
+                  computeAutoCount path for the selected preview user.
+                  Renders the actual value, with a small chip showing
+                  whether the source returned data (📊 green if non-
+                  zero, ⚪ gray if zero, ⚠ amber if not yet computed). */}
+              <td className="p-2 text-center">
+                {(() => {
+                  if (!previewUserId) return <span className="text-gray-300 text-[10px]">—</span>;
+                  if (previewLoading) return <span className="text-gray-400 text-[10px] italic">…</span>;
+                  const row = previewKpis[k.id];
+                  if (!row) return <span className="text-gray-300 text-[10px]">no data</span>;
+                  const actual = row.actual ?? row.actual_value ?? null;
+                  const isAuto = k.data_source && k.data_source.startsWith('auto:');
+                  let cls = 'bg-gray-100 text-gray-500';
+                  if (actual !== null && actual !== undefined && actual !== 0) {
+                    cls = 'bg-emerald-100 text-emerald-800';
+                  } else if (!isAuto) {
+                    cls = 'bg-amber-50 text-amber-700';
+                  }
+                  return (
+                    <div className="inline-flex items-center justify-center gap-1">
+                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${cls}`} title={`Live actual for ${row.metric_name || k.metric_name} · ${isAuto ? 'auto from ' + k.data_source.replace('auto:', '') : 'manual entry'}`}>
+                        {actual !== null && actual !== undefined
+                          ? (Number.isFinite(+actual) ? (+actual).toLocaleString('en-IN') : String(actual))
+                          : '—'}
+                      </span>
+                    </div>
+                  );
+                })()}
               </td>
               <td className="p-2"><button onClick={() => delKpi(k)} className="text-red-500 hover:text-red-700"><FiTrash2 size={12} /></button></td>
             </tr>
