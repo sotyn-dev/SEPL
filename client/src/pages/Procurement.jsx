@@ -9,7 +9,7 @@ import Pagination, { usePagination } from '../components/Pagination';
 import InfoTooltip from '../components/InfoTooltip';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
@@ -1608,10 +1608,134 @@ export default function Procurement() {
             </div>
           </div>
 
-          {/* freeze-col pins Indent No to the left while user scrolls right
+          {/* ─── MOBILE CARD VIEW ─────────────────────────────────────
+              Mam (2026-06-02): on phones the freeze-head table reads as
+              a cramped wall of text.  Cards below mirror her mockup
+              (INDENT REFERENCE label · status pill · site row · dispatch
+              window · view-details link · optional progress bar).
+              Hidden ≥ md so desktop keeps the full table with every
+              column intact. */}
+          <div className="md:hidden space-y-3">
+            {indents.length === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">No indents yet</div>
+            )}
+            {indents.length > 0 && filteredIndents.length === 0 && (
+              <div className="card p-6 text-center text-gray-400 text-sm">No indents match the current filters — try Reset</div>
+            )}
+            {indPg.rows.map(i => {
+              const items = i.items || [];
+              const expanded = expandedIndents.has(i.id);
+              // Status → progress % map (no per-item dispatch data yet).
+              // Hide bar for terminal/inapplicable states.
+              const PROG = { draft: 5, submitted: 20, pending: 20, approved: 50, po_sent: 70, dispatched: 90, received: 100 };
+              const prog = PROG[i.status];
+              const showProg = prog != null && i.status !== 'received' && i.status !== 'rejected';
+              const raisedClean = i.raised_by_name && !/^\d+(\.\d+)?$/.test(String(i.raised_by_name).trim())
+                ? i.raised_by_name
+                : null;
+              return (
+                <div key={i.id} className="card p-3 space-y-2">
+                  {/* Header: label + indent number + status pill */}
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Indent Reference</div>
+                      <div className="text-lg font-bold text-gray-900 truncate">{i.indent_number}</div>
+                    </div>
+                    <StatusBadge status={i.status} />
+                  </div>
+
+                  {/* Site Location */}
+                  <div className="flex items-start gap-1.5 text-xs">
+                    <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase text-gray-400">Site Location</div>
+                      <div className="font-medium text-gray-800 truncate">{i.site_name || i.client_name || '—'}</div>
+                    </div>
+                  </div>
+
+                  {/* Dispatch Window (created/indent date) */}
+                  <div className="flex items-start gap-1.5 text-xs">
+                    <FiCalendar size={12} className="mt-0.5 text-amber-600 flex-shrink-0" />
+                    <div>
+                      <div className="text-[10px] uppercase text-gray-400">Dispatch Window</div>
+                      <div className="font-medium text-gray-800">
+                        {i.created_at
+                          ? new Date(i.created_at).toLocaleString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                          : (i.indent_date || '—')}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Category + Budget mini-strip (only when present) */}
+                  {(i.indent_category || i.budget_amount > 0) && (
+                    <div className="flex items-center justify-between text-[11px] pt-1 border-t border-gray-100">
+                      <span className="text-gray-500">
+                        {i.indent_category ? <span className="inline-block bg-gray-100 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold mr-1">{i.indent_category.replace(/_/g, ' ')}</span> : null}
+                        {items.length > 0 && <span>{items.length} item{items.length === 1 ? '' : 's'}</span>}
+                      </span>
+                      {i.budget_amount > 0 && (
+                        <span className="font-semibold text-gray-700">
+                          ₹{Math.round(i.budget_amount).toLocaleString('en-IN')}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Loading Progress (status-derived) */}
+                  {showProg && (
+                    <div>
+                      <div className="flex justify-between text-[10px] text-gray-500 mb-0.5">
+                        <span className="uppercase tracking-wide">Loading Progress</span>
+                        <span className="font-bold text-gray-700">{prog}%</span>
+                      </div>
+                      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-emerald-500 transition-all" style={{ width: `${prog}%` }} />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Footer: raised by avatar + View Details */}
+                  <div className="flex justify-between items-center pt-2 border-t border-gray-100">
+                    <div className="flex items-center gap-1.5 text-[11px] text-gray-500 min-w-0">
+                      <span className="bg-indigo-100 text-indigo-700 rounded-full w-6 h-6 flex items-center justify-center text-[10px] font-bold flex-shrink-0">
+                        <FiUser size={11} />
+                      </span>
+                      <span className="truncate">{raisedClean || '—'}</span>
+                    </div>
+                    <button onClick={() => toggleIndentRow(i.id)} className="text-xs font-bold text-blue-600 flex items-center gap-1 hover:text-blue-800 whitespace-nowrap">
+                      VIEW DETAILS <FiChevronRight size={14} />
+                    </button>
+                  </div>
+
+                  {/* Expanded item list — same data as desktop, compact */}
+                  {expanded && items.length > 0 && (
+                    <div className="border-t pt-2 mt-1 space-y-1 text-xs">
+                      <div className="font-semibold text-gray-700 mb-1">Items</div>
+                      {items.slice(0, 12).map((it, idx) => (
+                        <div key={idx} className="flex justify-between gap-2 text-gray-600 pb-1 border-b border-gray-50 last:border-0">
+                          <div className="flex-1 min-w-0 truncate">{it.description || it.item_name || '—'}</div>
+                          <div className="text-right whitespace-nowrap text-gray-800 font-medium">
+                            {Number(it.quantity || it.qty || 0)} {it.unit || ''}
+                          </div>
+                        </div>
+                      ))}
+                      {items.length > 12 && (
+                        <div className="text-[10px] text-gray-400 italic">+ {items.length - 12} more — open in desktop view</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            <Pagination pg={indPg} setPerPage={setIndPerPage} />
+          </div>
+
+          {/* ─── DESKTOP TABLE VIEW ───────────────────────────────────
+              freeze-col pins Indent No to the left while user scrolls right
               to see Approval / Actions (mam 2026-05-25 — was "time wasting"
-              to scroll-end-then-back to read row labels). */}
-          <div className="card p-0 overflow-x-auto"><table className="freeze-head freeze-col">
+              to scroll-end-then-back to read row labels).  Hidden on phones
+              in favour of the card list above. */}
+          <div className="hidden md:block card p-0 overflow-x-auto"><table className="freeze-head freeze-col">
             <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Category</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
             <tbody>
               {indPg.rows.map(i => {
