@@ -430,8 +430,22 @@ router.get('/indents', (req, res) => {
     `).get(req.user.id);
     return !!r?.ok;
   })();
-  const where = canSeeAll ? '' : 'WHERE i.created_by = ?';
-  const params = canSeeAll ? [] : [req.user.id];
+  // Mam (2026-06-02): "gurcharan fill indent when i open his id he
+  // is not showing his own filled indent please dont do this type
+  // blunder".  The old filter only checked created_by — so any indent
+  // whose created_by got set wrong (legacy rows where the column was
+  // NULL, sessions where the form was filled via a shared device, or
+  // accounts that were re-created with a new user.id) became invisible
+  // to its actual raiser.  Now we OR-in a name match on the
+  // raised_by_name field — set by the same form that captured the
+  // indent — so engineers always see what they put their name on.
+  const where = canSeeAll
+    ? ''
+    : `WHERE (i.created_by = ?
+             OR (i.raised_by_name IS NOT NULL
+                 AND LENGTH(TRIM(i.raised_by_name)) > 0
+                 AND LOWER(TRIM(i.raised_by_name)) = LOWER(TRIM(?))))`;
+  const params = canSeeAll ? [] : [req.user.id, req.user.name || ''];
   const indents = db.prepare(
     `SELECT i.*, u.name as created_by_name,
             au.name as approved_by_name,
