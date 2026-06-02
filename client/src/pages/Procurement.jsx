@@ -2050,7 +2050,7 @@ export default function Procurement() {
               to see Approval / Actions (mam 2026-05-25 — was "time wasting"
               to scroll-end-then-back to read row labels).  Hidden on phones
               in favour of the card list above. */}
-          <div className="hidden md:block card p-0 overflow-x-auto"><table className="freeze-head freeze-col">
+          <div className="hidden md:block card p-0 overflow-auto max-h-[70vh]"><table className="freeze-head freeze-col">
             <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Category</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
             <tbody>
               {indPg.rows.map(i => {
@@ -2863,7 +2863,7 @@ export default function Procurement() {
                 </div>
               </div>
 
-          <div className="card p-0 overflow-x-auto hidden md:block"><table className="freeze-head freeze-col">
+          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
             <thead><tr><th>PO Number</th><th>Indent</th><th>PO Date</th><th>Vendor</th><th>Amount</th><th>File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {listPg.rows.map(v => (
@@ -3158,8 +3158,8 @@ export default function Procurement() {
             </div>
 
             {/* Desktop table (mobile gets card list below — mam 2026-06-02) */}
-            <div className="card p-0 overflow-x-auto hidden md:block">
-              <table className="text-xs">
+            <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block">
+              <table className="text-xs freeze-head">
                 <thead><tr className="bg-gray-50">
                   <th className="px-3 py-2 text-left">PO Number</th>
                   <th className="px-3 py-2 text-left">Indent / Site</th>
@@ -3630,7 +3630,7 @@ export default function Procurement() {
                   Showing <span className="font-semibold text-gray-700">{filteredBills.length}</span> of {purchaseBills.length}
                 </div>
               </div>
-          <div className="card p-0 overflow-x-auto hidden md:block"><table className="freeze-head freeze-col">
+          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
             <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
               {billsListPg.rows.map(b => (
@@ -4102,7 +4102,7 @@ export default function Procurement() {
                   Showing <span className="font-semibold text-gray-700">{filteredDispatch.length}</span> of {deliveryNotes.length}
                 </div>
               </div>
-          <div className="card p-0 overflow-x-auto hidden md:block"><table className="freeze-head freeze-col">
+          <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
             {/* Mam (2026-06-02): "site name also show here delivery note
                 number and against it we will upload receiving".  Bill-
                 upload now auto-creates the DN row (commit c7e86ac).

@@ -220,13 +220,41 @@ thead {
 th {
   @apply px-4 py-3 text-left font-bold text-gray-500 uppercase text-[10px] tracking-wider;
 }
-/* Freeze head — INTENTIONALLY INERT.  Multiple iterations (top:0,
-   top:var(--toolbar-height), :has() bounded wrapper) all produced
-   layering bugs where stat cards / page headers peeked through the
-   pinned thead.  Rolled back together with .sticky-toolbar after
-   mam saw the DPR dashboard mid-scroll and asked "seriously do you
-   think its good ui/ux" (2026-05-13).  Markup retains the class so
-   future work can wire it up cleanly. */
+/* Freeze head — mam (2026-06-02): "freeze like excel till headers".
+   Previously inert because page-level sticky leaked thead through
+   page-header / stat tiles.  Now wired correctly:
+     - per-th sticky (NOT thead, since Chrome ignores position:sticky
+       on <thead>/<tbody>)
+     - opaque solid bg so scrolled content can't bleed through
+     - bottom shadow for the Excel-style "frozen separator" line
+     - relies on the WRAPPER having max-h-* + overflow-y-auto so the
+       table scrolls inside its own container, not the whole page.
+       The wrapper-scoped scrolling kills the old layering bug
+       because there's nothing above the thead to peek through.
+   Tables opt in by adding the `freeze-head` className.  Pairs with
+   `freeze-col` (already wired) when the first column should also
+   pin during horizontal scroll. */
+.freeze-head thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #f3f4f6;            /* gray-100 — matches thead gradient end */
+  box-shadow: inset 0 -1px 0 0 rgba(0, 0, 0, 0.08);
+}
+/* When freeze-col is ALSO active, the first th of the header row
+   needs to win the z-index race so it stays above both the sticky
+   thead row AND the sticky first column. */
+.freeze-head.freeze-col thead tr > :first-child {
+  z-index: 6;
+  background: #f3f4f6;
+}
+/* freeze-2col + freeze-head: pin BOTH first two columns of the
+   header at the higher z-index so they stay on top while scrolling. */
+.freeze-head.freeze-2col thead tr > :first-child,
+.freeze-head.freeze-2col thead tr > :nth-child(2) {
+  z-index: 6;
+  background: #f3f4f6;
+}
 td {
   @apply px-4 py-3 border-t border-gray-50;
 }
