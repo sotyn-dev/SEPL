@@ -2127,6 +2127,180 @@ function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_lpi_raised ON labour_payment_indents(raised_by);
     CREATE INDEX IF NOT EXISTS idx_lpi_created ON labour_payment_indents(created_at DESC);
 
+    -- ============================================================
+    -- INDENT LABOUR PAYMENT (Project Execution & Billing) — mam
+    -- (2026-06-01).  Coexists with the simpler labour_payment_indents
+    -- module above (those rows stay on /labour-payment).
+    --
+    -- Plan workflow:
+    --   Project (= business_book) → Budget (3 labour types)
+    --                            → Work Orders (sub-contractors)
+    --                            → Muster Roll (daily-wage workers)
+    --                            → DPR (with work_order link)
+    --                            → MB / CDPR (aggregated, lockable)
+    --                            → Contractor RA Bill (Raised → Payment → Paid)
+    --                            → Client RA Bill (Raised → Payment → Paid)
+    --                            → Payment Received (via collections)
+    --
+    -- Schema strategy: REUSE existing tables (business_book, dpr,
+    -- collections, sub_contractors) wherever possible; new tables
+    -- only for entities with no existing home.  Every table seeded
+    -- here is idempotent (CREATE IF NOT EXISTS / try-catch ALTER).
+    -- ============================================================
+
+    CREATE TABLE IF NOT EXISTS proj_budgets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES business_book(id),
+      labour_type TEXT NOT NULL CHECK(labour_type IN ('salary','daily','contracting')),
+      category TEXT,                    -- free-text head, e.g. "Site Engineer", "Mason gang", "HVAC sub-con"
+      planned_amount REAL NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pbud_project ON proj_budgets(project_id);
+
+    -- Work Orders — dynamic count per project (NEVER hardcode 13).
+    -- One row per WO issued to a sub-contractor.  Status is the
+    -- workflow gate the front-end uses to show RA-bill buttons.
+    CREATE TABLE IF NOT EXISTS proj_work_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES business_book(id),
+      wo_number TEXT,                   -- e.g. WO/2026/SEPL/0023 — UNIQUE per project enforced at app layer
+      sub_contractor_id INTEGER REFERENCES sub_contractors(id),
+      sub_contractor_name TEXT,         -- denormalised (off-master subs)
+      scope TEXT,
+      planned_value REAL DEFAULT 0,
+      planned_start DATE,
+      planned_end DATE,
+      status TEXT NOT NULL DEFAULT 'draft'
+        CHECK(status IN ('draft','active','closed','cancelled')),
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pwo_project ON proj_work_orders(project_id);
+    CREATE INDEX IF NOT EXISTS idx_pwo_subcon  ON proj_work_orders(sub_contractor_id);
+
+    -- Muster Roll — per-day per-labourer attendance.  Distinct from
+    -- the existing dpr_manpower (trade-aggregate) and attendance
+    -- (per-employee) tables; this is the on-site daily wage register.
+    CREATE TABLE IF NOT EXISTS proj_muster_roll (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES business_book(id),
+      work_order_id INTEGER REFERENCES proj_work_orders(id),
+      labour_name TEXT NOT NULL,
+      trade TEXT,                       -- mason / helper / electrician / …
+      date DATE NOT NULL,
+      hours_in TEXT,
+      hours_out TEXT,
+      days REAL NOT NULL DEFAULT 1,
+      rate REAL NOT NULL DEFAULT 0,
+      amount REAL NOT NULL DEFAULT 0,
+      remarks TEXT,
+      recorded_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pmr_project_date ON proj_muster_roll(project_id, date);
+    CREATE INDEX IF NOT EXISTS idx_pmr_wo           ON proj_muster_roll(work_order_id);
+
+    -- Measurement Book (CDPR) — header + line snapshot so a
+    -- finalised MB stays immutable even when the underlying DPR
+    -- rows are later edited.  Locking is a one-way action.
+    CREATE TABLE IF NOT EXISTS proj_mb_sheets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES business_book(id),
+      mb_no TEXT,                       -- e.g. MB/2026/SEPL/0007
+      period_from DATE NOT NULL,
+      period_to   DATE NOT NULL,
+      total_qty REAL DEFAULT 0,
+      total_amount REAL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'draft'
+        CHECK(status IN ('draft','finalised')),
+      locked_by INTEGER REFERENCES users(id),
+      locked_at DATETIME,
+      remarks TEXT,
+      generated_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pmb_project ON proj_mb_sheets(project_id);
+
+    CREATE TABLE IF NOT EXISTS proj_mb_lines (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      mb_id INTEGER NOT NULL REFERENCES proj_mb_sheets(id) ON DELETE CASCADE,
+      work_order_id INTEGER REFERENCES proj_work_orders(id),
+      description TEXT,
+      unit TEXT,
+      qty REAL DEFAULT 0,
+      rate REAL DEFAULT 0,
+      amount REAL DEFAULT 0,
+      src_dpr_ids TEXT,                 -- CSV of dpr.id rows aggregated into this line (for audit)
+      remarks TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pmbl_mb ON proj_mb_lines(mb_id);
+
+    -- Contractor RA Bill — exactly 3 states per mam's flowchart:
+    -- raised → payment → paid.  Deductions are per-bill (retention,
+    -- TDS, advance recovery, custom) so they live in a child table.
+    CREATE TABLE IF NOT EXISTS proj_contractor_ra_bills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES business_book(id),
+      work_order_id INTEGER REFERENCES proj_work_orders(id),
+      mb_id INTEGER REFERENCES proj_mb_sheets(id),
+      ra_no TEXT,                       -- e.g. CRA/2026/0001
+      gross_amount REAL NOT NULL DEFAULT 0,
+      net_amount REAL DEFAULT 0,        -- gross − sum(deductions)
+      status TEXT NOT NULL DEFAULT 'raised'
+        CHECK(status IN ('raised','payment','paid','cancelled')),
+      raised_by INTEGER REFERENCES users(id),
+      raised_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      paid_by INTEGER REFERENCES users(id),
+      paid_at DATETIME,
+      payment_ref TEXT,
+      remarks TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pcra_project ON proj_contractor_ra_bills(project_id);
+    CREATE INDEX IF NOT EXISTS idx_pcra_wo      ON proj_contractor_ra_bills(work_order_id);
+
+    CREATE TABLE IF NOT EXISTS proj_contractor_ra_deductions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ra_bill_id INTEGER NOT NULL REFERENCES proj_contractor_ra_bills(id) ON DELETE CASCADE,
+      label TEXT NOT NULL,              -- 'Retention' / 'TDS' / 'Advance Recovery' / custom
+      pct REAL DEFAULT 0,
+      amount REAL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_pcra_ded_bill ON proj_contractor_ra_deductions(ra_bill_id);
+
+    -- Client RA Bill — SEPL → client side, same 3-state cycle.
+    CREATE TABLE IF NOT EXISTS proj_client_ra_bills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES business_book(id),
+      mb_id INTEGER REFERENCES proj_mb_sheets(id),
+      ra_no TEXT,                       -- e.g. RA/2026/0005
+      gross_amount REAL NOT NULL DEFAULT 0,
+      net_amount REAL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'raised'
+        CHECK(status IN ('raised','payment','paid','cancelled')),
+      raised_by INTEGER REFERENCES users(id),
+      raised_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      paid_at DATETIME,
+      remarks TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pcli_project ON proj_client_ra_bills(project_id);
+
+    CREATE TABLE IF NOT EXISTS proj_client_ra_deductions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ra_bill_id INTEGER NOT NULL REFERENCES proj_client_ra_bills(id) ON DELETE CASCADE,
+      label TEXT NOT NULL,
+      pct REAL DEFAULT 0,
+      amount REAL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_pcli_ded_bill ON proj_client_ra_deductions(ra_bill_id);
+
     -- Announcements — admin posts, everyone reads. Pinned items rise to the top.
     -- expires_at is optional; rows without it stay visible forever until deleted.
     CREATE TABLE IF NOT EXISTS announcements (
@@ -2571,6 +2745,21 @@ function initializeDatabase() {
     // every other PO's items because DELETE was keyed by business_book_id.
     ['po_items', 'po_id INTEGER REFERENCES purchase_orders(id)'],
     ['business_book', 'labour_rate_file_link TEXT'],
+    // Indent Labour Payment (mam 2026-06-01) — Project owner defaults
+    // to 'Aanchal' on legacy rows (admin can change per-project later).
+    // project_kickoff_legacy_cost = single frozen number captured at
+    // project kickoff for older projects that already had cost spent
+    // before the ERP came online; surfaced in the dashboard's running
+    // tally.
+    ['business_book', "owner TEXT DEFAULT 'Aanchal'"],
+    ['business_book', 'project_kickoff_legacy_cost REAL DEFAULT 0'],
+    // DPR ↔ Work-Order linkage (Phase 4 of Indent Labour Payment).
+    // Nullable so every existing DPR row stays valid.
+    ['dpr_work_items', 'work_order_id INTEGER REFERENCES proj_work_orders(id)'],
+    // Collections (Payment Received) → Client RA Bill linkage
+    // (Phase 6 of Indent Labour Payment).  Nullable; legacy
+    // collections rows continue to read fine.
+    ['collections', 'proj_client_ra_bill_id INTEGER REFERENCES proj_client_ra_bills(id)'],
     ['dpr_work_items', 'labour_rate REAL DEFAULT 0'],
     ['dpr_work_items', 'labour_amount REAL DEFAULT 0'],
     // Marks a DPR whose Table A rate already represents the labour portion
@@ -3858,6 +4047,11 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-05-30): Labour Payment Indents — site engineer raises,
     // manager approves, accounts pays.  Under Projects sidebar group.
     'labour_payment',
+    // Mam (2026-06-01): Indent Labour Payment — full project execution
+    // + billing pipeline (Project → Budget → WO → Muster → DPR-link →
+    // MB → Contractor RA → Client RA → Payment Received).  Coexists
+    // with the simpler labour_payment above (open Q #2).
+    'indent_labour_payment',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

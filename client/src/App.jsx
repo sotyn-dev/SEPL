@@ -32,6 +32,7 @@ import CashFlow from './pages/CashFlow';
 import Collections from './pages/Collections';
 import IndentFMS from './pages/IndentFMS';
 import DPR from './pages/DPR';
+import IndentLabourPayment from './pages/IndentLabourPayment';
 import Delegation from './pages/Delegation';
 import PMSTasks from './pages/PMSTasks';
 import Inventory from './pages/Inventory';
@@ -145,6 +146,8 @@ export default function App() {
         <Route path="collections" element={<ModuleRoute module="collections"><Collections /></ModuleRoute>} />
         <Route path="indent-fms" element={<ModuleRoute module="indent_fms"><IndentFMS /></ModuleRoute>} />
         <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
+        {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}
+        <Route path="indent-labour-payment" element={<ModuleRoute module="indent_labour_payment"><IndentLabourPayment /></ModuleRoute>} />
         <Route path="delegations" element={<ModuleRoute module="delegations"><Delegation /></ModuleRoute>} />
         <Route path="pms-tasks" element={<ModuleRoute module="pms_tasks"><PMSTasks /></ModuleRoute>} />
         {/* Other Modules */}

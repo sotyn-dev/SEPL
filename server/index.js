@@ -317,6 +317,8 @@ app.use('/api/snags', require('./routes/snags'));
 // Mam (2026-05-30): labour payment indents — sits in the Projects
 // sidebar group, raised against a site + sub-contractor.
 app.use('/api/labour-payment', require('./routes/labourPayment'));
+// Indent Labour Payment — Phase 1 (mam 2026-06-01).
+app.use('/api/indent-labour-payment', require('./routes/indentLabourPayment'));
 app.use('/api/company-assets', require('./routes/companyAssets'));
 app.use('/api/push', require('./routes/push'));
 

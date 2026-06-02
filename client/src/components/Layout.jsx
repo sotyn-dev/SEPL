@@ -100,6 +100,10 @@ const SIDEBAR_GROUPS = [
     { path: '/procurement-schedule', label: 'Schedule (Gantt)',   icon: FiGitBranch,    module: 'procurement_schedule' },
   ]},
   { id: 'projects', label: 'Projects', icon: FiBriefcase, items: [
+    // Mam (2026-06-01): top of Projects group — full execution +
+    // billing pipeline (Phase 1 lights up Project list only;
+    // Phases 2-6 visible as planned tabs).
+    { path: '/indent-labour-payment', label: 'Indent Labour Payment', icon: FiClipboard, module: 'indent_labour_payment' },
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
     { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
     { path: '/fire-noc',     label: 'Fire NOC Renewal', icon: FiZap,         module: 'fire_noc' },
