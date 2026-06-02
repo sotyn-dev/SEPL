@@ -1382,16 +1382,25 @@ export default function Procurement() {
     // Per-line received qty + short reason (mam 2026-06-02).  Server
     // persists this to delivery_notes.items_json AND uses received_qty
     // (not ordered) for the stock-IN amount, so a 10-ordered/9-received
-    // PO only adds 9 to inventory.
+    // PO only adds 9 to inventory.  Drop empty manual rows (no
+    // description AND no qty) so the seeded blank row doesn't pollute
+    // the payload if mam didn't fill it in.
     if (Array.isArray(receiveItems) && receiveItems.length > 0) {
-      const payload = receiveItems.map(it => ({
-        vendor_po_item_id: it.vpi_id,
-        ordered_qty:       +it.ordered_qty || 0,
-        received_qty:      +it.received_qty || 0,
-        short_reason:      it.short_reason || null,
-        description:       it.description || null,
-      }));
-      fd.append('items_received', JSON.stringify(payload));
+      const filtered = receiveItems.filter(it => {
+        const hasText = (it.description || '').trim().length > 0;
+        const hasQty  = (+it.ordered_qty > 0) || (+it.received_qty > 0);
+        return hasText || hasQty;
+      });
+      if (filtered.length > 0) {
+        const payload = filtered.map(it => ({
+          vendor_po_item_id: it.vpi_id,
+          ordered_qty:       +it.ordered_qty || 0,
+          received_qty:      +it.received_qty || 0,
+          short_reason:      it.short_reason || null,
+          description:       it.description || null,
+        }));
+        fd.append('items_received', JSON.stringify(payload));
+      }
     }
     try {
       const r = await api.patch(`/procurement/delivery-notes/${receiveId}/receive`, fd, {
@@ -3787,15 +3796,31 @@ export default function Procurement() {
         // Helper — fetch the items on the linked vendor PO so mam can
         // adjust received qty per line in the modal (mam 2026-06-02:
         // "delivery note item of qty 10 but when erec its 9" +
-        // "item wise not showing" — added explicit console.warn so
-        // browser dev tools surface the cause when items don't load).
+        // "item wise not showing" → console.warn + indent fallback +
+        // "by deault pick which items in delivery note" → when nothing
+        // comes back, seed ONE blank manual row so mam can just start
+        // typing instead of clicking "+ Add Item" first).
+        const blankManualRow = () => ({
+          vpi_id: `manual-${Date.now()}-0`,
+          description: '',
+          master_name: '',
+          item_code: '',
+          specification: '',
+          size: '',
+          unit: '',
+          ordered_qty: 0,
+          received_qty: 0,
+          short_reason: '',
+        });
         const loadReceiveItems = async (vendorPoId) => {
-          if (!vendorPoId) { setReceiveItems([]); return; }
+          if (!vendorPoId) { setReceiveItems([blankManualRow()]); return; }
           try {
             const r = await api.get(`/procurement/vendor-po/${vendorPoId}/with-items`);
             const raw = r.data?.items || [];
             if (raw.length === 0) {
-              console.warn(`[receive-items] PO ${vendorPoId} returned 0 items — neither vendor_po_items nor indent_items has rows.`);
+              console.warn(`[receive-items] PO ${vendorPoId} returned 0 items — seeding 1 blank manual row.`);
+              setReceiveItems([blankManualRow()]);
+              return;
             }
             const items = raw.map(it => ({
               vpi_id: it.id,
@@ -3812,7 +3837,8 @@ export default function Procurement() {
             setReceiveItems(items);
           } catch (err) {
             console.error('[receive-items] fetch failed:', err?.response?.status, err?.message);
-            setReceiveItems([]);
+            // Even on fetch failure, seed a blank row so mam isn't blocked.
+            setReceiveItems([blankManualRow()]);
           }
         };
 
@@ -5591,55 +5617,37 @@ export default function Procurement() {
                   : <span className="text-[10px] text-emerald-700">Full delivery</span>;
               })()}
             </div>
-            {/* Add-item helper — same handler for the empty-state CTA and
-                the footer "+ Add another" button.  Pushes a manual row
-                with synthetic vpi_id so the backend stock-IN fallback
-                kicks in (uses ordered qty + no master link). */}
-            {(() => {
-              const addManualItem = () => setReceiveItems(prev => [
-                ...prev,
-                {
-                  vpi_id: `manual-${Date.now()}-${prev.length}`,
-                  description: '',
-                  master_name: '',
-                  item_code: '',
-                  specification: '',
-                  size: '',
-                  unit: '',
-                  ordered_qty: 0,
-                  received_qty: 0,
-                  short_reason: '',
-                },
-              ]);
-              return (
-                <>
-                  {receiveItems.length === 0 && (
-                    <div className="text-center py-3 px-3 text-xs text-gray-500 italic">
-                      No items pre-linked to this PO.
-                      <div className="text-[10px] text-gray-400 mt-1">Use <b>+ Add Item</b> below to type each item + qty as it appears on the delivery note / challan.</div>
-                      <button
-                        type="button"
-                        onClick={addManualItem}
-                        className="btn btn-primary text-xs px-3 py-1.5 mt-2 inline-flex items-center gap-1"
-                      >
-                        <FiPlus size={11} /> Add Item
-                      </button>
-                    </div>
-                  )}
-                  {receiveItems.length > 0 && (
-                    <div className="px-3 py-2 border-t border-gray-100 bg-gray-50/40 flex justify-end">
-                      <button
-                        type="button"
-                        onClick={addManualItem}
-                        className="text-xs text-blue-700 font-semibold flex items-center gap-1 hover:underline"
-                      >
-                        <FiPlus size={11} /> Add another item
-                      </button>
-                    </div>
-                  )}
-                </>
-              );
-            })()}
+            {/* Add-item helper — footer "+ Add another" button.  Pushes
+                a manual row with synthetic vpi_id so the backend
+                stock-IN fallback kicks in.  Empty-state CTA dropped
+                since loadReceiveItems() now always seeds at least 1
+                row (mam 2026-06-02: "by deault pick which items in
+                delivery note"). */}
+            {receiveItems.length > 0 && (
+              <div className="px-3 py-2 border-t border-gray-100 bg-gray-50/40 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setReceiveItems(prev => [
+                    ...prev,
+                    {
+                      vpi_id: `manual-${Date.now()}-${prev.length}`,
+                      description: '',
+                      master_name: '',
+                      item_code: '',
+                      specification: '',
+                      size: '',
+                      unit: '',
+                      ordered_qty: 0,
+                      received_qty: 0,
+                      short_reason: '',
+                    },
+                  ])}
+                  className="text-xs text-blue-700 font-semibold flex items-center gap-1 hover:underline"
+                >
+                  <FiPlus size={11} /> Add another item
+                </button>
+              </div>
+            )}
             {receiveItems.length > 0 && (
               <>
                 <div className="overflow-x-auto">
