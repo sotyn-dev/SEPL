@@ -385,11 +385,14 @@ export default function Layout() {
           on flex items don't reflow reliably when 'all' is being
           transitioned, so we let desktop's w-0 ↔ w-64 snap instantly
           and reserve the animation for mobile's slide-in. */}
-      <aside className={`fixed md:relative z-40 h-full bg-gradient-to-b from-blue-900 to-blue-950 text-white flex flex-col transition-transform duration-300 flex-shrink-0 overflow-hidden min-w-0 ${
-        isMobile
-          ? `w-[80vw] max-w-[260px] ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`
-          : (sidebarOpen ? 'w-64' : 'w-0')
-      }`}>
+      <aside
+        className={`fixed md:relative z-40 h-full bg-gradient-to-b from-blue-900 to-blue-950 text-white flex flex-col transition-transform duration-300 flex-shrink-0 overflow-hidden min-w-0 ${
+          isMobile
+            ? `w-[80vw] max-w-[260px] ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`
+            : (sidebarOpen ? 'w-64' : 'w-0')
+        }`}
+        style={isMobile ? { paddingTop: 'env(safe-area-inset-top)' } : undefined}
+      >
         <div className="p-4 border-b border-white/10 flex justify-between items-center">
           <div>
             <div className="flex items-center gap-2">
@@ -585,7 +588,19 @@ export default function Layout() {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden w-full">
-        <header className="bg-white shadow-sm border-b border-gray-200 px-3 md:px-6 py-2.5 flex items-center gap-2">
+        {/* Mam (2026-06-02): "in iphone when i open it as app above click
+            slidebar open difficulties".  iOS PWA renders edge-to-edge
+            and apple-mobile-web-app-status-bar-style='black-translucent'
+            (in index.html) overlays the status bar + Dynamic Island on
+            top of the web view — burying the hamburger button at top-
+            left.  Fix: pad the header by env(safe-area-inset-top) so
+            the buttons sit BELOW the status bar / Dynamic Island.  The
+            CSS min() keeps a sane minimum 10px on devices without an
+            inset. */}
+        <header
+          className="bg-white shadow-sm border-b border-gray-200 px-3 md:px-6 pb-2.5 flex items-center gap-2"
+          style={{ paddingTop: 'max(0.625rem, env(safe-area-inset-top))' }}
+        >
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="p-2 hover:bg-gray-100 rounded-lg flex-shrink-0 text-gray-700"
@@ -615,7 +630,12 @@ export default function Layout() {
               "3 separate bells" layout that confused users. */}
           <AnnouncementBell />
         </header>
-        <main className="flex-1 overflow-y-auto p-2 md:p-6 bg-slate-50">
+        {/* iOS home-indicator padding so content doesn't hide behind the
+            bottom safe-area on iPhone X+ (mam 2026-06-02). */}
+        <main
+          className="flex-1 overflow-y-auto p-2 md:p-6 bg-slate-50"
+          style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
+        >
           <Outlet />
         </main>
       </div>
