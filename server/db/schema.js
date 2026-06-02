@@ -2129,8 +2129,67 @@ function initializeDatabase() {
 
     -- ============================================================
     -- INDENT LABOUR PAYMENT (Project Execution & Billing) — mam
-    -- (2026-06-01).  Coexists with the simpler labour_payment_indents
-    -- module above (those rows stay on /labour-payment).
+    -- (2026-06-01, amended 2026-06-02).  Coexists with the simpler
+    -- labour_payment_indents module above (those rows stay on
+    -- /labour-payment).
+    --
+    -- Phase-1 amend (mam: "it create wrong project … first amend
+    -- it"):  Projects are MANUALLY entered (not derived from
+    -- business_book).  Unique name.  No PO column.  Each project
+    -- owns three labour spend streams:
+    --   L1 Salary       → proj_salary_entries
+    --   L2 Daily Wages  → proj_daily_wage_entries
+    --   L3 Sub-contract → proj_work_orders + amount_paid running
+    -- Budget = SUM of all three.
+
+    CREATE TABLE IF NOT EXISTS proj_projects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      owner TEXT DEFAULT 'Aanchal',
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- L1 Salary entries.
+    --   kind='legacy'  → one bulk row at project kickoff capturing
+    --                    pre-ERP salary already spent.
+    --   kind='monthly' → optional per-month rows captured going
+    --                    forward (employee_name + period_month).
+    CREATE TABLE IF NOT EXISTS proj_salary_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES proj_projects(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('legacy','monthly')),
+      employee_name TEXT,
+      period_month TEXT,                -- 'YYYY-MM' or NULL for legacy
+      amount REAL NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_psal_project ON proj_salary_entries(project_id);
+
+    -- L2 Daily Wage entries.
+    --   kind='legacy' → one bulk row for pre-ERP daily-wage payout.
+    --   kind='entry'  → ongoing payout: per_day_rate × days_required.
+    CREATE TABLE IF NOT EXISTS proj_daily_wage_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES proj_projects(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('legacy','entry')),
+      description TEXT,
+      per_day_rate REAL DEFAULT 0,
+      days_required REAL DEFAULT 0,
+      total_amount REAL NOT NULL DEFAULT 0,  -- = per_day_rate × days_required (or legacy bulk)
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pdw_project ON proj_daily_wage_entries(project_id);
+
+    -- L3 Sub-contract work orders.  Phase-1 amend keeps a slim
+    -- shape: WO file, value, amount paid so far.  The full RA-bill
+    -- cycle lands in Phase 6.
     --
     -- Plan workflow:
     --   Project (= business_book) → Budget (3 labour types)
@@ -2162,16 +2221,20 @@ function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_pbud_project ON proj_budgets(project_id);
 
     -- Work Orders — dynamic count per project (NEVER hardcode 13).
-    -- One row per WO issued to a sub-contractor.  Status is the
-    -- workflow gate the front-end uses to show RA-bill buttons.
+    -- Phase-1 amend (mam): project_id now FKs proj_projects, plus
+    -- work_order_file_url for the uploaded WO document and
+    -- amount_paid for the running paid-against-value total.
+    -- Balance is derived: planned_value − amount_paid.
     CREATE TABLE IF NOT EXISTS proj_work_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL REFERENCES business_book(id),
-      wo_number TEXT,                   -- e.g. WO/2026/SEPL/0023 — UNIQUE per project enforced at app layer
+      project_id INTEGER NOT NULL REFERENCES proj_projects(id) ON DELETE CASCADE,
+      wo_number TEXT,                   -- e.g. WO/2026/SEPL/0023
       sub_contractor_id INTEGER REFERENCES sub_contractors(id),
       sub_contractor_name TEXT,         -- denormalised (off-master subs)
       scope TEXT,
       planned_value REAL DEFAULT 0,
+      amount_paid REAL DEFAULT 0,       -- running total of payments made
+      work_order_file_url TEXT,         -- /uploads/... after multer
       planned_start DATE,
       planned_end DATE,
       status TEXT NOT NULL DEFAULT 'draft'
@@ -2760,6 +2823,11 @@ function initializeDatabase() {
     // (Phase 6 of Indent Labour Payment).  Nullable; legacy
     // collections rows continue to read fine.
     ['collections', 'proj_client_ra_bill_id INTEGER REFERENCES proj_client_ra_bills(id)'],
+    // Phase-1 amend (mam 2026-06-02): work_order_file_url + amount_paid
+    // for proj_work_orders.  Idempotent so a yesterday-shipped empty
+    // table picks them up on next boot.
+    ['proj_work_orders', 'work_order_file_url TEXT'],
+    ['proj_work_orders', 'amount_paid REAL DEFAULT 0'],
     ['dpr_work_items', 'labour_rate REAL DEFAULT 0'],
     ['dpr_work_items', 'labour_amount REAL DEFAULT 0'],
     // Marks a DPR whose Table A rate already represents the labour portion
