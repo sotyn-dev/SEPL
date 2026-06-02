@@ -1624,103 +1624,216 @@ export default function Procurement() {
             )}
             {indPg.rows.map(i => {
               const items = i.items || [];
+              // Mam (2026-06-02 follow-up): items now visible BY DEFAULT
+              // (no longer hidden behind View Details).  Auto-show first
+              // 3; expander reveals the rest.
               const expanded = expandedIndents.has(i.id);
-              // Status → progress % map (no per-item dispatch data yet).
-              // Hide bar for terminal/inapplicable states.
-              const PROG = { draft: 5, submitted: 20, pending: 20, approved: 50, po_sent: 70, dispatched: 90, received: 100 };
-              const prog = PROG[i.status];
-              const showProg = prog != null && i.status !== 'received' && i.status !== 'rejected';
+              const visibleItems = expanded ? items : items.slice(0, 3);
               const raisedClean = i.raised_by_name && !/^\d+(\.\d+)?$/.test(String(i.raised_by_name).trim())
                 ? i.raised_by_name
                 : null;
+
+              // Mam's reference = desktop table.  Mirror its action logic
+              // exactly so the L1 / L2 / single-approval / Re-reject flow
+              // works identically on phone.
+              const isTwoLevel = i.approval_policy === 'two_level';
+              const isCreator = i.created_by === user?.id;
+              const canActL1 = isAdmin() || user?.approval_role === 'l1';
+              const canActL2 = isAdmin() || user?.approval_role === 'l2';
+              const blockSelfL2 = i.l1_by && i.l1_by === user?.id;
+
+              const renderActionButtons = () => {
+                if (i.status === 'submitted' && !isCreator) {
+                  if (isTwoLevel) {
+                    if (canActL1) return (
+                      <>
+                        <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve L1</button>
+                        <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject L1</button>
+                      </>
+                    );
+                    return <span className="text-[10px] text-amber-600 italic">Awaiting {i.approver_names?.l1 || 'L1'}</span>;
+                  }
+                  if (canApprove('procurement') || isAdmin()) return (
+                    <>
+                      <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve</button>
+                      <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject</button>
+                    </>
+                  );
+                }
+                if (i.status === 'l1_approved' && !isCreator) {
+                  if (canActL2 && !blockSelfL2) return (
+                    <>
+                      <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve L2</button>
+                      <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject L2</button>
+                    </>
+                  );
+                  if (canActL2 && blockSelfL2) return <span className="text-[10px] text-gray-500 italic">L2 needs different reviewer</span>;
+                  return <span className="text-[10px] text-purple-600 italic">Awaiting {i.approver_names?.l2 || 'L2'}</span>;
+                }
+                if (i.status === 'draft') return (
+                  <button onClick={() => approveIndent(i.id, 'submitted')} className="btn btn-primary text-xs py-1 px-2 flex-1">Submit</button>
+                );
+                if ((i.status === 'submitted' || i.status === 'l1_approved') && isCreator) {
+                  return <span className="text-[10px] text-gray-500 italic">Awaiting approval</span>;
+                }
+                if (i.status === 'approved' && isAdmin()) return (
+                  <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Re-reject</button>
+                );
+                return null;
+              };
+
               return (
                 <div key={i.id} className="card p-3 space-y-2">
-                  {/* Header: label + indent number + status pill */}
+                  {/* Header: indent # · date · status */}
                   <div className="flex justify-between items-start gap-2">
                     <div className="flex-1 min-w-0">
-                      <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Indent Reference</div>
+                      <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Indent No</div>
                       <div className="text-lg font-bold text-gray-900 truncate">{i.indent_number}</div>
-                    </div>
-                    <StatusBadge status={i.status} />
-                  </div>
-
-                  {/* Site Location */}
-                  <div className="flex items-start gap-1.5 text-xs">
-                    <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
-                    <div className="min-w-0">
-                      <div className="text-[10px] uppercase text-gray-400">Site Location</div>
-                      <div className="font-medium text-gray-800 truncate">{i.site_name || i.client_name || '—'}</div>
-                    </div>
-                  </div>
-
-                  {/* Dispatch Window (created/indent date) */}
-                  <div className="flex items-start gap-1.5 text-xs">
-                    <FiCalendar size={12} className="mt-0.5 text-amber-600 flex-shrink-0" />
-                    <div>
-                      <div className="text-[10px] uppercase text-gray-400">Dispatch Window</div>
-                      <div className="font-medium text-gray-800">
+                      <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
+                        <FiCalendar size={10} className="text-gray-400" />
                         {i.created_at
                           ? new Date(i.created_at).toLocaleString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
                           : (i.indent_date || '—')}
                       </div>
                     </div>
+                    <StatusBadge status={i.status} />
                   </div>
 
-                  {/* Category + Budget mini-strip (only when present) */}
-                  {(i.indent_category || i.budget_amount > 0) && (
-                    <div className="flex items-center justify-between text-[11px] pt-1 border-t border-gray-100">
-                      <span className="text-gray-500">
-                        {i.indent_category ? <span className="inline-block bg-gray-100 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold mr-1">{i.indent_category.replace(/_/g, ' ')}</span> : null}
-                        {items.length > 0 && <span>{items.length} item{items.length === 1 ? '' : 's'}</span>}
-                      </span>
-                      {i.budget_amount > 0 && (
-                        <span className="font-semibold text-gray-700">
-                          ₹{Math.round(i.budget_amount).toLocaleString('en-IN')}
-                        </span>
-                      )}
+                  {/* Site */}
+                  <div className="flex items-start gap-1.5 text-xs">
+                    <FiMapPin size={12} className="mt-0.5 text-red-500 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase text-gray-400">Site</div>
+                      <div className="font-medium text-gray-800">{i.site_name || i.client_name || '—'}</div>
                     </div>
-                  )}
+                  </div>
 
-                  {/* Loading Progress (status-derived) */}
-                  {showProg && (
+                  {/* Category · Raised By · Budget compact strip */}
+                  <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px]">
                     <div>
-                      <div className="flex justify-between text-[10px] text-gray-500 mb-0.5">
-                        <span className="uppercase tracking-wide">Loading Progress</span>
-                        <span className="font-bold text-gray-700">{prog}%</span>
-                      </div>
-                      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-emerald-500 transition-all" style={{ width: `${prog}%` }} />
+                      <div className="text-[9px] uppercase text-gray-400">Category</div>
+                      {(() => {
+                        const c = i.indent_category || 'material';
+                        const cfg = {
+                          material:           { label: 'Material',     color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+                          rgp:                { label: 'RGP',          color: 'bg-purple-50 text-purple-700 border-purple-200' },
+                          extra_schedule:     { label: 'Extra · Sched', color: 'bg-amber-50 text-amber-700 border-amber-200' },
+                          extra_non_schedule: { label: 'Extra · Non',   color: 'bg-orange-50 text-orange-700 border-orange-200' },
+                          rental:             { label: 'Rental',       color: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
+                        }[c] || { label: c, color: 'bg-gray-50 text-gray-700 border-gray-200' };
+                        return <span className={`inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${cfg.color}`}>{cfg.label}</span>;
+                      })()}
+                    </div>
+                    <div>
+                      <div className="text-[9px] uppercase text-gray-400">Raised By</div>
+                      <div className="font-medium text-gray-700 truncate">{raisedClean || '—'}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[9px] uppercase text-gray-400">Budget</div>
+                      <div className="font-semibold text-gray-800">
+                        {i.budget_amount > 0 ? `₹${Math.round(i.budget_amount).toLocaleString('en-IN')}` : '—'}
                       </div>
                     </div>
-                  )}
-
-                  {/* Footer: raised by avatar + View Details */}
-                  <div className="flex justify-between items-center pt-2 border-t border-gray-100">
-                    <div className="flex items-center gap-1.5 text-[11px] text-gray-500 min-w-0">
-                      <span className="bg-indigo-100 text-indigo-700 rounded-full w-6 h-6 flex items-center justify-center text-[10px] font-bold flex-shrink-0">
-                        <FiUser size={11} />
-                      </span>
-                      <span className="truncate">{raisedClean || '—'}</span>
-                    </div>
-                    <button onClick={() => toggleIndentRow(i.id)} className="text-xs font-bold text-blue-600 flex items-center gap-1 hover:text-blue-800 whitespace-nowrap">
-                      VIEW DETAILS <FiChevronRight size={14} />
-                    </button>
                   </div>
 
-                  {/* Expanded item list — same data as desktop, compact */}
-                  {expanded && items.length > 0 && (
-                    <div className="border-t pt-2 mt-1 space-y-1 text-xs">
-                      <div className="font-semibold text-gray-700 mb-1">Items</div>
-                      {items.slice(0, 12).map((it, idx) => (
+                  {/* File links — mam (2026-06-02): "indent pdf also not
+                      showing so that he can check indent after fill". */}
+                  <div className="flex items-center gap-3 text-xs pt-1 border-t border-gray-100">
+                    <a href={`/indent/${i.id}/print`} target="_blank" rel="noreferrer"
+                       className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">
+                      📄 Indent PDF
+                    </a>
+                    {i.boq_file_link && (
+                      <a href={i.boq_file_link} target="_blank" rel="noreferrer"
+                         className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                        <FiExternalLink size={11} /> BOQ
+                      </a>
+                    )}
+                  </div>
+
+                  {/* Items — visible by default (first 3); expand for rest */}
+                  {items.length > 0 && (
+                    <div className="pt-1 border-t border-gray-100 space-y-1 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-gray-700">
+                          Items <span className="text-gray-400 font-normal">({items.length})</span>
+                        </span>
+                        {items.length > 3 && (
+                          <button onClick={() => toggleIndentRow(i.id)} className="text-[10px] text-blue-600 font-semibold">
+                            {expanded ? 'Show less' : `Show all ${items.length}`}
+                          </button>
+                        )}
+                      </div>
+                      {visibleItems.map((it, idx) => (
                         <div key={idx} className="flex justify-between gap-2 text-gray-600 pb-1 border-b border-gray-50 last:border-0">
-                          <div className="flex-1 min-w-0 truncate">{it.description || it.item_name || '—'}</div>
+                          <div className="flex-1 min-w-0 truncate" title={it.description || it.item_name}>
+                            {it.description || it.item_name || '—'}
+                          </div>
                           <div className="text-right whitespace-nowrap text-gray-800 font-medium">
                             {Number(it.quantity || it.qty || 0)} {it.unit || ''}
                           </div>
                         </div>
                       ))}
-                      {items.length > 12 && (
-                        <div className="text-[10px] text-gray-400 italic">+ {items.length - 12} more — open in desktop view</div>
+                    </div>
+                  )}
+
+                  {/* Approval row — L1/L2 stacked for two-level, single for legacy */}
+                  <div className="pt-1 border-t border-gray-100 text-[11px]">
+                    <div className="text-[9px] uppercase text-gray-400 mb-0.5">Approval</div>
+                    {isTwoLevel ? (
+                      <div className="space-y-0.5">
+                        <ApprovalLevelRow label="L1" status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at}
+                          isReject={i.status === 'rejected' && i.l1_status === 'rejected'} reason={i.rejection_reason} />
+                        <ApprovalLevelRow label="L2" status={i.l2_status} name={i.l2_by_name || i.approver_names?.l2} at={i.l2_at}
+                          waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
+                          isReject={i.status === 'rejected' && i.l2_status === 'rejected'} reason={i.rejection_reason} />
+                      </div>
+                    ) : (
+                      <>
+                        {i.status === 'approved' && (
+                          <div className="text-emerald-700 font-medium flex items-center gap-1">
+                            <FiCheck size={11} /> {i.approved_by_name || 'approver'}
+                            {i.approved_at && <span className="text-[10px] text-gray-500 ml-1">{new Date(i.approved_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</span>}
+                          </div>
+                        )}
+                        {i.status === 'rejected' && (
+                          <div className="text-red-700 font-medium flex items-center gap-1" title={i.rejection_reason}>
+                            <FiX size={11} /> {i.rejected_by_name || 'approver'}
+                            {i.rejection_reason && <span className="text-[10px] italic ml-1 truncate">"{i.rejection_reason}"</span>}
+                          </div>
+                        )}
+                        {i.status !== 'approved' && i.status !== 'rejected' && <span className="text-gray-400">—</span>}
+                      </>
+                    )}
+                  </div>
+
+                  {/* Action buttons (approve / reject / submit / re-reject) */}
+                  {(() => {
+                    const buttons = renderActionButtons();
+                    if (!buttons) return null;
+                    return (
+                      <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
+                        {buttons}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Edit + delete row */}
+                  {((canEdit('procurement') || isAdmin()) || canDelete('procurement')) && (
+                    <div className="flex justify-end gap-2 pt-1 text-[11px]">
+                      {(canEdit('procurement') || isAdmin()) && i.status !== 'approved' && (
+                        <button onClick={() => openEditIndent(i)} className="text-blue-600 hover:underline flex items-center gap-1">
+                          <FiEdit2 size={11} /> Edit
+                        </button>
+                      )}
+                      {canDelete('procurement') && (
+                        <button onClick={async () => {
+                          if (!confirm(`Delete indent "${i.indent_number}"?`)) return;
+                          try { await api.delete(`/procurement/indents/${i.id}`); toast.success('Deleted'); load(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                        }} className="text-red-600 hover:underline flex items-center gap-1">
+                          <FiTrash2 size={11} /> Delete
+                        </button>
                       )}
                     </div>
                   )}
