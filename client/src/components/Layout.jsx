@@ -629,6 +629,21 @@ export default function Layout() {
               tabs inside a single dropdown — replaces the previous
               "3 separate bells" layout that confused users. */}
           <AnnouncementBell />
+          {/* Build stamp (mam 2026-06-02) — tiny version chip so we can
+              verify the iPhone PWA has the freshest bundle without
+              guessing.  Defined at build time via Vite define(). */}
+          <span
+            className="hidden md:inline text-[9px] font-mono text-gray-400 ml-1 px-1.5 py-0.5 rounded bg-gray-50 border border-gray-200"
+            title="Build timestamp — confirms which deploy is loaded"
+          >
+            v{typeof __BUILD_STAMP__ !== 'undefined' ? __BUILD_STAMP__ : 'dev'}
+          </span>
+          <span
+            className="md:hidden text-[8px] font-mono text-gray-400 ml-0.5"
+            title="Build version"
+          >
+            v{typeof __BUILD_STAMP__ !== 'undefined' ? __BUILD_STAMP__ : 'dev'}
+          </span>
         </header>
         {/* iOS home-indicator padding so content doesn't hide behind the
             bottom safe-area on iPhone X+ (mam 2026-06-02). */}
