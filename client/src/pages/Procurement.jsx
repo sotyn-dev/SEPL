@@ -9,7 +9,7 @@ import Pagination, { usePagination } from '../components/Pagination';
 import InfoTooltip from '../components/InfoTooltip';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser } from 'react-icons/fi';
+import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
@@ -123,6 +123,74 @@ function PaymentBlockChip({ v }) {
       <span className={`inline-block text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border ${cls}`} title={tooltipParts.join(' · ')}>
         {label}
       </span>
+    </div>
+  );
+}
+
+/**
+ * MobileItemRow — used inside the Indent-to-Dispatch mobile card.
+ * Mam (2026-06-02): "click on item show boq item sub item also and if
+ * item big then info button give".  Each item row collapses to one
+ * compact line (BOQ description + qty).  When mam taps it (or the ⓘ
+ * for long descriptions) we reveal the full BOQ description plus the
+ * underlying item_master sub-item — code, name, size, spec, make,
+ * type, rate.  Matches the desktop expanded sub-item table at line
+ * ~2095 so the data shown on phone is the same data shown on desktop.
+ */
+function MobileItemRow({ item, idx }) {
+  const [open, setOpen] = useState(false);
+  const desc = item.description || item.item_name || '—';
+  const isLong = (desc || '').length > 55;
+  const qty = Number(item.quantity || item.qty || 0);
+  const hasMaster = !!(item.item_code || item.master_name || item.master_specification || item.master_size);
+  const subLine = [item.master_size, item.master_specification].filter(Boolean).join(' / ');
+  return (
+    <div className="pb-1 border-b border-gray-50 last:border-0">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex justify-between items-start gap-2 text-left active:bg-gray-50 rounded -mx-1 px-1 py-0.5"
+      >
+        <div className="flex-1 min-w-0 flex items-start gap-1">
+          {isLong && <FiInfo className="mt-[2px] flex-shrink-0 text-blue-500" size={11} />}
+          <span className={`flex-1 min-w-0 ${open ? 'text-gray-800 font-medium' : 'text-gray-600 truncate'}`}>
+            {desc}
+          </span>
+        </div>
+        <div className="text-right whitespace-nowrap text-gray-800 font-medium">
+          {qty} {item.unit || ''}
+        </div>
+      </button>
+      {open && (
+        <div className="mt-1 ml-2 pl-2 border-l-2 border-blue-200 space-y-0.5 text-[10.5px] text-gray-600">
+          {hasMaster ? (
+            <>
+              {(item.item_code || item.master_name) && (
+                <div>
+                  {item.item_code && <span className="font-mono text-gray-500">[{item.item_code}]</span>}
+                  {item.master_name && <span className="ml-1 font-semibold text-gray-800">{item.master_name}</span>}
+                </div>
+              )}
+              {subLine && <div><span className="text-gray-400">Spec/Size:</span> {subLine}</div>}
+              {item.make && <div><span className="text-gray-400">Make:</span> {item.make}</div>}
+            </>
+          ) : (
+            <div className="italic text-gray-400">Manual entry (no item-master link)</div>
+          )}
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5 pt-0.5">
+            {item.item_type && <div><span className="text-gray-400">Type:</span> {item.item_type}</div>}
+            {+item.master_price > 0 && (
+              <div>
+                <span className="text-gray-400">Rate:</span> ₹{Math.round(+item.master_price).toLocaleString('en-IN')}
+                {item.rate_source === 'history' && (
+                  <span className="ml-1 text-[9px] px-1 rounded bg-amber-100 text-amber-700 font-semibold" title="From price history — master sheet has no current_price">hist</span>
+                )}
+              </div>
+            )}
+            {+item.line_budget > 0 && <div><span className="text-gray-400">Budget:</span> ₹{Math.round(+item.line_budget).toLocaleString('en-IN')}</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1764,15 +1832,14 @@ export default function Procurement() {
                           </button>
                         )}
                       </div>
+                      {/* Mam (2026-06-02): "click on item show boq item sub
+                          item also and if item big then info button give".
+                          Each item row tap-expands inline to reveal the
+                          full BOQ description + sub-item (item_master) +
+                          spec/size/make/type/rate.  An ⓘ icon appears on
+                          long descriptions so the tap target is obvious. */}
                       {visibleItems.map((it, idx) => (
-                        <div key={idx} className="flex justify-between gap-2 text-gray-600 pb-1 border-b border-gray-50 last:border-0">
-                          <div className="flex-1 min-w-0 truncate" title={it.description || it.item_name}>
-                            {it.description || it.item_name || '—'}
-                          </div>
-                          <div className="text-right whitespace-nowrap text-gray-800 font-medium">
-                            {Number(it.quantity || it.qty || 0)} {it.unit || ''}
-                          </div>
-                        </div>
+                        <MobileItemRow key={it.id || idx} item={it} idx={idx} />
                       ))}
                     </div>
                   )}
