@@ -5591,12 +5591,55 @@ export default function Procurement() {
                   : <span className="text-[10px] text-emerald-700">Full delivery</span>;
               })()}
             </div>
-            {receiveItems.length === 0 && (
-              <div className="text-center py-4 text-xs text-gray-500 italic">
-                No line items linked to this PO — quantity will be recorded at the PO level only.
-                <div className="text-[10px] text-gray-400 mt-1">If you expected items here, the PO may have been created without a linked indent.</div>
-              </div>
-            )}
+            {/* Add-item helper — same handler for the empty-state CTA and
+                the footer "+ Add another" button.  Pushes a manual row
+                with synthetic vpi_id so the backend stock-IN fallback
+                kicks in (uses ordered qty + no master link). */}
+            {(() => {
+              const addManualItem = () => setReceiveItems(prev => [
+                ...prev,
+                {
+                  vpi_id: `manual-${Date.now()}-${prev.length}`,
+                  description: '',
+                  master_name: '',
+                  item_code: '',
+                  specification: '',
+                  size: '',
+                  unit: '',
+                  ordered_qty: 0,
+                  received_qty: 0,
+                  short_reason: '',
+                },
+              ]);
+              return (
+                <>
+                  {receiveItems.length === 0 && (
+                    <div className="text-center py-3 px-3 text-xs text-gray-500 italic">
+                      No items pre-linked to this PO.
+                      <div className="text-[10px] text-gray-400 mt-1">Use <b>+ Add Item</b> below to type each item + qty as it appears on the delivery note / challan.</div>
+                      <button
+                        type="button"
+                        onClick={addManualItem}
+                        className="btn btn-primary text-xs px-3 py-1.5 mt-2 inline-flex items-center gap-1"
+                      >
+                        <FiPlus size={11} /> Add Item
+                      </button>
+                    </div>
+                  )}
+                  {receiveItems.length > 0 && (
+                    <div className="px-3 py-2 border-t border-gray-100 bg-gray-50/40 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={addManualItem}
+                        className="text-xs text-blue-700 font-semibold flex items-center gap-1 hover:underline"
+                      >
+                        <FiPlus size={11} /> Add another item
+                      </button>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
             {receiveItems.length > 0 && (
               <>
                 <div className="overflow-x-auto">
@@ -5614,40 +5657,105 @@ export default function Procurement() {
                   <tbody>
                     {receiveItems.map((it, idx) => {
                       const isShort = +it.received_qty < +it.ordered_qty;
+                      // Mam (2026-06-02): manual rows have no vpi_id —
+                      // their description + unit are editable so mam
+                      // can type "MS PIPE 25mm · qty 10" when the PO
+                      // doesn't pre-link items.  Auto-linked rows lock
+                      // those fields (display only).
+                      const isManual = !it.vpi_id || String(it.vpi_id).startsWith('manual-');
                       return (
-                        <tr key={it.vpi_id || idx} className={`border-b border-gray-100 ${isShort ? 'bg-amber-50/30' : ''}`}>
+                        <tr key={it.vpi_id || `manual-${idx}`} className={`border-b border-gray-100 ${isShort ? 'bg-amber-50/30' : ''}`}>
                           <td className="px-2 py-1.5 text-gray-500">{idx + 1}</td>
                           <td className="px-2 py-1.5">
-                            {it.item_code && <span className="font-mono text-[10px] text-gray-500">[{it.item_code}] </span>}
-                            <span className="font-medium">{it.master_name || it.description}</span>
-                            {(it.specification || it.size) && (
-                              <div className="text-[10px] text-gray-500">{[it.size, it.specification].filter(Boolean).join(' / ')}</div>
+                            {isManual ? (
+                              <input
+                                type="text"
+                                className="input text-xs py-1 px-2 w-full"
+                                placeholder="e.g. MS PIPE / C CLASS / 25mm"
+                                value={it.description}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setReceiveItems(prev => prev.map((r, i) => i === idx ? { ...r, description: v } : r));
+                                }}
+                              />
+                            ) : (
+                              <>
+                                {it.item_code && <span className="font-mono text-[10px] text-gray-500">[{it.item_code}] </span>}
+                                <span className="font-medium">{it.master_name || it.description}</span>
+                                {(it.specification || it.size) && (
+                                  <div className="text-[10px] text-gray-500">{[it.size, it.specification].filter(Boolean).join(' / ')}</div>
+                                )}
+                              </>
                             )}
                           </td>
-                          <td className="px-2 py-1.5 text-right text-gray-700 font-medium">{it.ordered_qty}</td>
+                          <td className="px-2 py-1.5 text-right">
+                            {isManual ? (
+                              <NumInput
+                                step="any" min="0"
+                                value={it.ordered_qty}
+                                onChange={(v) => {
+                                  const ord = Math.max(0, +v || 0);
+                                  setReceiveItems(prev => prev.map((r, i) => i === idx
+                                    ? { ...r, ordered_qty: ord, received_qty: Math.min(ord, +r.received_qty || ord) }
+                                    : r));
+                                }}
+                                className="border border-gray-300 rounded px-2 py-1 w-16 text-right text-xs focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                              />
+                            ) : (
+                              <span className="text-gray-700 font-medium">{it.ordered_qty}</span>
+                            )}
+                          </td>
                           <td className="px-2 py-1.5 text-right">
                             <NumInput
-                              step="any" min="0" max={it.ordered_qty}
+                              step="any" min="0" max={isManual ? undefined : it.ordered_qty}
                               value={it.received_qty}
                               onChange={(v) => {
-                                const clamped = Math.max(0, Math.min(+it.ordered_qty, +v || 0));
+                                const max = isManual ? Infinity : +it.ordered_qty;
+                                const clamped = Math.max(0, Math.min(max, +v || 0));
                                 setReceiveItems(prev => prev.map((r, i) => i === idx ? { ...r, received_qty: clamped } : r));
                               }}
                               className={`border rounded px-2 py-1 w-20 text-right text-xs focus:ring-1 focus:ring-emerald-500 ${isShort ? 'border-amber-400 bg-amber-50 text-amber-800 font-semibold' : 'border-gray-300 focus:border-emerald-500'}`}
                             />
                           </td>
-                          <td className="px-2 py-1.5">{it.unit || '—'}</td>
                           <td className="px-2 py-1.5">
-                            <input
-                              className="input text-xs py-1 px-2"
-                              placeholder={isShort ? 'damaged / short / etc.' : '— (no shortage)'}
-                              value={it.short_reason}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setReceiveItems(prev => prev.map((r, i) => i === idx ? { ...r, short_reason: v } : r));
-                              }}
-                              disabled={!isShort}
-                            />
+                            {isManual ? (
+                              <input
+                                type="text"
+                                className="input text-xs py-1 px-2 w-14"
+                                placeholder="kg / m / nos"
+                                value={it.unit}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setReceiveItems(prev => prev.map((r, i) => i === idx ? { ...r, unit: v } : r));
+                                }}
+                              />
+                            ) : (
+                              <span>{it.unit || '—'}</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <div className="flex items-center gap-1">
+                              <input
+                                className="input text-xs py-1 px-2 flex-1"
+                                placeholder={isShort ? 'damaged / short / etc.' : '— (no shortage)'}
+                                value={it.short_reason}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setReceiveItems(prev => prev.map((r, i) => i === idx ? { ...r, short_reason: v } : r));
+                                }}
+                                disabled={!isShort}
+                              />
+                              {isManual && (
+                                <button
+                                  type="button"
+                                  onClick={() => setReceiveItems(prev => prev.filter((_, i) => i !== idx))}
+                                  className="text-red-500 hover:text-red-700 p-1"
+                                  title="Remove this row"
+                                >
+                                  <FiTrash2 size={11} />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
