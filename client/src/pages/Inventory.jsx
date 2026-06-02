@@ -326,8 +326,90 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
           Condition · Rate · Value · Reorder · Actions. Site name lives
           inline (not as a section header) so filtering + scanning is
           easier across many sites. */}
+      {/* ─── MOBILE CARDS (mam 2026-06-02) ───────────────────────────
+          Read-only summary per stock row; condition is editable
+          (matches the inline-edit dropdown in the desktop table).
+          Rate + Reorder edits stay desktop-only — the input
+          interactions are too cramped on a phone. */}
       {flatStock.length > 0 && (
-        <div className="card p-0 overflow-hidden">
+        <div className="md:hidden space-y-2">
+          {flatStock.map(r => {
+            const low = r.reorder_level > 0 && r.quantity <= r.reorder_level;
+            const cond = r.latest_condition || '';
+            const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              : cond === 'Used' ? 'bg-amber-50 text-amber-700 border-amber-200'
+              : cond === 'Scrap' ? 'bg-red-50 text-red-700 border-red-200'
+              : 'bg-gray-50 text-gray-400 border-gray-200';
+            const eff = +r.effective_rate || 0;
+            const value = +r.value || (eff * (+r.quantity || 0));
+            return (
+              <div key={r.id} className={`card p-3 space-y-2 ${low ? 'border-l-4 border-amber-500' : ''}`}>
+                <div className="flex justify-between items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-gray-900 text-sm leading-snug">{r.item_name}</div>
+                    {(r.size || r.specification || r.make) && (
+                      <div className="text-[10px] text-gray-500 mt-0.5">
+                        {r.size && <span>{r.size} · </span>}
+                        {r.specification && <span>{r.specification} · </span>}
+                        {r.make && <span>{r.make}</span>}
+                      </div>
+                    )}
+                    <div className="text-[11px] text-gray-500 mt-1 flex items-center gap-1">
+                      {r.warehouse_type === 'office' ? <FiHome size={10} /> : <FiMapPin size={10} />}
+                      <span>{r.warehouse_name}</span>
+                      {r.item_code && <span className="font-mono text-[10px] text-gray-400 ml-1">· {r.item_code}</span>}
+                    </div>
+                  </div>
+                  {canEdit ? (
+                    <select value={cond} onChange={async (e) => {
+                      const next = e.target.value;
+                      try {
+                        await api.patch(`/inventory/stock/${r.id}`, { condition: next });
+                        toast.success(next ? `Marked ${next}` : 'Cleared');
+                        reload();
+                      } catch (err) { toast.error(err.response?.data?.error || 'Update failed'); }
+                    }} className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border cursor-pointer outline-none ${cond ? condClass : 'bg-gray-50 text-gray-400 border-gray-200'}`}>
+                      <option value="">—</option>
+                      <option value="Unused">Unused</option>
+                      <option value="Used">Used</option>
+                      <option value="Scrap">Scrap</option>
+                    </select>
+                  ) : cond ? (
+                    <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${condClass}`}>{cond}</span>
+                  ) : null}
+                </div>
+                <div className="grid grid-cols-3 gap-1 text-center pt-1 border-t border-gray-100">
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Qty {r.uom ? `(${r.uom})` : ''}</div>
+                    <div className={`text-sm font-bold tabular-nums ${low ? 'text-amber-700' : 'text-gray-800'}`}>
+                      {fmtNum(r.quantity)} {low && <FiAlertTriangle className="inline ml-0.5 text-amber-500" size={11} />}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Rate</div>
+                    <div className="text-sm font-semibold text-gray-700">{fmtMoney(eff)}</div>
+                    {r.rate_source === 'none' && <div className="text-[9px] text-amber-600 italic">unset</div>}
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-gray-400">Value</div>
+                    <div className="text-sm font-bold text-emerald-700">{fmtMoney(value)}</div>
+                  </div>
+                </div>
+                {r.reorder_level > 0 && (
+                  <div className="text-[10px] text-gray-500 text-center">
+                    Reorder at <strong>{fmtNum(r.reorder_level)}</strong>
+                    {low && <span className="text-amber-700 font-bold ml-1">· LOW STOCK</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ─── DESKTOP TABLE (md+) ───────────────────────────────────── */}
+      {flatStock.length > 0 && (
+        <div className="hidden md:block card p-0 overflow-hidden">
           <div>
             <table className="text-sm w-full freeze-head">
               <thead className="bg-gray-50/60">

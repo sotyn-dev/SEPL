@@ -637,7 +637,82 @@ export default function DPR() {
               }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Submit DPR</button>
             </div>
           </div>
-          <div className="card p-0"><table className="freeze-head">
+          {/* ─── MOBILE CARDS ───────────────────────────────────────
+              Mam (2026-06-02): phone version of the Daily Reports
+              table.  Same data, stacked card per DPR — keeps the
+              key money columns (Plan / Actual / Variance) visible
+              without horizontal scroll. */}
+          <div className="md:hidden space-y-3">
+            {dprs
+              .filter(d => {
+                if (!reportFilter) return true;
+                if (reportFilter === 'pending') return d.approval_status === 'pending';
+                if (reportFilter === 'billing') return d.billing_ready === 1 || d.billing_ready === true;
+                return true;
+              })
+              .map(d => {
+                const planned = !!d.is_planned_template;
+                const planB = +d.planned_cost_b || 0;
+                const actB = +d.grand_total_b || 0;
+                const actA = +d.grand_total_a || 0;
+                const hasPlan = planB > 0;
+                const variance = (!planned && hasPlan) ? (actB - planB) : null;
+                return (
+                  <div key={d.id} className="card p-3 space-y-2">
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">DPR</div>
+                        <div className="text-base font-bold text-gray-900 truncate">{d.site_name}</div>
+                        <div className="text-[11px] text-gray-500">{d.report_date} · {d.submitted_by_name || '—'}</div>
+                      </div>
+                      {planned
+                        ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"><FiCalendar size={10}/> PLANNED</span>
+                        : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">✓ SUBMITTED</span>}
+                    </div>
+                    {!planned && (
+                      <div className="grid grid-cols-3 gap-1 text-center pt-1 border-t border-gray-100">
+                        <div>
+                          <div className="text-[9px] uppercase text-gray-400">Plan B</div>
+                          <div className="text-xs font-bold text-sky-700">{hasPlan ? `₹${Math.round(planB/1000)}K` : '—'}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] uppercase text-gray-400">Actual B</div>
+                          <div className="text-xs font-bold text-red-600">{`₹${Math.round(actB/1000)}K`}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] uppercase text-gray-400">Revenue A</div>
+                          <div className="text-xs font-bold text-emerald-600">{`₹${Math.round(actA/1000)}K`}</div>
+                        </div>
+                      </div>
+                    )}
+                    {variance !== null && (
+                      <div className={`text-[11px] text-center py-1 rounded ${variance > 0 ? 'bg-red-50 text-red-700' : variance < 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-50 text-gray-500'}`}>
+                        Variance: <strong>{variance > 0 ? '+' : variance < 0 ? '−' : ''}₹{Math.abs(variance).toLocaleString()}</strong>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center pt-1 border-t border-gray-100">
+                      {!planned ? <StatusBadge status={d.approval_status} /> : <span className="text-[10px] text-gray-400">plan template</span>}
+                      <div className="flex gap-1">
+                        <button onClick={() => viewDpr(d.id)} className="p-1 hover:bg-red-50 rounded text-red-600"><FiEye size={14} /></button>
+                        {!planned && d.approval_status === 'pending' && canApprove('dpr') && <>
+                          <button onClick={() => approveDpr(d.id, 'approved', true)} className="btn btn-success text-[10px] py-0.5 px-1.5">Approve+Bill</button>
+                          <button onClick={() => approveDpr(d.id, 'rejected', false)} className="btn btn-danger text-[10px] py-0.5 px-1.5">Reject</button>
+                        </>}
+                        {canDelete('dpr') && <button onClick={async () => {
+                          if (!confirm(`Delete DPR for "${d.site_name}" on ${d.report_date}?`)) return;
+                          try { await api.delete(`/dpr/${d.id}`); toast.success('Deleted'); load(); }
+                          catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                        }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            {dprs.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No DPR for this date</div>}
+          </div>
+
+          {/* ─── DESKTOP TABLE (md+) ───────────────────────────────── */}
+          <div className="hidden md:block card p-0"><table className="freeze-head">
             <thead><tr>
               <th>Site</th><th>Date</th><th>By</th><th>Status</th>
               <th>Plan Cost<div className="text-[10px] font-normal text-gray-400">(B-plan)</div></th>

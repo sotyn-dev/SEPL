@@ -489,7 +489,78 @@ export default function PaymentRequired() {
             );
           })()}
 
-          <div className="card p-0"><table className="freeze-head">
+          {/* ─── MOBILE CARDS (mam 2026-06-02) ───────────────────── */}
+          <div className="md:hidden space-y-3">
+            {(tab === 'inbox' ? myInbox : requests).filter(r => {
+              if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
+              if (tab === 'approved' && r.status !== 'final_approved') return false;
+              if (tab === 'rejected' && r.status !== 'rejected') return false;
+              if (stageFilter && stageOf(r) !== stageFilter) return false;
+              return true;
+            }).map(r => {
+              const { date, time } = fmtISTPair(r.created_at);
+              return (
+                <div key={r.id} className="card p-3 space-y-2">
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Request</div>
+                      <div className="text-base font-bold text-red-600 cursor-pointer" onClick={() => viewRequest(r.id)}>{r.request_no}</div>
+                      <div className="text-xs text-gray-700 font-medium truncate">{r.employee_name}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-bold text-gray-900">{fmt(r.amount)}</div>
+                      <div className="mt-1"><StatusBadge status={r.status} /></div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <span className={`badge ${r.category === 'TA/DA' ? 'badge-purple' : r.category === 'Purchase' ? 'badge-blue' : r.category === 'Labour' ? 'badge-green' : 'badge-gray'}`}>{r.category}</span>
+                    <span className="text-gray-500 truncate">{r.site_display || r.site_name || '—'}</span>
+                  </div>
+                  <div className="text-xs text-gray-600 leading-snug break-words" title={r.purpose}>{r.purpose}</div>
+                  {(r.item_description || r.material_description || r.stay_details || r.travel_from_to) && (
+                    <div className="text-[10px] text-gray-500 break-words">
+                      {r.item_description && <span>📦 {r.item_description} </span>}
+                      {r.material_description && <span>🚚 {r.material_description} </span>}
+                      {r.stay_details && <span>🏨 {r.stay_details} </span>}
+                      {r.travel_from_to && <span>✈️ {r.travel_from_to}</span>}
+                    </div>
+                  )}
+                  <div className="pt-2 border-t border-gray-100 text-[11px] space-y-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="bg-gray-100 px-2 py-0.5 rounded font-mono">{r.approvals_count || 0}/{r.approvals_total || 5}</span>
+                      {r.current_step_name && r.status !== 'final_approved' && r.status !== 'rejected' && (
+                        <span className="text-amber-700 font-medium">→ {r.current_step_name}</span>
+                      )}
+                    </div>
+                    {r.last_approved_by_name && (
+                      <div className="text-emerald-700">✓ {r.last_approved_step_name} by <b>{r.last_approved_by_name}</b></div>
+                    )}
+                    {r.status !== 'final_approved' && r.status !== 'rejected' && (r.next_approver_name || r.next_approver_role) && (
+                      <div className="text-amber-800">⏳ Waiting on {r.next_approver_name ? <b>{r.next_approver_name}</b> : <>any <b>{r.next_approver_role}</b></>}</div>
+                    )}
+                  </div>
+                  <div className="flex justify-between items-center pt-1 border-t border-gray-100 text-[10px] text-gray-500">
+                    <span>{date} · {time}</span>
+                    <div className="flex gap-1">
+                      <button onClick={() => viewRequest(r.id)} className="p-1.5 text-gray-400 hover:text-red-600 rounded"><FiEye size={14} /></button>
+                      {canApprove('payment_required') && r.status !== 'final_approved' && r.status !== 'rejected' && (
+                        <button onClick={() => viewRequest(r.id)} className="btn btn-secondary text-[10px] py-0.5 px-2">Review</button>
+                      )}
+                      {canDelete('payment_required') && <button onClick={async () => {
+                        if (!confirm(`Delete request "${r.request_no}"?`)) return;
+                        try { await api.delete(`/payment-required/${r.id}`); toast.success('Deleted'); load(); }
+                        catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                      }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={12} /></button>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {requests.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No requests found</div>}
+          </div>
+
+          {/* ─── DESKTOP TABLE (md+) ───────────────────────────────── */}
+          <div className="hidden md:block card p-0"><table className="freeze-head">
             <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody>
               {(tab === 'inbox' ? myInbox : requests).filter(r => {
