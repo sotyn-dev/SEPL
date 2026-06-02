@@ -5788,7 +5788,29 @@ export default function Procurement() {
           </div>
           <div>
             <label className="label">Received By (name) *</label>
-            <input className="input" placeholder="e.g. Site engineer / customer rep name" value={form.received_by_name || ''} onChange={e => setForm({...form, received_by_name: e.target.value})} required />
+            {/* Mam (2026-06-02): "receiver name in drop down with search".
+                Native <datalist> combobox — mam picks from the employee
+                list with autocomplete-as-she-types, OR types a custom
+                name for external receivers (customer rep, sub-contractor,
+                anyone not in HR). Works on iPhone Safari too. */}
+            <input
+              className="input"
+              list="receive-by-suggestions"
+              placeholder="Type name or pick from list…"
+              value={form.received_by_name || ''}
+              onChange={e => setForm({...form, received_by_name: e.target.value})}
+              required
+            />
+            <datalist id="receive-by-suggestions">
+              {(employees || []).map(emp => (
+                <option key={emp.id} value={emp.name}>
+                  {emp.role ? `${emp.role}` : ''}{emp.email ? ` · ${emp.email}` : ''}
+                </option>
+              ))}
+            </datalist>
+            <p className="text-[10px] text-gray-400 mt-0.5">
+              Start typing to filter SEPL staff, or type any name for an external receiver.
+            </p>
           </div>
           <div>
             <label className="label">Received On</label>
