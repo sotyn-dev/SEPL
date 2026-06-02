@@ -169,18 +169,56 @@ export default function CRMKitting() {
     if (modalObsDate < minObsISO()) { toast.error('Observation date cannot be more than 5 days in the past'); return; }
     if (!modalPhoto) { toast.error('Please upload a file (photo or PDF) as evidence'); return; }
     setSaving(true);
+    // Snapshot the projectKey + cpId BEFORE the modal closes so the
+    // optimistic update below can still address the right cell.
+    const projectKey = modalProject.project_key;
+    const cpId       = modalCp.id;
+    const newStatus  = modalStatus;
+    const newObsDate = modalObsDate;
+    const newRemarks = modalRemarks;
     try {
       const fd = new FormData();
-      fd.append('project_key', modalProject.project_key);
-      fd.append('checkpoint_id', modalCp.id);
-      fd.append('status', modalStatus);
-      fd.append('observation_date', modalObsDate);
-      if (modalRemarks) fd.append('remarks', modalRemarks);
-      if (modalPhoto)   fd.append('photo', modalPhoto);
-      await api.post('/crm-kitting/entry', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      fd.append('project_key', projectKey);
+      fd.append('checkpoint_id', cpId);
+      fd.append('status', newStatus);
+      fd.append('observation_date', newObsDate);
+      if (newRemarks) fd.append('remarks', newRemarks);
+      if (modalPhoto) fd.append('photo', modalPhoto);
+      const res = await api.post('/crm-kitting/entry', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       toast.success('Saved');
       setModalOpen(false);
-      loadMatrix();
+      // Mam (2026-06-02): "when i update after proof upload go to top
+      // which is bad".  Don't call loadMatrix() — refetching repaints
+      // the whole 36×131 matrix which forces the page back to scroll
+      // top.  Patch matrix.entries locally with the new row instead
+      // so the cell badge flips colour immediately without any
+      // layout rebuild.  Field shape matches what /crm-kitting/matrix
+      // returns (project_key, checkpoint_id, status, photo_path,
+      // remarks, observation_date, uploaded_at, uploaded_by,
+      // uploaded_by_name, history_count).
+      const key = `${projectKey}::${cpId}`;
+      setMatrix(prev => {
+        const existing = prev.entries?.[key] || {};
+        return {
+          ...prev,
+          entries: {
+            ...(prev.entries || {}),
+            [key]: {
+              ...existing,
+              project_key: projectKey,
+              checkpoint_id: cpId,
+              status: newStatus,
+              photo_path: res?.data?.photo_path ?? existing.photo_path ?? null,
+              remarks: newRemarks || null,
+              observation_date: newObsDate,
+              uploaded_at: new Date().toISOString(),
+              uploaded_by: user?.id ?? existing.uploaded_by ?? null,
+              uploaded_by_name: user?.name ?? existing.uploaded_by_name ?? null,
+              history_count: (+existing.history_count || 0) + 1,
+            },
+          },
+        };
+      });
     } catch (e) {
       toast.error(e.response?.data?.error || 'Failed to save');
     } finally {
