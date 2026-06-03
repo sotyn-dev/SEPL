@@ -14,6 +14,18 @@ import { exportCsv } from '../utils/exportCsv';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
 
+// True when the Client PO's assigned CRM name (a first name like "Sushila"
+// from the Orders dropdown) matches the logged-in user — equal, or one name
+// appears as a whitespace token in the other (so "Sushila Sharma" matches
+// "Sushila").  Used to let the assigned CRM approve Extra indents even
+// without crm_funnel role access.  Mirrors the server gate in procurement.js.
+const crmNameMatchesUser = (crmName, userName) => {
+  const a = String(crmName || '').trim().toLowerCase();
+  const b = String(userName || '').trim().toLowerCase();
+  if (!a || !b) return false;
+  return a === b || a.split(/\s+/).includes(b) || b.split(/\s+/).includes(a);
+};
+
 // Client-side unit display normaliser (mam, 2026-05-16: "not change
 // according to itemwise" — stale "Each" / "Metre" / "Mtrs" values
 // leaked through when there's no master link).  Aligns with the
@@ -1816,7 +1828,11 @@ export default function Procurement() {
               // module key is 'crm_funnel' (there is no 'crm' module), and
               // "access" = can view the CRM funnel — sales/CRM roles get
               // view, only admin gets edit/approve, so gate on view here.
-              const canActCrm = isAdmin() || canView('crm_funnel');
+              // ALSO allow the CRM person assigned on the Client PO
+              // (planning_crm_name, e.g. Sushila/Lovely) even without the
+              // role — matches the server gate (mam 2026-06-03).
+              const isAssignedCrm = crmNameMatchesUser(i.planning_crm_name, user?.name);
+              const canActCrm = isAdmin() || canView('crm_funnel') || isAssignedCrm;
               const blockSelfL2 = i.l1_by && i.l1_by === user?.id;
 
               const renderActionButtons = () => {
@@ -2222,8 +2238,12 @@ export default function Procurement() {
                         const isCreator = i.created_by === user?.id;
                         const canActL1 = isAdmin() || user?.approval_role === 'l1';
                         const canActL2 = isAdmin() || user?.approval_role === 'l2';
-                        // CRM action = anyone with CRM module (crm_funnel) access.
-                        const canActCrm = isAdmin() || canView('crm_funnel');
+                        // CRM action = anyone with CRM module (crm_funnel)
+                        // access, OR the CRM person assigned on the Client PO
+                        // (planning_crm_name) even without the role — matches
+                        // the server gate (mam 2026-06-03).
+                        const isAssignedCrm = crmNameMatchesUser(i.planning_crm_name, user?.name);
+                        const canActCrm = isAdmin() || canView('crm_funnel') || isAssignedCrm;
                         const blockSelfL2 = i.l1_by && i.l1_by === user?.id;
 
                         // CRM stage (Extra-billable) — fires first, before L1/L2.

@@ -461,7 +461,11 @@ router.get('/indents', (req, res) => {
             COALESCE(NULLIF(TRIM(opb.project_name), ''),
                      NULLIF(TRIM(opb.company_name), ''),
                      NULLIF(TRIM(opb.client_name), '')) as planning_project,
-            opb.owner as planning_owner
+            opb.owner as planning_owner,
+            -- CRM person assigned on the linked Client PO (Sushila/Lovely).
+            -- The frontend lets this person act on the CRM stage even without
+            -- crm_funnel role access — must agree with the server gate.
+            opo.crm_name as planning_crm_name
      FROM indents i
      LEFT JOIN users u ON i.created_by = u.id
      LEFT JOIN users au ON i.approved_by = au.id
@@ -471,6 +475,7 @@ router.get('/indents', (req, res) => {
      LEFT JOIN users cu ON i.crm_by = cu.id
      LEFT JOIN order_planning op ON op.id = i.planning_id
      LEFT JOIN business_book opb ON opb.id = op.business_book_id
+     LEFT JOIN purchase_orders opo ON opo.id = op.po_id
      ${where}
      ORDER BY i.created_at DESC`
   ).all(...params);
@@ -961,7 +966,31 @@ router.put('/indents/:id', (req, res) => {
              JOIN user_roles ur ON ur.role_id = rp.role_id
             WHERE ur.user_id = ? AND rp.module = 'crm_funnel'`
         ).get(actor.id) || {};
-        const canActCrm = isAdminUser || crmPerm.can_view === 1;
+        // ALSO allow the CRM person actually ASSIGNED to this project on the
+        // Client PO (purchase_orders.crm_name, e.g. "Sushila"/"Lovely") to
+        // approve their own Extra indents even if their role lacks crm_funnel
+        // access — mam 2026-06-03: "sushila is the PO's CRM but can't approve".
+        // Match on name, case-insensitive, via planning_id → order_planning →
+        // purchase_orders.
+        const poCrm = db.prepare(
+          `SELECT po.crm_name
+             FROM indents i
+             LEFT JOIN order_planning op ON op.id = i.planning_id
+             LEFT JOIN purchase_orders po ON po.id = op.po_id
+            WHERE i.id = ?`
+        ).get(id);
+        const actorName = String(
+          db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || req.user.name || ''
+        ).trim().toLowerCase();
+        // The PO dropdown stores a first name ("Sushila"); a user account may
+        // be "Sushila Sharma".  Match if the names are equal OR the CRM name
+        // appears as a whitespace token in the user's name (and vice-versa).
+        const crmNameNorm = String(poCrm?.crm_name || '').trim().toLowerCase();
+        const nameMatches = (a, b) =>
+          a.length > 0 && b.length > 0 &&
+          (a === b || a.split(/\s+/).includes(b) || b.split(/\s+/).includes(a));
+        const isAssignedCrm = nameMatches(actorName, crmNameNorm);
+        const canActCrm = isAdminUser || crmPerm.can_view === 1 || isAssignedCrm;
 
         // CRM stage — only for crm_two_level policy.  Must complete BEFORE
         // L1 can act.  When CRM approves, auto-INSERT a po_items row on
