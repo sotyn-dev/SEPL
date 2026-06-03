@@ -333,18 +333,36 @@ export default function Vendors() {
             <div><label className="label">Sub Category <span className="text-[10px] text-gray-400 font-normal normal-case">(optional)</span></label><input className="input" value={form.sub_category || ''} onChange={e => setForm({...form, sub_category: e.target.value})} /></div>
             <div>
               <label className="label">Rating <span className="text-[10px] text-gray-400 font-normal normal-case">(out of 10)</span></label>
-              <div className="flex flex-wrap gap-1">
-                {[1,2,3,4,5,6,7,8,9,10].map(n => (
-                  <button
-                    type="button"
-                    key={n}
-                    onClick={() => setForm({ ...form, rating: n })}
-                    className={`w-7 h-7 rounded text-xs font-semibold border transition-colors ${Number(form.rating) === n ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-blue-50'}`}
-                    title={`${n} / 10`}
-                  >
-                    {n}
-                  </button>
-                ))}
+              <div className="relative flex items-end justify-between pt-3 pb-1 px-1">
+                {/* Track line behind the nodes — red → yellow → green */}
+                <div className="absolute left-2 right-2 top-[18px] h-1.5 rounded-full" style={{ background: 'linear-gradient(to right, #ef4444, #f59e0b, #eab308, #22c55e)' }} />
+                {[1,2,3,4,5,6,7,8,9,10].map(n => {
+                  const hue = Math.round(((n - 1) / 9) * 120); // 0=red → 120=green
+                  const color = `hsl(${hue}, 72%, 45%)`;
+                  const selected = Number(form.rating) === n;
+                  return (
+                    <button
+                      type="button"
+                      key={n}
+                      onClick={() => setForm({ ...form, rating: n })}
+                      className="relative z-10 flex flex-col items-center gap-0.5 group"
+                      title={`${n} / 10`}
+                    >
+                      <span
+                        className="rounded-full bg-white flex items-center justify-center transition-all"
+                        style={{
+                          width: selected ? 18 : 13,
+                          height: selected ? 18 : 13,
+                          border: `3px solid ${color}`,
+                          boxShadow: selected ? `0 0 0 3px ${color}33` : 'none',
+                        }}
+                      >
+                        <span className="rounded-full" style={{ width: selected ? 7 : 4, height: selected ? 7 : 4, background: color }} />
+                      </span>
+                      <span className={`text-[9px] leading-none ${selected ? 'font-bold text-gray-800' : 'text-gray-400'}`}>{n}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
