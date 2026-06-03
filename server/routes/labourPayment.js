@@ -71,8 +71,9 @@ router.get('/', requirePermission('labour_payment', 'view'), (req, res) => {
   // Mirrors the gate the existing /dpr endpoint uses.
   const isAdmin = req.user.role === 'admin';
   const canApprove = isAdmin || db.prepare(
-    `SELECT 1 FROM user_permissions
-      WHERE user_id=? AND module='labour_payment' AND permission_level='approve'`
+    `SELECT 1 FROM role_permissions rp
+       JOIN user_roles ur ON ur.role_id = rp.role_id
+      WHERE ur.user_id=? AND rp.module='labour_payment' AND rp.can_approve=1`
   ).get(req.user.id);
   if (!canApprove) { sql += ' AND lpi.raised_by = ?'; params.push(req.user.id); }
   sql += ' ORDER BY lpi.created_at DESC';
@@ -88,7 +89,9 @@ router.get('/summary', requirePermission('labour_payment', 'view'), (req, res) =
   const { site_id, sub_contractor_id, date_from, date_to } = req.query;
   const isAdmin = req.user.role === 'admin';
   const canApprove = isAdmin || db.prepare(
-    `SELECT 1 FROM user_permissions WHERE user_id=? AND module='labour_payment' AND permission_level='approve'`
+    `SELECT 1 FROM role_permissions rp
+       JOIN user_roles ur ON ur.role_id = rp.role_id
+      WHERE ur.user_id=? AND rp.module='labour_payment' AND rp.can_approve=1`
   ).get(req.user.id);
 
   let where = ' WHERE 1=1';
@@ -130,7 +133,9 @@ router.get('/:id', requirePermission('labour_payment', 'view'), (req, res) => {
   // Engineers may only see their own.
   const isAdmin = req.user.role === 'admin';
   const canApprove = isAdmin || db.prepare(
-    `SELECT 1 FROM user_permissions WHERE user_id=? AND module='labour_payment' AND permission_level='approve'`
+    `SELECT 1 FROM role_permissions rp
+       JOIN user_roles ur ON ur.role_id = rp.role_id
+      WHERE ur.user_id=? AND rp.module='labour_payment' AND rp.can_approve=1`
   ).get(req.user.id);
   if (!canApprove && row.raised_by !== req.user.id) {
     return res.status(403).json({ error: 'You can only view your own labour payment indents' });
