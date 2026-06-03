@@ -2516,6 +2516,10 @@ function initializeDatabase() {
     // ROI=1, Automations=4, etc.). Used as the Planned default when no
     // weekly entry exists.
     ['score_kpis', 'default_planned REAL DEFAULT 0'],
+    // Vendor rating out of 10 (mam 2026-06-03: "add for rating 10 out of
+    // score" on the Add Vendor form). Optional 0–10 score the team sets
+    // when onboarding / reviewing a vendor.
+    ['vendors', 'rating REAL'],
     // Supervisor → site linkage so Supervisor template KPIs (DPR Daily
     // Actual, Stock report, Tools List, Material Receiving) can scope
     // by site. The TEXT 'supervisor' column was insufficient for joins.

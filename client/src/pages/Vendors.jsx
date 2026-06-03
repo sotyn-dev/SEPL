@@ -227,6 +227,7 @@ export default function Vendors() {
               <div><span className="text-gray-400 text-xs">Authorized:</span><br/><span className="font-medium">{viewData.authorized_dealer || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Contact Person:</span><br/><span className="font-medium">{viewData.contact_person || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Sub Category:</span><br/><span className="font-medium">{viewData.sub_category || '-'}</span></div>
+              <div><span className="text-gray-400 text-xs">Rating:</span><br/><span className="font-medium">{viewData.rating !== null && viewData.rating !== undefined && viewData.rating !== '' ? `${viewData.rating} / 10` : '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Phone:</span><br/><span className="font-medium">{viewData.phone || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Email:</span><br/><span className="font-medium">{viewData.email || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">GST:</span><br/><span className="font-medium">{viewData.gst_number || '-'}</span></div>
@@ -330,6 +331,12 @@ export default function Vendors() {
             <div><label className="label">Payment Terms <span className="text-red-500">*</span></label><select className="select" value={form.payment_terms || ''} onChange={e => setForm({...form, payment_terms: e.target.value})} required><option value="">Select</option><option>Advance</option><option>Credit</option><option>PDC</option><option>COD</option></select></div>
             <div><label className="label">Credit Days <span className="text-[10px] text-gray-400 font-normal normal-case">(optional)</span></label><input className="input" value={form.credit_days || ''} onChange={e => setForm({...form, credit_days: e.target.value})} /></div>
             <div><label className="label">Sub Category <span className="text-[10px] text-gray-400 font-normal normal-case">(optional)</span></label><input className="input" value={form.sub_category || ''} onChange={e => setForm({...form, sub_category: e.target.value})} /></div>
+            <div><label className="label">Rating <span className="text-[10px] text-gray-400 font-normal normal-case">(out of 10)</span></label><input className="input" type="number" min="0" max="10" step="0.5" placeholder="0 – 10" value={form.rating ?? ''} onChange={e => {
+              const v = e.target.value;
+              if (v === '') { setForm({...form, rating: ''}); return; }
+              const n = Math.max(0, Math.min(10, Number(v)));
+              setForm({...form, rating: n});
+            }} /></div>
           </div>
           <div><label className="label">Address <span className="text-red-500">*</span></label><textarea className="input" rows="2" value={form.address || ''} onChange={e => setForm({...form, address: e.target.value})} required /></div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Create'}</button></div>
