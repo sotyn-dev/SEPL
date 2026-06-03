@@ -935,10 +935,18 @@ router.put('/indents/:id', (req, res) => {
         // OR fall through to admin gate.  In practice the canApproveCrm
         // role is set on Aanchal + sales staff so they can sign off
         // billable indents.
-        const userPerms = db.prepare(
-          `SELECT action FROM user_permissions WHERE user_id=? AND module='crm'`
-        ).all(actor.id).map(r => r.action);
-        const canActCrm = isAdminUser || userPerms.includes('approve') || userPerms.includes('edit');
+        // Permissions live in role_permissions (joined via user_roles), not a
+        // standalone user_permissions table.  "CRM access" = can_approve OR
+        // can_edit on the crm_funnel module.  (Previous code queried a
+        // non-existent user_permissions table, which threw "no such table"
+        // and blocked EVERY two-level L2 approval — mam 2026-06-03.)
+        const crmPerm = db.prepare(
+          `SELECT MAX(rp.can_approve) AS can_approve, MAX(rp.can_edit) AS can_edit
+             FROM role_permissions rp
+             JOIN user_roles ur ON ur.role_id = rp.role_id
+            WHERE ur.user_id = ? AND rp.module = 'crm_funnel'`
+        ).get(actor.id) || {};
+        const canActCrm = isAdminUser || crmPerm.can_approve === 1 || crmPerm.can_edit === 1;
 
         // CRM stage — only for crm_two_level policy.  Must complete BEFORE
         // L1 can act.  When CRM approves, auto-INSERT a po_items row on
