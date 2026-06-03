@@ -55,6 +55,7 @@ import ProcurementSchedule from './pages/ProcurementSchedule';
 import CRMFunnel from './pages/CRMFunnel';
 import ChequeFMS from './pages/ChequeFMS';
 import EmailSettings from './pages/EmailSettings';
+import EmailTriggers from './pages/EmailTriggers';
 import DashboardCMD from './pages/DashboardCMD';
 import DashboardCMDToc from './pages/DashboardCMDToc';
 import DashboardWarRoom from './pages/DashboardWarRoom';
@@ -188,6 +189,7 @@ export default function App() {
         <Route path="admin/collections-md" element={<AdminRoute><CollectionsMD /></AdminRoute>} />
         <Route path="admin/ai-settings" element={<AdminRoute><AISettings /></AdminRoute>} />
         <Route path="admin/email-settings" element={<AdminRoute><EmailSettings /></AdminRoute>} />
+        <Route path="admin/email-triggers" element={<AdminRoute><EmailTriggers /></AdminRoute>} />
         <Route path="sub-contractors" element={<ModuleRoute module="sub_contractors"><SubContractors /></ModuleRoute>} />
         <Route path="subcon-hiring" element={<ModuleRoute module="subcon_hiring"><SubconHiring /></ModuleRoute>} />
         <Route path="procurement-schedule" element={<ModuleRoute module="procurement_schedule"><ProcurementSchedule /></ModuleRoute>} />

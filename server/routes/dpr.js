@@ -969,6 +969,24 @@ async function checkConsecutiveLossAndAlert(latestDprId, siteId) {
   } else if (result?.skipped) {
     console.log(`[dpr] loss-streak email skipped (${result.reason}): ${siteName} (${streak} days)`);
   }
+
+  // Also fire the dynamic email-trigger event so any user-configured
+  // 'dpr.loss_streak' rules send (mam 2026-06-03). Best-effort.
+  try {
+    const eng = db.prepare(
+      'SELECT u.email FROM sites s LEFT JOIN users u ON u.id = s.site_engineer_id WHERE s.id = ?'
+    ).get(siteId);
+    let director = null;
+    try { director = require('../lib/email').getEmailConfig().director; } catch {}
+    require('../lib/emailRules').fireEmailEvent('dpr.loss_streak', {
+      site: siteName,
+      days: String(streak),
+      total_loss: Math.abs(Math.round(totalLoss)).toLocaleString('en-IN'),
+      date: latest.report_date,
+      director_email: director,
+      site_engineer_email: eng?.email || null,
+    });
+  } catch (e) { /* never block the DPR save */ }
 }
 
 function isoMinusOneDay(iso) {

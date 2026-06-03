@@ -38,7 +38,7 @@ function isConfigured() {
   return !!(c.host && c.user && c.pass);
 }
 
-async function sendEmail({ to, subject, html, text }) {
+async function sendEmail({ to, subject, html, text, from }) {
   const c = getEmailConfig();
   if (!c.host || !c.user || !c.pass) {
     return { skipped: true, reason: 'SMTP not configured' };
@@ -52,8 +52,11 @@ async function sendEmail({ to, subject, html, text }) {
     host: c.host, port: c.port, secure: c.secure,
     auth: { user: c.user, pass: c.pass },
   });
+  // `from` override (per-rule dynamic sender, mam 2026-06-03) falls back to
+  // the global From, then to the SMTP user. Note: many providers (Gmail)
+  // ignore a From that isn't the authenticated account / a verified alias.
   const info = await transporter.sendMail({
-    from: c.from, to: to || c.director, subject, html, text,
+    from: from || c.from, to: to || c.director, subject, html, text,
   });
   return { sent: true, messageId: info?.messageId };
 }

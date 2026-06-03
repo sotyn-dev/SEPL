@@ -339,6 +339,7 @@ app.use('/api/admin/changelog', require('./routes/changelog'));
 app.use('/api/admin/locations', require('./routes/locations'));
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/ai-agent', require('./routes/aiAgent'));
+app.use('/api/email-rules', require('./routes/emailRules'));
 app.use('/api/sub-contractors', require('./routes/subcontractors'));
 app.use('/api/subcon-hiring', require('./routes/subconHiring'));
 app.use('/api/procurement-schedule', require('./routes/procurementSchedule'));

@@ -1596,6 +1596,27 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Dynamic email-trigger rules (mam 2026-06-03: "lots of email with
+    -- trigger and pattern with my selected things, dynamic"). Each row is a
+    -- user-built rule: when <event_key> fires AND <conditions> match, email
+    -- <recipients> using <subject_tpl>/<body_tpl> with {{variable}} merge.
+    CREATE TABLE IF NOT EXISTS email_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      event_key TEXT NOT NULL,
+      enabled INTEGER DEFAULT 1,
+      conditions TEXT,            -- JSON array [{field,op,value}]
+      recipients TEXT,            -- JSON {people:[],fixed:'',roles:[]}
+      from_addr TEXT,             -- optional per-rule From (template, {{vars}} ok)
+      subject_tpl TEXT,
+      body_tpl TEXT,
+      created_by INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_fired_at DATETIME,
+      fire_count INTEGER DEFAULT 0
+    );
+
     -- Sales Funnel — universal stage audit log per mam's spec:
     -- 'every stage entry timestamp · actor (user_id) · action · evidence
     -- (file/note) · stage exit timestamp'. Forward-only state machine;
@@ -2520,6 +2541,16 @@ function initializeDatabase() {
     // score" on the Add Vendor form). Optional 0–10 score the team sets
     // when onboarding / reviewing a vendor.
     ['vendors', 'rating REAL'],
+    // Extra Non-Schedule quotation margin % (mam 2026-06-03 flowchart:
+    // "Make Quotation (add margin only)").  Captured by CRM at approval;
+    // the billable PO line + CRM-funnel quotation amount = cost + margin.
+    ['indents', 'crm_margin_pct REAL'],
+    // Regular (as-per-PO) "Check Company" — vendor/company the approver
+    // confirms at approval time (mam 2026-06-03 flowchart). Free text.
+    ['indents', 'approver_company TEXT'],
+    // Per-rule dynamic From address for email triggers (mam 2026-06-03:
+    // "from mail which id also dynamic"). Optional; supports {{vars}}.
+    ['email_rules', 'from_addr TEXT'],
     // Supervisor → site linkage so Supervisor template KPIs (DPR Daily
     // Actual, Stock report, Tools List, Material Receiving) can scope
     // by site. The TEXT 'supervisor' column was insufficient for joins.
