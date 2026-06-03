@@ -216,7 +216,7 @@ function MobileItemRow({ item, idx }) {
 }
 
 export default function Procurement() {
-  const { canDelete, canCreate, canEdit, canApprove, user, isAdmin } = useAuth();
+  const { canDelete, canCreate, canEdit, canApprove, canView, user, isAdmin } = useAuth();
   // Site-engineer-style users see only "Raise Indent" — they don't enter
   // vendor rates, upload Vendor POs, Purchase Bills, or Dispatch. Those
   // tabs are gated by canApprove('procurement'), which admin grants to
@@ -1812,10 +1812,11 @@ export default function Procurement() {
               const canActL1 = isAdmin() || user?.approval_role === 'l1';
               const canActL2 = isAdmin() || user?.approval_role === 'l2';
               // CRM action allowed for anyone with CRM module access
-              // (mam's pick: "anyone with CRM module access" — the
-              // permission live-check uses canApprove('crm') from the
-              // user's loaded permissions map).
-              const canActCrm = isAdmin() || canApprove('crm');
+              // (mam's pick: "anyone with CRM module access").  The real
+              // module key is 'crm_funnel' (there is no 'crm' module), and
+              // "access" = can view the CRM funnel — sales/CRM roles get
+              // view, only admin gets edit/approve, so gate on view here.
+              const canActCrm = isAdmin() || canView('crm_funnel');
               const blockSelfL2 = i.l1_by && i.l1_by === user?.id;
 
               const renderActionButtons = () => {

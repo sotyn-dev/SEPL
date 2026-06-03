@@ -936,17 +936,21 @@ router.put('/indents/:id', (req, res) => {
         // role is set on Aanchal + sales staff so they can sign off
         // billable indents.
         // Permissions live in role_permissions (joined via user_roles), not a
-        // standalone user_permissions table.  "CRM access" = can_approve OR
-        // can_edit on the crm_funnel module.  (Previous code queried a
-        // non-existent user_permissions table, which threw "no such table"
-        // and blocked EVERY two-level L2 approval — mam 2026-06-03.)
+        // standalone user_permissions table.  Mam's rule is "anyone with CRM
+        // module access" can sign off Extra indents at the CRM stage — and
+        // "access" = can_view on the crm_funnel module (sales/CRM roles get
+        // view; only admin gets edit/approve).  This MUST match the frontend
+        // gate canView('crm_funnel') so the button and the API agree.
+        // (Previous code queried a non-existent user_permissions table /
+        // 'crm' module, which threw "no such table" AND blocked every
+        // two-level L2 approval — mam 2026-06-03.)
         const crmPerm = db.prepare(
-          `SELECT MAX(rp.can_approve) AS can_approve, MAX(rp.can_edit) AS can_edit
+          `SELECT MAX(rp.can_view) AS can_view
              FROM role_permissions rp
              JOIN user_roles ur ON ur.role_id = rp.role_id
             WHERE ur.user_id = ? AND rp.module = 'crm_funnel'`
         ).get(actor.id) || {};
-        const canActCrm = isAdminUser || crmPerm.can_approve === 1 || crmPerm.can_edit === 1;
+        const canActCrm = isAdminUser || crmPerm.can_view === 1;
 
         // CRM stage — only for crm_two_level policy.  Must complete BEFORE
         // L1 can act.  When CRM approves, auto-INSERT a po_items row on
