@@ -2138,13 +2138,25 @@ export default function Procurement() {
                       stacked L1 + L2 mini-row so progress is visible from
                       the list without opening each row. */}
                   <td className="text-xs">
-                    {i.approval_policy === 'two_level' ? (
+                    {(i.approval_policy === 'two_level' || i.approval_policy === 'crm_two_level') ? (
                       <div className="space-y-0.5 min-w-[150px]">
+                        {/* Extra-billable indents add a CRM stage before L1/L2. */}
+                        {i.approval_policy === 'crm_two_level' && (
+                          <ApprovalLevelRow
+                            label="CRM"
+                            status={i.crm_status}
+                            name={i.crm_by_name}
+                            at={i.crm_at}
+                            isReject={i.status === 'rejected' && i.crm_status === 'rejected'}
+                            reason={i.crm_reason || i.rejection_reason}
+                          />
+                        )}
                         <ApprovalLevelRow
                           label="L1"
                           status={i.l1_status}
                           name={i.l1_by_name || i.approver_names?.l1}
                           at={i.l1_at}
+                          waiting={i.approval_policy === 'crm_two_level' && i.crm_status !== 'approved' && i.l1_status === 'pending'}
                           isReject={i.status === 'rejected' && i.l1_status === 'rejected'}
                           reason={i.rejection_reason}
                         />
@@ -2200,10 +2212,32 @@ export default function Procurement() {
                           Server enforces the same guards as a safety net. */}
                       {(() => {
                         const isTwoLevel = i.approval_policy === 'two_level';
+                        // Extra-Schedule / Extra-Non-Schedule indents route
+                        // through CRM first (crm_two_level): CRM → L1 → L2.
+                        // The desktop table must mirror the mobile card's
+                        // renderActionButtons or these rows show no action
+                        // and the CRM approver can't act (mam 2026-06-03).
+                        const isCrmTwoLevel = i.approval_policy === 'crm_two_level';
+                        const needsCrm = isCrmTwoLevel && i.crm_status === 'pending';
                         const isCreator = i.created_by === user?.id;
                         const canActL1 = isAdmin() || user?.approval_role === 'l1';
                         const canActL2 = isAdmin() || user?.approval_role === 'l2';
+                        // CRM action = anyone with CRM module (crm_funnel) access.
+                        const canActCrm = isAdmin() || canView('crm_funnel');
                         const blockSelfL2 = i.l1_by && i.l1_by === user?.id;
+
+                        // CRM stage (Extra-billable) — fires first, before L1/L2.
+                        if (needsCrm && i.status === 'submitted' && !isCreator) {
+                          if (canActCrm) {
+                            return (
+                              <>
+                                <button onClick={() => openApproveModal(i)} className="btn text-xs py-1 px-2 bg-purple-600 text-white hover:bg-purple-700">Approve as CRM</button>
+                                <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject CRM</button>
+                              </>
+                            );
+                          }
+                          return <span className="text-[10px] text-purple-600 italic">Awaiting CRM (Extra-billable)</span>;
+                        }
 
                         // L1 stage — submitted + (legacy OR two_level pending L1)
                         if (i.status === 'submitted' && !isCreator) {
@@ -2229,7 +2263,20 @@ export default function Procurement() {
                           }
                         }
 
-                        // L2 stage — only happens for two_level indents.
+                        // CRM-approved → behaves like 'submitted' for L1.
+                        if (i.status === 'crm_approved' && !isCreator) {
+                          if (canActL1) {
+                            return (
+                              <>
+                                <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve L1</button>
+                                <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject L1</button>
+                              </>
+                            );
+                          }
+                          return <span className="text-[10px] text-amber-600 italic" title={`Waiting for ${i.approver_names?.l1 || 'L1 approver'}`}>CRM ✓ · Awaiting {i.approver_names?.l1 || 'L1'}</span>;
+                        }
+
+                        // L2 stage — two_level + crm_two_level indents.
                         if (i.status === 'l1_approved' && !isCreator) {
                           if (canActL2 && !blockSelfL2) {
                             return (
