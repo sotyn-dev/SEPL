@@ -5,6 +5,7 @@ const XLSX = require('xlsx');
 const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { nextSequence } = require('../db/nextSequence');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -1013,6 +1014,54 @@ router.put('/indents/:id', (req, res) => {
             }
           } catch (e) {
             console.error('[crm-approve] auto-billable line failed (CRM approval saved anyway):', e.message);
+          }
+          // Mam (2026-06-03): "after crm approval indent go to crm funnel
+          // automatically".  Create one CRM Sales Funnel entry per
+          // CRM-approved Extra indent so the sales team tracks the billable
+          // enquiry without re-keying.  A [auto-indent:<id>] marker in
+          // remarks dedups in case the path is ever re-entered.
+          try {
+            const fi = db.prepare(
+              `SELECT i.indent_number, i.client_name, i.site_name,
+                      bb.company_name AS bb_company, bb.client_name AS bb_client,
+                      bb.state AS bb_state, bb.district AS bb_district, bb.owner AS bb_owner,
+                      COALESCE((SELECT SUM(amount) FROM indent_items WHERE indent_id = i.id), 0) AS total_amt
+                 FROM indents i
+                 LEFT JOIN order_planning op ON op.id = i.planning_id
+                 LEFT JOIN business_book bb ON bb.id = op.business_book_id
+                WHERE i.id = ?`
+            ).get(id);
+            const marker = `[auto-indent:${id}]`;
+            const already = db.prepare(
+              `SELECT 1 FROM crm_funnel WHERE remarks LIKE ?`
+            ).get(`%${marker}%`);
+            if (!already) {
+              const clientName = String(
+                fi?.client_name || fi?.site_name || fi?.bb_client || fi?.bb_company || 'Extra item'
+              ).trim() || 'Extra item';
+              const funnelLeadNo = nextSequence(db, 'crm_funnel', 'lead_no', 'CRM-', { startFrom: 0, pad: 4 });
+              db.prepare(
+                `INSERT INTO crm_funnel
+                   (lead_no, client_name, company_name, state, district, remarks,
+                    category, type, lead_type, quotation_amount, created_by)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+              ).run(
+                funnelLeadNo,
+                clientName,
+                fi?.bb_company || fi?.site_name || null,
+                fi?.bb_state || null,
+                fi?.bb_district || null,
+                `Auto-created from Extra indent ${fi?.indent_number || id} on CRM approval`
+                  + (fi?.bb_owner ? ` · owner ${fi.bb_owner}` : '') + ` ${marker}`,
+                cur2.indent_category || null,
+                'Extra Item',
+                'Extra Enquiry',
+                +fi?.total_amt || 0,
+                actor.id,
+              );
+            }
+          } catch (e) {
+            console.error('[crm-approve] auto crm_funnel entry failed (CRM approval saved anyway):', e.message);
           }
           db.prepare(
             `UPDATE indents
