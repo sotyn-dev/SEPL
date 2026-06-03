@@ -331,12 +331,22 @@ export default function Vendors() {
             <div><label className="label">Payment Terms <span className="text-red-500">*</span></label><select className="select" value={form.payment_terms || ''} onChange={e => setForm({...form, payment_terms: e.target.value})} required><option value="">Select</option><option>Advance</option><option>Credit</option><option>PDC</option><option>COD</option></select></div>
             <div><label className="label">Credit Days <span className="text-[10px] text-gray-400 font-normal normal-case">(optional)</span></label><input className="input" value={form.credit_days || ''} onChange={e => setForm({...form, credit_days: e.target.value})} /></div>
             <div><label className="label">Sub Category <span className="text-[10px] text-gray-400 font-normal normal-case">(optional)</span></label><input className="input" value={form.sub_category || ''} onChange={e => setForm({...form, sub_category: e.target.value})} /></div>
-            <div><label className="label">Rating <span className="text-[10px] text-gray-400 font-normal normal-case">(out of 10)</span></label><input className="input" type="number" min="0" max="10" step="0.5" placeholder="0 – 10" value={form.rating ?? ''} onChange={e => {
-              const v = e.target.value;
-              if (v === '') { setForm({...form, rating: ''}); return; }
-              const n = Math.max(0, Math.min(10, Number(v)));
-              setForm({...form, rating: n});
-            }} /></div>
+            <div>
+              <label className="label">Rating <span className="text-[10px] text-gray-400 font-normal normal-case">(out of 10)</span></label>
+              <div className="flex flex-wrap gap-1">
+                {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                  <button
+                    type="button"
+                    key={n}
+                    onClick={() => setForm({ ...form, rating: n })}
+                    className={`w-7 h-7 rounded text-xs font-semibold border transition-colors ${Number(form.rating) === n ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-blue-50'}`}
+                    title={`${n} / 10`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
           <div><label className="label">Address <span className="text-red-500">*</span></label><textarea className="input" rows="2" value={form.address || ''} onChange={e => setForm({...form, address: e.target.value})} required /></div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Create'}</button></div>
