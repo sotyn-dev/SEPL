@@ -6229,6 +6229,17 @@ export default function Procurement() {
                 <div><span className="text-gray-500">Original budget:</span> <span className="font-medium">₹{Math.round(+approveTarget.budget_amount || 0).toLocaleString('en-IN')}</span></div>
               </div>
 
+              {/* Order Planning context for Extra-item CRM approval (mam
+                  2026-06-03): show the project/site this indent maps to in
+                  Order Planning + its CRM owner so the approver knows whose
+                  billable line they're signing off.  Display-only. */}
+              {(approveTarget.approval_policy === 'crm_two_level' || approveTarget.planning_owner || approveTarget.planning_project) && (
+                <div className="grid grid-cols-2 gap-3 text-xs bg-purple-50 border border-purple-200 rounded p-3">
+                  <div><span className="text-purple-500">Order Planning project:</span> <span className="font-medium text-purple-900">{approveTarget.planning_project || '—'}</span></div>
+                  <div><span className="text-purple-500">CRM owner:</span> <span className="font-medium text-purple-900">{approveTarget.planning_owner || '—'}</span></div>
+                </div>
+              )}
+
               {/* Stock-coverage banner — surfaces lines that may not need
                   to be purchased because we already have them in stock. */}
               {(stockSummary.covered + stockSummary.partial) > 0 && (

@@ -452,7 +452,15 @@ router.get('/indents', (req, res) => {
             ru.name as rejected_by_name,
             l1u.name as l1_by_name,
             l2u.name as l2_by_name,
-            cu.name as crm_by_name
+            cu.name as crm_by_name,
+            -- Order Planning context (mam 2026-06-03): for Extra-item CRM
+            -- approval, surface which project/site this indent belongs to
+            -- via planning_id → order_planning → business_book, plus the
+            -- CRM owner.  Display-only; does NOT restrict who can approve.
+            COALESCE(NULLIF(TRIM(opb.project_name), ''),
+                     NULLIF(TRIM(opb.company_name), ''),
+                     NULLIF(TRIM(opb.client_name), '')) as planning_project,
+            opb.owner as planning_owner
      FROM indents i
      LEFT JOIN users u ON i.created_by = u.id
      LEFT JOIN users au ON i.approved_by = au.id
@@ -460,6 +468,8 @@ router.get('/indents', (req, res) => {
      LEFT JOIN users l1u ON i.l1_by = l1u.id
      LEFT JOIN users l2u ON i.l2_by = l2u.id
      LEFT JOIN users cu ON i.crm_by = cu.id
+     LEFT JOIN order_planning op ON op.id = i.planning_id
+     LEFT JOIN business_book opb ON opb.id = op.business_book_id
      ${where}
      ORDER BY i.created_at DESC`
   ).all(...params);
