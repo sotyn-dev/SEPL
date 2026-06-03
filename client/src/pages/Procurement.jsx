@@ -437,12 +437,6 @@ export default function Procurement() {
   // approved) when the modal opens; mam can override anywhere from 0 to
   // min(approved, office_stock).
   const [approveFromStore, setApproveFromStore] = useState({});
-  // Extra Non-Schedule quotation margin % entered by CRM at approval
-  // (mam 2026-06-03: "make quotation add margin only"). Default 0.
-  const [approveMargin, setApproveMargin] = useState('');
-  // "Check Company" — vendor/company the approver confirms on a Regular
-  // indent at approval (mam 2026-06-03 flowchart).
-  const [approveCompany, setApproveCompany] = useState('');
   const [approveSaving, setApproveSaving] = useState(false);
   const [rejectTarget, setRejectTarget] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
@@ -792,9 +786,8 @@ export default function Procurement() {
         if (masterPrice <= 0) return toast.error(`Row ${i + 1}: Cannot validate rental — Item Master rate missing for this item`);
         const totalRental = (+it.quantity || 0) * (+it.rental_days || 0) * (+it.rental_rate_per_day || 0);
         const buyCost = (+it.quantity || 0) * masterPrice;
-        const rentCap = 2 * buyCost; // buy at 2× tool cost (mam 2026-06-03)
-        if (totalRental >= rentCap) {
-          return toast.error(`Row ${i + 1}: Rental cost ₹${Math.round(totalRental).toLocaleString('en-IN')} ≥ 2× buying ₹${Math.round(rentCap).toLocaleString('en-IN')} (tool ₹${Math.round(buyCost).toLocaleString('en-IN')}). Buy the tool instead of renting.`);
+        if (totalRental >= buyCost) {
+          return toast.error(`Row ${i + 1}: Rental cost ₹${Math.round(totalRental).toLocaleString('en-IN')} ≥ buying outright ₹${Math.round(buyCost).toLocaleString('en-IN')}. Buy instead of renting.`);
         }
       }
     }
@@ -1029,9 +1022,6 @@ export default function Procurement() {
     }
     setApproveQtyOverrides(seed);
     setApproveFromStore(seedStore);
-    // Pre-fill margin from any saved value (re-open) else blank.
-    setApproveMargin(detail.crm_margin_pct != null ? String(detail.crm_margin_pct) : '');
-    setApproveCompany(detail.approver_company || '');
     setApproveTarget(detail);
   };
   // Open the Reject modal — empty reason; saves on submit only if non-empty.
@@ -1078,11 +1068,6 @@ export default function Procurement() {
         status: 'approved',
         quantity_overrides: changed,
         store_qty_per_item: storeQty,
-        // Margin % only meaningful at the CRM stage of an Extra Non-Schedule
-        // indent; server ignores it otherwise.
-        crm_margin_pct: approveTarget.indent_category === 'extra_non_schedule' ? (+approveMargin || 0) : undefined,
-        // "Check Company" — vendor/company confirmed for Regular indents.
-        approver_company: approveCompany || undefined,
       });
       const noteSuffix = res.data?.stock_issue_note ? ` · Store issue ${res.data.stock_issue_note} (${storeTotalQty} pcs)` : '';
       toast.success(
@@ -1830,9 +1815,6 @@ export default function Procurement() {
               // exactly so the L1 / L2 / single-approval / Re-reject flow
               // works identically on phone.
               const isTwoLevel = i.approval_policy === 'two_level';
-              // RGP uses a single L1 (HR) approval that finalises directly
-              // (no L2) — treat it like the L1 stage of two_level (mam 2026-06-03).
-              const isL1Only = i.approval_policy === 'l1_only';
               // Phase A+B (mam 2026-06-02): Extra-Schedule / Extra-Non-Schedule
               // indents route through CRM first.  Detect that policy here so
               // the approve buttons render in the right order: CRM → L1 → L2.
@@ -1865,7 +1847,7 @@ export default function Procurement() {
                   return <span className="text-[10px] text-purple-600 italic">Awaiting CRM (Extra-billable)</span>;
                 }
                 if (i.status === 'submitted' && !isCreator) {
-                  if (isTwoLevel || isL1Only) {
+                  if (isTwoLevel) {
                     if (canActL1) return (
                       <>
                         <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve L1</button>
@@ -2011,21 +1993,19 @@ export default function Procurement() {
                       for crm_two_level / two_level, single line for legacy. */}
                   <div className="pt-1 border-t border-gray-100 text-[11px]">
                     <div className="text-[9px] uppercase text-gray-400 mb-0.5">Approval</div>
-                    {(isTwoLevel || isCrmTwoLevel || isL1Only) ? (
+                    {(isTwoLevel || isCrmTwoLevel) ? (
                       <div className="space-y-0.5">
                         {isCrmTwoLevel && (
                           <ApprovalLevelRow label="CRM" status={i.crm_status}
                             name={i.crm_by_name} at={i.crm_at}
                             isReject={i.status === 'rejected' && i.crm_status === 'rejected'} reason={i.crm_reason || i.rejection_reason} />
                         )}
-                        <ApprovalLevelRow label={isL1Only ? 'L1 (HR)' : 'L1'} status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at}
+                        <ApprovalLevelRow label="L1" status={i.l1_status} name={i.l1_by_name || i.approver_names?.l1} at={i.l1_at}
                           waiting={isCrmTwoLevel && i.crm_status !== 'approved' && i.l1_status === 'pending'}
                           isReject={i.status === 'rejected' && i.l1_status === 'rejected'} reason={i.rejection_reason} />
-                        {!isL1Only && (
-                          <ApprovalLevelRow label="L2" status={i.l2_status} name={i.l2_by_name || i.approver_names?.l2} at={i.l2_at}
-                            waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
-                            isReject={i.status === 'rejected' && i.l2_status === 'rejected'} reason={i.rejection_reason} />
-                        )}
+                        <ApprovalLevelRow label="L2" status={i.l2_status} name={i.l2_by_name || i.approver_names?.l2} at={i.l2_at}
+                          waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
+                          isReject={i.status === 'rejected' && i.l2_status === 'rejected'} reason={i.rejection_reason} />
                       </div>
                     ) : (
                       <>
@@ -2174,7 +2154,7 @@ export default function Procurement() {
                       stacked L1 + L2 mini-row so progress is visible from
                       the list without opening each row. */}
                   <td className="text-xs">
-                    {(i.approval_policy === 'two_level' || i.approval_policy === 'crm_two_level' || i.approval_policy === 'l1_only') ? (
+                    {(i.approval_policy === 'two_level' || i.approval_policy === 'crm_two_level') ? (
                       <div className="space-y-0.5 min-w-[150px]">
                         {/* Extra-billable indents add a CRM stage before L1/L2. */}
                         {i.approval_policy === 'crm_two_level' && (
@@ -2196,18 +2176,15 @@ export default function Procurement() {
                           isReject={i.status === 'rejected' && i.l1_status === 'rejected'}
                           reason={i.rejection_reason}
                         />
-                        {/* RGP (l1_only) finalises at L1 — no L2 row. */}
-                        {i.approval_policy !== 'l1_only' && (
-                          <ApprovalLevelRow
-                            label="L2"
-                            status={i.l2_status}
-                            name={i.l2_by_name || i.approver_names?.l2}
-                            at={i.l2_at}
-                            waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
-                            isReject={i.status === 'rejected' && i.l2_status === 'rejected'}
-                            reason={i.rejection_reason}
-                          />
-                        )}
+                        <ApprovalLevelRow
+                          label="L2"
+                          status={i.l2_status}
+                          name={i.l2_by_name || i.approver_names?.l2}
+                          at={i.l2_at}
+                          waiting={i.l1_status !== 'approved' && i.l2_status === 'pending'}
+                          isReject={i.status === 'rejected' && i.l2_status === 'rejected'}
+                          reason={i.rejection_reason}
+                        />
                       </div>
                     ) : (
                       <>
@@ -2257,8 +2234,6 @@ export default function Procurement() {
                         // renderActionButtons or these rows show no action
                         // and the CRM approver can't act (mam 2026-06-03).
                         const isCrmTwoLevel = i.approval_policy === 'crm_two_level';
-                        // RGP = single L1 (HR) approval, finalises directly (mam 2026-06-03).
-                        const isL1Only = i.approval_policy === 'l1_only';
                         const needsCrm = isCrmTwoLevel && i.crm_status === 'pending';
                         const isCreator = i.created_by === user?.id;
                         const canActL1 = isAdmin() || user?.approval_role === 'l1';
@@ -2284,9 +2259,9 @@ export default function Procurement() {
                           return <span className="text-[10px] text-purple-600 italic">Awaiting CRM (Extra-billable)</span>;
                         }
 
-                        // L1 stage — submitted + (two_level OR l1_only pending L1)
+                        // L1 stage — submitted + (legacy OR two_level pending L1)
                         if (i.status === 'submitted' && !isCreator) {
-                          if (isTwoLevel || isL1Only) {
+                          if (isTwoLevel) {
                             if (canActL1) {
                               return (
                                 <>
@@ -4665,14 +4640,10 @@ export default function Procurement() {
                       const ratePerDay = +item.rental_rate_per_day || 0;
                       const totalRental = qty * days * ratePerDay;
                       const buyCost = qty * masterPrice;
-                      // Buy-vs-rent threshold = 2× the tool buy cost (mam
-                      // 2026-06-03). Rent until rental ≥ 2× buy, then buy.
-                      const RENT_BUY_MULTIPLE = 2;
-                      const rentCap = RENT_BUY_MULTIPLE * buyCost;
                       const rentalBlocks = isRental && (
                         (!m || masterPrice <= 0)
                           ? false  // separate error message below
-                          : (totalRental > 0 && totalRental >= rentCap)
+                          : (totalRental > 0 && totalRental >= buyCost)
                       );
                       const rentalNoPrice = isRental && m && masterPrice <= 0;
                       return (
@@ -4747,9 +4718,9 @@ export default function Procurement() {
                               {rentalNoPrice ? (
                                 <>⚠️ Item Master rate is 0 — set the master rate first so rental can be validated.</>
                               ) : rentalBlocks ? (
-                                <><b>BLOCKED.</b> Rental ₹{Math.round(totalRental).toLocaleString('en-IN')} ≥ 2× buying ₹{Math.round(rentCap).toLocaleString('en-IN')} (tool ₹{Math.round(buyCost).toLocaleString('en-IN')}). Buy the tool instead of renting.</>
+                                <><b>BLOCKED.</b> Rental ₹{Math.round(totalRental).toLocaleString('en-IN')} ≥ buying ₹{Math.round(buyCost).toLocaleString('en-IN')}. Buy instead of renting.</>
                               ) : totalRental > 0 ? (
-                                <>Rental cost: <b>₹{Math.round(totalRental).toLocaleString('en-IN')}</b> ({qty} × {days} days × ₹{ratePerDay}/day) · buy-cap 2× = ₹{Math.round(rentCap).toLocaleString('en-IN')} (tool ₹{Math.round(buyCost).toLocaleString('en-IN')}). OK to rent.</>
+                                <>Rental cost: <b>₹{Math.round(totalRental).toLocaleString('en-IN')}</b> ({qty} × {days} days × ₹{ratePerDay}/day) vs buying outright ₹{Math.round(buyCost).toLocaleString('en-IN')} — savings ₹{Math.round(buyCost - totalRental).toLocaleString('en-IN')}.</>
                               ) : null}
                             </div>
                           )}
@@ -6333,48 +6304,6 @@ export default function Procurement() {
                 <div className="grid grid-cols-2 gap-3 text-xs bg-purple-50 border border-purple-200 rounded p-3">
                   <div><span className="text-purple-500">Order Planning project:</span> <span className="font-medium text-purple-900">{approveTarget.planning_project || '—'}</span></div>
                   <div><span className="text-purple-500">CRM owner:</span> <span className="font-medium text-purple-900">{approveTarget.planning_owner || '—'}</span></div>
-                </div>
-              )}
-
-              {/* Quotation margin — Extra Non-Schedule only, at the CRM stage
-                  (mam 2026-06-03: "make quotation, add margin only"). The
-                  billable PO line + CRM-funnel quotation = cost + margin %. */}
-              {approveTarget.indent_category === 'extra_non_schedule' && approveTarget.crm_status === 'pending' && (
-                <div className="text-xs bg-indigo-50 border border-indigo-200 rounded p-3 space-y-1.5">
-                  <div className="font-semibold text-indigo-800">Quotation margin (Extra · Non-Schedule)</div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-indigo-600">Add margin %:</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={approveMargin}
-                      onChange={e => setApproveMargin(e.target.value)}
-                      className="input w-24 text-sm"
-                      placeholder="0"
-                    />
-                    <span className="text-indigo-500">applied to the indent cost → client billable</span>
-                  </div>
-                  {(+approveMargin > 0 && +approveTarget.budget_amount > 0) && (
-                    <div className="text-indigo-700">
-                      Est. cost ₹{Math.round(+approveTarget.budget_amount).toLocaleString('en-IN')} → billable ₹{Math.round(+approveTarget.budget_amount * (1 + (+approveMargin) / 100)).toLocaleString('en-IN')} (+{approveMargin}%)
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* "Check Company" — Regular (material) indents: approver
-                  confirms the vendor/company (mam 2026-06-03 flowchart). */}
-              {approveTarget.indent_category === 'material' && (
-                <div className="text-xs bg-sky-50 border border-sky-200 rounded p-3 flex items-center gap-2">
-                  <span className="font-semibold text-sky-800 whitespace-nowrap">Check Company:</span>
-                  <input
-                    type="text"
-                    value={approveCompany}
-                    onChange={e => setApproveCompany(e.target.value)}
-                    className="input text-sm flex-1"
-                    placeholder="Vendor / company for this purchase (optional)"
-                  />
                 </div>
               )}
 

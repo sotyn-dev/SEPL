@@ -2541,13 +2541,6 @@ function initializeDatabase() {
     // score" on the Add Vendor form). Optional 0–10 score the team sets
     // when onboarding / reviewing a vendor.
     ['vendors', 'rating REAL'],
-    // Extra Non-Schedule quotation margin % (mam 2026-06-03 flowchart:
-    // "Make Quotation (add margin only)").  Captured by CRM at approval;
-    // the billable PO line + CRM-funnel quotation amount = cost + margin.
-    ['indents', 'crm_margin_pct REAL'],
-    // Regular (as-per-PO) "Check Company" — vendor/company the approver
-    // confirms at approval time (mam 2026-06-03 flowchart). Free text.
-    ['indents', 'approver_company TEXT'],
     // Per-rule dynamic From address for email triggers (mam 2026-06-03:
     // "from mail which id also dynamic"). Optional; supports {{vars}}.
     ['email_rules', 'from_addr TEXT'],

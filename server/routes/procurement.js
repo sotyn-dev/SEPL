@@ -17,7 +17,7 @@ router.use(authMiddleware);
 function buildIndentContext(db, indentId, extra = {}) {
   try {
     const row = db.prepare(`
-      SELECT i.indent_number, i.indent_category, i.site_name, i.crm_margin_pct,
+      SELECT i.indent_number, i.indent_category, i.site_name,
              cu.email AS raiser_email, cu.name AS raised_by_name,
              opb.owner AS planning_owner, opo.crm_name AS planning_crm_name,
              COALESCE((SELECT SUM(amount) FROM indent_items WHERE indent_id = i.id), 0) AS amount
@@ -46,7 +46,6 @@ function buildIndentContext(db, indentId, extra = {}) {
       site: row.site_name,
       amount: Math.round(+row.amount || 0).toLocaleString('en-IN'),
       raised_by: row.raised_by_name,
-      margin_pct: row.crm_margin_pct != null ? String(row.crm_margin_pct) : '',
       date: new Date().toISOString().slice(0, 10),
       raiser_email: row.raiser_email,
       crm_owner_email: crmOwnerEmail,
@@ -598,31 +597,16 @@ router.get('/indents', (req, res) => {
                 ORDER BY iph.created_at DESC
                 LIMIT 1),
               0
-            ) * COALESCE(ii.quantity, 0) as line_budget,
-            -- BOQ rate from the linked Client-PO line, for the "Check Price
-            -- (whichever is lower)" comparison at approval (mam 2026-06-03).
-            COALESCE(NULLIF(pi.rate, 0), 0) as boq_rate
+            ) * COALESCE(ii.quantity, 0) as line_budget
      FROM indent_items ii
      LEFT JOIN item_master im ON ii.item_master_id = im.id
      LEFT JOIN stock_issue_notes sin ON sin.id = ii.stock_issue_note_id
-     LEFT JOIN po_items pi ON pi.id = ii.po_item_id
      ORDER BY ii.id`
   ).all();
   const itemsByIndent = new Map();
   const budgetByIndent = new Map();
   for (const it of allItems) {
     if (!itemsByIndent.has(it.indent_id)) itemsByIndent.set(it.indent_id, []);
-    // "Check Price — whichever is lower" (mam 2026-06-03 flowchart):
-    // budget each line on the LOWER of the Item-Master rate and the BOQ
-    // rate when BOTH exist; otherwise use whichever one is non-zero.
-    const masterRate = +it.master_price || 0;
-    const boqRate = +it.boq_rate || 0;
-    const effRate = (masterRate > 0 && boqRate > 0) ? Math.min(masterRate, boqRate) : (masterRate || boqRate);
-    it.effective_rate = effRate;
-    it.rate_basis = (masterRate > 0 && boqRate > 0)
-      ? (effRate === boqRate && boqRate < masterRate ? 'boq' : 'master')
-      : (masterRate > 0 ? 'master' : (boqRate > 0 ? 'boq' : 'none'));
-    it.line_budget = effRate * (+it.quantity || 0);
     itemsByIndent.get(it.indent_id).push(it);
     budgetByIndent.set(it.indent_id, (budgetByIndent.get(it.indent_id) || 0) + (+it.line_budget || 0));
   }
@@ -811,15 +795,10 @@ router.post('/indents', (req, res) => {
             error: `Row ${i + 1}: Cannot validate rental cost — Item Master rate missing for this item. Set the master rate first.`
           });
         }
-        // Buy-vs-rent threshold (mam 2026-06-03 flowchart): rent is allowed
-        // until the total rental reaches ~2× the tool's outright buy cost.
-        // At or beyond 2×, it's cheaper to own the tool, so force a buy.
         const buyCost = qty * masterPrice;
-        const RENT_BUY_MULTIPLE = 2;
-        const rentCap = RENT_BUY_MULTIPLE * buyCost;
-        if (totalRental >= rentCap) {
+        if (totalRental >= buyCost) {
           return res.status(400).json({
-            error: `Row ${i + 1}: Rental cost ₹${Math.round(totalRental).toLocaleString('en-IN')} ≥ ${RENT_BUY_MULTIPLE}× buying cost ₹${Math.round(rentCap).toLocaleString('en-IN')} (tool buy price ₹${Math.round(buyCost).toLocaleString('en-IN')}). Buy the tool instead of renting.`
+            error: `Row ${i + 1}: Rental cost ₹${Math.round(totalRental).toLocaleString('en-IN')} ≥ buying outright ₹${Math.round(buyCost).toLocaleString('en-IN')}. Buy instead of renting.`
           });
         }
       }
@@ -888,14 +867,7 @@ router.post('/indents', (req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const isBillable = category === 'extra_schedule' || category === 'extra_non_schedule';
   const basePolicy = today >= TWO_LEVEL_CUTOFF ? 'two_level' : 'single';
-  let policy = isBillable && basePolicy === 'two_level' ? 'crm_two_level' : basePolicy;
-  // RGP (returnable gate pass) needs only a single L1 (HR) sign-off — no L2
-  // — per mam's 2026-06-03 flowchart ("RGP → L1 Approval → Check Store →
-  // Check Site").  Use a dedicated 'l1_only' policy so the approve handler
-  // finalises at L1 instead of waiting for L2.
-  if (category === 'rgp' && basePolicy === 'two_level') policy = 'l1_only';
-  const needsL1 = policy === 'two_level' || policy === 'crm_two_level' || policy === 'l1_only';
-  const needsL2 = policy === 'two_level' || policy === 'crm_two_level';
+  const policy = isBillable && basePolicy === 'two_level' ? 'crm_two_level' : basePolicy;
   const r = db.prepare(
     `INSERT INTO indents
        (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,
@@ -905,8 +877,8 @@ router.post('/indents', (req, res) => {
     resolvedPlanningId, indentNum, 'submitted',
     notes || '', site_name || '', raised_by_name || '', site_name || '', req.user.id,
     policy,
-    needsL1 ? 'pending' : null,
-    needsL2 ? 'pending' : null,
+    policy === 'two_level' || policy === 'crm_two_level' ? 'pending' : null,
+    policy === 'two_level' || policy === 'crm_two_level' ? 'pending' : null,
     category,
     policy === 'crm_two_level' ? 'pending' : 'n/a',
   );
@@ -1005,16 +977,6 @@ router.put('/indents/:id', (req, res) => {
 
   // Approve / reject path.
   if (status && !items) {
-    // "Check Company" (mam 2026-06-03): persist the vendor/company the
-    // approver confirmed on a Regular indent, whenever supplied.  Stored
-    // independently of the approval-level state machine below.
-    if (status === 'approved' && req.body.approver_company != null
-        && String(req.body.approver_company).trim()) {
-      try {
-        db.prepare('UPDATE indents SET approver_company=? WHERE id=?')
-          .run(String(req.body.approver_company).trim(), id);
-      } catch (e) { /* best-effort; never block approval */ }
-    }
     // ─── 2-Level approval routing (mam 2026-05-26) ────────────────────
     // For indents with approval_policy='two_level', the flow is:
     //   submitted  --(L1 approve)-->  l1_approved  --(L2 approve)-->  approved
@@ -1039,7 +1001,7 @@ router.put('/indents/:id', (req, res) => {
                 crm_status, indent_category, planning_id
            FROM indents WHERE id=?`
       ).get(id);
-      if (cur2 && (cur2.approval_policy === 'two_level' || cur2.approval_policy === 'crm_two_level' || cur2.approval_policy === 'l1_only')) {
+      if (cur2 && (cur2.approval_policy === 'two_level' || cur2.approval_policy === 'crm_two_level')) {
         const actor = db.prepare('SELECT id, role, approval_role FROM users WHERE id=?').get(req.user.id) || req.user;
         const isAdminUser = actor.role === 'admin';
         const canActL1 = isAdminUser || actor.approval_role === 'l1';
@@ -1108,16 +1070,6 @@ router.put('/indents/:id', (req, res) => {
           // Resolve the linked Client PO via planning_id → order_planning → purchase_orders.
           // We add the Extra item as a new billable po_items row with item_type='extra'
           // so collections + DPR + Sales Bill rates auto-pick it up.
-          //
-          // Margin (mam 2026-06-03 flowchart): Extra NON-Schedule items are
-          // "make quotation (add margin only)" — CRM enters a margin % at
-          // approval and the BILLABLE amount = cost × (1 + margin/100).
-          // Extra-Schedule items keep the existing rate (no margin).
-          const marginApplies = cur2.indent_category === 'extra_non_schedule';
-          const crmMarginPct = marginApplies
-            ? Math.max(0, Number(req.body.crm_margin_pct) || 0)
-            : 0;
-          const marginMult = 1 + crmMarginPct / 100;
           let billablePoItemId = null;
           try {
             const indentRow = db.prepare(
@@ -1137,16 +1089,14 @@ router.put('/indents/:id', (req, res) => {
                         AVG(NULLIF(rate, 0)) as avg_rate, MIN(unit) as unit
                    FROM indent_items WHERE indent_id = ?`
               ).get(id);
-              const costAmt = +items?.amount || 0;
-              const totalAmt = Math.round(costAmt * marginMult);  // cost + margin
+              const totalAmt = +items?.amount || 0;
               const totalQty = +items?.qty || 1;
               const ins = db.prepare(
                 `INSERT INTO po_items (po_id, description, quantity, unit, rate, amount, item_type)
                  VALUES (?, ?, ?, ?, ?, ?, 'extra')`
               ).run(
                 clientPoId,
-                `[EXTRA · ${cur2.indent_category}] from indent ${id}`
-                  + (crmMarginPct > 0 ? ` (+${crmMarginPct}% margin)` : ''),
+                `[EXTRA · ${cur2.indent_category}] from indent ${id}`,
                 totalQty,
                 items?.unit || 'nos',
                 totalQty > 0 ? totalAmt / totalQty : totalAmt,
@@ -1198,7 +1148,7 @@ router.put('/indents/:id', (req, res) => {
                 cur2.indent_category || null,
                 'Extra Item',
                 'Extra Enquiry',
-                Math.round((+fi?.total_amt || 0) * marginMult),  // cost + margin
+                +fi?.total_amt || 0,
                 actor.id,
               );
             }
@@ -1211,10 +1161,9 @@ router.put('/indents/:id', (req, res) => {
                    crm_by=?,
                    crm_at=CURRENT_TIMESTAMP,
                    crm_billable_po_item_id=?,
-                   crm_margin_pct=?,
                    status='crm_approved'
              WHERE id=?`
-          ).run(actor.id, billablePoItemId, crmMarginPct, id);
+          ).run(actor.id, billablePoItemId, id);
           fireIndent(db, id, 'indent.crm_approved', { crm_by: actor.name || actor.email || '' });
           return res.json({
             message: 'CRM approved — awaiting L1 sign-off',
@@ -1246,25 +1195,13 @@ router.put('/indents/:id', (req, res) => {
                 error: `Not authorised for L1 approval. You're signed in as "${actorName}" (approval_role=${actor.approval_role || 'none'}). Admin → User Management → edit your user → set Indent Approval Role = L1.`,
               });
             }
-            // RGP / l1_only: a single L1 (HR) sign-off finalises the indent.
-            // Write l1_* but DON'T flip to 'l1_approved' or return — fall
-            // through to the legacy approve path so status='approved',
-            // approved_by/at, store-issue and overrides all apply.
-            if (cur2.approval_policy === 'l1_only') {
-              db.prepare(
-                `UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP
-                   WHERE id=?`
-              ).run(actor.id, id);
-              // (no return — continue to legacy approve/finalise path below)
-            } else {
-              db.prepare(
-                `UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP,
-                                    status='l1_approved'
-                   WHERE id=?`
-              ).run(actor.id, id);
-              fireIndent(db, id, 'indent.l1_approved', { l1_by: actor.name || actor.email || '' });
-              return res.json({ message: 'L1 approved — awaiting L2 sign-off', stage: 'l1_done' });
-            }
+            db.prepare(
+              `UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP,
+                                  status='l1_approved'
+                 WHERE id=?`
+            ).run(actor.id, id);
+            fireIndent(db, id, 'indent.l1_approved', { l1_by: actor.name || actor.email || '' });
+            return res.json({ message: 'L1 approved — awaiting L2 sign-off', stage: 'l1_done' });
           }
           if (cur2.status === 'l1_approved' && cur2.l2_status === 'pending') {
             // L2 approve — gate by role + sequence + self-double-sign block.
