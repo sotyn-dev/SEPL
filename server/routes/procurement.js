@@ -1013,6 +1013,34 @@ router.put('/indents/:id', (req, res) => {
                 crm_status, indent_category, planning_id
            FROM indents WHERE id=?`
       ).get(id);
+
+      // ── Admin Re-approve / Re-reject of a FINAL indent (mam 2026-06-04) ──
+      // Re-approve: only an admin may flip a REJECTED indent back to approved
+      // (revoke the rejection) without re-raising it.  All approval levels are
+      // marked approved so it reads as fully signed-off.
+      const isAdminActor = req.user.role === 'admin';
+      if (status === 'approved' && cur2 && cur2.status === 'rejected') {
+        if (!isAdminActor) return res.status(403).json({ error: 'Only an admin can re-approve a rejected indent.' });
+        db.prepare(
+          `UPDATE indents SET status='approved',
+               l1_status='approved', l1_at=COALESCE(l1_at, CURRENT_TIMESTAMP), l1_by=COALESCE(l1_by, ?),
+               l2_status=CASE WHEN approval_policy IN ('two_level','crm_two_level') THEN 'approved' ELSE l2_status END,
+               l2_at=CASE WHEN approval_policy IN ('two_level','crm_two_level') THEN COALESCE(l2_at, CURRENT_TIMESTAMP) ELSE l2_at END,
+               l2_by=CASE WHEN approval_policy IN ('two_level','crm_two_level') THEN COALESCE(l2_by, ?) ELSE l2_by END,
+               crm_status=CASE WHEN approval_policy='crm_two_level' THEN 'approved' ELSE crm_status END,
+               approved_by=?, approved_at=CURRENT_TIMESTAMP,
+               rejected_by=NULL, rejected_at=NULL, rejection_reason=NULL
+           WHERE id=?`
+        ).run(req.user.id, req.user.id, req.user.id, id);
+        fireIndent(db, id, 'indent.approved', { approved_by: req.user.name || req.user.email || '' });
+        return res.json({ message: 'Re-approved — rejection revoked', stage: 'reapproved' });
+      }
+      // Re-reject: revoking an ALREADY-APPROVED indent is admin-only (hard
+      // server gate, not just the hidden UI button).
+      if (status === 'rejected' && cur2 && cur2.status === 'approved' && !isAdminActor) {
+        return res.status(403).json({ error: 'Only an admin can revoke (re-reject) an already-approved indent.' });
+      }
+
       if (cur2 && (cur2.approval_policy === 'two_level' || cur2.approval_policy === 'crm_two_level')) {
         const actor = db.prepare('SELECT id, role, approval_role FROM users WHERE id=?').get(req.user.id) || req.user;
         const isAdminUser = actor.role === 'admin';
