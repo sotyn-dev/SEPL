@@ -263,11 +263,9 @@ export default function VendorPOPrint() {
           <div className="p-2 text-[10.5px] bg-emerald-50/30 leading-snug">
             <div className="text-[9px] uppercase tracking-wider font-bold text-emerald-700">Consignee (Ship to)</div>
             <div className="font-extrabold text-[12px] leading-tight">{po.site_name || COMPANY.name}</div>
-            {(po.sepl_lead_no || po.client_name_bb) && (
+            {po.sepl_lead_no && (
               <div className="text-[9.5px] text-gray-700">
-                {po.sepl_lead_no && <>Lead: <span className="font-mono font-semibold">{po.sepl_lead_no}</span></>}
-                {po.sepl_lead_no && po.client_name_bb && ' · '}
-                {po.client_name_bb && <>Client: <span className="font-semibold">{po.client_name_bb}</span></>}
+                Lead: <span className="font-mono font-semibold">{po.sepl_lead_no}</span>
               </div>
             )}
             {po.client_address_bb && (
