@@ -18,8 +18,8 @@ const PAGE_SIZE = 100;
 // 60+), filter pills (Expired / Ageing / Make blank / No vendor), and
 // a non-destructive Price History viewer per row.
 
-const DEPARTMENTS = ['FF', 'LV', 'ELE', 'CCTV', 'AC', 'NET', 'SOL', 'OTHER'];
-const DEPT_LABELS = { FF: 'Fire Fighting', LV: 'Low Voltage', ELE: 'Electrical', CCTV: 'CCTV', AC: 'Access Control', NET: 'Networking', SOL: 'Solar', OTHER: 'Other' };
+const DEPARTMENTS = ['FF', 'LV', 'ELE', 'CCTV', 'AC', 'NET', 'SOL', 'PLB', 'OTHER'];
+const DEPT_LABELS = { FF: 'Fire Fighting', LV: 'Low Voltage', ELE: 'Electrical', CCTV: 'CCTV', AC: 'Access Control', NET: 'Networking', SOL: 'Solar', PLB: 'Plumbing', OTHER: 'Other' };
 // PO  = chargeable purchase
 // FOC = free-of-cost (no rate, no GST line)
 // RGP = Returnable Gate Pass (contractor's own tools to site, return after)
