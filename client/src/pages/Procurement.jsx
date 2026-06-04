@@ -241,7 +241,7 @@ export default function Procurement() {
   // wrong"). Use a setter helper that writes both React state AND the URL
   // in one shot — no useEffect ping-pong.
   const [searchParams, setSearchParams] = useSearchParams();
-  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'bills', 'delivery'];
+  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'bills', 'delivery', 'debitnotes'];
   const urlTab = searchParams.get('tab');
   const [tab, _setTab] = useState(VALID_TABS.includes(urlTab) ? urlTab : 'indents');
   const setTab = (newTab) => {
@@ -260,6 +260,38 @@ export default function Procurement() {
   const [purchaseBills, setPurchaseBills] = useState([]);
   const [deliveryNotes, setDeliveryNotes] = useState([]);
   const [vendors, setVendors] = useState([]);
+  // Debit Notes (mam 2026-06-04 post-PO chart, stage 7)
+  const [debitNotes, setDebitNotes] = useState([]);
+  const [dnModal, setDnModal] = useState(false);
+  const [dnForm, setDnForm] = useState({ type: 'rejected', vendor_po_id: '', reason: '', items: [], amount: 0, note: '', loaded: false });
+  const [dnSaving, setDnSaving] = useState(false);
+  const loadDebitNotes = () => api.get('/procurement/debit-notes').then(r => setDebitNotes(r.data || [])).catch(() => setDebitNotes([]));
+  useEffect(() => { if (tab === 'debitnotes') loadDebitNotes(); /* eslint-disable-next-line */ }, [tab]);
+  const openDnModal = () => { setDnForm({ type: 'rejected', vendor_po_id: '', reason: '', items: [], amount: 0, note: '', loaded: false }); setDnModal(true); };
+  const loadDnSource = async () => {
+    if (!dnForm.vendor_po_id) { toast.error('Pick a Vendor PO first'); return; }
+    try {
+      const r = await api.get(`/procurement/vendor-po/${dnForm.vendor_po_id}/debit-source?type=${dnForm.type}`);
+      setDnForm(f => ({ ...f, items: r.data.items || [], amount: r.data.amount || 0, note: r.data.note || '', reason: f.reason || r.data.note || '', loaded: true }));
+      if (!(r.data.items || []).length) toast(r.data.note || 'No source lines found for this type', { icon: 'ℹ️' });
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed to load source'); }
+  };
+  const saveDebitNote = async () => {
+    if (!dnForm.vendor_po_id) { toast.error('Pick a Vendor PO'); return; }
+    if (!(+dnForm.amount > 0)) { toast.error('Amount must be greater than 0'); return; }
+    setDnSaving(true);
+    try {
+      const r = await api.post('/procurement/debit-notes', {
+        type: dnForm.type, vendor_po_id: +dnForm.vendor_po_id,
+        reason: dnForm.reason, items: dnForm.items, amount: +dnForm.amount,
+      });
+      toast.success(`Debit note ${r.data.dn_number} created`);
+      setDnModal(false);
+      loadDebitNotes();
+      window.open(`/debit-note/${r.data.id}/print`, '_blank');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed to save'); }
+    finally { setDnSaving(false); }
+  };
   const [itemRates, setItemRates] = useState([]); // indent items with their 3-vendor rates + final
   const [pendingPoItems, setPendingPoItems] = useState([]); // finalized items not yet in a Vendor PO
   const [indentItemsForPo, setIndentItemsForPo] = useState([]); // items of the currently picked indent (for the Create Vendor PO modal)
@@ -1455,6 +1487,7 @@ export default function Procurement() {
     { id: 'payment', label: 'Payment', show: canPurchaseOps },
     { id: 'bills', label: 'Purchase Bills', show: canPurchaseOps },
     { id: 'delivery', label: 'Dispatch & Receiving', show: canPurchaseOps },
+    { id: 'debitnotes', label: 'Debit Notes', show: canPurchaseOps },
   ];
   const tabs = allTabs.filter(t => t.show);
 
@@ -4482,6 +4515,103 @@ export default function Procurement() {
         </>
         );
       })()}
+
+      {/* ===== Debit Notes tab (mam 2026-06-04 post-PO chart, stage 7) ===== */}
+      {tab === 'debitnotes' && (
+        <div className="space-y-3">
+          <div className="card p-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="font-semibold text-gray-800">Debit Notes &amp; Short-Supply Notices</h3>
+              <p className="text-xs text-gray-500">Raise a debit against a vendor for rejected material, extra (over-PO) rates, or short supply — then print &amp; send.</p>
+            </div>
+            <button onClick={openDnModal} className="btn btn-primary flex items-center gap-2"><FiPlus /> Raise Debit Note</button>
+          </div>
+          <div className="card p-0 overflow-x-auto">
+            <table className="text-sm w-full freeze-head">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">No.</th>
+                  <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Type</th>
+                  <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Vendor</th>
+                  <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Against PO</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Amount</th>
+                  <th className="text-center px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Status</th>
+                  <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {debitNotes.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No debit notes yet — click "Raise Debit Note".</td></tr>}
+                {debitNotes.map(d => {
+                  const typeLabel = d.type === 'extra_rate' ? 'Extra Rate' : d.type === 'short_supply' ? 'Short Supply' : 'Rejected';
+                  const typeCls = d.type === 'extra_rate' ? 'bg-amber-50 text-amber-700 border-amber-200' : d.type === 'short_supply' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-red-50 text-red-700 border-red-200';
+                  return (
+                    <tr key={d.id} className="border-t hover:bg-gray-50">
+                      <td className="px-3 py-2 font-mono text-[11px] text-gray-600">{d.dn_number}</td>
+                      <td className="px-3 py-2"><span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${typeCls}`}>{typeLabel}</span></td>
+                      <td className="px-3 py-2">{d.vendor_name || '—'}</td>
+                      <td className="px-3 py-2 font-mono text-[11px]">{d.po_number || '—'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums font-semibold">₹ {Math.round(+d.amount || 0).toLocaleString('en-IN')}</td>
+                      <td className="px-3 py-2 text-center"><span className="text-[10px] uppercase text-gray-600">{d.status}</span></td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <a href={`/debit-note/${d.id}/print`} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline text-xs font-medium">View / Print</a>
+                        <button onClick={async () => { if (!confirm(`Delete debit note ${d.dn_number}?`)) return; try { await api.delete(`/procurement/debit-notes/${d.id}`); toast.success('Deleted'); loadDebitNotes(); } catch { toast.error('Delete failed'); } }} className="ml-2 p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Raise Debit Note modal */}
+      <Modal isOpen={dnModal} onClose={() => setDnModal(false)} title="Raise Debit Note / Short-Supply Notice">
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="label">Type</label>
+              <select className="select" value={dnForm.type} onChange={e => setDnForm(f => ({ ...f, type: e.target.value, loaded: false, items: [], amount: 0 }))}>
+                <option value="rejected">Rejected material</option>
+                <option value="extra_rate">Extra rate (billed over PO)</option>
+                <option value="short_supply">Short supply</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Against Vendor PO</label>
+              <select className="select" value={dnForm.vendor_po_id} onChange={e => setDnForm(f => ({ ...f, vendor_po_id: e.target.value, loaded: false, items: [], amount: 0 }))}>
+                <option value="">Select PO…</option>
+                {vendorPos.map(p => <option key={p.id} value={p.id}>{p.po_number} — {p.vendor_name}</option>)}
+              </select>
+            </div>
+          </div>
+          <button type="button" onClick={loadDnSource} className="btn btn-secondary text-sm">Load suggested lines from {dnForm.type === 'extra_rate' ? 'Purchase Bill' : 'GRN'}</button>
+          {dnForm.loaded && (
+            <div className="text-xs bg-blue-50 border border-blue-200 rounded p-2">
+              <div className="font-semibold text-blue-800">{dnForm.items.length} line(s) · suggested amount ₹{Math.round(+dnForm.amount || 0).toLocaleString('en-IN')}</div>
+              {dnForm.note && <div className="text-gray-600 mt-0.5">{dnForm.note}</div>}
+              {dnForm.items.slice(0, 6).map((it, i) => (
+                <div key={i} className="text-gray-600 mt-0.5">• {it.description} — {(+it.qty || 0).toLocaleString('en-IN')} {it.unit || ''} × ₹{it.rate != null ? (+it.rate).toLocaleString('en-IN') : '—'} = ₹{Math.round(+it.amount || 0).toLocaleString('en-IN')}</div>
+              ))}
+              {dnForm.items.length > 6 && <div className="text-gray-400 mt-0.5">…and {dnForm.items.length - 6} more</div>}
+            </div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="label">Amount (₹)</label>
+              <input type="number" step="any" min="0" className="input" value={dnForm.amount} onChange={e => setDnForm(f => ({ ...f, amount: e.target.value }))} />
+            </div>
+            <div>
+              <label className="label">Reason / Note</label>
+              <input className="input" value={dnForm.reason} onChange={e => setDnForm(f => ({ ...f, reason: e.target.value }))} placeholder="Shown on the printed note" />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <button type="button" onClick={() => setDnModal(false)} className="btn btn-secondary">Cancel</button>
+            <button type="button" onClick={saveDebitNote} disabled={dnSaving} className="btn btn-primary flex items-center gap-2"><FiCheck /> {dnSaving ? 'Saving…' : 'Save & Print'}</button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Indent Modal */}
       <Modal isOpen={modal === 'indent'} onClose={() => { setModal(false); setEditingIndentId(null); }} title={editingIndentId ? 'Edit Purchase Indent' : 'Raise Purchase Indent'} wide>
