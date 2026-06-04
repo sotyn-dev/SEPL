@@ -1937,6 +1937,7 @@ router.get('/vendor-po/:id/print', (req, res) => {
            v.phone as vendor_phone, v.email as vendor_email,
            v.gst_number, v.address as vendor_address,
            v.district, v.state, v.payment_terms as vendor_payment_terms,
+           v.credit_days as vendor_credit_days,
            i.indent_number, i.site_name, i.raised_by_name,
            cu.name as creator_name, cu.phone as creator_phone
       FROM vendor_pos vp

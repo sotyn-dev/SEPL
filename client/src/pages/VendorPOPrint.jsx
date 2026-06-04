@@ -131,6 +131,19 @@ export default function VendorPOPrint() {
   const units = [...new Set(items.map(it => (it.unit || it.uom || '').toUpperCase()).filter(Boolean))];
   const totalUnit = units.length === 1 ? units[0] : '';
 
+  // Payment Terms — mam (2026-06-04): the line always showed "—" because
+  // it read po.terms, a column that doesn't exist on vendor_pos.  The
+  // real value lives on the Vendor master (vendors.payment_terms +
+  // credit_days); fall back to any per-line terms captured on the PO
+  // items.  Still shows "—" only when the vendor master genuinely has
+  // no payment terms filled.
+  const payTermsText = (po.vendor_payment_terms && String(po.vendor_payment_terms).trim())
+    || items.find(it => it.terms && String(it.terms).trim())?.terms
+    || '';
+  const payCreditDays = po.vendor_credit_days
+    || items.find(it => it.credit_days)?.credit_days
+    || null;
+
   const sharePO = () => {
     const phone = String(po.vendor_phone || '').replace(/\D/g, '');
     const url = window.location.href;
@@ -430,7 +443,7 @@ export default function VendorPOPrint() {
         <div className="border-t border-gray-800 print:border-black px-4 py-3 text-[11px] bg-gray-50/40 print:bg-transparent">
           <div className="text-[11px] uppercase tracking-wider font-bold text-blue-800 mb-2 border-b border-blue-800/30 pb-1">Terms &amp; Conditions</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
-            <div className="text-[11px]"><span className="text-gray-500">Payment Terms&nbsp;&nbsp;:</span> <span className="font-semibold">{po.terms || '—'}{po.credit_days ? ` (${po.credit_days} days)` : ''}</span></div>
+            <div className="text-[11px]"><span className="text-gray-500">Payment Terms&nbsp;&nbsp;:</span> <span className="font-semibold">{payTermsText || '—'}{payCreditDays ? ` (${payCreditDays} days)` : ''}</span></div>
             <div className="text-[11px]"><span className="text-gray-500">Terms for Delivery&nbsp;&nbsp;:</span> <span className="font-semibold">{po.expected_receipt_date ? `Delivery by ${fmtDate(po.expected_receipt_date)}` : '—'}</span></div>
           </div>
           <ol className="mt-1 space-y-1 text-[10px] leading-snug list-decimal list-outside ml-4 text-gray-700">
