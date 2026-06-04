@@ -1014,13 +1014,15 @@ router.put('/indents/:id', (req, res) => {
            FROM indents WHERE id=?`
       ).get(id);
 
-      // ── Admin Re-approve / Re-reject of a FINAL indent (mam 2026-06-04) ──
-      // Re-approve: only an admin may flip a REJECTED indent back to approved
-      // (revoke the rejection) without re-raising it.  All approval levels are
-      // marked approved so it reads as fully signed-off.
-      const isAdminActor = req.user.role === 'admin';
+      // ── Re-approve / Re-reject of a FINAL indent (mam 2026-06-04) ──
+      // Allowed for ADMIN or the L2 approver (mam's MD).  Re-approve flips a
+      // REJECTED indent back to approved (revoke the rejection) without
+      // re-raising it; all approval levels are marked approved.
+      const actorRow = db.prepare('SELECT role, approval_role FROM users WHERE id=?').get(req.user.id) || {};
+      const isAdminActor = actorRow.role === 'admin' || req.user.role === 'admin';
+      const canRevoke = isAdminActor || actorRow.approval_role === 'l2';
       if (status === 'approved' && cur2 && cur2.status === 'rejected') {
-        if (!isAdminActor) return res.status(403).json({ error: 'Only an admin can re-approve a rejected indent.' });
+        if (!canRevoke) return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can re-approve a rejected indent.' });
         db.prepare(
           `UPDATE indents SET status='approved',
                l1_status='approved', l1_at=COALESCE(l1_at, CURRENT_TIMESTAMP), l1_by=COALESCE(l1_by, ?),
@@ -1035,10 +1037,10 @@ router.put('/indents/:id', (req, res) => {
         fireIndent(db, id, 'indent.approved', { approved_by: req.user.name || req.user.email || '' });
         return res.json({ message: 'Re-approved — rejection revoked', stage: 'reapproved' });
       }
-      // Re-reject: revoking an ALREADY-APPROVED indent is admin-only (hard
-      // server gate, not just the hidden UI button).
-      if (status === 'rejected' && cur2 && cur2.status === 'approved' && !isAdminActor) {
-        return res.status(403).json({ error: 'Only an admin can revoke (re-reject) an already-approved indent.' });
+      // Re-reject: revoking an ALREADY-APPROVED indent is limited to admin or
+      // the L2 approver (MD) — hard server gate, not just the hidden UI button.
+      if (status === 'rejected' && cur2 && cur2.status === 'approved' && !canRevoke) {
+        return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can revoke (re-reject) an already-approved indent.' });
       }
 
       if (cur2 && (cur2.approval_policy === 'two_level' || cur2.approval_policy === 'crm_two_level')) {

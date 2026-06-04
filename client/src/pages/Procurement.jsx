@@ -1962,10 +1962,10 @@ export default function Procurement() {
                 if ((i.status === 'submitted' || i.status === 'l1_approved') && isCreator) {
                   return <span className="text-[10px] text-gray-500 italic">Awaiting approval</span>;
                 }
-                if (i.status === 'approved' && isAdmin()) return (
+                if (i.status === 'approved' && (isAdmin() || user?.approval_role === 'l2')) return (
                   <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Re-reject</button>
                 );
-                if (i.status === 'rejected' && isAdmin()) return (
+                if (i.status === 'rejected' && (isAdmin() || user?.approval_role === 'l2')) return (
                   <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2 flex-1" title="Revoke rejection and approve">Re-approve</button>
                 );
                 return null;
@@ -2409,14 +2409,14 @@ export default function Procurement() {
                           the approval and flips back to rejected, using the
                           same mandatory-reason modal.  Mam (2026-05-25):
                           "give this permission to delete or again reject". */}
-                      {i.status === 'approved' && isAdmin() && (
+                      {i.status === 'approved' && (isAdmin() || user?.approval_role === 'l2') && (
                         <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2" title="Revoke approval and reject this indent">
                           Re-reject
                         </button>
                       )}
-                      {/* Admin-only Re-approve — revoke a rejection back to
-                          approved (mam 2026-06-04). */}
-                      {i.status === 'rejected' && isAdmin() && (
+                      {/* Re-approve — revoke a rejection back to approved.
+                          Admin or the L2 approver / MD (mam 2026-06-04). */}
+                      {i.status === 'rejected' && (isAdmin() || user?.approval_role === 'l2') && (
                         <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2" title="Revoke rejection and approve this indent">
                           Re-approve
                         </button>
