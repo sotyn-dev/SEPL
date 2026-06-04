@@ -1303,8 +1303,14 @@ export default function Procurement() {
     fd.append('total_amount', form.total_amount || 0);
     if (form.bill_file) fd.append('file', form.bill_file);
     try {
-      await api.post('/procurement/purchase-bills', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      toast.success('Purchase bill added');
+      const r = await api.post('/procurement/purchase-bills', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const ad = r.data?.auto_debit;
+      if (ad) {
+        // Auto extra-rate debit raised because the bill exceeded the PO value.
+        toast.success(`Purchase bill added · Auto debit note ${ad.dn_number} for ₹${Math.round(ad.amount).toLocaleString('en-IN')} (billed over PO) — deducted from payable`, { duration: 6000 });
+      } else {
+        toast.success('Purchase bill added');
+      }
       setModal(false); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
@@ -3771,13 +3777,21 @@ export default function Procurement() {
                 </div>
               </div>
           <div className="card p-0 overflow-auto max-h-[70vh] hidden md:block"><table className="freeze-head freeze-col">
-            <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Bill No</th><th>Vendor</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>Debit / Net Pay</th><th>File</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
               {billsListPg.rows.map(b => (
                 <tr key={b.id}>
                   <td className="font-medium">{b.bill_number}</td><td>{b.vendor_name}</td><td>{b.bill_date}</td>
                   <td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td>
                   <td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td>
+                  <td>
+                    {+b.debit_total > 0 ? (
+                      <div className="leading-tight" title="Debit notes on this PO are deducted from the payable">
+                        <div className="text-red-600 text-[11px]">− Rs {Math.round(+b.debit_total).toLocaleString('en-IN')}</div>
+                        <div className="font-semibold text-emerald-700 text-[11px]">Net Rs {Math.round((+b.total_amount || 0) - (+b.debit_total || 0)).toLocaleString('en-IN')}</div>
+                      </div>
+                    ) : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
                   <td>
                     {b.file_path
                       ? <a href={b.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 underline text-xs">View Bill</a>
@@ -3791,10 +3805,10 @@ export default function Procurement() {
                   }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}</td>
                 </tr>
               ))}
-              {purchaseBills.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No bills yet</td></tr>}
-              {purchaseBills.length > 0 && filteredBills.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">No bills match the current filters.</td></tr>}
+              {purchaseBills.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No bills yet</td></tr>}
+              {purchaseBills.length > 0 && filteredBills.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No bills match the current filters.</td></tr>}
             </tbody>
-            <tfoot><tr><td colSpan="9" className="border-t border-gray-100"><Pagination pg={billsListPg} setPerPage={setBillsListPerPage} /></td></tr></tfoot>
+            <tfoot><tr><td colSpan="10" className="border-t border-gray-100"><Pagination pg={billsListPg} setPerPage={setBillsListPerPage} /></td></tr></tfoot>
           </table></div>
 
           {/* Mobile cards — polished pattern matching Indents (mam). */}

@@ -1476,9 +1476,11 @@ router.put('/indents/:id', (req, res) => {
             issueNoteNumber = `SI/${yr}/${String(seq).padStart(4, '0')}`;
 
             // Pull the indent's destination site (for the note header).
+            // indents has no site_id FK — only the free-text site_name — so
+            // resolve the site by matching site_name → sites.name.
             const indentSite = db.prepare(
               `SELECT s.id as site_id FROM indents i
-                 LEFT JOIN sites s ON s.id = i.site_id
+                 LEFT JOIN sites s ON LOWER(TRIM(s.name)) = LOWER(TRIM(i.site_name))
                 WHERE i.id = ?`
             ).get(id) || {};
 
@@ -2964,7 +2966,7 @@ router.get('/delivery-notes', (req, res) => {
     LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
     LEFT JOIN vendors v ON vp.vendor_id = v.id
     LEFT JOIN indents i ON vp.indent_id = i.id
-    LEFT JOIN sites s ON i.site_id = s.id
+    LEFT JOIN sites s ON LOWER(TRIM(s.name)) = LOWER(TRIM(i.site_name))
     ORDER BY dn.created_at DESC
   `).all());
 });
