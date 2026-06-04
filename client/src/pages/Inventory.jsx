@@ -177,6 +177,18 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
   // Modal state for full-row qty/rate edit (separate from inline reorder edit).
   const [editRow, setEditRow] = useState(null); // { id, item_name, quantity, avg_rate, notes }
   const [savingRow, setSavingRow] = useState(false);
+  // Type filter (PO / FOC / RGP) — mam (2026-06-04): "if i filter rgp show
+  // all tools". Purely client-side so it's instant and needs no refetch.
+  const [typeFilter, setTypeFilter] = useState('');
+
+  // Item-type badge styling (PO / FOC / RGP), shared by the table + cards.
+  const typeBadgeClass = (t) => {
+    const T = String(t || '').toUpperCase();
+    return T === 'FOC' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      : T === 'RGP' ? 'bg-amber-50 text-amber-700 border-amber-200'
+      : T === 'PO'  ? 'bg-blue-50 text-blue-700 border-blue-200'
+      : 'bg-gray-50 text-gray-400 border-gray-200';
+  };
 
   const saveEditRow = async () => {
     if (!editRow) return;
@@ -244,10 +256,16 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
   // mam was seeing CHOUDHERY rows under a CONSERN PHARMA filter when the
   // stock state was momentarily stale between fetches.
   const flatStock = useMemo(() => {
-    if (!filter.warehouse_id) return stock;
-    const wid = +filter.warehouse_id;
-    return stock.filter(r => +r.warehouse_id === wid);
-  }, [stock, filter.warehouse_id]);
+    let rows = stock;
+    if (filter.warehouse_id) {
+      const wid = +filter.warehouse_id;
+      rows = rows.filter(r => +r.warehouse_id === wid);
+    }
+    if (typeFilter) {
+      rows = rows.filter(r => String(r.item_type || '').toUpperCase() === typeFilter);
+    }
+    return rows;
+  }, [stock, filter.warehouse_id, typeFilter]);
 
   // Total value across whatever's currently filtered. Used in the
   // summary banner — especially useful when mam picks a single site
@@ -277,12 +295,21 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
 
   return (
     <>
-      <div className="card p-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+      <div className="card p-4 grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
         <div>
           <label className="label">Warehouse</label>
           <select className="select" value={filter.warehouse_id} onChange={e => setFilter(f => ({ ...f, warehouse_id: e.target.value }))}>
             <option value="">All warehouses</option>
             {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Type</label>
+          <select className="select" value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
+            <option value="">All types</option>
+            <option value="PO">PO</option>
+            <option value="FOC">FOC</option>
+            <option value="RGP">RGP (tools)</option>
           </select>
         </div>
         <div>
@@ -358,6 +385,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                       {r.warehouse_type === 'office' ? <FiHome size={10} /> : <FiMapPin size={10} />}
                       <span>{r.warehouse_name}</span>
                       {r.item_code && <span className="font-mono text-[10px] text-gray-400 ml-1">· {r.item_code}</span>}
+                      {r.item_type && <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${typeBadgeClass(r.item_type)}`}>{r.item_type}</span>}
                     </div>
                   </div>
                   {canEdit ? (
@@ -417,6 +445,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Code</th>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Site Name</th>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Item</th>
+                  <th className="text-center px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Type</th>
                   <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">UOM</th>
                   <th className="text-right px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Quantity</th>
                   <th className="text-center px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase">Condition</th>
@@ -461,6 +490,13 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                             {r.specification && <span><span className="text-gray-400">Spec:</span> <span className="font-medium text-gray-600">{r.specification}</span></span>}
                             {r.make && <span><span className="text-gray-400">Make:</span> <span className="font-medium text-gray-600">{r.make}</span></span>}
                           </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {r.item_type ? (
+                          <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${typeBadgeClass(r.item_type)}`}>{r.item_type}</span>
+                        ) : (
+                          <span className="text-[10px] text-gray-300 italic">—</span>
                         )}
                       </td>
                       <td className="px-3 py-2 text-gray-600">{r.uom || '—'}</td>
