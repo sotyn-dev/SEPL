@@ -4,7 +4,7 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiPhoneCall, FiAlertTriangle, FiRefreshCw, FiTrash2, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiPhoneCall, FiAlertTriangle, FiRefreshCw, FiTrash2, FiDownload, FiFileText } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
 
@@ -323,6 +323,11 @@ export default function Collections() {
                   <td className="text-xs">{r.owner_name || <span className="text-gray-300">—</span>}</td>
                   <td>
                     <div className="flex gap-1">
+                      <button onClick={() => {
+                        // Payment Advice (mam 2026-06-04): per-client outstanding statement.
+                        const q = r.business_book_id ? `bbid=${encodeURIComponent(r.business_book_id)}` : `client=${encodeURIComponent(r.client_name || r.site_name || '')}`;
+                        window.open(`/payment-advice/print?${q}`, '_blank');
+                      }} className="p-1 hover:bg-indigo-50 rounded text-indigo-600" title="Payment Advice (outstanding statement)"><FiFileText size={14} /></button>
                       <button onClick={() => openEdit(r)} className="p-1 hover:bg-blue-50 rounded text-blue-600" title="Edit"><FiEdit2 size={14} /></button>
                       <button onClick={() => openFollowUps(r.id)} className="p-1 hover:bg-red-50 rounded text-red-600" title="Follow-up"><FiPhoneCall size={14} /></button>
                       <button onClick={() => { setSelectedId(r.id); setForm({ amount: 0, collection_date: new Date().toISOString().split('T')[0], payment_mode: '', transaction_ref: '', notes: '' }); setCollectModal(true); }} className="p-1 hover:bg-emerald-50 rounded text-emerald-600" title="Record Collection"><LuIndianRupee size={14} /></button>

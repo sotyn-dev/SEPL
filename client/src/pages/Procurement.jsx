@@ -241,7 +241,7 @@ export default function Procurement() {
   // wrong"). Use a setter helper that writes both React state AND the URL
   // in one shot — no useEffect ping-pong.
   const [searchParams, setSearchParams] = useSearchParams();
-  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'bills', 'delivery', 'debitnotes'];
+  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'bills', 'delivery', 'debitnotes', 'pipeline'];
   const urlTab = searchParams.get('tab');
   const [tab, _setTab] = useState(VALID_TABS.includes(urlTab) ? urlTab : 'indents');
   const setTab = (newTab) => {
@@ -265,8 +265,10 @@ export default function Procurement() {
   const [dnModal, setDnModal] = useState(false);
   const [dnForm, setDnForm] = useState({ type: 'rejected', vendor_po_id: '', reason: '', items: [], amount: 0, note: '', loaded: false });
   const [dnSaving, setDnSaving] = useState(false);
+  const [pipeline, setPipeline] = useState([]);
   const loadDebitNotes = () => api.get('/procurement/debit-notes').then(r => setDebitNotes(r.data || [])).catch(() => setDebitNotes([]));
-  useEffect(() => { if (tab === 'debitnotes') loadDebitNotes(); /* eslint-disable-next-line */ }, [tab]);
+  const loadPipeline = () => api.get('/procurement/po-pipeline').then(r => setPipeline(r.data || [])).catch(() => setPipeline([]));
+  useEffect(() => { if (tab === 'debitnotes') loadDebitNotes(); if (tab === 'pipeline') loadPipeline(); /* eslint-disable-next-line */ }, [tab]);
   const openDnModal = () => { setDnForm({ type: 'rejected', vendor_po_id: '', reason: '', items: [], amount: 0, note: '', loaded: false }); setDnModal(true); };
   const loadDnSource = async () => {
     if (!dnForm.vendor_po_id) { toast.error('Pick a Vendor PO first'); return; }
@@ -1488,6 +1490,7 @@ export default function Procurement() {
     { id: 'bills', label: 'Purchase Bills', show: canPurchaseOps },
     { id: 'delivery', label: 'Dispatch & Receiving', show: canPurchaseOps },
     { id: 'debitnotes', label: 'Debit Notes', show: canPurchaseOps },
+    { id: 'pipeline', label: 'PO Pipeline', show: canPurchaseOps },
   ];
   const tabs = allTabs.filter(t => t.show);
 
@@ -4564,6 +4567,64 @@ export default function Procurement() {
           </div>
         </div>
       )}
+
+      {/* ===== PO Pipeline tab (mam 2026-06-04 post-PO chart) ===== */}
+      {tab === 'pipeline' && (() => {
+        const Stage = ({ done, label, sub, tone = 'emerald' }) => (
+          <div className="flex flex-col items-center min-w-[70px]">
+            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold border ${done ? (tone === 'emerald' ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'bg-blue-100 text-blue-700 border-blue-300') : 'bg-gray-50 text-gray-300 border-gray-200'}`}>{done ? '✓' : '○'}</span>
+            <span className={`text-[9px] mt-0.5 uppercase tracking-wide ${done ? 'text-gray-700 font-semibold' : 'text-gray-400'}`}>{label}</span>
+            {sub && <span className="text-[8px] text-gray-400">{sub}</span>}
+          </div>
+        );
+        const conn = 'flex-1 h-px bg-gray-200 mt-3 mx-1 min-w-[12px]';
+        return (
+          <div className="space-y-3">
+            <div className="card p-4 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-semibold text-gray-800">Post-PO Pipeline</h3>
+                <p className="text-xs text-gray-500">Where each Vendor PO stands: PO → Delivery → Received → Bill → Vendor Paid.</p>
+              </div>
+              <button onClick={loadPipeline} className="btn btn-secondary flex items-center gap-2 text-sm"><FiRefreshCw size={14} /> Refresh</button>
+            </div>
+            {pipeline.length === 0 && <div className="card p-6 text-center text-gray-400 text-sm">No vendor POs yet.</div>}
+            <div className="space-y-2">
+              {pipeline.map(p => {
+                const received = (+p.grn_count > 0) || (+p.dn_received > 0);
+                const paid = p.bill_payment_status === 'paid';
+                return (
+                  <div key={p.id} className="card p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                      <div className="min-w-0">
+                        <span className="font-mono font-semibold text-blue-800">{p.po_number}</span>
+                        <span className="text-gray-400 mx-1">·</span>
+                        <span className="text-sm text-gray-700">{p.vendor_name || '—'}</span>
+                        {p.site_name && <span className="text-[11px] text-gray-400 ml-2">{p.site_name}</span>}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {+p.debit_count > 0 && <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded border bg-red-50 text-red-700 border-red-200">{p.debit_count} debit</span>}
+                        <span className="text-sm font-semibold tabular-nums text-gray-700">₹ {Math.round(+p.total_amount || 0).toLocaleString('en-IN')}</span>
+                        <a href={`/vendor-po/${p.id}/print`} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline text-xs font-medium">PO</a>
+                      </div>
+                    </div>
+                    <div className="flex items-start">
+                      <Stage done={true} label="PO" sub={p.po_date || ''} tone="blue" />
+                      <div className={conn} />
+                      <Stage done={+p.dn_count > 0} label="Delivery" sub={+p.dn_count > 0 ? `${p.dn_count} note` : ''} />
+                      <div className={conn} />
+                      <Stage done={received} label="Received" sub={+p.grn_count > 0 ? 'GRN' : (+p.dn_received > 0 ? 'signed' : '')} />
+                      <div className={conn} />
+                      <Stage done={+p.bill_count > 0} label="P.Bill" sub={+p.bill_count > 0 ? `${p.bill_count}` : ''} />
+                      <div className={conn} />
+                      <Stage done={paid} label="Paid" sub={p.bill_payment_status || (p.payment_block_status === 'pending' ? 'blocked' : '')} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Raise Debit Note modal */}
       <Modal isOpen={dnModal} onClose={() => setDnModal(false)} title="Raise Debit Note / Short-Supply Notice">

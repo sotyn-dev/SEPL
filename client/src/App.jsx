@@ -39,6 +39,7 @@ import Inventory from './pages/Inventory';
 import HelpTickets from './pages/HelpTickets';
 import VendorPOPrint from './pages/VendorPOPrint';
 import DebitNotePrint from './pages/DebitNotePrint';
+import PaymentAdvicePrint from './pages/PaymentAdvicePrint';
 import DeliveryNotePrint from './pages/DeliveryNotePrint';
 import RentalPOPrint from './pages/RentalPOPrint';
 import IndentPrint from './pages/IndentPrint';
@@ -109,6 +110,7 @@ export default function App() {
           chrome so the document fills the viewport cleanly. */}
       <Route path="/vendor-po/:id/print" element={<ProtectedRoute><VendorPOPrint /></ProtectedRoute>} />
       <Route path="/debit-note/:id/print" element={<ProtectedRoute><DebitNotePrint /></ProtectedRoute>} />
+      <Route path="/payment-advice/print" element={<ProtectedRoute><PaymentAdvicePrint /></ProtectedRoute>} />
       {/* Mam (2026-05-22): "delivery note make here automatically and
           show pdf here according to po" — print-on-demand DN auto-
           filled from the same Vendor PO data.  No delivery_notes

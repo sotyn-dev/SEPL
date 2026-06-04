@@ -294,6 +294,51 @@ router.get('/summary', (req, res) => {
   res.json({ totalOutstanding: total.total, byBucket, byStatus, topClients, overdue });
 });
 
+// Payment Advice / Outstanding statement for ONE client (mam 2026-06-04
+// post-PO chart, stage 13: "Payment advice with pending balance").
+// Lists every receivable (invoice) for the client with billed / received
+// / pending, plus the totals.  Rendered by the PaymentAdvicePrint page.
+// Keyed by ?client=<client_name> (and optional ?bbid=<business_book_id>).
+router.get('/payment-advice', (req, res) => {
+  const db = getDb();
+  const clientName = String(req.query.client || '').trim();
+  const bbid = req.query.bbid ? +req.query.bbid : null;
+  if (!clientName && !bbid) return res.status(400).json({ error: 'client name or bbid is required' });
+
+  const rows = bbid
+    ? db.prepare(`SELECT * FROM receivables WHERE business_book_id = ? ORDER BY COALESCE(invoice_date, created_at)`).all(bbid)
+    : db.prepare(`SELECT * FROM receivables WHERE LOWER(TRIM(client_name)) = LOWER(TRIM(?)) ORDER BY COALESCE(invoice_date, created_at)`).all(clientName);
+
+  const totals = rows.reduce((a, r) => {
+    a.billed += +r.invoice_amount || 0;
+    a.received += +r.received_amount || 0;
+    a.pending += +r.outstanding_amount || 0;
+    return a;
+  }, { billed: 0, received: 0, pending: 0 });
+
+  // Pull client address / GSTIN from business_book when we can resolve it.
+  let client = { name: clientName || rows[0]?.client_name || '', company: null, address: null, gstin: null, state: null };
+  try {
+    const resolveBbid = bbid || rows.find(r => r.business_book_id)?.business_book_id || null;
+    let bb = null;
+    if (resolveBbid) bb = db.prepare(`SELECT company_name, client_name, billing_address, gstin, state FROM business_book WHERE id = ?`).get(resolveBbid);
+    if (!bb && clientName) bb = db.prepare(`SELECT company_name, client_name, billing_address, gstin, state FROM business_book WHERE LOWER(TRIM(COALESCE(client_name,''))) = LOWER(TRIM(?)) OR LOWER(TRIM(COALESCE(company_name,''))) = LOWER(TRIM(?)) ORDER BY id DESC LIMIT 1`).get(clientName, clientName);
+    if (bb) client = { name: bb.client_name || clientName, company: bb.company_name || null, address: bb.billing_address || null, gstin: bb.gstin || null, state: bb.state || null };
+  } catch (_) { /* non-fatal */ }
+
+  res.json({
+    client,
+    invoices: rows.map(r => ({
+      invoice_number: r.invoice_number, invoice_date: r.invoice_date,
+      project_name: r.project_name, site_name: r.site_name,
+      billed: +r.invoice_amount || 0, received: +r.received_amount || 0,
+      pending: +r.outstanding_amount || 0, due_date: r.due_date,
+      ageing_days: r.ageing_days, ageing_bucket: r.ageing_bucket, status: r.status,
+    })),
+    totals,
+  });
+});
+
 // Create receivable. Accepts the original free-text fields AND the new
 // v2 fields (site_id / site_name / crm_name / next_planned_date /
 // last_discussion). client_name is auto-derived from site_name when

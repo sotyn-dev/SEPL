@@ -2864,6 +2864,34 @@ router.get('/debit-notes/:id/print', (req, res) => {
   res.json({ dn, items });
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// POST-PO PIPELINE (mam 2026-06-04 chart): one row per Vendor PO showing
+// how far it has progressed: PO → Delivery Note → Received(GRN) →
+// Purchase Bill → Vendor Paid, plus a debit-note flag.  Pure read of the
+// existing tables — no new data captured.
+// ─────────────────────────────────────────────────────────────────────
+router.get('/po-pipeline', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT vp.id, vp.po_number, vp.po_date, vp.total_amount, vp.status,
+           vp.payment_block_status,
+           v.name as vendor_name,
+           i.indent_number, i.site_name,
+           (SELECT COUNT(*) FROM delivery_notes dn WHERE dn.vendor_po_id = vp.id) as dn_count,
+           (SELECT COUNT(*) FROM delivery_notes dn WHERE dn.vendor_po_id = vp.id AND dn.status='received') as dn_received,
+           (SELECT COUNT(*) FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id) as bill_count,
+           (SELECT pb.payment_status FROM purchase_bills pb WHERE pb.vendor_po_id = vp.id ORDER BY pb.id DESC LIMIT 1) as bill_payment_status,
+           (SELECT COUNT(*) FROM grn g WHERE g.vendor_po_id = vp.id) as grn_count,
+           (SELECT COUNT(*) FROM debit_notes d WHERE d.vendor_po_id = vp.id) as debit_count
+      FROM vendor_pos vp
+      LEFT JOIN vendors v ON v.id = vp.vendor_id
+      LEFT JOIN indents i ON i.id = vp.indent_id
+     WHERE COALESCE(vp.cancelled, 0) = 0
+     ORDER BY vp.id DESC
+  `).all();
+  res.json(rows);
+});
+
 // Dispatch (delivery_notes) — a dispatch entry is either a Sales Bill
 // (for PO items sold to client) or a Delivery Challan (FOC / RGP items).
 // After dispatch, mam records who received it via the /receive endpoint.
