@@ -2726,6 +2726,144 @@ router.delete('/purchase-bills/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// DEBIT NOTES (mam 2026-06-04 post-PO chart, stage 7)
+// Three types, one table:
+//   rejected     — material rejected at GRN (grn_items.rejected_qty)
+//   short_supply — ordered vs received shortfall (a "short material" notice)
+//   extra_rate   — vendor billed above the PO value (bill total − PO total)
+// ─────────────────────────────────────────────────────────────────────
+
+// Suggest the line items + amount for a debit note of a given type, drawn
+// from the PO's GRNs / latest Purchase Bill.  The Raise-Debit-Note form
+// pre-fills from this; the user can still edit before saving.
+router.get('/vendor-po/:id/debit-source', (req, res) => {
+  const db = getDb();
+  const poId = +req.params.id;
+  const type = String(req.query.type || 'rejected');
+  const po = db.prepare(
+    `SELECT vp.id, vp.po_number, vp.total_amount, vp.vendor_id,
+            v.name as vendor_name, v.gst_number, v.address as vendor_address
+       FROM vendor_pos vp LEFT JOIN vendors v ON v.id = vp.vendor_id
+      WHERE vp.id = ?`
+  ).get(poId);
+  if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
+
+  let items = [], amount = 0, note = '';
+  try {
+    if (type === 'rejected' || type === 'short_supply') {
+      // Pull GRN lines for this PO. rejected → rejected_qty; short_supply
+      // → ordered − received (when positive).
+      const rows = db.prepare(
+        `SELECT gi.description, gi.unit, gi.rate,
+                gi.ordered_qty, gi.received_qty, gi.rejected_qty, gi.remarks,
+                g.grn_number, g.id as grn_id
+           FROM grn_items gi JOIN grn g ON g.id = gi.grn_id
+          WHERE g.vendor_po_id = ?`
+      ).all(poId);
+      for (const r of rows) {
+        const qty = type === 'rejected'
+          ? (+r.rejected_qty || 0)
+          : Math.max(0, (+r.ordered_qty || 0) - (+r.received_qty || 0));
+        if (qty <= 0) continue;
+        const rate = +r.rate || 0;
+        const amt = qty * rate;
+        amount += amt;
+        items.push({ description: r.description, unit: r.unit || '', qty, rate, amount: amt, grn_number: r.grn_number, remarks: r.remarks || '' });
+      }
+      note = type === 'rejected'
+        ? 'Material rejected at receiving — debit raised to recover value.'
+        : 'Short supply — ordered quantity not fully received.';
+    } else if (type === 'extra_rate') {
+      // Vendor billed more than the PO value.  Latest Purchase Bill total
+      // vs the PO total.  Positive difference is the debit.
+      const bill = db.prepare(
+        `SELECT id, bill_number, total_amount FROM purchase_bills
+          WHERE vendor_po_id = ? ORDER BY id DESC LIMIT 1`
+      ).get(poId);
+      const poTotal = +po.total_amount || 0;
+      const billTotal = +bill?.total_amount || 0;
+      const diff = billTotal - poTotal;
+      if (bill && diff > 0) {
+        amount = diff;
+        items.push({ description: `Excess over PO ${po.po_number} (Bill ${bill.bill_number || '#' + bill.id})`, unit: '', qty: 1, rate: diff, amount: diff, purchase_bill_id: bill.id });
+        note = `Vendor billed ₹${Math.round(billTotal).toLocaleString('en-IN')} vs PO ₹${Math.round(poTotal).toLocaleString('en-IN')} — excess debited.`;
+      } else {
+        note = bill ? 'Bill does not exceed the PO value — no extra-rate debit.' : 'No Purchase Bill on this PO yet.';
+      }
+    }
+  } catch (e) { /* table may be empty — return zero */ }
+
+  res.json({ po, type, amount: Math.round(amount * 100) / 100, items, note });
+});
+
+router.get('/debit-notes', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT dn.*, vp.po_number, v.name as vendor_name
+       FROM debit_notes dn
+       LEFT JOIN vendor_pos vp ON vp.id = dn.vendor_po_id
+       LEFT JOIN vendors v ON v.id = dn.vendor_id
+      ORDER BY dn.id DESC`
+  ).all();
+  res.json(rows);
+});
+
+router.post('/debit-notes', (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  const VALID = ['rejected', 'extra_rate', 'short_supply'];
+  const type = VALID.includes(b.type) ? b.type : 'rejected';
+  const vendor_po_id = b.vendor_po_id ? +b.vendor_po_id : null;
+  if (!vendor_po_id) return res.status(400).json({ error: 'Vendor PO is required' });
+  const po = db.prepare('SELECT vendor_id FROM vendor_pos WHERE id=?').get(vendor_po_id);
+  if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
+  const items = Array.isArray(b.items) ? b.items : [];
+  const amount = b.amount != null ? +b.amount
+    : items.reduce((s, it) => s + (+it.amount || (+it.qty || 0) * (+it.rate || 0)), 0);
+  const { nextSequence } = require('../db/nextSequence');
+  const year = new Date().getFullYear();
+  const dnNum = nextSequence(db, 'debit_notes', 'dn_number', `DBN/${year}/`, { pad: 4 });
+  const r = db.prepare(
+    `INSERT INTO debit_notes
+       (dn_number, type, vendor_po_id, vendor_id, grn_id, purchase_bill_id, amount, reason, items_json, status, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`
+  ).run(dnNum, type, vendor_po_id, po.vendor_id, b.grn_id || null, b.purchase_bill_id || null,
+        Math.round(amount * 100) / 100, b.reason || null, JSON.stringify(items), req.user?.id || null);
+  res.status(201).json({ id: r.lastInsertRowid, dn_number: dnNum, amount });
+});
+
+router.patch('/debit-notes/:id', (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  if (b.status && ['open', 'sent', 'settled', 'cancelled'].includes(b.status)) {
+    db.prepare('UPDATE debit_notes SET status=? WHERE id=?').run(b.status, req.params.id);
+  }
+  res.json({ message: 'Updated' });
+});
+
+router.delete('/debit-notes/:id', (req, res) => {
+  getDb().prepare('DELETE FROM debit_notes WHERE id=?').run(req.params.id);
+  res.json({ message: 'Deleted' });
+});
+
+// Print data for a debit note — self-contained from items_json + vendor/PO.
+router.get('/debit-notes/:id/print', (req, res) => {
+  const db = getDb();
+  const dn = db.prepare(
+    `SELECT dn.*, vp.po_number, vp.po_date, v.name as vendor_name, v.gst_number,
+            v.address as vendor_address, v.district, v.state, v.phone as vendor_phone
+       FROM debit_notes dn
+       LEFT JOIN vendor_pos vp ON vp.id = dn.vendor_po_id
+       LEFT JOIN vendors v ON v.id = dn.vendor_id
+      WHERE dn.id = ?`
+  ).get(req.params.id);
+  if (!dn) return res.status(404).json({ error: 'Debit note not found' });
+  let items = [];
+  try { items = JSON.parse(dn.items_json || '[]'); } catch (_) {}
+  res.json({ dn, items });
+});
+
 // Dispatch (delivery_notes) — a dispatch entry is either a Sales Bill
 // (for PO items sold to client) or a Delivery Challan (FOC / RGP items).
 // After dispatch, mam records who received it via the /receive endpoint.

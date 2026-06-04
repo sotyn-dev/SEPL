@@ -554,6 +554,29 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Debit Notes (mam 2026-06-04 post-PO chart, stage 7): a document
+    -- raised against a vendor for (a) material REJECTED at GRN, (b) the
+    -- vendor billing EXTRA over the PO rate, or (c) SHORT supply (ordered
+    -- vs received shortfall — a "short material" notice).  One table,
+    -- distinguished by the type column.  items_json holds the line snapshot so the
+    -- printable note is self-contained even if the source GRN/bill changes.
+    CREATE TABLE IF NOT EXISTS debit_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dn_number TEXT,
+      type TEXT DEFAULT 'rejected' CHECK(type IN ('rejected','extra_rate','short_supply')),
+      vendor_po_id INTEGER REFERENCES vendor_pos(id),
+      vendor_id INTEGER REFERENCES vendors(id),
+      grn_id INTEGER,
+      purchase_bill_id INTEGER,
+      amount REAL DEFAULT 0,
+      reason TEXT,
+      items_json TEXT,
+      status TEXT DEFAULT 'open' CHECK(status IN ('open','sent','settled','cancelled')),
+      file_path TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Installation
     CREATE TABLE IF NOT EXISTS installations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
