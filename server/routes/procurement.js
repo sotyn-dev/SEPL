@@ -796,9 +796,15 @@ router.post('/indents', (req, res) => {
           });
         }
         const buyCost = qty * masterPrice;
-        if (totalRental >= buyCost) {
+        // Buy-vs-rent threshold — mam (2026-06-04 workflow chart):
+        // "if higher on buying (2 times of tools) buy, otherwise rent".
+        // Renting is allowed up to 2× the outright buy cost; only force a
+        // purchase when the rental would cost MORE than twice buying.
+        const RENT_LIMIT_MULTIPLE = 2;
+        const buyThreshold = RENT_LIMIT_MULTIPLE * buyCost;
+        if (totalRental >= buyThreshold) {
           return res.status(400).json({
-            error: `Row ${i + 1}: Rental cost ₹${Math.round(totalRental).toLocaleString('en-IN')} ≥ buying outright ₹${Math.round(buyCost).toLocaleString('en-IN')}. Buy instead of renting.`
+            error: `Row ${i + 1}: Rental cost ₹${Math.round(totalRental).toLocaleString('en-IN')} ≥ ${RENT_LIMIT_MULTIPLE}× buying outright (₹${Math.round(buyThreshold).toLocaleString('en-IN')}). Buy instead of renting.`
           });
         }
       }
