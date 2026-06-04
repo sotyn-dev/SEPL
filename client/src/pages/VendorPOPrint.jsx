@@ -167,12 +167,13 @@ export default function VendorPOPrint() {
           color (e.g. visited link blue) bleeds into descriptions. */}
       <div className="max-w-4xl mx-auto bg-white shadow-lg my-6 print:my-0 print:shadow-none border-2 border-gray-800 print:border-black text-[12px] text-gray-900 overflow-hidden po-body">
         {/* RED branded title bar — pops the document immediately as a SEPL PO */}
-        <div className="bg-red-700 text-white text-center py-2.5 px-3 print:bg-red-700">
-          <div className="font-extrabold text-[16px] tracking-[0.3em] uppercase">Purchase Order</div>
-          <div className="flex justify-between mt-1.5 text-[10px] opacity-95 font-medium">
-            <span>GSTIN : {COMPANY.gstin}</span>
-            <span>PAN : {COMPANY.pan}</span>
-          </div>
+        {/* Mam (2026-06-04): "do it some congested" — the title bar had too
+            much empty height.  GSTIN / PAN now flank the title on the SAME
+            row so the band is a single tight line instead of three. */}
+        <div className="bg-red-700 text-white py-1.5 px-3 print:bg-red-700 flex items-center justify-between gap-3">
+          <span className="text-[9.5px] opacity-95 font-medium whitespace-nowrap">GSTIN : {COMPANY.gstin}</span>
+          <span className="font-extrabold text-[15px] tracking-[0.3em] uppercase leading-none">Purchase Order</span>
+          <span className="text-[9.5px] opacity-95 font-medium whitespace-nowrap">PAN : {COMPANY.pan}</span>
         </div>
 
         {/* Company name + Head Office + Branch Office addresses.
