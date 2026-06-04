@@ -1021,8 +1021,12 @@ router.put('/indents/:id', (req, res) => {
       const actorRow = db.prepare('SELECT role, approval_role FROM users WHERE id=?').get(req.user.id) || {};
       const isAdminActor = actorRow.role === 'admin' || req.user.role === 'admin';
       const canRevoke = isAdminActor || actorRow.approval_role === 'l2';
-      if (status === 'approved' && cur2 && cur2.status === 'rejected') {
-        if (!canRevoke) return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can re-approve a rejected indent.' });
+      // Re-approve fires for a REJECTED indent (revoke the rejection) OR an
+      // already-APPROVED one (re-confirm / re-stamp the approval — mam
+      // 2026-06-04 wanted the button on approved indents too).
+      if (status === 'approved' && cur2 && (cur2.status === 'rejected' || cur2.status === 'approved')) {
+        if (!canRevoke) return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can re-approve this indent.' });
+        const wasRejected = cur2.status === 'rejected';
         db.prepare(
           `UPDATE indents SET status='approved',
                l1_status='approved', l1_at=COALESCE(l1_at, CURRENT_TIMESTAMP), l1_by=COALESCE(l1_by, ?),
@@ -1035,7 +1039,7 @@ router.put('/indents/:id', (req, res) => {
            WHERE id=?`
         ).run(req.user.id, req.user.id, req.user.id, id);
         fireIndent(db, id, 'indent.approved', { approved_by: req.user.name || req.user.email || '' });
-        return res.json({ message: 'Re-approved — rejection revoked', stage: 'reapproved' });
+        return res.json({ message: wasRejected ? 'Re-approved — rejection revoked' : 'Approval re-confirmed', stage: 'reapproved' });
       }
       // Re-reject: revoking an ALREADY-APPROVED indent is limited to admin or
       // the L2 approver (MD) — hard server gate, not just the hidden UI button.

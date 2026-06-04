@@ -1029,10 +1029,13 @@ export default function Procurement() {
   // Admin Re-approve — revoke a rejection and flip the indent back to approved
   // (mam 2026-06-04). No reason modal; it's an admin override.
   const reapproveIndent = async (i) => {
-    if (!confirm(`Re-approve indent ${i.indent_number}?\n\nThis revokes the rejection and marks it fully approved.`)) return;
+    const msg = i.status === 'rejected'
+      ? `Re-approve indent ${i.indent_number}?\n\nThis revokes the rejection and marks it fully approved.`
+      : `Re-confirm approval of indent ${i.indent_number}?\n\nThis re-stamps the approval with your name and the current time.`;
+    if (!confirm(msg)) return;
     try {
-      await api.put(`/procurement/indents/${i.id}`, { status: 'approved' });
-      toast.success(`Indent ${i.indent_number} re-approved`);
+      const r = await api.put(`/procurement/indents/${i.id}`, { status: 'approved' });
+      toast.success(r.data?.message || `Indent ${i.indent_number} re-approved`);
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Re-approve failed'); }
   };
@@ -1963,7 +1966,10 @@ export default function Procurement() {
                   return <span className="text-[10px] text-gray-500 italic">Awaiting approval</span>;
                 }
                 if (i.status === 'approved' && (isAdmin() || user?.approval_role === 'l2')) return (
-                  <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Re-reject</button>
+                  <>
+                    <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2 flex-1" title="Re-confirm this approval">Re-approve</button>
+                    <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Re-reject</button>
+                  </>
                 );
                 if (i.status === 'rejected' && (isAdmin() || user?.approval_role === 'l2')) return (
                   <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2 flex-1" title="Revoke rejection and approve">Re-approve</button>
@@ -2414,10 +2420,12 @@ export default function Procurement() {
                           Re-reject
                         </button>
                       )}
-                      {/* Re-approve — revoke a rejection back to approved.
-                          Admin or the L2 approver / MD (mam 2026-06-04). */}
-                      {i.status === 'rejected' && (isAdmin() || user?.approval_role === 'l2') && (
-                        <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2" title="Revoke rejection and approve this indent">
+                      {/* Re-approve — on a REJECTED indent it revokes the
+                          rejection; on an APPROVED one it re-confirms the
+                          approval. Admin or the L2 approver / MD (mam
+                          2026-06-04). */}
+                      {(i.status === 'rejected' || i.status === 'approved') && (isAdmin() || user?.approval_role === 'l2') && (
+                        <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2" title={i.status === 'rejected' ? 'Revoke rejection and approve' : 'Re-confirm this approval'}>
                           Re-approve
                         </button>
                       )}
