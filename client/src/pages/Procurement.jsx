@@ -437,6 +437,10 @@ export default function Procurement() {
   // approved) when the modal opens; mam can override anywhere from 0 to
   // min(approved, office_stock).
   const [approveFromStore, setApproveFromStore] = useState({});
+  // Client-quotation margin % for Extra-Non-Schedule CRM approval (mam
+  // 2026-06-04 workflow chart). Only used at the CRM stage of an
+  // extra_non_schedule indent; applied to the auto billable line.
+  const [approveMargin, setApproveMargin] = useState('');
   const [approveSaving, setApproveSaving] = useState(false);
   const [rejectTarget, setRejectTarget] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
@@ -1068,6 +1072,9 @@ export default function Procurement() {
         status: 'approved',
         quantity_overrides: changed,
         store_qty_per_item: storeQty,
+        // Margin only matters at the CRM stage of an Extra-Non-Schedule
+        // indent; the server ignores it otherwise.
+        crm_margin_pct: approveMargin === '' ? undefined : +approveMargin,
       });
       const noteSuffix = res.data?.stock_issue_note ? ` · Store issue ${res.data.stock_issue_note} (${storeTotalQty} pcs)` : '';
       toast.success(
@@ -1097,6 +1104,7 @@ export default function Procurement() {
       setApproveTarget(null);
       setApproveQtyOverrides({});
       setApproveFromStore({});
+      setApproveMargin('');
       load();  // background refresh for canonical state
     } catch (err) {
       toast.error(err.response?.data?.error || 'Approve failed');
@@ -6266,7 +6274,7 @@ export default function Procurement() {
           approval time".  Approver sees the full line list with editable
           qty inputs + a live budget total at the bottom.  Only changed
           quantities go up in the request body. */}
-      <Modal isOpen={!!approveTarget} onClose={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); }} title={approveTarget ? `Approve Indent ${approveTarget.indent_number}` : 'Approve Indent'} wide>
+      <Modal isOpen={!!approveTarget} onClose={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); setApproveMargin(''); }} title={approveTarget ? `Approve Indent ${approveTarget.indent_number}` : 'Approve Indent'} wide>
         {approveTarget && (() => {
           const items = approveTarget.items || [];
           const liveBudget = items.reduce((sum, it) => {
@@ -6507,8 +6515,29 @@ export default function Procurement() {
                 </div>
               )}
 
+              {/* Client-quotation margin — only for the CRM stage of an
+                  Extra-Non-Schedule indent (a brand-new, off-BOQ item).
+                  The margin % is added on top of cost for the billable
+                  client line. Extra-Schedule reuses the BOQ rate (no margin)
+                  so this box doesn't appear for it. */}
+              {approveTarget.approval_policy === 'crm_two_level'
+                && approveTarget.crm_status === 'pending'
+                && approveTarget.indent_category === 'extra_non_schedule' && (
+                <div className="text-xs bg-purple-50 border border-purple-200 rounded p-3 flex flex-wrap items-center gap-3">
+                  <span className="font-semibold text-purple-800">Client quotation margin (Extra-Non-Schedule):</span>
+                  <div className="flex items-center gap-1">
+                    <input type="number" step="any" min="0" placeholder="0"
+                      value={approveMargin}
+                      onChange={e => setApproveMargin(e.target.value)}
+                      className="border border-purple-300 rounded px-2 py-1 w-24 text-right focus:border-purple-500 focus:ring-1 focus:ring-purple-500" />
+                    <span className="text-purple-700 font-medium">%</span>
+                  </div>
+                  <span className="text-gray-500">added on top of cost for the billable client line. Leave blank for no margin.</span>
+                </div>
+              )}
+
               <div className="flex justify-end gap-3 pt-2 border-t">
-                <button type="button" onClick={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); }} className="btn btn-secondary">Cancel</button>
+                <button type="button" onClick={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); setApproveMargin(''); }} className="btn btn-secondary">Cancel</button>
                 <button type="button" onClick={submitApprove} disabled={approveSaving} className="btn btn-success flex items-center gap-1">
                   <FiCheck /> {approveSaving ? 'Approving…' : 'Approve Indent'}
                 </button>

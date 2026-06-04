@@ -977,7 +977,7 @@ router.post('/indents', (req, res) => {
 //      Vendor PO has been created against it. Once approved or POed,
 //      it's frozen.
 router.put('/indents/:id', (req, res) => {
-  const { status, items, site_name, raised_by_name, notes, reason, quantity_overrides, store_qty_per_item } = req.body;
+  const { status, items, site_name, raised_by_name, notes, reason, quantity_overrides, store_qty_per_item, crm_margin_pct } = req.body;
   const db = getDb();
   const id = req.params.id;
 
@@ -1073,6 +1073,10 @@ router.put('/indents/:id', (req, res) => {
               error: `Extra-Schedule / Extra-Non-Schedule indents require CRM approval first. You're signed in as "${actorName}" — no CRM module access. Admin → User Management → grant CRM access.`,
             });
           }
+          // Margin (mam 2026-06-04): only Extra-NON-Schedule adds a margin
+          // on the client quotation; Extra-Schedule bills at the BOQ rate.
+          const marginPct = (cur2.indent_category === 'extra_non_schedule' && +crm_margin_pct > 0)
+            ? +crm_margin_pct : 0;
           // Resolve the linked Client PO via planning_id → order_planning → purchase_orders.
           // We add the Extra item as a new billable po_items row with item_type='extra'
           // so collections + DPR + Sales Bill rates auto-pick it up.
@@ -1097,16 +1101,21 @@ router.put('/indents/:id', (req, res) => {
               ).get(id);
               const totalAmt = +items?.amount || 0;
               const totalQty = +items?.qty || 1;
+              // Extra-NON-Schedule adds margin on the client quotation;
+              // Extra-Schedule bills at the BOQ rate (marginPct computed above).
+              const baseRate = totalQty > 0 ? totalAmt / totalQty : totalAmt;
+              const billRate = baseRate * (1 + marginPct / 100);
+              const billAmt = billRate * totalQty;
               const ins = db.prepare(
                 `INSERT INTO po_items (po_id, description, quantity, unit, rate, amount, item_type)
                  VALUES (?, ?, ?, ?, ?, ?, 'extra')`
               ).run(
                 clientPoId,
-                `[EXTRA · ${cur2.indent_category}] from indent ${id}`,
+                `[EXTRA · ${cur2.indent_category}${marginPct ? ` · +${marginPct}% margin` : ''}] from indent ${id}`,
                 totalQty,
                 items?.unit || 'nos',
-                totalQty > 0 ? totalAmt / totalQty : totalAmt,
-                totalAmt,
+                billRate,
+                billAmt,
               );
               billablePoItemId = ins.lastInsertRowid;
             }
@@ -1167,9 +1176,10 @@ router.put('/indents/:id', (req, res) => {
                    crm_by=?,
                    crm_at=CURRENT_TIMESTAMP,
                    crm_billable_po_item_id=?,
+                   crm_margin_pct=?,
                    status='crm_approved'
              WHERE id=?`
-          ).run(actor.id, billablePoItemId, id);
+          ).run(actor.id, billablePoItemId, marginPct, id);
           fireIndent(db, id, 'indent.crm_approved', { crm_by: actor.name || actor.email || '' });
           return res.json({
             message: 'CRM approved — awaiting L1 sign-off',
