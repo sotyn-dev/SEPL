@@ -28,7 +28,7 @@ const fmtDate = (s) => {
 // mam's address / GSTIN changes. Mirrors the SEPL Purchase Order PDF
 // format mam shared as the reference layout.
 const COMPANY = {
-  name: 'SECURED ENGINEERS PVT. LTD - 24-25',
+  name: 'SECURED ENGINEERS PVT. LTD',
   gstin: '03AASCS7836D2Z3',
   pan: 'AASCS7836D',
   state: 'Punjab',
@@ -43,8 +43,6 @@ const STATS = [
   { num: '309+', label: 'STRONG MANPOWER' },
   { num: '16+', label: 'STATES SERVED' },
   { num: '4+', label: 'COUNTRIES' },
-  { num: 'ISO 9001:2015', label: 'CERTIFIED', small: true },
-  { num: 'MSME', label: 'REGISTERED', small: true },
 ];
 
 // Comprehensive 35-clause Terms & Conditions exactly as on mam's
@@ -185,7 +183,7 @@ export default function VendorPOPrint() {
           <div className="text-[9.5px] text-gray-700 mt-0.5 leading-snug">
             <span className="font-semibold">Head Office:</span> {COMPANY.head_office}
             <span className="mx-2 text-gray-400">|</span>
-            <span className="font-semibold">Branch (Noida):</span> {COMPANY.branch_office}
+            <span className="font-semibold">Corporate Office:</span> {COMPANY.branch_office}
           </div>
         </div>
 
@@ -275,6 +273,7 @@ export default function VendorPOPrint() {
             <div className="text-[9px] text-gray-600 italic mt-0.5">
               Ship to the site above. Coordinate exact address with the site engineer{po.raised_by_name && /[a-zA-Z]/.test(String(po.raised_by_name)) ? ` — ${po.raised_by_name}` : ''}.
             </div>
+            <div className="text-[9.5px] text-gray-700 mt-0.5">Mobile Number :- {po.raised_by_phone || ''}</div>
           </div>
         </div>
 
@@ -294,7 +293,7 @@ export default function VendorPOPrint() {
             <tr className="border-b-2 border-gray-800 print:border-black bg-red-700 text-[10px] uppercase tracking-wide font-bold print:bg-red-700" style={{ color: '#ffffff' }}>
               <th className="border-r border-red-800 print:border-black px-1 py-2 w-8" style={{ color: '#ffffff' }}>Sl<br/>No.</th>
               <th className="border-r border-red-800 print:border-black px-2 py-2 text-left" style={{ color: '#ffffff' }}>Description of Goods</th>
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-20" style={{ color: '#ffffff' }}>Due on</th>
+              <th className="border-r border-red-800 print:border-black px-1 py-2 w-16" style={{ color: '#ffffff' }}>Type</th>
               <th className="border-r border-red-800 print:border-black px-1 py-2 w-20" style={{ color: '#ffffff' }}>Quantity</th>
               <th className="border-r border-red-800 print:border-black px-1 py-2 w-20" style={{ color: '#ffffff' }}>Rate</th>
               <th className="border-r border-red-800 print:border-black px-1 py-2 w-12" style={{ color: '#ffffff' }}>per</th>
@@ -318,12 +317,12 @@ export default function VendorPOPrint() {
               const liveRate = (it.latest_rate != null && +it.latest_rate > 0) ? +it.latest_rate : +it.rate;
               const rateDrift = +it.rate && +it.latest_rate && +it.latest_rate !== +it.rate;
               const amount = +liveRate * +it.quantity || +it.amount || 0;
-              // Per-item due date.  mam (2026-05-21): each line should
-              // show its OWN required-by date from the indent — not a
-              // single PO-level date stamped on every row.  Falls back
-              // to PO-level expected_receipt_date for legacy rows that
-              // pre-date the indent_items.required_date column.
-              const dueOn = fmtDate(it.required_date || po.expected_receipt_date || po.po_date || po.created_at);
+              // Per-item TYPE — the procurement classification of the
+              // line (PO / FOC / RGP).  Mam's reference PO replaced the
+              // old "Due on" date column with this item-wise type.
+              // Sourced from indent_items.item_type, falling back to the
+              // item_master.type it was mirrored from.
+              const itemType = (it.item_type || it.im_type || '').toUpperCase();
               const stripeBg = idx % 2 === 1 ? 'bg-gray-50/40' : '';
               return (
                 <tr key={it.id} className={`align-top ${stripeBg}`}>
@@ -351,7 +350,7 @@ export default function VendorPOPrint() {
                       </div>
                     )}
                   </td>
-                  <td className="border-r border-gray-800 print:border-black px-1 py-2 italic text-center text-gray-700">{dueOn}</td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-2 text-center font-semibold text-gray-700">{itemType}</td>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums font-bold">{(+it.quantity || 0).toLocaleString('en-IN')} {unit}</td>
                   {/* Rate cell — shows current rate only.  Mam
                       (2026-05-21): the audit-trail "was X · updated"

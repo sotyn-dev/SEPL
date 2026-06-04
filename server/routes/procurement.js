@@ -1970,7 +1970,9 @@ router.get('/vendor-po/:id/print', (req, res) => {
   const items = db.prepare(`
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.terms, vpi.credit_days,
            ii.description, ii.make as ii_make, ii.unit, ii.required_date,
+           ii.item_type,
            im.item_code, im.item_name as master_name, im.specification, im.size, im.uom, im.make as im_make,
+           im.type as im_type,
            poi.description as boq_description,
            -- Mam (2026-05-21): "update here if i update rate in 3
            -- vendor".  Pull the LATEST finalised rate from the
