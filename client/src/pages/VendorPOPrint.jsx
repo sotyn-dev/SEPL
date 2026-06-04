@@ -170,7 +170,7 @@ export default function VendorPOPrint() {
         {/* Mam (2026-06-04): "do it some congested" — the title bar had too
             much empty height.  GSTIN / PAN now flank the title on the SAME
             row so the band is a single tight line instead of three. */}
-        <div className="bg-red-700 text-white py-1.5 px-3 print:bg-red-700 flex items-center justify-between gap-3">
+        <div className="bg-blue-800 text-white py-1.5 px-3 print:bg-blue-800 flex items-center justify-between gap-3">
           <span className="text-[9.5px] opacity-95 font-medium whitespace-nowrap">GSTIN : {COMPANY.gstin}</span>
           <span className="font-extrabold text-[15px] tracking-[0.3em] uppercase leading-none">Purchase Order</span>
           <span className="text-[9.5px] opacity-95 font-medium whitespace-nowrap">PAN : {COMPANY.pan}</span>
@@ -179,7 +179,7 @@ export default function VendorPOPrint() {
         {/* Company name + Head Office + Branch Office addresses.
             Mam (2026-05-21): the items table was sitting too far down
             the page — compressed all the marketing rows above it. */}
-        <div className="text-center py-1.5 px-3 border-b border-red-700 bg-gradient-to-b from-red-50/60 to-white">
+        <div className="text-center py-1.5 px-3 border-b border-blue-800 bg-gradient-to-b from-blue-50/60 to-white">
           <div className="text-[19px] font-extrabold tracking-tight text-gray-900 leading-tight">{COMPANY.name}</div>
           <div className="text-[9.5px] text-gray-700 mt-0.5 leading-snug">
             <span className="font-semibold">Head Office:</span> {COMPANY.head_office}
@@ -191,23 +191,23 @@ export default function VendorPOPrint() {
         {/* Marketing band — compact one-row strip combining tagline,
             stat chips, presence, and service lines.  Was 4 separate
             bands taking ~120px; now a single ~28px band. */}
-        <div className="border-b border-red-700 bg-red-50/40 print:bg-red-50">
+        <div className="border-b border-blue-800 bg-blue-50/40 print:bg-blue-50">
           <div className="flex items-center justify-center gap-3 py-1 px-3 text-[9.5px] flex-wrap">
-            <span className="font-extrabold uppercase tracking-wider text-red-700">A Leading Engineering Company of India</span>
+            <span className="font-extrabold uppercase tracking-wider text-blue-800">A Leading Engineering Company of India</span>
             <span className="text-gray-400">•</span>
             {STATS.map((s, i) => (
               <span key={i} className="whitespace-nowrap">
-                <span className="font-extrabold text-red-700">{s.num}</span>
+                <span className="font-extrabold text-blue-800">{s.num}</span>
                 <span className="text-gray-600 ml-0.5 uppercase text-[8.5px]">{s.label.replace(/\n/g, ' ')}</span>
               </span>
             ))}
           </div>
-          <div className="text-center text-[9px] text-gray-700 px-3 py-0.5 border-t border-red-200 leading-snug">
-            <span className="text-red-700 font-bold uppercase">Pan-India:</span>
+          <div className="text-center text-[9px] text-gray-700 px-3 py-0.5 border-t border-blue-200 leading-snug">
+            <span className="text-blue-800 font-bold uppercase">Pan-India:</span>
             <span className="font-bold text-gray-900 ml-1">LUDHIANA | NOIDA | BANGALORE | MUMBAI</span>
             <span className="text-gray-400 mx-2">•</span>
             <span className="text-gray-600">Specialists in </span>
-            <span className="font-extrabold text-red-700">ELECTRICAL | HVAC | FIRE SAFETY | PLUMBING | SOLAR | ELV</span>
+            <span className="font-extrabold text-blue-800">ELECTRICAL | HVAC | FIRE SAFETY | PLUMBING | SOLAR | ELV</span>
           </div>
         </div>
 
@@ -215,7 +215,7 @@ export default function VendorPOPrint() {
             Tightened padding for the post-2026-05-21 compact layout. */}
         <div className="grid grid-cols-2 border-b border-gray-800 print:border-black">
           <div className="border-r border-gray-800 print:border-black p-2 bg-blue-50/30 text-[10.5px] leading-snug">
-            <div className="text-[9px] uppercase tracking-wider font-bold text-red-700">Details of Vendor</div>
+            <div className="text-[9px] uppercase tracking-wider font-bold text-blue-800">Details of Vendor</div>
             <div className="font-extrabold text-[12.5px] leading-tight">{po.vendor_name || '—'}</div>
             {po.firm_name && po.firm_name !== po.vendor_name && <div>{po.firm_name}</div>}
             {po.vendor_address && <div className="text-gray-700 whitespace-pre-line">{po.vendor_address}</div>}
@@ -227,15 +227,15 @@ export default function VendorPOPrint() {
             <table className="w-full">
               <tbody>
                 <tr>
-                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-0.5 w-1/2"><span className="text-red-700 font-semibold">Voucher No.:</span> <span className="font-bold">SEPL-{po.id}</span></td>
-                  <td className="border-b border-gray-800 print:border-black px-2 py-0.5 w-1/2"><span className="text-red-700 font-semibold">Date :</span> <span className="font-bold">{fmtDate(po.po_date || po.created_at)}</span></td>
+                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-0.5 w-1/2"><span className="text-blue-800 font-semibold">Voucher No.:</span> <span className="font-bold">SEPL-{po.id}</span></td>
+                  <td className="border-b border-gray-800 print:border-black px-2 py-0.5 w-1/2"><span className="text-blue-800 font-semibold">Date :</span> <span className="font-bold">{fmtDate(po.po_date || po.created_at)}</span></td>
                 </tr>
                 <tr>
-                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-0.5"><span className="text-red-700 font-semibold">SEPL PO No.:</span> <span className="font-bold">{po.po_number || ''}</span></td>
+                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-0.5"><span className="text-blue-800 font-semibold">SEPL PO No.:</span> <span className="font-bold">{po.po_number || ''}</span></td>
                   <td className="border-b border-gray-800 print:border-black px-2 py-0.5"><span className="text-gray-500">Vendor Code:</span> <span className="font-mono">{po.vendor_code || ''}</span></td>
                 </tr>
                 <tr>
-                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-0.5"><span className="text-red-700 font-semibold">SEPL Indent No.:</span> <span className="font-bold">{po.indent_number || ''}</span></td>
+                  <td className="border-b border-r border-gray-800 print:border-black px-2 py-0.5"><span className="text-blue-800 font-semibold">SEPL Indent No.:</span> <span className="font-bold">{po.indent_number || ''}</span></td>
                   <td className="border-b border-gray-800 print:border-black px-2 py-0.5"><span className="text-gray-500">Contact Person:</span> <span className="font-medium">{po.contact_person || ''}</span></td>
                 </tr>
                 <tr>
@@ -298,15 +298,15 @@ export default function VendorPOPrint() {
               is wider than the content. */}
         <table className="w-full text-[11px] border-collapse">
           <thead>
-            <tr className="border-b-2 border-gray-800 print:border-black bg-red-700 text-[10px] uppercase tracking-wide font-bold print:bg-red-700" style={{ color: '#ffffff' }}>
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-8" style={{ color: '#ffffff' }}>Sl<br/>No.</th>
-              <th className="border-r border-red-800 print:border-black px-2 py-2 text-left" style={{ color: '#ffffff' }}>Description of Goods</th>
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-16" style={{ color: '#ffffff' }}>Type</th>
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-20" style={{ color: '#ffffff' }}>Quantity</th>
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-20" style={{ color: '#ffffff' }}>Rate</th>
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-12" style={{ color: '#ffffff' }}>per</th>
-              <th className="border-r border-red-800 print:border-black px-1 py-2 w-12" style={{ color: '#ffffff' }}>Disc.%</th>
-              <th className="border-r border-red-800 print:border-black px-2 py-2 w-24 text-right" style={{ color: '#ffffff' }}>Amount</th>
+            <tr className="border-b-2 border-gray-800 print:border-black bg-blue-800 text-[10px] uppercase tracking-wide font-bold print:bg-blue-800" style={{ color: '#ffffff' }}>
+              <th className="border-r border-blue-900 print:border-black px-1 py-2 w-8" style={{ color: '#ffffff' }}>Sl<br/>No.</th>
+              <th className="border-r border-blue-900 print:border-black px-2 py-2 text-left" style={{ color: '#ffffff' }}>Description of Goods</th>
+              <th className="border-r border-blue-900 print:border-black px-1 py-2 w-16" style={{ color: '#ffffff' }}>Type</th>
+              <th className="border-r border-blue-900 print:border-black px-1 py-2 w-20" style={{ color: '#ffffff' }}>Quantity</th>
+              <th className="border-r border-blue-900 print:border-black px-1 py-2 w-20" style={{ color: '#ffffff' }}>Rate</th>
+              <th className="border-r border-blue-900 print:border-black px-1 py-2 w-12" style={{ color: '#ffffff' }}>per</th>
+              <th className="border-r border-blue-900 print:border-black px-1 py-2 w-12" style={{ color: '#ffffff' }}>Disc.%</th>
+              <th className="border-r border-blue-900 print:border-black px-2 py-2 w-24 text-right" style={{ color: '#ffffff' }}>Amount</th>
             </tr>
           </thead>
           <tbody>
@@ -415,20 +415,20 @@ export default function VendorPOPrint() {
             )}
 
             {/* GRAND TOTAL — red branded bg, larger fonts for visual pop */}
-            <tr className="border-t-2 border-b-2 border-gray-800 print:border-black bg-red-700 print:bg-red-700" style={{ color: '#ffffff' }}>
-              <td className="border-r border-red-800 print:border-black px-1 py-3 text-right font-extrabold uppercase text-[13px] tracking-wide" colSpan="3" style={{ color: '#ffffff' }}>Grand Total</td>
-              <td className="border-r border-red-800 print:border-black px-1 py-3 text-right tabular-nums font-bold text-[13px]" style={{ color: '#ffffff' }}>{totalQty.toLocaleString('en-IN')} {totalUnit}</td>
-              <td className="border-r border-red-800 print:border-black px-1 py-3"></td>
-              <td className="border-r border-red-800 print:border-black px-1 py-3"></td>
-              <td className="border-r border-red-800 print:border-black px-1 py-3"></td>
-              <td className="border-r border-red-800 print:border-black px-2 py-3 text-right tabular-nums font-extrabold text-[18px]" style={{ color: '#ffffff' }}>₹ {fmtMoney(grandTotal)}</td>
+            <tr className="border-t-2 border-b-2 border-gray-800 print:border-black bg-blue-800 print:bg-blue-800" style={{ color: '#ffffff' }}>
+              <td className="border-r border-blue-900 print:border-black px-1 py-3 text-right font-extrabold uppercase text-[13px] tracking-wide" colSpan="3" style={{ color: '#ffffff' }}>Grand Total</td>
+              <td className="border-r border-blue-900 print:border-black px-1 py-3 text-right tabular-nums font-bold text-[13px]" style={{ color: '#ffffff' }}>{totalQty.toLocaleString('en-IN')} {totalUnit}</td>
+              <td className="border-r border-blue-900 print:border-black px-1 py-3"></td>
+              <td className="border-r border-blue-900 print:border-black px-1 py-3"></td>
+              <td className="border-r border-blue-900 print:border-black px-1 py-3"></td>
+              <td className="border-r border-blue-900 print:border-black px-2 py-3 text-right tabular-nums font-extrabold text-[18px]" style={{ color: '#ffffff' }}>₹ {fmtMoney(grandTotal)}</td>
             </tr>
           </tbody>
         </table>
 
         {/* Terms & Conditions — branded section header + numbered list */}
         <div className="border-t border-gray-800 print:border-black px-4 py-3 text-[11px] bg-gray-50/40 print:bg-transparent">
-          <div className="text-[11px] uppercase tracking-wider font-bold text-red-700 mb-2 border-b border-red-700/30 pb-1">Terms &amp; Conditions</div>
+          <div className="text-[11px] uppercase tracking-wider font-bold text-blue-800 mb-2 border-b border-blue-800/30 pb-1">Terms &amp; Conditions</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
             <div className="text-[11px]"><span className="text-gray-500">Payment Terms&nbsp;&nbsp;:</span> <span className="font-semibold">{po.terms || '—'}{po.credit_days ? ` (${po.credit_days} days)` : ''}</span></div>
             <div className="text-[11px]"><span className="text-gray-500">Terms for Delivery&nbsp;&nbsp;:</span> <span className="font-semibold">{po.expected_receipt_date ? `Delivery by ${fmtDate(po.expected_receipt_date)}` : '—'}</span></div>
@@ -451,7 +451,7 @@ export default function VendorPOPrint() {
         </div>
 
         {/* Footer — branded red bar */}
-        <div className="text-center border-t-2 border-red-700 py-2 text-[11px] font-semibold italic bg-red-50/60 print:bg-red-50 text-red-900">
+        <div className="text-center border-t-2 border-blue-800 py-2 text-[11px] font-semibold italic bg-blue-50/60 print:bg-blue-50 text-blue-900">
           This is a Computer Generated Voucher. No Signature Required.
         </div>
       </div>
@@ -460,15 +460,15 @@ export default function VendorPOPrint() {
         @media print {
           @page { size: A4; margin: 6mm; }
           body { background: white !important; }
-          /* Force browsers to print background colors / images so the red
-             header bar, totals bar and section tints appear in the PDF. */
+          /* Force browsers to print background colors / images so the royal
+             blue header bar, totals bar and section tints appear in the PDF. */
           * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
           .print\\:hidden { display: none !important; }
           .print\\:my-0 { margin-top: 0 !important; margin-bottom: 0 !important; }
           .print\\:shadow-none { box-shadow: none !important; }
           .print\\:border-black { border-color: black !important; }
-          .print\\:bg-red-700 { background-color: #b91c1c !important; color: white !important; }
-          .print\\:bg-red-50 { background-color: #fef2f2 !important; }
+          .print\\:bg-blue-800 { background-color: #1e40af !important; color: white !important; }
+          .print\\:bg-blue-50 { background-color: #eff6ff !important; }
           .print\\:bg-transparent { background-color: transparent !important; }
         }
       `}</style>
