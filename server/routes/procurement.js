@@ -1022,24 +1022,25 @@ router.put('/indents/:id', (req, res) => {
       const isAdminActor = actorRow.role === 'admin' || req.user.role === 'admin';
       const canRevoke = isAdminActor || actorRow.approval_role === 'l2';
       // Re-approve fires for a REJECTED indent (revoke the rejection) OR an
-      // already-APPROVED one (re-confirm / re-stamp the approval — mam
-      // 2026-06-04 wanted the button on approved indents too).
+      // already-APPROVED one (re-confirm — mam 2026-06-04 wanted it on
+      // approved indents too).  mam (2026-06-04 follow-up): a re-approve can
+      // ALSO edit order qty + from-store qty, so we mark all approval levels
+      // approved here and then FALL THROUGH to the legacy approve path, which
+      // applies quantity_overrides / store_qty_per_item and flips status.
+      let isReapprove = false;
       if (status === 'approved' && cur2 && (cur2.status === 'rejected' || cur2.status === 'approved')) {
         if (!canRevoke) return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can re-approve this indent.' });
-        const wasRejected = cur2.status === 'rejected';
+        isReapprove = true;
         db.prepare(
-          `UPDATE indents SET status='approved',
+          `UPDATE indents SET
                l1_status='approved', l1_at=COALESCE(l1_at, CURRENT_TIMESTAMP), l1_by=COALESCE(l1_by, ?),
                l2_status=CASE WHEN approval_policy IN ('two_level','crm_two_level') THEN 'approved' ELSE l2_status END,
                l2_at=CASE WHEN approval_policy IN ('two_level','crm_two_level') THEN COALESCE(l2_at, CURRENT_TIMESTAMP) ELSE l2_at END,
                l2_by=CASE WHEN approval_policy IN ('two_level','crm_two_level') THEN COALESCE(l2_by, ?) ELSE l2_by END,
-               crm_status=CASE WHEN approval_policy='crm_two_level' THEN 'approved' ELSE crm_status END,
-               approved_by=?, approved_at=CURRENT_TIMESTAMP,
-               rejected_by=NULL, rejected_at=NULL, rejection_reason=NULL
+               crm_status=CASE WHEN approval_policy='crm_two_level' THEN 'approved' ELSE crm_status END
            WHERE id=?`
-        ).run(req.user.id, req.user.id, req.user.id, id);
-        fireIndent(db, id, 'indent.approved', { approved_by: req.user.name || req.user.email || '' });
-        return res.json({ message: wasRejected ? 'Re-approved — rejection revoked' : 'Approval re-confirmed', stage: 'reapproved' });
+        ).run(req.user.id, req.user.id, id);
+        // do NOT return — fall through to the legacy approve path below.
       }
       // Re-reject: revoking an ALREADY-APPROVED indent is limited to admin or
       // the L2 approver (MD) — hard server gate, not just the hidden UI button.
@@ -1047,7 +1048,7 @@ router.put('/indents/:id', (req, res) => {
         return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can revoke (re-reject) an already-approved indent.' });
       }
 
-      if (cur2 && (cur2.approval_policy === 'two_level' || cur2.approval_policy === 'crm_two_level')) {
+      if (!isReapprove && cur2 && (cur2.approval_policy === 'two_level' || cur2.approval_policy === 'crm_two_level')) {
         const actor = db.prepare('SELECT id, role, approval_role FROM users WHERE id=?').get(req.user.id) || req.user;
         const isAdminUser = actor.role === 'admin';
         const canActL1 = isAdminUser || actor.approval_role === 'l1';
@@ -1333,7 +1334,7 @@ router.put('/indents/:id', (req, res) => {
       // on l1_* for the audit trail, then fall through to the legacy
       // approve / reject path which finalises status + applies any qty
       // overrides / from-store issue.
-      if (cur2 && cur2.approval_policy === 'hr_single') {
+      if (!isReapprove && cur2 && cur2.approval_policy === 'hr_single') {
         const actor = db.prepare('SELECT id, role, approval_role FROM users WHERE id=?').get(req.user.id) || req.user;
         const isAdminUser = actor.role === 'admin';
         const canActHr = isAdminUser || actor.approval_role === 'hr';
@@ -1371,7 +1372,7 @@ router.put('/indents/:id', (req, res) => {
     // 'draft' → 'submitted' on their own row (that's the submit step,
     // not an approval).  Admin bypasses (handles corner cases where
     // mam herself raised an indent and needs to push it through).
-    if (status === 'approved' || status === 'rejected') {
+    if ((status === 'approved' || status === 'rejected') && !isReapprove) {
       const cur = db.prepare('SELECT created_by FROM indents WHERE id=?').get(id);
       if (cur && cur.created_by === req.user.id && req.user.role !== 'admin') {
         return res.status(403).json({

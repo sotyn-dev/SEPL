@@ -1028,17 +1028,11 @@ export default function Procurement() {
   };
   // Admin Re-approve — revoke a rejection and flip the indent back to approved
   // (mam 2026-06-04). No reason modal; it's an admin override.
-  const reapproveIndent = async (i) => {
-    const msg = i.status === 'rejected'
-      ? `Re-approve indent ${i.indent_number}?\n\nThis revokes the rejection and marks it fully approved.`
-      : `Re-confirm approval of indent ${i.indent_number}?\n\nThis re-stamps the approval with your name and the current time.`;
-    if (!confirm(msg)) return;
-    try {
-      const r = await api.put(`/procurement/indents/${i.id}`, { status: 'approved' });
-      toast.success(r.data?.message || `Indent ${i.indent_number} re-approved`);
-      load();
-    } catch (err) { toast.error(err.response?.data?.error || 'Re-approve failed'); }
-  };
+  // Re-approve opens the SAME approve modal so the MD can also edit order
+  // qty + From-Store qty while re-approving (mam 2026-06-04). The modal's
+  // Approve sends status=approved + quantity_overrides + store_qty_per_item;
+  // the server re-approve path marks all levels approved and applies them.
+  const reapproveIndent = (i) => openApproveModal(i);
 
   // Open the Approve modal — pre-seeds the qty-override map with each line's
   // current quantity so the approver can edit-in-place before confirming.
