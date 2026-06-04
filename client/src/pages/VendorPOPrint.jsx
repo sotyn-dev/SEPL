@@ -131,26 +131,31 @@ export default function VendorPOPrint() {
   const units = [...new Set(items.map(it => (it.unit || it.uom || '').toUpperCase()).filter(Boolean))];
   const totalUnit = units.length === 1 ? units[0] : '';
 
-  // Payment Terms — mam (2026-06-04).  Priority:
-  //   1. Terms entered on the PO itself when it was created
-  //      (vendor_pos.payment_terms / credit_days).
-  //   2. Terms negotiated at the Finalise-Rate step, carried on the
-  //      finalised rate (indent_item_rates.final_terms / final_credit_days).
-  //      Per-item — the first line that has terms wins for the header.
-  //   3. The Vendor master default (vendors.payment_terms / credit_days).
+  // Payment Terms — mam (2026-06-04).  The term AND its credit days are
+  // taken from the SAME source so they never mismatch (e.g. an "Advance"
+  // term must not borrow "30 days" from the vendor master).  Priority:
+  //   1. Terms entered on the PO itself (vendor_pos.payment_terms).
+  //   2. Terms from the Finalise-Rate step (indent_item_rates.final_terms);
+  //      per-item — first line that has terms wins for the header.
+  //   3. The Vendor master default (vendors.payment_terms).
   //   4. Any per-line terms frozen on the PO items.
-  // Shows "—" only when none of these are set.
-  const finalTermsItem = items.find(it => it.final_terms && String(it.final_terms).trim());
-  const payTermsText = (po.payment_terms && String(po.payment_terms).trim())
-    || (finalTermsItem && String(finalTermsItem.final_terms).trim())
-    || (po.vendor_payment_terms && String(po.vendor_payment_terms).trim())
-    || items.find(it => it.terms && String(it.terms).trim())?.terms
-    || '';
-  const payCreditDays = po.credit_days
-    || finalTermsItem?.final_credit_days
-    || po.vendor_credit_days
-    || items.find(it => it.credit_days)?.credit_days
-    || null;
+  const hasVal = (s) => s != null && String(s).trim() !== '';
+  const finalTermsItem = items.find(it => hasVal(it.final_terms));
+  const lineTermsItem = items.find(it => hasVal(it.terms));
+  const termsSource =
+      hasVal(po.payment_terms)        ? { t: po.payment_terms,            d: po.credit_days }
+    : finalTermsItem                  ? { t: finalTermsItem.final_terms,  d: finalTermsItem.final_credit_days }
+    : hasVal(po.vendor_payment_terms) ? { t: po.vendor_payment_terms,     d: po.vendor_credit_days }
+    : lineTermsItem                   ? { t: lineTermsItem.terms,         d: lineTermsItem.credit_days }
+    : null;
+  const payTermsText = termsSource ? String(termsSource.t).trim() : '';
+  // Credit days only make sense for a credit-type term — "Advance (30
+  // days)" / "COD (30 days)" is nonsensical.  Show the suffix only when
+  // the term is Credit (or contains "credit"), and render as a whole
+  // number so "30.0" doesn't leak through.
+  const isCreditTerm = /credit/i.test(payTermsText);
+  const payCreditDays = (isCreditTerm && termsSource && +termsSource.d > 0)
+    ? Math.round(+termsSource.d) : null;
 
   const sharePO = () => {
     const phone = String(po.vendor_phone || '').replace(/\D/g, '');
