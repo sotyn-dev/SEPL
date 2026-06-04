@@ -437,7 +437,11 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
 
       {/* ─── DESKTOP TABLE (md+) ───────────────────────────────────── */}
       {flatStock.length > 0 && (
-        <div className="hidden md:block card p-0 overflow-hidden">
+        <div className="hidden md:block card p-0">
+          {/* No overflow-hidden on the card above — it would create an
+              intervening scroll container that breaks the sticky
+              `freeze-head` thead. mam (2026-06-04): "freeze like excel
+              headers". Header sticks to the app's main scroll area. */}
           <div>
             <table className="text-sm w-full freeze-head">
               <thead className="bg-gray-50/60">
