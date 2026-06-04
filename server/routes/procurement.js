@@ -1225,14 +1225,25 @@ router.put('/indents/:id', (req, res) => {
             fireIndent(db, id, 'indent.l1_approved', { l1_by: actor.name || actor.email || '' });
             return res.json({ message: 'L1 approved — awaiting L2 sign-off', stage: 'l1_done' });
           }
-          if (cur2.status === 'l1_approved' && cur2.l2_status === 'pending') {
+          if (cur2.status === 'l1_approved' && cur2.l2_status !== 'rejected') {
             // L2 approve — gate by role + sequence + self-double-sign block.
+            // NOTE: l2_status may already be 'approved' here. The L2 sign-off
+            // and the final status flip (in the approve transaction below) are
+            // NOT atomic: if that transaction bounced on a validation error
+            // (e.g. a store-issue qty check) AFTER l2_status was written, the
+            // row gets stuck at status='l1_approved' + l2_status='approved'.
+            // Accepting l2_status != 'rejected' (instead of == 'pending') makes
+            // this branch idempotent so a retry self-heals the stuck row and
+            // finally flips status='approved'. mam (2026-06-04).
             if (!canActL2) {
               const actorName = db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
               return res.status(403).json({
                 error: `Not authorised for L2 approval. You're signed in as "${actorName}" (approval_role=${actor.approval_role || 'none'}). Admin → User Management → edit your user → set Indent Approval Role = L2.`,
               });
             }
+            // Self-double-sign block keys off who did L1. On a recovery retry
+            // l2_by is already set to the original L2 approver, so guard against
+            // the L1 approver only.
             if (cur2.l1_by && cur2.l1_by === actor.id) {
               return res.status(400).json({ error: 'Same user cannot do both L1 and L2 — get a second pair of eyes' });
             }
@@ -2635,7 +2646,14 @@ router.delete('/item-rates/:rate_id', needsApprove, (req, res) => {
 
 // Purchase Bills
 router.get('/purchase-bills', (req, res) => {
-  res.json(getDb().prepare(`SELECT pb.*, v.name as vendor_name FROM purchase_bills pb
+  // debit_total = sum of non-cancelled debit notes on this bill's PO.
+  // net_payable = bill total − debits (mam 2026-06-04: the auto extra-rate
+  // debit deducts from what we pay the vendor).
+  res.json(getDb().prepare(`SELECT pb.*, v.name as vendor_name,
+      COALESCE((SELECT SUM(d.amount) FROM debit_notes d
+                 WHERE d.vendor_po_id = pb.vendor_po_id
+                   AND d.status <> 'cancelled'), 0) AS debit_total
+    FROM purchase_bills pb
     LEFT JOIN vendors v ON pb.vendor_id=v.id ORDER BY pb.created_at DESC`).all());
 });
 
@@ -2709,11 +2727,42 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       }
     }
 
+    // Auto extra-rate DEBIT NOTE (mam 2026-06-04): when the vendor bills
+    // MORE than the PO value, raise a debit note for the difference
+    // automatically — it then deducts from the net payable.  Compares the
+    // bill's TAXABLE value (amount, pre-GST) against the PO subtotal
+    // (vendor_pos.total_amount, also pre-GST) so GST never creates a false
+    // variance.  One auto extra-rate debit per bill (guarded).
+    let autoDebit = null;
+    if (vendor_po_id) {
+      try {
+        const po = db.prepare('SELECT total_amount, vendor_id FROM vendor_pos WHERE id=?').get(vendor_po_id);
+        const poVal = +po?.total_amount || 0;
+        const billVal = amount > 0 ? amount : (total_amount - gst_amount);  // taxable value
+        const variance = Math.round((billVal - poVal) * 100) / 100;
+        const already = db.prepare("SELECT id FROM debit_notes WHERE purchase_bill_id=? AND type='extra_rate'").get(r.lastInsertRowid);
+        if (poVal > 0 && variance > 1 && !already) {
+          const { nextSequence } = require('../db/nextSequence');
+          const year = new Date().getFullYear();
+          const dnNum = nextSequence(db, 'debit_notes', 'dn_number', `DBN/${year}/`, { pad: 4 });
+          const items = [{ description: `Excess over PO value (Bill ${bill_number || '#' + r.lastInsertRowid})`, unit: '', qty: 1, rate: variance, amount: variance, purchase_bill_id: r.lastInsertRowid }];
+          const dr = db.prepare(
+            `INSERT INTO debit_notes (dn_number, type, vendor_po_id, vendor_id, purchase_bill_id, amount, reason, items_json, status, created_by)
+             VALUES (?, 'extra_rate', ?, ?, ?, ?, ?, ?, 'open', ?)`
+          ).run(dnNum, vendor_po_id, vendor_id || po.vendor_id || null, r.lastInsertRowid, variance,
+                `Auto-raised on bill entry: vendor billed ₹${Math.round(billVal).toLocaleString('en-IN')} vs PO ₹${Math.round(poVal).toLocaleString('en-IN')} (excess ₹${Math.round(variance).toLocaleString('en-IN')}).`,
+                JSON.stringify(items), req.user?.id || null);
+          autoDebit = { id: dr.lastInsertRowid, dn_number: dnNum, amount: variance };
+        }
+      } catch (e) { console.error('[auto-debit] failed (bill saved anyway):', e.message); }
+    }
+
     res.status(201).json({
       id: r.lastInsertRowid,
       file_path: filePath,
       delivery_note_id: autoDnId,
       delivery_note_number: autoDnNumber,
+      auto_debit: autoDebit,
     });
   } catch (err) {
     if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
