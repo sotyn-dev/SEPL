@@ -208,6 +208,7 @@ export default function UserManagement() {
                   <span className={`badge ${u.role === 'admin' ? 'badge-red' : u.role === 'manager' ? 'badge-purple' : 'badge-blue'}`}>{u.role}</span>
                   {u.approval_role === 'l1' && <span className="ml-1 inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title="L1 Indent Approver">L1</span>}
                   {u.approval_role === 'l2' && <span className="ml-1 inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 border border-purple-300" title="L2 Indent Approver">L2</span>}
+                  {u.approval_role === 'hr' && <span className="ml-1 inline-block text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-teal-100 text-teal-700 border border-teal-300" title="HR Indent Approver (RGP)">HR</span>}
                 </td>
                 <td>
                   <div className="flex flex-wrap gap-1">
@@ -280,8 +281,9 @@ export default function UserManagement() {
                 <option value="">— none —</option>
                 <option value="l1">L1 Approver (first sign-off)</option>
                 <option value="l2">L2 Approver (final sign-off)</option>
+                <option value="hr">HR Approver (RGP single sign-off)</option>
               </select>
-              <p className="text-[10px] text-gray-400 mt-0.5">Two-level indent approval. Only one L1 and one L2 are active at a time.</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">Two-level indent approval (L1 → L2). HR signs off RGP indents in a single approval.</p>
             </div>
           </div>
 

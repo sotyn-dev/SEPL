@@ -1831,6 +1831,9 @@ export default function Procurement() {
               const isCreator = i.created_by === user?.id;
               const canActL1 = isAdmin() || user?.approval_role === 'l1';
               const canActL2 = isAdmin() || user?.approval_role === 'l2';
+              // RGP single HR sign-off (mam 2026-06-04).
+              const isHrSingle = i.approval_policy === 'hr_single';
+              const canActHr = isAdmin() || user?.approval_role === 'hr';
               // CRM action allowed for anyone with CRM module access
               // (mam's pick: "anyone with CRM module access").  The real
               // module key is 'crm_funnel' (there is no 'crm' module), and
@@ -1853,6 +1856,16 @@ export default function Procurement() {
                     </>
                   );
                   return <span className="text-[10px] text-purple-600 italic">Awaiting CRM (Extra-billable)</span>;
+                }
+                // RGP single HR sign-off — one approval by an HR-role user.
+                if (isHrSingle && i.status === 'submitted' && !isCreator) {
+                  if (canActHr) return (
+                    <>
+                      <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2 flex-1">Approve (HR)</button>
+                      <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Reject</button>
+                    </>
+                  );
+                  return <span className="text-[10px] text-teal-600 italic">Awaiting HR approval</span>;
                 }
                 if (i.status === 'submitted' && !isCreator) {
                   if (isTwoLevel) {
@@ -2246,6 +2259,8 @@ export default function Procurement() {
                         const isCreator = i.created_by === user?.id;
                         const canActL1 = isAdmin() || user?.approval_role === 'l1';
                         const canActL2 = isAdmin() || user?.approval_role === 'l2';
+                        const isHrSingle = i.approval_policy === 'hr_single';
+                        const canActHr = isAdmin() || user?.approval_role === 'hr';
                         // CRM action = anyone with CRM module (crm_funnel)
                         // access, OR the CRM person assigned on the Client PO
                         // (planning_crm_name) even without the role — matches
@@ -2265,6 +2280,19 @@ export default function Procurement() {
                             );
                           }
                           return <span className="text-[10px] text-purple-600 italic">Awaiting CRM (Extra-billable)</span>;
+                        }
+
+                        // RGP single HR sign-off — one approval by an HR-role user.
+                        if (isHrSingle && i.status === 'submitted' && !isCreator) {
+                          if (canActHr) {
+                            return (
+                              <>
+                                <button onClick={() => openApproveModal(i)} className="btn btn-success text-xs py-1 px-2">Approve (HR)</button>
+                                <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2">Reject</button>
+                              </>
+                            );
+                          }
+                          return <span className="text-[10px] text-teal-600 italic">Awaiting HR approval</span>;
                         }
 
                         // L1 stage — submitted + (legacy OR two_level pending L1)

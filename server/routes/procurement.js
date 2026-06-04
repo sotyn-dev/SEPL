@@ -873,7 +873,10 @@ router.post('/indents', (req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const isBillable = category === 'extra_schedule' || category === 'extra_non_schedule';
   const basePolicy = today >= TWO_LEVEL_CUTOFF ? 'two_level' : 'single';
-  const policy = isBillable && basePolicy === 'two_level' ? 'crm_two_level' : basePolicy;
+  // RGP — mam (2026-06-04 chart): "RGP → L1 Approval (HR)".  RGP indents
+  // take a SINGLE HR sign-off (policy 'hr_single'), not the L1+L2 chain.
+  const policy = category === 'rgp' ? 'hr_single'
+    : (isBillable && basePolicy === 'two_level' ? 'crm_two_level' : basePolicy);
   const r = db.prepare(
     `INSERT INTO indents
        (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,
@@ -883,7 +886,10 @@ router.post('/indents', (req, res) => {
     resolvedPlanningId, indentNum, 'submitted',
     notes || '', site_name || '', raised_by_name || '', site_name || '', req.user.id,
     policy,
-    policy === 'two_level' || policy === 'crm_two_level' ? 'pending' : null,
+    // l1_status — pending for two_level / crm_two_level AND hr_single
+    // (the single HR gate is tracked on l1_*).
+    policy === 'two_level' || policy === 'crm_two_level' || policy === 'hr_single' ? 'pending' : null,
+    // l2_status — only the two-level chains have an L2 stage; hr_single has none.
     policy === 'two_level' || policy === 'crm_two_level' ? 'pending' : null,
     category,
     policy === 'crm_two_level' ? 'pending' : 'n/a',
@@ -1273,6 +1279,42 @@ router.put('/indents/:id', (req, res) => {
           // (No 'else' branch — admin Re-reject on an already-approved indent
           // skips the L1/L2 tagging entirely and falls straight through to
           // the legacy reject path, which is what mam wants.)
+        }
+      }
+
+      // ── RGP single HR sign-off (mam 2026-06-04 chart) ──────────────
+      // RGP indents (policy 'hr_single') need ONE approval from an
+      // HR-role user — no L1/L2.  Gate by role here, record the sign-off
+      // on l1_* for the audit trail, then fall through to the legacy
+      // approve / reject path which finalises status + applies any qty
+      // overrides / from-store issue.
+      if (cur2 && cur2.approval_policy === 'hr_single') {
+        const actor = db.prepare('SELECT id, role, approval_role FROM users WHERE id=?').get(req.user.id) || req.user;
+        const isAdminUser = actor.role === 'admin';
+        const canActHr = isAdminUser || actor.approval_role === 'hr';
+        const whoami = () => db.prepare('SELECT name FROM users WHERE id=?').get(actor.id)?.name || 'unknown';
+        if (status === 'approved') {
+          if (cur2.status !== 'submitted') {
+            return res.status(400).json({ error: `Cannot approve from status='${cur2.status}'` });
+          }
+          if (!canActHr) {
+            return res.status(403).json({
+              error: `RGP indents need HR approval. You're signed in as "${whoami()}" (approval_role=${actor.approval_role || 'none'}). Admin → User Management → set Indent Approval Role = HR.`,
+            });
+          }
+          db.prepare(`UPDATE indents SET l1_status='approved', l1_by=?, l1_at=CURRENT_TIMESTAMP WHERE id=?`).run(actor.id, id);
+          // fall through → legacy approve path sets status='approved'
+        }
+        if (status === 'rejected') {
+          const reasonStr = String(reason || '').trim();
+          if (reasonStr.length < 3) {
+            return res.status(400).json({ error: 'Rejection reason is required (at least 3 characters).' });
+          }
+          if (!canActHr) {
+            return res.status(403).json({ error: `RGP indents need HR to reject. You're signed in as "${whoami()}".` });
+          }
+          db.prepare(`UPDATE indents SET l1_status='rejected', l1_by=?, l1_at=CURRENT_TIMESTAMP WHERE id=?`).run(actor.id, id);
+          // fall through → legacy reject path writes rejection_reason + status
         }
       }
     }

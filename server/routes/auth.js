@@ -160,7 +160,7 @@ router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
     // after). Accept 'l1' | 'l2' | null/'' to clear. Sent separately so
     // omitting the field doesn't clobber an existing assignment.
     if (approval_role !== undefined) {
-      const VALID = ['l1', 'l2'];
+      const VALID = ['l1', 'l2', 'hr'];
       const cleaned = approval_role && VALID.includes(approval_role) ? approval_role : null;
       db.prepare('UPDATE users SET approval_role=? WHERE id=?').run(cleaned, req.params.id);
     }
