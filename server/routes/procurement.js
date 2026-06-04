@@ -2258,6 +2258,13 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   const remarks = b.remarks || null;
   const expected_receipt_date = b.expected_receipt_date || null;
 
+  // Vendor-facing Payment Terms entered on the Create PO modal (mam
+  // 2026-06-04).  Printed on the PO.  credit_days is optional and only
+  // meaningful for credit-type terms.
+  const payment_terms = b.payment_terms ? String(b.payment_terms).trim().slice(0, 60) : null;
+  const credit_days = (b.credit_days !== undefined && b.credit_days !== '' && +b.credit_days >= 0)
+    ? Math.round(+b.credit_days) : null;
+
   // ─── Payment-before-material (INTERNAL ONLY — mam 2026-05-27) ───
   // Captures whether the vendor needs advance / wants old dues cleared
   // before shipping, or is fine to ship on credit. Never printed on the
@@ -2277,10 +2284,12 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
       const r = db.prepare(
         `INSERT INTO vendor_pos
            (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks, expected_receipt_date,
-            payment_block_type, payment_block_amount, payment_block_notes, payment_block_status)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`
+            payment_block_type, payment_block_amount, payment_block_notes, payment_block_status,
+            payment_terms, credit_days)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks, expected_receipt_date,
-            pmtType, pmtAmount, pmtNotes, pmtStatus);
+            pmtType, pmtAmount, pmtNotes, pmtStatus,
+            payment_terms, credit_days);
       const vpoId = r.lastInsertRowid;
 
       // Only write line items if the uploader chose to link indent lines.

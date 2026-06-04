@@ -131,16 +131,18 @@ export default function VendorPOPrint() {
   const units = [...new Set(items.map(it => (it.unit || it.uom || '').toUpperCase()).filter(Boolean))];
   const totalUnit = units.length === 1 ? units[0] : '';
 
-  // Payment Terms — mam (2026-06-04): the line always showed "—" because
-  // it read po.terms, a column that doesn't exist on vendor_pos.  The
-  // real value lives on the Vendor master (vendors.payment_terms +
-  // credit_days); fall back to any per-line terms captured on the PO
-  // items.  Still shows "—" only when the vendor master genuinely has
-  // no payment terms filled.
-  const payTermsText = (po.vendor_payment_terms && String(po.vendor_payment_terms).trim())
+  // Payment Terms — mam (2026-06-04).  Priority:
+  //   1. Terms entered on the PO itself when it was created
+  //      (vendor_pos.payment_terms / credit_days).
+  //   2. The Vendor master default (vendors.payment_terms / credit_days).
+  //   3. Any per-line terms captured on the PO items.
+  // Shows "—" only when none of these are set.
+  const payTermsText = (po.payment_terms && String(po.payment_terms).trim())
+    || (po.vendor_payment_terms && String(po.vendor_payment_terms).trim())
     || items.find(it => it.terms && String(it.terms).trim())?.terms
     || '';
-  const payCreditDays = po.vendor_credit_days
+  const payCreditDays = po.credit_days
+    || po.vendor_credit_days
     || items.find(it => it.credit_days)?.credit_days
     || null;
 

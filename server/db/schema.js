@@ -3016,6 +3016,12 @@ function initializeDatabase() {
     ['vendor_pos', "payment_block_status TEXT DEFAULT 'na'"],  // 'pending' | 'cleared' | 'na'
     ['vendor_pos', 'payment_cleared_at DATETIME'],        // when "Mark Cleared" clicked
     ['vendor_pos', 'payment_cleared_by INTEGER REFERENCES users(id)'],
+    // Vendor-facing Payment Terms entered when the PO is created (mam
+    // 2026-06-04: "payment terms here when we make po their enter
+    // payment terms").  Unlike payment_block_* (internal), THESE print on
+    // the vendor PO.  Falls back to the vendor master's terms when blank.
+    ['vendor_pos', 'payment_terms TEXT'],                 // 'Advance' | 'Credit' | 'PDC' | 'COD' | free text
+    ['vendor_pos', 'credit_days INTEGER'],                // optional credit period for the above
     // Purchase Bills also get an uploaded file (the bill PDF / image / excel)
     ['purchase_bills', 'file_path TEXT'],
     // Dispatch (delivery_notes) — upgraded from a simple "delivery record" to

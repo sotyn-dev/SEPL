@@ -1144,6 +1144,8 @@ export default function Procurement() {
       po_date: new Date().toISOString().slice(0, 10), // default to today
       expected_receipt_date: '',
       total_amount: '',
+      payment_terms: '',
+      credit_days: '',
       remarks: '',
       po_file: null,
     });
@@ -1213,6 +1215,9 @@ export default function Procurement() {
     fd.append('vendor_id', form.vendor_id);
     if (form.indent_id) fd.append('indent_id', form.indent_id);
     if (form.total_amount) fd.append('total_amount', form.total_amount);
+    // Vendor-facing Payment Terms entered here (mam 2026-06-04) — printed on the PO.
+    if (form.payment_terms) fd.append('payment_terms', form.payment_terms);
+    if (form.credit_days !== '' && form.credit_days != null) fd.append('credit_days', form.credit_days);
     if (form.remarks) fd.append('remarks', form.remarks);
     if (items.length) fd.append('items', JSON.stringify(items));
     if (form.po_file) fd.append('file', form.po_file);
@@ -5100,11 +5105,22 @@ export default function Procurement() {
             </div>
             <div>
               <label className="label">Vendor *</label>
-              <select className="select" value={form.vendor_id || ''} onChange={e => setForm({...form, vendor_id: +e.target.value})} required>
+              <select className="select" value={form.vendor_id || ''} onChange={e => {
+                const vid = +e.target.value;
+                const v = vendors.find(x => x.id === vid);
+                // Pre-fill Payment Terms from the vendor master, but never
+                // overwrite a value mam already typed for this PO.
+                setForm(f => ({
+                  ...f,
+                  vendor_id: vid,
+                  payment_terms: f.payment_terms || (v?.payment_terms || ''),
+                  credit_days: (f.credit_days !== '' && f.credit_days != null) ? f.credit_days : (v?.credit_days ?? ''),
+                }));
+              }} required>
                 <option value="">Select vendor</option>
                 {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
               </select>
-              <p className="text-[10px] text-gray-400 mt-0.5">Auto-picked from finalized rates if all items agree.</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">Auto-picked from finalized rates if all items agree. Payment terms pre-fill from the vendor.</p>
             </div>
             <div>
               <label className="label">PO Total Amount <span className="text-gray-400 font-normal">(auto-computed from items)</span></label>
@@ -5115,6 +5131,22 @@ export default function Procurement() {
               <label className="label">Expected Receipt Date <span className="text-gray-400 font-normal">(when goods are due from vendor)</span></label>
               <input className="input" type="date" value={form.expected_receipt_date || ''} onChange={e => setForm({...form, expected_receipt_date: e.target.value})} />
               <p className="text-[10px] text-gray-400 mt-0.5">Used to chase vendor follow-ups and trigger the Purchase Bill upload.</p>
+            </div>
+            <div>
+              <label className="label">Payment Terms <span className="text-gray-400 font-normal">(printed on the PO)</span></label>
+              <select className="select" value={form.payment_terms || ''} onChange={e => setForm({...form, payment_terms: e.target.value})}>
+                <option value="">— select —</option>
+                <option>Advance</option>
+                <option>Credit</option>
+                <option>PDC</option>
+                <option>COD</option>
+              </select>
+              <p className="text-[10px] text-gray-400 mt-0.5">Defaults from the vendor — change it for this PO if needed.</p>
+            </div>
+            <div>
+              <label className="label">Credit Days <span className="text-gray-400 font-normal">(optional)</span></label>
+              <input className="input" type="number" min="0" placeholder="e.g. 30" value={form.credit_days ?? ''} onChange={e => setForm({...form, credit_days: e.target.value})} />
+              <p className="text-[10px] text-gray-400 mt-0.5">Prints as "Credit (30 days)" on the PO.</p>
             </div>
             <div className="sm:col-span-2">
               <label className="label">Remarks <span className="text-gray-400 font-normal">(optional)</span></label>
