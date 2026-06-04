@@ -2014,7 +2014,12 @@ router.get('/vendor-po/:id/print', (req, res) => {
            -- frozen vendor_po_items.rate so editing the rate later
            -- (in Vendor Rates step) is reflected on every fresh print.
            ir.final_rate as latest_rate,
-           ir.final_vendor_name as latest_vendor
+           ir.final_vendor_name as latest_vendor,
+           -- Payment terms negotiated at the Finalise-Rate step (mam
+           -- 2026-06-04: "or may be enter in finalise rate").  Per-item;
+           -- the print picks the first non-empty one for the PO header.
+           ir.final_terms as final_terms,
+           ir.final_credit_days as final_credit_days
       FROM vendor_po_items vpi
       LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
       LEFT JOIN item_master im ON im.id = ii.item_master_id

@@ -134,14 +134,20 @@ export default function VendorPOPrint() {
   // Payment Terms — mam (2026-06-04).  Priority:
   //   1. Terms entered on the PO itself when it was created
   //      (vendor_pos.payment_terms / credit_days).
-  //   2. The Vendor master default (vendors.payment_terms / credit_days).
-  //   3. Any per-line terms captured on the PO items.
+  //   2. Terms negotiated at the Finalise-Rate step, carried on the
+  //      finalised rate (indent_item_rates.final_terms / final_credit_days).
+  //      Per-item — the first line that has terms wins for the header.
+  //   3. The Vendor master default (vendors.payment_terms / credit_days).
+  //   4. Any per-line terms frozen on the PO items.
   // Shows "—" only when none of these are set.
+  const finalTermsItem = items.find(it => it.final_terms && String(it.final_terms).trim());
   const payTermsText = (po.payment_terms && String(po.payment_terms).trim())
+    || (finalTermsItem && String(finalTermsItem.final_terms).trim())
     || (po.vendor_payment_terms && String(po.vendor_payment_terms).trim())
     || items.find(it => it.terms && String(it.terms).trim())?.terms
     || '';
   const payCreditDays = po.credit_days
+    || finalTermsItem?.final_credit_days
     || po.vendor_credit_days
     || items.find(it => it.credit_days)?.credit_days
     || null;
