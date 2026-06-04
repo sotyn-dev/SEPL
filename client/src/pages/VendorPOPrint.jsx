@@ -270,10 +270,19 @@ export default function VendorPOPrint() {
                 {po.client_name_bb && <>Client: <span className="font-semibold">{po.client_name_bb}</span></>}
               </div>
             )}
+            {po.client_address_bb && (
+              <div className="text-[9px] text-gray-600 whitespace-pre-line leading-tight mt-0.5">
+                <span className="text-gray-500">Client Address:</span> {po.client_address_bb}
+              </div>
+            )}
             <div className="text-[9px] text-gray-600 italic mt-0.5">
-              Ship to the site above. Coordinate exact address with the site engineer{po.raised_by_name && /[a-zA-Z]/.test(String(po.raised_by_name)) ? ` — ${po.raised_by_name}` : ''}.
+              Ship to the site above. Coordinate exact address with the site engineer{po.site_engineer_name ? ` — ${po.site_engineer_name}` : ''}.
             </div>
-            <div className="text-[9.5px] text-gray-700 mt-0.5">Mobile Number :- {po.raised_by_phone || ''}</div>
+            <div className="text-[9.5px] text-gray-700 mt-0.5">
+              Site Engineer :- {po.site_engineer_name || ''}
+              <span className="mx-1 text-gray-400">|</span>
+              Mobile Number :- {po.raised_by_phone || ''}
+            </div>
           </div>
         </div>
 

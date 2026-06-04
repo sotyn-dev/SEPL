@@ -1937,10 +1937,12 @@ router.get('/vendor-po/:id/print', (req, res) => {
            v.phone as vendor_phone, v.email as vendor_email,
            v.gst_number, v.address as vendor_address,
            v.district, v.state, v.payment_terms as vendor_payment_terms,
-           i.indent_number, i.site_name, i.raised_by_name
+           i.indent_number, i.site_name, i.raised_by_name,
+           cu.name as creator_name, cu.phone as creator_phone
       FROM vendor_pos vp
       LEFT JOIN vendors v ON vp.vendor_id = v.id
       LEFT JOIN indents i ON vp.indent_id = i.id
+      LEFT JOIN users cu ON cu.id = i.created_by
      WHERE vp.id = ?
   `).get(req.params.id);
   if (!po) return res.status(404).json({ error: 'Vendor PO not found' });
@@ -1953,7 +1955,8 @@ router.get('/vendor-po/:id/print', (req, res) => {
   if (po.site_name) {
     try {
       const bb = db.prepare(`
-        SELECT lead_no, project_name, company_name, client_name
+        SELECT lead_no, project_name, company_name, client_name,
+               billing_address, shipping_address
         FROM business_book
         WHERE LOWER(TRIM(COALESCE(project_name, ''))) = LOWER(TRIM(?))
            OR LOWER(TRIM(COALESCE(company_name, ''))) = LOWER(TRIM(?))
@@ -1963,9 +1966,39 @@ router.get('/vendor-po/:id/print', (req, res) => {
         po.sepl_lead_no = bb.lead_no || null;
         po.project_name_bb = bb.project_name || bb.company_name || null;
         po.client_name_bb = bb.client_name || null;
+        // mam (2026-06-04): show the client's billing address (from
+        // Business Book) on the PO Consignee block.  Falls back to the
+        // shipping address when billing isn't filled.
+        po.client_address_bb = bb.billing_address || bb.shipping_address || null;
       }
     } catch (_) { /* non-fatal */ }
   }
+
+  // Site engineer + mobile — mam (2026-06-04): the indent's site
+  // engineer and HIS number should appear on the PO so the vendor can
+  // coordinate delivery.  raised_by_name is free text typed on the
+  // indent form; match it to a User Management record (users.name) to
+  // pull the phone.  When raised_by_name is blank or unmatched, fall
+  // back to the indent's creator (indents.created_by) — the user who
+  // actually filled the indent — for both the displayed name and phone.
+  if (po.raised_by_name && /[a-zA-Z]/.test(String(po.raised_by_name))) {
+    try {
+      const u = db.prepare(`
+        SELECT phone FROM users
+        WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))
+          AND phone IS NOT NULL AND TRIM(phone) <> ''
+        ORDER BY active DESC, id ASC LIMIT 1
+      `).get(po.raised_by_name);
+      if (u) po.raised_by_phone = u.phone;
+    } catch (_) { /* non-fatal */ }
+  }
+  // Displayed engineer name: prefer the typed site-engineer name, else
+  // the indent creator's name.
+  po.site_engineer_name = (po.raised_by_name && /[a-zA-Z]/.test(String(po.raised_by_name)))
+    ? po.raised_by_name
+    : (po.creator_name || null);
+  // Phone fallback: matched-by-name phone, else the creator's phone.
+  if (!po.raised_by_phone) po.raised_by_phone = po.creator_phone || null;
 
   const items = db.prepare(`
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.terms, vpi.credit_days,
