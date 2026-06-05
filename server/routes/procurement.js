@@ -1007,6 +1007,9 @@ router.put('/indents/:id', (req, res) => {
     //   - Reject at L1 or L2 → set l*_status='rejected', then FALL THROUGH
     //                  to the existing reject path so rejection_reason + the
     //                  legacy Approval-column display keep working.
+    // Declared at handler scope so the later self-creator-check + legacy
+    // approve path can also see it (re-approve skips those gates).
+    let isReapprove = false;
     if (status === 'approved' || status === 'rejected') {
       const cur2 = db.prepare(
         `SELECT created_by, approval_policy, status, l1_status, l2_status, l1_by,
@@ -1027,7 +1030,6 @@ router.put('/indents/:id', (req, res) => {
       // ALSO edit order qty + from-store qty, so we mark all approval levels
       // approved here and then FALL THROUGH to the legacy approve path, which
       // applies quantity_overrides / store_qty_per_item and flips status.
-      let isReapprove = false;
       if (status === 'approved' && cur2 && (cur2.status === 'rejected' || cur2.status === 'approved')) {
         if (!canRevoke) return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can re-approve this indent.' });
         isReapprove = true;
