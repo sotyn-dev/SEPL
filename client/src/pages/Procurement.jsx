@@ -3954,6 +3954,14 @@ export default function Procurement() {
         const readyToDispatch = vendorPos.filter(po =>
           billedPoIds.has(po.id) && !salesBilledPoIds.has(po.id) && !po.cancelled
         );
+        // Sales-Bill-pending challans with NO Vendor PO (i.e. from-store
+        // challans) — they can't ride the PO list above, so surface them
+        // here too (mam 2026-06-04: "if SB pending, also show in Ready to
+        // Dispatch").  PO challans that are SB-pending are already covered
+        // by readyToDispatch (billed PO, not yet sales-billed).
+        const sbPendingDNs = deliveryNotes.filter(d =>
+          d.sales_bill_pending === 1 && !d.sales_bill_number && d.document_type === 'challan' && !d.vendor_po_id
+        );
 
         // Sub-tab filtering (mam 2026-05-25)
         const rSearch = dispReadySearch.trim().toLowerCase();
@@ -4147,7 +4155,7 @@ export default function Procurement() {
             <div className="flex gap-1 border-b border-gray-200 -mb-px">
               <button onClick={() => setDispatchSubTab('ready')}
                 className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'ready' ? 'border-indigo-500 text-indigo-700 bg-indigo-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                Ready to Dispatch <span className="ml-1 text-[10px] opacity-80">({readyToDispatch.length})</span>
+                Ready to Dispatch <span className="ml-1 text-[10px] opacity-80">({readyToDispatch.length + sbPendingDNs.length})</span>
               </button>
               <button onClick={() => setDispatchSubTab('list')}
                 className={`px-3 py-1.5 text-xs font-semibold border-b-2 -mb-px ${dispatchSubTab === 'list' ? 'border-red-600 text-red-700 bg-red-50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
@@ -4157,8 +4165,40 @@ export default function Procurement() {
           </div>
 
           {/* ===== Sub-tab 1: Ready to dispatch ===== */}
-          {dispatchSubTab === 'ready' && readyToDispatch.length === 0 && (
-            <div className="card text-center py-8 text-gray-400 text-xs">No POs awaiting dispatch. 🎉</div>
+          {dispatchSubTab === 'ready' && readyToDispatch.length === 0 && sbPendingDNs.length === 0 && (
+            <div className="card text-center py-8 text-gray-400 text-xs">Nothing awaiting a Sales Bill / dispatch. 🎉</div>
+          )}
+          {/* From-store (no-PO) challans awaiting a Sales Bill — mam 2026-06-04. */}
+          {dispatchSubTab === 'ready' && sbPendingDNs.length > 0 && (
+            <div className="card p-3 bg-amber-50 border border-amber-200 mb-3">
+              <h4 className="font-semibold text-amber-800 text-sm mb-2">
+                From-Store · Sales Bill pending
+                <span className="text-xs font-normal text-amber-700 ml-2">({sbPendingDNs.length})</span>
+              </h4>
+              <div className="overflow-auto max-h-[40vh]">
+                <table className="text-xs w-full">
+                  <thead><tr className="bg-amber-100/50">
+                    <th className="px-2 py-1 text-left">Challan No</th>
+                    <th className="px-2 py-1 text-left">Site / Company</th>
+                    <th className="px-2 py-1">Date</th>
+                    <th className="px-2 py-1 text-right">Actions</th>
+                  </tr></thead>
+                  <tbody>
+                    {sbPendingDNs.map(d => (
+                      <tr key={d.id} className="border-b border-amber-100">
+                        <td className="px-2 py-1.5 font-semibold text-blue-800 whitespace-nowrap">{d.document_number}<span className="ml-1 text-[9px] text-indigo-600">📦 FROM STORE</span></td>
+                        <td className="px-2 py-1.5 max-w-[260px] truncate">{d.site_name || '—'}</td>
+                        <td className="px-2 py-1.5 text-center whitespace-nowrap">{d.delivery_date || '—'}</td>
+                        <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                          <button onClick={async () => { const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' }); const url = URL.createObjectURL(new Blob([res.data], { type: 'text/html' })); window.open(url, '_blank'); }} className="text-[10px] px-2 py-1 mr-1 rounded border border-gray-300 hover:bg-gray-50">Print</button>
+                          <button onClick={() => { setSbTarget(d); setSbForm({ sales_bill_number: '', file: null }); }} className="text-[10px] px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">Add Sales Bill</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           )}
           {dispatchSubTab === 'ready' && readyToDispatch.length > 0 && (
             <div className="card p-3 bg-indigo-50 border border-indigo-200">
