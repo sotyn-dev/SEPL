@@ -2787,6 +2787,58 @@ router.get('/purchase-bills', (req, res) => {
     LEFT JOIN vendors v ON pb.vendor_id=v.id ORDER BY pb.created_at DESC`).all());
 });
 
+// Per-item PO qty vs RECEIVED qty for a Vendor PO — feeds the Bill-upload
+// modal (mam 2026-06-04): show ordered vs received per line so the user
+// can spot a short before saving the bill, and suggest the bill amount.
+// Received qty is summed from delivery_notes.items_json (per
+// vendor_po_item_id).  received_qty stays null when nothing's been
+// received yet, so the UI doesn't flag "short" prematurely.
+router.get('/vendor-po/:id/bill-items', (req, res) => {
+  const db = getDb();
+  const poId = +req.params.id;
+  const items = db.prepare(`
+    SELECT vpi.id as vpi_id, vpi.quantity as ordered_qty, vpi.rate,
+           COALESCE(im.item_name, ii.description) as description,
+           im.uom, ii.unit, ii.item_type
+      FROM vendor_po_items vpi
+      LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+     WHERE vpi.vendor_po_id = ?
+     ORDER BY vpi.id
+  `).all(poId);
+
+  const receivedByVpi = {};
+  let anyReceipt = false;
+  const dns = db.prepare("SELECT items_json FROM delivery_notes WHERE vendor_po_id=? AND items_json IS NOT NULL").all(poId);
+  for (const dn of dns) {
+    try {
+      const arr = JSON.parse(dn.items_json);
+      for (const r of (arr || [])) {
+        if (r.vendor_po_item_id != null) {
+          anyReceipt = true;
+          receivedByVpi[r.vendor_po_item_id] = (receivedByVpi[r.vendor_po_item_id] || 0) + (+r.received_qty || 0);
+        }
+      }
+    } catch (_) { /* ignore bad json */ }
+  }
+
+  const rows = items.map(it => {
+    const recorded = Object.prototype.hasOwnProperty.call(receivedByVpi, it.vpi_id);
+    const received = recorded ? receivedByVpi[it.vpi_id] : null;
+    const ordered = +it.ordered_qty || 0;
+    return {
+      vpi_id: it.vpi_id, description: it.description || '—',
+      unit: it.uom || it.unit || '', item_type: it.item_type || '',
+      ordered_qty: ordered, received_qty: received,
+      rate: +it.rate || 0,
+      short_qty: received != null ? Math.max(0, ordered - received) : 0,
+      ordered_value: ordered * (+it.rate || 0),
+    };
+  });
+  const orderedTotal = rows.reduce((s, r) => s + r.ordered_value, 0);
+  res.json({ items: rows, ordered_total: Math.round(orderedTotal * 100) / 100, any_receipt: anyReceipt });
+});
+
 // Purchase bill creation supports an optional file upload (PDF / image / xlsx)
 // via multipart/form-data, the same pattern as Vendor PO upload. If no file
 // is attached it still works — mam sometimes captures a bill without a scan.

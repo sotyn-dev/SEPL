@@ -266,6 +266,8 @@ export default function Procurement() {
   const [dnForm, setDnForm] = useState({ type: 'rejected', vendor_po_id: '', reason: '', items: [], amount: 0, note: '', loaded: false });
   const [dnSaving, setDnSaving] = useState(false);
   const [pipeline, setPipeline] = useState([]);
+  // PO qty vs received qty per item, for the Bill-upload modal (mam 2026-06-04).
+  const [billItems, setBillItems] = useState(null);
   const loadDebitNotes = () => api.get('/procurement/debit-notes').then(r => setDebitNotes(r.data || [])).catch(() => setDebitNotes([]));
   const loadPipeline = () => api.get('/procurement/po-pipeline').then(r => setPipeline(r.data || [])).catch(() => setPipeline([]));
   useEffect(() => { if (tab === 'debitnotes') loadDebitNotes(); if (tab === 'pipeline') loadPipeline(); /* eslint-disable-next-line */ }, [tab]);
@@ -3561,7 +3563,13 @@ export default function Procurement() {
             gst_amount: 0,
             total_amount: 0,
           });
+          setBillItems(null);
           setModal('bill');
+          // Load PO qty vs received qty per item + suggest the bill amount.
+          api.get(`/procurement/vendor-po/${po.id}/bill-items`).then(r => {
+            setBillItems(r.data);
+            setForm(f => ({ ...f, amount: f.amount || r.data.ordered_total || 0, total_amount: (f.amount || r.data.ordered_total || 0) + (f.gst_amount || 0) }));
+          }).catch(() => setBillItems({ items: [], ordered_total: 0, any_receipt: false }));
         };
         return (
         <>
@@ -3578,7 +3586,7 @@ export default function Procurement() {
               </button>
             </div>
             {billsSubTab === 'bills' && (
-              <button onClick={() => { setForm({ vendor_id: '', bill_number: '', bill_date: '', amount: 0, gst_amount: 0, total_amount: 0 }); setModal('bill'); }} className="btn btn-primary flex items-center gap-2 text-xs"><FiPlus /> Add Bill</button>
+              <button onClick={() => { setForm({ vendor_id: '', bill_number: '', bill_date: '', amount: 0, gst_amount: 0, total_amount: 0 }); setBillItems(null); setModal('bill'); }} className="btn btn-primary flex items-center gap-2 text-xs"><FiPlus /> Add Bill</button>
             )}
           </div>
 
@@ -5540,6 +5548,52 @@ export default function Procurement() {
               Linked to Vendor PO <b>{form.vendor_po_number}</b>. The bill will automatically clear this PO from the follow-up list.
             </div>
           )}
+          {/* PO qty vs received qty per item (mam 2026-06-04): spot a short
+              before saving the bill.  Short lines are flagged + a banner. */}
+          {form.vendor_po_id && billItems && billItems.items?.length > 0 && (() => {
+            const shortLines = billItems.items.filter(it => it.received_qty != null && it.short_qty > 0);
+            return (
+              <div className="border rounded-lg overflow-hidden">
+                <div className="bg-gray-50 px-3 py-1.5 border-b text-[11px] font-semibold text-gray-600 uppercase flex items-center justify-between">
+                  <span>PO vs Received <span className="text-[10px] text-gray-400 normal-case">(check before billing)</span></span>
+                  {!billItems.any_receipt && <span className="text-[10px] text-amber-600 normal-case">No receipt recorded yet</span>}
+                </div>
+                <div className="overflow-x-auto max-h-52">
+                  <table className="text-[11px] w-full">
+                    <thead className="bg-gray-50 sticky top-0"><tr>
+                      <th className="px-2 py-1 text-left">Item</th>
+                      <th className="px-2 py-1 text-right">PO Qty</th>
+                      <th className="px-2 py-1 text-right">Received</th>
+                      <th className="px-2 py-1 text-right">Short</th>
+                      <th className="px-2 py-1 text-right">Rate</th>
+                    </tr></thead>
+                    <tbody>
+                      {billItems.items.map(it => {
+                        const isShort = it.received_qty != null && it.short_qty > 0;
+                        return (
+                          <tr key={it.vpi_id} className={`border-t ${isShort ? 'bg-amber-50' : ''}`}>
+                            <td className="px-2 py-1">{it.description}{it.item_type ? <span className="ml-1 text-[9px] text-gray-400">[{it.item_type}]</span> : null}</td>
+                            <td className="px-2 py-1 text-right tabular-nums">{it.ordered_qty.toLocaleString('en-IN')} {it.unit}</td>
+                            <td className="px-2 py-1 text-right tabular-nums">{it.received_qty == null ? <span className="text-gray-300">—</span> : it.received_qty.toLocaleString('en-IN')}</td>
+                            <td className={`px-2 py-1 text-right tabular-nums font-semibold ${isShort ? 'text-amber-700' : 'text-gray-300'}`}>{isShort ? it.short_qty.toLocaleString('en-IN') : '0'}</td>
+                            <td className="px-2 py-1 text-right tabular-nums">₹{it.rate.toLocaleString('en-IN')}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {shortLines.length > 0 && (
+                  <div className="bg-amber-50 border-t border-amber-200 px-3 py-1.5 text-[11px] text-amber-800">
+                    ⚠ <b>{shortLines.length}</b> item{shortLines.length === 1 ? '' : 's'} short-supplied (received less than ordered). Verify the bill is only for what was received — a short-supply debit may apply.
+                  </div>
+                )}
+                <div className="bg-blue-50 border-t border-blue-100 px-3 py-1 text-[10px] text-blue-700">
+                  Suggested taxable amount (PO value): ₹{Math.round(billItems.ordered_total || 0).toLocaleString('en-IN')} — pre-filled below, edit to the actual bill value.
+                </div>
+              </div>
+            );
+          })()}
           <div>
             <label className="label">Vendor *</label>
             <SearchableSelect
