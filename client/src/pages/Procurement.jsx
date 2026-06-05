@@ -5598,6 +5598,16 @@ export default function Procurement() {
               </div>
             );
           })()}
+          {/* Empty / loading states so the modal never looks "broken" when a
+              PO has no itemised lines (older POs created without item links). */}
+          {form.vendor_po_id && !billItems && (
+            <div className="text-[11px] text-gray-400 italic px-1">Loading PO items…</div>
+          )}
+          {form.vendor_po_id && billItems && (billItems.items?.length || 0) === 0 && (
+            <div className="text-[11px] text-gray-500 border border-dashed rounded px-3 py-2 bg-gray-50">
+              This PO has no itemised lines linked from the indent, so there's no PO-qty vs received check to show. Enter the bill amount manually.
+            </div>
+          )}
           <div>
             <label className="label">Vendor *</label>
             <SearchableSelect
