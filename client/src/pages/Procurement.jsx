@@ -3939,12 +3939,20 @@ export default function Procurement() {
       })()}
 
       {tab === 'delivery' && (() => {
-        // Follow-up: POs that have a Purchase Bill uploaded but no Dispatch
-        // entry yet. These are ready to be dispatched to site.
-        const dispatchedPoIds = new Set(deliveryNotes.map(d => d.vendor_po_id).filter(Boolean));
+        // "Ready to Dispatch" — billed POs that still need a client SALES
+        // BILL.  mam (2026-06-04): uploading a bill now auto-creates a
+        // challan (a receiving doc), so the old "billed but no delivery
+        // note" rule always came up empty.  The remaining action is the
+        // Sales Bill, so list POs that have a bill but NO sales bill yet.
         const billedPoIds = new Set(purchaseBills.map(b => b.vendor_po_id).filter(Boolean));
+        // A PO counts as sales-billed when it has a sales_bill delivery note
+        // OR its challan carries a sales_bill_number. The auto-challan from
+        // a Purchase Bill does NOT count.
+        const salesBilledPoIds = new Set(
+          deliveryNotes.filter(d => d.document_type === 'sales_bill' || d.sales_bill_number).map(d => d.vendor_po_id).filter(Boolean)
+        );
         const readyToDispatch = vendorPos.filter(po =>
-          billedPoIds.has(po.id) && !dispatchedPoIds.has(po.id) && !po.cancelled
+          billedPoIds.has(po.id) && !salesBilledPoIds.has(po.id) && !po.cancelled
         );
 
         // Sub-tab filtering (mam 2026-05-25)
