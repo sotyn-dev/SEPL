@@ -1327,13 +1327,17 @@ export default function Procurement() {
     try {
       const r = await api.post('/procurement/purchase-bills', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const ad = r.data?.auto_debit;
+      const asd = r.data?.auto_short_debit;
+      toast.success('Purchase bill added');
       if (ad) {
         // Auto extra-rate debit raised because the bill exceeded the PO value.
-        toast.success(`Purchase bill added · Auto debit note ${ad.dn_number} for ₹${Math.round(ad.amount).toLocaleString('en-IN')} (billed over PO) — deducted from payable`, { duration: 6000 });
-      } else {
-        toast.success('Purchase bill added');
+        toast.success(`Auto debit ${ad.dn_number} · ₹${Math.round(ad.amount).toLocaleString('en-IN')} (billed over PO) — deducted from payable`, { duration: 6000 });
       }
-      setModal(false); load();
+      if (asd) {
+        // Auto short-supply debit raised because items were received short.
+        toast.success(`Auto short-supply debit ${asd.dn_number} · ₹${Math.round(asd.amount).toLocaleString('en-IN')} (received less than ordered)`, { duration: 6000 });
+      }
+      setModal(false); setBillItems(null); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 

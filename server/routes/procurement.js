@@ -2939,12 +2939,58 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       } catch (e) { console.error('[auto-debit] failed (bill saved anyway):', e.message); }
     }
 
+    // Auto SHORT-SUPPLY debit from the bill (mam 2026-06-04): if items were
+    // received SHORT (received < ordered), raise a short-supply debit — but
+    // only when one doesn't already exist for this PO (the receiving flow
+    // may have created it).  Short comes from delivery_notes received qty
+    // vs the PO ordered qty; value = shortfall × PO rate.
+    let autoShortDebit = null;
+    if (vendor_po_id) {
+      try {
+        const existingShort = db.prepare("SELECT id FROM debit_notes WHERE vendor_po_id=? AND type='short_supply'").get(vendor_po_id);
+        if (!existingShort) {
+          const poItems = db.prepare(
+            `SELECT vpi.id, vpi.quantity, vpi.rate, COALESCE(im.item_name, ii.description) as description, ii.unit
+               FROM vendor_po_items vpi
+               LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
+               LEFT JOIN item_master im ON im.id = ii.item_master_id
+              WHERE vpi.vendor_po_id = ?`
+          ).all(vendor_po_id);
+          const recv = {};
+          for (const dn of db.prepare("SELECT items_json FROM delivery_notes WHERE vendor_po_id=? AND items_json IS NOT NULL").all(vendor_po_id)) {
+            try { for (const x of (JSON.parse(dn.items_json) || [])) if (x.vendor_po_item_id != null) recv[x.vendor_po_item_id] = (recv[x.vendor_po_item_id] || 0) + (+x.received_qty || 0); } catch (_) {}
+          }
+          const lines = []; let amt = 0;
+          for (const it of poItems) {
+            if (!(it.id in recv)) continue;  // only lines that were actually received
+            const short = Math.max(0, (+it.quantity || 0) - (+recv[it.id] || 0));
+            if (short <= 0) continue;
+            const lineAmt = short * (+it.rate || 0); amt += lineAmt;
+            lines.push({ description: it.description || 'Item', unit: it.unit || '', qty: short, rate: +it.rate || 0, amount: lineAmt });
+          }
+          if (lines.length && amt > 0) {
+            const { nextSequence } = require('../db/nextSequence');
+            const year = new Date().getFullYear();
+            const dnNum = nextSequence(db, 'debit_notes', 'dn_number', `DBN/${year}/`, { pad: 4 });
+            const po2 = db.prepare('SELECT vendor_id FROM vendor_pos WHERE id=?').get(vendor_po_id);
+            const dr = db.prepare(
+              `INSERT INTO debit_notes (dn_number, type, vendor_po_id, vendor_id, purchase_bill_id, amount, reason, items_json, status, created_by)
+               VALUES (?, 'short_supply', ?, ?, ?, ?, ?, ?, 'open', ?)`
+            ).run(dnNum, vendor_po_id, vendor_id || po2?.vendor_id || null, r.lastInsertRowid, Math.round(amt * 100) / 100,
+                  'Auto-raised on bill entry: short supply (received less than ordered).', JSON.stringify(lines), req.user?.id || null);
+            autoShortDebit = { id: dr.lastInsertRowid, dn_number: dnNum, amount: Math.round(amt * 100) / 100 };
+          }
+        }
+      } catch (e) { console.error('[auto-short-debit] failed (bill saved anyway):', e.message); }
+    }
+
     res.status(201).json({
       id: r.lastInsertRowid,
       file_path: filePath,
       delivery_note_id: autoDnId,
       delivery_note_number: autoDnNumber,
       auto_debit: autoDebit,
+      auto_short_debit: autoShortDebit,
     });
   } catch (err) {
     if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
