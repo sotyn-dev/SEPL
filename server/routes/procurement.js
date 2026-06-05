@@ -1819,6 +1819,72 @@ router.put('/indents/:id', (req, res) => {
   return res.status(400).json({ error: 'Nothing to update' });
 });
 
+// POST /indents/:id/reset-store-issue — mam (2026-06-04): "by mistake i
+// entered store qty 10, store had 1000 — on re-approve let me edit qty".
+// Reverses ALL prior store issues on this indent so the approve modal can
+// re-enter the From-Store / Procure split from scratch:
+//   1. re-credit the issued qty back to stock (+ a reversing IN movement)
+//   2. delete the Stock Issue Note(s)
+//   3. merge each store child back into its parent line at full qty
+//      (or flip a 100%-from-store line back to source='procure')
+// Admin or L2 (MD) only — same gate as re-approve. Idempotent: a no-op
+// when the indent has no store issues.
+router.post('/indents/:id/reset-store-issue', (req, res) => {
+  const db = getDb();
+  const id = +req.params.id;
+  const actorRow = db.prepare('SELECT role, approval_role FROM users WHERE id=?').get(req.user.id) || {};
+  const canRevoke = actorRow.role === 'admin' || req.user.role === 'admin' || actorRow.approval_role === 'l2';
+  if (!canRevoke) return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can reset a store issue.' });
+
+  const children = db.prepare("SELECT * FROM indent_items WHERE indent_id=? AND source='store'").all(id);
+  if (!children.length) return res.json({ message: 'No store issues to reset', reversed: 0, reversed_qty: 0 });
+
+  let reversedQty = 0;
+  try {
+    const tx = db.transaction(() => {
+      // 1. Reverse stock once per unique Stock Issue Note (avoid double-credit
+      //    when several lines share the same note).
+      const noteIds = [...new Set(children.map(c => c.stock_issue_note_id).filter(Boolean))];
+      for (const noteId of noteIds) {
+        const note = db.prepare('SELECT note_number FROM stock_issue_notes WHERE id=?').get(noteId);
+        const noteNumber = note?.note_number;
+        if (!noteNumber) continue;
+        const movements = db.prepare(
+          "SELECT warehouse_id, item_master_id, quantity, rate FROM stock_movements WHERE reference_type='ISSUE' AND reference_id=? AND type='OUT'"
+        ).all(noteNumber);
+        for (const mv of movements) {
+          const cur = db.prepare('SELECT id FROM stock_balance WHERE warehouse_id=? AND item_master_id=?').get(mv.warehouse_id, mv.item_master_id);
+          if (cur) db.prepare('UPDATE stock_balance SET quantity = quantity + ?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(+mv.quantity, cur.id);
+          else db.prepare('INSERT INTO stock_balance (warehouse_id, item_master_id, quantity, avg_rate) VALUES (?,?,?,?)').run(mv.warehouse_id, mv.item_master_id, +mv.quantity, +mv.rate);
+          db.prepare(
+            `INSERT INTO stock_movements (warehouse_id, item_master_id, type, quantity, rate, total_value, reference_type, reference_id, notes, created_by)
+             VALUES (?,?,'IN',?,?,?,'ISSUE_REVERSAL',?,?,?)`
+          ).run(mv.warehouse_id, mv.item_master_id, +mv.quantity, +mv.rate, +mv.quantity * +mv.rate, noteNumber,
+                `Reversed store issue ${noteNumber} — re-approve of indent #${id}`, req.user.id);
+        }
+      }
+      // 2. Merge each store child back into its parent (or flip a converted
+      //    100%-from-store line back to procure).  MUST run before deleting
+      //    the notes — children reference stock_issue_note_id (FK).
+      for (const ch of children) {
+        if (ch.parent_item_id) {
+          db.prepare('UPDATE indent_items SET quantity = quantity + ? WHERE id=?').run(+ch.quantity, ch.parent_item_id);
+          db.prepare('DELETE FROM indent_items WHERE id=?').run(ch.id);
+        } else {
+          db.prepare("UPDATE indent_items SET source='procure', stock_issue_note_id=NULL WHERE id=?").run(ch.id);
+        }
+        reversedQty += +ch.quantity;
+      }
+      // 3. Now safe to delete the Stock Issue Note(s) — nothing references them.
+      for (const noteId of noteIds) db.prepare('DELETE FROM stock_issue_notes WHERE id=?').run(noteId);
+    });
+    tx();
+    res.json({ message: 'Store issue reset — qty returned to stock', reversed: children.length, reversed_qty: reversedQty });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE /indents/:id — soft-reject when downstream records would be
 // orphaned, hard-delete only when nothing references the indent.
 // FK children of indents:

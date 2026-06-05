@@ -1029,10 +1029,23 @@ export default function Procurement() {
   // Admin Re-approve — revoke a rejection and flip the indent back to approved
   // (mam 2026-06-04). No reason modal; it's an admin override.
   // Re-approve opens the SAME approve modal so the MD can also edit order
-  // qty + From-Store qty while re-approving (mam 2026-06-04). The modal's
-  // Approve sends status=approved + quantity_overrides + store_qty_per_item;
-  // the server re-approve path marks all levels approved and applies them.
-  const reapproveIndent = (i) => openApproveModal(i);
+  // qty + From-Store qty while re-approving (mam 2026-06-04). First RESET
+  // any prior store issue (return the qty to stock, cancel the issue note,
+  // merge the split line back to full qty) so the modal shows the original
+  // quantities and the From-Store split can be re-entered cleanly — this
+  // fixes a wrong store qty (e.g. 10 entered when 1000 was meant).
+  const reapproveIndent = async (i) => {
+    try {
+      const r = await api.post(`/procurement/indents/${i.id}/reset-store-issue`);
+      if (r.data?.reversed > 0) {
+        toast(`Reset ${r.data.reversed_qty} from a previous store issue — re-enter the split`, { icon: '↩️', duration: 5000 });
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not reset the previous store issue');
+      return;
+    }
+    openApproveModal(i);  // fetches the merged (full-qty) lines
+  };
 
   // Open the Approve modal — pre-seeds the qty-override map with each line's
   // current quantity so the approver can edit-in-place before confirming.
