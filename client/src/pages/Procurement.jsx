@@ -1480,6 +1480,8 @@ export default function Procurement() {
       toast.success(ins > 0
         ? `Marked as received · ${ins} item${ins === 1 ? '' : 's'} added to stock${shortNote}`
         : `Marked as received${shortNote}`);
+      const ad = r.data?.auto_debit;
+      if (ad) toast.success(`Auto short-supply debit ${ad.dn_number} for ₹${Math.round(ad.amount).toLocaleString('en-IN')} raised — see Debit Notes`, { duration: 6000 });
       setModal(false);
       setReceiveItems([]);
       load();

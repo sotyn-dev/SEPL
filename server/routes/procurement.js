@@ -3302,7 +3302,48 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
       }
     }
 
-    res.json({ message: 'Marked as received', receipt_file_path: receiptPath, stock_ins: stockIns });
+    // Auto SHORT-SUPPLY DEBIT NOTE (mam 2026-06-04): when material is
+    // received SHORT (received < ordered), raise a short-supply debit
+    // automatically — mirrors the auto extra-rate debit at bill entry.
+    // Value = shortfall qty × PO rate. One per delivery note (guarded via
+    // a [DN-<id>] marker in the reason).
+    let autoDebit = null;
+    try {
+      if (Array.isArray(itemsReceivedArr) && itemsReceivedArr.some(r => +r.received_qty < +r.ordered_qty)) {
+        const dnRow = db.prepare('SELECT vendor_po_id FROM delivery_notes WHERE id=?').get(req.params.id);
+        const poId = dnRow?.vendor_po_id || null;
+        if (poId) {
+          const po = db.prepare('SELECT vendor_id FROM vendor_pos WHERE id=?').get(poId);
+          const rateByVpi = new Map();
+          for (const it of db.prepare('SELECT id, rate FROM vendor_po_items WHERE vendor_po_id=?').all(poId)) rateByVpi.set(it.id, +it.rate || 0);
+          const lines = []; let amt = 0;
+          for (const r of itemsReceivedArr) {
+            const shortQty = Math.max(0, (+r.ordered_qty || 0) - (+r.received_qty || 0));
+            if (shortQty <= 0) continue;
+            const rate = r.vendor_po_item_id != null ? (rateByVpi.get(+r.vendor_po_item_id) || 0) : 0;
+            const lineAmt = shortQty * rate;
+            amt += lineAmt;
+            lines.push({ description: r.description || 'Item', unit: '', qty: shortQty, rate, amount: lineAmt, remarks: r.short_reason || '' });
+          }
+          const marker = `[DN-${req.params.id}]`;
+          const exists = db.prepare("SELECT id FROM debit_notes WHERE vendor_po_id=? AND type='short_supply' AND reason LIKE ?").get(poId, '%' + marker + '%');
+          if (lines.length && amt > 0 && !exists) {
+            const { nextSequence } = require('../db/nextSequence');
+            const year = new Date().getFullYear();
+            const dnNum = nextSequence(db, 'debit_notes', 'dn_number', `DBN/${year}/`, { pad: 4 });
+            const dr = db.prepare(
+              `INSERT INTO debit_notes (dn_number, type, vendor_po_id, vendor_id, amount, reason, items_json, status, created_by)
+               VALUES (?, 'short_supply', ?, ?, ?, ?, ?, 'open', ?)`
+            ).run(dnNum, poId, po?.vendor_id || null, Math.round(amt * 100) / 100,
+              `Auto-raised on receiving: short supply (ordered vs received shortfall). ${marker}`,
+              JSON.stringify(lines), req.user.id);
+            autoDebit = { id: dr.lastInsertRowid, dn_number: dnNum, type: 'short_supply', amount: Math.round(amt * 100) / 100 };
+          }
+        }
+      }
+    } catch (e) { console.error('[receive] auto short-supply debit failed (receipt saved anyway):', e.message); }
+
+    res.json({ message: 'Marked as received', receipt_file_path: receiptPath, stock_ins: stockIns, auto_debit: autoDebit });
   } catch (err) {
     if (receiptPath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(receiptPath))); } catch (e) {} }
     res.status(500).json({ error: err.message });

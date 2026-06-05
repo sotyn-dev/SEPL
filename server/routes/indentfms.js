@@ -98,6 +98,40 @@ router.post('/grn', (req, res) => {
     insertItem.run(r.lastInsertRowid, i.description, i.ordered_qty, i.received_qty, i.accepted_qty || i.received_qty, i.rejected_qty || 0, i.unit, i.rate, (i.accepted_qty || i.received_qty) * i.rate, i.remarks, i.item_master_id || null);
   }
 
+  // Auto DEBIT NOTES from receiving variance (mam 2026-06-04): rejected
+  // material AND short supply (ordered vs received) each raise a debit
+  // note automatically — mirrors the auto extra-rate debit at bill entry.
+  // Best-effort; guarded one-per-(GRN,type). Value = qty × rate.
+  if (vendor_po_id) {
+    try {
+      const po = db.prepare('SELECT vendor_id FROM vendor_pos WHERE id=?').get(vendor_po_id);
+      const year = new Date().getFullYear();
+      for (const kind of ['rejected', 'short_supply']) {
+        const lines = []; let amt = 0;
+        for (const i of (items || [])) {
+          const rate = +i.rate || 0;
+          const qty = kind === 'rejected'
+            ? (+i.rejected_qty || 0)
+            : Math.max(0, (+i.ordered_qty || 0) - (+i.received_qty || 0));
+          if (qty <= 0) continue;
+          const lineAmt = qty * rate; amt += lineAmt;
+          lines.push({ description: i.description, unit: i.unit || '', qty, rate, amount: lineAmt, grn_number: grnNum, remarks: i.remarks || '' });
+        }
+        if (!lines.length || amt <= 0) continue;
+        const exists = db.prepare('SELECT id FROM debit_notes WHERE grn_id=? AND type=?').get(r.lastInsertRowid, kind);
+        if (exists) continue;
+        const dnNum = nextSequence(db, 'debit_notes', 'dn_number', `DBN/${year}/`, { pad: 4 });
+        const reason = kind === 'rejected'
+          ? `Auto-raised at GRN ${grnNum}: material rejected at receiving.`
+          : `Auto-raised at GRN ${grnNum}: short supply (ordered vs received shortfall).`;
+        db.prepare(
+          `INSERT INTO debit_notes (dn_number, type, vendor_po_id, vendor_id, grn_id, amount, reason, items_json, status, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`
+        ).run(dnNum, kind, vendor_po_id, po?.vendor_id || null, r.lastInsertRowid, Math.round(amt * 100) / 100, reason, JSON.stringify(lines), req.user.id);
+      }
+    } catch (e) { console.error('[grn] auto-debit failed (GRN saved anyway):', e.message); }
+  }
+
   // Auto-track stage
   if (indent_id) {
     db.prepare('INSERT INTO indent_tracker (indent_id, stage, updated_by, notes) VALUES (?,?,?,?)')
