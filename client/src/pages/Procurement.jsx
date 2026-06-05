@@ -5466,9 +5466,9 @@ export default function Procurement() {
                               {it.make && <div className="text-[10px] text-gray-400">Make: {it.make}</div>}
                               {inPo && <div className="text-[10px] text-gray-500 italic">Already in a Vendor PO</div>}
                             </td>
-                            <td className="px-1 py-1"><input className="input text-[11px] px-1 py-0.5 w-16 text-right" type="number" disabled={inPo} value={s.quantity ?? it.quantity ?? 0} onChange={e => togglePoItem(it.indent_item_id, { quantity: +e.target.value })} /></td>
+                            <td className="px-1 py-1"><NumInput className="input text-[11px] px-1 py-0.5 w-16 text-right" min="0" emitZeroOnEmpty disabled={inPo} value={s.quantity ?? it.quantity ?? 0} onChange={v => togglePoItem(it.indent_item_id, { quantity: v })} /></td>
                             <td className="px-2 py-1.5 text-center text-gray-600">{unit || <span className="text-gray-300">—</span>}</td>
-                            <td className="px-1 py-1"><input className="input text-[11px] px-1 py-0.5 w-20 text-right" type="number" disabled={inPo} value={s.rate ?? 0} onChange={e => togglePoItem(it.indent_item_id, { rate: +e.target.value })} /></td>
+                            <td className="px-1 py-1"><NumInput className="input text-[11px] px-1 py-0.5 w-20 text-right" min="0" emitZeroOnEmpty disabled={inPo} value={s.rate ?? 0} onChange={v => togglePoItem(it.indent_item_id, { rate: v })} /></td>
                             <td className="px-2 py-1.5 text-right font-semibold">{amount ? `Rs ${amount.toLocaleString()}` : <span className="text-gray-300">—</span>}</td>
                           </tr>
                         );
