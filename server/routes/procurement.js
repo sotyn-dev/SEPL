@@ -3815,11 +3815,13 @@ router.get('/delivery-notes/:id/print', (req, res) => {
           .filter(it => it && it.include !== false)
           .map(it => ({
             description: it.description || '',
-            quantity: +it.quantity || 0,
+            // Store-issue challans write `qty`; the create-modal writes
+            // `quantity` — accept either (mam 2026-06-04: store DN showed 0).
+            quantity: +it.quantity || +it.qty || 0,
             unit: it.unit || '',
             rate: +it.rate || 0,
             disc_pct: +it.disc_pct || 0,
-            amount: +it.amount || ((+it.quantity || 0) * (+it.rate || 0) * (1 - (+it.disc_pct || 0) / 100)),
+            amount: +it.amount || ((+it.quantity || +it.qty || 0) * (+it.rate || 0) * (1 - (+it.disc_pct || 0) / 100)),
             item_code: it.item_code || it.hsn || '',
             specification: it.specification || '',
             size: it.size || '',
