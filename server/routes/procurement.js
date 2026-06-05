@@ -1452,7 +1452,7 @@ router.put('/indents/:id', (req, res) => {
         }
         if (fromStore === 0) continue;
         const row = db.prepare(
-          'SELECT id, indent_id, item_master_id, quantity, unit, rate, description FROM indent_items WHERE id=?'
+          'SELECT id, indent_id, item_master_id, quantity, unit, rate, description, item_type FROM indent_items WHERE id=?'
         ).get(itemId);
         if (!row || +row.indent_id !== +id) {
           return res.status(400).json({ error: `Item #${itemId} does not belong to this indent.` });
@@ -1479,7 +1479,8 @@ router.put('/indents/:id', (req, res) => {
             error: `Only ${+avail.qty} pcs of "${row.description}" available in office store — cannot issue ${fromStore}.`,
           });
         }
-        storePlans.push({ itemId, fromStore, finalQty, masterId: row.item_master_id, rate: +row.rate || 0 });
+        storePlans.push({ itemId, fromStore, finalQty, masterId: row.item_master_id, rate: +row.rate || 0,
+          description: row.description, unit: row.unit, item_type: row.item_type });
       }
 
       try {
@@ -1621,6 +1622,26 @@ router.put('/indents/:id', (req, res) => {
                   SET total_qty = ?, total_value = ?, from_warehouse_id = ?
                 WHERE id = ?`
             ).run(totalStoreQty, totalStoreValue, lastWarehouseId, issueNoteId);
+
+            // Auto DELIVERY CHALLAN for the store-issued material (mam
+            // 2026-06-04): store material has no Vendor PO, so its challan
+            // links to the indent + Stock Issue Note.  Appears in Dispatch
+            // & Receiving for printing + (billable items) a Sales Bill.
+            // sales_bill_pending=1 when any line is a billable PO item.
+            const storeItems = storePlans.map(p => ({
+              description: p.description, qty: p.fromStore, unit: p.unit || '',
+              rate: +p.rate || 0, amount: p.fromStore * (+p.rate || 0),
+              item_type: p.item_type || '',
+            }));
+            const billable = storePlans.some(p => String(p.item_type || '').toUpperCase() === 'PO');
+            const today = new Date().toISOString().slice(0, 10);
+            db.prepare(
+              `INSERT INTO delivery_notes
+                 (vendor_po_id, indent_id, stock_issue_note_id, source, delivery_date,
+                  document_type, document_number, status, sales_bill_pending, items_json, notes)
+               VALUES (NULL, ?, ?, 'store', ?, 'challan', ?, 'pending', ?, ?, ?)`
+            ).run(id, issueNoteId, today, issueNoteNumber, billable ? 1 : 0,
+                  JSON.stringify(storeItems), 'Material issued from store');
           }
 
           // 3. Flip the indent to approved.
@@ -3072,7 +3093,9 @@ router.get('/delivery-notes', (req, res) => {
     LEFT JOIN users u ON dn.received_by = u.id
     LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
     LEFT JOIN vendors v ON vp.vendor_id = v.id
-    LEFT JOIN indents i ON vp.indent_id = i.id
+    -- Resolve the indent from the Vendor PO, OR (for from-store challans
+    -- with no PO) directly from delivery_notes.indent_id.
+    LEFT JOIN indents i ON i.id = COALESCE(vp.indent_id, dn.indent_id)
     LEFT JOIN sites s ON LOWER(TRIM(s.name)) = LOWER(TRIM(i.site_name))
     ORDER BY dn.created_at DESC
   `).all());

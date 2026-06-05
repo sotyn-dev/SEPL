@@ -3227,6 +3227,12 @@ function initializeDatabase() {
     ['delivery_notes', 'sales_bill_number TEXT'],
     ['delivery_notes', 'sales_bill_file_path TEXT'],
     ['delivery_notes', 'sales_bill_uploaded_at DATETIME'],
+    // From-store challans (mam 2026-06-04): material issued from stock has
+    // no Vendor PO, so its delivery challan links to the indent + the
+    // Stock Issue Note instead.  vendor_po_id stays NULL for these rows.
+    ['delivery_notes', 'indent_id INTEGER'],
+    ['delivery_notes', 'stock_issue_note_id INTEGER'],
+    ['delivery_notes', "source TEXT DEFAULT 'po'"],   // 'po' | 'store'
     // Sub-Contractor module (mam's "Sub-Contractor Form" Google-Form
     // 47-entry workflow brought into ERP). Extends the existing
     // sub_contractors table — legacy HR fields (phone, email,
