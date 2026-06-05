@@ -3413,6 +3413,42 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[migration] blank legacy raised_by_name failed:', e.message); }
 
+  // Backfill from-store delivery challans (mam 2026-06-04): store issues
+  // created BEFORE the auto-challan feature have a Stock Issue Note but no
+  // delivery_notes challan, so they don't show in Dispatch & Receiving.
+  // Create one 'challan' (source='store') per stock_issue_note that lacks
+  // one, pulling the store lines from the indent_items that reference it.
+  // Guarded to run once.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='backfill_store_challans_v1'").get();
+    if (!done) {
+      const notes = db.prepare('SELECT id, note_number, indent_id FROM stock_issue_notes').all();
+      let created = 0;
+      for (const n of notes) {
+        const exists = db.prepare("SELECT id FROM delivery_notes WHERE stock_issue_note_id=? AND source='store'").get(n.id);
+        if (exists) continue;
+        const lines = db.prepare(
+          "SELECT description, quantity as qty, unit, rate, item_type FROM indent_items WHERE stock_issue_note_id=?"
+        ).all(n.id);
+        const billable = lines.some(it => String(it.item_type || '').toUpperCase() === 'PO');
+        const itemsJson = JSON.stringify(lines.map(it => ({
+          description: it.description, qty: it.qty, unit: it.unit || '',
+          rate: +it.rate || 0, amount: (+it.qty || 0) * (+it.rate || 0), item_type: it.item_type || '',
+        })));
+        const today = new Date().toISOString().slice(0, 10);
+        db.prepare(
+          `INSERT INTO delivery_notes
+             (vendor_po_id, indent_id, stock_issue_note_id, source, delivery_date,
+              document_type, document_number, status, sales_bill_pending, items_json, notes)
+           VALUES (NULL, ?, ?, 'store', ?, 'challan', ?, 'pending', ?, ?, ?)`
+        ).run(n.indent_id, n.id, today, n.note_number, billable ? 1 : 0, itemsJson, 'Material issued from store (backfilled)');
+        created++;
+      }
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('backfill_store_challans_v1', '1')").run();
+      if (created > 0) console.log(`[migration] backfilled ${created} from-store delivery challans`);
+    }
+  } catch (e) { console.error('[migration] store challan backfill failed:', e.message); }
+
   // Drop indents.status CHECK entirely (mam 2026-05-28: L1 Nitin Jain
   // hit "CHECK constraint failed: status IN (...)" on Approve L1).
   //

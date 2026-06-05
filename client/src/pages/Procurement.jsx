@@ -4352,6 +4352,9 @@ export default function Procurement() {
                       <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${d.document_type === 'sales_bill' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : d.document_type === 'challan' ? 'bg-sky-50 text-sky-700 border-sky-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
                         {d.document_type === 'sales_bill' ? 'SALES BILL' : d.document_type === 'challan' ? 'CHALLAN' : '—'}
                       </span>
+                      {d.source === 'store' && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-indigo-50 text-indigo-700 border-indigo-300" title="Material issued from store — no Vendor PO">📦 FROM STORE</span>
+                      )}
                       {/* Sales Bill pending chip — mam (2026-05-25): when
                           dispatched with Challan only and SB will follow
                           later, this amber chip lingers until SB is
@@ -4368,7 +4371,7 @@ export default function Procurement() {
                       )}
                     </div>
                   </td>
-                  <td className="text-xs">{d.vendor_po_number || <span className="text-gray-300">—</span>}<div className="text-[10px] text-gray-500">{d.vendor_name || ''}</div></td>
+                  <td className="text-xs">{d.vendor_po_number || (d.source === 'store' ? <span className="text-indigo-600 text-[10px] font-semibold">From Store</span> : <span className="text-gray-300">—</span>)}<div className="text-[10px] text-gray-500">{d.vendor_name || ''}</div></td>
                   {/* Site (mam 2026-06-02) — pulled from indents.site_id via the GET /delivery-notes JOIN */}
                   <td className="text-xs">{d.site_name || <span className="text-gray-300">—</span>}</td>
                   <td>{d.delivery_date}</td>
