@@ -3236,15 +3236,16 @@ router.get('/delivery-notes', (req, res) => {
       vp.indent_id as vendor_po_indent_id,
       v.name as vendor_name,
       i.indent_number as indent_number,
-      COALESCE(NULLIF(TRIM(i.site_name), ''), s.name) as site_name
+      NULLIF(TRIM(i.site_name), '') as site_name
     FROM delivery_notes dn
     LEFT JOIN users u ON dn.received_by = u.id
     LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
     LEFT JOIN vendors v ON vp.vendor_id = v.id
     -- Resolve the indent from the Vendor PO, OR (for from-store challans
-    -- with no PO) directly from delivery_notes.indent_id.
+    -- with no PO) directly from delivery_notes.indent_id.  No sites JOIN:
+    -- it matched site_name to itself (circular) and fanned out into
+    -- DUPLICATE rows when a site name wasn't unique (mam 2026-06-04).
     LEFT JOIN indents i ON i.id = COALESCE(vp.indent_id, dn.indent_id)
-    LEFT JOIN sites s ON LOWER(TRIM(s.name)) = LOWER(TRIM(i.site_name))
     ORDER BY dn.created_at DESC
   `).all());
 });
