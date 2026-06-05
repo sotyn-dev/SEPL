@@ -5963,18 +5963,12 @@ export default function Procurement() {
                         <td className="px-1 py-1 text-center">
                           <input type="checkbox" checked={it.include !== false} onChange={e => update({ include: e.target.checked })} className="w-3.5 h-3.5" />
                         </td>
-                        <td className="px-2 py-1 align-top min-w-[220px]">
-                          {/* Item name (indent-wise) shown prominently; the
-                              full billing description stays editable below.
-                              mam 2026-06-04: "show item name by indent wise". */}
-                          {(it.item_name || it.item_code) && (
-                            <div className="text-[11px] font-semibold text-gray-900 leading-tight">
-                              {it.item_code && <span className="font-mono text-[9px] text-gray-500 mr-1">[{it.item_code}]</span>}
-                              {it.item_name}
-                              {(it.specification || it.size) && <span className="ml-1 font-normal text-[9px] text-gray-500">{[it.size, it.specification].filter(Boolean).join(' · ')}</span>}
-                            </div>
-                          )}
-                          <textarea rows={1} className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-[10px] text-gray-600 resize-y leading-snug" value={it.description || ''} onChange={e => update({ description: e.target.value })} placeholder="Billing description (editable)" />
+                        <td className="px-2 py-1 align-top min-w-[240px]">
+                          {/* Description is now the INDENT-wise item name
+                              (mam 2026-06-04).  item_code chip + a readable,
+                              editable, wrapping field. */}
+                          {it.item_code && <div className="font-mono text-[9px] text-gray-500 leading-none mb-0.5">[{it.item_code}]</div>}
+                          <textarea rows={1} className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-[11px] text-gray-800 font-medium resize-y leading-snug" value={it.description || ''} onChange={e => update({ description: e.target.value })} placeholder="Item / billing description" />
                         </td>
                         <td className="px-1 py-1">
                           <input className="w-full bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-red-300 rounded px-1 py-0.5 text-[10px]" value={it.hsn || ''} onChange={e => update({ hsn: e.target.value })} placeholder="HSN" />

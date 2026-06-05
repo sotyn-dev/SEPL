@@ -3673,15 +3673,20 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
   // client-facing rates.
   const rows = db.prepare(`
     SELECT vpi.id,
+           -- Description = the INDENT-wise item name (mam 2026-06-04):
+           -- item-master name first, then the indent line's own
+           -- description, and only fall back to the verbose BOQ SITC text.
            COALESCE(NULLIF(TRIM(im.item_name), ''),
-                    NULLIF(TRIM(poi.description), ''),
-                    ii.description) as description,
+                    NULLIF(TRIM(ii.description), ''),
+                    poi.description) as description,
            vpi.quantity,
            COALESCE(ii.unit, poi.unit, im.uom) as unit,
            COALESCE(poi.rate, 0) as rate,
            COALESCE(poi.amount, 0) as amount,
            poi.hsn_code,
-           im.item_code, im.specification, im.size, im.gst AS gst_text, im.item_name,
+           im.item_code, im.specification, im.size, im.gst AS gst_text,
+           -- A clear item label for the UI even when there's no master link.
+           COALESCE(NULLIF(TRIM(im.item_name), ''), NULLIF(TRIM(ii.description), '')) as item_name,
            vpi.rate as vendor_rate,
            poi.id as po_item_id
       FROM vendor_po_items vpi
