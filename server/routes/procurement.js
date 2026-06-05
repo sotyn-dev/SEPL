@@ -2345,6 +2345,8 @@ router.get('/indents/:id/items-for-po', (req, res) => {
      LEFT JOIN indent_item_rates r ON r.indent_item_id = ii.id
      LEFT JOIN item_master im ON im.id = ii.item_master_id
      WHERE ii.indent_id = ?
+       -- Exclude from-store lines — they're fulfilled from stock, not a PO.
+       AND (ii.source IS NULL OR ii.source <> 'store')
      ORDER BY ii.id`
   ).all(req.params.id);
   res.json(rows);
@@ -2371,6 +2373,8 @@ router.get('/pending-po-items', (req, res) => {
         WHERE vpi.indent_item_id = ii.id
           AND COALESCE(vp.cancelled, 0) = 0
      )
+       -- Exclude from-store lines — fulfilled from stock, not pending for PO.
+       AND (ii.source IS NULL OR ii.source <> 'store')
      ORDER BY
        CASE WHEN r.status = 'finalized' THEN 0 ELSE 1 END,
        i.created_at DESC, ii.id`
@@ -4189,6 +4193,11 @@ router.get('/item-rates', (req, res) => {
      LEFT JOIN order_planning op ON op.id = i.planning_id
      LEFT JOIN business_book bb ON bb.id = op.business_book_id
      WHERE i.status IN ${APPROVED_FOR_RATES}
+       -- From-store lines are fulfilled from stock — they don't need a
+       -- vendor rate / PO, so only the PROCURE portion shows here.  mam
+       -- (2026-06-04): a 1000 line approved as 10-store + 990-procure
+       -- must show 990 in Vendor Rates, not 1000.
+       AND (ii.source IS NULL OR ii.source <> 'store')
      ORDER BY i.created_at DESC, ii.id`
   ).all();
   res.json(rows);
