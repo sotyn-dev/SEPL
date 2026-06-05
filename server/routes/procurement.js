@@ -2852,6 +2852,8 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
   const amount = +b.amount || 0;
   const gst_amount = +b.gst_amount || 0;
   const total_amount = +b.total_amount || 0;
+  // Material acceptance (mam 2026-06-04): 'approved' (default) or 'reject'.
+  const materialStatus = b.material_status === 'reject' ? 'reject' : 'approved';
 
   // Rename uploaded file to "<timestamp>-<original>" so the /uploads link
   // shows the real filename, same convention as Vendor PO upload.
@@ -2871,9 +2873,9 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
   try {
     const db = getDb();
     const r = db.prepare(
-      `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, file_path)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, filePath);
+      `INSERT INTO purchase_bills (vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, file_path, material_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(vendor_po_id, vendor_id, bill_number, bill_date, amount, gst_amount, total_amount, filePath, materialStatus);
 
     // Mam (2026-06-02): "in rec. against delivery note show here ok
     // site name also show here delivery note number and against it
@@ -2909,14 +2911,38 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       }
     }
 
+    // Material REJECTED at bill entry (mam 2026-06-04): raise a rejected
+    // debit note for the full taxable value.  When rejected we skip the
+    // extra-rate / short-supply checks (nothing was accepted).
+    let autoRejectDebit = null;
+    if (materialStatus === 'reject' && vendor_po_id) {
+      try {
+        const po = db.prepare('SELECT vendor_id FROM vendor_pos WHERE id=?').get(vendor_po_id);
+        const billVal = amount > 0 ? amount : (total_amount - gst_amount);
+        if (billVal > 0) {
+          const { nextSequence } = require('../db/nextSequence');
+          const year = new Date().getFullYear();
+          const dnNum = nextSequence(db, 'debit_notes', 'dn_number', `DBN/${year}/`, { pad: 4 });
+          const items = [{ description: `Material rejected (Bill ${bill_number || '#' + r.lastInsertRowid})`, unit: '', qty: 1, rate: billVal, amount: billVal, purchase_bill_id: r.lastInsertRowid }];
+          const dr = db.prepare(
+            `INSERT INTO debit_notes (dn_number, type, vendor_po_id, vendor_id, purchase_bill_id, amount, reason, items_json, status, created_by)
+             VALUES (?, 'rejected', ?, ?, ?, ?, ?, ?, 'open', ?)`
+          ).run(dnNum, vendor_po_id, vendor_id || po?.vendor_id || null, r.lastInsertRowid, Math.round(billVal * 100) / 100,
+                'Auto-raised on bill entry: material REJECTED.', JSON.stringify(items), req.user?.id || null);
+          autoRejectDebit = { id: dr.lastInsertRowid, dn_number: dnNum, amount: Math.round(billVal * 100) / 100 };
+        }
+      } catch (e) { console.error('[auto-reject-debit] failed (bill saved anyway):', e.message); }
+    }
+
     // Auto extra-rate DEBIT NOTE (mam 2026-06-04): when the vendor bills
     // MORE than the PO value, raise a debit note for the difference
     // automatically — it then deducts from the net payable.  Compares the
     // bill's TAXABLE value (amount, pre-GST) against the PO subtotal
     // (vendor_pos.total_amount, also pre-GST) so GST never creates a false
-    // variance.  One auto extra-rate debit per bill (guarded).
+    // variance.  One auto extra-rate debit per bill (guarded).  Skipped when
+    // the material was rejected.
     let autoDebit = null;
-    if (vendor_po_id) {
+    if (materialStatus === 'approved' && vendor_po_id) {
       try {
         const po = db.prepare('SELECT total_amount, vendor_id FROM vendor_pos WHERE id=?').get(vendor_po_id);
         const poVal = +po?.total_amount || 0;
@@ -2945,7 +2971,8 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
     // may have created it).  Short comes from delivery_notes received qty
     // vs the PO ordered qty; value = shortfall × PO rate.
     let autoShortDebit = null;
-    if (vendor_po_id) {
+    let vendorMailed = false;
+    if (materialStatus === 'approved' && vendor_po_id) {
       try {
         const existingShort = db.prepare("SELECT id FROM debit_notes WHERE vendor_po_id=? AND type='short_supply'").get(vendor_po_id);
         if (!existingShort) {
@@ -2979,6 +3006,26 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
             ).run(dnNum, vendor_po_id, vendor_id || po2?.vendor_id || null, r.lastInsertRowid, Math.round(amt * 100) / 100,
                   'Auto-raised on bill entry: short supply (received less than ordered).', JSON.stringify(lines), req.user?.id || null);
             autoShortDebit = { id: dr.lastInsertRowid, dn_number: dnNum, amount: Math.round(amt * 100) / 100 };
+
+            // Email the vendor about the short supply (mam 2026-06-04).
+            // Fire-and-forget; sendEmail no-ops gracefully if SMTP is off.
+            try {
+              const { sendEmail } = require('../lib/email');
+              const vend = db.prepare('SELECT name, email FROM vendors WHERE id=?').get(vendor_id || po2?.vendor_id);
+              const po3 = db.prepare('SELECT po_number FROM vendor_pos WHERE id=?').get(vendor_po_id);
+              if (vend?.email) {
+                const rowsHtml = lines.map(l => `<tr><td>${l.description}</td><td align="right">${l.qty} ${l.unit || ''}</td></tr>`).join('');
+                sendEmail({
+                  to: vend.email,
+                  subject: `Short Supply against PO ${po3?.po_number || ''} — please supply the balance`,
+                  html: `<p>Dear ${vend.name || 'Sir/Madam'},</p>
+                    <p>The following material against our PO <b>${po3?.po_number || ''}</b> was received <b>short</b> of the ordered quantity. Please arrange to supply the shortfall at the earliest, or confirm a credit.</p>
+                    <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse"><tr><th align="left">Item</th><th align="right">Short Qty</th></tr>${rowsHtml}</table>
+                    <p>Regards,<br/>Secured Engineers Pvt. Ltd.</p>`,
+                }).catch(() => {});
+                vendorMailed = true;
+              }
+            } catch (_) { /* email is best-effort */ }
           }
         }
       } catch (e) { console.error('[auto-short-debit] failed (bill saved anyway):', e.message); }
@@ -2991,6 +3038,9 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       delivery_note_number: autoDnNumber,
       auto_debit: autoDebit,
       auto_short_debit: autoShortDebit,
+      auto_reject_debit: autoRejectDebit,
+      material_status: materialStatus,
+      vendor_mailed: vendorMailed,
     });
   } catch (err) {
     if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }

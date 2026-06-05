@@ -3047,6 +3047,9 @@ function initializeDatabase() {
     ['vendor_pos', 'credit_days INTEGER'],                // optional credit period for the above
     // Purchase Bills also get an uploaded file (the bill PDF / image / excel)
     ['purchase_bills', 'file_path TEXT'],
+    // Material acceptance at bill entry (mam 2026-06-04): 'approved' (default)
+    // or 'reject'.  Reject auto-raises a rejected-material debit note.
+    ['purchase_bills', "material_status TEXT DEFAULT 'approved'"],
     // Dispatch (delivery_notes) — upgraded from a simple "delivery record" to
     // either a Sales Bill (PO items we sell to client) or a Delivery Challan
     // (FOC / RGP items). document_type + document_number distinguish them,

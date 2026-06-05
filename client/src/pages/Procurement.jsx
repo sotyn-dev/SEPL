@@ -1326,19 +1326,22 @@ export default function Procurement() {
     fd.append('amount', form.amount || 0);
     fd.append('gst_amount', form.gst_amount || 0);
     fd.append('total_amount', form.total_amount || 0);
+    fd.append('material_status', form.material_status || 'approved');
     if (form.bill_file) fd.append('file', form.bill_file);
     try {
       const r = await api.post('/procurement/purchase-bills', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const ad = r.data?.auto_debit;
       const asd = r.data?.auto_short_debit;
+      const ard = r.data?.auto_reject_debit;
       toast.success('Purchase bill added');
+      if (ard) {
+        toast.success(`Material REJECTED · auto debit ${ard.dn_number} for ₹${Math.round(ard.amount).toLocaleString('en-IN')}`, { duration: 6000 });
+      }
       if (ad) {
-        // Auto extra-rate debit raised because the bill exceeded the PO value.
         toast.success(`Auto debit ${ad.dn_number} · ₹${Math.round(ad.amount).toLocaleString('en-IN')} (billed over PO) — deducted from payable`, { duration: 6000 });
       }
       if (asd) {
-        // Auto short-supply debit raised because items were received short.
-        toast.success(`Auto short-supply debit ${asd.dn_number} · ₹${Math.round(asd.amount).toLocaleString('en-IN')} (received less than ordered)`, { duration: 6000 });
+        toast.success(`Auto short-supply debit ${asd.dn_number} · ₹${Math.round(asd.amount).toLocaleString('en-IN')}${r.data?.vendor_mailed ? ' · vendor emailed for the shortfall' : ''}`, { duration: 6000 });
       }
       setModal(false); setBillItems(null); setBillRecv({}); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
@@ -3569,6 +3572,7 @@ export default function Procurement() {
             amount: 0,
             gst_amount: 0,
             total_amount: 0,
+            material_status: 'approved',
           });
           setBillItems(null);
           setBillRecv({});
@@ -3599,7 +3603,7 @@ export default function Procurement() {
               </button>
             </div>
             {billsSubTab === 'bills' && (
-              <button onClick={() => { setForm({ vendor_id: '', bill_number: '', bill_date: '', amount: 0, gst_amount: 0, total_amount: 0 }); setBillItems(null); setBillRecv({}); setModal('bill'); }} className="btn btn-primary flex items-center gap-2 text-xs"><FiPlus /> Add Bill</button>
+              <button onClick={() => { setForm({ vendor_id: '', bill_number: '', bill_date: '', amount: 0, gst_amount: 0, total_amount: 0, material_status: 'approved' }); setBillItems(null); setBillRecv({}); setModal('bill'); }} className="btn btn-primary flex items-center gap-2 text-xs"><FiPlus /> Add Bill</button>
             )}
           </div>
 
@@ -5641,6 +5645,18 @@ export default function Procurement() {
               placeholder="Search vendor…"
               onChange={(v) => setForm({ ...form, vendor_id: v?.id || '' })}
             />
+          </div>
+          {/* Material Status (mam 2026-06-04): Approved (default) accepts the
+              material; Reject auto-raises a rejected-material debit note. */}
+          <div>
+            <label className="label">Material Status</label>
+            <select className={`select ${form.material_status === 'reject' ? 'border-red-400 text-red-700 font-semibold' : ''}`} value={form.material_status || 'approved'} onChange={e => setForm({ ...form, material_status: e.target.value })}>
+              <option value="approved">Approved — accept material</option>
+              <option value="reject">Reject — auto-raise a rejected-material debit note</option>
+            </select>
+            {form.material_status === 'reject' && (
+              <p className="text-[11px] text-red-600 mt-0.5">On save, a rejected-material debit note for the bill value will be raised automatically.</p>
+            )}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div><label className="label">Bill Number</label><input className="input" value={form.bill_number} onChange={e => setForm({...form, bill_number: e.target.value})} /></div>
