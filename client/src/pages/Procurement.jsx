@@ -4600,9 +4600,9 @@ export default function Procurement() {
           <div className="card p-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="font-semibold text-gray-800">Debit Notes &amp; Short-Supply Notices</h3>
-              <p className="text-xs text-gray-500">Raise a debit against a vendor for rejected material, extra (over-PO) rates, or short supply — then print &amp; send.</p>
+              <p className="text-xs text-gray-500">Auto-generated on variance: <b>extra rate</b> (bill over PO), <b>short supply</b> (received &lt; ordered), <b>rejected</b> material (at GRN). They appear here automatically — the button is only for a manual/discretionary debit.</p>
             </div>
-            <button onClick={openDnModal} className="btn btn-primary flex items-center gap-2"><FiPlus /> Raise Debit Note</button>
+            <button onClick={openDnModal} className="btn btn-secondary flex items-center gap-2" title="Most debits are raised automatically on variance — use this only for a manual one"><FiPlus /> Manual Debit Note</button>
           </div>
           <div className="card p-0 overflow-x-auto">
             <table className="text-sm w-full freeze-head">
@@ -4618,7 +4618,7 @@ export default function Procurement() {
                 </tr>
               </thead>
               <tbody>
-                {debitNotes.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No debit notes yet — click "Raise Debit Note".</td></tr>}
+                {debitNotes.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No debit notes yet — they appear here automatically when a bill exceeds a PO, material is received short, or rejected at GRN.</td></tr>}
                 {debitNotes.map(d => {
                   const typeLabel = d.type === 'extra_rate' ? 'Extra Rate' : d.type === 'short_supply' ? 'Short Supply' : 'Rejected';
                   const typeCls = d.type === 'extra_rate' ? 'bg-amber-50 text-amber-700 border-amber-200' : d.type === 'short_supply' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-red-50 text-red-700 border-red-200';
