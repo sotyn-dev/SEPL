@@ -988,6 +988,9 @@ router.post('/indents', (req, res) => {
         .join('; ');
       const fi = db.prepare(
         `SELECT bb.company_name AS bb_company, bb.client_name AS bb_client,
+                bb.client_contact AS bb_mobile,
+                COALESCE(NULLIF(TRIM(bb.client_email),''), NULLIF(TRIM(bb.email_address),'')) AS bb_email,
+                bb.billing_address AS bb_address, bb.source_of_enquiry AS bb_source,
                 bb.state AS bb_state, bb.district AS bb_district, bb.owner AS bb_owner
            FROM order_planning op LEFT JOIN business_book bb ON bb.id = op.business_book_id
           WHERE op.id = ?`
@@ -996,21 +999,25 @@ router.post('/indents', (req, res) => {
       const already = db.prepare('SELECT id FROM crm_funnel WHERE source_indent_id=? OR remarks LIKE ?')
         .get(r.lastInsertRowid, `%${marker}%`);
       if (!already) {
-        const clientName = String(site_name || fi.bb_client || fi.bb_company || 'Extra item').trim() || 'Extra item';
+        // Prefer the Business Book client/company; fall back to the indent's
+        // own site name only when there's no BB link.
+        const clientName = String(fi.bb_client || fi.bb_company || site_name || 'Extra item').trim() || 'Extra item';
+        const companyName = fi.bb_company || fi.bb_client || site_name || null;
         const funnelLeadNo = nextSequence(db, 'crm_funnel', 'lead_no', 'CRM-', { startFrom: 0, pad: 4 });
         db.prepare(
           `INSERT INTO crm_funnel
-             (lead_no, client_name, company_name, state, district, remarks,
-              category, type, lead_type, quotation_amount, requirement_items,
-              source_indent_id, created_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+             (lead_no, client_name, company_name, mobile, email, source, address,
+              state, district, remarks, category, type, lead_type, quotation_amount,
+              requirement_items, source_indent_id, created_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         ).run(
-          funnelLeadNo, clientName, fi.bb_company || site_name || null,
+          funnelLeadNo, clientName, companyName,
+          fi.bb_mobile || null, fi.bb_email || null, fi.bb_source || 'Extra Indent', fi.bb_address || null,
           fi.bb_state || null, fi.bb_district || null,
           `Requirement from Extra indent ${indentNum} (awaiting CRM approval)`
             + (fi.bb_owner ? ` · owner ${fi.bb_owner}` : '') + ` ${marker}`,
-          category, 'Extra Item', 'Extra Enquiry', 0, reqText || null,
-          r.lastInsertRowid, req.user.id,
+          category, 'Extra Item', 'Extra Enquiry', 0,
+          reqText || null, r.lastInsertRowid, req.user.id,
         );
       }
     } catch (e) { console.error('[indent] CRM funnel requirement-at-raise failed (indent saved anyway):', e.message); }
@@ -1220,6 +1227,9 @@ router.put('/indents/:id', (req, res) => {
             const fi = db.prepare(
               `SELECT i.indent_number, i.client_name, i.site_name,
                       bb.company_name AS bb_company, bb.client_name AS bb_client,
+                      bb.client_contact AS bb_mobile,
+                      COALESCE(NULLIF(TRIM(bb.client_email),''), NULLIF(TRIM(bb.email_address),'')) AS bb_email,
+                      bb.billing_address AS bb_address, bb.source_of_enquiry AS bb_source,
                       bb.state AS bb_state, bb.district AS bb_district, bb.owner AS bb_owner,
                       COALESCE((SELECT SUM(amount) FROM indent_items WHERE indent_id = i.id), 0) AS total_amt
                  FROM indents i
@@ -1234,8 +1244,9 @@ router.put('/indents/:id', (req, res) => {
             const already = db.prepare(
               `SELECT id FROM crm_funnel WHERE source_indent_id=? OR remarks LIKE ?`
             ).get(id, `%${marker}%`);
+            // Prefer the Business Book client/company; site name is the fallback.
             const clientName = String(
-              fi?.client_name || fi?.site_name || fi?.bb_client || fi?.bb_company || 'Extra item'
+              fi?.bb_client || fi?.bb_company || fi?.client_name || fi?.site_name || 'Extra item'
             ).trim() || 'Extra item';
             if (already) {
               db.prepare(
@@ -1246,16 +1257,22 @@ router.put('/indents/:id', (req, res) => {
                   WHERE id = ?`
               ).run(+fi?.total_amt || 0, already.id);
             } else {
+              const reqItems = db.prepare('SELECT description, quantity, unit FROM indent_items WHERE indent_id=?').all(id);
+              const reqText = reqItems
+                .map(it => `${(+it.quantity || 0).toLocaleString('en-IN')}${it.unit ? ' ' + it.unit : ''} × ${it.description || 'item'}`)
+                .join('; ');
               const funnelLeadNo = nextSequence(db, 'crm_funnel', 'lead_no', 'CRM-', { startFrom: 0, pad: 4 });
               db.prepare(
                 `INSERT INTO crm_funnel
-                   (lead_no, client_name, company_name, state, district, remarks,
-                    category, type, lead_type, quotation_amount, source_indent_id, created_by)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+                   (lead_no, client_name, company_name, mobile, email, source, address,
+                    state, district, remarks, category, type, lead_type, quotation_amount,
+                    requirement_items, source_indent_id, created_by)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
               ).run(
                 funnelLeadNo,
                 clientName,
-                fi?.bb_company || fi?.site_name || null,
+                fi?.bb_company || fi?.bb_client || fi?.site_name || null,
+                fi?.bb_mobile || null, fi?.bb_email || null, fi?.bb_source || 'Extra Indent', fi?.bb_address || null,
                 fi?.bb_state || null,
                 fi?.bb_district || null,
                 `Auto-created from Extra indent ${fi?.indent_number || id} on CRM approval`
@@ -1264,6 +1281,7 @@ router.put('/indents/:id', (req, res) => {
                 'Extra Item',
                 'Extra Enquiry',
                 +fi?.total_amt || 0,
+                reqText || null,
                 id,
                 actor.id,
               );

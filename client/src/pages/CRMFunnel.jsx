@@ -309,7 +309,7 @@ export default function CRMFunnel() {
                 <td>{r.mobile || '-'}</td>
                 <td>{r.source || '-'}</td>
                 <td>{r.type || '-'}</td>
-                <td>{r.category || '-'}</td>
+                <td>{r.category === 'extra_non_schedule' ? 'Extra · Non-Schedule' : r.category === 'extra_schedule' ? 'Extra · Schedule' : (r.category || '-')}</td>
                 <td>{r.state || '-'}</td>
                 <td>{r.cust_boq_link ? <a className="text-red-600 hover:underline" href={r.cust_boq_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a> : '-'}</td>
                 <td>{r.quotation_link ? <a className="text-red-600 hover:underline" href={r.quotation_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a> : '-'}</td>
