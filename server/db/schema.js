@@ -3236,6 +3236,10 @@ function initializeDatabase() {
     ['delivery_notes', 'indent_id INTEGER'],
     ['delivery_notes', 'stock_issue_note_id INTEGER'],
     ['delivery_notes', "source TEXT DEFAULT 'po'"],   // 'po' | 'store'
+    // Auto-generated Sales Bill that still needs completion (missing client
+    // GSTIN / selling rates).  mam 2026-06-04: auto-create on receive, flag
+    // as draft until the few fields are filled.
+    ['delivery_notes', 'is_draft INTEGER DEFAULT 0'],
     // Sub-Contractor module (mam's "Sub-Contractor Form" Google-Form
     // 47-entry workflow brought into ERP). Extends the existing
     // sub_contractors table — legacy HR fields (phone, email,

@@ -1507,6 +1507,8 @@ export default function Procurement() {
         : `Marked as received${shortNote}`);
       const ad = r.data?.auto_debit;
       if (ad) toast.success(`Auto short-supply debit ${ad.dn_number} for ₹${Math.round(ad.amount).toLocaleString('en-IN')} raised — see Debit Notes`, { duration: 6000 });
+      const asb = r.data?.auto_sales_bill;
+      if (asb) toast.success(`Sales Bill ${asb.document_number} auto-generated${asb.is_draft ? ' as DRAFT — fill client GSTIN / rates' : ''}`, { duration: 7000 });
       setModal(false);
       setReceiveItems([]);
       load();
@@ -4427,6 +4429,9 @@ export default function Procurement() {
                       </span>
                       {d.source === 'store' && (
                         <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-indigo-50 text-indigo-700 border-indigo-300" title="Material issued from store — no Vendor PO">📦 FROM STORE</span>
+                      )}
+                      {d.is_draft === 1 && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-red-50 text-red-700 border-red-300" title="Auto-generated Sales Bill — needs client GSTIN / selling rates before sending">✏️ DRAFT</span>
                       )}
                       {/* Sales Bill pending chip — mam (2026-05-25): when
                           dispatched with Challan only and SB will follow
