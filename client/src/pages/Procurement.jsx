@@ -1949,7 +1949,10 @@ export default function Procurement() {
               // the approve buttons render in the right order: CRM → L1 → L2.
               const isCrmTwoLevel = i.approval_policy === 'crm_two_level';
               const needsCrm = isCrmTwoLevel && i.crm_status === 'pending';
-              const isCreator = i.created_by === user?.id;
+              // Admin is never treated as the blocked self-creator — mam
+              // (2026-06-06: "admin can also approval like others"). Matches
+              // the backend, which lets admin approve indents they raised.
+              const isCreator = i.created_by === user?.id && !isAdmin();
               const canActL1 = isAdmin() || user?.approval_role === 'l1';
               const canActL2 = isAdmin() || user?.approval_role === 'l2';
               // RGP single HR sign-off (mam 2026-06-04).
@@ -2383,7 +2386,10 @@ export default function Procurement() {
                         // and the CRM approver can't act (mam 2026-06-03).
                         const isCrmTwoLevel = i.approval_policy === 'crm_two_level';
                         const needsCrm = isCrmTwoLevel && i.crm_status === 'pending';
-                        const isCreator = i.created_by === user?.id;
+                        // Admin is never treated as the blocked self-creator — mam
+              // (2026-06-06: "admin can also approval like others"). Matches
+              // the backend, which lets admin approve indents they raised.
+              const isCreator = i.created_by === user?.id && !isAdmin();
                         const canActL1 = isAdmin() || user?.approval_role === 'l1';
                         const canActL2 = isAdmin() || user?.approval_role === 'l2';
                         const isHrSingle = i.approval_policy === 'hr_single';
