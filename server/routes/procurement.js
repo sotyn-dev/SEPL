@@ -1879,7 +1879,7 @@ router.put('/indents/:id', (req, res) => {
           // Not billable (sales_bill_pending=0). Guarded one-per-indent.
           try {
             const rgpRows = db.prepare(
-              `SELECT description, quantity AS qty, unit
+              `SELECT description, quantity AS qty, unit, item_master_id
                  FROM indent_items
                 WHERE indent_id=? AND UPPER(COALESCE(item_type,''))='RGP'
                   AND COALESCE(quantity,0) > 0 AND (source IS NULL OR source<>'store')`
@@ -1898,9 +1898,44 @@ router.put('/indents/:id', (req, res) => {
                    VALUES (NULL, ?, 'rgp', ?, 'challan', ?, 'pending', 0, ?, ?)`
                 ).run(id, gpDate, gpNum, JSON.stringify(gpItems),
                       'RGP returnable gate pass — auto-generated on approval');
+
+                // Deduct RGP material from office stock (mam 2026-06-06: "if
+                // approved rgp from store then why not decrease"). Greedy across
+                // active office warehouses; log a stock_movements OUT
+                // (reference_type='RGP'). Best-effort, non-blocking — if an item
+                // isn't tracked in inventory or is short, deduct what's there
+                // and move on (never block the approval / go negative).
+                const balRgp = db.prepare(
+                  `SELECT sb.id, sb.warehouse_id, sb.quantity, sb.avg_rate
+                     FROM stock_balance sb
+                     JOIN warehouses w ON w.id = sb.warehouse_id AND COALESCE(w.active,1)=1
+                    WHERE sb.item_master_id = ? AND w.type='office' AND sb.quantity > 0
+                    ORDER BY sb.warehouse_id ASC`
+                );
+                const decRgp = db.prepare('UPDATE stock_balance SET quantity = quantity - ?, updated_at=CURRENT_TIMESTAMP WHERE id=?');
+                const mvRgp = db.prepare(
+                  `INSERT INTO stock_movements
+                     (warehouse_id, item_master_id, type, quantity, rate, total_value,
+                      reference_type, reference_id, notes, created_by)
+                   VALUES (?, ?, 'OUT', ?, ?, ?, 'RGP', ?, ?, ?)`
+                );
+                for (const r of rgpRows) {
+                  if (!r.item_master_id) continue;
+                  let remaining = +r.qty || 0;
+                  for (const b of balRgp.all(r.item_master_id)) {
+                    if (remaining <= 0) break;
+                    const take = Math.min(remaining, +b.quantity);
+                    if (take <= 0) continue;
+                    const rate = +b.avg_rate || 0;
+                    decRgp.run(take, b.id);
+                    mvRgp.run(b.warehouse_id, r.item_master_id, take, rate, take * rate,
+                              gpNum, `RGP issued to site for indent #${id} (${gpNum})`, req.user.id);
+                    remaining -= take;
+                  }
+                }
               }
             }
-          } catch (e) { console.error('[approve] RGP challan failed (approval saved anyway):', e.message); }
+          } catch (e) { console.error('[approve] RGP challan/stock failed (approval saved anyway):', e.message); }
         });
         tx();
 
