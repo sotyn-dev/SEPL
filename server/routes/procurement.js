@@ -1982,6 +1982,10 @@ router.put('/indents/:id', (req, res) => {
       }
 
       if (isManual) continue;
+      // RGP / Extra-Non-Schedule / Rental pick straight from Item Master — no
+      // BOQ link required (mam 2026-06-06: editing an RGP indent wrongly
+      // demanded a BOQ Item). editSkipBoqCheck was computed but not applied here.
+      if (editSkipBoqCheck && hasSub) continue;
       if (hasBoq && hasSub) continue;
       if (!hasBoq) return res.status(400).json({ error: `Row ${i + 1}: pick a BOQ Item (or type a description for manual entry)` });
       if (!hasSub) return res.status(400).json({ error: `Row ${i + 1}: pick a Sub-Item (Item Master)` });
