@@ -1634,8 +1634,10 @@ router.put('/indents/:id', (req, res) => {
         const itemId = +k;
         const qty = +v;
         if (!Number.isFinite(itemId) || itemId <= 0) continue;
-        if (!Number.isFinite(qty) || qty <= 0) {
-          return res.status(400).json({ error: `Quantity for item #${itemId} must be greater than 0.` });
+        // qty 0 is allowed — the approver did NOT approve that line (mam
+        // 2026-06-06: "L2 want enter approved qty 0"). Negative is invalid.
+        if (!Number.isFinite(qty) || qty < 0) {
+          return res.status(400).json({ error: `Quantity for item #${itemId} cannot be negative.` });
         }
         valid.push([itemId, qty]);
       }
@@ -2587,6 +2589,8 @@ router.get('/indents/:id/items-for-po', (req, res) => {
      WHERE ii.indent_id = ?
        -- Exclude from-store lines — they're fulfilled from stock, not a PO.
        AND (ii.source IS NULL OR ii.source <> 'store')
+       -- Lines the approver zeroed out (approved qty 0) aren't procured.
+       AND COALESCE(ii.quantity, 0) > 0
      ORDER BY ii.id`
   ).all(req.params.id);
   res.json(rows);
@@ -2625,6 +2629,8 @@ router.get('/pending-po-items', (req, res) => {
      )
        -- Exclude from-store lines — fulfilled from stock, not pending for PO.
        AND (ii.source IS NULL OR ii.source <> 'store')
+       -- Lines the approver zeroed out (approved qty 0) aren't procured.
+       AND COALESCE(ii.quantity, 0) > 0
      ORDER BY
        CASE WHEN r.status = 'finalized' THEN 0 ELSE 1 END,
        i.created_at DESC, ii.id`
@@ -4727,6 +4733,8 @@ router.get('/item-rates', (req, res) => {
        -- goes to site and comes back, never purchased. mam (2026-06-06: "if
        -- approve from store then why 3 rate") — keep it out of Vendor Rates.
        AND UPPER(COALESCE(ii.item_type, '')) <> 'RGP'
+       -- Lines the approver zeroed out (approved qty 0) aren't procured.
+       AND COALESCE(ii.quantity, 0) > 0
      ORDER BY i.created_at DESC, ii.id`
   ).all();
   res.json(rows);

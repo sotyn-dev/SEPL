@@ -1115,8 +1115,10 @@ export default function Procurement() {
     for (const [k, v] of Object.entries(approveQtyOverrides)) {
       const newQty = +v;
       const oldQty = +original[k];
-      if (!Number.isFinite(newQty) || newQty <= 0) {
-        toast.error(`Quantity must be greater than 0`);
+      // 0 is allowed — it means the approver does NOT approve that line (mam
+      // 2026-06-06: "L2 want enter approved qty 0"). Negative is invalid.
+      if (!Number.isFinite(newQty) || newQty < 0) {
+        toast.error(`Quantity cannot be negative`);
         return;
       }
       if (newQty !== oldQty) changed[k] = newQty;
@@ -6952,7 +6954,7 @@ export default function Procurement() {
                           <td className="px-2 py-1 text-right">
                             {/* NumInput keeps backspace/select-all-delete from
                                 snapping the field to 0 (mam 2026-05-25). */}
-                            <NumInput step="any" min="0.001"
+                            <NumInput step="any" min="0" emitZeroOnEmpty
                               value={approveQtyOverrides[it.id] ?? it.quantity}
                               onChange={(v) => setApproveQtyOverrides(prev => ({ ...prev, [it.id]: v }))}
                               className="border border-gray-300 rounded px-2 py-1 w-20 text-right text-xs focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
