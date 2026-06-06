@@ -1870,6 +1870,37 @@ router.put('/indents/:id', (req, res) => {
                    rejection_reason = NULL
              WHERE id = ?`
           ).run(req.user.id, id);
+
+          // 4. RGP gate-pass Delivery Challan (mam 2026-06-06: "rgp delivery
+          // challan automatically generate, rec. also required"). RGP is
+          // returnable material that goes to site and comes back — no purchase.
+          // On approval, auto-create a Delivery Challan listing the RGP lines so
+          // it appears in Dispatch & Receiving for the signed Mark-Received.
+          // Not billable (sales_bill_pending=0). Guarded one-per-indent.
+          try {
+            const rgpRows = db.prepare(
+              `SELECT description, quantity AS qty, unit
+                 FROM indent_items
+                WHERE indent_id=? AND UPPER(COALESCE(item_type,''))='RGP'
+                  AND COALESCE(quantity,0) > 0 AND (source IS NULL OR source<>'store')`
+            ).all(id);
+            if (rgpRows.length) {
+              const exists = db.prepare("SELECT id FROM delivery_notes WHERE indent_id=? AND source='rgp'").get(id);
+              if (!exists) {
+                const { nextSequence } = require('../db/nextSequence');
+                const gpDate = new Date().toISOString().slice(0, 10);
+                const gpNum = nextSequence(db, 'delivery_notes', 'document_number', `RGP/${new Date().getFullYear()}/`, { pad: 4 });
+                const gpItems = rgpRows.map(r => ({ description: r.description, qty: +r.qty || 0, unit: r.unit || '', rate: 0, amount: 0, item_type: 'RGP' }));
+                db.prepare(
+                  `INSERT INTO delivery_notes
+                     (vendor_po_id, indent_id, source, delivery_date, document_type,
+                      document_number, status, sales_bill_pending, items_json, notes)
+                   VALUES (NULL, ?, 'rgp', ?, 'challan', ?, 'pending', 0, ?, ?)`
+                ).run(id, gpDate, gpNum, JSON.stringify(gpItems),
+                      'RGP returnable gate pass — auto-generated on approval');
+              }
+            }
+          } catch (e) { console.error('[approve] RGP challan failed (approval saved anyway):', e.message); }
         });
         tx();
 
