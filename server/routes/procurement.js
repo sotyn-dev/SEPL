@@ -984,10 +984,9 @@ router.post('/indents', (req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const isBillable = category === 'extra_schedule' || category === 'extra_non_schedule';
   const basePolicy = today >= TWO_LEVEL_CUTOFF ? 'two_level' : 'single';
-  // RGP — mam (2026-06-04 chart): "RGP → L1 Approval (HR)".  RGP indents
-  // take a SINGLE HR sign-off (policy 'hr_single'), not the L1+L2 chain.
-  const policy = category === 'rgp' ? 'hr_single'
-    : (isBillable && basePolicy === 'two_level' ? 'crm_two_level' : basePolicy);
+  // RGP now follows the normal L1 → L2 chain like Material (mam 2026-06-06:
+  // "rgp approval like as material l1,l2" — reverses the earlier hr_single).
+  const policy = isBillable && basePolicy === 'two_level' ? 'crm_two_level' : basePolicy;
   const r = db.prepare(
     `INSERT INTO indents
        (planning_id, indent_number, status, notes, site_name, raised_by_name, client_name, created_by,

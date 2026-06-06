@@ -3670,6 +3670,27 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[migration] crm_funnel BB name-match failed:', e.message); }
 
+  // RGP now approves like Material — L1 → L2 (mam 2026-06-06: "rgp approval
+  // like as material l1,l2"). Convert still-pending RGP indents that are on
+  // the old single-HR policy to two_level so they show the L1/L2 chain.
+  // Already-approved / rejected ones are left as-is. Runs once.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='rgp_to_two_level_v1'").get();
+    if (!done) {
+      const r = db.prepare(
+        `UPDATE indents
+            SET approval_policy = 'two_level',
+                l1_status = CASE WHEN l1_status IS NULL THEN 'pending' ELSE l1_status END,
+                l2_status = CASE WHEN l2_status IS NULL THEN 'pending' ELSE l2_status END
+          WHERE indent_category = 'rgp'
+            AND approval_policy = 'hr_single'
+            AND status NOT IN ('approved','rejected','po_sent','dispatched','received')`
+      ).run();
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('rgp_to_two_level_v1', '1')").run();
+      if (r.changes > 0) console.log(`[migration] moved ${r.changes} pending RGP indents from HR-single to L1→L2`);
+    }
+  } catch (e) { console.error('[migration] RGP to two_level failed:', e.message); }
+
   // Drop indents.status CHECK entirely (mam 2026-05-28: L1 Nitin Jain
   // hit "CHECK constraint failed: status IN (...)" on Approve L1).
   //
