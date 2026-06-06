@@ -4723,6 +4723,10 @@ router.get('/item-rates', (req, res) => {
        -- (2026-06-04): a 1000 line approved as 10-store + 990-procure
        -- must show 990 in Vendor Rates, not 1000.
        AND (ii.source IS NULL OR ii.source <> 'store')
+       -- RGP (Returnable Gate Pass) is SEPL's own returnable material — it
+       -- goes to site and comes back, never purchased. mam (2026-06-06: "if
+       -- approve from store then why 3 rate") — keep it out of Vendor Rates.
+       AND UPPER(COALESCE(ii.item_type, '')) <> 'RGP'
      ORDER BY i.created_at DESC, ii.id`
   ).all();
   res.json(rows);
