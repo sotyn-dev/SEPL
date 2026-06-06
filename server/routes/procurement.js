@@ -119,12 +119,17 @@ function buildExtraQuotation(db, indentId) {
     if (byName) cli = { ...(byName), ...(cli || {}) };  // planning values win where present
   }
   cli = cli || {};
+  // Chargeable lines = everything EXCEPT free items (FOC / RGP) and
+  // from-store lines. Includes PO and untyped items so older Extra indents
+  // (where item_type was never set) still get quoted. (mam 2026-06-06:
+  // "where is qty rate amount" — the strict PO-only filter hid them.)
   const rows = db.prepare(
-    `SELECT ii.id, ii.description, ii.quantity, ii.unit, ii.po_item_id,
+    `SELECT ii.id, ii.description, ii.quantity, ii.unit, ii.po_item_id, ii.item_type,
             poi.description AS boq_description, poi.unit AS boq_unit
        FROM indent_items ii
        LEFT JOIN po_items poi ON poi.id = ii.po_item_id
-      WHERE ii.indent_id=? AND UPPER(COALESCE(ii.item_type,''))='PO'
+      WHERE ii.indent_id=?
+        AND UPPER(COALESCE(ii.item_type,'')) NOT IN ('FOC','RGP')
         AND (ii.source IS NULL OR ii.source<>'store')
       ORDER BY ii.id`
   ).all(indentId);
