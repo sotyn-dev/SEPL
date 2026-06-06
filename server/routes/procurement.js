@@ -3392,6 +3392,69 @@ router.post('/delivery-notes/:id/sales-bill', needsApprove, vendorPoUpload.singl
   res.json({ ok: true, sales_bill_number, sales_bill_file_path: sbFilePath });
 });
 
+// GENERATE a Sales Bill (invoice) from a challan — mam (2026-06-04):
+// "sales bill generate, not upload".  Builds a new sales_bill delivery
+// note from the challan's items (from-store challan → its items_json;
+// PO challan → the BOQ items at selling rates), links it back to the
+// challan, and flags is_draft when client GSTIN / rates are missing.
+// Returns the new sales bill id so the client can open its printable
+// invoice.  Idempotent: returns the existing one if already generated.
+router.post('/delivery-notes/:id/generate-sales-bill', needsApprove, (req, res) => {
+  const db = getDb();
+  const challan = db.prepare('SELECT * FROM delivery_notes WHERE id=?').get(req.params.id);
+  if (!challan) return res.status(404).json({ error: 'Dispatch not found' });
+
+  // Already generated?  Return the linked Sales Bill.
+  if (challan.sales_bill_number) {
+    const existing = db.prepare("SELECT id, document_number, is_draft FROM delivery_notes WHERE document_type='sales_bill' AND document_number=?").get(challan.sales_bill_number);
+    if (existing) return res.json({ id: existing.id, document_number: existing.document_number, is_draft: existing.is_draft, existing: true });
+  }
+
+  let items = [];
+  let indentId = challan.indent_id || null;
+  if (challan.source === 'store') {
+    try {
+      const arr = JSON.parse(challan.items_json || '[]');
+      items = (arr || []).map(it => ({
+        description: it.description || '', qty: +it.qty || +it.quantity || 0, unit: it.unit || '',
+        rate: +it.rate || 0, amount: (+it.qty || +it.quantity || 0) * (+it.rate || 0),
+        hsn: it.hsn || '', item_code: it.item_code || '',
+      }));
+    } catch (_) {}
+  } else if (challan.vendor_po_id) {
+    const billable = db.prepare(`
+      SELECT vpi.quantity,
+             COALESCE(NULLIF(TRIM(im.item_name), ''), NULLIF(TRIM(ii.description), ''), poi.description) as description,
+             COALESCE(ii.unit, poi.unit, im.uom) as unit, COALESCE(poi.rate, 0) as rate, poi.hsn_code, im.item_code
+        FROM vendor_po_items vpi
+        LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
+        LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+        LEFT JOIN item_master im ON im.id = ii.item_master_id
+       WHERE vpi.vendor_po_id = ? AND UPPER(COALESCE(ii.item_type, '')) = 'PO'
+    `).all(challan.vendor_po_id);
+    items = billable.map(it => ({
+      description: it.description || '', qty: +it.quantity || 0, unit: it.unit || '',
+      rate: +it.rate || 0, amount: (+it.quantity || 0) * (+it.rate || 0), hsn: it.hsn_code || '', item_code: it.item_code || '',
+    }));
+    if (!indentId) indentId = db.prepare('SELECT indent_id FROM vendor_pos WHERE id=?').get(challan.vendor_po_id)?.indent_id || null;
+  }
+  if (!items.length) return res.status(400).json({ error: 'No billable items found on this challan to generate a Sales Bill.' });
+
+  const client = db.prepare(`SELECT bb.gstin FROM indents i LEFT JOIN order_planning op ON op.id=i.planning_id LEFT JOIN business_book bb ON bb.id=op.business_book_id WHERE i.id=?`).get(indentId) || {};
+  const isDraft = (items.some(it => !(it.rate > 0)) || !client.gstin) ? 1 : 0;
+  const { nextSequence } = require('../db/nextSequence');
+  const year = new Date().getFullYear();
+  const invNum = nextSequence(db, 'delivery_notes', 'document_number', `INV/${year}/`, { pad: 4 });
+  const today = new Date().toISOString().slice(0, 10);
+  const sb = db.prepare(`
+    INSERT INTO delivery_notes (vendor_po_id, indent_id, source, delivery_date, document_type, document_number, status, is_draft, items_json, notes)
+    VALUES (?, ?, ?, ?, 'sales_bill', ?, 'pending', ?, ?, ?)
+  `).run(challan.vendor_po_id || null, indentId, challan.source || 'po', today, invNum, isDraft, JSON.stringify(items),
+         isDraft ? 'Generated Sales Bill — DRAFT (fill client GSTIN / selling rates before sending)' : 'Generated Sales Bill');
+  db.prepare("UPDATE delivery_notes SET sales_bill_pending=0, sales_bill_number=? WHERE id=?").run(invNum, req.params.id);
+  res.json({ id: sb.lastInsertRowid, document_number: invNum, is_draft: isDraft, items: items.length });
+});
+
 // Mark a dispatch as "Received by <name> on <date>" and attach the stamped +
 // signed receipt photo as proof. Mam flagged this as business-critical: without
 // the signed proof, clients sometimes deny receipt and SEPL eats the loss.

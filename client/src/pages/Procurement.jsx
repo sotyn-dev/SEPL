@@ -442,6 +442,17 @@ export default function Procurement() {
   const [sbTarget, setSbTarget] = useState(null);
   const [sbForm, setSbForm] = useState({ sales_bill_number: '', file: null });
   const [sbSaving, setSbSaving] = useState(false);
+  // Generate (not upload) a Sales Bill from a challan, then open its
+  // printable invoice — mam (2026-06-04): "sales bill generate, not upload".
+  const generateSalesBill = async (d) => {
+    try {
+      const r = await api.post(`/procurement/delivery-notes/${d.id}/generate-sales-bill`);
+      toast.success(`Sales Bill ${r.data.document_number} ${r.data.existing ? 'already exists' : 'generated'}${r.data.is_draft ? ' · DRAFT — fill client GSTIN / rates' : ''}`, { duration: 6000 });
+      load();
+      const res = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'arraybuffer' });
+      window.open(URL.createObjectURL(new Blob([res.data], { type: 'text/html' })), '_blank');
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed to generate Sales Bill'); }
+  };
   const submitSalesBill = async () => {
     if (!sbTarget) return;
     const num = String(sbForm.sales_bill_number || '').trim();
@@ -4193,7 +4204,7 @@ export default function Procurement() {
                         <td className="px-2 py-1.5 text-center whitespace-nowrap">{d.delivery_date || '—'}</td>
                         <td className="px-2 py-1.5 text-right whitespace-nowrap">
                           <button onClick={async () => { const res = await api.get(`/procurement/delivery-notes/${d.id}/print`, { responseType: 'arraybuffer' }); const url = URL.createObjectURL(new Blob([res.data], { type: 'text/html' })); window.open(url, '_blank'); }} className="text-[10px] px-2 py-1 mr-1 rounded border border-gray-300 hover:bg-gray-50">Print</button>
-                          <button onClick={() => { setSbTarget(d); setSbForm({ sales_bill_number: '', file: null }); }} className="text-[10px] px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">Add Sales Bill</button>
+                          <button onClick={() => generateSalesBill(d)} className="text-[10px] px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">Add Sales Bill</button>
                         </td>
                       </tr>
                     ))}
@@ -4495,7 +4506,7 @@ export default function Procurement() {
                         sales_bill_pending=1 AND no SB has been uploaded yet
                         (mam 2026-05-25). */}
                     {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
-                      <button onClick={() => { setSbTarget(d); setSbForm({ sales_bill_number: '', file: null }); }} className="text-[10px] px-2 py-1 mr-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">
+                      <button onClick={() => generateSalesBill(d)} className="text-[10px] px-2 py-1 mr-1 rounded bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 font-semibold">
                         Add Sales Bill
                       </button>
                     )}
@@ -4627,7 +4638,7 @@ export default function Procurement() {
                     className="text-gray-600 hover:underline flex items-center gap-1 font-semibold"
                   >🖨 Print</button>
                   {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
-                    <button onClick={() => { setSbTarget(d); setSbForm({ sales_bill_number: '', file: null }); }} className="text-amber-700 hover:underline flex items-center gap-1 font-semibold">+ Add Sales Bill</button>
+                    <button onClick={() => generateSalesBill(d)} className="text-amber-700 hover:underline flex items-center gap-1 font-semibold">+ Add Sales Bill</button>
                   )}
                   {canDelete('procurement') && (
                     <button onClick={async () => {
