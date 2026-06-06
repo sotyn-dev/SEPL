@@ -3259,6 +3259,8 @@ function initializeDatabase() {
     ['sub_contractors', 'active INTEGER DEFAULT 1'],
     ['sub_contractors', 'created_by INTEGER REFERENCES users(id)'],
     ['sub_contractors', 'updated_at DATETIME'],
+    // Optional Work Order document (mam 2026-06-06) — stored as a /uploads URL.
+    ['sub_contractors', 'work_order_file TEXT'],
     // ─── Per-user KPI settings — mam (2026-06-02 follow-up) ───────────
     // Initial table (score_user_kpi_target) only held planned_value
     // overrides.  Mam confirmed "every person different KPIs" — Option B:

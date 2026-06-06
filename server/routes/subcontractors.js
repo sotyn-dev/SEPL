@@ -66,8 +66,8 @@ router.post('/', requirePermission('sub_contractors', 'create'), (req, res) => {
     `INSERT INTO sub_contractors
      (name, phone, state, district, location_extra, contractor_type,
       experience_years, manpower, with_tools, has_gst, gst_number, rate_in_budget,
-      start_within_days, notes, active, created_by)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      start_within_days, notes, active, work_order_file, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(
     String(b.name).trim(),
     b.phone || null,
@@ -84,6 +84,7 @@ router.post('/', requirePermission('sub_contractors', 'create'), (req, res) => {
     num(b.start_within_days),
     b.notes || null,
     b.active === false || b.active === 0 ? 0 : 1,
+    b.work_order_file || null,
     req.user.id,
   );
   res.status(201).json({ id: r.lastInsertRowid });
@@ -99,7 +100,7 @@ router.put('/:id', requirePermission('sub_contractors', 'edit'), (req, res) => {
     `UPDATE sub_contractors SET
        name=?, phone=?, state=?, district=?, location_extra=?, contractor_type=?,
        experience_years=?, manpower=?, with_tools=?, has_gst=?, gst_number=?, rate_in_budget=?,
-       start_within_days=?, notes=?, active=?, updated_at=CURRENT_TIMESTAMP
+       start_within_days=?, notes=?, active=?, work_order_file=?, updated_at=CURRENT_TIMESTAMP
      WHERE id=?`
   ).run(
     String(b.name).trim(),
@@ -117,6 +118,7 @@ router.put('/:id', requirePermission('sub_contractors', 'edit'), (req, res) => {
     num(b.start_within_days),
     b.notes || null,
     b.active === false || b.active === 0 ? 0 : 1,
+    b.work_order_file || null,
     req.params.id,
   );
   res.json({ message: 'Updated' });

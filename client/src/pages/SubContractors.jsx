@@ -21,7 +21,7 @@ const blankForm = () => ({
   name: '', phone: '', state: '', district: '', location_extra: '',
   contractor_type: '', experience_years: 0, manpower: 0,
   with_tools: false, has_gst: false, gst_number: '', rate_in_budget: '',
-  start_within_days: 0, notes: '', active: true,
+  start_within_days: 0, notes: '', active: true, work_order_file: '',
 });
 
 export default function SubContractors() {
@@ -33,6 +33,7 @@ export default function SubContractors() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(blankForm());
   const [saving, setSaving] = useState(false);
+  const [uploadingWO, setUploadingWO] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -79,6 +80,25 @@ export default function SubContractors() {
       toast.error(err.response?.data?.error || 'Save failed');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Optional Work Order document upload (mam) — PDF / image / Excel.
+  // Uploads to the shared /upload endpoint and stores the returned URL on
+  // the form; the JSON save then persists work_order_file like any field.
+  const uploadWorkOrder = async (file) => {
+    if (!file) return;
+    setUploadingWO(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setForm(f => ({ ...f, work_order_file: r.data.url }));
+      toast.success('Work order attached');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Upload failed');
+    } finally {
+      setUploadingWO(false);
     }
   };
 
@@ -295,6 +315,25 @@ export default function SubContractors() {
           <div>
             <label className="label">Notes <span className="text-xs text-gray-400 font-normal">(optional)</span></label>
             <textarea className="input" rows="2" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="Past projects, references, special skills…" />
+          </div>
+
+          <div>
+            <label className="label">Work Order File <span className="text-xs text-gray-400 font-normal">(optional)</span></label>
+            {form.work_order_file ? (
+              <div className="flex items-center gap-3 text-sm">
+                <a href={form.work_order_file} target="_blank" rel="noreferrer" className="text-blue-700 underline">View attached work order</a>
+                <button type="button" onClick={() => setForm({ ...form, work_order_file: '' })} className="text-red-500 hover:underline">Remove</button>
+              </div>
+            ) : (
+              <input
+                type="file"
+                accept=".pdf,.doc,.docx,.xls,.xlsx,image/*"
+                className="input"
+                disabled={uploadingWO}
+                onChange={e => uploadWorkOrder(e.target.files?.[0])}
+              />
+            )}
+            {uploadingWO && <p className="text-xs text-gray-500 mt-1">Uploading…</p>}
           </div>
 
           {editing && (
