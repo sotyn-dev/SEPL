@@ -4133,6 +4133,34 @@ export default function Procurement() {
           }
         };
 
+        // Build receive rows from a delivery note's own items_json. Used for
+        // from-store challans / Sales Bills (mam 2026-06-06: "items not show")
+        // — they have no Vendor PO, so loadReceiveItems(vendor_po_id) came up
+        // empty and seeded a blank row. Their lines live in items_json
+        // ({description, qty|quantity, unit, rate, ...}).
+        const loadReceiveItemsFromJson = (itemsJson) => {
+          let arr = [];
+          try { arr = JSON.parse(itemsJson || '[]') || []; } catch (_) {}
+          if (!Array.isArray(arr) || arr.length === 0) { setReceiveItems([blankManualRow()]); return; }
+          setReceiveItems(arr.map(it => {
+            const qty = +it.qty || +it.quantity || 0;
+            return {
+              vpi_id: null,
+              description: it.description || it.master_name || '—',
+              master_name: it.description || '',
+              item_code: it.item_code || '',
+              specification: it.specification || '',
+              size: it.size || '',
+              make: it.make || '',
+              unit: it.unit || it.uom || '',
+              hsn: it.hsn || it.hsn_code || '',
+              ordered_qty: qty,
+              received_qty: qty,
+              short_reason: '',
+            };
+          }));
+        };
+
         const openMarkReceived = (d) => {
           setForm({
             receive_id: d.id,
@@ -4142,7 +4170,10 @@ export default function Procurement() {
             received_at: new Date().toISOString().slice(0, 10),
           });
           setReceiveItems([]);
-          loadReceiveItems(d.vendor_po_id);
+          // From-store (no PO) → read lines from the note's items_json;
+          // PO-linked → pull from the PO's delivery-note-data as before.
+          if (d.vendor_po_id) loadReceiveItems(d.vendor_po_id);
+          else loadReceiveItemsFromJson(d.items_json);
           setModal('receive');
         };
         // Upload receiving for a Ready-to-Dispatch PO directly (no dispatch
