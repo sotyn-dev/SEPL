@@ -133,17 +133,19 @@ function buildExtraQuotation(db, indentId) {
         AND (ii.source IS NULL OR ii.source<>'store')
       ORDER BY ii.id`
   ).all(indentId);
-  // Most-recent previous BOQ rate for an EXACT item-name match (rate>0),
-  // excluding this indent's own BOQ line.
+  // BOQ rate for an EXACT item-name match (rate>0), most recent first.
+  // Includes the indent's own BOQ line — for Extra-Schedule the rate lives
+  // on that project's BOQ line for the item (mam 2026-06-06: it was being
+  // excluded, so a priced BOQ line showed ₹0).
   const rateStmt = db.prepare(
     `SELECT rate FROM po_items
-      WHERE LOWER(TRIM(description))=LOWER(TRIM(?)) AND COALESCE(rate,0)>0 AND id<>?
+      WHERE LOWER(TRIM(description))=LOWER(TRIM(?)) AND COALESCE(rate,0)>0
       ORDER BY id DESC LIMIT 1`
   );
   let supplyTotal = 0;
   const items = rows.map((it, idx) => {
     const name = (it.boq_description && it.boq_description.trim()) ? it.boq_description : (it.description || '');
-    const found = rateStmt.get(name, it.po_item_id || 0);
+    const found = rateStmt.get(name);
     const rate = found ? +found.rate : 0;
     const qty = +it.quantity || 0;
     const amount = Math.round(qty * rate * 100) / 100;
