@@ -3458,6 +3458,37 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[migration] store challan backfill failed:', e.message); }
 
+  // Revert auto-cut from-store Sales Bills (mam 2026-06-06): we used to
+  // auto-cut the Sales Bill for PO store items at store issue. mam wants
+  // those to instead wait in "Ready to Dispatch" so she cuts them herself.
+  // For every from-store challan that was auto-cut, IF its Sales Bill is
+  // still a DRAFT and hasn't been received yet (safe to undo), delete that
+  // draft Sales Bill and flip the challan back to sales_bill_pending=1 so it
+  // reappears in the Ready-to-Dispatch "From-Store · Sales Bill pending"
+  // card.  Sales Bills already received/sent are left untouched. Run once.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='revert_autocut_store_sb_v1'").get();
+    if (!done) {
+      const challans = db.prepare(
+        "SELECT id, sales_bill_number FROM delivery_notes WHERE source='store' AND document_type='challan' AND sales_bill_number IS NOT NULL AND sales_bill_number <> ''"
+      ).all();
+      let reverted = 0;
+      for (const ch of challans) {
+        const sb = db.prepare(
+          "SELECT id, is_draft, status, received_at FROM delivery_notes WHERE document_type='sales_bill' AND document_number=?"
+        ).get(ch.sales_bill_number);
+        // Only undo when the Sales Bill is a draft AND not yet received.
+        if (sb && sb.is_draft === 1 && !sb.received_at && (sb.status === 'pending' || sb.status == null)) {
+          db.prepare('DELETE FROM delivery_notes WHERE id=?').run(sb.id);
+          db.prepare("UPDATE delivery_notes SET sales_bill_pending=1, sales_bill_number=NULL WHERE id=?").run(ch.id);
+          reverted++;
+        }
+      }
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('revert_autocut_store_sb_v1', '1')").run();
+      if (reverted > 0) console.log(`[migration] reverted ${reverted} auto-cut from-store Sales Bills back to Ready-to-Dispatch (mam)`);
+    }
+  } catch (e) { console.error('[migration] revert auto-cut store SB failed:', e.message); }
+
   // Drop indents.status CHECK entirely (mam 2026-05-28: L1 Nitin Jain
   // hit "CHECK constraint failed: status IN (...)" on Approve L1).
   //
