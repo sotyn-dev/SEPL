@@ -1155,7 +1155,7 @@ router.post('/indents', (req, res) => {
 //      Vendor PO has been created against it. Once approved or POed,
 //      it's frozen.
 router.put('/indents/:id', (req, res) => {
-  const { status, items, site_name, raised_by_name, notes, reason, quantity_overrides, store_qty_per_item, crm_margin_pct } = req.body;
+  const { status, items, site_name, raised_by_name, notes, reason, quantity_overrides, store_qty_per_item, unit_overrides, crm_margin_pct } = req.body;
   const db = getDb();
   const id = req.params.id;
 
@@ -1701,6 +1701,17 @@ router.put('/indents/:id', (req, res) => {
           if (valid.length) {
             const upd = db.prepare('UPDATE indent_items SET quantity = ? WHERE id = ? AND indent_id = ?');
             for (const [itemId, qty] of valid) upd.run(qty, itemId, id);
+          }
+
+          // 1b. Apply per-line UNIT overrides (mam 2026-06-06: L2 fixes a wrong
+          // Item-Master UOM at approval). { indent_item_id: 'KG' }.
+          if (unit_overrides && typeof unit_overrides === 'object') {
+            const updUnit = db.prepare('UPDATE indent_items SET unit = ? WHERE id = ? AND indent_id = ?');
+            for (const [k, v] of Object.entries(unit_overrides)) {
+              const itemId = +k;
+              const unit = String(v || '').trim().slice(0, 20);
+              if (Number.isFinite(itemId) && itemId > 0 && unit) updUnit.run(unit, itemId, id);
+            }
           }
 
           // 2. Execute each store-split: decrement stock, log movements,

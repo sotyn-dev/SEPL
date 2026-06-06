@@ -481,6 +481,9 @@ export default function Procurement() {
   // rejectTarget holds the indent row + the mandatory reason field.
   const [approveTarget, setApproveTarget] = useState(null);
   const [approveQtyOverrides, setApproveQtyOverrides] = useState({});
+  // Per-line UNIT override (mam 2026-06-06): L2 can fix a wrong Item-Master UOM
+  // at approval ("unit can also change ... our itemwise has some wrong").
+  const [approveUnitOverrides, setApproveUnitOverrides] = useState({});
   // Mam (2026-06-02): per-line "From Store" qty.  When > 0 the approver
   // is saying "issue N pcs of this line from existing office stock and
   // procure the rest as a fresh vendor PO".  Auto-seeded to min(office,
@@ -1138,12 +1141,22 @@ export default function Procurement() {
         storeTotalQty += fs;
       }
     }
+    // Per-line UNIT changes (mam 2026-06-06): only send units the approver
+    // actually changed.
+    const unitChanged = {};
+    for (const it of (approveTarget.items || [])) {
+      const u = approveUnitOverrides[it.id];
+      if (u != null && String(u).trim() && String(u).trim() !== String(it.unit || '').trim()) {
+        unitChanged[it.id] = String(u).trim();
+      }
+    }
     setApproveSaving(true);
     try {
       const res = await api.put(`/procurement/indents/${approveTarget.id}`, {
         status: 'approved',
         quantity_overrides: changed,
         store_qty_per_item: storeQty,
+        unit_overrides: unitChanged,
         // Margin only matters at the CRM stage of an Extra-Non-Schedule
         // indent; the server ignores it otherwise.
         crm_margin_pct: approveMargin === '' ? undefined : +approveMargin,
@@ -1176,6 +1189,7 @@ export default function Procurement() {
       setApproveTarget(null);
       setApproveQtyOverrides({});
       setApproveFromStore({});
+      setApproveUnitOverrides({});
       setApproveMargin('');
       load();  // background refresh for canonical state
     } catch (err) {
@@ -6750,7 +6764,7 @@ export default function Procurement() {
           approval time".  Approver sees the full line list with editable
           qty inputs + a live budget total at the bottom.  Only changed
           quantities go up in the request body. */}
-      <Modal isOpen={!!approveTarget} onClose={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); setApproveMargin(''); }} title={approveTarget ? `Approve Indent ${approveTarget.indent_number}` : 'Approve Indent'} wide>
+      <Modal isOpen={!!approveTarget} onClose={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); setApproveUnitOverrides({}); setApproveMargin(''); }} title={approveTarget ? `Approve Indent ${approveTarget.indent_number}` : 'Approve Indent'} wide>
         {approveTarget && (() => {
           const items = approveTarget.items || [];
           const liveBudget = items.reduce((sum, it) => {
@@ -6806,6 +6820,9 @@ export default function Procurement() {
                 </div>
               )}
 
+              <datalist id="approve-uom-list">
+                {['PCS','MTR','KG','SQMM','PACKET','SET','LOT','PAIR','RFT','LTR','BOX','NOS'].map(u => <option key={u} value={u} />)}
+              </datalist>
               <div className="overflow-x-auto">
                 <table className="text-xs w-full">
                   <thead className="bg-gray-50 text-gray-600">
@@ -6850,7 +6867,15 @@ export default function Procurement() {
                               <div className="text-[10px] text-gray-500">{[it.master_size, it.master_specification].filter(Boolean).join(' / ')}</div>
                             )}
                           </td>
-                          <td className="px-2 py-1">{it.unit || '—'}</td>
+                          <td className="px-2 py-1">
+                            <input
+                              list="approve-uom-list"
+                              value={approveUnitOverrides[it.id] ?? it.unit ?? ''}
+                              onChange={(e) => setApproveUnitOverrides(prev => ({ ...prev, [it.id]: e.target.value }))}
+                              placeholder="unit"
+                              className="border border-gray-300 rounded px-1.5 py-1 w-16 text-xs focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                            />
+                          </td>
                           <td className="px-2 py-1 text-right">
                             {+it.master_price > 0 ? (
                               <div className="inline-flex items-center gap-1 justify-end">
@@ -7013,7 +7038,7 @@ export default function Procurement() {
               )}
 
               <div className="flex justify-end gap-3 pt-2 border-t">
-                <button type="button" onClick={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); setApproveMargin(''); }} className="btn btn-secondary">Cancel</button>
+                <button type="button" onClick={() => { setApproveTarget(null); setApproveQtyOverrides({}); setApproveFromStore({}); setApproveUnitOverrides({}); setApproveMargin(''); }} className="btn btn-secondary">Cancel</button>
                 <button type="button" onClick={submitApprove} disabled={approveSaving} className="btn btn-success flex items-center gap-1">
                   <FiCheck /> {approveSaving ? 'Approving…' : 'Approve Indent'}
                 </button>
