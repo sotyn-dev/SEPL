@@ -3691,6 +3691,39 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[migration] RGP to two_level failed:', e.message); }
 
+  // Fix blank descriptions on existing RGP gate-pass challans (mam 2026-06-06:
+  // "i fill rgp item not showing here"). Early RGP challans stored items_json
+  // from indent_items.description, which is empty for RGP (the name lives on
+  // the Item Master). Rebuild items_json from the indent's RGP lines with the
+  // master name / size / spec. Runs once.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='fix_rgp_challan_desc_v1'").get();
+    if (!done) {
+      const challans = db.prepare("SELECT id, indent_id FROM delivery_notes WHERE source='rgp' AND indent_id IS NOT NULL").all();
+      const itemStmt = db.prepare(
+        `SELECT ii.quantity AS qty, ii.unit,
+                COALESCE(NULLIF(TRIM(ii.description),''), NULLIF(TRIM(im.item_name),''), 'Item') AS name,
+                im.size, im.specification, im.make, im.item_code
+           FROM indent_items ii LEFT JOIN item_master im ON im.id = ii.item_master_id
+          WHERE ii.indent_id=? AND UPPER(COALESCE(ii.item_type,''))='RGP' AND COALESCE(ii.quantity,0)>0`
+      );
+      let fixed = 0;
+      for (const ch of challans) {
+        const rows = itemStmt.all(ch.indent_id);
+        if (!rows.length) continue;
+        const items = rows.map(r => ({
+          description: [r.name, r.size, r.specification].filter(Boolean).join(' / '),
+          qty: +r.qty || 0, unit: r.unit || '', rate: 0, amount: 0,
+          item_code: r.item_code || '', make: r.make || '', item_type: 'RGP',
+        }));
+        db.prepare('UPDATE delivery_notes SET items_json=? WHERE id=?').run(JSON.stringify(items), ch.id);
+        fixed++;
+      }
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('fix_rgp_challan_desc_v1', '1')").run();
+      if (fixed > 0) console.log(`[migration] rebuilt descriptions on ${fixed} RGP gate-pass challans`);
+    }
+  } catch (e) { console.error('[migration] RGP challan desc rebuild failed:', e.message); }
+
   // Drop indents.status CHECK entirely (mam 2026-05-28: L1 Nitin Jain
   // hit "CHECK constraint failed: status IN (...)" on Approve L1).
   //

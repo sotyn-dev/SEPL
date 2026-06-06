@@ -1890,10 +1890,13 @@ router.put('/indents/:id', (req, res) => {
           // Not billable (sales_bill_pending=0). Guarded one-per-indent.
           try {
             const rgpRows = db.prepare(
-              `SELECT description, quantity AS qty, unit, item_master_id
-                 FROM indent_items
-                WHERE indent_id=? AND UPPER(COALESCE(item_type,''))='RGP'
-                  AND COALESCE(quantity,0) > 0 AND (source IS NULL OR source<>'store')`
+              `SELECT ii.quantity AS qty, ii.unit, ii.item_master_id,
+                      COALESCE(NULLIF(TRIM(ii.description), ''), NULLIF(TRIM(im.item_name), ''), 'Item') AS name,
+                      im.size, im.specification, im.make, im.item_code
+                 FROM indent_items ii
+                 LEFT JOIN item_master im ON im.id = ii.item_master_id
+                WHERE ii.indent_id=? AND UPPER(COALESCE(ii.item_type,''))='RGP'
+                  AND COALESCE(ii.quantity,0) > 0 AND (ii.source IS NULL OR ii.source<>'store')`
             ).all(id);
             if (rgpRows.length) {
               const exists = db.prepare("SELECT id FROM delivery_notes WHERE indent_id=? AND source='rgp'").get(id);
@@ -1901,7 +1904,11 @@ router.put('/indents/:id', (req, res) => {
                 const { nextSequence } = require('../db/nextSequence');
                 const gpDate = new Date().toISOString().slice(0, 10);
                 const gpNum = nextSequence(db, 'delivery_notes', 'document_number', `RGP/${new Date().getFullYear()}/`, { pad: 4 });
-                const gpItems = rgpRows.map(r => ({ description: r.description, qty: +r.qty || 0, unit: r.unit || '', rate: 0, amount: 0, item_type: 'RGP' }));
+                const gpItems = rgpRows.map(r => ({
+                  description: [r.name, r.size, r.specification].filter(Boolean).join(' / '),
+                  qty: +r.qty || 0, unit: r.unit || '', rate: 0, amount: 0,
+                  item_code: r.item_code || '', make: r.make || '', item_type: 'RGP',
+                }));
                 db.prepare(
                   `INSERT INTO delivery_notes
                      (vendor_po_id, indent_id, source, delivery_date, document_type,
