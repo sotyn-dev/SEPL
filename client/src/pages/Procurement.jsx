@@ -2717,7 +2717,6 @@ export default function Procurement() {
                           <div>
                             <div>{(Math.round(r.qty * r.weight_per_meter * 100) / 100).toLocaleString('en-IN')} <span className="text-blue-700">KG</span></div>
                             <div className="text-[9px] font-normal text-gray-500">{r.qty} MTR @ {r.weight_per_meter} kg/m</div>
-                            <div className="text-[9px] font-normal text-blue-700">enter rate as ₹/kg</div>
                           </div>
                         ) : (
                           <>{r.qty} {cleanUnit(r.uom || r.unit)}</>
@@ -5618,7 +5617,6 @@ export default function Procurement() {
                             <td className="px-2 py-1.5 text-center text-gray-600">{isPipe ? <span className="text-blue-700 font-semibold">MTR → KG</span> : (unit || <span className="text-gray-300">—</span>)}</td>
                             <td className="px-1 py-1">
                               <NumInput className="input text-[11px] px-1 py-0.5 w-20 text-right" min="0" emitZeroOnEmpty disabled={inPo} value={s.rate ?? 0} onChange={v => togglePoItem(it.indent_item_id, { rate: v })} />
-                              {isPipe && <div className="text-[10px] text-blue-700 text-right mt-0.5">₹ / kg</div>}
                             </td>
                             <td className="px-2 py-1.5 text-right font-semibold">{amount ? `Rs ${amount.toLocaleString()}` : <span className="text-gray-300">—</span>}</td>
                           </tr>
