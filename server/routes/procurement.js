@@ -1106,9 +1106,13 @@ router.post('/indents', (req, res) => {
       ).get(resolvedPlanningId) || {};
       // No project link (or thin data)? Match the Business Book by name.
       if (!fi.bb_mobile) fi = fillBbBlanks(fi, bbByName(db, site_name));
-      // Auto-priced quotation total (most-recent BOQ rate × qty per item).
+      // Auto-priced quotation total — ONLY for Extra-Schedule (its items come
+      // from the BOQ, so previous rates exist). Extra-Non-Schedule is quoted
+      // MANUALLY (mam 2026-06-06), so its amount is left blank.
       let quoteAmt = 0;
-      try { quoteAmt = buildExtraQuotation(db, r.lastInsertRowid)?.supply_total || 0; } catch (_) {}
+      if (category === 'extra_schedule') {
+        try { quoteAmt = buildExtraQuotation(db, r.lastInsertRowid)?.supply_total || 0; } catch (_) {}
+      }
       const marker = `[auto-indent:${r.lastInsertRowid}]`;
       const already = db.prepare('SELECT id FROM crm_funnel WHERE source_indent_id=? OR remarks LIKE ?')
         .get(r.lastInsertRowid, `%${marker}%`);
@@ -1364,11 +1368,13 @@ router.put('/indents/:id', (req, res) => {
             const clientName = String(
               fi?.bb_client || fi?.bb_company || fi?.client_name || fi?.site_name || 'Extra item'
             ).trim() || 'Extra item';
-            // Auto-priced quotation total (most-recent BOQ rate × qty); falls
-            // back to the indent's own amount sum if no BOQ matches found.
+            // Auto-priced quotation total — ONLY Extra-Schedule (BOQ-priced).
+            // Extra-Non-Schedule is quoted manually, so its amount stays blank.
             let quoteAmt = 0;
-            try { quoteAmt = buildExtraQuotation(db, id)?.supply_total || 0; } catch (_) {}
-            if (!quoteAmt) quoteAmt = +fi?.total_amt || 0;
+            if (cur2.indent_category === 'extra_schedule') {
+              try { quoteAmt = buildExtraQuotation(db, id)?.supply_total || 0; } catch (_) {}
+              if (!quoteAmt) quoteAmt = +fi?.total_amt || 0;
+            }
             if (already) {
               db.prepare(
                 `UPDATE crm_funnel

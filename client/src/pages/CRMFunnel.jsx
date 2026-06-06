@@ -316,7 +316,7 @@ export default function CRMFunnel() {
                 <td>
                   {r.quotation_link ? (
                     <a className="text-red-600 hover:underline" href={r.quotation_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
-                  ) : r.source_indent_id ? (
+                  ) : (r.source_indent_id && r.category === 'extra_schedule') ? (
                     <a href={`/quotation/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap font-semibold" title="Auto-priced quotation from previous BOQ rates"><FiExternalLink size={11} /> Make quotation</a>
                   ) : '-'}
                 </td>
