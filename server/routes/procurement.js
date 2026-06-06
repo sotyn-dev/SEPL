@@ -1635,13 +1635,37 @@ router.put('/indents/:id', (req, res) => {
             }));
             const billable = storePlans.some(p => String(p.item_type || '').toUpperCase() === 'PO');
             const today = new Date().toISOString().slice(0, 10);
-            db.prepare(
+            const chRes = db.prepare(
               `INSERT INTO delivery_notes
                  (vendor_po_id, indent_id, stock_issue_note_id, source, delivery_date,
                   document_type, document_number, status, sales_bill_pending, items_json, notes)
                VALUES (NULL, ?, ?, 'store', ?, 'challan', ?, 'pending', ?, ?, ?)`
             ).run(id, issueNoteId, today, issueNoteNumber, billable ? 1 : 0,
                   JSON.stringify(storeItems), 'Material issued from store');
+
+            // Auto-cut the Sales Bill for billable (PO) store items right at
+            // the store issue (mam 2026-06-04: "if item is PO and goes from
+            // store, sales bill also will be cut").  FOC/RGP store items are
+            // not billed.  Flagged DRAFT when client GSTIN / selling rate is
+            // missing.  Links the challan so it's no longer SB-pending.
+            if (billable) {
+              const poItems = storePlans
+                .filter(p => String(p.item_type || '').toUpperCase() === 'PO')
+                .map(p => ({ description: p.description || '', qty: p.fromStore, unit: p.unit || '', rate: +p.rate || 0, amount: p.fromStore * (+p.rate || 0), item_code: '' }));
+              if (poItems.length) {
+                const { nextSequence } = require('../db/nextSequence');
+                const client = db.prepare(`SELECT bb.gstin FROM indents i LEFT JOIN order_planning op ON op.id=i.planning_id LEFT JOIN business_book bb ON bb.id=op.business_book_id WHERE i.id=?`).get(id) || {};
+                const isDraft = (poItems.some(it => !(it.rate > 0)) || !client.gstin) ? 1 : 0;
+                const yr2 = new Date().getFullYear();
+                const invNum = nextSequence(db, 'delivery_notes', 'document_number', `INV/${yr2}/`, { pad: 4 });
+                db.prepare(
+                  `INSERT INTO delivery_notes (vendor_po_id, indent_id, source, delivery_date, document_type, document_number, status, is_draft, items_json, notes)
+                   VALUES (NULL, ?, 'store', ?, 'sales_bill', ?, 'pending', ?, ?, ?)`
+                ).run(id, today, invNum, isDraft, JSON.stringify(poItems),
+                      isDraft ? 'Auto-cut on store issue — DRAFT (fill client GSTIN / selling rate)' : 'Auto-cut Sales Bill on store issue');
+                db.prepare("UPDATE delivery_notes SET sales_bill_pending=0, sales_bill_number=? WHERE id=?").run(invNum, chRes.lastInsertRowid);
+              }
+            }
           }
 
           // 3. Flip the indent to approved.
