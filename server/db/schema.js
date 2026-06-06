@@ -3619,6 +3619,57 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[migration] extra CRM funnel backfill failed:', e.message); }
 
+  // Fill blank client data on existing Extra-indent funnel leads by matching
+  // the Business Book on company / client name (mam 2026-06-06: "client name,
+  // mobile, district, state pick data from business book according to company
+  // name"). Only touches auto Extra leads (source_indent_id set) that are
+  // missing mobile or state. client_name is upgraded to the BB client name;
+  // mobile / email / address / source / state / district fill where blank.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='crm_funnel_bb_namematch_v1'").get();
+    if (!done) {
+      const rows = db.prepare(
+        `SELECT id, client_name, company_name FROM crm_funnel
+          WHERE source_indent_id IS NOT NULL
+            AND (mobile IS NULL OR TRIM(mobile)='' OR state IS NULL OR TRIM(state)='')`
+      ).all();
+      const findBb = db.prepare(
+        `SELECT bb.client_name, bb.company_name, bb.client_contact AS mobile,
+                COALESCE(NULLIF(TRIM(bb.client_email),''), NULLIF(TRIM(bb.email_address),'')) AS email,
+                bb.billing_address AS address, bb.source_of_enquiry AS source,
+                bb.state, bb.district
+           FROM business_book bb
+          WHERE LOWER(TRIM(bb.company_name)) = LOWER(TRIM(?))
+             OR LOWER(TRIM(bb.client_name))  = LOWER(TRIM(?))
+          ORDER BY (bb.client_contact IS NOT NULL AND TRIM(bb.client_contact) <> '') DESC, bb.id DESC
+          LIMIT 1`
+      );
+      const upd = db.prepare(
+        `UPDATE crm_funnel SET
+            client_name = COALESCE(NULLIF(TRIM(?),''), client_name),
+            mobile      = COALESCE(NULLIF(TRIM(mobile),''), ?),
+            email       = COALESCE(NULLIF(TRIM(email),''), ?),
+            address     = COALESCE(NULLIF(TRIM(address),''), ?),
+            source      = COALESCE(NULLIF(TRIM(source),''), ?),
+            state       = COALESCE(NULLIF(TRIM(state),''), ?),
+            district    = COALESCE(NULLIF(TRIM(district),''), ?),
+            updated_at  = CURRENT_TIMESTAMP
+          WHERE id = ?`
+      );
+      let fixed = 0;
+      for (const r of rows) {
+        const name = r.company_name || r.client_name;
+        if (!name) continue;
+        const bb = findBb.get(name, name);
+        if (!bb) continue;
+        upd.run(bb.client_name, bb.mobile, bb.email, bb.address, bb.source, bb.state, bb.district, r.id);
+        fixed++;
+      }
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('crm_funnel_bb_namematch_v1', '1')").run();
+      if (fixed > 0) console.log(`[migration] filled BB client data on ${fixed} CRM funnel Extra leads by name match`);
+    }
+  } catch (e) { console.error('[migration] crm_funnel BB name-match failed:', e.message); }
+
   // Drop indents.status CHECK entirely (mam 2026-05-28: L1 Nitin Jain
   // hit "CHECK constraint failed: status IN (...)" on Approve L1).
   //

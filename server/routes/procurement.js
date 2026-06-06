@@ -68,6 +68,36 @@ function fireIndent(db, indentId, eventKey, extra = {}) {
 // mam's requirement (2026-04-23): site can create indent, nothing else.
 const needsApprove = requirePermission('procurement', 'approve');
 
+// Match a Business Book row by company / client name (mam 2026-06-06: Extra
+// indents not linked to a project should still pull client + mobile + state +
+// district from the Business Book "according to company name"). Returns the
+// row with bb_* aliases (same shape as the planning-based lookup) or {}.
+// Prefers a BB row that actually has a contact number.
+function bbByName(db, name) {
+  if (!name || !String(name).trim()) return {};
+  return db.prepare(
+    `SELECT bb.company_name AS bb_company, bb.client_name AS bb_client,
+            bb.client_contact AS bb_mobile,
+            COALESCE(NULLIF(TRIM(bb.client_email),''), NULLIF(TRIM(bb.email_address),'')) AS bb_email,
+            bb.billing_address AS bb_address, bb.source_of_enquiry AS bb_source,
+            bb.state AS bb_state, bb.district AS bb_district, bb.owner AS bb_owner
+       FROM business_book bb
+      WHERE LOWER(TRIM(bb.company_name)) = LOWER(TRIM(?))
+         OR LOWER(TRIM(bb.client_name))  = LOWER(TRIM(?))
+      ORDER BY (bb.client_contact IS NOT NULL AND TRIM(bb.client_contact) <> '') DESC, bb.id DESC
+      LIMIT 1`
+  ).get(name, name) || {};
+}
+// Merge name-matched BB fields into a (possibly thin) planning-based result,
+// filling only the keys that are still empty.
+function fillBbBlanks(fi, byName) {
+  const out = { ...(fi || {}) };
+  for (const k of Object.keys(byName || {})) {
+    if ((out[k] == null || out[k] === '') && byName[k] != null && byName[k] !== '') out[k] = byName[k];
+  }
+  return out;
+}
+
 // Shared upload directory (served statically by server/index.js at /uploads).
 // Used by both the Tally PO upload and the BOQ bulk upload lower in this file.
 const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads');
@@ -986,7 +1016,7 @@ router.post('/indents', (req, res) => {
       const reqText = reqItems
         .map(it => `${(+it.quantity || 0).toLocaleString('en-IN')}${it.unit ? ' ' + it.unit : ''} × ${it.description || 'item'}`)
         .join('; ');
-      const fi = db.prepare(
+      let fi = db.prepare(
         `SELECT bb.company_name AS bb_company, bb.client_name AS bb_client,
                 bb.client_contact AS bb_mobile,
                 COALESCE(NULLIF(TRIM(bb.client_email),''), NULLIF(TRIM(bb.email_address),'')) AS bb_email,
@@ -995,6 +1025,8 @@ router.post('/indents', (req, res) => {
            FROM order_planning op LEFT JOIN business_book bb ON bb.id = op.business_book_id
           WHERE op.id = ?`
       ).get(resolvedPlanningId) || {};
+      // No project link (or thin data)? Match the Business Book by name.
+      if (!fi.bb_mobile) fi = fillBbBlanks(fi, bbByName(db, site_name));
       const marker = `[auto-indent:${r.lastInsertRowid}]`;
       const already = db.prepare('SELECT id FROM crm_funnel WHERE source_indent_id=? OR remarks LIKE ?')
         .get(r.lastInsertRowid, `%${marker}%`);
@@ -1224,7 +1256,7 @@ router.put('/indents/:id', (req, res) => {
           // enquiry without re-keying.  A [auto-indent:<id>] marker in
           // remarks dedups in case the path is ever re-entered.
           try {
-            const fi = db.prepare(
+            let fi = db.prepare(
               `SELECT i.indent_number, i.client_name, i.site_name,
                       bb.company_name AS bb_company, bb.client_name AS bb_client,
                       bb.client_contact AS bb_mobile,
@@ -1237,6 +1269,8 @@ router.put('/indents/:id', (req, res) => {
                  LEFT JOIN business_book bb ON bb.id = op.business_book_id
                 WHERE i.id = ?`
             ).get(id);
+            // No project link (or thin data)? Match the Business Book by name.
+            if (fi && !fi.bb_mobile) fi = fillBbBlanks(fi, bbByName(db, fi.site_name || fi.client_name));
             const marker = `[auto-indent:${id}]`;
             // The requirement entry was already created when the indent was
             // raised (mam 2026-06-06).  On CRM approval, UPDATE it with the
