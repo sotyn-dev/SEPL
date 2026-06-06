@@ -1253,7 +1253,11 @@ export default function Procurement() {
       const vendorNames = [...new Set(items.filter(i => i.final_vendor_name).map(i => i.final_vendor_name))];
       const finalisedSum = items
         .filter(i => i.rate_status === 'finalized' && i.in_po_count === 0)
-        .reduce((s, i) => s + ((+i.quantity || 0) * (+i.final_rate || 0)), 0);
+        .reduce((s, i) => {
+          const wpm = +i.weight_per_meter || 0;
+          const qty = wpm > 0 ? (+i.quantity || 0) * wpm : (+i.quantity || 0);  // kg for pipes
+          return s + (qty * (+i.final_rate || 0));
+        }, 0);
       setForm(f => {
         const next = { ...f };
         if (vendorNames.length === 1) {
@@ -1269,7 +1273,18 @@ export default function Procurement() {
   const togglePoItem = (iiId, patch) => {
     setPoItemSelection(prev => ({ ...prev, [iiId]: { ...prev[iiId], ...patch } }));
   };
-  const poTotal = Object.values(poItemSelection).reduce((s, r) => s + (r.checked ? (+r.quantity || 0) * (+r.rate || 0) : 0), 0);
+  // Pipe lines (weight_per_meter > 0) are quoted/PO'd in KG: the editable Qty
+  // stays in METERS, but rate is ₹/kg and amount = (mtr × kg/m) × rate.
+  const poLineQtyForAmount = (it, s) => {
+    const wpm = +it?.weight_per_meter || 0;
+    const q = +s?.quantity || 0;
+    return wpm > 0 ? q * wpm : q;
+  };
+  const poTotal = indentItemsForPo.reduce((sum, it) => {
+    const s = poItemSelection[it.indent_item_id] || {};
+    if (!s.checked) return sum;
+    return sum + poLineQtyForAmount(it, s) * (+s.rate || 0);
+  }, 0);
 
   // Upload a Tally Vendor PO. The backend endpoint is multipart/form-data —
   // metadata fields + an optional file + a JSON-encoded items array for the
@@ -1281,9 +1296,26 @@ export default function Procurement() {
     // manual entry. PO file is also optional; mam's flow is to create
     // the PO inside the ERP, not upload a Tally PDF.
 
-    const items = Object.entries(poItemSelection)
-      .filter(([, v]) => v.checked && +v.quantity > 0 && +v.rate > 0)
-      .map(([iiId, v]) => ({ indent_item_id: +iiId, quantity: +v.quantity, rate: +v.rate }));
+    // Build line items. For pipe lines (weight_per_meter > 0) convert the
+    // entered METERS to KG so the PO is in kg (qty kg × ₹/kg). The original
+    // meters + kg/m ride along for the "show both" display on the print.
+    const items = indentItemsForPo
+      .map(it => ({ it, v: poItemSelection[it.indent_item_id] || {} }))
+      .filter(({ v }) => v.checked && +v.quantity > 0 && +v.rate > 0)
+      .map(({ it, v }) => {
+        const wpm = +it.weight_per_meter || 0;
+        if (wpm > 0) {
+          const mtr = +v.quantity;
+          return {
+            indent_item_id: it.indent_item_id,
+            quantity: Math.round(mtr * wpm * 1000) / 1000,  // KG
+            rate: +v.rate,                                  // ₹/kg
+            weight_per_meter: wpm,
+            original_qty_mtr: mtr,
+          };
+        }
+        return { indent_item_id: it.indent_item_id, quantity: +v.quantity, rate: +v.rate };
+      });
 
     const fd = new FormData();
     if (form.po_date) fd.append('po_date', form.po_date);
@@ -2680,7 +2712,17 @@ export default function Procurement() {
                           <div className="text-[9px] text-gray-400 mt-0.5 italic">merged from {r.indent_item_ids.length} BOQ rows</div>
                         )}
                       </td>
-                      <td className="px-2 py-2 text-center font-semibold whitespace-nowrap">{r.qty} {cleanUnit(r.uom || r.unit)}</td>
+                      <td className="px-2 py-2 text-center font-semibold whitespace-nowrap">
+                        {(+r.weight_per_meter > 0) ? (
+                          <div>
+                            <div>{(Math.round(r.qty * r.weight_per_meter * 100) / 100).toLocaleString('en-IN')} <span className="text-blue-700">KG</span></div>
+                            <div className="text-[9px] font-normal text-gray-500">{r.qty} MTR @ {r.weight_per_meter} kg/m</div>
+                            <div className="text-[9px] font-normal text-blue-700">enter rate as ₹/kg</div>
+                          </div>
+                        ) : (
+                          <>{r.qty} {cleanUnit(r.uom || r.unit)}</>
+                        )}
+                      </td>
                       {[1,2,3].map(n => (
                         <Fragment key={n}>
                           <td className="px-1 py-1" style={{ minWidth: '200px', width: '200px' }}>
@@ -5552,7 +5594,10 @@ export default function Procurement() {
                       {indentItemsForPo.map(it => {
                         const s = poItemSelection[it.indent_item_id] || {};
                         const inPo = it.in_po_count > 0;
-                        const amount = (s.checked ? (+s.quantity || 0) * (+s.rate || 0) : 0);
+                        const wpm = +it.weight_per_meter || 0;
+                        const isPipe = wpm > 0;
+                        const kg = isPipe ? Math.round((+s.quantity || 0) * wpm * 100) / 100 : 0;
+                        const amount = (s.checked ? (isPipe ? kg : (+s.quantity || 0)) * (+s.rate || 0) : 0);
                         const unit = it.unit || it.uom || '';
                         return (
                           <tr key={it.indent_item_id} className={`border-b ${inPo ? 'bg-gray-100 text-gray-400' : (s.checked ? 'bg-red-50/40' : '')}`}>
@@ -5563,11 +5608,18 @@ export default function Procurement() {
                               {it.item_code && <div className="text-[10px] font-mono text-gray-500">[{it.item_code}]</div>}
                               <div className="whitespace-normal leading-snug font-medium">{[it.master_name || it.description, it.specification, it.size].filter(Boolean).join(' / ')}</div>
                               {it.make && <div className="text-[10px] text-gray-400">Make: {it.make}</div>}
+                              {isPipe && <div className="text-[10px] text-blue-700 font-semibold">🪈 Pipe · {wpm} kg/m — PO in KG</div>}
                               {inPo && <div className="text-[10px] text-gray-500 italic">Already in a Vendor PO</div>}
                             </td>
-                            <td className="px-1 py-1"><NumInput className="input text-[11px] px-1 py-0.5 w-16 text-right" min="0" emitZeroOnEmpty disabled={inPo} value={s.quantity ?? it.quantity ?? 0} onChange={v => togglePoItem(it.indent_item_id, { quantity: v })} /></td>
-                            <td className="px-2 py-1.5 text-center text-gray-600">{unit || <span className="text-gray-300">—</span>}</td>
-                            <td className="px-1 py-1"><NumInput className="input text-[11px] px-1 py-0.5 w-20 text-right" min="0" emitZeroOnEmpty disabled={inPo} value={s.rate ?? 0} onChange={v => togglePoItem(it.indent_item_id, { rate: v })} /></td>
+                            <td className="px-1 py-1">
+                              <NumInput className="input text-[11px] px-1 py-0.5 w-16 text-right" min="0" emitZeroOnEmpty disabled={inPo} value={s.quantity ?? it.quantity ?? 0} onChange={v => togglePoItem(it.indent_item_id, { quantity: v })} />
+                              {isPipe && <div className="text-[10px] text-blue-700 text-right mt-0.5">= {kg.toLocaleString('en-IN')} kg</div>}
+                            </td>
+                            <td className="px-2 py-1.5 text-center text-gray-600">{isPipe ? <span className="text-blue-700 font-semibold">MTR → KG</span> : (unit || <span className="text-gray-300">—</span>)}</td>
+                            <td className="px-1 py-1">
+                              <NumInput className="input text-[11px] px-1 py-0.5 w-20 text-right" min="0" emitZeroOnEmpty disabled={inPo} value={s.rate ?? 0} onChange={v => togglePoItem(it.indent_item_id, { rate: v })} />
+                              {isPipe && <div className="text-[10px] text-blue-700 text-right mt-0.5">₹ / kg</div>}
+                            </td>
                             <td className="px-2 py-1.5 text-right font-semibold">{amount ? `Rs ${amount.toLocaleString()}` : <span className="text-gray-300">—</span>}</td>
                           </tr>
                         );

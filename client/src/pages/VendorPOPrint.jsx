@@ -343,7 +343,10 @@ export default function VendorPOPrint() {
               // UOM source priority: item_master.uom is the canonical
               // unit (mam, 2026-05-15 normalised the master); fall back
               // to whatever the indent line was raised with.
-              const unit = String(it.uom || it.unit || '').toUpperCase();
+              // Pipe lines are stored & PO'd in KG (quantity = kg); the
+              // original meters ride along in original_qty_mtr for "show both".
+              const isPipe = +it.weight_per_meter > 0;
+              const unit = isPipe ? 'KG' : String(it.uom || it.unit || '').toUpperCase();
               // Mam (2026-05-21): "update here if i update rate in 3
               // vendor" — prefer the latest finalised rate from the
               // Vendor Rates step over the PO-frozen rate.  Drift
@@ -385,7 +388,12 @@ export default function VendorPOPrint() {
                     )}
                   </td>
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-center font-semibold text-gray-700">{itemType}</td>
-                  <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums font-bold">{(+it.quantity || 0).toLocaleString('en-IN')} {unit}</td>
+                  <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums font-bold">
+                    {(+it.quantity || 0).toLocaleString('en-IN')} {unit}
+                    {isPipe && +it.original_qty_mtr > 0 && (
+                      <div className="text-[8.5px] font-normal text-gray-500">({(+it.original_qty_mtr).toLocaleString('en-IN')} MTR @ {it.weight_per_meter} kg/m)</div>
+                    )}
+                  </td>
                   {/* Rate cell — shows current rate only.  Mam
                       (2026-05-21): the audit-trail "was X · updated"
                       badge that previously appeared here when the

@@ -912,13 +912,13 @@ router.post('/indents', (req, res) => {
   // row up on the server to derive authoritative description/unit, and fall
   // back to item_master if the BOQ row was linked to the catalogue.
   const getPoItem = db.prepare('SELECT description, unit, quantity as boq_qty, item_master_id FROM po_items WHERE id=?');
-  const getMaster = db.prepare('SELECT item_name, specification, size, uom, type, make FROM item_master WHERE id=?');
+  const getMaster = db.prepare('SELECT item_name, specification, size, uom, type, make, weight_per_meter FROM item_master WHERE id=?');
   const insertItem = db.prepare(
     `INSERT INTO indent_items
       (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount,
        item_type, is_foc, is_tool, required_date,
-       is_extra_schedule, is_extra_non_schedule, rental_days, rental_rate_per_day)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       is_extra_schedule, is_extra_non_schedule, rental_days, rental_rate_per_day, weight_per_meter)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   );
   for (const i of (items || [])) {
     let desc = i.description || '';
@@ -926,6 +926,7 @@ router.post('/indents', (req, res) => {
     let itemType = null;
     let make = i.make || '';
     let masterId = i.item_master_id || null;
+    let wpm = null;   // pipe kg/meter — snapshot from item_master for MTR→KG
 
     // Only integer po_item_ids correspond to real po_items rows. Strings like
     // 'fallback-Sheet2-3' come from the on-the-fly BOQ Excel parser and
@@ -949,6 +950,7 @@ router.post('/indents', (req, res) => {
         // Overrides whatever the BOQ row said because the master sheet
         // is the source of truth post-cleanup.
         if (m.uom) unit = String(m.uom).toLowerCase();
+        if (m.weight_per_meter > 0) wpm = +m.weight_per_meter;
       }
     }
 
@@ -967,7 +969,7 @@ router.post('/indents', (req, res) => {
     insertItem.run(
       r.lastInsertRowid, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool,
       i.required_date || null,
-      extraSch, extraNon, rentDays, rentRate,
+      extraSch, extraNon, rentDays, rentRate, wpm,
     );
   }
   fireIndent(db, r.lastInsertRowid, 'indent.raised');
@@ -2206,6 +2208,7 @@ router.get('/vendor-po/:id/print', (req, res) => {
 
   const items = db.prepare(`
     SELECT vpi.id, vpi.quantity, vpi.rate, vpi.amount, vpi.terms, vpi.credit_days,
+           vpi.weight_per_meter, vpi.original_qty_mtr,
            ii.description, ii.make as ii_make, ii.unit, ii.required_date,
            ii.item_type,
            im.item_code, im.item_name as master_name, im.specification, im.size, im.uom, im.make as im_make,
@@ -2365,6 +2368,7 @@ router.get('/indents/:id/items-for-po', (req, res) => {
   const rows = db.prepare(
     `SELECT ii.id as indent_item_id, ii.description, ii.make, ii.quantity, ii.unit, ii.item_type,
             ii.item_master_id, ii.required_date,
+            COALESCE(ii.weight_per_meter, im.weight_per_meter) as weight_per_meter,
             im.item_code, im.item_name as master_name, im.specification, im.size, im.uom,
             r.final_rate, r.final_vendor_name, r.final_terms, r.final_credit_days, r.status as rate_status,
             (SELECT COUNT(*) FROM vendor_po_items vpi
@@ -2390,6 +2394,7 @@ router.get('/pending-po-items', (req, res) => {
   const rows = db.prepare(
     `SELECT ii.id as indent_item_id, ii.description, ii.make, ii.quantity, ii.unit, ii.item_type,
             ii.item_master_id, im.item_code, im.item_name as master_name, im.specification, im.size, im.uom,
+            COALESCE(ii.weight_per_meter, im.weight_per_meter) as weight_per_meter,
             i.id as indent_id, i.indent_number, i.site_name, i.raised_by_name,
             r.final_rate, r.final_vendor_name, r.final_terms, r.final_credit_days, r.status as rate_status
      FROM indent_items ii
@@ -2508,11 +2513,15 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
       // Terms + credit_days are deliberately null — PO terms now live on the
       // uploaded Tally PO itself.
       const insItem = db.prepare(
-        `INSERT INTO vendor_po_items (vendor_po_id, indent_item_id, quantity, rate, amount, terms, credit_days)
-         VALUES (?, ?, ?, ?, ?, NULL, 0)`
+        `INSERT INTO vendor_po_items (vendor_po_id, indent_item_id, quantity, rate, amount, terms, credit_days, weight_per_meter, original_qty_mtr)
+         VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?)`
       );
       for (const i of lines) {
-        insItem.run(vpoId, i.indent_item_id, +i.quantity, +i.rate, +i.quantity * +i.rate);
+        // For pipe lines the client sends quantity already in KG (mtr × kg/m),
+        // rate in ₹/kg, plus weight_per_meter + original_qty_mtr for display.
+        const wpm = +i.weight_per_meter > 0 ? +i.weight_per_meter : null;
+        const mtr = +i.original_qty_mtr > 0 ? +i.original_qty_mtr : null;
+        insItem.run(vpoId, i.indent_item_id, +i.quantity, +i.rate, +i.quantity * +i.rate, wpm, mtr);
       }
       if (indent_id) db.prepare('UPDATE indents SET status=? WHERE id=?').run('po_sent', indent_id);
       return vpoId;
@@ -4472,6 +4481,7 @@ router.get('/item-rates', (req, res) => {
             LOWER(COALESCE(NULLIF(TRIM(im.uom), ''), NULLIF(TRIM(ii.unit), ''), 'nos')) as unit,
             ii.unit as unit_raw,
             ii.item_type, ii.item_master_id, ii.po_item_id,
+            COALESCE(ii.weight_per_meter, im.weight_per_meter) as weight_per_meter,
             im.item_code, im.item_name as master_name, im.specification, im.size, im.uom,
             poi.description as boq_description, poi.quantity as boq_qty,
             i.indent_number, i.id as indent_id,

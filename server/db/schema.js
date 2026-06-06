@@ -3284,6 +3284,10 @@ function initializeDatabase() {
     // item is indented in meters, Vendor Rates + PO convert qty to KG.
     ['item_master', 'weight_per_meter REAL'],
     ['indent_items', 'weight_per_meter REAL'],
+    // PO line snapshot: kg/m used, and the original meters (quantity on the
+    // line is stored in KG for pipes so amount = kg × ₹/kg works unchanged).
+    ['vendor_po_items', 'weight_per_meter REAL'],
+    ['vendor_po_items', 'original_qty_mtr REAL'],
     // ─── Per-user KPI settings — mam (2026-06-02 follow-up) ───────────
     // Initial table (score_user_kpi_target) only held planned_value
     // overrides.  Mam confirmed "every person different KPIs" — Option B:
@@ -3531,6 +3535,24 @@ function initializeDatabase() {
       console.log(`[migration] seeded ${C.length} C-class pipe weights`);
     }
   } catch (e) { console.error('[migration] pipe weight seed failed:', e.message); }
+
+  // Backfill indent_items.weight_per_meter from item_master for items that
+  // already had a kg/m set (mam 2026-06-06). New indents snapshot it at
+  // creation; this catches pre-existing open indents. Guarded once.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='backfill_indent_item_wpm_v1'").get();
+    if (!done) {
+      const r = db.prepare(`
+        UPDATE indent_items
+           SET weight_per_meter = (SELECT im.weight_per_meter FROM item_master im WHERE im.id = indent_items.item_master_id)
+         WHERE weight_per_meter IS NULL
+           AND item_master_id IS NOT NULL
+           AND (SELECT im.weight_per_meter FROM item_master im WHERE im.id = indent_items.item_master_id) > 0
+      `).run();
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('backfill_indent_item_wpm_v1', '1')").run();
+      if (r.changes > 0) console.log(`[migration] backfilled weight_per_meter on ${r.changes} indent items`);
+    }
+  } catch (e) { console.error('[migration] indent item wpm backfill failed:', e.message); }
 
   // Drop indents.status CHECK entirely (mam 2026-05-28: L1 Nitin Jain
   // hit "CHECK constraint failed: status IN (...)" on Approve L1).
