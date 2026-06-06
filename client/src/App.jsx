@@ -43,6 +43,7 @@ import PaymentAdvicePrint from './pages/PaymentAdvicePrint';
 import DeliveryNotePrint from './pages/DeliveryNotePrint';
 import RentalPOPrint from './pages/RentalPOPrint';
 import IndentPrint from './pages/IndentPrint';
+import QuotationPrint from './pages/QuotationPrint';
 import UserManagement from './pages/admin/UserManagement';
 import RolesPermissions from './pages/admin/RolesPermissions';
 import DatabaseBackups from './pages/admin/DatabaseBackups';
@@ -118,6 +119,7 @@ export default function App() {
       <Route path="/vendor-po/:id/delivery-note" element={<ProtectedRoute><DeliveryNotePrint /></ProtectedRoute>} />
       <Route path="/rental-po/:id/print" element={<ProtectedRoute><RentalPOPrint /></ProtectedRoute>} />
       <Route path="/indent/:id/print" element={<ProtectedRoute><IndentPrint /></ProtectedRoute>} />
+      <Route path="/quotation/:indentId/print" element={<ProtectedRoute><QuotationPrint /></ProtectedRoute>} />
       <Route path="/payroll/slip/:employee_id" element={<ProtectedRoute><SalarySlipPrint /></ProtectedRoute>} />
       <Route path="/hr/candidates/:id/offer-letter" element={<ProtectedRoute><OfferLetterPrint /></ProtectedRoute>} />
       <Route path="/hr/candidates/:id/nda" element={<ProtectedRoute><NDAPrint /></ProtectedRoute>} />

@@ -98,6 +98,80 @@ function fillBbBlanks(fi, byName) {
   return out;
 }
 
+// Build the auto-quotation data for an Extra indent (mam 2026-06-06). Each
+// chargeable (PO-type) line is priced from the MOST RECENT previous BOQ
+// (po_items) whose description EXACTLY matches (case/space-insensitive) the
+// item's BOQ name × the indent qty. FOC / RGP / from-store lines are excluded.
+// Returns { company, client, items[], supply_total, ... } or null if no indent.
+function buildExtraQuotation(db, indentId) {
+  const ind = db.prepare('SELECT * FROM indents WHERE id=?').get(indentId);
+  if (!ind) return null;
+  // Client — planning BB first, else match BB by the indent's site name.
+  let cli = ind.planning_id
+    ? db.prepare(`SELECT bb.* FROM order_planning op JOIN business_book bb ON bb.id=op.business_book_id WHERE op.id=?`).get(ind.planning_id)
+    : null;
+  if (!cli || !cli.client_contact) {
+    const byName = db.prepare(
+      `SELECT * FROM business_book
+        WHERE LOWER(TRIM(company_name))=LOWER(TRIM(?)) OR LOWER(TRIM(client_name))=LOWER(TRIM(?))
+        ORDER BY (client_contact IS NOT NULL AND TRIM(client_contact)<>'') DESC, id DESC LIMIT 1`
+    ).get(ind.site_name, ind.site_name);
+    if (byName) cli = { ...(byName), ...(cli || {}) };  // planning values win where present
+  }
+  cli = cli || {};
+  const rows = db.prepare(
+    `SELECT ii.id, ii.description, ii.quantity, ii.unit, ii.po_item_id,
+            poi.description AS boq_description, poi.unit AS boq_unit
+       FROM indent_items ii
+       LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+      WHERE ii.indent_id=? AND UPPER(COALESCE(ii.item_type,''))='PO'
+        AND (ii.source IS NULL OR ii.source<>'store')
+      ORDER BY ii.id`
+  ).all(indentId);
+  // Most-recent previous BOQ rate for an EXACT item-name match (rate>0),
+  // excluding this indent's own BOQ line.
+  const rateStmt = db.prepare(
+    `SELECT rate FROM po_items
+      WHERE LOWER(TRIM(description))=LOWER(TRIM(?)) AND COALESCE(rate,0)>0 AND id<>?
+      ORDER BY id DESC LIMIT 1`
+  );
+  let supplyTotal = 0;
+  const items = rows.map((it, idx) => {
+    const name = (it.boq_description && it.boq_description.trim()) ? it.boq_description : (it.description || '');
+    const found = rateStmt.get(name, it.po_item_id || 0);
+    const rate = found ? +found.rate : 0;
+    const qty = +it.quantity || 0;
+    const amount = Math.round(qty * rate * 100) / 100;
+    supplyTotal += amount;
+    return { sno: idx + 1, description: name, unit: it.unit || it.boq_unit || 'Nos', qty, rate, amount, rate_found: !!found };
+  });
+  return {
+    company: {
+      name: 'SECURED ENGINEERS PVT. LTD',
+      ho: '2480/1, B.K. Towers, Janta Nagar, Gill Road, Ludhiana',
+      co: '58/A/1, First Floor, Kalu Sarai, New Delhi - 110016',
+      website: 'www.securedengineers.com',
+    },
+    quotation: {
+      no: `SEPL/QTN/${ind.indent_number || indentId}`,
+      date: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }),
+    },
+    client: {
+      name: cli.client_name || ind.site_name || '',
+      company: cli.company_name || ind.site_name || '',
+      address: cli.billing_address || cli.shipping_address || '',
+      mobile: cli.client_contact || '',
+      state: cli.state || '',
+      district: cli.district || '',
+      gstin: cli.gstin || '',
+    },
+    indent_number: ind.indent_number || null,
+    items,
+    supply_total: Math.round(supplyTotal * 100) / 100,
+    basic_amount: Math.round(supplyTotal * 100) / 100,
+  };
+}
+
 // Shared upload directory (served statically by server/index.js at /uploads).
 // Used by both the Tally PO upload and the BOQ bulk upload lower in this file.
 const uploadDir = path.join(__dirname, '..', '..', 'data', 'uploads');
@@ -1027,6 +1101,9 @@ router.post('/indents', (req, res) => {
       ).get(resolvedPlanningId) || {};
       // No project link (or thin data)? Match the Business Book by name.
       if (!fi.bb_mobile) fi = fillBbBlanks(fi, bbByName(db, site_name));
+      // Auto-priced quotation total (most-recent BOQ rate × qty per item).
+      let quoteAmt = 0;
+      try { quoteAmt = buildExtraQuotation(db, r.lastInsertRowid)?.supply_total || 0; } catch (_) {}
       const marker = `[auto-indent:${r.lastInsertRowid}]`;
       const already = db.prepare('SELECT id FROM crm_funnel WHERE source_indent_id=? OR remarks LIKE ?')
         .get(r.lastInsertRowid, `%${marker}%`);
@@ -1048,7 +1125,7 @@ router.post('/indents', (req, res) => {
           fi.bb_state || null, fi.bb_district || null,
           `Requirement from Extra indent ${indentNum} (awaiting CRM approval)`
             + (fi.bb_owner ? ` · owner ${fi.bb_owner}` : '') + ` ${marker}`,
-          category, 'Extra Item', 'Extra Enquiry', 0,
+          category, 'Extra Item', 'Extra Enquiry', quoteAmt,
           reqText || null, r.lastInsertRowid, req.user.id,
         );
       }
@@ -1282,6 +1359,11 @@ router.put('/indents/:id', (req, res) => {
             const clientName = String(
               fi?.bb_client || fi?.bb_company || fi?.client_name || fi?.site_name || 'Extra item'
             ).trim() || 'Extra item';
+            // Auto-priced quotation total (most-recent BOQ rate × qty); falls
+            // back to the indent's own amount sum if no BOQ matches found.
+            let quoteAmt = 0;
+            try { quoteAmt = buildExtraQuotation(db, id)?.supply_total || 0; } catch (_) {}
+            if (!quoteAmt) quoteAmt = +fi?.total_amt || 0;
             if (already) {
               db.prepare(
                 `UPDATE crm_funnel
@@ -1289,7 +1371,7 @@ router.put('/indents/:id', (req, res) => {
                         remarks = REPLACE(remarks, '(awaiting CRM approval)', '(CRM approved)'),
                         updated_at = CURRENT_TIMESTAMP
                   WHERE id = ?`
-              ).run(+fi?.total_amt || 0, already.id);
+              ).run(quoteAmt, already.id);
             } else {
               const reqItems = db.prepare('SELECT description, quantity, unit FROM indent_items WHERE indent_id=?').all(id);
               const reqText = reqItems
@@ -1314,7 +1396,7 @@ router.put('/indents/:id', (req, res) => {
                 cur2.indent_category || null,
                 'Extra Item',
                 'Extra Enquiry',
-                +fi?.total_amt || 0,
+                quoteAmt,
                 reqText || null,
                 id,
                 actor.id,
@@ -2491,6 +2573,15 @@ router.get('/indents/:id/items-for-po', (req, res) => {
      ORDER BY ii.id`
   ).all(req.params.id);
   res.json(rows);
+});
+
+// Auto-quotation data for an Extra indent (mam 2026-06-06). Prices each
+// chargeable line from the most-recent matching previous BOQ × indent qty.
+// Rendered client-side at /quotation/:indentId/print in the SEPL format.
+router.get('/indents/:id/quotation', (req, res) => {
+  const data = buildExtraQuotation(getDb(), req.params.id);
+  if (!data) return res.status(404).json({ error: 'Indent not found' });
+  res.json(data);
 });
 
 // Indent items not yet covered by a Vendor PO — the 'pending for PO' list

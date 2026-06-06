@@ -313,7 +313,13 @@ export default function CRMFunnel() {
                     <a href={`/indent/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap" title="View indent requirement"><FiExternalLink size={11} /> View indent</a>
                   ) : '-'}
                 </td>
-                <td>{r.quotation_link ? <a className="text-red-600 hover:underline" href={r.quotation_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a> : '-'}</td>
+                <td>
+                  {r.quotation_link ? (
+                    <a className="text-red-600 hover:underline" href={r.quotation_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
+                  ) : r.source_indent_id ? (
+                    <a href={`/quotation/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-emerald-700 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap font-semibold" title="Auto-priced quotation from previous BOQ rates"><FiExternalLink size={11} /> Make quotation</a>
+                  ) : '-'}
+                </td>
                 <td>{r.quotation_amount ? `Rs ${(+r.quotation_amount).toLocaleString('en-IN')}` : '-'}</td>
                 <td>{NEG_STATUSES.find(s => s.v === r.negotiation_status)?.l || '-'}</td>
                 <td>{r.negotiation_amount ? `Rs ${(+r.negotiation_amount).toLocaleString('en-IN')}` : '-'}</td>
