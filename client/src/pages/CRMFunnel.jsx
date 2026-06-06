@@ -299,11 +299,6 @@ export default function CRMFunnel() {
                   {r.requirement_items && (
                     <div className="text-[10px] text-gray-500 font-normal max-w-[220px] truncate" title={r.requirement_items}>🧾 {r.requirement_items}</div>
                   )}
-                  {r.source_indent_id && (
-                    <a href={`/indent/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline font-normal inline-flex items-center gap-0.5">
-                      <FiExternalLink size={10} /> View indent requirement
-                    </a>
-                  )}
                 </td>
                 <td>{r.company_name || '-'}</td>
                 <td>{r.mobile || '-'}</td>
@@ -311,7 +306,13 @@ export default function CRMFunnel() {
                 <td>{r.type || '-'}</td>
                 <td>{r.category === 'extra_non_schedule' ? 'Extra · Non-Schedule' : r.category === 'extra_schedule' ? 'Extra · Schedule' : (r.category || '-')}</td>
                 <td>{r.state || '-'}</td>
-                <td>{r.cust_boq_link ? <a className="text-red-600 hover:underline" href={r.cust_boq_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a> : '-'}</td>
+                <td>
+                  {r.cust_boq_link ? (
+                    <a className="text-red-600 hover:underline" href={r.cust_boq_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a>
+                  ) : r.source_indent_id ? (
+                    <a href={`/indent/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline inline-flex items-center gap-0.5 whitespace-nowrap" title="View indent requirement"><FiExternalLink size={11} /> View indent</a>
+                  ) : '-'}
+                </td>
                 <td>{r.quotation_link ? <a className="text-red-600 hover:underline" href={r.quotation_link} target="_blank" rel="noreferrer"><FiExternalLink size={12} className="inline" /></a> : '-'}</td>
                 <td>{r.quotation_amount ? `Rs ${(+r.quotation_amount).toLocaleString('en-IN')}` : '-'}</td>
                 <td>{NEG_STATUSES.find(s => s.v === r.negotiation_status)?.l || '-'}</td>
