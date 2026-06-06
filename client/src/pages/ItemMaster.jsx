@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
+import PipeWeightsModal from '../components/PipeWeightsModal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiDownload, FiUpload, FiPackage, FiFilter, FiX, FiClock, FiAlertTriangle, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
@@ -35,6 +36,7 @@ const emptyForm = {
   uom: 'PCS', gst: '18%', type: 'PO', make: '', model_number: '',
   current_price: 0,
   vendor_id: '', source_type: 'Manual', bill_po_number: '', bill_po_date: '',
+  weight_per_meter: '',
 };
 
 // Pretty age badge — colours match MD's spec.
@@ -65,6 +67,8 @@ export default function ItemMaster() {
   const [statusFilter, setStatusFilter] = useState(''); // expired | ageing | fresh | never | make_blank | no_vendor
   const [bulkData, setBulkData] = useState('');
   const [bulkPreview, setBulkPreview] = useState([]);
+  const [pipeModal, setPipeModal] = useState(false);
+  const [pipeWeights, setPipeWeights] = useState([]);  // lookup for the item form dropdown
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -89,6 +93,13 @@ export default function ItemMaster() {
     // Lazy-load vendors so the Vendor dropdown in the modal works.
     api.get('/procurement/vendors').then(r => setVendors(r.data || [])).catch(() => setVendors([]));
   }, []);
+
+  // Pipe Weights lookup — for the kg/m picker in the item form. Reloaded
+  // when the Pipe Weights master modal closes (mam may have added rows).
+  const loadPipeWeights = useCallback(() => {
+    api.get('/pipe-weights/lookup').then(r => setPipeWeights(r.data || [])).catch(() => setPipeWeights([]));
+  }, []);
+  useEffect(() => { loadPipeWeights(); }, [loadPipeWeights]);
 
   const handleSave = async (e) => {
     e.preventDefault();
@@ -215,6 +226,7 @@ export default function ItemMaster() {
           </div>
           <div className="flex gap-2 flex-wrap">
             <button onClick={exportCSV} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export</button>
+            <button onClick={() => setPipeModal(true)} className="btn btn-secondary flex items-center gap-2 text-sm" title="Pipe MTR → KG weight master">🪈 Pipe Weights</button>
             {canCreate('item_master') && <>
               <button onClick={() => { setBulkData(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiUpload size={15} /> Bulk Import</button>
               <button onClick={() => { setForm({ ...emptyForm }); setModal('add'); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Item</button>
@@ -370,6 +382,26 @@ export default function ItemMaster() {
             <div><label className="label">Model #</label><input className="input" value={form.model_number || ''} onChange={e => F('model_number', e.target.value)} /></div>
           </div>
 
+          {/* Pipe MTR → KG conversion (mam 2026-06-06). Optional — only for
+              pipes. When set, an item indented in meters is converted to KG
+              for the vendor enquiry + PO (qty kg = mtr × kg/m). */}
+          <div className="border border-blue-200 bg-blue-50/40 rounded-lg p-3">
+            <label className="label">Pipe weight (kg / meter) <span className="text-xs text-gray-400 font-normal">— optional, only for pipes; converts MTR → KG on vendor enquiry &amp; PO</span></label>
+            <div className="flex flex-wrap gap-2 items-center">
+              <select className="select flex-1 min-w-[220px]" value=""
+                onChange={e => { const pw = pipeWeights.find(p => String(p.id) === e.target.value); if (pw) F('weight_per_meter', pw.kg_per_meter); }}>
+                <option value="">Pick from Pipe Weights master…</option>
+                {pipeWeights.map(p => <option key={p.id} value={p.id}>{p.pipe_class} class · {p.size} ({p.kg_per_meter} kg/m)</option>)}
+              </select>
+              <input className="input w-32" type="number" step="0.001" min="0" placeholder="kg/m"
+                value={form.weight_per_meter ?? ''} onChange={e => F('weight_per_meter', e.target.value === '' ? '' : +e.target.value)} />
+              {form.weight_per_meter ? (
+                <button type="button" onClick={() => F('weight_per_meter', '')} className="btn btn-secondary text-xs px-2">Clear</button>
+              ) : null}
+            </div>
+            <p className="text-[11px] text-gray-500 mt-1">Leave blank for non-pipe items. Manage the list via the “🪈 Pipe Weights” button at the top.</p>
+          </div>
+
           {/* MD Phase 1 — pricing provenance block */}
           <div className="border border-red-200 bg-red-50/40 rounded-lg p-3 space-y-3">
             <div className="text-xs font-bold uppercase text-red-700">Pricing — full traceability for tenders</div>
@@ -464,6 +496,9 @@ export default function ItemMaster() {
           <div className="flex justify-end gap-3"><button onClick={() => setBulkModal(false)} className="btn btn-secondary">Cancel</button><button onClick={bulkImport} disabled={bulkPreview.length === 0} className="btn btn-primary disabled:opacity-50 flex items-center gap-1"><FiUpload size={14} /> Import {bulkPreview.length} Items</button></div>
         </div>
       </Modal>
+
+      {/* Pipe Weight master (MTR → KG) */}
+      <PipeWeightsModal isOpen={pipeModal} onClose={() => { setPipeModal(false); loadPipeWeights(); }} />
     </div>
   );
 }

@@ -299,6 +299,7 @@ app.use('/api/payment-required', require('./routes/paymentrequired'));
 app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/support', require('./routes/support'));
 app.use('/api/item-master', require('./routes/itemmaster'));
+app.use('/api/pipe-weights', require('./routes/pipeweights'));
 app.use('/api/procurement', require('./routes/procurement'));
 app.use('/api/customers', require('./routes/customers'));
 app.use('/api/installation', require('./routes/installation'));

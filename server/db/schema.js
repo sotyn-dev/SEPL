@@ -2469,6 +2469,25 @@ function initializeDatabase() {
       last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Pipe Weight master (mam 2026-06-06): pipes are indented in METERS but
+    -- enquired to vendors and PO'd in KG. This master holds the conversion:
+    -- kg per meter, keyed by pipe Class (B / C / ...) + Size. weight_per_pipe
+    -- and pipe_length_m are optional reference fields (kg_per_meter is what
+    -- the conversion uses; if length given, kg_per_meter = weight_per_pipe /
+    -- length). An item links to a row by storing its kg/m (weight_per_meter).
+    CREATE TABLE IF NOT EXISTS pipe_weights (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pipe_class TEXT NOT NULL,
+      size TEXT NOT NULL,
+      kg_per_meter REAL NOT NULL,
+      weight_per_pipe REAL,
+      pipe_length_m REAL DEFAULT 6,
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME
+    );
+    CREATE INDEX IF NOT EXISTS idx_pipe_weights_class_size ON pipe_weights(pipe_class, size);
+
     -- Price Required — site engineer raises a "we need price for this item"
     -- request when an item isn't yet in the catalog. Purchase team gathers 3
     -- vendor quotes, picks a final rate, and the system auto-promotes the
@@ -3261,6 +3280,10 @@ function initializeDatabase() {
     ['sub_contractors', 'updated_at DATETIME'],
     // Optional Work Order document (mam 2026-06-06) — stored as a /uploads URL.
     ['sub_contractors', 'work_order_file TEXT'],
+    // Pipe MTR→KG conversion (mam 2026-06-06): kg per meter. When >0 and the
+    // item is indented in meters, Vendor Rates + PO convert qty to KG.
+    ['item_master', 'weight_per_meter REAL'],
+    ['indent_items', 'weight_per_meter REAL'],
     // ─── Per-user KPI settings — mam (2026-06-02 follow-up) ───────────
     // Initial table (score_user_kpi_target) only held planned_value
     // overrides.  Mam confirmed "every person different KPIs" — Option B:
@@ -3488,6 +3511,26 @@ function initializeDatabase() {
       if (reverted > 0) console.log(`[migration] reverted ${reverted} auto-cut from-store Sales Bills back to Ready-to-Dispatch (mam)`);
     }
   } catch (e) { console.error('[migration] revert auto-cut store SB failed:', e.message); }
+
+  // Seed the Pipe Weight master with C-class rows from mam's sheet
+  // (2026-06-06). kg_per_meter = weight_per_pipe / 6m. mam can edit these and
+  // add B-class etc. in the Pipe Weights master UI. Guarded; only seeds if the
+  // table is empty so it never clobbers her edits.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='seed_pipe_weights_cclass_v1'").get();
+    const count = db.prepare('SELECT COUNT(*) c FROM pipe_weights').get().c;
+    if (!done && count === 0) {
+      const C = [
+        ['400 mm', 419.46], ['350 mm', 366.12], ['300 mm', 332.82], ['250 mm', 250.62],
+        ['200 mm', 199.86], ['150 mm', 127.8], ['100 mm', 87], ['80 mm', 59.4],
+        ['65 mm', 47.58], ['50 mm', 37.14], ['40 mm', 26.22], ['32 mm', 22.74], ['25 mm', 17.58],
+      ];
+      const ins = db.prepare("INSERT INTO pipe_weights (pipe_class, size, kg_per_meter, weight_per_pipe, pipe_length_m, active) VALUES ('C', ?, ?, ?, 6, 1)");
+      for (const [size, wpp] of C) ins.run(size, Math.round((wpp / 6) * 1000) / 1000, wpp);
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('seed_pipe_weights_cclass_v1', '1')").run();
+      console.log(`[migration] seeded ${C.length} C-class pipe weights`);
+    }
+  } catch (e) { console.error('[migration] pipe weight seed failed:', e.message); }
 
   // Drop indents.status CHECK entirely (mam 2026-05-28: L1 Nitin Jain
   // hit "CHECK constraint failed: status IN (...)" on Approve L1).
