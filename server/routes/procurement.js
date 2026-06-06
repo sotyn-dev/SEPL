@@ -1484,8 +1484,9 @@ router.put('/indents/:id', (req, res) => {
             }
             // Self-double-sign block keys off who did L1. On a recovery retry
             // l2_by is already set to the original L2 approver, so guard against
-            // the L1 approver only.
-            if (cur2.l1_by && cur2.l1_by === actor.id) {
+            // the L1 approver only. Admin is exempt — the super-user can sign
+            // both levels (mam 2026-06-06: "admin do everything l1,l2").
+            if (cur2.l1_by && cur2.l1_by === actor.id && !isAdminUser) {
               return res.status(400).json({ error: 'Same user cannot do both L1 and L2 — get a second pair of eyes' });
             }
             db.prepare(

@@ -1968,7 +1968,7 @@ export default function Procurement() {
               // role — matches the server gate (mam 2026-06-03).
               const isAssignedCrm = crmNameMatchesUser(i.planning_crm_name, user?.name);
               const canActCrm = isAdmin() || canView('crm_funnel') || isAssignedCrm;
-              const blockSelfL2 = i.l1_by && i.l1_by === user?.id;
+              const blockSelfL2 = i.l1_by && i.l1_by === user?.id && !isAdmin();
 
               const renderActionButtons = () => {
                 // CRM stage (Extra-billable indents) — fires first, before L1/L2.
@@ -2400,7 +2400,7 @@ export default function Procurement() {
                         // the server gate (mam 2026-06-03).
                         const isAssignedCrm = crmNameMatchesUser(i.planning_crm_name, user?.name);
                         const canActCrm = isAdmin() || canView('crm_funnel') || isAssignedCrm;
-                        const blockSelfL2 = i.l1_by && i.l1_by === user?.id;
+                        const blockSelfL2 = i.l1_by && i.l1_by === user?.id && !isAdmin();
 
                         // CRM stage (Extra-billable) — fires first, before L1/L2.
                         if (needsCrm && i.status === 'submitted' && !isCreator) {
