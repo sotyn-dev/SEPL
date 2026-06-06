@@ -294,7 +294,17 @@ export default function CRMFunnel() {
             {rows.map(r => (
               <tr key={r.id}>
                 <td className="font-mono text-xs">{r.lead_no}</td>
-                <td className="font-medium">{r.client_name}</td>
+                <td className="font-medium">
+                  {r.client_name}
+                  {r.requirement_items && (
+                    <div className="text-[10px] text-gray-500 font-normal max-w-[220px] truncate" title={r.requirement_items}>🧾 {r.requirement_items}</div>
+                  )}
+                  {r.source_indent_id && (
+                    <a href={`/indent/${r.source_indent_id}/print`} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 hover:underline font-normal inline-flex items-center gap-0.5">
+                      <FiExternalLink size={10} /> View indent requirement
+                    </a>
+                  )}
+                </td>
                 <td>{r.company_name || '-'}</td>
                 <td>{r.mobile || '-'}</td>
                 <td>{r.source || '-'}</td>

@@ -972,6 +972,50 @@ router.post('/indents', (req, res) => {
       extraSch, extraNon, rentDays, rentRate, wpm,
     );
   }
+  // CRM funnel "requirement" at RAISE time (mam 2026-06-06: "if extra
+  // schedule also go in crm funnel and show requirement"). Extra-Schedule /
+  // Extra-Non-Schedule indents are client-billable, so the moment they're
+  // raised we drop a CRM funnel lead listing the requirement (items) + a
+  // link back to the indent, so the sales team can start quoting before CRM
+  // approval. On CRM approval the same entry is updated with the billable
+  // amount. Deduped by a [auto-indent:<id>] marker. Best-effort.
+  if (isBillable && policy === 'crm_two_level') {
+    try {
+      const { nextSequence } = require('../db/nextSequence');
+      const reqItems = db.prepare('SELECT description, quantity, unit FROM indent_items WHERE indent_id=?').all(r.lastInsertRowid);
+      const reqText = reqItems
+        .map(it => `${(+it.quantity || 0).toLocaleString('en-IN')}${it.unit ? ' ' + it.unit : ''} × ${it.description || 'item'}`)
+        .join('; ');
+      const fi = db.prepare(
+        `SELECT bb.company_name AS bb_company, bb.client_name AS bb_client,
+                bb.state AS bb_state, bb.district AS bb_district, bb.owner AS bb_owner
+           FROM order_planning op LEFT JOIN business_book bb ON bb.id = op.business_book_id
+          WHERE op.id = ?`
+      ).get(resolvedPlanningId) || {};
+      const marker = `[auto-indent:${r.lastInsertRowid}]`;
+      const already = db.prepare('SELECT id FROM crm_funnel WHERE source_indent_id=? OR remarks LIKE ?')
+        .get(r.lastInsertRowid, `%${marker}%`);
+      if (!already) {
+        const clientName = String(site_name || fi.bb_client || fi.bb_company || 'Extra item').trim() || 'Extra item';
+        const funnelLeadNo = nextSequence(db, 'crm_funnel', 'lead_no', 'CRM-', { startFrom: 0, pad: 4 });
+        db.prepare(
+          `INSERT INTO crm_funnel
+             (lead_no, client_name, company_name, state, district, remarks,
+              category, type, lead_type, quotation_amount, requirement_items,
+              source_indent_id, created_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        ).run(
+          funnelLeadNo, clientName, fi.bb_company || site_name || null,
+          fi.bb_state || null, fi.bb_district || null,
+          `Requirement from Extra indent ${indentNum} (awaiting CRM approval)`
+            + (fi.bb_owner ? ` · owner ${fi.bb_owner}` : '') + ` ${marker}`,
+          category, 'Extra Item', 'Extra Enquiry', 0, reqText || null,
+          r.lastInsertRowid, req.user.id,
+        );
+      }
+    } catch (e) { console.error('[indent] CRM funnel requirement-at-raise failed (indent saved anyway):', e.message); }
+  }
+
   fireIndent(db, r.lastInsertRowid, 'indent.raised');
   res.status(201).json({ id: r.lastInsertRowid, indent_number: indentNum });
 });
@@ -1184,19 +1228,30 @@ router.put('/indents/:id', (req, res) => {
                 WHERE i.id = ?`
             ).get(id);
             const marker = `[auto-indent:${id}]`;
+            // The requirement entry was already created when the indent was
+            // raised (mam 2026-06-06).  On CRM approval, UPDATE it with the
+            // now-known billable amount instead of creating a duplicate.
             const already = db.prepare(
-              `SELECT 1 FROM crm_funnel WHERE remarks LIKE ?`
-            ).get(`%${marker}%`);
-            if (!already) {
-              const clientName = String(
-                fi?.client_name || fi?.site_name || fi?.bb_client || fi?.bb_company || 'Extra item'
-              ).trim() || 'Extra item';
+              `SELECT id FROM crm_funnel WHERE source_indent_id=? OR remarks LIKE ?`
+            ).get(id, `%${marker}%`);
+            const clientName = String(
+              fi?.client_name || fi?.site_name || fi?.bb_client || fi?.bb_company || 'Extra item'
+            ).trim() || 'Extra item';
+            if (already) {
+              db.prepare(
+                `UPDATE crm_funnel
+                    SET quotation_amount = ?,
+                        remarks = REPLACE(remarks, '(awaiting CRM approval)', '(CRM approved)'),
+                        updated_at = CURRENT_TIMESTAMP
+                  WHERE id = ?`
+              ).run(+fi?.total_amt || 0, already.id);
+            } else {
               const funnelLeadNo = nextSequence(db, 'crm_funnel', 'lead_no', 'CRM-', { startFrom: 0, pad: 4 });
               db.prepare(
                 `INSERT INTO crm_funnel
                    (lead_no, client_name, company_name, state, district, remarks,
-                    category, type, lead_type, quotation_amount, created_by)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+                    category, type, lead_type, quotation_amount, source_indent_id, created_by)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
               ).run(
                 funnelLeadNo,
                 clientName,
@@ -1209,6 +1264,7 @@ router.put('/indents/:id', (req, res) => {
                 'Extra Item',
                 'Extra Enquiry',
                 +fi?.total_amt || 0,
+                id,
                 actor.id,
               );
             }

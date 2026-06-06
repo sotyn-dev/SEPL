@@ -3288,6 +3288,10 @@ function initializeDatabase() {
     // line is stored in KG for pipes so amount = kg × ₹/kg works unchanged).
     ['vendor_po_items', 'weight_per_meter REAL'],
     ['vendor_po_items', 'original_qty_mtr REAL'],
+    // CRM funnel ← Extra indent link (mam 2026-06-06): Extra-Schedule /
+    // Extra-Non-Schedule indents drop a funnel "requirement" at raise time.
+    ['crm_funnel', 'source_indent_id INTEGER'],
+    ['crm_funnel', 'requirement_items TEXT'],
     // ─── Per-user KPI settings — mam (2026-06-02 follow-up) ───────────
     // Initial table (score_user_kpi_target) only held planned_value
     // overrides.  Mam confirmed "every person different KPIs" — Option B:
