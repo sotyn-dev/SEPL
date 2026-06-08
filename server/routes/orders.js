@@ -173,7 +173,7 @@ router.post('/po', (req, res) => {
 });
 
 router.put('/po/:id', (req, res) => {
-  const { po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, status, site_engineer_id, site_engineer_ids, crm_name } = req.body;
+  const { business_book_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, status, site_engineer_id, site_engineer_ids, crm_name } = req.body;
   // Same regex guard on edit — junk PO numbers can't be re-saved.
   if (po_number !== undefined && po_number !== null && String(po_number).trim() !== '') {
     const poErr = validatePoNumber(po_number);
@@ -207,8 +207,20 @@ router.put('/po/:id', (req, res) => {
   const safePoNumber = po_number && String(po_number).trim() ? String(po_number).trim() : null;
   const safePoDate = po_date && String(po_date).trim() ? po_date : null;
 
+  // business_book_id: lets an edit RE-LINK the PO to a different booked
+  // lead (e.g. a PO mistakenly attached to the Electrical lead being
+  // moved to the Plumbing lead). Previously this field was dropped on
+  // update, so the list's Category/amount — both derived from the linked
+  // business_book — could never be corrected from the UI. null (blank /
+  // omitted) keeps the existing link via COALESCE; we never silently
+  // unlink.
+  const safeBbId = (business_book_id !== undefined && business_book_id !== null && String(business_book_id).trim() !== '')
+    ? parseInt(business_book_id, 10) : null;
+
   try {
-    getDb().prepare(`UPDATE purchase_orders SET
+    const db = getDb();
+    db.prepare(`UPDATE purchase_orders SET
+      business_book_id=COALESCE(?,business_book_id),
       po_number=COALESCE(?,po_number), po_date=COALESCE(?,po_date),
       total_amount=COALESCE(?,total_amount), advance_amount=COALESCE(?,advance_amount),
       po_copy_link=?, boq_file_link=?,
@@ -216,6 +228,7 @@ router.put('/po/:id', (req, res) => {
       site_engineer_id=?, site_engineer_ids=?, crm_name=?,
       status=COALESCE(?,status) WHERE id=?`)
       .run(
+        safeBbId,
         safePoNumber, safePoDate,
         num(total_amount), num(advance_amount),
         po_copy_link || null, boq_file_link || null,
@@ -223,6 +236,18 @@ router.put('/po/:id', (req, res) => {
         primaryEng, engCsv, crm_name,
         safeStatus, req.params.id
       );
+
+    // When the link changed, keep the dependent rows consistent — mirror
+    // what POST /po does: re-point this PO's items to the new business
+    // book (for indent/DPR pooling) and sync the new lead's po_* fields.
+    if (safeBbId) {
+      db.prepare('UPDATE po_items SET business_book_id=? WHERE po_id=?').run(safeBbId, req.params.id);
+      const cur = db.prepare('SELECT po_number, po_date, total_amount FROM purchase_orders WHERE id=?').get(req.params.id);
+      if (cur) {
+        db.prepare('UPDATE business_book SET po_number=?, po_date=?, po_amount=? WHERE id=?')
+          .run(cur.po_number, cur.po_date, cur.total_amount || 0, safeBbId);
+      }
+    }
     res.json({ message: 'Updated' });
   } catch (err) {
     console.error('[PO update] failed:', err.message, req.body);
