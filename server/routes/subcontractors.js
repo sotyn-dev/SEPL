@@ -16,10 +16,17 @@ router.use(authMiddleware);
 // stay small.  MUST be registered above the `/:id` route so the
 // id-matcher doesn't eat it.
 router.get('/lookup', (req, res) => {
+  // De-dupe by name (case-insensitive): the master can hold several
+  // rows sharing a name (e.g. four "Raj" plumbing gangs), but the DPR
+  // picker binds by name string and uses it as the React key, so the
+  // duplicates collapse into one another and silently drop from the
+  // list.  GROUP BY name → one entry per distinct name; keep the
+  // lowest id (earliest master record) as the representative.
   const rows = getDb().prepare(
-    `SELECT id, name, contractor_type, district
+    `SELECT MIN(id) AS id, name, contractor_type, district
        FROM sub_contractors
       WHERE active = 1
+      GROUP BY name COLLATE NOCASE
       ORDER BY name COLLATE NOCASE`
   ).all();
   res.json(rows);
