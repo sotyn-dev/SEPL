@@ -190,7 +190,7 @@ function calculateForEmployee(db, settings, employee, month) {
   const startDate = `${month}-01`;
   const endDate = `${month}-${pad(totalDays)}`;
   const attRows = userId
-    ? db.prepare(`SELECT date, punch_in_time, punch_out_time, total_hours, status
+    ? db.prepare(`SELECT date, punch_in_time, punch_out_time, total_hours, status, admin_marked
                   FROM attendance WHERE user_id = ? AND date BETWEEN ? AND ?`).all(userId, startDate, endDate)
     : [];
   const attByDate = {};
@@ -279,6 +279,31 @@ function calculateForEmployee(db, settings, employee, month) {
       }
       breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: dayPay });
       paidDays += dayPay;
+      continue;
+    }
+
+    // Admin-marked override (admin-mark sets status + admin_marked=1 but
+    // NO punch_in_time, so the punch-based logic below would wrongly count
+    // it absent). When an admin manually marks a day, honour that status
+    // directly — this is what makes "admin updates present/absent" flow
+    // through to the payroll counts. Wins over the punch logic.
+    if (att && att.admin_marked) {
+      const s = String(att.status || '').toLowerCase();
+      if (s === 'present' || s === 'late') {
+        dayPay = 1;
+        dayLabel = s === 'late' ? 'admin_late' : 'admin_present';
+      } else if (s === 'half_day' || s === 'short_day') {
+        dayPay = 0.5; halfDays += 1;
+        dayLabel = 'admin_' + s;
+      } else if (s === 'leave' || s === 'on_leave' || s === 'holiday') {
+        dayPay = 1; paidLeaves += 1;
+        dayLabel = 'admin_' + s;
+      } else { // 'absent' or anything unrecognised
+        dayPay = 0; absentDays += 1;
+        dayLabel = 'admin_absent';
+      }
+      paidDays += dayPay;
+      breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: dayLabel, pay: dayPay, admin_marked: true });
       continue;
     }
 
