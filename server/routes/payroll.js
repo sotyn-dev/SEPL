@@ -478,8 +478,8 @@ function calculateForEmployee(db, settings, employee, month) {
     unpaid_leaves: unpaidLeaves,
     sunday_count: sundayCount,
     ot_hours: round2(otHours),
-    ot_threshold: settings.ot_threshold_hours,            // hours/day before OT (= 9)
-    ot_per_hour_rate: round2(perHourRate * (settings.ot_rate_multiplier || 1)), // = salary/days/9
+    ot_threshold: settings.ot_threshold_hours,            // hours/day before OT (= 8)
+    ot_per_hour_rate: round2(perHourRate * (settings.ot_rate_multiplier || 1)), // = salary/days/8
     gross_earned: round2(grossEarned),
     ot_pay: round2(otPay),
     // Earnings breakdown (Basic + Conveyance + HRA + Adhoc + Misc = gross)
