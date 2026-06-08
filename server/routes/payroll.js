@@ -588,4 +588,130 @@ router.post('/unlock', adminOnly, (req, res) => {
   res.json({ message: `Unlocked ${month}` });
 });
 
+// ─── CL Leave Balances (annual, with carry-forward) ────────────────────
+// Mam: "show me we give CL to someone and carry forward, where i can show".
+// Model (decided 2026-06-08): the monthly CL allowance is the same for
+// everyone (payroll_settings.cl_per_month); each person accrues it month
+// by month across the YEAR, CL taken is deducted, and whatever is left at
+// year-end is carried into next year as their opening balance.
+//
+//   remaining(year) = cl_opening_balance            (carried from prev year)
+//                   + cl_per_month × months_elapsed  (accrued this year)
+//                   − CL days taken this year        (approved casual leaves)
+//
+// months_elapsed = 12 for a past year, current calendar month for the
+// running year, 0 for a future year. Per-employee cl_eligible=0 → no accrual.
+
+function computeLeaveBalances(db, year) {
+  const settings = getSettings(db);
+  const clPerMonth = +settings.cl_per_month || 0;
+
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const curMonth = now.getMonth() + 1; // 1-12
+  const monthsElapsed = year < curYear ? 12 : (year > curYear ? 0 : curMonth);
+
+  const yStart = `${year}-01-01`;
+  const yEnd = `${year}-12-31`;
+
+  const employees = db.prepare(
+    `SELECT id, user_id, name, department, designation,
+            COALESCE(cl_eligible, 1) AS cl_eligible,
+            COALESCE(cl_opening_balance, 0) AS cl_opening_balance
+       FROM employees WHERE status='active' ORDER BY name COLLATE NOCASE`
+  ).all();
+
+  // CL days taken this year per user (approved casual leaves whose start
+  // falls in the year). days defaults to 1 when the column is null.
+  const usedStmt = db.prepare(
+    `SELECT COALESCE(SUM(COALESCE(days, 1)), 0) AS used
+       FROM leave_requests
+      WHERE user_id = ? AND leave_type = 'casual' AND status = 'approved'
+        AND from_date BETWEEN ? AND ?`
+  );
+
+  return employees.map(e => {
+    const eligible = e.cl_eligible ? 1 : 0;
+    const opening = round2(e.cl_opening_balance);
+    const accrued = eligible ? round2(clPerMonth * monthsElapsed) : 0;
+    const used = e.user_id ? round2(usedStmt.get(e.user_id, yStart, yEnd).used) : 0;
+    const remaining = round2(opening + accrued - used);
+    return {
+      employee_id: e.id,
+      employee_name: e.name,
+      department: e.department || null,
+      designation: e.designation || null,
+      cl_eligible: eligible,
+      opening_balance: opening,
+      cl_per_month: clPerMonth,
+      months_elapsed: monthsElapsed,
+      accrued,
+      used,
+      remaining,
+      user_linked: !!e.user_id,
+    };
+  });
+}
+
+// GET annual CL balance sheet for all employees.
+router.get('/leave-balances', requirePermission('payroll', 'view'), (req, res) => {
+  try {
+    const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+    const db = getDb();
+    res.json({ year, cl_per_month: +getSettings(db).cl_per_month || 0, rows: computeLeaveBalances(db, year) });
+  } catch (err) {
+    console.error('leave-balances error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT one employee's carry-forward opening balance + CL eligibility (admin).
+router.put('/leave-balance/:employee_id', adminOnly, (req, res) => {
+  try {
+    const db = getDb();
+    const emp = db.prepare('SELECT id FROM employees WHERE id=?').get(req.params.employee_id);
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+    const sets = [];
+    const vals = [];
+    if (req.body.cl_opening_balance !== undefined) {
+      const v = Number(req.body.cl_opening_balance);
+      if (!Number.isFinite(v)) return res.status(400).json({ error: 'cl_opening_balance must be a number' });
+      sets.push('cl_opening_balance = ?'); vals.push(v);
+    }
+    if (req.body.cl_eligible !== undefined) {
+      sets.push('cl_eligible = ?'); vals.push(req.body.cl_eligible ? 1 : 0);
+    }
+    if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+    vals.push(emp.id);
+    db.prepare(`UPDATE employees SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    res.json({ message: 'Updated' });
+  } catch (err) {
+    console.error('leave-balance update error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST roll a year's leftover CL into next year's opening balance (admin).
+// Sets each employee's cl_opening_balance = remaining(year). Idempotent in
+// effect only if re-run on the SAME source year — re-running after CL is
+// taken in the new year would double count, so the UI guards it to the
+// completed year.
+router.post('/leave-balances/rollover', adminOnly, (req, res) => {
+  try {
+    const year = parseInt(req.body.year, 10);
+    if (!year) return res.status(400).json({ error: 'year required' });
+    const db = getDb();
+    const rows = computeLeaveBalances(db, year);
+    const upd = db.prepare('UPDATE employees SET cl_opening_balance = ? WHERE id = ?');
+    const tx = db.transaction(() => {
+      for (const r of rows) upd.run(Math.max(0, r.remaining), r.employee_id);
+    });
+    tx();
+    res.json({ message: `Rolled ${year} leftover CL into opening balance for ${rows.length} employees`, count: rows.length });
+  } catch (err) {
+    console.error('leave-balances rollover error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

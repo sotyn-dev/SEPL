@@ -4,7 +4,7 @@ import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiSettings, FiDollarSign, FiEye, FiLock, FiUnlock, FiSave, FiDownload } from 'react-icons/fi';
+import { FiSettings, FiDollarSign, FiEye, FiLock, FiUnlock, FiSave, FiDownload, FiCalendar } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
 import TimePicker from '../components/TimePicker';
@@ -97,6 +97,11 @@ export default function Payroll() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState(null);
+  // CL Leave Balances tab
+  const [leaveYear, setLeaveYear] = useState(new Date().getFullYear());
+  const [leaveRows, setLeaveRows] = useState([]);
+  const [leaveLoading, setLeaveLoading] = useState(false);
+  const [leaveEdits, setLeaveEdits] = useState({}); // employee_id -> draft opening_balance
 
   const loadSettings = useCallback(() => {
     api.get('/payroll/settings').then(r => { setSettings(r.data); setSavedSettings(r.data); }).catch(() => {});
@@ -110,8 +115,42 @@ export default function Payroll() {
       .finally(() => setLoading(false));
   }, [month]);
 
+  const loadLeaveBalances = useCallback(() => {
+    setLeaveLoading(true);
+    api.get(`/payroll/leave-balances?year=${leaveYear}`)
+      .then(r => { setLeaveRows(r.data.rows || []); setLeaveEdits({}); })
+      .catch(err => toast.error(err.response?.data?.error || 'Failed'))
+      .finally(() => setLeaveLoading(false));
+  }, [leaveYear]);
+
   useEffect(() => { loadSettings(); }, [loadSettings]);
   useEffect(() => { if (tab === 'monthly') loadMonth(); }, [tab, loadMonth]);
+  useEffect(() => { if (tab === 'leaves') loadLeaveBalances(); }, [tab, loadLeaveBalances]);
+
+  const saveOpening = async (employeeId) => {
+    const v = leaveEdits[employeeId];
+    try {
+      await api.put(`/payroll/leave-balance/${employeeId}`, { cl_opening_balance: Number(v) });
+      toast.success('Carry-forward saved');
+      loadLeaveBalances();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  const toggleEligible = async (employeeId, next) => {
+    try {
+      await api.put(`/payroll/leave-balance/${employeeId}`, { cl_eligible: next ? 1 : 0 });
+      loadLeaveBalances();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  const rolloverYear = async () => {
+    if (!confirm(`Roll ${leaveYear}'s leftover CL into each person's opening balance? Do this once ${leaveYear} is complete — it overwrites the current carry-forward.`)) return;
+    try {
+      const res = await api.post('/payroll/leave-balances/rollover', { year: leaveYear });
+      toast.success(res.data.message);
+      setLeaveYear(y => y + 1);
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
 
   const saveSettings = async () => {
     try {
@@ -165,6 +204,9 @@ export default function Payroll() {
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => setTab('monthly')} className={`btn ${tab === 'monthly' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1`}>
             <FiDollarSign size={14} /> Monthly Payroll
+          </button>
+          <button onClick={() => setTab('leaves')} className={`btn ${tab === 'leaves' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1`}>
+            <FiCalendar size={14} /> Leave Balances
           </button>
           {isAdmin && (
             <button onClick={() => setTab('settings')} className={`btn ${tab === 'settings' ? 'btn-primary' : 'btn-secondary'} text-sm flex items-center gap-1`}>
@@ -376,6 +418,90 @@ export default function Payroll() {
             <p className="text-[11px] text-gray-400 pt-2">Last updated: {savedSettings.updated_at}</p>
           )}
         </div>
+      )}
+
+      {/* Leave Balances Tab — annual CL with carry-forward */}
+      {tab === 'leaves' && (
+        <>
+          <div className="card p-4 flex flex-wrap items-center gap-3">
+            <div>
+              <label className="label">Year</label>
+              <select className="select" value={leaveYear} onChange={e => setLeaveYear(+e.target.value)}>
+                {Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - 3 + i).map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
+            <div className="bg-purple-50 border border-purple-200 px-3 py-2 rounded text-xs text-purple-800 max-w-xl">
+              <strong>Remaining = Carry-Forward + Accrued − Used.</strong> Everyone accrues the same monthly CL
+              ({leaveRows[0]?.cl_per_month ?? '—'}/month); whatever is left at year-end can be carried into next year.
+            </div>
+            <div className="flex-1" />
+            <button onClick={() => exportCsv(`cl-balances-${leaveYear}`,
+              ['Employee', 'Dept', 'Carry-Forward', 'Accrued', 'Used', 'Remaining'],
+              leaveRows.map(r => [r.employee_name, r.department, r.opening_balance, r.accrued, r.used, r.remaining]))}
+              className="btn btn-secondary text-sm flex items-center gap-1"><FiDownload size={14} /> Export Excel</button>
+            {isAdmin && (
+              <button onClick={rolloverYear} className="btn btn-success text-sm flex items-center gap-1" title={`Set each person's carry-forward = their ${leaveYear} remaining`}>
+                <FiSave size={14} /> Roll over {leaveYear} → {leaveYear + 1}
+              </button>
+            )}
+          </div>
+
+          <div className="card p-0">
+            <table className="freeze-head">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Dept</th>
+                  <th className="text-center">CL Eligible</th>
+                  <th className="text-right">Carry-Forward</th>
+                  <th className="text-right">Accrued ({leaveRows[0]?.months_elapsed ?? 0} mo)</th>
+                  <th className="text-right">Used</th>
+                  <th className="text-right">Remaining</th>
+                  {isAdmin && <th></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {leaveLoading && <tr><td colSpan={isAdmin ? 8 : 7} className="text-center py-8 text-gray-400">Loading…</td></tr>}
+                {!leaveLoading && leaveRows.length === 0 && <tr><td colSpan={isAdmin ? 8 : 7} className="text-center py-8 text-gray-400">No active employees.</td></tr>}
+                {!leaveLoading && leaveRows.map(r => {
+                  const draft = leaveEdits[r.employee_id];
+                  const dirty = draft !== undefined && Number(draft) !== r.opening_balance;
+                  return (
+                    <tr key={r.employee_id} className={r.user_linked === false ? 'bg-amber-50/40' : ''}>
+                      <td className="font-medium">
+                        {r.employee_name}
+                        {r.user_linked === false && <span className="ml-1 text-[10px] bg-amber-200 text-amber-800 px-1 py-0.5 rounded" title="No login user linked — CL taken can't be counted.">⚠ no login</span>}
+                      </td>
+                      <td className="text-xs text-gray-500">{r.department || '-'}</td>
+                      <td className="text-center">
+                        {isAdmin ? (
+                          <input type="checkbox" checked={!!r.cl_eligible} onChange={e => toggleEligible(r.employee_id, e.target.checked)} />
+                        ) : (r.cl_eligible ? 'Yes' : 'No')}
+                      </td>
+                      <td className="text-right">
+                        {isAdmin ? (
+                          <input type="number" step="0.5" className="input text-right w-24 inline-block"
+                            value={draft !== undefined ? draft : r.opening_balance}
+                            onChange={e => setLeaveEdits(s => ({ ...s, [r.employee_id]: e.target.value }))} />
+                        ) : r.opening_balance}
+                      </td>
+                      <td className="text-right text-gray-700">{r.accrued}</td>
+                      <td className="text-right text-purple-600">{r.used}</td>
+                      <td className={`text-right font-bold ${r.remaining < 0 ? 'text-red-600' : 'text-emerald-700'}`}>{r.remaining}</td>
+                      {isAdmin && (
+                        <td className="text-right">
+                          {dirty && <button onClick={() => saveOpening(r.employee_id)} className="btn btn-primary text-xs">Save</button>}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       {/* Slip Detail Modal */}
