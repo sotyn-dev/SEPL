@@ -464,6 +464,10 @@ function calculateForEmployee(db, settings, employee, month) {
     user_linked: !!userId,
     user_id: userId || null,
     paid_days: round2(paidDays),
+    // Components of paid_days, so the UI can show "attendance + Sunday + CL"
+    // (mam 2026-06-08). present_days = worked-day equivalents (full=1,
+    // half=0.5); the rest of paid_days is sundays + paid leaves.
+    present_days: round2(paidDays - sundayCount - paidLeaves),
     half_days: halfDays,
     absent_days: absentDays,
     late_marks: lateMarks,
@@ -474,6 +478,8 @@ function calculateForEmployee(db, settings, employee, month) {
     unpaid_leaves: unpaidLeaves,
     sunday_count: sundayCount,
     ot_hours: round2(otHours),
+    ot_threshold: settings.ot_threshold_hours,            // hours/day before OT (= 9)
+    ot_per_hour_rate: round2(perHourRate * (settings.ot_rate_multiplier || 1)), // = salary/days/9
     gross_earned: round2(grossEarned),
     ot_pay: round2(otPay),
     // Earnings breakdown (Basic + Conveyance + HRA + Adhoc + Misc = gross)

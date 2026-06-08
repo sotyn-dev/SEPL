@@ -265,13 +265,13 @@ export default function Payroll() {
                   <th>Employee</th>
                   <th>Dept</th>
                   <th className="text-right">Base</th>
-                  <th className="text-right">Paid Days</th>
+                  <th className="text-right" title="Paid Days = attendance days + Sundays + paid CL/leave">Paid Days</th>
                   <th className="text-center">Half</th>
                   <th className="text-center">Absent</th>
-                  <th className="text-center">Late</th>
-                  <th className="text-right">Late ₹</th>
+                  <th className="text-center" title="Late count — informational only, no pay impact">Late</th>
+                  <th className="text-right" title="Late deduction (charged from late time)">Late ₹</th>
                   <th className="text-center">Leaves</th>
-                  <th className="text-right">OT</th>
+                  <th className="text-right" title="Overtime for hours worked beyond 9/day, paid at salary ÷ days ÷ 9 per hour">OT (&gt;9h)</th>
                   <th className="text-right">Net Pay</th>
                   <th></th>
                 </tr>
@@ -288,13 +288,21 @@ export default function Payroll() {
                     </td>
                     <td className="text-xs text-gray-500">{r.department || '-'}</td>
                     <td className="text-right">{fmt(r.base_salary)}</td>
-                    <td className="text-right font-semibold">{r.paid_days}</td>
+                    <td className="text-right font-semibold">
+                      {r.paid_days}
+                      <div className="text-[9px] font-normal text-gray-400" title="attendance days + Sundays + paid CL">
+                        att {r.present_days ?? 0} · sun {r.sunday_count ?? 0}{r.paid_leaves ? ` · CL ${r.paid_leaves}` : ''}
+                      </div>
+                    </td>
                     <td className="text-center">{r.half_days || 0}</td>
                     <td className="text-center text-red-600">{r.absent_days || 0}</td>
-                    <td className="text-center text-amber-600">{r.late_marks || 0}{r.lates_converted_absent ? ` (-${r.lates_converted_absent})` : ''}</td>
+                    <td className="text-center text-amber-600" title="Late count only — does not reduce pay. See Late ₹ for the deduction.">{r.late_marks || 0}{r.lates_converted_absent ? ` (-${r.lates_converted_absent})` : ''}</td>
                     <td className="text-right text-amber-700">{r.late_penalty ? fmt(r.late_penalty) : '-'}</td>
                     <td className="text-center text-purple-600">{(r.paid_leaves || 0) + (r.unpaid_leaves || 0)}</td>
-                    <td className="text-right text-blue-600">{r.ot_hours || 0}h{r.ot_pay ? ` (+${fmt(r.ot_pay)})` : ''}</td>
+                    <td className="text-right text-blue-600" title={r.ot_per_hour_rate ? `Rs ${r.ot_per_hour_rate}/hr = ${fmt(r.base_salary)} ÷ ${r.total_days_in_month} days ÷ ${r.ot_threshold || 9}h` : 'No overtime'}>
+                      {r.ot_hours || 0}h{r.ot_pay ? ` (+${fmt(r.ot_pay)})` : ''}
+                      {r.ot_hours ? <div className="text-[9px] font-normal text-gray-400">&gt;{r.ot_threshold || 9}h @ Rs {r.ot_per_hour_rate}/h</div> : null}
+                    </td>
                     <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}</td>
                     <td className="space-x-1 whitespace-nowrap">
                       <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs">Detail</button>
@@ -339,10 +347,12 @@ export default function Payroll() {
                   <div>
                     <div className="text-[9px] uppercase text-gray-400">Paid Days</div>
                     <div className="font-semibold text-gray-800">{r.paid_days}</div>
+                    <div className="text-[8px] text-gray-400">att {r.present_days ?? 0}·sun {r.sunday_count ?? 0}{r.paid_leaves ? `·CL ${r.paid_leaves}` : ''}</div>
                   </div>
                   <div>
-                    <div className="text-[9px] uppercase text-gray-400">OT</div>
+                    <div className="text-[9px] uppercase text-gray-400">OT (&gt;9h)</div>
                     <div className="font-semibold text-blue-700">{r.ot_hours || 0}h{r.ot_pay ? ` +${fmt(r.ot_pay)}` : ''}</div>
+                    {r.ot_hours ? <div className="text-[8px] text-gray-400">Rs {r.ot_per_hour_rate}/h</div> : null}
                   </div>
                 </div>
                 <div className="grid grid-cols-4 gap-2 pt-1 border-t border-gray-100 text-[11px] text-center">
@@ -523,10 +533,17 @@ export default function Payroll() {
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <Stat label="OT" value={`${detail.ot_hours} h (+${fmt(detail.ot_pay)})`} color="text-blue-600" />
-              <Stat label="Gross Earned" value={fmt(detail.gross_earned)} color="text-emerald-700" />
-              <Stat label="Total Deductions" value={fmt(detail.total_deductions)} color="text-red-600" />
+              <Stat label="Attendance Days" value={detail.present_days} color="text-emerald-700" />
               <Stat label="Sundays" value={detail.sunday_count} color="text-blue-600" />
+              <Stat label="Paid CL/Leave" value={detail.paid_leaves} color="text-purple-600" />
+              <Stat label={`OT (>${detail.ot_threshold || 9}h)`} value={`${detail.ot_hours} h (+${fmt(detail.ot_pay)})`} color="text-blue-600" />
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <Stat label="OT Rate / Hour" value={`${fmt(detail.ot_per_hour_rate)}`} color="text-blue-600" />
+              <Stat label="Gross Earned" value={fmt(detail.gross_earned)} color="text-emerald-700" />
+              <Stat label="Late Deduction" value={detail.late_penalty ? fmt(detail.late_penalty) : '0'} color="text-red-600" />
+              <Stat label="Total Deductions" value={fmt(detail.total_deductions)} color="text-red-600" />
             </div>
 
             {/* Earnings Breakdown — matches the printable slip */}

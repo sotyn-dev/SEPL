@@ -1486,8 +1486,8 @@ function initializeDatabase() {
       sl_per_month REAL DEFAULT 1,                    -- paid sick leave allowance
       pl_per_month REAL DEFAULT 1.5,                  -- paid privilege/earned leave
       short_leave_per_month INTEGER DEFAULT 2,        -- short-leave count allowed
-      ot_threshold_hours REAL DEFAULT 8,              -- hours/day before OT kicks in
-      ot_rate_multiplier REAL DEFAULT 1.5,            -- OT pay rate (× normal hourly)
+      ot_threshold_hours REAL DEFAULT 9,              -- hours/day before OT kicks in (mam: OT for >9h/day)
+      ot_rate_multiplier REAL DEFAULT 1,              -- OT pay rate (× normal hourly); mam: straight rate = salary/days/9 per hour
       pay_cycle_start_day INTEGER DEFAULT 1,          -- 1 = month-start, 26 = 26th-to-25th
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_by INTEGER REFERENCES users(id)
@@ -3452,6 +3452,24 @@ function initializeDatabase() {
       if (blanked.changes > 0) console.log(`[migration] indents.raised_by_name — blanked ${blanked.changes} legacy rows (mam: previous names wrong)`);
     }
   } catch (e) { console.error('[migration] blank legacy raised_by_name failed:', e.message); }
+
+  // Mam (2026-06-08) OT rule: "Overtime per hours >9, OT per hour =
+  // salary / total days in month / 9 × extra hours". The engine already
+  // computes perHourRate = base / (totalDays × ot_threshold_hours) ×
+  // ot_rate_multiplier, so the rule maps exactly to threshold=9 and a
+  // straight (×1) multiplier. The live settings row predates this and
+  // still holds 8h / 1.5×, so set it once. Admin can re-tune both in
+  // Payroll → Rules/Settings afterwards. Guarded so it runs exactly once.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='payroll_ot_rule_9h_straight_v1'").get();
+    if (!done) {
+      const r = db.prepare(
+        `UPDATE payroll_settings SET ot_threshold_hours = 9, ot_rate_multiplier = 1 WHERE id = 1`
+      ).run();
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('payroll_ot_rule_9h_straight_v1', '1')").run();
+      if (r.changes > 0) console.log('[migration] payroll OT rule set to >9h at straight (salary/days/9) per-hour rate');
+    }
+  } catch (e) { console.error('[migration] payroll OT rule set failed:', e.message); }
 
   // Backfill from-store delivery challans (mam 2026-06-04): store issues
   // created BEFORE the auto-challan feature have a Stock Issue Note but no
