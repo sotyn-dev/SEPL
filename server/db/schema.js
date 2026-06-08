@@ -4121,6 +4121,17 @@ function initializeDatabase() {
     // and "by step" (quotation_submitted, negotiation_status, final_status).
     'CREATE INDEX IF NOT EXISTS idx_crm_funnel_final ON crm_funnel(final_status, created_at DESC)',
     'CREATE INDEX IF NOT EXISTS idx_crm_funnel_neg ON crm_funnel(negotiation_status)',
+    // Purchase orders + items — joined/filtered by business_book_id on
+    // almost every Orders + DPR + procurement query; po_items also looked
+    // up by po_id (per-PO line items) and item_master_id (rate joins).
+    // These FKs had no index → full scans on every PO page load.
+    'CREATE INDEX IF NOT EXISTS idx_po_bb ON purchase_orders(business_book_id)',
+    'CREATE INDEX IF NOT EXISTS idx_po_quotation ON purchase_orders(quotation_id)',
+    'CREATE INDEX IF NOT EXISTS idx_po_items_po ON po_items(po_id)',
+    'CREATE INDEX IF NOT EXISTS idx_po_items_bb ON po_items(business_book_id)',
+    'CREATE INDEX IF NOT EXISTS idx_po_items_item ON po_items(item_master_id)',
+    // (CRM Kitting's (project_key, checkpoint_id, uploaded_at) lookup is
+    // already indexed by idx_kit_entry_proj in routes/crmKitting.js.)
   ];
   for (const sql of safeIndexes) {
     try { db.exec(sql); } catch (e) { /* column missing on a stale DB — non-fatal */ }
