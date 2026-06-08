@@ -271,7 +271,7 @@ export default function Payroll() {
                   <th className="text-center" title="Late count — informational only, no pay impact">Late</th>
                   <th className="text-right" title="Late deduction (charged from late time)">Late ₹</th>
                   <th className="text-center">Leaves</th>
-                  <th className="text-right" title="Overtime for hours worked beyond 8/day, paid at salary ÷ days ÷ 8 per hour">OT (&gt;8h)</th>
+                  <th className="text-right" title="Overtime for hours worked beyond 9/day, paid at salary ÷ days ÷ 9 per hour">OT (&gt;9h)</th>
                   <th className="text-right" title="Salary before overtime is added">Before OT</th>
                   <th className="text-right" title="Final salary including overtime">Net Pay</th>
                   <th></th>
@@ -300,9 +300,9 @@ export default function Payroll() {
                     <td className="text-center text-amber-600" title="Late count only — does not reduce pay. See Late ₹ for the deduction.">{r.late_marks || 0}{r.lates_converted_absent ? ` (-${r.lates_converted_absent})` : ''}</td>
                     <td className="text-right text-amber-700">{r.late_penalty ? fmt(r.late_penalty) : '-'}</td>
                     <td className="text-center text-purple-600">{(r.paid_leaves || 0) + (r.unpaid_leaves || 0)}</td>
-                    <td className="text-right text-blue-600" title={r.ot_per_hour_rate ? `Rs ${r.ot_per_hour_rate}/hr = ${fmt(r.base_salary)} ÷ ${r.total_days_in_month} days ÷ ${r.ot_threshold || 8}h` : 'No overtime'}>
+                    <td className="text-right text-blue-600" title={r.ot_per_hour_rate ? `Rs ${r.ot_per_hour_rate}/hr = ${fmt(r.base_salary)} ÷ ${r.total_days_in_month} days ÷ ${r.ot_threshold || 9}h` : 'No overtime'}>
                       {r.ot_hours || 0}h{r.ot_pay ? ` (+${fmt(r.ot_pay)})` : ''}
-                      {r.ot_hours ? <div className="text-[9px] font-normal text-gray-400">&gt;{r.ot_threshold || 8}h @ Rs {r.ot_per_hour_rate}/h</div> : null}
+                      {r.ot_hours ? <div className="text-[9px] font-normal text-gray-400">&gt;{r.ot_threshold || 9}h @ Rs {r.ot_per_hour_rate}/h</div> : null}
                     </td>
                     <td className="text-right text-gray-600">{fmt(r.net_before_ot ?? (r.net_pay - (r.ot_pay || 0)))}</td>
                     <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}</td>
@@ -353,7 +353,7 @@ export default function Payroll() {
                     <div className="text-[8px] text-gray-400">att {r.present_days ?? 0}·sun {r.sunday_count ?? 0}{r.paid_leaves ? `·CL ${r.paid_leaves}` : ''}</div>
                   </div>
                   <div>
-                    <div className="text-[9px] uppercase text-gray-400">OT (&gt;8h)</div>
+                    <div className="text-[9px] uppercase text-gray-400">OT (&gt;9h)</div>
                     <div className="font-semibold text-blue-700">{r.ot_hours || 0}h{r.ot_pay ? ` +${fmt(r.ot_pay)}` : ''}</div>
                     {r.ot_hours ? <div className="text-[8px] text-gray-400">Rs {r.ot_per_hour_rate}/h</div> : null}
                   </div>
@@ -539,7 +539,7 @@ export default function Payroll() {
               <Stat label="Attendance Days" value={detail.present_days} color="text-emerald-700" />
               <Stat label="Sundays" value={detail.sunday_count} color="text-blue-600" />
               <Stat label="Paid CL/Leave" value={detail.paid_leaves} color="text-purple-600" />
-              <Stat label={`OT (>${detail.ot_threshold || 8}h)`} value={`${detail.ot_hours} h (+${fmt(detail.ot_pay)})`} color="text-blue-600" />
+              <Stat label={`OT (>${detail.ot_threshold || 9}h)`} value={`${detail.ot_hours} h (+${fmt(detail.ot_pay)})`} color="text-blue-600" />
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
