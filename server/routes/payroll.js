@@ -385,36 +385,39 @@ function calculateForEmployee(db, settings, employee, month) {
     }
   }
 
-  // ─── Sandwich rule (mam 2026-06-01) ──────────────────────────────
-  // "if some one full day on saturday and monday sunday deduct" —
-  // i.e. the standard Indian labour sandwich: Sunday is PAID by
-  // default, but if either the preceding Saturday or the following
-  // Monday is absent / half-day, the Sunday becomes UNPAID.
-  // Walk the breakdown post-loop because we need each day's
-  // outcome (pay 0 / 0.5 / 1) before deciding the Sundays.
+  // ─── Sandwich rule (mam 2026-06-08, revised) ─────────────────────
+  // Sunday is ALWAYS paid, EXCEPT when BOTH the Saturday before AND the
+  // Monday after are absent (no pay) — only then is the sandwiched
+  // Sunday deducted. If either side is a worked/paid day (full, half,
+  // or paid leave) the Sunday stays paid. (Previous rule deducted when
+  // EITHER side was off; mam softened it to BOTH.)
+  //
+  // Only the weekly-off Sunday rows are touched — a Sunday the person
+  // actually worked or took leave on keeps its own outcome.
+  // Walk post-loop because we need each neighbouring day's pay first.
   for (let i = 0; i < breakdown.length; i++) {
     const b = breakdown[i];
     if (b.day !== 'Sun') continue;
+    if (!(b.label && b.label.startsWith('sunday'))) continue;
     const prev = i > 0 ? breakdown[i - 1] : null;
     const next = i < breakdown.length - 1 ? breakdown[i + 1] : null;
-    const prevOk = !prev || prev.pay >= 1; // Saturday must be FULL day
-    const nextOk = !next || next.pay >= 1; // Monday must be FULL day
-    if (prevOk && nextOk) {
-      // Sandwich satisfied → Sunday paid.  Only flip if it wasn't
-      // already (preserves any existing sundays_paid behaviour).
+    const prevAbsent = !!prev && prev.pay === 0; // Saturday absent (no pay)
+    const nextAbsent = !!next && next.pay === 0; // Monday absent (no pay)
+    if (prevAbsent && nextAbsent) {
+      // Both neighbours absent → Sunday deducted.
+      if (b.pay > 0) {
+        paidDays -= b.pay;
+        sundayCount -= 1;
+        b.pay = 0;
+        b.label = 'sunday_sandwich_break';
+      }
+    } else if (settings.sundays_paid) {
+      // At least one neighbour worked/paid → Sunday paid.
       if (b.pay < 1) {
         paidDays += (1 - b.pay);
         sundayCount += 1;
         b.pay = 1;
-        b.label = 'sunday_paid_sandwich';
-      }
-    } else {
-      // Sandwich broken → Sunday unpaid.
-      if (b.pay > 0) {
-        paidDays -= b.pay;
-        if (b.label === 'sunday_paid') sundayCount -= 1;
-        b.pay = 0;
-        b.label = 'sunday_sandwich_break';
+        b.label = 'sunday_paid';
       }
     }
   }
