@@ -272,13 +272,14 @@ export default function Payroll() {
                   <th className="text-right" title="Late deduction (charged from late time)">Late ₹</th>
                   <th className="text-center">Leaves</th>
                   <th className="text-right" title="Overtime for hours worked beyond 8/day, paid at salary ÷ days ÷ 8 per hour">OT (&gt;8h)</th>
-                  <th className="text-right">Net Pay</th>
+                  <th className="text-right" title="Salary before overtime is added">Before OT</th>
+                  <th className="text-right" title="Final salary including overtime">Net Pay</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan="12" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
-                {!loading && list.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
+                {loading && <tr><td colSpan="13" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
+                {!loading && list.length === 0 && <tr><td colSpan="13" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
                 {!loading && list.map(r => (
                   <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : (r.user_linked === false ? 'bg-amber-50/40' : '')}>
                     <td className="font-medium">
@@ -303,7 +304,8 @@ export default function Payroll() {
                       {r.ot_hours || 0}h{r.ot_pay ? ` (+${fmt(r.ot_pay)})` : ''}
                       {r.ot_hours ? <div className="text-[9px] font-normal text-gray-400">&gt;{r.ot_threshold || 8}h @ Rs {r.ot_per_hour_rate}/h</div> : null}
                     </td>
-                    <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}</td>
+                    <td className="text-right text-gray-600">{fmt(r.net_before_ot ?? (r.net_pay - (r.ot_pay || 0)))}</td>
+                    <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}</td>
                     <td className="space-x-1 whitespace-nowrap">
                       <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs">Detail</button>
                       <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-primary text-xs">SEPL Slip</a>
@@ -337,6 +339,7 @@ export default function Payroll() {
                   <div className="text-right">
                     <div className="text-[9px] uppercase text-gray-400">Net Pay</div>
                     <div className="text-lg font-bold text-emerald-700">{fmt(r.net_pay)}</div>
+                    <div className="text-[9px] text-gray-400">before OT {fmt(r.net_before_ot ?? (r.net_pay - (r.ot_pay || 0)))}</div>
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100 text-[11px] text-center">
@@ -540,10 +543,10 @@ export default function Payroll() {
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <Stat label="Salary before OT" value={fmt(detail.net_before_ot ?? (detail.net_pay - (detail.ot_pay || 0)))} color="text-gray-700" />
+              <Stat label="OT Pay" value={`+${fmt(detail.ot_pay)}`} color="text-blue-600" />
               <Stat label="OT Rate / Hour" value={`${fmt(detail.ot_per_hour_rate)}`} color="text-blue-600" />
-              <Stat label="Gross Earned" value={fmt(detail.gross_earned)} color="text-emerald-700" />
-              <Stat label="Late Deduction" value={detail.late_penalty ? fmt(detail.late_penalty) : '0'} color="text-red-600" />
-              <Stat label="Total Deductions" value={fmt(detail.total_deductions)} color="text-red-600" />
+              <Stat label="Net (after OT)" value={fmt(detail.net_pay)} color="text-emerald-700 font-bold" />
             </div>
 
             {/* Earnings Breakdown — matches the printable slip */}

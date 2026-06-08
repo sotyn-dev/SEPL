@@ -448,6 +448,10 @@ function calculateForEmployee(db, settings, employee, month) {
   const misc = round2(grossEarned * (settings.misc_pct || 0) / 100);
 
   const totalDeductions = round2(latePenalty);
+  // Salary BEFORE overtime = earned-for-days minus deductions (mam wants
+  // to see the base earning and the OT add-on separately). Net pay then
+  // = before-OT + OT.
+  const netBeforeOt = round2(grossEarned - totalDeductions);
   const netPay = round2(grossEarned + otPay - totalDeductions);
   const deductions = baseSalary - grossEarned + totalDeductions; // informational
 
@@ -485,6 +489,7 @@ function calculateForEmployee(db, settings, employee, month) {
     ot_per_hour_rate: round2(perHourRate * (settings.ot_rate_multiplier || 1)), // = salary/days/8
     gross_earned: round2(grossEarned),
     ot_pay: round2(otPay),
+    net_before_ot: netBeforeOt,   // salary before overtime is added
     // Earnings breakdown (Basic + Conveyance + HRA + Adhoc + Misc = gross)
     basic_pay: basicPay,
     conveyance: conveyance,
