@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import api from '../api';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
-import { FiPlus, FiTrash2, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiDownload, FiUploadCloud } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
 // AI Auto-Quotation (Estimator) — mam 2026-06-09.
@@ -15,6 +15,7 @@ import { exportCsv } from '../utils/exportCsv';
 const blankRow = () => ({
   item_id: null, code: '', description: '', category: '', unit: 'nos',
   qty: 1, pp: 0, lab: 0, suggestion: null,
+  confidence: '', matchedName: '', matchScore: 0, alternatives: [],
 });
 
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -28,6 +29,8 @@ export default function Estimator() {
   const [accPct, setAccPct] = useState(0);          // accessories = % of material (PP)
   const [margins, setMargins] = useState({});        // { category: marginPct }
   const [rows, setRows] = useState([blankRow()]);
+  const [matching, setMatching] = useState(false);
+  const fileRef = useRef();
 
   useEffect(() => {
     api.get('/item-master/dropdown').then(r => setItemOptions(r.data)).catch(() => {});
@@ -47,21 +50,74 @@ export default function Estimator() {
   // Pick an item from Item Master → auto-fill material rate (PP), category,
   // unit, description, then fetch the AI rate suggestion.
   const pickItem = async (i, opt) => {
-    if (!opt) { patchRow(i, { item_id: null, suggestion: null }); return; }
-    patchRow(i, {
+    if (!opt) { patchRow(i, { item_id: null, suggestion: null, matchedName: '', confidence: '' }); return; }
+    setRows(rs => rs.map((r, idx) => idx === i ? {
+      ...r,
       item_id: opt.id,
       code: opt.item_code || '',
-      description: opt.display_name || opt.item_name || '',
+      description: r.description || opt.display_name || opt.item_name || '',
       category: opt.department || 'General',
-      unit: opt.uom || 'nos',
+      unit: (r.unit && r.unit !== 'nos') ? r.unit : (opt.uom || 'nos'),
       pp: opt.current_price || 0,
-    });
+      matchedName: opt.display_name || opt.item_name || '',
+      matchScore: 100, confidence: 'high', alternatives: [],
+    } : r));
     try {
       const params = { item_id: opt.id };
       if (leadId) params.lead_id = leadId;
       const { data } = await api.get('/ai-agent/rate-suggestion', { params });
       patchRow(i, { suggestion: data });
     } catch (e) { /* suggestion is best-effort */ }
+  };
+
+  // Swap a row to one of the AI's alternative matches (one-click review).
+  const applyMatch = (i, m) => patchRow(i, {
+    item_id: m.item_id, code: m.code, category: m.department, pp: m.rate,
+    matchedName: m.name, matchScore: m.score,
+    confidence: m.score >= 60 ? 'high' : m.score >= 30 ? 'medium' : 'low',
+  });
+
+  // Upload the CLIENT's BOQ Excel → AI matches every line to Item Master.
+  const uploadBoq = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setMatching(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const { data } = await api.post('/quotations/auto-match-boq', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const mapped = (data.rows || []).map(r => ({
+        ...blankRow(),
+        item_id: r.match?.item_id || null,
+        code: r.match?.code || '',
+        description: r.description,
+        category: r.match?.department || '',
+        unit: r.unit || r.match?.uom || 'nos',
+        qty: r.qty || 1,
+        pp: r.match?.rate || 0,
+        confidence: r.confidence,
+        matchedName: r.match?.name || '',
+        matchScore: r.match?.score || 0,
+        alternatives: r.alternatives || [],
+      }));
+      if (!mapped.length) { toast.error('No items found in that BOQ'); return; }
+      setRows(mapped);
+      const unsure = mapped.filter(m => m.confidence === 'low' || m.confidence === 'none').length;
+      toast.success(`Matched ${mapped.length} item(s) — ${unsure} need a quick review`);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not read that BOQ');
+    } finally {
+      setMatching(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const confBadge = (c, score) => {
+    if (c === 'high') return <span className="text-emerald-600 font-semibold">✅ {score}%</span>;
+    if (c === 'medium') return <span className="text-amber-600 font-semibold">⚠️ {score}%</span>;
+    if (c === 'low') return <span className="text-red-500 font-semibold">❗ {score}% check</span>;
+    if (c === 'none') return <span className="text-red-500 font-semibold">❗ no match</span>;
+    return null;
   };
 
   // Per-row computed economics (matches mam's sheet).
@@ -127,6 +183,19 @@ export default function Estimator() {
         </div>
       </div>
 
+      {/* Auto-build from client BOQ */}
+      <div className="card p-4 flex flex-wrap items-center gap-3 bg-indigo-50/50 border border-indigo-100">
+        <div className="flex-1 min-w-[220px]">
+          <div className="font-semibold text-sm flex items-center gap-1">🤖 Auto-build from Client BOQ</div>
+          <div className="text-xs text-gray-500">Upload the client's BOQ Excel — AI matches each line to your Item Master and fills the rates. Review the lines it flags ❗.</div>
+        </div>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={uploadBoq} />
+        <button type="button" disabled={matching} onClick={() => fileRef.current?.click()}
+          className="btn btn-primary text-sm flex items-center gap-1">
+          <FiUploadCloud size={15} /> {matching ? 'Matching…' : 'Upload Client BOQ'}
+        </button>
+      </div>
+
       {/* Per-category margins */}
       {categories.length > 0 && (
         <div className="card p-4">
@@ -169,7 +238,7 @@ export default function Estimator() {
             {rows.map((row, i) => {
               const c = calc(row);
               return (
-                <tr key={i} className="border-t border-gray-100 align-top">
+                <tr key={i} className={`border-t border-gray-100 align-top ${(row.confidence === 'low' || row.confidence === 'none') ? 'bg-red-50/40' : ''}`}>
                   <td className="p-2 text-gray-400">{i + 1}</td>
                   <td className="p-2">
                     <SearchableSelect
@@ -190,6 +259,23 @@ export default function Estimator() {
                           onClick={() => patchRow(i, { pp: row.suggestion.last_for_client?.rate || row.suggestion.last_overall?.rate })}>
                           use as material
                         </button>
+                      </div>
+                    )}
+                    {row.matchedName && (
+                      <div className="text-[10px] mt-1 flex items-center gap-1 flex-wrap">
+                        {confBadge(row.confidence, row.matchScore)}
+                        <span className="text-gray-500">→ {row.matchedName}</span>
+                      </div>
+                    )}
+                    {row.alternatives?.length > 0 && (row.confidence === 'low' || row.confidence === 'medium' || row.confidence === 'none') && (
+                      <div className="flex flex-wrap gap-1 mt-1 items-center">
+                        <span className="text-[9px] text-gray-400">try:</span>
+                        {row.alternatives.map((a, ai) => (
+                          <button key={ai} type="button" onClick={() => applyMatch(i, a)}
+                            className="text-[10px] bg-white hover:bg-indigo-100 border border-gray-200 rounded px-1 py-0.5">
+                            {a.name} ({a.score}%)
+                          </button>
+                        ))}
                       </div>
                     )}
                   </td>
