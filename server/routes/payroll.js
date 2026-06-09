@@ -47,11 +47,17 @@ function pad(n) { return String(n).padStart(2, '0'); }
 // Parse "HH:MM" / "HH:MM:SS" / ISO datetime → minutes since midnight
 function timeToMinutes(t) {
   if (!t) return null;
-  // ISO datetime?
+  // ISO datetime? punch_in_time is stored as UTC; the production VPS also
+  // runs in UTC, so d.getHours() would return UTC hours — a 10:15 IST punch
+  // (04:45Z) read as 04:45 and NEVER crosses the 09:46/10:00 late cutoffs,
+  // so nobody was ever marked late. Convert to IST (+5:30) explicitly and
+  // read UTC parts so the result is correct regardless of server timezone
+  // (matches the attendance month-view logic).
   if (t.includes('T') || t.includes(' ')) {
     const d = new Date(t);
     if (isNaN(d)) return null;
-    return d.getHours() * 60 + d.getMinutes();
+    const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000);
+    return ist.getUTCHours() * 60 + ist.getUTCMinutes();
   }
   const [h, m] = t.split(':').map(Number);
   return h * 60 + (m || 0);
