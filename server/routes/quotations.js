@@ -19,20 +19,65 @@ function tokens(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ')
     .filter(t => t && t.length >= 2 && !STOP.has(t));
 }
-// Score 0..1 = fraction of the item's (short, specific) tokens that appear in
-// the BOQ line, with a boost when the item's leading keyword is present.
+// Score 0..1 for how well an Item Master item matches a BOQ line. Coverage of
+// the item's tokens, BUT weighted down hard for thin evidence: a single common
+// material word (e.g. "cement" mentioned inside "construct brick masonry
+// manhole") must NOT score high. Real confidence needs several matched
+// keywords. The LLM pass (below) makes the final call when configured.
 function scoreMatch(lineSet, itemTokens) {
   if (!itemTokens.length) return 0;
   let hit = 0;
   for (const t of itemTokens) if (lineSet.has(t)) hit++;
+  if (hit === 0) return 0;
   let score = hit / itemTokens.length;
-  if (lineSet.has(itemTokens[0])) score += 0.15;
+  if (lineSet.has(itemTokens[0])) score += 0.1;
+  // Specificity: scale by matched-keyword count (need ~3 for full weight),
+  // and cap matches resting on 0–1 keywords to a weak score.
+  score *= Math.min(1, hit / 3);
+  if (hit < 2) score = Math.min(score, 0.25);
   return Math.min(1, score);
+}
+
+// Read an app_settings value (AI key/model live there, set via AI Settings UI).
+function aiSetting(key) {
+  try { const r = getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(key); return r ? r.value : null; }
+  catch (e) { return null; }
+}
+
+// Claude pass: for each line, pick the best catalog item from its fuzzy
+// shortlist, or null for composite WORK items that have no single catalog
+// match. Returns an array indexed by line, or null if AI isn't configured.
+async function llmRefine(ranked) {
+  const apiKey = aiSetting('ai_api_key');
+  if (!apiKey) return null;
+  let Anthropic;
+  try { Anthropic = require('@anthropic-ai/sdk'); } catch (e) { return null; }
+  const model = aiSetting('ai_model') || 'claude-opus-4-7';
+  const client = new Anthropic.default({ apiKey, timeout: 55000 });
+  const blocks = ranked.map((r, i) => {
+    const cands = r.scored.slice(0, 8).map(s =>
+      `${s.it.id}=${[s.it.item_name, s.it.specification, s.it.size].filter(Boolean).join(' ')}`).join(' | ');
+    return `[${i}] "${String(r.line.description).slice(0, 280)}"\n   options: ${cands || '(none)'}`;
+  }).join('\n');
+  const prompt = `You match client BOQ lines to a company's Item Master (catalog of materials/products it sells).
+For each BOQ line, pick the ONE option id that is the SAME product, or null if none genuinely match.
+CRITICAL: many lines are CONSTRUCTION WORK (e.g. "construct brick masonry manhole", "lay RCC pipe in trench") that has NO single catalog item — return null for those; do NOT match a material merely mentioned inside the text.
+Return ONLY a JSON array, one object per line: {"line": <index>, "item_id": <id or null>, "confidence": <0-100>}.
+
+${blocks}`;
+  const resp = await client.messages.create({ model, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] });
+  const text = (resp.content || []).map(c => c.text || '').join('');
+  const a = text.indexOf('['), b = text.lastIndexOf(']');
+  if (a === -1 || b === -1) return null;
+  const arr = JSON.parse(text.slice(a, b + 1));
+  const out = [];
+  for (const o of arr) if (o && typeof o.line === 'number') out[o.line] = { item_id: o.item_id ?? null, confidence: Number(o.confidence) || 0 };
+  return out;
 }
 
 // POST a CLIENT BOQ Excel → auto-match each line to Item Master and return a
 // suggested item + rate + confidence per line (the "AI" auto-quotation).
-router.post('/auto-match-boq', upload.single('file'), (req, res) => {
+router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const wb = XLSX.readFile(req.file.path);
@@ -78,27 +123,52 @@ router.post('/auto-match-boq', upload.single('file'), (req, res) => {
     if (!lines.length) return res.status(400).json({ error: 'Could not read the BOQ. Ensure there is a header row with a "Description" (and ideally "Qty") column.' });
 
     const items = getDb().prepare(`SELECT id, item_code, department, item_name, specification, size, uom, current_price FROM item_master`).all();
+    const itemById = new Map(items.map(it => [it.id, it]));
     const itemTok = items.map(it => ({ it, toks: tokens([it.item_name, it.specification, it.size].filter(Boolean).join(' ')) }));
 
-    const mk = (s) => (s && s.score > 0) ? {
-      item_id: s.it.id, code: s.it.item_code,
-      name: [s.it.item_name, s.it.specification, s.it.size].filter(Boolean).join(' / '),
-      department: s.it.department || 'General', rate: s.it.current_price || 0,
-      uom: s.it.uom || '', score: Math.round(s.score * 100),
+    const mk = (it, score) => it ? {
+      item_id: it.id, code: it.item_code,
+      name: [it.item_name, it.specification, it.size].filter(Boolean).join(' / '),
+      department: it.department || 'General', rate: it.current_price || 0,
+      uom: it.uom || '', score: Math.round(score || 0),
     } : null;
 
-    const rows = lines.map(line => {
+    // Fuzzy shortlist per line (also the candidate set handed to the AI).
+    const ranked = lines.map(line => {
       const lset = new Set(tokens(line.description));
       const scored = itemTok.map(({ it, toks }) => ({ it, score: scoreMatch(lset, toks) }))
-        .sort((a, b) => b.score - a.score).slice(0, 4);
+        .filter(s => s.score > 0).sort((a, b) => b.score - a.score).slice(0, 8);
+      return { line, scored };
+    });
+
+    // Best-effort AI refinement; falls back to fuzzy if not configured / errors.
+    let llm = null;
+    try { llm = await llmRefine(ranked); } catch (e) { llm = null; }
+
+    const rows = ranked.map((r, i) => {
+      const { line, scored } = r;
+      const alts = scored.map(s => mk(s.it, s.score * 100)).filter(Boolean);
+      if (llm && llm[i] !== undefined) {
+        const pick = llm[i];
+        const it = (pick.item_id != null) ? itemById.get(pick.item_id) : null;
+        const cf = Number(pick.confidence) || 0;
+        const conf = it ? (cf >= 70 ? 'high' : cf >= 40 ? 'medium' : 'low') : 'none';
+        return {
+          description: line.description, qty: line.qty, unit: line.unit,
+          confidence: it ? conf : 'none', match: it ? mk(it, cf) : null,
+          alternatives: alts.filter(a => !it || a.item_id !== it.id).slice(0, 3),
+        };
+      }
       const best = scored[0];
-      const conf = (!best || best.score === 0) ? 'none' : best.score < 0.3 ? 'low' : best.score < 0.6 ? 'medium' : 'high';
+      const sc = best ? best.score : 0;
+      const conf = sc === 0 ? 'none' : sc < 0.3 ? 'low' : sc < 0.6 ? 'medium' : 'high';
       return {
         description: line.description, qty: line.qty, unit: line.unit,
-        confidence: conf, match: mk(best), alternatives: scored.slice(1).map(mk).filter(Boolean),
+        confidence: best ? conf : 'none', match: best ? mk(best.it, sc * 100) : null,
+        alternatives: alts.slice(1, 4),
       };
     });
-    res.json({ count: rows.length, rows });
+    res.json({ count: rows.length, rows, matched_by: llm ? 'ai' : 'keyword' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to parse BOQ: ' + err.message });
   } finally {
