@@ -3936,6 +3936,28 @@ function initializeDatabase() {
     if (l2.changes > 0) console.log('[seed] Tagged Nitin Sir as L2 indent approver');
   } catch (e) { /* column not yet present on very first boot — silent */ }
 
+  // ─── Fixed-salary (salary_exempt) employees ──────────────────────
+  // Mam 2026-06-09: these people always get their FULL salary — never
+  // docked for attendance / late / absent / leave. The salary_exempt flag
+  // existed but was never set on the data, so they were being prorated.
+  // Match on the LETTERS-ONLY form of the name (case- & punctuation-
+  // tolerant exact match: "D.S Kaplesh" → "dskaplesh", "ANKUR KAPLESH" →
+  // "ankurkaplesh") so a stray dot/case can't miss or over-match.
+  // Idempotent — only touches rows not already exempt.
+  try {
+    const fixedSalaryNames = new Set([
+      'ankurkaplesh', 'nitinjain', 'parulgoyal',
+      'poojakaplesh', 'somakaplesh', 'dskaplesh',
+    ]);
+    const norm = s => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+    const setExempt = db.prepare('UPDATE employees SET salary_exempt=1 WHERE id=? AND COALESCE(salary_exempt,0)=0');
+    let exemptCount = 0;
+    for (const e of db.prepare('SELECT id, name FROM employees').all()) {
+      if (fixedSalaryNames.has(norm(e.name))) exemptCount += setExempt.run(e.id).changes;
+    }
+    if (exemptCount > 0) console.log(`[seed] Flagged ${exemptCount} fixed-salary (salary_exempt) employees`);
+  } catch (e) { /* employees table/column not ready — silent */ }
+
   // ─── One-time data backfill: link sites to business_book ──────────
   // Mam: "in dpr all not see boq item which i upload in order to
   // planning". Older DPR sites were inserted with business_book_id =
