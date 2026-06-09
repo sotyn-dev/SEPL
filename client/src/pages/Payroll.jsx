@@ -142,6 +142,13 @@ export default function Payroll() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  const toggleOtEligible = async (employeeId, next) => {
+    try {
+      await api.put(`/payroll/leave-balance/${employeeId}`, { ot_eligible: next ? 1 : 0 });
+      loadLeaveBalances();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
   const rolloverYear = async () => {
     if (!confirm(`Roll ${leaveYear}'s leftover CL into each person's opening balance? Do this once ${leaveYear} is complete — it overwrites the current carry-forward.`)) return;
     try {
@@ -467,6 +474,7 @@ export default function Payroll() {
                   <th>Employee</th>
                   <th>Dept</th>
                   <th className="text-center">CL Eligible</th>
+                  <th className="text-center">OT Eligible</th>
                   <th className="text-right">Carry-Forward</th>
                   <th className="text-right">Accrued ({leaveRows[0]?.months_elapsed ?? 0} mo)</th>
                   <th className="text-right">Used</th>
@@ -475,8 +483,8 @@ export default function Payroll() {
                 </tr>
               </thead>
               <tbody>
-                {leaveLoading && <tr><td colSpan={isAdmin ? 8 : 7} className="text-center py-8 text-gray-400">Loading…</td></tr>}
-                {!leaveLoading && leaveRows.length === 0 && <tr><td colSpan={isAdmin ? 8 : 7} className="text-center py-8 text-gray-400">No active employees.</td></tr>}
+                {leaveLoading && <tr><td colSpan={isAdmin ? 9 : 8} className="text-center py-8 text-gray-400">Loading…</td></tr>}
+                {!leaveLoading && leaveRows.length === 0 && <tr><td colSpan={isAdmin ? 9 : 8} className="text-center py-8 text-gray-400">No active employees.</td></tr>}
                 {!leaveLoading && leaveRows.map(r => {
                   const draft = leaveEdits[r.employee_id];
                   const dirty = draft !== undefined && Number(draft) !== r.opening_balance;
@@ -491,6 +499,11 @@ export default function Payroll() {
                         {isAdmin ? (
                           <input type="checkbox" checked={!!r.cl_eligible} onChange={e => toggleEligible(r.employee_id, e.target.checked)} />
                         ) : (r.cl_eligible ? 'Yes' : 'No')}
+                      </td>
+                      <td className="text-center">
+                        {isAdmin ? (
+                          <input type="checkbox" checked={!!r.ot_eligible} onChange={e => toggleOtEligible(r.employee_id, e.target.checked)} title="Tick to give this person overtime pay above the OT threshold" />
+                        ) : (r.ot_eligible ? 'Yes' : 'No')}
                       </td>
                       <td className="text-right">
                         {isAdmin ? (

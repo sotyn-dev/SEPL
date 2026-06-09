@@ -342,8 +342,8 @@ function calculateForEmployee(db, settings, employee, month) {
           dayLabel = 'present';
         }
         dayPay = 1;
-        // Overtime
-        if (hours > settings.ot_threshold_hours) {
+        // Overtime — only for employees explicitly marked OT-eligible.
+        if (employee.ot_eligible && hours > settings.ot_threshold_hours) {
           otHours += hours - settings.ot_threshold_hours;
         }
       }
@@ -523,7 +523,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
     const db = getDb();
     const settings = getSettings(db);
-    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary FROM employees WHERE status='active' AND salary > 0`).all();
+    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible FROM employees WHERE status='active' AND salary > 0`).all();
 
     // If a run is finalised for this month, return saved snapshots; else live-calc
     const finalised = db.prepare('SELECT COUNT(*) as c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
@@ -633,6 +633,7 @@ function computeLeaveBalances(db, year) {
   const employees = db.prepare(
     `SELECT id, user_id, name, department, designation,
             COALESCE(cl_eligible, 1) AS cl_eligible,
+            COALESCE(ot_eligible, 0) AS ot_eligible,
             COALESCE(cl_opening_balance, 0) AS cl_opening_balance
        FROM employees WHERE status='active' ORDER BY name COLLATE NOCASE`
   ).all();
@@ -658,6 +659,7 @@ function computeLeaveBalances(db, year) {
       department: e.department || null,
       designation: e.designation || null,
       cl_eligible: eligible,
+      ot_eligible: e.ot_eligible ? 1 : 0,
       opening_balance: opening,
       cl_per_month: clPerMonth,
       months_elapsed: monthsElapsed,
@@ -696,6 +698,9 @@ router.put('/leave-balance/:employee_id', adminOnly, (req, res) => {
     }
     if (req.body.cl_eligible !== undefined) {
       sets.push('cl_eligible = ?'); vals.push(req.body.cl_eligible ? 1 : 0);
+    }
+    if (req.body.ot_eligible !== undefined) {
+      sets.push('ot_eligible = ?'); vals.push(req.body.ot_eligible ? 1 : 0);
     }
     if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
     vals.push(emp.id);
