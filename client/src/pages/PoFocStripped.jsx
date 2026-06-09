@@ -5,9 +5,10 @@ import toast from 'react-hot-toast';
 import { FiPlus, FiTrash2, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
-// PO/FOC Stripped (mam 2026-06-09).
-// Each card = one PO item (type=PO) + up to 10 FOC items (type=FOC) + manual
-// labour + a margin %.  TPA = (PO Rate×Qty + Σ FOC Rate×Qty + Labour) × (1 + margin%).
+// PO/FOC Stripped (mam 2026-06-09). Horizontal layout: each PO item is one
+// row (item + qty + rate + labour + margin + TPA), with FOC items (type=FOC,
+// max 10) flowing side-by-side beneath it.
+// TPA = (PO Rate×Qty + Σ FOC Rate×Qty + Labour) × (1 + margin%).
 
 const MARGINS = [10, 20, 30, 40, 50, 75, 100];
 const MAX_FOC = 10;
@@ -15,6 +16,10 @@ const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const fmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const blankFoc = () => ({ item_id: null, name: '', qty: 1, rate: 0 });
 const blankRow = () => ({ po_item_id: null, po_name: '', po_rate: 0, qty: 1, focs: [], margin: 30, labour: 0 });
+
+const Lbl = ({ children }) => (
+  <div className="text-[9px] font-semibold uppercase tracking-wide text-gray-400 mb-0.5">{children}</div>
+);
 
 export default function PoFocStripped() {
   const [poItems, setPoItems] = useState([]);
@@ -70,20 +75,13 @@ export default function PoFocStripped() {
     exportCsv('po-foc-stripped', headers, data);
   };
 
-  const Field = ({ label, children }) => (
-    <div>
-      <label className="block text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-0.5">{label}</label>
-      {children}
-    </div>
-  );
-
   return (
-    <div className="max-w-4xl mx-auto space-y-4 pb-24">
+    <div className="space-y-4 pb-24">
       {/* Header */}
       <div className="flex items-end justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">📦 PO/FOC Stripped</h1>
-          <p className="text-sm text-gray-500">Pick a PO item, attach up to {MAX_FOC} FOC items, add labour and a margin — TPA builds automatically.</p>
+          <p className="text-sm text-gray-500">One PO item per row — attach up to {MAX_FOC} FOC items, add labour and a margin. TPA builds automatically.</p>
         </div>
         <div className="text-right bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-2">
           <div className="text-[10px] uppercase tracking-wide text-emerald-600 font-semibold">Total TPA</div>
@@ -92,90 +90,79 @@ export default function PoFocStripped() {
         </div>
       </div>
 
-      {/* Cards — one per PO item */}
+      {/* One horizontal row per PO item */}
       {rows.map((row, i) => {
         const c = calc(row);
         const focCount = (row.focs || []).length;
         return (
-          <div key={i} className="card p-4 space-y-3">
-            {/* Card header */}
-            <div className="flex items-center justify-between gap-2 border-b border-gray-100 pb-2">
-              <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 text-sm font-bold">{i + 1}</span>
-              <div className="flex items-center gap-4">
-                <div className="text-right">
-                  <span className="text-[10px] uppercase tracking-wide text-gray-400">TPA</span>
-                  <span className="ml-2 text-lg font-bold text-emerald-700">₹{fmt(c.tpa)}</span>
-                  <span className="ml-2 text-[11px] text-gray-400">cost ₹{fmt(c.cost)}</span>
-                </div>
-                <button type="button" title="Remove this PO item"
-                  onClick={() => setRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : [blankRow()])}
-                  className="text-red-400 hover:text-red-600"><FiTrash2 size={16} /></button>
+          <div key={i} className="card p-3">
+            {/* Main horizontal line */}
+            <div className="flex items-end gap-3 flex-wrap">
+              <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 text-sm font-bold shrink-0">{i + 1}</span>
+              <div className="flex-1 min-w-[220px]">
+                <Lbl>PO Item (type to search)</Lbl>
+                <SearchableSelect options={poItems} value={row.po_item_id} valueKey="id"
+                  displayKey="display_name" placeholder="Search PO items…" onChange={opt => pickPo(i, opt)} />
               </div>
-            </div>
-
-            {/* PO item picker */}
-            <Field label="PO Item (type to search)">
-              <SearchableSelect options={poItems} value={row.po_item_id} valueKey="id"
-                displayKey="display_name" placeholder="Search PO items…"
-                onChange={opt => pickPo(i, opt)} />
-            </Field>
-
-            {/* Numbers grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <Field label="Qty">
-                <input className="input text-right" type="number" min="1" value={row.qty || ''}
+              <div className="w-16">
+                <Lbl>Qty</Lbl>
+                <input className="input text-right py-1.5" type="number" min="1" value={row.qty || ''}
                   onChange={e => patchRow(i, { qty: e.target.value })} />
-              </Field>
-              <Field label="PO Rate ₹">
-                <input className="input text-right" type="number" min="0" value={row.po_rate || ''}
+              </div>
+              <div className="w-24">
+                <Lbl>PO Rate ₹</Lbl>
+                <input className="input text-right py-1.5" type="number" min="0" value={row.po_rate || ''}
                   onChange={e => patchRow(i, { po_rate: e.target.value })} />
-              </Field>
-              <Field label="Labour ₹">
-                <input className="input text-right" type="number" min="0" value={row.labour || ''}
+              </div>
+              <div className="w-24">
+                <Lbl>Labour ₹</Lbl>
+                <input className="input text-right py-1.5" type="number" min="0" value={row.labour || ''}
                   onChange={e => patchRow(i, { labour: e.target.value })} placeholder="0" />
-              </Field>
-              <Field label="Margin %">
-                <select className="select" value={row.margin} onChange={e => patchRow(i, { margin: +e.target.value })}>
+              </div>
+              <div className="w-20">
+                <Lbl>Margin %</Lbl>
+                <select className="select py-1.5" value={row.margin} onChange={e => patchRow(i, { margin: +e.target.value })}>
                   {MARGINS.map(m => <option key={m} value={m}>{m}%</option>)}
                 </select>
-              </Field>
+              </div>
+              <div className="text-right min-w-[96px]">
+                <Lbl>TPA ₹</Lbl>
+                <div className="text-lg font-bold text-emerald-700 leading-tight">{fmt(c.tpa)}</div>
+                <div className="text-[9px] text-gray-400">cost {fmt(c.cost)}</div>
+              </div>
+              <button type="button" title="Remove this PO item"
+                onClick={() => setRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : [blankRow()])}
+                className="text-red-400 hover:text-red-600 mb-1.5"><FiTrash2 size={16} /></button>
             </div>
 
-            {/* FOC items */}
-            <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-gray-600">FOC Items <span className="text-gray-400">({focCount}/{MAX_FOC})</span></span>
-                <button type="button" disabled={focCount >= MAX_FOC}
-                  onClick={() => addFoc(i)}
-                  className={`text-xs flex items-center gap-1 px-2 py-1 rounded ${focCount >= MAX_FOC ? 'text-gray-300' : 'text-indigo-600 hover:bg-indigo-50'}`}>
-                  <FiPlus size={13} /> Add FOC
-                </button>
-              </div>
-              {focCount === 0 && <div className="text-[11px] text-gray-400 italic">No FOC items. Click “Add FOC” to attach (up to {MAX_FOC}).</div>}
-              <div className="space-y-2">
-                {(row.focs || []).map((f, fi) => (
-                  <div key={fi} className="flex items-center gap-2">
-                    <span className="text-[10px] text-gray-400 w-4">{fi + 1}</span>
-                    <div className="flex-1 min-w-0">
-                      <SearchableSelect options={focItems} value={f.item_id} valueKey="id"
-                        displayKey="display_name" placeholder="Search FOC item…"
-                        onChange={opt => pickFoc(i, fi, opt)} />
-                    </div>
-                    <div className="w-16">
-                      <select className="select text-xs py-1.5" value={f.qty}
-                        onChange={e => patchFoc(i, fi, { qty: +e.target.value })} title="Qty 1–10">
-                        {Array.from({ length: 10 }, (_, n) => <option key={n + 1} value={n + 1}>{n + 1}</option>)}
-                      </select>
-                    </div>
-                    <div className="w-24">
-                      <input className="input text-right text-xs py-1.5" type="number" min="0" value={f.rate || ''}
-                        onChange={e => patchFoc(i, fi, { rate: e.target.value })} placeholder="rate" title="Rate (from item)" />
-                    </div>
-                    <button type="button" className="text-red-300 hover:text-red-500"
-                      onClick={() => removeFoc(i, fi)}><FiTrash2 size={13} /></button>
+            {/* FOC items — flowing side by side */}
+            <div className="mt-2 pt-2 border-t border-gray-100 flex items-end gap-2 flex-wrap">
+              <span className="text-[11px] font-semibold text-gray-500 mb-2 whitespace-nowrap">FOC ({focCount}/{MAX_FOC}):</span>
+              {(row.focs || []).map((f, fi) => (
+                <div key={fi} className="inline-flex items-end gap-1 border border-gray-200 rounded-lg px-2 py-1 bg-gray-50">
+                  <div className="w-40">
+                    <Lbl>FOC item</Lbl>
+                    <SearchableSelect options={focItems} value={f.item_id} valueKey="id"
+                      displayKey="display_name" placeholder="Search FOC…" onChange={opt => pickFoc(i, fi, opt)} />
                   </div>
-                ))}
-              </div>
+                  <div className="w-12">
+                    <Lbl>Qty</Lbl>
+                    <select className="select py-1.5 text-xs" value={f.qty} onChange={e => patchFoc(i, fi, { qty: +e.target.value })}>
+                      {Array.from({ length: 10 }, (_, n) => <option key={n + 1} value={n + 1}>{n + 1}</option>)}
+                    </select>
+                  </div>
+                  <div className="w-16">
+                    <Lbl>Rate ₹</Lbl>
+                    <input className="input text-right py-1.5 text-xs" type="number" min="0" value={f.rate || ''}
+                      onChange={e => patchFoc(i, fi, { rate: e.target.value })} placeholder="0" />
+                  </div>
+                  <button type="button" className="text-red-300 hover:text-red-500 mb-1.5" onClick={() => removeFoc(i, fi)}><FiTrash2 size={12} /></button>
+                </div>
+              ))}
+              <button type="button" disabled={focCount >= MAX_FOC} onClick={() => addFoc(i)}
+                className={`text-xs flex items-center gap-1 px-2 py-1.5 rounded border mb-0.5 ${focCount >= MAX_FOC ? 'text-gray-300 border-gray-100' : 'text-indigo-600 border-indigo-200 hover:bg-indigo-50'}`}>
+                <FiPlus size={13} /> Add FOC
+              </button>
             </div>
           </div>
         );
