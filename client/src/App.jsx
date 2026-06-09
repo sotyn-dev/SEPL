@@ -5,6 +5,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Leads from './pages/Leads';
 import Quotations from './pages/Quotations';
+import Estimator from './pages/Estimator';
 import Orders from './pages/Orders';
 import BusinessBook from './pages/BusinessBook';
 import ItemMaster from './pages/ItemMaster';
@@ -160,6 +161,7 @@ export default function App() {
         {/* Other Modules */}
         <Route path="leads" element={<ModuleRoute module="leads"><Leads /></ModuleRoute>} />
         <Route path="quotations" element={<ModuleRoute module="quotations"><Quotations /></ModuleRoute>} />
+        <Route path="estimator" element={<ModuleRoute module="quotations"><Estimator /></ModuleRoute>} />
         <Route path="business-book" element={<ModuleRoute module="business_book"><BusinessBook /></ModuleRoute>} />
         <Route path="item-master" element={<ModuleRoute module="item_master"><ItemMaster /></ModuleRoute>} />
         <Route path="orders" element={<ModuleRoute module="orders"><Orders /></ModuleRoute>} />
