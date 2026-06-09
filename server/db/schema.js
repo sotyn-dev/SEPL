@@ -1524,6 +1524,19 @@ function initializeDatabase() {
       UNIQUE(month, employee_id)
     );
 
+    -- Advance salary taken by an employee in a given month (mam 2026-06-09:
+    -- "some persons take advance salary"). Admin enters the amount in the
+    -- monthly payroll screen; payroll deducts it from that month's net pay.
+    CREATE TABLE IF NOT EXISTS payroll_advances (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      month TEXT NOT NULL,                            -- YYYY-MM
+      employee_id INTEGER REFERENCES employees(id),
+      amount REAL DEFAULT 0,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(month, employee_id)
+    );
+
     -- Score-card templates (one per role / job-type). Each template has
     -- many KPIs that sum to 100% weight. Mam shared 20 such templates as
     -- PDFs (Aanchal-Finance, Site Eng, Supervisor, etc.) on 2026-05-04.
@@ -2623,6 +2636,7 @@ function initializeDatabase() {
     ['payroll_runs', 'hra REAL DEFAULT 0'],
     ['payroll_runs', 'adhoc REAL DEFAULT 0'],
     ['payroll_runs', 'misc REAL DEFAULT 0'],
+    ['payroll_runs', 'advance REAL DEFAULT 0'],
     ['purchase_orders', 'site_engineer_id INTEGER REFERENCES users(id)'],
     ['purchase_orders', 'site_engineer_ids TEXT'],
     ['purchase_orders', 'crm_name TEXT'],

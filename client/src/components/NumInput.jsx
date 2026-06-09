@@ -31,8 +31,15 @@ export default function NumInput({
   allowDecimal = true,
   emitZeroOnEmpty = false,
   className,
+  step,
   ...rest
 }) {
+  // Without an explicit step, type="number" defaults to step=1 and the
+  // browser rejects decimals (e.g. a rate of 21.07 → "nearest valid values
+  // are 21 and 22"). Since this input parses decimals by default, allow
+  // them: step="any" for decimal inputs, "1" when allowDecimal=false. An
+  // explicit step prop still wins.
+  const stepAttr = step != null ? step : (allowDecimal ? 'any' : '1');
   // The string the user actually sees in the input.  Initialised from
   // `value` but tracked separately so an empty box doesn't bounce to "0".
   const [text, setText] = useState(
@@ -79,6 +86,7 @@ export default function NumInput({
     <input
       {...rest}
       type="number"
+      step={stepAttr}
       value={text}
       onChange={handle}
       onBlur={handleBlur}

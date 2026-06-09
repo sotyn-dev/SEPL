@@ -268,12 +268,12 @@ export default function SalarySlipPrint() {
               <td><strong>Late Penalty</strong></td>
               <td className="amount">{data.late_penalty ? fmt(data.late_penalty) : '0'}</td>
             </tr>
-            {data.ot_pay > 0 && (
+            {(data.ot_pay > 0 || data.advance > 0) && (
               <tr>
-                <td>Overtime Pay ({data.ot_hours}h)</td>
-                <td className="amount">{fmt(data.ot_pay)}</td>
-                <td></td>
-                <td></td>
+                <td>{data.ot_pay > 0 ? `Overtime Pay (${data.ot_hours}h)` : ''}</td>
+                <td className="amount">{data.ot_pay > 0 ? fmt(data.ot_pay) : ''}</td>
+                <td>{data.advance > 0 ? <strong>Advance Salary</strong> : ''}</td>
+                <td className="amount">{data.advance > 0 ? fmt(data.advance) : ''}</td>
               </tr>
             )}
             <tr className="total">
@@ -304,6 +304,7 @@ export default function SalarySlipPrint() {
           {data.late_penalty ? ` (penalty ₹${fmt(data.late_penalty)} after ${data.settings?.late_grace_count || 3} free)` : ''}
           {data.paid_leaves ? ` • ${data.paid_leaves} paid leave(s)` : ''}
           {data.unpaid_leaves ? ` • ${data.unpaid_leaves} unpaid leave(s)` : ''}
+          {data.sunday_worked ? ` • ${data.sunday_worked} Sunday(s) worked (extra +${data.sunday_worked_pay} day pay)` : ''}
         </div>
 
         {/* Footer */}

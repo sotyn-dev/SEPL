@@ -100,6 +100,13 @@ function calculateForEmployee(db, settings, employee, month) {
   const [year, mm] = month.split('-').map(Number);
   const totalDays = daysInMonth(month);
 
+  // Advance salary taken this month (admin enters it in the monthly payroll
+  // screen). Recovered by deducting from this month's net pay.
+  const advance = round2(
+    db.prepare('SELECT amount FROM payroll_advances WHERE month=? AND employee_id=?')
+      .get(month, employee.id)?.amount || 0
+  );
+
   // ─── Salary-exempt short-circuit (mam 2026-06-01) ────────────────
   // "this person every month make salary full" — Parul Goyal, Rajat
   // Sir, Nitin Jain, Ankur Kaplesh, Pooja Kaplesh, D.S Kaplesh, Soma
@@ -145,8 +152,9 @@ function calculateForEmployee(db, settings, employee, month) {
       gross_earned: grossEarned,
       basic_pay: basicPay, conveyance, hra, adhoc, misc,
       total_earnings: round2(basicPay + conveyance + hra + adhoc + misc),
-      total_deductions: 0, deductions: 0,
-      net_pay: grossEarned,
+      advance,
+      total_deductions: advance, deductions: advance,
+      net_pay: round2(grossEarned - advance),
       cl_used: 0, sl_used: 0, pl_used: 0, short_leave_used: 0,
       breakdown: [{ date: month + '-01', day: '—', label: 'salary_exempt', pay: 0, note: 'Flat monthly salary; daily breakdown not applicable' }],
     };
@@ -225,6 +233,22 @@ function calculateForEmployee(db, settings, employee, month) {
     }
   }
 
+  // Paid casual leave follows the ANNUAL CL balance (mam 2026-06-09): pay
+  // CL while the person still has balance, instead of a flat cl_per_month
+  // cap. balance = opening carry-forward + monthly accrual THROUGH this
+  // month − casual days already taken earlier in the year. cl_eligible=0 →
+  // no accrual (opening only). Sick/Earned keep their own per-month caps;
+  // comp-off is always paid; half-day leave = ½ paid.
+  const clEligible = employee.cl_eligible == null ? 1 : (employee.cl_eligible ? 1 : 0);
+  const clOpening = Number(employee.cl_opening_balance) || 0;
+  const clAccruedThroughMonth = clEligible ? (Number(settings.cl_per_month) || 0) * mm : 0;
+  const clTakenBefore = userId ? db.prepare(
+    `SELECT COALESCE(SUM(COALESCE(days, 1)), 0) AS d FROM leave_requests
+      WHERE user_id = ? AND leave_type = 'casual' AND status = 'approved'
+        AND from_date >= ? AND from_date < ?`
+  ).get(userId, `${year}-01-01`, `${year}-${pad(mm)}-01`).d : 0;
+  let clBalance = clOpening + clAccruedThroughMonth - clTakenBefore; // CL days available entering this month
+
   let paidDays = 0, halfDays = 0, absentDays = 0, lateMarks = 0;
   let paidLeaves = 0, unpaidLeaves = 0, sundayCount = 0, otHours = 0;
   let latePenalty = 0; // accumulated Rs deduction for late punches over grace
@@ -260,21 +284,30 @@ function calculateForEmployee(db, settings, employee, month) {
 
     // Approved leave that day
     if (leaveType) {
-      let allowance = 0, used = 0;
-      if (leaveType === 'casual') { allowance = settings.cl_per_month; used = clUsed; }
-      else if (leaveType === 'sick') { allowance = settings.sl_per_month; used = slUsed; }
-      else if (leaveType === 'earned') { allowance = settings.pl_per_month; used = plUsed; }
-
-      if (allowance > 0 && used < allowance) {
-        // Within allowance → paid
+      // Half-day leave → ½ paid day (mam 2026-06-09).
+      if (leaveType === 'half_day') {
+        dayPay = 0.5; halfDays += 1; paidLeaves += 0.5;
+        breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: 'half_day_leave', pay: dayPay });
+        paidDays += dayPay;
+        continue;
+      }
+      let paid = false;
+      if (leaveType === 'casual') {
+        // Paid while the person still has annual CL balance left.
+        if (clBalance >= 1) { paid = true; clBalance -= 1; }
+        clUsed += 1;
+      } else if (leaveType === 'sick') {
+        if ((settings.sl_per_month || 0) > 0 && slUsed < settings.sl_per_month) { paid = true; slUsed += 1; }
+      } else if (leaveType === 'earned') {
+        if ((settings.pl_per_month || 0) > 0 && plUsed < settings.pl_per_month) { paid = true; plUsed += 1; }
+      } else if (leaveType === 'comp_off') {
+        paid = true; // comp-off earned by working extra → always paid full day
+      }
+      if (paid) {
         dayPay = 1;
-        if (leaveType === 'casual') clUsed += 1;
-        else if (leaveType === 'sick') slUsed += 1;
-        else if (leaveType === 'earned') plUsed += 1;
         paidLeaves += 1;
         dayLabel = `paid_${leaveType}_leave`;
       } else {
-        // Over allowance → unpaid
         unpaidLeaves += 1;
         dayLabel = `unpaid_${leaveType}_leave`;
       }
@@ -424,6 +457,28 @@ function calculateForEmployee(db, settings, employee, month) {
     }
   }
 
+  // ─── Sunday-worked bonus (mam 2026-06-09) ────────────────────────
+  // Sunday is a paid weekly-off already built into the monthly salary.
+  // If the person ALSO works that Sunday, mam gives an EXTRA full day's
+  // pay on top — so net can exceed base salary. The worked Sunday has
+  // already counted as one normal day (folded into the 'att'/present
+  // count); here we add the extra day-equivalent (full worked Sunday →
+  // +1, half → +0.5).  Weekly-off (unworked) Sundays are untouched.
+  let sundayWorked = 0;     // # of Sundays actually worked
+  let sundayWorkedPay = 0;  // extra day-equivalents credited
+  const SUN_WORK_LABELS = new Set([
+    'present', 'late', 'half_day_late', 'half_day_low_hours',
+    'admin_present', 'admin_late', 'admin_half_day', 'admin_short_day',
+  ]);
+  for (const b of breakdown) {
+    if (b.day !== 'Sun' || !SUN_WORK_LABELS.has(b.label) || !(b.pay > 0)) continue;
+    sundayWorked += 1;
+    sundayWorkedPay += b.pay;
+    b.sunday_worked = true;
+    b.sunday_bonus = b.pay;
+  }
+  paidDays += sundayWorkedPay;
+
   // ─── Per-day rate (mam 2026-06-01) ───────────────────────────────
   // "one per day we count = full salary / total days in month".
   // Switched from working_days_per_month (typically 26) to the actual
@@ -449,7 +504,8 @@ function calculateForEmployee(db, settings, employee, month) {
   const adhoc = round2(grossEarned * (settings.adhoc_pct || 0) / 100);
   const misc = round2(grossEarned * (settings.misc_pct || 0) / 100);
 
-  const totalDeductions = round2(latePenalty);
+  // Deductions = late penalty + any advance salary taken this month.
+  const totalDeductions = round2(latePenalty + advance);
   // Salary BEFORE overtime = earned-for-days minus deductions (mam wants
   // to see the base earning and the OT add-on separately). Net pay then
   // = before-OT + OT.
@@ -476,7 +532,9 @@ function calculateForEmployee(db, settings, employee, month) {
     // Components of paid_days, so the UI can show "attendance + Sunday + CL"
     // (mam 2026-06-08). present_days = worked-day equivalents (full=1,
     // half=0.5); the rest of paid_days is sundays + paid leaves.
-    present_days: round2(paidDays - sundayCount - paidLeaves),
+    present_days: round2(paidDays - sundayCount - paidLeaves - sundayWorkedPay),
+    sunday_worked: sundayWorked,            // # of Sundays the person worked
+    sunday_worked_pay: round2(sundayWorkedPay), // extra day-equivalents paid for them
     half_days: halfDays,
     absent_days: absentDays,
     late_marks: lateMarks,
@@ -499,6 +557,8 @@ function calculateForEmployee(db, settings, employee, month) {
     adhoc: adhoc,
     misc: misc,
     total_earnings: round2(basicPay + conveyance + hra + adhoc + misc),
+    advance,
+    late_penalty_only: round2(latePenalty),
     total_deductions: totalDeductions,
     deductions: round2(deductions),
     net_pay: netPay,
@@ -523,7 +583,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
     const db = getDb();
     const settings = getSettings(db);
-    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible FROM employees WHERE status='active' AND salary > 0`).all();
+    const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible, cl_eligible, cl_opening_balance FROM employees WHERE status='active' AND salary > 0`).all();
 
     // If a run is finalised for this month, return saved snapshots; else live-calc
     const finalised = db.prepare('SELECT COUNT(*) as c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
@@ -572,9 +632,9 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
       month, employee_id, employee_name, base_salary, working_days, paid_days, half_days,
       absent_days, late_marks, lates_converted_absent, late_penalty, paid_leaves, unpaid_leaves, sundays,
       ot_hours, gross_earned, ot_pay, deductions, net_pay,
-      basic_pay, conveyance, hra, adhoc, misc,
+      basic_pay, conveyance, hra, adhoc, misc, advance,
       breakdown_json, status, finalised_by, finalised_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`);
 
     const tx = db.transaction(() => {
       for (const emp of employees) {
@@ -583,7 +643,7 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
           month, emp.id, emp.name, r.base_salary, r.working_days, r.paid_days, r.half_days,
           r.absent_days, r.late_marks, r.lates_converted_absent, r.late_penalty, r.paid_leaves, r.unpaid_leaves, r.sunday_count,
           r.ot_hours, r.gross_earned, r.ot_pay, r.deductions, r.net_pay,
-          r.basic_pay, r.conveyance, r.hra, r.adhoc, r.misc,
+          r.basic_pay, r.conveyance, r.hra, r.adhoc, r.misc, r.advance,
           JSON.stringify(r.breakdown), 'finalised', req.user.id
         );
       }
@@ -602,6 +662,36 @@ router.post('/unlock', adminOnly, (req, res) => {
   const db = getDb();
   db.prepare('DELETE FROM payroll_runs WHERE month=? AND status != ?').run(month, 'disbursed');
   res.json({ message: `Unlocked ${month}` });
+});
+
+// PUT an employee's advance-salary amount for a month (admin). Deducted
+// from that month's net pay. Blocked once the month is finalised.
+router.put('/advance/:employee_id', adminOnly, (req, res) => {
+  try {
+    const db = getDb();
+    const { month } = req.body;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: 'amount must be a non-negative number' });
+
+    const emp = db.prepare('SELECT id FROM employees WHERE id=?').get(req.params.employee_id);
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+
+    const locked = db.prepare('SELECT COUNT(*) AS c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
+    if (locked) return res.status(409).json({ error: `${month} is finalised — unlock it first to change an advance.` });
+
+    db.prepare(
+      `INSERT INTO payroll_advances (month, employee_id, amount, updated_by, updated_at)
+       VALUES (?,?,?,?,CURRENT_TIMESTAMP)
+       ON CONFLICT(month, employee_id) DO UPDATE SET
+         amount = excluded.amount, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP`
+    ).run(month, emp.id, round2(amount), req.user.id);
+
+    res.json({ message: 'Advance saved', amount: round2(amount) });
+  } catch (err) {
+    console.error('advance update error', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── CL Leave Balances (annual, with carry-forward) ────────────────────

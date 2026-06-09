@@ -81,9 +81,12 @@ const LABEL_PILL = {
   paid_casual_leave: 'bg-purple-100 text-purple-700',
   paid_sick_leave: 'bg-purple-100 text-purple-700',
   paid_earned_leave: 'bg-purple-100 text-purple-700',
+  paid_comp_off_leave: 'bg-purple-100 text-purple-700',
+  half_day_leave: 'bg-orange-100 text-orange-700',
   unpaid_casual_leave: 'bg-rose-100 text-rose-700',
   unpaid_sick_leave: 'bg-rose-100 text-rose-700',
   unpaid_earned_leave: 'bg-rose-100 text-rose-700',
+  unpaid_comp_off_leave: 'bg-rose-100 text-rose-700',
 };
 
 export default function Payroll() {
@@ -96,6 +99,7 @@ export default function Payroll() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState(null);
+  const [advanceEdits, setAdvanceEdits] = useState({}); // employee_id -> draft advance amount
   // CL Leave Balances tab
   const [leaveYear, setLeaveYear] = useState(new Date().getFullYear());
   const [leaveRows, setLeaveRows] = useState([]);
@@ -114,12 +118,15 @@ export default function Payroll() {
       .finally(() => setLoading(false));
   }, [month]);
 
-  const loadLeaveBalances = useCallback(() => {
-    setLeaveLoading(true);
+  // silent=true → refresh rows without flipping the loading state (which
+  // empties the table and bounces the page to the top). Used after a tick
+  // or carry-forward save so the scroll position stays put.
+  const loadLeaveBalances = useCallback((silent = false) => {
+    if (!silent) setLeaveLoading(true);
     api.get(`/payroll/leave-balances?year=${leaveYear}`)
-      .then(r => { setLeaveRows(r.data.rows || []); setLeaveEdits({}); })
+      .then(r => { setLeaveRows(r.data.rows || []); if (!silent) setLeaveEdits({}); })
       .catch(err => toast.error(err.response?.data?.error || 'Failed'))
-      .finally(() => setLeaveLoading(false));
+      .finally(() => { if (!silent) setLeaveLoading(false); });
   }, [leaveYear]);
 
   useEffect(() => { loadSettings(); }, [loadSettings]);
@@ -131,21 +138,42 @@ export default function Payroll() {
     try {
       await api.put(`/payroll/leave-balance/${employeeId}`, { cl_opening_balance: Number(v) });
       toast.success('Carry-forward saved');
-      loadLeaveBalances();
+      setLeaveEdits(s => { const n = { ...s }; delete n[employeeId]; return n; });
+      loadLeaveBalances(true); // silent — keep scroll position
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   const toggleEligible = async (employeeId, next) => {
+    // Flip the checkbox in place immediately (no scroll jump), then sync
+    // the recomputed accrued/remaining silently in the background.
+    setLeaveRows(rows => rows.map(r => r.employee_id === employeeId ? { ...r, cl_eligible: next ? 1 : 0 } : r));
     try {
       await api.put(`/payroll/leave-balance/${employeeId}`, { cl_eligible: next ? 1 : 0 });
-      loadLeaveBalances();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+      loadLeaveBalances(true); // silent
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+      loadLeaveBalances(true); // revert to server state
+    }
   };
 
   const toggleOtEligible = async (employeeId, next) => {
+    setLeaveRows(rows => rows.map(r => r.employee_id === employeeId ? { ...r, ot_eligible: next ? 1 : 0 } : r));
     try {
       await api.put(`/payroll/leave-balance/${employeeId}`, { ot_eligible: next ? 1 : 0 });
-      loadLeaveBalances();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed');
+      loadLeaveBalances(true); // revert to server state
+    }
+  };
+
+  // Save an employee's advance salary for the open month; net pay recomputes.
+  const saveAdvance = async (employeeId, value) => {
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || amount < 0) { toast.error('Enter a valid amount'); return; }
+    try {
+      await api.put(`/payroll/advance/${employeeId}`, { month, amount });
+      setAdvanceEdits(s => { const n = { ...s }; delete n[employeeId]; return n; });
+      loadMonth();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
@@ -279,13 +307,14 @@ export default function Payroll() {
                   <th className="text-center">Leaves</th>
                   <th className="text-right" title="Overtime for hours worked beyond 9/day, paid at salary ÷ days ÷ 9 per hour">OT (&gt;9h)</th>
                   <th className="text-right" title="Salary before overtime is added">Before OT</th>
-                  <th className="text-right" title="Final salary including overtime">Net Pay</th>
+                  <th className="text-right" title="Advance salary taken this month — deducted from net pay">Advance</th>
+                  <th className="text-right" title="Final salary including overtime, after advance">Net Pay</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan="13" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
-                {!loading && list.length === 0 && <tr><td colSpan="13" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
+                {loading && <tr><td colSpan="14" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
+                {!loading && list.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
                 {!loading && list.map(r => (
                   <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : (r.user_linked === false ? 'bg-amber-50/40' : '')}>
                     <td className="font-medium">
@@ -300,6 +329,11 @@ export default function Payroll() {
                       <div className="text-[9px] font-normal text-gray-400" title="attendance days + Sundays + paid CL">
                         att {r.present_days ?? 0} · sun {r.sunday_count ?? 0}{r.paid_leaves ? ` · CL ${r.paid_leaves}` : ''}
                       </div>
+                      {r.sunday_worked > 0 && (
+                        <div className="text-[9px] font-normal text-emerald-600" title="Extra full-day pay for working on Sunday(s)">
+                          +{r.sunday_worked_pay}d for {r.sunday_worked} Sun worked
+                        </div>
+                      )}
                     </td>
                     <td className="text-center">{r.half_days || 0}</td>
                     <td className="text-center text-red-600">{r.absent_days || 0}</td>
@@ -311,7 +345,17 @@ export default function Payroll() {
                       {r.ot_hours ? <div className="text-[9px] font-normal text-gray-400">&gt;{r.ot_threshold || 9}h @ Rs {r.ot_per_hour_rate}/h</div> : null}
                     </td>
                     <td className="text-right text-gray-600">{fmt(r.net_before_ot ?? (r.net_pay - (r.ot_pay || 0)))}</td>
-                    <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}</td>
+                    <td className="text-right">
+                      {isAdmin && !r.locked ? (
+                        <input type="number" min="0" step="100"
+                          className="input text-right w-24 inline-block"
+                          value={advanceEdits[r.employee_id] !== undefined ? advanceEdits[r.employee_id] : (r.advance || 0)}
+                          onChange={e => setAdvanceEdits(s => ({ ...s, [r.employee_id]: e.target.value }))}
+                          onBlur={e => { if (Number(e.target.value) !== Number(r.advance || 0)) saveAdvance(r.employee_id, e.target.value); }}
+                          title="Advance salary taken this month — deducted from net pay" />
+                      ) : (r.advance ? <span className="text-rose-600">-{fmt(r.advance)}</span> : '-')}
+                    </td>
+                    <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}{r.sunday_worked_pay ? <span className="block text-[9px] font-normal text-emerald-600">incl. +{r.sunday_worked_pay}d Sun work</span> : null}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}{r.advance ? <span className="block text-[9px] font-normal text-rose-500">less ₹{fmt(r.advance)} advance</span> : null}</td>
                     <td className="space-x-1 whitespace-nowrap">
                       <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs">Detail</button>
                       <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-primary text-xs">SEPL Slip</a>
@@ -357,6 +401,7 @@ export default function Payroll() {
                     <div className="text-[9px] uppercase text-gray-400">Paid Days</div>
                     <div className="font-semibold text-gray-800">{r.paid_days}</div>
                     <div className="text-[8px] text-gray-400">att {r.present_days ?? 0}·sun {r.sunday_count ?? 0}{r.paid_leaves ? `·CL ${r.paid_leaves}` : ''}</div>
+                    {r.sunday_worked > 0 && <div className="text-[8px] text-emerald-600">+{r.sunday_worked_pay}d for {r.sunday_worked} Sun worked</div>}
                   </div>
                   <div>
                     <div className="text-[9px] uppercase text-gray-400">OT (&gt;9h)</div>
@@ -387,6 +432,18 @@ export default function Payroll() {
                     Late penalty: {fmt(r.late_penalty)}
                   </div>
                 )}
+                {isAdmin && !r.locked ? (
+                  <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
+                    <span className="text-[11px] text-gray-500 font-semibold whitespace-nowrap">Advance ₹</span>
+                    <input type="number" min="0" step="100" className="input text-right text-xs py-1 flex-1"
+                      defaultValue={r.advance || 0}
+                      onBlur={e => { if (Number(e.target.value) !== Number(r.advance || 0)) saveAdvance(r.employee_id, e.target.value); }} />
+                  </div>
+                ) : (r.advance > 0 && (
+                  <div className="text-[11px] text-rose-700 font-semibold pt-1 border-t border-gray-100">
+                    Advance: -{fmt(r.advance)}
+                  </div>
+                ))}
                 <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
                   <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs py-1.5 px-3 flex-1">Detail</button>
                   <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer"
