@@ -123,8 +123,24 @@ async function sendComplaintRegistered({ complaintNo, clientName, mobile }) {
   return { ok: whatsapp.ok || sms.ok, to: e164, whatsapp, sms };
 }
 
+// Generic one-off notification (WhatsApp + SMS) to a single mobile. Used by
+// procurement receiving-mismatch alerts (S16) and other ad-hoc notices. Same
+// guarantees as above: never throws, skips cleanly if Twilio isn't configured.
+async function sendText({ mobile, body }) {
+  const e164 = toE164(mobile);
+  if (!e164) return { ok: false, skipped: true, reason: 'invalid_mobile', mobile };
+  const client = getClient();
+  if (!client) return { ok: false, skipped: true, reason: 'twilio_unavailable' };
+  const [whatsapp, sms] = await Promise.all([
+    sendOne(client, 'whatsapp', 'TWILIO_WHATSAPP_FROM', e164, body),
+    sendOne(client, 'sms', 'TWILIO_SMS_FROM', e164, body),
+  ]);
+  return { ok: whatsapp.ok || sms.ok, to: e164, whatsapp, sms };
+}
+
 module.exports = {
   sendComplaintRegistered,
+  sendText,
   // exported for unit testing / reuse
   toE164,
   buildComplaintRegisteredText,

@@ -3971,6 +3971,30 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
       }
     } catch (e) { console.error('[receive] auto short-supply debit failed (receipt saved anyway):', e.message); }
 
+    // S16 (mam 2026-06-09): notify the site engineer (the indent raiser)
+    // ONLY when there's a receiving MISMATCH (a short-supply debit was
+    // auto-raised). WhatsApp + SMS + email, all best-effort — never blocks
+    // the receipt. No notification on a clean, fully-matched receipt.
+    if (autoDebit) {
+      try {
+        const eng = db.prepare(`
+          SELECT u.name, u.email, u.phone
+            FROM delivery_notes dn
+            JOIN vendor_pos vp ON vp.id = dn.vendor_po_id
+            JOIN indents i ON i.id = vp.indent_id
+            JOIN users u ON u.id = i.created_by
+           WHERE dn.id = ?`).get(req.params.id);
+        if (eng) {
+          const msg = `Material received SHORT on receiving. Debit note ${autoDebit.dn_number} (Rs ${autoDebit.amount}) auto-raised — please verify physically. — Secured Engineers`;
+          if (eng.phone) require('../services/notify').sendText({ mobile: eng.phone, body: msg }).catch(() => {});
+          if (eng.email) {
+            const { sendEmail } = require('../lib/email');
+            sendEmail({ to: eng.email, subject: `Short supply on receiving — ${autoDebit.dn_number}`, html: `<p>Hi ${eng.name || ''},</p><p>${msg}</p>` }).catch(() => {});
+          }
+        }
+      } catch (e) { console.error('[receive] S16 engineer mismatch notify failed:', e.message); }
+    }
+
     // Auto SALES BILL on receive (mam 2026-06-04): when a CHALLAN is marked
     // received and its PO has billable PO-type items, auto-generate a Sales
     // Bill (INV/) from the BOQ items at their selling rates.  FOC/RGP-only
