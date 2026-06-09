@@ -16,6 +16,7 @@ const blankRow = () => ({
   item_id: null, code: '', description: '', category: '', unit: 'nos',
   qty: 1, pp: 0, lab: 0, suggestion: null,
   confidence: '', matchedName: '', matchScore: 0, alternatives: [],
+  subs: [], // accessory / FOC items bundled under this line
 });
 
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -112,6 +113,18 @@ export default function Estimator() {
     }
   };
 
+  // Accessory / FOC sub-items under a line. FOC = free (₹0, just listed);
+  // a non-FOC accessory adds rate×qty to that line's cost.
+  const addSub = (i) => setRows(rs => rs.map((r, idx) => idx === i
+    ? { ...r, subs: [...(r.subs || []), { item_id: null, name: '', qty: 1, rate: 0, foc: true }] } : r));
+  const patchSub = (i, si, patch) => setRows(rs => rs.map((r, idx) => idx === i
+    ? { ...r, subs: (r.subs || []).map((s, sj) => sj === si ? { ...s, ...patch } : s) } : r));
+  const removeSub = (i, si) => setRows(rs => rs.map((r, idx) => idx === i
+    ? { ...r, subs: (r.subs || []).filter((_, sj) => sj !== si) } : r));
+  const pickSub = (i, si, opt) => patchSub(i, si, opt
+    ? { item_id: opt.id, name: opt.display_name || opt.item_name, rate: opt.current_price || 0 }
+    : { item_id: null, name: '' });
+
   const confBadge = (c, score) => {
     if (c === 'high') return <span className="text-emerald-600 font-semibold">✅ {score}%</span>;
     if (c === 'medium') return <span className="text-amber-600 font-semibold">⚠️ {score}%</span>;
@@ -127,11 +140,14 @@ export default function Estimator() {
     const lab = Number(row.lab) || 0;
     const acc = r2(pp * (Number(accPct) || 0) / 100);
     const tp = r2(pp + acc + lab);
-    const tpa = r2(tp * qty);
+    // Charged (non-FOC) accessories add to the line total; FOC = ₹0.
+    const subsCharged = r2((row.subs || []).filter(s => !s.foc)
+      .reduce((t, s) => t + (Number(s.rate) || 0) * (Number(s.qty) || 0), 0));
+    const tpa = r2(tp * qty + subsCharged);
     const mPct = marginFor(row.category);
     const sp = r2(tpa * (1 + mPct / 100));
     const rate = qty ? r2(sp / qty) : 0;
-    return { acc, tp, tpa, mPct, sp, rate, cost: tpa };
+    return { acc, tp, tpa, mPct, sp, rate, cost: tpa, subsCharged };
   };
 
   const totals = useMemo(() => rows.reduce((t, row) => {
@@ -144,10 +160,17 @@ export default function Estimator() {
   const exportSheet = () => {
     const headers = ['S.NO', 'ITEM DESCRIPTION', 'UNIT', 'QTY', 'RATE', 'AMOUNT',
       'PP', 'ACC', 'LAB', 'TP', 'TPA', 'MARGIN %', 'SP', 'CATEGORY'];
-    const data = rows.filter(r => r.description).map((row, idx) => {
+    const data = [];
+    rows.filter(r => r.description).forEach((row, idx) => {
       const c = calc(row);
-      return [idx + 1, row.description, row.unit, row.qty, c.rate, c.sp,
-        row.pp, c.acc, row.lab, c.tp, c.tpa, c.mPct, c.sp, row.category];
+      data.push([idx + 1, row.description, row.unit, row.qty, c.rate, c.sp,
+        row.pp, c.acc, row.lab, c.tp, c.tpa, c.mPct, c.sp, row.category]);
+      (row.subs || []).forEach(s => {
+        if (!s.name && !s.item_id) return;
+        const amt = s.foc ? 0 : r2((Number(s.rate) || 0) * (Number(s.qty) || 0));
+        data.push(['', `   - ${s.name}${s.foc ? ' (FOC)' : ''}`, '', s.qty,
+          s.foc ? 0 : s.rate, amt, '', '', '', '', '', '', amt, row.category]);
+      });
     });
     if (!data.length) { toast.error('Add at least one item'); return; }
     // Totals line
@@ -278,6 +301,32 @@ export default function Estimator() {
                         ))}
                       </div>
                     )}
+                    {/* Accessory / FOC sub-items */}
+                    <div className="mt-1.5 pl-2 border-l-2 border-indigo-100 space-y-1">
+                      {(row.subs || []).map((s, si) => (
+                        <div key={si} className="flex items-center gap-1 flex-wrap">
+                          <div className="w-40">
+                            <SearchableSelect options={itemOptions} value={s.item_id} valueKey="id"
+                              displayKey="display_name" placeholder="Accessory…"
+                              onChange={opt => pickSub(i, si, opt)} />
+                          </div>
+                          <input className="input w-12 text-center py-0.5 text-xs" type="number" min="0"
+                            value={s.qty || ''} onChange={e => patchSub(i, si, { qty: e.target.value })} title="Qty" />
+                          <label className="text-[10px] flex items-center gap-0.5" title="Free of cost">
+                            <input type="checkbox" checked={s.foc} onChange={e => patchSub(i, si, { foc: e.target.checked })} />
+                            <span className={s.foc ? 'text-emerald-600 font-semibold' : 'text-gray-400'}>FOC</span>
+                          </label>
+                          {!s.foc && (
+                            <input className="input w-16 text-right py-0.5 text-xs" type="number" min="0"
+                              value={s.rate || ''} onChange={e => patchSub(i, si, { rate: e.target.value })} placeholder="rate" />
+                          )}
+                          <button type="button" className="text-red-300 hover:text-red-500"
+                            onClick={() => removeSub(i, si)}><FiTrash2 size={11} /></button>
+                        </div>
+                      ))}
+                      <button type="button" className="text-[10px] text-indigo-600 hover:underline"
+                        onClick={() => addSub(i)}>+ Accessory / FOC</button>
+                    </div>
                   </td>
                   <td className="p-2 text-xs text-gray-600">{row.category || '—'}</td>
                   <td className="p-2 w-16">
