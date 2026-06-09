@@ -233,22 +233,6 @@ function calculateForEmployee(db, settings, employee, month) {
     }
   }
 
-  // Paid casual leave follows the ANNUAL CL balance (mam 2026-06-09): pay
-  // CL while the person still has balance, instead of a flat cl_per_month
-  // cap. balance = opening carry-forward + monthly accrual THROUGH this
-  // month − casual days already taken earlier in the year. cl_eligible=0 →
-  // no accrual (opening only). Sick/Earned keep their own per-month caps;
-  // comp-off is always paid; half-day leave = ½ paid.
-  const clEligible = employee.cl_eligible == null ? 1 : (employee.cl_eligible ? 1 : 0);
-  const clOpening = Number(employee.cl_opening_balance) || 0;
-  const clAccruedThroughMonth = clEligible ? (Number(settings.cl_per_month) || 0) * mm : 0;
-  const clTakenBefore = userId ? db.prepare(
-    `SELECT COALESCE(SUM(COALESCE(days, 1)), 0) AS d FROM leave_requests
-      WHERE user_id = ? AND leave_type = 'casual' AND status = 'approved'
-        AND from_date >= ? AND from_date < ?`
-  ).get(userId, `${year}-01-01`, `${year}-${pad(mm)}-01`).d : 0;
-  let clBalance = clOpening + clAccruedThroughMonth - clTakenBefore; // CL days available entering this month
-
   let paidDays = 0, halfDays = 0, absentDays = 0, lateMarks = 0;
   let paidLeaves = 0, unpaidLeaves = 0, sundayCount = 0, otHours = 0;
   let latePenalty = 0; // accumulated Rs deduction for late punches over grace
@@ -293,9 +277,8 @@ function calculateForEmployee(db, settings, employee, month) {
       }
       let paid = false;
       if (leaveType === 'casual') {
-        // Paid while the person still has annual CL balance left.
-        if (clBalance >= 1) { paid = true; clBalance -= 1; }
-        clUsed += 1;
+        // 1 paid casual leave per month per staff (mam 2026-06-09).
+        if ((settings.cl_per_month || 0) > 0 && clUsed < settings.cl_per_month) { paid = true; clUsed += 1; }
       } else if (leaveType === 'sick') {
         if ((settings.sl_per_month || 0) > 0 && slUsed < settings.sl_per_month) { paid = true; slUsed += 1; }
       } else if (leaveType === 'earned') {
