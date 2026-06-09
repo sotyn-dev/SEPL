@@ -3946,7 +3946,7 @@ function initializeDatabase() {
   // Idempotent — only touches rows not already exempt.
   try {
     const fixedSalaryNames = new Set([
-      'ankurkaplesh', 'nitinjain', 'parulgoyal',
+      'ankurkaplesh', 'nitinjain', 'parulgoyal', 'rajatsir',
       'poojakaplesh', 'somakaplesh', 'dskaplesh',
     ]);
     const norm = s => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
