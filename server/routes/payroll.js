@@ -4,8 +4,9 @@
 //   - Sunday handling (paid / unpaid per setting)
 //   - Approved leaves (CL / SL / PL paid up to allowance, LWP unpaid)
 //   - Short leave (skips half-day deduction if setting enabled)
-//   - Attendance (no punch = absent, late punch = late mark / half day,
-//     low hours = half day / absent, overtime hours)
+//   - Attendance (no punch = absent; punch 09:46–10:00 = late mark on a
+//     full day; punch after 10:00 = half day; under 4h worked = half day;
+//     4h+ = full day; overtime hours)
 //   - N lates → 1 absent (configurable)
 // Everything is recalculated live unless a run is "finalised" — then we
 // return the snapshot from payroll_runs so historical slips don't drift.
@@ -312,19 +313,20 @@ function calculateForEmployee(db, settings, employee, month) {
       const punchInMin = timeToMinutes(att.punch_in_time);
       const hours = att.total_hours || 0;
 
-      // Half-day cutoff (punched in late)
+      // Half-day triggers (mam 2026-06-09):
+      //   - punched in AFTER 10:00 (half_day_after_time) → half day, no grace
+      //   - worked UNDER min_hours_half_day (4h) → half day (NOT absent)
+      // A day with 4h+ of work counts as a FULL day even if it's under 8h —
+      // mam dropped the old 8h-minimum half-day docking ("Full day" for the
+      // 4–8h case). Coming in during the 09:46–10:00 window is only a late
+      // MARK on an otherwise full day, handled in the else branch below.
       const veryLate = punchInMin !== null && halfDayAfter !== null && punchInMin > halfDayAfter;
-      const lowHoursHalfDay = hours > 0 && hours < settings.min_hours_full_day && hours >= settings.min_hours_half_day;
-      const lowHoursAbsent = hours > 0 && hours < settings.min_hours_half_day;
+      const lowHoursHalf = hours > 0 && hours < settings.min_hours_half_day;
 
       // Skip half-day if short leave was applied that day (and setting enabled)
       const shortLeaveSavesIt = isShortLeave && settings.skip_half_day_if_short_leave;
 
-      if (lowHoursAbsent) {
-        absentDays += 1;
-        dayLabel = 'absent_low_hours';
-        dayPay = 0;
-      } else if ((veryLate || lowHoursHalfDay) && !shortLeaveSavesIt) {
+      if ((veryLate || lowHoursHalf) && !shortLeaveSavesIt) {
         halfDays += 1;
         dayPay = 0.5;
         dayLabel = veryLate ? 'half_day_late' : 'half_day_low_hours';

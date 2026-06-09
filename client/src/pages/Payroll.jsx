@@ -20,10 +20,9 @@ const SETTING_GROUPS = [
   {
     title: 'Attendance Cutoffs',
     fields: [
-      { key: 'late_after_time', label: 'Late Zone Start', help: 'Punch-in after this = late mark (e.g. 09:45)', type: 'time' },
-      { key: 'half_day_after_time', label: 'Half-Day After Time', help: 'Punch-in after this = half day deduction (e.g. 10:00)', type: 'time' },
-      { key: 'min_hours_full_day', label: 'Min Hours for Full Day', help: 'Worked less than this = half day', type: 'number', step: 0.5 },
-      { key: 'min_hours_half_day', label: 'Min Hours for Half Day', help: 'Worked less than this = absent', type: 'number', step: 0.5 },
+      { key: 'late_after_time', label: 'Late Zone Start', help: 'Punch-in after this = late mark (e.g. 09:46). Full day; counts toward monthly grace.', type: 'time' },
+      { key: 'half_day_after_time', label: 'Half-Day After Time', help: 'Punch-in after this = half day, no grace (e.g. 10:00)', type: 'time' },
+      { key: 'min_hours_half_day', label: 'Min Hours for Full Day', help: 'Work this many hours or more = full day; less = half day (e.g. 4)', type: 'number', step: 0.5 },
     ]
   },
   {
