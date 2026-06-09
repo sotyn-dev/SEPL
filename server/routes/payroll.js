@@ -268,13 +268,6 @@ function calculateForEmployee(db, settings, employee, month) {
 
     // Approved leave that day
     if (leaveType) {
-      // Half-day leave → ½ paid day (mam 2026-06-09).
-      if (leaveType === 'half_day') {
-        dayPay = 0.5; halfDays += 1; paidLeaves += 0.5;
-        breakdown.push({ date: dateStr, day: dayName(year, mm, day), label: 'half_day_leave', pay: dayPay });
-        paidDays += dayPay;
-        continue;
-      }
       let paid = false;
       if (leaveType === 'casual') {
         // 1 paid casual leave per month per staff (mam 2026-06-09).
@@ -283,8 +276,8 @@ function calculateForEmployee(db, settings, employee, month) {
         if ((settings.sl_per_month || 0) > 0 && slUsed < settings.sl_per_month) { paid = true; slUsed += 1; }
       } else if (leaveType === 'earned') {
         if ((settings.pl_per_month || 0) > 0 && plUsed < settings.pl_per_month) { paid = true; plUsed += 1; }
-      } else if (leaveType === 'comp_off') {
-        paid = true; // comp-off earned by working extra → always paid full day
+      } else if (leaveType === 'comp_off' || leaveType === 'half_day') {
+        paid = true; // comp-off & half-day leave → full paid day (mam 2026-06-09)
       }
       if (paid) {
         dayPay = 1;
