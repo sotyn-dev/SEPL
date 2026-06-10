@@ -1288,9 +1288,10 @@ router.put('/indents/:id', (req, res) => {
               error: `Extra-Schedule / Extra-Non-Schedule indents require CRM approval first. You're signed in as "${actorName}" — no CRM module access. Admin → User Management → grant CRM access.`,
             });
           }
-          // Margin (mam 2026-06-04): only Extra-NON-Schedule adds a margin
-          // on the client quotation; Extra-Schedule bills at the BOQ rate.
-          const marginPct = (cur2.indent_category === 'extra_non_schedule' && +crm_margin_pct > 0)
+          // Margin (mam 2026-06-10): CRM can add a client-quotation margin on
+          // BOTH Extra-Schedule and Extra-Non-Schedule billable lines. (Was
+          // Non-Schedule only — CRM couldn't price Extra-Schedule items.)
+          const marginPct = ((cur2.indent_category === 'extra_non_schedule' || cur2.indent_category === 'extra_schedule') && +crm_margin_pct > 0)
             ? +crm_margin_pct : 0;
           // Resolve the linked Client PO via planning_id → order_planning → purchase_orders.
           // We add the Extra item as a new billable po_items row with item_type='extra'

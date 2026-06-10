@@ -7023,9 +7023,9 @@ export default function Procurement() {
                   so this box doesn't appear for it. */}
               {approveTarget.approval_policy === 'crm_two_level'
                 && approveTarget.crm_status === 'pending'
-                && approveTarget.indent_category === 'extra_non_schedule' && (
+                && (approveTarget.indent_category === 'extra_non_schedule' || approveTarget.indent_category === 'extra_schedule') && (
                 <div className="text-xs bg-purple-50 border border-purple-200 rounded p-3 flex flex-wrap items-center gap-3">
-                  <span className="font-semibold text-purple-800">Client quotation margin (Extra-Non-Schedule):</span>
+                  <span className="font-semibold text-purple-800">Client quotation margin ({approveTarget.indent_category === 'extra_schedule' ? 'Extra-Schedule' : 'Extra-Non-Schedule'}):</span>
                   <div className="flex items-center gap-1">
                     <input type="number" step="any" min="0" placeholder="0"
                       value={approveMargin}
