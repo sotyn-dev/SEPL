@@ -17,6 +17,7 @@ const blankRow = () => ({
   qty: 1, pp: 0, lab: 0, suggestion: null,
   confidence: '', matchedName: '', matchScore: 0, alternatives: [],
   subs: [], // accessory / FOC items bundled under this line
+  fromKit: false, // material rate + labour + FOC pulled from a PO/FOC kit
 });
 
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -31,12 +32,37 @@ export default function Estimator() {
   const [margins, setMargins] = useState({});        // { category: marginPct }
   const [rows, setRows] = useState([blankRow()]);
   const [matching, setMatching] = useState(false);
+  const [kitByPoId, setKitByPoId] = useState({}); // po_item_id → PO/FOC kit (labour, focs, po_rate)
   const fileRef = useRef();
 
   useEffect(() => {
     api.get('/item-master/dropdown').then(r => setItemOptions(r.data)).catch(() => {});
     api.get('/leads').then(r => setLeads(r.data)).catch(() => {});
+    // PO/FOC kits — so picking an item pulls its labour rate + FOC + material
+    // rate from the PO/FOC module. Approved kits win over drafts.
+    api.get('/quotations/po-foc').then(r => {
+      const map = {};
+      for (const k of (r.data.rows || [])) {
+        if (!k.po_item_id) continue;
+        if (!map[k.po_item_id] || (k.status === 'approved' && map[k.po_item_id].status !== 'approved')) {
+          map[k.po_item_id] = { labour: k.labour, po_rate: k.po_rate, focs: k.focs || [], status: k.status };
+        }
+      }
+      setKitByPoId(map);
+    }).catch(() => {});
   }, []);
+
+  // Pull labour + FOC + material rate from a PO/FOC kit for an item, if one exists.
+  const kitFields = (itemId, fallbackPp) => {
+    const kit = kitByPoId[itemId];
+    if (!kit) return null;
+    return {
+      fromKit: true,
+      lab: kit.labour || 0,
+      pp: kit.po_rate || fallbackPp || 0,
+      subs: (kit.focs || []).map(f => ({ item_id: f.item_id || null, name: f.name || '', qty: f.qty || 1, rate: f.rate || 0, foc: false })),
+    };
+  };
 
   // Categories present across the rows → drives the per-category margin inputs.
   const categories = useMemo(
@@ -51,7 +77,8 @@ export default function Estimator() {
   // Pick an item from Item Master → auto-fill material rate (PP), category,
   // unit, description, then fetch the AI rate suggestion.
   const pickItem = async (i, opt) => {
-    if (!opt) { patchRow(i, { item_id: null, suggestion: null, matchedName: '', confidence: '' }); return; }
+    if (!opt) { patchRow(i, { item_id: null, suggestion: null, matchedName: '', confidence: '', fromKit: false }); return; }
+    const kit = kitFields(opt.id, opt.current_price);
     setRows(rs => rs.map((r, idx) => idx === i ? {
       ...r,
       item_id: opt.id,
@@ -60,9 +87,12 @@ export default function Estimator() {
       category: opt.department || 'General',
       unit: (r.unit && r.unit !== 'nos') ? r.unit : (opt.uom || 'nos'),
       pp: opt.current_price || 0,
+      lab: 0, subs: [], fromKit: false,
+      ...(kit || {}),  // PO/FOC kit overrides pp + labour + FOC when it exists
       matchedName: opt.display_name || opt.item_name || '',
       matchScore: 100, confidence: 'high', alternatives: [],
     } : r));
+    if (kit) toast.success('Labour + FOC pulled from PO/FOC kit');
     try {
       const params = { item_id: opt.id };
       if (leadId) params.lead_id = leadId;
@@ -87,20 +117,24 @@ export default function Estimator() {
       const fd = new FormData();
       fd.append('file', file);
       const { data } = await api.post('/quotations/auto-match-boq', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      const mapped = (data.rows || []).map(r => ({
-        ...blankRow(),
-        item_id: r.match?.item_id || null,
-        code: r.match?.code || '',
-        description: r.description,
-        category: r.match?.department || '',
-        unit: r.unit || r.match?.uom || 'nos',
-        qty: r.qty || 1,
-        pp: r.match?.rate || 0,
-        confidence: r.confidence,
-        matchedName: r.match?.name || '',
-        matchScore: r.match?.score || 0,
-        alternatives: r.alternatives || [],
-      }));
+      const mapped = (data.rows || []).map(r => {
+        const base = {
+          ...blankRow(),
+          item_id: r.match?.item_id || null,
+          code: r.match?.code || '',
+          description: r.description,
+          category: r.match?.department || '',
+          unit: r.unit || r.match?.uom || 'nos',
+          qty: r.qty || 1,
+          pp: r.match?.rate || 0,
+          confidence: r.confidence,
+          matchedName: r.match?.name || '',
+          matchScore: r.match?.score || 0,
+          alternatives: r.alternatives || [],
+        };
+        const kit = r.match?.item_id ? kitFields(r.match.item_id, r.match.rate) : null;
+        return kit ? { ...base, ...kit } : base;
+      });
       if (!mapped.length) { toast.error('No items found in that BOQ'); return; }
       setRows(mapped);
       const unsure = mapped.filter(m => m.confidence === 'low' || m.confidence === 'none').length;
@@ -341,6 +375,7 @@ export default function Estimator() {
                   <td className="p-2 w-24">
                     <input className="input text-right py-1" type="number" min="0" value={row.lab || ''}
                       onChange={e => patchRow(i, { lab: e.target.value })} placeholder="0" />
+                    {row.fromKit && <div className="text-[9px] text-indigo-500 mt-0.5 text-right" title="Labour + FOC from the PO/FOC module">🔗 PO/FOC</div>}
                   </td>
                   <td className="p-2 text-right text-gray-700">{fmt(c.tp)}</td>
                   <td className="p-2 text-right text-gray-700">{fmt(c.tpa)}</td>
@@ -382,7 +417,7 @@ export default function Estimator() {
       </div>
 
       <p className="text-xs text-gray-400">
-        Formula: SP = (PP + ACC + LAB) × Qty × (1 + category margin%). Material (PP) auto-fills from Item Master; labour (LAB) is entered manually for now — once you share the labour rate sheet I'll auto-fill it per item too.
+        Formula: SP = (PP + ACC + LAB) × Qty × (1 + category margin%). Material (PP) auto-fills from Item Master. When the picked/matched item has a 🔗 PO/FOC kit, its labour rate (LAB) and FOC accessories pull in automatically from the PO/FOC module — otherwise enter labour manually.
       </p>
     </div>
   );
