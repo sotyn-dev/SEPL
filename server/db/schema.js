@@ -4016,6 +4016,42 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[seed] labour_rates import failed:', e.message); }
 
+  // ─── Import PO/FOC kits once from mam's sheet (2026-06-10) ─────────
+  // Each kit = a PO item + its labour + FOC consumables. Codes are resolved
+  // to item_master / labour_rates against THIS db. Inserted as non_approved
+  // drafts so admin can edit/approve. Guarded by a one-time flag.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='po_foc_seed_imported'").get();
+    if (!done) {
+      const seed = require('./poFocSeed.json');
+      const findPo = db.prepare("SELECT id, current_price FROM item_master WHERE type='PO' AND LOWER(TRIM(item_code))=LOWER(TRIM(?)) LIMIT 1");
+      const findFoc = db.prepare("SELECT id, current_price FROM item_master WHERE type='FOC' AND LOWER(TRIM(item_code))=LOWER(TRIM(?)) LIMIT 1");
+      const findLab = db.prepare("SELECT id FROM labour_rates WHERE LOWER(TRIM(item_name))=LOWER(TRIM(?)) LIMIT 1");
+      const ins = db.prepare(`INSERT INTO po_foc_entries (po_item_id, po_name, po_rate, qty, labour, labour_item_id, labour_name, labour_margin, margin, focs_json, cost, tpa, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'non_approved')`);
+      let n = 0;
+      db.transaction(list => {
+        for (const e of list) {
+          const po = e.po_code ? findPo.get(e.po_code) : null;
+          const poRate = e.po_rate || (po && po.current_price) || 0;
+          const focs = (e.focs || []).map(f => {
+            const fm = f.code ? findFoc.get(f.code) : null;
+            return { item_id: fm ? fm.id : null, name: f.name, qty: f.qty || 1, rate: f.rate || (fm && fm.current_price) || 0 };
+          });
+          const labRate = e.labour_rate || 0;
+          const labMatch = e.labour_name ? findLab.get(e.labour_name) : null;
+          const margin = 30, labMargin = 50;
+          const poAmt = poRate, focAmt = focs.reduce((t, f) => t + f.rate * f.qty, 0), labAmt = labRate;
+          const cost = Math.round((poAmt + focAmt + labAmt) * 100) / 100;
+          const tpa = Math.round(((poAmt + focAmt) * (1 + margin / 100) + labAmt * (1 + labMargin / 100)) * 100) / 100;
+          ins.run(po ? po.id : null, e.po_name, poRate, 1, labRate, labMatch ? labMatch.id : null, e.labour_name || '', labMargin, margin, JSON.stringify(focs), cost, tpa);
+          n++;
+        }
+      })(seed);
+      db.prepare("INSERT INTO app_settings (key, value, updated_at) VALUES ('po_foc_seed_imported','1',CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value='1'").run();
+      console.log(`[seed] Imported ${n} PO/FOC kits from sheet`);
+    }
+  } catch (e) { console.error('[seed] po_foc import failed:', e.message); }
+
   // ─── One-time data backfill: link sites to business_book ──────────
   // Mam: "in dpr all not see boq item which i upload in order to
   // planning". Older DPR sites were inserted with business_book_id =

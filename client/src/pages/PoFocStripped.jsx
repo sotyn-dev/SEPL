@@ -13,6 +13,7 @@ import { FiPlus, FiTrash2, FiEdit2, FiCheck, FiFileText } from 'react-icons/fi';
 const MARGINS = [10, 20, 30, 40, 50, 75, 100];
 const MAX_FOC = 10;
 const PENDING_CAP = 50;
+const DRAFT_CAP = 30;
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const fmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
@@ -51,6 +52,7 @@ export default function PoFocStripped() {
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState(blankForm());
   const [pendSearch, setPendSearch] = useState('');
+  const [draftSearch, setDraftSearch] = useState('');
 
   const load = useCallback(() => {
     api.get('/quotations/po-foc').then(r => { setEntries(r.data.rows || []); setCounts(r.data.counts || {}); }).catch(() => {});
@@ -110,6 +112,9 @@ export default function PoFocStripped() {
   const openForPoItem = (p) => { setForm({ ...blankForm(), po_item_id: p.id, po_name: p.display_name || p.item_name, po_rate: p.current_price || 0 }); setModal(true); };
 
   const shown = entries.filter(e => e.status === tab);
+  const dq = draftSearch.toLowerCase().trim();
+  const dToks = dq.split(/\s+/).filter(Boolean);
+  const shownFiltered = dq ? shown.filter(e => dToks.every(t => (e.po_name || '').toLowerCase().includes(t))) : shown;
 
   const entryCard = (e) => (
     <div key={e.id} className="card p-3">
@@ -171,11 +176,18 @@ export default function PoFocStripped() {
       {/* Body */}
       {tab === 'non_approved' ? (
         <>
-          {/* Drafts already started (FOC partially added) */}
+          {/* Drafts (imported / started) — searchable + capped for perf */}
           {shown.length > 0 && (
             <div className="space-y-3">
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">In progress ({shown.length})</div>
-              {shown.map(e => entryCard(e))}
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Pending kits ({shown.length})</div>
+                <input className="input max-w-xs" placeholder="Search pending kits…" value={draftSearch} onChange={e => setDraftSearch(e.target.value)} />
+              </div>
+              {shownFiltered.slice(0, DRAFT_CAP).map(e => entryCard(e))}
+              {shownFiltered.length > DRAFT_CAP && (
+                <div className="text-xs text-gray-400 text-center">Showing {DRAFT_CAP} of {shownFiltered.length} — type to narrow.</div>
+              )}
+              {shownFiltered.length === 0 && <div className="text-xs text-gray-400 text-center py-2">No pending kit matches “{draftSearch}”.</div>}
             </div>
           )}
           {/* PO items that still need a FOC kit */}
