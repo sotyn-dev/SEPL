@@ -86,6 +86,7 @@ const SIDEBAR_GROUPS = [
     { path: '/quotations',  label: 'Quotations',        icon: FiClipboard,    module: 'quotations' },
     { path: '/estimator',   label: 'AI Auto-Quotation', icon: FiClipboard,    module: 'quotations' },
     { path: '/po-foc-stripped', label: 'PO/FOC Stripped', icon: FiClipboard,  module: 'quotations' },
+    { path: '/labour-rate',     label: 'Labour Rate',     icon: FiClipboard,  module: 'quotations' },
   ]},
   // Procurement (mam 2026-05-27 follow-up): Dispatch + Order to Planning
   // moved here from Quotes & Orders — they're procurement workflow steps,

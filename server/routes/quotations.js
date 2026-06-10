@@ -331,4 +331,36 @@ router.delete('/po-foc/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+// ── Labour Rate sheet (mam 2026-06-10) ────────────────────────────
+router.get('/labour-rates', (req, res) => {
+  const db = getDb();
+  const { search, category } = req.query;
+  const cond = [], args = [];
+  if (category) { cond.push('category = ?'); args.push(category); }
+  if (search) { cond.push('LOWER(item_name) LIKE ?'); args.push('%' + String(search).toLowerCase() + '%'); }
+  const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+  res.json(db.prepare(`SELECT * FROM labour_rates ${where} ORDER BY category, item_name`).all(...args));
+});
+
+router.post('/labour-rates', (req, res) => {
+  const { item_name, rate, uom, category } = req.body;
+  if (!item_name || !String(item_name).trim()) return res.status(400).json({ error: 'Item name is required' });
+  const r = getDb().prepare('INSERT INTO labour_rates (item_name, rate, uom, category, created_by) VALUES (?,?,?,?,?)')
+    .run(String(item_name).trim(), Number(rate) || 0, uom || '', category || '', req.user.id);
+  res.json({ id: r.lastInsertRowid, message: 'Saved' });
+});
+
+router.put('/labour-rates/:id', (req, res) => {
+  const { item_name, rate, uom, category } = req.body;
+  if (!item_name || !String(item_name).trim()) return res.status(400).json({ error: 'Item name is required' });
+  getDb().prepare('UPDATE labour_rates SET item_name=?, rate=?, uom=?, category=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+    .run(String(item_name).trim(), Number(rate) || 0, uom || '', category || '', req.params.id);
+  res.json({ message: 'Updated' });
+});
+
+router.delete('/labour-rates/:id', (req, res) => {
+  getDb().prepare('DELETE FROM labour_rates WHERE id=?').run(req.params.id);
+  res.json({ message: 'Deleted' });
+});
+
 module.exports = router;

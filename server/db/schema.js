@@ -270,6 +270,19 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Labour Rate sheet (mam 2026-06-10): item-wise labour / sub-contractor
+    -- rates by UOM and category. Seeded once from her uploaded sheet.
+    CREATE TABLE IF NOT EXISTS labour_rates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_name TEXT NOT NULL,
+      rate REAL DEFAULT 0,                            -- Purchase / Sub-Contractor rate
+      uom TEXT,
+      category TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Purchase Orders (from client)
     CREATE TABLE IF NOT EXISTS purchase_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3981,6 +3994,17 @@ function initializeDatabase() {
     }
     if (exemptCount > 0) console.log(`[seed] Flagged ${exemptCount} fixed-salary (salary_exempt) employees`);
   } catch (e) { /* employees table/column not ready — silent */ }
+
+  // ─── Seed labour_rates once from mam's uploaded sheet (2026-06-10) ─
+  try {
+    const cnt = db.prepare('SELECT COUNT(*) AS c FROM labour_rates').get().c;
+    if (cnt === 0) {
+      const seed = require('./labourRatesSeed.json');
+      const ins = db.prepare('INSERT INTO labour_rates (item_name, rate, uom, category) VALUES (?,?,?,?)');
+      db.transaction(rows => { for (const r of rows) ins.run(r.item_name, r.rate || 0, r.uom || '', r.category || ''); })(seed);
+      console.log(`[seed] Imported ${seed.length} labour_rates from sheet`);
+    }
+  } catch (e) { console.error('[seed] labour_rates import failed:', e.message); }
 
   // ─── One-time data backfill: link sites to business_book ──────────
   // Mam: "in dpr all not see boq item which i upload in order to
