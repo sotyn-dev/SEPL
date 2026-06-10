@@ -191,12 +191,25 @@ router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
     const itemById = new Map(items.map(it => [it.id, it]));
     const itemTok = items.map(it => ({ it, toks: tokens([it.item_name, it.specification, it.size].filter(Boolean).join(' ')) }));
 
-    const mk = (it, score) => it ? {
-      item_id: it.id, code: it.item_code,
-      name: [it.item_name, it.specification, it.size].filter(Boolean).join(' / '),
-      department: it.department || 'General', rate: it.current_price || 0,
-      uom: it.uom || '', score: Math.round(score || 0),
-    } : null;
+    // PO/FOC kits keyed by po_item_id (approved preferred) — so a matched item
+    // carries its PP rate + labour + FOC straight to the quotation line.
+    const kitById = new Map();
+    for (const k of getDb().prepare('SELECT po_item_id, po_rate, labour, focs_json, status FROM po_foc_entries WHERE po_item_id IS NOT NULL').all()) {
+      if (!kitById.has(k.po_item_id) || k.status === 'approved') kitById.set(k.po_item_id, k);
+    }
+
+    const mk = (it, score) => {
+      if (!it) return null;
+      const k = kitById.get(it.id);
+      const base = {
+        item_id: it.id, code: it.item_code,
+        name: [it.item_name, it.specification, it.size].filter(Boolean).join(' / '),
+        department: it.department || 'General', rate: it.current_price || 0,
+        uom: it.uom || '', score: Math.round(score || 0),
+      };
+      if (k) { base.kit_pp = k.po_rate || 0; base.kit_labour = k.labour || 0; base.kit_focs = JSON.parse(k.focs_json || '[]'); }
+      return base;
+    };
 
     // Fuzzy shortlist per line (also the candidate set handed to the AI).
     const ranked = lines.map(line => {
@@ -213,6 +226,16 @@ router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
     const rows = ranked.map((r, i) => {
       const { line, scored } = r;
       const alts = scored.map(s => mk(s.it, s.score * 100)).filter(Boolean);
+      // A very strong fuzzy match (≥85%) is auto-applied as the match — don't
+      // let the LLM bump a near-exact name into "try:" (mam 2026-06-10).
+      const strong = scored[0] && scored[0].score >= 0.85 ? scored[0] : null;
+      if (strong) {
+        return {
+          description: line.description, qty: line.qty, unit: line.unit,
+          confidence: 'high', match: mk(strong.it, strong.score * 100),
+          alternatives: alts.filter(a => a.item_id !== strong.it.id).slice(0, 3),
+        };
+      }
       if (llm && llm[i] !== undefined) {
         const pick = llm[i];
         const it = (pick.item_id != null) ? itemById.get(pick.item_id) : null;

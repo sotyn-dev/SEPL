@@ -112,12 +112,22 @@ export default function Estimator() {
     } catch (e) { /* suggestion is best-effort */ }
   };
 
+  // Apply a matched item — pull PP + labour + FOC from its PO/FOC kit (data
+  // the backend sends on the match), or fall back to the catalogue rate.
+  const matchToRow = (m) => {
+    const hasKit = m.kit_pp !== undefined || Array.isArray(m.kit_focs);
+    return {
+      item_id: m.item_id, code: m.code, category: m.department,
+      pp: hasKit ? (m.kit_pp || m.rate || 0) : (m.rate || 0),
+      lab: hasKit ? (m.kit_labour || 0) : 0,
+      subs: hasKit ? (m.kit_focs || []).map(f => ({ item_id: f.item_id || null, name: f.name || '', qty: f.qty || 1, rate: f.rate || 0, foc: false })) : [],
+      fromKit: hasKit,
+      matchedName: m.name, matchScore: m.score,
+      confidence: m.score >= 60 ? 'high' : m.score >= 30 ? 'medium' : 'low',
+    };
+  };
   // Swap a row to one of the AI's alternative matches (one-click review).
-  const applyMatch = (i, m) => patchRow(i, {
-    item_id: m.item_id, code: m.code, category: m.department, pp: m.rate,
-    matchedName: m.name, matchScore: m.score,
-    confidence: m.score >= 60 ? 'high' : m.score >= 30 ? 'medium' : 'low',
-  });
+  const applyMatch = (i, m) => patchRow(i, matchToRow(m));
 
   // Upload the CLIENT's BOQ Excel → AI matches every line to Item Master.
   const uploadBoq = async (e) => {
@@ -131,20 +141,14 @@ export default function Estimator() {
       const mapped = (data.rows || []).map(r => {
         const base = {
           ...blankRow(),
-          item_id: r.match?.item_id || null,
-          code: r.match?.code || '',
           description: r.description,
-          category: r.match?.department || '',
           unit: r.unit || r.match?.uom || 'nos',
           qty: r.qty || 1,
-          pp: r.match?.rate || 0,
           confidence: r.confidence,
-          matchedName: r.match?.name || '',
-          matchScore: r.match?.score || 0,
           alternatives: r.alternatives || [],
         };
-        const kit = r.match?.item_id ? kitFields(r.match.item_id, r.match.rate) : null;
-        return kit ? { ...base, ...kit } : base;
+        // Apply the matched item + pull PP + labour + FOC from its PO/FOC kit.
+        return r.match ? { ...base, ...matchToRow(r.match) } : base;
       });
       if (!mapped.length) { toast.error('No items found in that BOQ'); return; }
       setRows(mapped);
