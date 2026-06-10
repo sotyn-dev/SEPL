@@ -60,8 +60,8 @@ export default function PoFocStripped() {
     api.get('/item-master/dropdown?type=PO').then(r => setPoItems(r.data || [])).catch(() => {});
     api.get('/item-master/dropdown?type=FOC').then(r => setFocItems(r.data || [])).catch(() => {});
     api.get('/quotations/labour-rates').then(r => setLabourItems((r.data || []).map(x => ({
-      id: x.id, item_name: x.item_name, rate: x.rate,
-      display_name: `${x.item_name} — ₹${x.rate}/${x.uom || ''}`,
+      id: x.id, item_name: x.item_name, rate: x.rate, uom: x.uom,
+      display_name: `${x.item_name}${x.uom ? ' (' + x.uom + ')' : ''}`,
     })))).catch(() => {});
   }, []);
 
@@ -222,17 +222,23 @@ export default function PoFocStripped() {
             <div><label className="label" title="Margin on PO + FOC">Margin %</label><select className="select" value={form.margin} onChange={e => setF({ margin: +e.target.value })}>{MARGINS.map(m => <option key={m} value={m}>{m}%</option>)}</select></div>
           </div>
 
-          {/* Labour from the Labour Rate sheet + its own margin */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-start bg-amber-50/50 border border-amber-100 rounded-lg p-3">
-            <div className="sm:col-span-2">
-              <label className="label">Labour (from Labour Rate sheet)</label>
-              <SearchableSelect options={labourItems} value={form.labour_item_id} valueKey="id" displayKey="display_name" placeholder="Search labour item…" onChange={pickLabour} />
-              {form.labour_name && <div className="text-[10px] text-gray-500 mt-0.5">₹{fmt(form.labour)} × qty {form.qty} = ₹{fmt((Number(form.labour) || 0) * (Number(form.qty) || 0))}</div>}
+          {/* Labour from the Labour Rate sheet — item + rate + margin (like FOC) */}
+          <div className="bg-amber-50/50 border border-amber-100 rounded-lg p-3">
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+              <div className="sm:col-span-6">
+                <label className="label">Labour Item (from Labour Rate sheet)</label>
+                <SearchableSelect options={labourItems} value={form.labour_item_id} valueKey="id" displayKey="display_name" placeholder="Search labour item…" onChange={pickLabour} />
+              </div>
+              <div className="sm:col-span-3">
+                <label className="label">Labour Rate ₹</label>
+                <input className="input text-right" type="number" min="0" value={form.labour || ''} onChange={e => setF({ labour: e.target.value })} placeholder="0" />
+              </div>
+              <div className="sm:col-span-3">
+                <label className="label" title="Labour has its own margin (default 50%)">Labour Margin %</label>
+                <select className="select" value={form.labour_margin} onChange={e => setF({ labour_margin: +e.target.value })}>{MARGINS.map(m => <option key={m} value={m}>{m}%</option>)}</select>
+              </div>
             </div>
-            <div>
-              <label className="label" title="Labour has its own margin (default 50%)">Labour Margin %</label>
-              <select className="select" value={form.labour_margin} onChange={e => setF({ labour_margin: +e.target.value })}>{MARGINS.map(m => <option key={m} value={m}>{m}%</option>)}</select>
-            </div>
+            {form.labour_name && <div className="text-[10px] text-gray-500 mt-1">₹{fmt(form.labour)} × qty {form.qty} = ₹{fmt((Number(form.labour) || 0) * (Number(form.qty) || 0))} labour amount</div>}
           </div>
 
           <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
