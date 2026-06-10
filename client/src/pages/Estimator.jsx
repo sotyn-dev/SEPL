@@ -244,9 +244,9 @@ export default function Estimator() {
       <div className="card p-4 flex flex-wrap items-center gap-3 bg-indigo-50/50 border border-indigo-100">
         <div className="flex-1 min-w-[220px]">
           <div className="font-semibold text-sm flex items-center gap-1">🤖 Auto-build from Client BOQ</div>
-          <div className="text-xs text-gray-500">Upload the client's BOQ Excel — AI matches each line to your Item Master and fills the rates. Review the lines it flags ❗.</div>
+          <div className="text-xs text-gray-500">Upload the client's BOQ — Excel, PDF or Word. AI matches each line to your Item Master and fills the rates. Review the lines it flags ❗.</div>
         </div>
-        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={uploadBoq} />
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.doc,.docx" className="hidden" onChange={uploadBoq} />
         <button type="button" disabled={matching} onClick={() => fileRef.current?.click()}
           className="btn btn-primary text-sm flex items-center gap-1">
           <FiUploadCloud size={15} /> {matching ? 'Matching…' : 'Upload Client BOQ'}

@@ -75,52 +75,83 @@ ${blocks}`;
   return out;
 }
 
-// POST a CLIENT BOQ Excel → auto-match each line to Item Master and return a
-// suggested item + rate + confidence per line (the "AI" auto-quotation).
+// Turn extracted PDF/Word text into BOQ line items: each meaningful line is a
+// description (header/note/total lines skipped); a trailing "<n> <unit>"
+// becomes the qty.
+function textToLines(text) {
+  const SKIP = /^(s\.?\s*no\.?|sr\.?\s*no\.?|sl\.?\s*no\.?|description|particulars?|total|grand total|sub\s*total|subtotal|note|notes|terms|page\b|quotation|date|qty|quantity|uom|unit|rate|amount|gst|cgst|sgst|igst)\b/i;
+  const out = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const l = raw.replace(/\s+/g, ' ').trim();
+    if (l.length < 4 || !/[a-z]{3,}/i.test(l) || SKIP.test(l)) continue;
+    const desc = l.replace(/^\s*\d+(\.\d+)*[).]?\s+/, '').trim();   // strip leading serial "1." / "1.1)"
+    if (desc.length < 4) continue;
+    let qty = 1, unit = '';
+    const m = desc.match(/(\d+(?:\.\d+)?)\s*(nos?|pcs|mtrs?|kg|sqm|cum|sets?|rmt|rft|ltr|point|each)\.?$/i);
+    if (m) { qty = parseFloat(m[1]) || 1; unit = m[2] || ''; }
+    out.push({ description: desc, qty, unit });
+  }
+  return out;
+}
+
+// POST a CLIENT BOQ (Excel / PDF / Word) → auto-match each line to Item
+// Master and return a suggested item + rate + confidence per line.
 router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
-    const wb = XLSX.readFile(req.file.path);
-    const parseNum = (v) => {
-      if (v == null || v === '') return 0;
-      if (typeof v === 'number') return v;
-      const m = String(v).replace(/[,\s]/g, '').match(/-?\d+(\.\d+)?/);
-      return m ? parseFloat(m[0]) : 0;
-    };
-    const parseSheet = (name) => {
-      const ws = wb.Sheets[name]; if (!ws) return [];
-      const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
-      const KW = ['description', 'particulars', 'item', 'work', 'qty', 'quantity', 'unit', 'rate', 's.no', 'sr no', 'sn'];
-      let h = -1;
-      for (let i = 0; i < Math.min(25, data.length); i++) {
-        const row = (data[i] || []).map(c => String(c || '').toLowerCase().trim());
-        if (KW.filter(k => row.some(c => c === k || c.includes(k))).length >= 2) { h = i; break; }
-      }
-      if (h === -1) return [];
-      const headers = (data[h] || []).map(x => String(x || '').toLowerCase().trim());
-      const col = {};
-      headers.forEach((hd, i) => {
-        if (col.name === undefined && (hd.includes('description') || hd.includes('particular') || hd === 'item' || hd === 'items' || hd === 'work' || hd.includes('work description'))) col.name = i;
-        if (col.qty === undefined && (hd === 'qty' || hd === 'quantity' || hd.includes('qty'))) col.qty = i;
-        if (col.unit === undefined && (hd === 'unit' || hd === 'uom' || hd.includes('unit'))) col.unit = i;
-      });
-      if (col.name === undefined) return [];
-      const out = [];
-      for (let i = h + 1; i < data.length; i++) {
-        const row = data[i] || [];
-        const desc = String(row[col.name] || '').trim();
-        if (!desc || desc.length < 3) continue;
-        out.push({
-          description: desc,
-          qty: col.qty !== undefined ? (parseNum(row[col.qty]) || 1) : 1,
-          unit: col.unit !== undefined ? String(row[col.unit] || '').trim() : '',
-        });
-      }
-      return out;
-    };
+    const ext = String(req.file.originalname || '').toLowerCase().split('.').pop();
     let lines = [];
-    for (const name of wb.SheetNames) { const r = parseSheet(name); if (r.length > lines.length) lines = r; }
-    if (!lines.length) return res.status(400).json({ error: 'Could not read the BOQ. Ensure there is a header row with a "Description" (and ideally "Qty") column.' });
+    if (ext === 'pdf') {
+      const pdfParse = require('pdf-parse');
+      const data = await pdfParse(fs.readFileSync(req.file.path));
+      lines = textToLines(data.text);
+    } else if (ext === 'docx' || ext === 'doc') {
+      const mammoth = require('mammoth');
+      const r = await mammoth.extractRawText({ path: req.file.path });
+      lines = textToLines(r.value);
+    } else {
+      // Excel / CSV — find the header row, then read Description/Qty/Unit cols.
+      const wb = XLSX.readFile(req.file.path);
+      const parseNum = (v) => {
+        if (v == null || v === '') return 0;
+        if (typeof v === 'number') return v;
+        const m = String(v).replace(/[,\s]/g, '').match(/-?\d+(\.\d+)?/);
+        return m ? parseFloat(m[0]) : 0;
+      };
+      const parseSheet = (name) => {
+        const ws = wb.Sheets[name]; if (!ws) return [];
+        const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
+        const KW = ['description', 'particulars', 'item', 'work', 'qty', 'quantity', 'unit', 'rate', 's.no', 'sr no', 'sn'];
+        let h = -1;
+        for (let i = 0; i < Math.min(25, data.length); i++) {
+          const row = (data[i] || []).map(c => String(c || '').toLowerCase().trim());
+          if (KW.filter(k => row.some(c => c === k || c.includes(k))).length >= 2) { h = i; break; }
+        }
+        if (h === -1) return [];
+        const headers = (data[h] || []).map(x => String(x || '').toLowerCase().trim());
+        const col = {};
+        headers.forEach((hd, i) => {
+          if (col.name === undefined && (hd.includes('description') || hd.includes('particular') || hd === 'item' || hd === 'items' || hd === 'work' || hd.includes('work description'))) col.name = i;
+          if (col.qty === undefined && (hd === 'qty' || hd === 'quantity' || hd.includes('qty'))) col.qty = i;
+          if (col.unit === undefined && (hd === 'unit' || hd === 'uom' || hd.includes('unit'))) col.unit = i;
+        });
+        if (col.name === undefined) return [];
+        const out = [];
+        for (let i = h + 1; i < data.length; i++) {
+          const row = data[i] || [];
+          const desc = String(row[col.name] || '').trim();
+          if (!desc || desc.length < 3) continue;
+          out.push({
+            description: desc,
+            qty: col.qty !== undefined ? (parseNum(row[col.qty]) || 1) : 1,
+            unit: col.unit !== undefined ? String(row[col.unit] || '').trim() : '',
+          });
+        }
+        return out;
+      };
+      for (const name of wb.SheetNames) { const r = parseSheet(name); if (r.length > lines.length) lines = r; }
+    }
+    if (!lines.length) return res.status(400).json({ error: 'Could not read any items. For Excel: ensure a Description/Qty header row. For PDF/Word: the items must be text (not a scanned image).' });
 
     const items = getDb().prepare(`SELECT id, item_code, department, item_name, specification, size, uom, current_price FROM item_master`).all();
     const itemById = new Map(items.map(it => [it.id, it]));
