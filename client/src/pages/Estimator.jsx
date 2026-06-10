@@ -195,16 +195,12 @@ export default function Estimator() {
     const headers = ['S.NO', 'ITEM DESCRIPTION', 'UNIT', 'QTY', 'RATE', 'AMOUNT',
       'PP', 'ACC', 'LAB', 'TP', 'TPA', 'MARGIN %', 'SP', 'CATEGORY'];
     const data = [];
+    // One row per main item only — FOC items are NOT listed in the export
+    // (mam 2026-06-10). Their cost is already inside the line's TPA/SP.
     rows.filter(r => r.description).forEach((row, idx) => {
       const c = calc(row);
       data.push([idx + 1, row.description, row.unit, row.qty, c.rate, c.sp,
         row.pp, c.acc, row.lab, c.tp, c.tpa, c.mPct, c.sp, row.category]);
-      (row.subs || []).forEach(s => {
-        if (!s.name && !s.item_id) return;
-        const amt = s.foc ? 0 : r2((Number(s.rate) || 0) * (Number(s.qty) || 0));
-        data.push(['', `   - ${s.name}${s.foc ? ' (FOC)' : ''}`, '', s.qty,
-          s.foc ? 0 : s.rate, amt, '', '', '', '', '', '', amt, row.category]);
-      });
     });
     if (!data.length) { toast.error('Add at least one item'); return; }
     // Totals line
