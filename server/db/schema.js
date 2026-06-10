@@ -2680,6 +2680,10 @@ function initializeDatabase() {
     ['po_foc_entries', 'labour_item_id INTEGER'],
     ['po_foc_entries', 'labour_name TEXT'],
     ['po_foc_entries', 'labour_margin REAL DEFAULT 50'],
+    // CRM client-quotation margin on Extra indents — the code reads/writes
+    // this but the column was never created → "no such column" on CRM
+    // approval. Add it (mam 2026-06-10).
+    ['indents', 'crm_margin_pct REAL'],
     ['purchase_orders', 'site_engineer_id INTEGER REFERENCES users(id)'],
     ['purchase_orders', 'site_engineer_ids TEXT'],
     ['purchase_orders', 'crm_name TEXT'],
