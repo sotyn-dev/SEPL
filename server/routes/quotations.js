@@ -94,6 +94,32 @@ function textToLines(text) {
   return out;
 }
 
+// Use Claude to extract clean BOQ line items from raw PDF/Word text — it
+// groups multi-line descriptions (name + spec + make) into one item and skips
+// headers/notes/totals. Returns [{description, qty}] or null if AI not set up.
+async function llmExtractItems(text) {
+  const apiKey = aiSetting('ai_api_key');
+  if (!apiKey || !text) return null;
+  let Anthropic; try { Anthropic = require('@anthropic-ai/sdk'); } catch (e) { return null; }
+  const model = aiSetting('ai_model') || 'claude-opus-4-7';
+  const client = new Anthropic.default({ apiKey, timeout: 55000 });
+  const prompt = `Extract the BOQ / requirement line items from this client document text.
+Each item may span SEVERAL lines (item name, long description, "Make: ...", size) — COMBINE those into ONE item's description.
+Skip headers, column titles, notes, terms, totals, page numbers, addresses.
+Return ONLY a JSON array, one object per item: {"description": "<full combined item text>", "qty": <number, default 1>}.
+
+TEXT:
+${String(text).slice(0, 14000)}`;
+  const resp = await client.messages.create({ model, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] });
+  const t = (resp.content || []).map(c => c.text || '').join('');
+  const a = t.indexOf('['), b = t.lastIndexOf(']');
+  if (a === -1 || b === -1) return null;
+  const arr = JSON.parse(t.slice(a, b + 1));
+  const out = arr.filter(x => x && x.description && String(x.description).trim().length > 3)
+    .map(x => ({ description: String(x.description).replace(/\s+/g, ' ').trim(), qty: Number(x.qty) || 1, unit: '' }));
+  return out.length ? out : null;
+}
+
 // POST a CLIENT BOQ (Excel / PDF / Word) → auto-match each line to Item
 // Master and return a suggested item + rate + confidence per line.
 router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
@@ -104,11 +130,11 @@ router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
     if (ext === 'pdf') {
       const pdfParse = require('pdf-parse');
       const data = await pdfParse(fs.readFileSync(req.file.path));
-      lines = textToLines(data.text);
+      lines = (await llmExtractItems(data.text).catch(() => null)) || textToLines(data.text);
     } else if (ext === 'docx' || ext === 'doc') {
       const mammoth = require('mammoth');
       const r = await mammoth.extractRawText({ path: req.file.path });
-      lines = textToLines(r.value);
+      lines = (await llmExtractItems(r.value).catch(() => null)) || textToLines(r.value);
     } else {
       // Excel / CSV — find the header row, then read Description/Qty/Unit cols.
       const wb = XLSX.readFile(req.file.path);
@@ -153,7 +179,9 @@ router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
     }
     if (!lines.length) return res.status(400).json({ error: 'Could not read any items. For Excel: ensure a Description/Qty header row. For PDF/Word: the items must be text (not a scanned image).' });
 
-    const items = getDb().prepare(`SELECT id, item_code, department, item_name, specification, size, uom, current_price FROM item_master`).all();
+    // Match the client BOQ against OUR PO items only (the ones quoted, with
+    // PO/FOC kits) — mam 2026-06-10. FOC/consumables aren't quoted as lines.
+    const items = getDb().prepare(`SELECT id, item_code, department, item_name, specification, size, uom, current_price FROM item_master WHERE type='PO'`).all();
     const itemById = new Map(items.map(it => [it.id, it]));
     const itemTok = items.map(it => ({ it, toks: tokens([it.item_name, it.specification, it.size].filter(Boolean).join(' ')) }));
 
