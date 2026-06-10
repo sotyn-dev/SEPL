@@ -79,19 +79,25 @@ ${blocks}`;
 // description (header/note/total lines skipped); a trailing "<n> <unit>"
 // becomes the qty.
 function textToLines(text) {
-  const SKIP = /^(s\.?\s*no\.?|sr\.?\s*no\.?|sl\.?\s*no\.?|description|particulars?|total|grand total|sub\s*total|subtotal|note|notes|terms|page\b|quotation|date|qty|quantity|uom|unit|rate|amount|gst|cgst|sgst|igst)\b/i;
-  const out = [];
-  for (const raw of String(text || '').split(/\r?\n/)) {
-    const l = raw.replace(/\s+/g, ' ').trim();
-    if (l.length < 4 || !/[a-z]{3,}/i.test(l) || SKIP.test(l)) continue;
-    const desc = l.replace(/^\s*\d+(\.\d+)*[).]?\s+/, '').trim();   // strip leading serial "1." / "1.1)"
-    if (desc.length < 4) continue;
-    let qty = 1, unit = '';
-    const m = desc.match(/(\d+(?:\.\d+)?)\s*(nos?|pcs|mtrs?|kg|sqm|cum|sets?|rmt|rft|ltr|point|each)\.?$/i);
-    if (m) { qty = parseFloat(m[1]) || 1; unit = m[2] || ''; }
-    out.push({ description: desc, qty, unit });
+  const raw = String(text || '').split(/\r?\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const SKIP = /^(s\.?\s*no\.?|sr\.?\s*no\.?|sl\.?\s*no\.?|description|particulars?|hsn|grand total|sub\s*total|subtotal|total\b|note|notes|terms|page\b|quotation\b|date\b|validity|currency|subject|scope|to:|m\/s|email|website|secured ?engineers|fire ?fighting|#$|qty|quantity|uom|unit|rate|amount|gst|cgst|sgst|igst)\b/i;
+  const isSerial = l => /^\d{1,3}$/.test(l);                         // item number on its own line
+  const isPriceLine = l => /(mtrs?|nos|pcs|sets?|kg|each|point|rmt|rft|sqm|cum)\b/i.test(l) && /(₹|\brs\b|\d{2,})/i.test(l);
+  const items = [];
+  let cur = null;
+  for (const l of raw) {
+    if (SKIP.test(l)) continue;
+    if (isSerial(l)) { if (cur && cur.parts.length) items.push(cur); cur = { parts: [] }; continue; }
+    if (!cur) continue;                                              // skip the header preamble before item #1
+    if (isPriceLine(l) && cur.parts.length) continue;                // drop the HSN/qty/rate/amount line
+    // also handle a serial prefixed inline: "1. Supply of ..."
+    const cleaned = l.replace(/^\s*\d+(\.\d+)*[).]\s+/, '').trim();
+    if (cleaned.length >= 3) cur.parts.push(cleaned);
   }
-  return out;
+  if (cur && cur.parts.length) items.push(cur);
+  return items
+    .map(it => ({ description: it.parts.join(' — ').replace(/\s+/g, ' ').trim(), qty: 1, unit: '' }))
+    .filter(it => it.description.length > 3 && /[a-z]{3,}/i.test(it.description));
 }
 
 // Use Claude to extract clean BOQ line items from raw PDF/Word text — it
