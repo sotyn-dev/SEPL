@@ -59,8 +59,10 @@ export default function PoFocStripped() {
   }, []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    api.get('/item-master/dropdown?type=PO').then(r => setPoItems(r.data || [])).catch(() => {});
-    api.get('/item-master/dropdown?type=FOC').then(r => setFocItems(r.data || [])).catch(() => {});
+    // Show item CODE + UOM in the dropdown label (mam 2026-06-10).
+    const withCode = x => ({ ...x, display_name: `${x.item_code ? '[' + x.item_code + '] ' : ''}${[x.item_name, x.specification, x.size].filter(Boolean).join(' / ')}${x.uom ? ' · ' + x.uom : ''}` });
+    api.get('/item-master/dropdown?type=PO').then(r => setPoItems((r.data || []).map(withCode))).catch(() => {});
+    api.get('/item-master/dropdown?type=FOC').then(r => setFocItems((r.data || []).map(withCode))).catch(() => {});
     api.get('/quotations/labour-rates').then(r => setLabourItems((r.data || []).map(x => ({
       id: x.id, item_name: x.item_name, rate: x.rate, uom: x.uom,
       display_name: `${x.item_name}${x.uom ? ' (' + x.uom + ')' : ''}`,
@@ -80,6 +82,11 @@ export default function PoFocStripped() {
   const pickFoc = (fi, opt) => patchFoc(fi, opt ? { item_id: opt.id, name: opt.display_name || opt.item_name, rate: opt.current_price || 0 } : { item_id: null, name: '', rate: 0 });
 
   const formCalc = useMemo(() => calc(form), [form]);
+
+  // Open the Item Master page (new tab) pre-searched to this item so you can
+  // edit it; re-pick it here afterwards to pull the updated rate.
+  const codeOf = (list, id) => (list.find(x => x.id === id) || {}).item_code || '';
+  const openItemEdit = (code, name) => window.open(`/item-master?search=${encodeURIComponent(code || name || '')}`, '_blank', 'noopener');
 
   const save = async (approveAfter) => {
     if (!form.po_name) { toast.error('Pick a PO item'); return; }
@@ -226,7 +233,14 @@ export default function PoFocStripped() {
         <div className="space-y-3">
           <div>
             <label className="label">PO Item (type to search)</label>
-            <SearchableSelect options={poItems} value={form.po_item_id} valueKey="id" displayKey="display_name" placeholder="Search PO items…" onChange={pickPo} />
+            <div className="flex items-center gap-2">
+              <div className="flex-1 min-w-0"><SearchableSelect options={poItems} value={form.po_item_id} valueKey="id" displayKey="display_name" placeholder="Search PO items…" onChange={pickPo} /></div>
+              {form.po_item_id && (
+                <button type="button" title="Edit this item in Item Master (new tab)"
+                  onClick={() => openItemEdit(codeOf(poItems, form.po_item_id), form.po_name)}
+                  className="text-indigo-500 hover:text-indigo-700 shrink-0"><FiEdit2 size={16} /></button>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div><label className="label">Qty</label><input className="input text-right" type="number" min="1" value={form.qty || ''} onChange={e => setF({ qty: e.target.value })} /></div>
@@ -265,6 +279,7 @@ export default function PoFocStripped() {
                 <div key={fi} className="flex items-center gap-2">
                   <span className="text-[10px] text-gray-400 w-4">{fi + 1}</span>
                   <div className="flex-1 min-w-0"><SearchableSelect options={focItems} value={f.item_id} valueKey="id" displayKey="display_name" placeholder="Search FOC item…" onChange={opt => pickFoc(fi, opt)} /></div>
+                  {f.item_id && <button type="button" title="Edit this item in Item Master (new tab)" onClick={() => openItemEdit(codeOf(focItems, f.item_id), f.name)} className="text-indigo-400 hover:text-indigo-600 shrink-0"><FiEdit2 size={13} /></button>}
                   <select className="select text-xs py-1.5 w-14" value={f.qty} onChange={e => patchFoc(fi, { qty: +e.target.value })}>{Array.from({ length: 10 }, (_, n) => <option key={n + 1} value={n + 1}>{n + 1}</option>)}</select>
                   <input className="input text-right text-xs py-1.5 w-20" type="number" min="0" value={f.rate || ''} onChange={e => patchFoc(fi, { rate: e.target.value })} placeholder="rate" />
                   <button type="button" className="text-red-300 hover:text-red-500" onClick={() => removeFoc(fi)}><FiTrash2 size={13} /></button>

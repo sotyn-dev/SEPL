@@ -62,7 +62,9 @@ export default function ItemMaster() {
   const [bulkModal, setBulkModal] = useState(false);
   const [historyModal, setHistoryModal] = useState(null); // { item, rows }
   const [form, setForm] = useState({ ...emptyForm });
-  const [search, setSearch] = useState('');
+  // Allow opening pre-searched via ?search=CODE (e.g. an Edit-item link from
+  // the PO/FOC builder opens this page focused on that item).
+  const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get('search') || '');
   const [filterDept, setFilterDept] = useState('');
   const [statusFilter, setStatusFilter] = useState(''); // expired | ageing | fresh | never | make_blank | no_vendor
   const [bulkData, setBulkData] = useState('');
