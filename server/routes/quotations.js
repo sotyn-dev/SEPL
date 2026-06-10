@@ -273,7 +273,7 @@ function computePoFoc(body) {
   })) : [];
   const poAmt = poRate * qty;
   const focAmt = focs.reduce((t, f) => t + f.rate * f.qty, 0);
-  const cost = Math.round((poAmt + focAmt + labour) * 100) / 100;
+  const cost = Math.round((poAmt + focAmt + labour * qty) * 100) / 100; // labour RATE × PO qty
   const tpa = Math.round(cost * (1 + margin / 100) * 100) / 100;
   return { qty, poRate, labour, margin, focs, cost, tpa };
 }

@@ -31,8 +31,8 @@ const blankFoc = () => ({ item_id: null, name: '', qty: 1, rate: 0 });
 const calc = (f) => {
   const poAmt = r2((Number(f.po_rate) || 0) * (Number(f.qty) || 0));
   const focAmt = r2((f.focs || []).reduce((t, x) => t + (Number(x.rate) || 0) * (Number(x.qty) || 0), 0));
-  const labour = Number(f.labour) || 0;
-  const cost = r2(poAmt + focAmt + labour);
+  const labourAmt = r2((Number(f.labour) || 0) * (Number(f.qty) || 0)); // labour RATE × PO qty
+  const cost = r2(poAmt + focAmt + labourAmt);
   const tpa = r2(cost * (1 + (Number(f.margin) || 0) / 100));
   return { cost, tpa };
 };
@@ -159,7 +159,7 @@ export default function PoFocStripped() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div><label className="label">Qty</label><input className="input text-right" type="number" min="1" value={form.qty || ''} onChange={e => setF({ qty: e.target.value })} /></div>
             <div><label className="label">PO Rate ₹</label><input className="input text-right" type="number" min="0" value={form.po_rate || ''} onChange={e => setF({ po_rate: e.target.value })} /></div>
-            <div><label className="label">Labour ₹</label><input className="input text-right" type="number" min="0" value={form.labour || ''} onChange={e => setF({ labour: e.target.value })} placeholder="0" /></div>
+            <div><label className="label" title="Per unit/qty — multiplied by PO Qty">Labour Rate ₹</label><input className="input text-right" type="number" min="0" value={form.labour || ''} onChange={e => setF({ labour: e.target.value })} placeholder="0" /></div>
             <div><label className="label">Margin %</label><select className="select" value={form.margin} onChange={e => setF({ margin: +e.target.value })}>{MARGINS.map(m => <option key={m} value={m}>{m}%</option>)}</select></div>
           </div>
 
@@ -196,7 +196,7 @@ export default function PoFocStripped() {
         </div>
       </Modal>
 
-      <p className="text-xs text-gray-400">TPA = (PO Rate × Qty + Σ FOC Rate × Qty + Labour) × (1 + Margin%). Editing an Approved item moves it to Re-Approved until you approve it again.</p>
+      <p className="text-xs text-gray-400">TPA = (PO Rate × Qty + Σ FOC Rate × FOC Qty + Labour Rate × Qty) × (1 + Margin%). Labour is per unit of the PO item's UOM (per KG / MTR / PCS). Editing an Approved item moves it to Re-Approved until you approve it again.</p>
     </div>
   );
 }

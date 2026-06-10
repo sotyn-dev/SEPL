@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 
-// Render cap — protects against pathological lists (10k+ rows) tanking
-// scroll perf, while staying well above any real-world BOQ. Mam: "in
-// jeewan mala 350+ item and this happen also in indent raise not
-// showing all boq items" — the previous 100 cap silently hid the rest.
-const RENDER_CAP = 2000;
+// Render cap — only this many option rows are painted at once. Kept low so
+// huge masters (the item-master PO list is ~1700 rows) don't render thousands
+// of DOM nodes and hang the page (mam 2026-06-09 "erp is hang"). 400 still
+// covers a 350-item BOQ fully; for bigger lists the token search below makes
+// anything reachable by typing a couple of words.
+const RENDER_CAP = 400;
 
 export default function SearchableSelect({ options, value, onChange, placeholder = 'Search...', displayKey = 'label', valueKey = 'value', buttonClassName = 'input text-left text-sm w-full truncate flex items-center justify-between gap-1 cursor-pointer' }) {
   const [open, setOpen] = useState(false);
@@ -13,10 +14,15 @@ export default function SearchableSelect({ options, value, onChange, placeholder
   const inputRef = useRef(null);
 
   const selected = options.find(o => o[valueKey] === value);
+  // Token-based search (mam 2026-06-09): split the query into words and
+  // require EVERY word to appear somewhere in the option text, in any order.
+  // The " / " separators in item names (e.g. "pipe / ss 304 / 25mm") no
+  // longer break the match — "304 pipe" or "ball 25mm ci" now find it.
   const filtered = options.filter(o => {
     if (!search) return true;
-    const q = search.toLowerCase();
-    return (o[displayKey] || '').toLowerCase().includes(q);
+    const text = (o[displayKey] || '').toLowerCase();
+    const tokens = search.toLowerCase().split(/\s+/).filter(Boolean);
+    return tokens.every(t => text.includes(t));
   });
 
   useEffect(() => {

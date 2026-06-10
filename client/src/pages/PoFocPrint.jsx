@@ -70,8 +70,8 @@ export default function PoFocPrint() {
             ))}
             {e.labour > 0 && (
               <tr>
-                <td style={{ border: '1px solid #e2e8f0', padding: 6 }} colSpan={4}>Labour</td>
-                <td style={{ border: '1px solid #e2e8f0', padding: 6, textAlign: 'right' }}>{fmt(e.labour)}</td>
+                <td style={{ border: '1px solid #e2e8f0', padding: 6 }} colSpan={4}>Labour (₹{fmt(e.labour)}/unit × {e.qty})</td>
+                <td style={{ border: '1px solid #e2e8f0', padding: 6, textAlign: 'right' }}>{fmt((Number(e.labour) || 0) * (Number(e.qty) || 0))}</td>
               </tr>
             )}
           </tbody>
