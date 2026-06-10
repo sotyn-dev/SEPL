@@ -12,6 +12,7 @@ import { FiPlus, FiTrash2, FiEdit2, FiCheck, FiFileText } from 'react-icons/fi';
 
 const MARGINS = [10, 20, 30, 40, 50, 75, 100];
 const MAX_FOC = 10;
+const PENDING_CAP = 50;
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const fmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
@@ -45,6 +46,7 @@ export default function PoFocStripped() {
   const [focItems, setFocItems] = useState([]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState(blankForm());
+  const [pendSearch, setPendSearch] = useState('');
 
   const load = useCallback(() => {
     api.get('/quotations/po-foc').then(r => { setEntries(r.data.rows || []); setCounts(r.data.counts || {}); }).catch(() => {});
@@ -83,7 +85,56 @@ export default function PoFocStripped() {
   const approve = async (id) => { try { await api.post(`/quotations/po-foc/${id}/approve`); toast.success('Approved'); load(); } catch (e) { toast.error('Failed'); } };
   const del = async (id) => { if (!confirm('Delete this PO/FOC item?')) return; try { await api.delete(`/quotations/po-foc/${id}`); load(); } catch (e) { toast.error('Failed'); } };
 
+  // "Auto-list PO items needing FOC" (mam 2026-06-10): Non-Approved lists PO
+  // items that have no approved FOC kit yet — you open each and define it.
+  // Saved drafts (non_approved entries) show as cards above the list.
+  const approvedPoIds = useMemo(() => new Set(entries.filter(e => e.status === 'approved' || e.status === 're_approved').map(e => e.po_item_id)), [entries]);
+  const draftPoIds = useMemo(() => new Set(entries.filter(e => e.status === 'non_approved').map(e => e.po_item_id)), [entries]);
+  const pendingItems = useMemo(() => {
+    let list = poItems.filter(p => !approvedPoIds.has(p.id) && !draftPoIds.has(p.id));
+    const q = pendSearch.toLowerCase().trim();
+    if (q) { const toks = q.split(/\s+/).filter(Boolean); list = list.filter(p => toks.every(t => (p.display_name || '').toLowerCase().includes(t))); }
+    return list;
+  }, [poItems, approvedPoIds, draftPoIds, pendSearch]);
+  const pendingTotal = Math.max(0, poItems.length - approvedPoIds.size); // PO items still needing FOC (incl drafts)
+  const tabCount = (k) => k === 'non_approved' ? pendingTotal : (counts[k] || 0);
+  const openForPoItem = (p) => { setForm({ ...blankForm(), po_item_id: p.id, po_name: p.display_name || p.item_name, po_rate: p.current_price || 0 }); setModal(true); };
+
   const shown = entries.filter(e => e.status === tab);
+
+  const entryCard = (e) => (
+    <div key={e.id} className="card p-3">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex-1 min-w-[220px]">
+          <div className="flex items-center gap-2">
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${STATUS_BADGE[e.status]}`}>{e.status.replace('_', '-').toUpperCase()}</span>
+            <span className="font-semibold text-gray-800">{e.po_name}</span>
+          </div>
+          <div className="text-xs text-gray-500 mt-1">
+            Qty {e.qty} · PO ₹{fmt(e.po_rate)} · Labour ₹{fmt(e.labour)} · Margin {e.margin}% · FOC {(e.focs || []).length}
+          </div>
+          {(e.focs || []).length > 0 && (
+            <div className="text-[11px] text-gray-400 mt-0.5 truncate">FOC: {(e.focs || []).map(f => `${f.name}×${f.qty}`).join(', ')}</div>
+          )}
+        </div>
+        <div className="text-right">
+          <div className="text-[10px] uppercase text-gray-400">TPA</div>
+          <div className="text-lg font-bold text-emerald-700">₹{fmt(e.tpa)}</div>
+          <div className="text-[10px] text-gray-400">cost ₹{fmt(e.cost)}</div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100 flex-wrap">
+        {(e.status === 'approved' || e.status === 're_approved') && (
+          <a href={`/po-foc/${e.id}/print`} target="_blank" rel="noreferrer" className="btn btn-secondary text-xs flex items-center gap-1"><FiFileText size={13} /> View PDF</a>
+        )}
+        <button onClick={() => openEdit(e)} className="btn btn-secondary text-xs flex items-center gap-1"><FiEdit2 size={13} /> Edit</button>
+        {e.status !== 'approved' && (
+          <button onClick={() => approve(e.id)} className="btn btn-success text-xs flex items-center gap-1"><FiCheck size={13} /> {e.status === 're_approved' ? 'Re-approve' : 'Approve'}</button>
+        )}
+        <button onClick={() => del(e.id)} className="text-red-400 hover:text-red-600 ml-auto"><FiTrash2 size={15} /></button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-4 pb-24">
@@ -102,52 +153,51 @@ export default function PoFocStripped() {
             className={`px-4 py-2 rounded-full text-sm font-semibold border transition ${tab === t.key
               ? t.active
               : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
-            {t.label} <span className={`ml-1 ${tab === t.key ? 'opacity-90' : 'text-gray-400'}`}>({counts[t.key] || 0})</span>
+            {t.label} <span className={`ml-1 ${tab === t.key ? 'opacity-90' : 'text-gray-400'}`}>({tabCount(t.key)})</span>
           </button>
         ))}
       </div>
 
-      {/* Entry cards for the active tab */}
-      {shown.length === 0 && (
-        <div className="card p-8 text-center text-gray-400 text-sm">
-          {tab === 'non_approved' ? 'Nothing pending. Click “New PO/FOC” to start.' : tab === 'approved' ? 'No approved items yet.' : 'No re-approved (changed) items.'}
-        </div>
-      )}
-      <div className="space-y-3">
-        {shown.map(e => (
-          <div key={e.id} className="card p-3">
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div className="flex-1 min-w-[220px]">
-                <div className="flex items-center gap-2">
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${STATUS_BADGE[e.status]}`}>{e.status.replace('_', '-').toUpperCase()}</span>
-                  <span className="font-semibold text-gray-800">{e.po_name}</span>
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  Qty {e.qty} · PO ₹{fmt(e.po_rate)} · Labour ₹{fmt(e.labour)} · Margin {e.margin}% · FOC {(e.focs || []).length}
-                </div>
-                {(e.focs || []).length > 0 && (
-                  <div className="text-[11px] text-gray-400 mt-0.5 truncate">FOC: {(e.focs || []).map(f => `${f.name}×${f.qty}`).join(', ')}</div>
-                )}
-              </div>
-              <div className="text-right">
-                <div className="text-[10px] uppercase text-gray-400">TPA</div>
-                <div className="text-lg font-bold text-emerald-700">₹{fmt(e.tpa)}</div>
-                <div className="text-[10px] text-gray-400">cost ₹{fmt(e.cost)}</div>
-              </div>
+      {/* Body */}
+      {tab === 'non_approved' ? (
+        <>
+          {/* Drafts already started (FOC partially added) */}
+          {shown.length > 0 && (
+            <div className="space-y-3">
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">In progress ({shown.length})</div>
+              {shown.map(e => entryCard(e))}
             </div>
-            <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100 flex-wrap">
-              {(e.status === 'approved' || e.status === 're_approved') && (
-                <a href={`/po-foc/${e.id}/print`} target="_blank" rel="noreferrer" className="btn btn-secondary text-xs flex items-center gap-1"><FiFileText size={13} /> View PDF</a>
+          )}
+          {/* PO items that still need a FOC kit */}
+          <div className="card p-3">
+            <div className="text-sm font-semibold text-gray-700 mb-2">PO items needing FOC <span className="text-gray-400">({pendingTotal})</span></div>
+            <input className="input mb-2" placeholder="Search a PO item to define its FOC…" value={pendSearch} onChange={e => setPendSearch(e.target.value)} />
+            <div className="divide-y divide-gray-100">
+              {pendingItems.slice(0, PENDING_CAP).map(p => (
+                <div key={p.id} className="flex items-center justify-between gap-2 py-1.5">
+                  <span className="text-sm text-gray-700 truncate" title={p.display_name}>{p.display_name}</span>
+                  <button onClick={() => openForPoItem(p)} className="btn btn-secondary text-xs whitespace-nowrap flex items-center gap-1"><FiPlus size={12} /> Define FOC</button>
+                </div>
+              ))}
+              {pendingItems.length === 0 && (
+                <div className="py-5 text-center text-sm text-gray-400">{pendSearch ? 'No matching PO items.' : 'All PO items have a FOC kit. 🎉'}</div>
               )}
-              <button onClick={() => openEdit(e)} className="btn btn-secondary text-xs flex items-center gap-1"><FiEdit2 size={13} /> Edit</button>
-              {e.status !== 'approved' && (
-                <button onClick={() => approve(e.id)} className="btn btn-success text-xs flex items-center gap-1"><FiCheck size={13} /> {e.status === 're_approved' ? 'Re-approve' : 'Approve'}</button>
-              )}
-              <button onClick={() => del(e.id)} className="text-red-400 hover:text-red-600 ml-auto"><FiTrash2 size={15} /></button>
             </div>
+            {pendingItems.length > PENDING_CAP && (
+              <div className="text-xs text-gray-400 text-center pt-2">Showing {PENDING_CAP} of {pendingItems.length} — type to narrow.</div>
+            )}
           </div>
-        ))}
-      </div>
+        </>
+      ) : (
+        <>
+          {shown.length === 0 && (
+            <div className="card p-8 text-center text-gray-400 text-sm">
+              {tab === 'approved' ? 'No approved items yet.' : 'No re-approved (changed) items.'}
+            </div>
+          )}
+          <div className="space-y-3">{shown.map(e => entryCard(e))}</div>
+        </>
+      )}
 
       {/* Edit / New modal */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title={form.id ? 'Edit PO/FOC item' : 'New PO/FOC item'} wide>
