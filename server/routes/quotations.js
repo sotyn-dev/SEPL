@@ -266,16 +266,19 @@ router.delete('/boq/:id', (req, res) => {
 function computePoFoc(body) {
   const qty = Number(body.qty) || 0;
   const poRate = Number(body.po_rate) || 0;
-  const labour = Number(body.labour) || 0;
+  const labour = Number(body.labour) || 0;                 // labour rate (from labour_rates)
   const margin = Number(body.margin) || 0;
+  const labourMargin = (body.labour_margin === '' || body.labour_margin == null) ? 50 : Number(body.labour_margin) || 0;
   const focs = Array.isArray(body.focs) ? body.focs.filter(f => f && (f.item_id || f.name)).map(f => ({
     item_id: f.item_id || null, name: f.name || '', qty: Number(f.qty) || 1, rate: Number(f.rate) || 0,
   })) : [];
   const poAmt = poRate * qty;
   const focAmt = focs.reduce((t, f) => t + f.rate * f.qty, 0);
-  const cost = Math.round((poAmt + focAmt + labour * qty) * 100) / 100; // labour RATE × PO qty
-  const tpa = Math.round(cost * (1 + margin / 100) * 100) / 100;
-  return { qty, poRate, labour, margin, focs, cost, tpa };
+  const labourAmt = labour * qty;                          // labour RATE × PO qty
+  const cost = Math.round((poAmt + focAmt + labourAmt) * 100) / 100;
+  // PO + FOC carry the item margin; labour carries its own labour margin.
+  const tpa = Math.round(((poAmt + focAmt) * (1 + margin / 100) + labourAmt * (1 + labourMargin / 100)) * 100) / 100;
+  return { qty, poRate, labour, margin, labourMargin, focs, cost, tpa };
 }
 
 router.get('/po-foc', (req, res) => {
@@ -295,9 +298,10 @@ router.get('/po-foc/:id', (req, res) => {
 router.post('/po-foc', (req, res) => {
   const c = computePoFoc(req.body);
   const r = getDb().prepare(
-    `INSERT INTO po_foc_entries (po_item_id, po_name, po_rate, qty, labour, margin, focs_json, cost, tpa, status, created_by)
-     VALUES (?,?,?,?,?,?,?,?,?, 'non_approved', ?)`
-  ).run(req.body.po_item_id || null, req.body.po_name || '', c.poRate, c.qty, c.labour, c.margin,
+    `INSERT INTO po_foc_entries (po_item_id, po_name, po_rate, qty, labour, labour_item_id, labour_name, labour_margin, margin, focs_json, cost, tpa, status, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'non_approved', ?)`
+  ).run(req.body.po_item_id || null, req.body.po_name || '', c.poRate, c.qty, c.labour,
+        req.body.labour_item_id || null, req.body.labour_name || '', c.labourMargin, c.margin,
         JSON.stringify(c.focs), c.cost, c.tpa, req.user.id);
   res.json({ id: r.lastInsertRowid, message: 'Saved' });
 });
@@ -310,9 +314,10 @@ router.put('/po-foc/:id', (req, res) => {
   // Editing an APPROVED entry sends it to re_approved (mam's rule).
   const newStatus = cur.status === 'approved' ? 're_approved' : cur.status;
   db.prepare(
-    `UPDATE po_foc_entries SET po_item_id=?, po_name=?, po_rate=?, qty=?, labour=?, margin=?,
+    `UPDATE po_foc_entries SET po_item_id=?, po_name=?, po_rate=?, qty=?, labour=?, labour_item_id=?, labour_name=?, labour_margin=?, margin=?,
             focs_json=?, cost=?, tpa=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
-  ).run(req.body.po_item_id || null, req.body.po_name || '', c.poRate, c.qty, c.labour, c.margin,
+  ).run(req.body.po_item_id || null, req.body.po_name || '', c.poRate, c.qty, c.labour,
+        req.body.labour_item_id || null, req.body.labour_name || '', c.labourMargin, c.margin,
         JSON.stringify(c.focs), c.cost, c.tpa, newStatus, req.params.id);
   res.json({ message: 'Updated', status: newStatus });
 });

@@ -26,7 +26,7 @@ const STATUS_BADGE = {
   approved: 'bg-emerald-100 text-emerald-700',
   re_approved: 'bg-blue-100 text-blue-700',
 };
-const blankForm = () => ({ id: null, status: 'non_approved', po_item_id: null, po_name: '', po_rate: 0, qty: 1, labour: 0, margin: 30, focs: [] });
+const blankForm = () => ({ id: null, status: 'non_approved', po_item_id: null, po_name: '', po_rate: 0, qty: 1, labour: 0, labour_item_id: null, labour_name: '', labour_margin: 50, margin: 30, focs: [] });
 const blankFoc = () => ({ item_id: null, name: '', qty: 1, rate: 0 });
 
 const calc = (f) => {
@@ -34,7 +34,10 @@ const calc = (f) => {
   const focAmt = r2((f.focs || []).reduce((t, x) => t + (Number(x.rate) || 0) * (Number(x.qty) || 0), 0));
   const labourAmt = r2((Number(f.labour) || 0) * (Number(f.qty) || 0)); // labour RATE × PO qty
   const cost = r2(poAmt + focAmt + labourAmt);
-  const tpa = r2(cost * (1 + (Number(f.margin) || 0) / 100));
+  const margin = Number(f.margin) || 0;
+  const lMargin = (f.labour_margin === '' || f.labour_margin == null) ? 50 : Number(f.labour_margin) || 0;
+  // PO + FOC carry the item margin; labour carries its own labour margin.
+  const tpa = r2((poAmt + focAmt) * (1 + margin / 100) + labourAmt * (1 + lMargin / 100));
   return { cost, tpa };
 };
 
@@ -44,6 +47,7 @@ export default function PoFocStripped() {
   const [counts, setCounts] = useState({ non_approved: 0, approved: 0, re_approved: 0 });
   const [poItems, setPoItems] = useState([]);
   const [focItems, setFocItems] = useState([]);
+  const [labourItems, setLabourItems] = useState([]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState(blankForm());
   const [pendSearch, setPendSearch] = useState('');
@@ -55,6 +59,10 @@ export default function PoFocStripped() {
   useEffect(() => {
     api.get('/item-master/dropdown?type=PO').then(r => setPoItems(r.data || [])).catch(() => {});
     api.get('/item-master/dropdown?type=FOC').then(r => setFocItems(r.data || [])).catch(() => {});
+    api.get('/quotations/labour-rates').then(r => setLabourItems((r.data || []).map(x => ({
+      id: x.id, item_name: x.item_name, rate: x.rate,
+      display_name: `${x.item_name} — ₹${x.rate}/${x.uom || ''}`,
+    })))).catch(() => {});
   }, []);
 
   const openNew = () => { setForm(blankForm()); setModal(true); };
@@ -63,6 +71,7 @@ export default function PoFocStripped() {
   // form helpers
   const setF = (patch) => setForm(f => ({ ...f, ...patch }));
   const pickPo = (opt) => setF(opt ? { po_item_id: opt.id, po_name: opt.display_name || opt.item_name, po_rate: opt.current_price || 0 } : { po_item_id: null, po_name: '', po_rate: 0 });
+  const pickLabour = (opt) => setF(opt ? { labour_item_id: opt.id, labour_name: opt.item_name, labour: opt.rate || 0 } : { labour_item_id: null, labour_name: '', labour: 0 });
   const addFoc = () => setForm(f => (f.focs || []).length >= MAX_FOC ? (toast.error(`Max ${MAX_FOC} FOC`), f) : { ...f, focs: [...(f.focs || []), blankFoc()] });
   const patchFoc = (fi, patch) => setForm(f => ({ ...f, focs: f.focs.map((x, j) => j === fi ? { ...x, ...patch } : x) }));
   const removeFoc = (fi) => setForm(f => ({ ...f, focs: f.focs.filter((_, j) => j !== fi) }));
@@ -73,7 +82,7 @@ export default function PoFocStripped() {
   const save = async (approveAfter) => {
     if (!form.po_name) { toast.error('Pick a PO item'); return; }
     try {
-      const payload = { po_item_id: form.po_item_id, po_name: form.po_name, po_rate: form.po_rate, qty: form.qty, labour: form.labour, margin: form.margin, focs: form.focs };
+      const payload = { po_item_id: form.po_item_id, po_name: form.po_name, po_rate: form.po_rate, qty: form.qty, labour: form.labour, labour_item_id: form.labour_item_id, labour_name: form.labour_name, labour_margin: form.labour_margin, margin: form.margin, focs: form.focs };
       let id = form.id;
       if (id) { await api.put(`/quotations/po-foc/${id}`, payload); }
       else { const r = await api.post('/quotations/po-foc', payload); id = r.data.id; }
@@ -111,7 +120,8 @@ export default function PoFocStripped() {
             <span className="font-semibold text-gray-800">{e.po_name}</span>
           </div>
           <div className="text-xs text-gray-500 mt-1">
-            Qty {e.qty} · PO ₹{fmt(e.po_rate)} · Labour ₹{fmt(e.labour)} · Margin {e.margin}% · FOC {(e.focs || []).length}
+            Qty {e.qty} · PO ₹{fmt(e.po_rate)} · Margin {e.margin}% · FOC {(e.focs || []).length}
+            {e.labour_name ? ` · Labour: ${e.labour_name} (₹${fmt(e.labour)}×${e.qty}, ${e.labour_margin}%)` : ''}
           </div>
           {(e.focs || []).length > 0 && (
             <div className="text-[11px] text-gray-400 mt-0.5 truncate">FOC: {(e.focs || []).map(f => `${f.name}×${f.qty}`).join(', ')}</div>
@@ -206,11 +216,23 @@ export default function PoFocStripped() {
             <label className="label">PO Item (type to search)</label>
             <SearchableSelect options={poItems} value={form.po_item_id} valueKey="id" displayKey="display_name" placeholder="Search PO items…" onChange={pickPo} />
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div><label className="label">Qty</label><input className="input text-right" type="number" min="1" value={form.qty || ''} onChange={e => setF({ qty: e.target.value })} /></div>
             <div><label className="label">PO Rate ₹</label><input className="input text-right" type="number" min="0" value={form.po_rate || ''} onChange={e => setF({ po_rate: e.target.value })} /></div>
-            <div><label className="label" title="Per unit/qty — multiplied by PO Qty">Labour Rate ₹</label><input className="input text-right" type="number" min="0" value={form.labour || ''} onChange={e => setF({ labour: e.target.value })} placeholder="0" /></div>
-            <div><label className="label">Margin %</label><select className="select" value={form.margin} onChange={e => setF({ margin: +e.target.value })}>{MARGINS.map(m => <option key={m} value={m}>{m}%</option>)}</select></div>
+            <div><label className="label" title="Margin on PO + FOC">Margin %</label><select className="select" value={form.margin} onChange={e => setF({ margin: +e.target.value })}>{MARGINS.map(m => <option key={m} value={m}>{m}%</option>)}</select></div>
+          </div>
+
+          {/* Labour from the Labour Rate sheet + its own margin */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-start bg-amber-50/50 border border-amber-100 rounded-lg p-3">
+            <div className="sm:col-span-2">
+              <label className="label">Labour (from Labour Rate sheet)</label>
+              <SearchableSelect options={labourItems} value={form.labour_item_id} valueKey="id" displayKey="display_name" placeholder="Search labour item…" onChange={pickLabour} />
+              {form.labour_name && <div className="text-[10px] text-gray-500 mt-0.5">₹{fmt(form.labour)} × qty {form.qty} = ₹{fmt((Number(form.labour) || 0) * (Number(form.qty) || 0))}</div>}
+            </div>
+            <div>
+              <label className="label" title="Labour has its own margin (default 50%)">Labour Margin %</label>
+              <select className="select" value={form.labour_margin} onChange={e => setF({ labour_margin: +e.target.value })}>{MARGINS.map(m => <option key={m} value={m}>{m}%</option>)}</select>
+            </div>
           </div>
 
           <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
@@ -246,7 +268,7 @@ export default function PoFocStripped() {
         </div>
       </Modal>
 
-      <p className="text-xs text-gray-400">TPA = (PO Rate × Qty + Σ FOC Rate × FOC Qty + Labour Rate × Qty) × (1 + Margin%). Labour is per unit of the PO item's UOM (per KG / MTR / PCS). Editing an Approved item moves it to Re-Approved until you approve it again.</p>
+      <p className="text-xs text-gray-400">TPA = (PO Rate × Qty + Σ FOC Rate × FOC Qty) × (1 + Margin%) + (Labour Rate × Qty) × (1 + Labour Margin%). Labour is picked from the Labour Rate sheet and carries its own margin (default 50%). Editing an Approved item moves it to Re-Approved until you approve it again.</p>
     </div>
   );
 }

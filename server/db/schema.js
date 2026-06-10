@@ -257,7 +257,10 @@ function initializeDatabase() {
       po_name TEXT,
       po_rate REAL DEFAULT 0,
       qty REAL DEFAULT 1,
-      labour REAL DEFAULT 0,
+      labour REAL DEFAULT 0,                          -- labour RATE (from labour_rates)
+      labour_item_id INTEGER,                         -- chosen labour_rates row
+      labour_name TEXT,
+      labour_margin REAL DEFAULT 50,                  -- labour has its own margin
       margin REAL DEFAULT 30,
       focs_json TEXT,                                 -- [{item_id,name,qty,rate}]
       cost REAL DEFAULT 0,
@@ -2674,6 +2677,9 @@ function initializeDatabase() {
     ['payroll_runs', 'adhoc REAL DEFAULT 0'],
     ['payroll_runs', 'misc REAL DEFAULT 0'],
     ['payroll_runs', 'advance REAL DEFAULT 0'],
+    ['po_foc_entries', 'labour_item_id INTEGER'],
+    ['po_foc_entries', 'labour_name TEXT'],
+    ['po_foc_entries', 'labour_margin REAL DEFAULT 50'],
     ['purchase_orders', 'site_engineer_id INTEGER REFERENCES users(id)'],
     ['purchase_orders', 'site_engineer_ids TEXT'],
     ['purchase_orders', 'crm_name TEXT'],

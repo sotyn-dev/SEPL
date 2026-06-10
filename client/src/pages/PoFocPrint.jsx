@@ -70,7 +70,7 @@ export default function PoFocPrint() {
             ))}
             {e.labour > 0 && (
               <tr>
-                <td style={{ border: '1px solid #e2e8f0', padding: 6 }} colSpan={4}>Labour (₹{fmt(e.labour)}/unit × {e.qty})</td>
+                <td style={{ border: '1px solid #e2e8f0', padding: 6 }} colSpan={4}>Labour: {e.labour_name || '—'} (₹{fmt(e.labour)}/unit × {e.qty}, +{e.labour_margin}% margin)</td>
                 <td style={{ border: '1px solid #e2e8f0', padding: 6, textAlign: 'right' }}>{fmt((Number(e.labour) || 0) * (Number(e.qty) || 0))}</td>
               </tr>
             )}
@@ -81,7 +81,7 @@ export default function PoFocPrint() {
               <td style={{ border: '1px solid #cbd5e1', padding: 6, textAlign: 'right', fontWeight: 600 }}>{fmt(e.cost)}</td>
             </tr>
             <tr style={{ background: '#ecfdf5' }}>
-              <td colSpan={4} style={{ border: '1px solid #cbd5e1', padding: 6, textAlign: 'right', fontWeight: 700 }}>TPA (× {100 + Number(e.margin)}%)</td>
+              <td colSpan={4} style={{ border: '1px solid #cbd5e1', padding: 6, textAlign: 'right', fontWeight: 700 }}>TPA (PO+FOC @ {e.margin}%, Labour @ {e.labour_margin}%)</td>
               <td style={{ border: '1px solid #cbd5e1', padding: 6, textAlign: 'right', fontWeight: 700, color: '#047857' }}>₹{fmt(e.tpa)}</td>
             </tr>
           </tfoot>
