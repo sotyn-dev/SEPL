@@ -7,6 +7,7 @@ import Leads from './pages/Leads';
 import Quotations from './pages/Quotations';
 import Estimator from './pages/Estimator';
 import PoFocStripped from './pages/PoFocStripped';
+import PoFocPrint from './pages/PoFocPrint';
 import Orders from './pages/Orders';
 import BusinessBook from './pages/BusinessBook';
 import ItemMaster from './pages/ItemMaster';
@@ -122,6 +123,7 @@ export default function App() {
       <Route path="/rental-po/:id/print" element={<ProtectedRoute><RentalPOPrint /></ProtectedRoute>} />
       <Route path="/indent/:id/print" element={<ProtectedRoute><IndentPrint /></ProtectedRoute>} />
       <Route path="/quotation/:indentId/print" element={<ProtectedRoute><QuotationPrint /></ProtectedRoute>} />
+      <Route path="/po-foc/:id/print" element={<ProtectedRoute><PoFocPrint /></ProtectedRoute>} />
       <Route path="/payroll/slip/:employee_id" element={<ProtectedRoute><SalarySlipPrint /></ProtectedRoute>} />
       <Route path="/hr/candidates/:id/offer-letter" element={<ProtectedRoute><OfferLetterPrint /></ProtectedRoute>} />
       <Route path="/hr/candidates/:id/nda" element={<ProtectedRoute><NDAPrint /></ProtectedRoute>} />

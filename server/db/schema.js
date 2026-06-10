@@ -246,6 +246,30 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- PO/FOC Stripped (mam 2026-06-09): each row = one PO item + its FOC
+    -- items + labour + margin, with an approval workflow:
+    --   non_approved → still being decided (FOC/labour/margin not fixed)
+    --   approved     → fixed; printable as a PDF
+    --   re_approved  → an approved item that was changed afterwards
+    CREATE TABLE IF NOT EXISTS po_foc_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      po_item_id INTEGER,
+      po_name TEXT,
+      po_rate REAL DEFAULT 0,
+      qty REAL DEFAULT 1,
+      labour REAL DEFAULT 0,
+      margin REAL DEFAULT 30,
+      focs_json TEXT,                                 -- [{item_id,name,qty,rate}]
+      cost REAL DEFAULT 0,
+      tpa REAL DEFAULT 0,
+      status TEXT DEFAULT 'non_approved' CHECK(status IN ('non_approved','approved','re_approved')),
+      created_by INTEGER REFERENCES users(id),
+      approved_by INTEGER REFERENCES users(id),
+      approved_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Purchase Orders (from client)
     CREATE TABLE IF NOT EXISTS purchase_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

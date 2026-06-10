@@ -260,4 +260,75 @@ router.delete('/boq/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+// ── PO/FOC Stripped (mam 2026-06-09) ──────────────────────────────
+// Each entry = one PO item + FOC items + labour + margin, with an
+// approval workflow (non_approved → approved → re_approved on later edit).
+function computePoFoc(body) {
+  const qty = Number(body.qty) || 0;
+  const poRate = Number(body.po_rate) || 0;
+  const labour = Number(body.labour) || 0;
+  const margin = Number(body.margin) || 0;
+  const focs = Array.isArray(body.focs) ? body.focs.filter(f => f && (f.item_id || f.name)).map(f => ({
+    item_id: f.item_id || null, name: f.name || '', qty: Number(f.qty) || 1, rate: Number(f.rate) || 0,
+  })) : [];
+  const poAmt = poRate * qty;
+  const focAmt = focs.reduce((t, f) => t + f.rate * f.qty, 0);
+  const cost = Math.round((poAmt + focAmt + labour) * 100) / 100;
+  const tpa = Math.round(cost * (1 + margin / 100) * 100) / 100;
+  return { qty, poRate, labour, margin, focs, cost, tpa };
+}
+
+router.get('/po-foc', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM po_foc_entries ORDER BY updated_at DESC, id DESC').all();
+  const counts = { non_approved: 0, approved: 0, re_approved: 0 };
+  for (const r of rows) counts[r.status] = (counts[r.status] || 0) + 1;
+  res.json({ rows: rows.map(r => ({ ...r, focs: JSON.parse(r.focs_json || '[]') })), counts });
+});
+
+router.get('/po-foc/:id', (req, res) => {
+  const r = getDb().prepare('SELECT * FROM po_foc_entries WHERE id=?').get(req.params.id);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  res.json({ ...r, focs: JSON.parse(r.focs_json || '[]') });
+});
+
+router.post('/po-foc', (req, res) => {
+  const c = computePoFoc(req.body);
+  const r = getDb().prepare(
+    `INSERT INTO po_foc_entries (po_item_id, po_name, po_rate, qty, labour, margin, focs_json, cost, tpa, status, created_by)
+     VALUES (?,?,?,?,?,?,?,?,?, 'non_approved', ?)`
+  ).run(req.body.po_item_id || null, req.body.po_name || '', c.poRate, c.qty, c.labour, c.margin,
+        JSON.stringify(c.focs), c.cost, c.tpa, req.user.id);
+  res.json({ id: r.lastInsertRowid, message: 'Saved' });
+});
+
+router.put('/po-foc/:id', (req, res) => {
+  const db = getDb();
+  const cur = db.prepare('SELECT status FROM po_foc_entries WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const c = computePoFoc(req.body);
+  // Editing an APPROVED entry sends it to re_approved (mam's rule).
+  const newStatus = cur.status === 'approved' ? 're_approved' : cur.status;
+  db.prepare(
+    `UPDATE po_foc_entries SET po_item_id=?, po_name=?, po_rate=?, qty=?, labour=?, margin=?,
+            focs_json=?, cost=?, tpa=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`
+  ).run(req.body.po_item_id || null, req.body.po_name || '', c.poRate, c.qty, c.labour, c.margin,
+        JSON.stringify(c.focs), c.cost, c.tpa, newStatus, req.params.id);
+  res.json({ message: 'Updated', status: newStatus });
+});
+
+router.post('/po-foc/:id/approve', (req, res) => {
+  const db = getDb();
+  const cur = db.prepare('SELECT id FROM po_foc_entries WHERE id=?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  db.prepare(`UPDATE po_foc_entries SET status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(req.user.id, req.params.id);
+  res.json({ message: 'Approved' });
+});
+
+router.delete('/po-foc/:id', (req, res) => {
+  getDb().prepare('DELETE FROM po_foc_entries WHERE id=?').run(req.params.id);
+  res.json({ message: 'Deleted' });
+});
+
 module.exports = router;

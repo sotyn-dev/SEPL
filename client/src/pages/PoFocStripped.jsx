@@ -1,186 +1,202 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../api';
+import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
-import { FiPlus, FiTrash2, FiDownload } from 'react-icons/fi';
-import { exportCsv } from '../utils/exportCsv';
+import { FiPlus, FiTrash2, FiEdit2, FiCheck, FiFileText } from 'react-icons/fi';
 
-// PO/FOC Stripped (mam 2026-06-09). Horizontal layout: each PO item is one
-// row (item + qty + rate + labour + margin + TPA), with FOC items (type=FOC,
-// max 10) flowing side-by-side beneath it.
-// TPA = (PO Rate×Qty + Σ FOC Rate×Qty + Labour) × (1 + margin%).
+// PO/FOC Stripped (mam 2026-06-09) — workflow module.
+// Three status tabs: Non-Approved → Approved → Re-Approved.
+// Each entry = one PO item (type=PO) + up to 10 FOC items (type=FOC) +
+// labour + margin.  TPA = (PO Rate×Qty + Σ FOC Rate×Qty + Labour) × (1 + margin%).
 
 const MARGINS = [10, 20, 30, 40, 50, 75, 100];
 const MAX_FOC = 10;
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const fmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-const blankFoc = () => ({ item_id: null, name: '', qty: 1, rate: 0 });
-const blankRow = () => ({ po_item_id: null, po_name: '', po_rate: 0, qty: 1, focs: [], margin: 30, labour: 0 });
 
-const Lbl = ({ children }) => (
-  <div className="text-[9px] font-semibold uppercase tracking-wide text-gray-400 mb-0.5">{children}</div>
-);
+const TABS = [
+  { key: 'non_approved', label: 'Non-Approved', active: 'bg-amber-500 text-white border-amber-500' },
+  { key: 'approved', label: 'Approved', active: 'bg-emerald-600 text-white border-emerald-600' },
+  { key: 're_approved', label: 'Re-Approved', active: 'bg-blue-600 text-white border-blue-600' },
+];
+const STATUS_BADGE = {
+  non_approved: 'bg-amber-100 text-amber-700',
+  approved: 'bg-emerald-100 text-emerald-700',
+  re_approved: 'bg-blue-100 text-blue-700',
+};
+const blankForm = () => ({ id: null, status: 'non_approved', po_item_id: null, po_name: '', po_rate: 0, qty: 1, labour: 0, margin: 30, focs: [] });
+const blankFoc = () => ({ item_id: null, name: '', qty: 1, rate: 0 });
+
+const calc = (f) => {
+  const poAmt = r2((Number(f.po_rate) || 0) * (Number(f.qty) || 0));
+  const focAmt = r2((f.focs || []).reduce((t, x) => t + (Number(x.rate) || 0) * (Number(x.qty) || 0), 0));
+  const labour = Number(f.labour) || 0;
+  const cost = r2(poAmt + focAmt + labour);
+  const tpa = r2(cost * (1 + (Number(f.margin) || 0) / 100));
+  return { cost, tpa };
+};
 
 export default function PoFocStripped() {
+  const [tab, setTab] = useState('non_approved');
+  const [entries, setEntries] = useState([]);
+  const [counts, setCounts] = useState({ non_approved: 0, approved: 0, re_approved: 0 });
   const [poItems, setPoItems] = useState([]);
   const [focItems, setFocItems] = useState([]);
-  const [rows, setRows] = useState([blankRow()]);
+  const [modal, setModal] = useState(false);
+  const [form, setForm] = useState(blankForm());
 
+  const load = useCallback(() => {
+    api.get('/quotations/po-foc').then(r => { setEntries(r.data.rows || []); setCounts(r.data.counts || {}); }).catch(() => {});
+  }, []);
+  useEffect(() => { load(); }, [load]);
   useEffect(() => {
     api.get('/item-master/dropdown?type=PO').then(r => setPoItems(r.data || [])).catch(() => {});
     api.get('/item-master/dropdown?type=FOC').then(r => setFocItems(r.data || [])).catch(() => {});
   }, []);
 
-  const patchRow = (i, patch) => setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r));
-  const pickPo = (i, opt) => patchRow(i, opt
-    ? { po_item_id: opt.id, po_name: opt.display_name || opt.item_name, po_rate: opt.current_price || 0 }
-    : { po_item_id: null, po_name: '', po_rate: 0 });
+  const openNew = () => { setForm(blankForm()); setModal(true); };
+  const openEdit = (e) => { setForm({ ...e, focs: (e.focs || []).map(f => ({ ...f })) }); setModal(true); };
 
-  const addFoc = (i) => setRows(rs => rs.map((r, idx) => {
-    if (idx !== i) return r;
-    if ((r.focs || []).length >= MAX_FOC) { toast.error(`Max ${MAX_FOC} FOC items per item`); return r; }
-    return { ...r, focs: [...(r.focs || []), blankFoc()] };
-  }));
-  const patchFoc = (i, fi, patch) => setRows(rs => rs.map((r, idx) => idx === i
-    ? { ...r, focs: r.focs.map((f, fj) => fj === fi ? { ...f, ...patch } : f) } : r));
-  const removeFoc = (i, fi) => setRows(rs => rs.map((r, idx) => idx === i
-    ? { ...r, focs: r.focs.filter((_, fj) => fj !== fi) } : r));
-  const pickFoc = (i, fi, opt) => patchFoc(i, fi, opt
-    ? { item_id: opt.id, name: opt.display_name || opt.item_name, rate: opt.current_price || 0 }
-    : { item_id: null, name: '', rate: 0 });
+  // form helpers
+  const setF = (patch) => setForm(f => ({ ...f, ...patch }));
+  const pickPo = (opt) => setF(opt ? { po_item_id: opt.id, po_name: opt.display_name || opt.item_name, po_rate: opt.current_price || 0 } : { po_item_id: null, po_name: '', po_rate: 0 });
+  const addFoc = () => setForm(f => (f.focs || []).length >= MAX_FOC ? (toast.error(`Max ${MAX_FOC} FOC`), f) : { ...f, focs: [...(f.focs || []), blankFoc()] });
+  const patchFoc = (fi, patch) => setForm(f => ({ ...f, focs: f.focs.map((x, j) => j === fi ? { ...x, ...patch } : x) }));
+  const removeFoc = (fi) => setForm(f => ({ ...f, focs: f.focs.filter((_, j) => j !== fi) }));
+  const pickFoc = (fi, opt) => patchFoc(fi, opt ? { item_id: opt.id, name: opt.display_name || opt.item_name, rate: opt.current_price || 0 } : { item_id: null, name: '', rate: 0 });
 
-  const calc = (row) => {
-    const poAmt = r2((Number(row.po_rate) || 0) * (Number(row.qty) || 0));
-    const focAmt = r2((row.focs || []).reduce((t, f) => t + (Number(f.rate) || 0) * (Number(f.qty) || 0), 0));
-    const labour = Number(row.labour) || 0;
-    const cost = r2(poAmt + focAmt + labour);
-    const margin = Number(row.margin) || 0;
-    const tpa = r2(cost * (1 + margin / 100));
-    return { poAmt, focAmt, labour, cost, margin, tpa };
+  const formCalc = useMemo(() => calc(form), [form]);
+
+  const save = async (approveAfter) => {
+    if (!form.po_name) { toast.error('Pick a PO item'); return; }
+    try {
+      const payload = { po_item_id: form.po_item_id, po_name: form.po_name, po_rate: form.po_rate, qty: form.qty, labour: form.labour, margin: form.margin, focs: form.focs };
+      let id = form.id;
+      if (id) { await api.put(`/quotations/po-foc/${id}`, payload); }
+      else { const r = await api.post('/quotations/po-foc', payload); id = r.data.id; }
+      if (approveAfter && id) await api.post(`/quotations/po-foc/${id}/approve`);
+      toast.success(approveAfter ? 'Approved' : 'Saved');
+      setModal(false); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
+  const approve = async (id) => { try { await api.post(`/quotations/po-foc/${id}/approve`); toast.success('Approved'); load(); } catch (e) { toast.error('Failed'); } };
+  const del = async (id) => { if (!confirm('Delete this PO/FOC item?')) return; try { await api.delete(`/quotations/po-foc/${id}`); load(); } catch (e) { toast.error('Failed'); } };
 
-  const totals = useMemo(() => rows.reduce((t, r) => {
-    const c = calc(r); t.cost += c.cost; t.tpa += c.tpa; return t;
-  }, { cost: 0, tpa: 0 }), [rows]);
-
-  const exportSheet = () => {
-    const headers = ['PO Item No', 'Item Name', 'Qty', 'PO Rate', 'FOC Items', 'FOC Amount', 'Labour Rate', 'Margin %', 'Cost', 'TPA'];
-    const data = rows.filter(r => r.po_name).map((r, idx) => {
-      const c = calc(r);
-      const focStr = (r.focs || []).filter(f => f.name).map(f => `${f.name} x${f.qty} @${f.rate}`).join(' ; ');
-      return [idx + 1, r.po_name, r.qty, r.po_rate, focStr, c.focAmt, c.labour, `${c.margin}%`, c.cost, c.tpa];
-    });
-    if (!data.length) { toast.error('Add at least one PO item'); return; }
-    data.push(['', 'TOTAL', '', '', '', '', '', '', totals.cost, totals.tpa]);
-    exportCsv('po-foc-stripped', headers, data);
-  };
+  const shown = entries.filter(e => e.status === tab);
 
   return (
     <div className="space-y-4 pb-24">
-      {/* Header */}
       <div className="flex items-end justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">📦 PO/FOC Stripped</h1>
-          <p className="text-sm text-gray-500">One PO item per row — attach up to {MAX_FOC} FOC items, add labour and a margin. TPA builds automatically.</p>
+          <p className="text-sm text-gray-500">Build a PO item with its FOC items, labour and margin, then approve it. Approved items print as a PDF.</p>
         </div>
-        <div className="text-right bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-2">
-          <div className="text-[10px] uppercase tracking-wide text-emerald-600 font-semibold">Total TPA</div>
-          <div className="text-2xl font-bold text-emerald-700">₹{fmt(totals.tpa)}</div>
-          <div className="text-[10px] text-gray-400">cost ₹{fmt(totals.cost)}</div>
-        </div>
+        <button onClick={openNew} className="btn btn-primary flex items-center gap-1"><FiPlus size={15} /> New PO/FOC</button>
       </div>
 
-      {/* One horizontal row per PO item */}
-      {rows.map((row, i) => {
-        const c = calc(row);
-        const focCount = (row.focs || []).length;
-        return (
-          <div key={i} className="card p-3">
-            {/* Main horizontal line */}
-            <div className="flex items-end gap-3 flex-wrap">
-              <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 text-sm font-bold shrink-0">{i + 1}</span>
-              <div className="flex-1 min-w-[220px]">
-                <Lbl>PO Item (type to search)</Lbl>
-                <SearchableSelect options={poItems} value={row.po_item_id} valueKey="id"
-                  displayKey="display_name" placeholder="Search PO items…" onChange={opt => pickPo(i, opt)} />
-              </div>
-              <div className="w-16">
-                <Lbl>Qty</Lbl>
-                <input className="input text-right py-1.5" type="number" min="1" value={row.qty || ''}
-                  onChange={e => patchRow(i, { qty: e.target.value })} />
-              </div>
-              <div className="w-24">
-                <Lbl>PO Rate ₹</Lbl>
-                <input className="input text-right py-1.5" type="number" min="0" value={row.po_rate || ''}
-                  onChange={e => patchRow(i, { po_rate: e.target.value })} />
-              </div>
-              <div className="w-24">
-                <Lbl>Labour ₹</Lbl>
-                <input className="input text-right py-1.5" type="number" min="0" value={row.labour || ''}
-                  onChange={e => patchRow(i, { labour: e.target.value })} placeholder="0" />
-              </div>
-              <div className="w-20">
-                <Lbl>Margin %</Lbl>
-                <select className="select py-1.5" value={row.margin} onChange={e => patchRow(i, { margin: +e.target.value })}>
-                  {MARGINS.map(m => <option key={m} value={m}>{m}%</option>)}
-                </select>
-              </div>
-              <div className="text-right min-w-[96px]">
-                <Lbl>TPA ₹</Lbl>
-                <div className="text-lg font-bold text-emerald-700 leading-tight">{fmt(c.tpa)}</div>
-                <div className="text-[9px] text-gray-400">cost {fmt(c.cost)}</div>
-              </div>
-              <button type="button" title="Remove this PO item"
-                onClick={() => setRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : [blankRow()])}
-                className="text-red-400 hover:text-red-600 mb-1.5"><FiTrash2 size={16} /></button>
-            </div>
+      {/* Status pill tabs */}
+      <div className="flex gap-2 flex-wrap">
+        {TABS.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`px-4 py-2 rounded-full text-sm font-semibold border transition ${tab === t.key
+              ? t.active
+              : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
+            {t.label} <span className={`ml-1 ${tab === t.key ? 'opacity-90' : 'text-gray-400'}`}>({counts[t.key] || 0})</span>
+          </button>
+        ))}
+      </div>
 
-            {/* FOC items — flowing side by side */}
-            <div className="mt-2 pt-2 border-t border-gray-100 flex items-end gap-2 flex-wrap">
-              <span className="text-[11px] font-semibold text-gray-500 mb-2 whitespace-nowrap">FOC ({focCount}/{MAX_FOC}):</span>
-              {(row.focs || []).map((f, fi) => (
-                <div key={fi} className="inline-flex items-end gap-1 border border-gray-200 rounded-lg px-2 py-1 bg-gray-50">
-                  <div className="w-40">
-                    <Lbl>FOC item</Lbl>
-                    <SearchableSelect options={focItems} value={f.item_id} valueKey="id"
-                      displayKey="display_name" placeholder="Search FOC…" onChange={opt => pickFoc(i, fi, opt)} />
-                  </div>
-                  <div className="w-12">
-                    <Lbl>Qty</Lbl>
-                    <select className="select py-1.5 text-xs" value={f.qty} onChange={e => patchFoc(i, fi, { qty: +e.target.value })}>
-                      {Array.from({ length: 10 }, (_, n) => <option key={n + 1} value={n + 1}>{n + 1}</option>)}
-                    </select>
-                  </div>
-                  <div className="w-16">
-                    <Lbl>Rate ₹</Lbl>
-                    <input className="input text-right py-1.5 text-xs" type="number" min="0" value={f.rate || ''}
-                      onChange={e => patchFoc(i, fi, { rate: e.target.value })} placeholder="0" />
-                  </div>
-                  <button type="button" className="text-red-300 hover:text-red-500 mb-1.5" onClick={() => removeFoc(i, fi)}><FiTrash2 size={12} /></button>
+      {/* Entry cards for the active tab */}
+      {shown.length === 0 && (
+        <div className="card p-8 text-center text-gray-400 text-sm">
+          {tab === 'non_approved' ? 'Nothing pending. Click “New PO/FOC” to start.' : tab === 'approved' ? 'No approved items yet.' : 'No re-approved (changed) items.'}
+        </div>
+      )}
+      <div className="space-y-3">
+        {shown.map(e => (
+          <div key={e.id} className="card p-3">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="flex-1 min-w-[220px]">
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${STATUS_BADGE[e.status]}`}>{e.status.replace('_', '-').toUpperCase()}</span>
+                  <span className="font-semibold text-gray-800">{e.po_name}</span>
                 </div>
-              ))}
-              <button type="button" disabled={focCount >= MAX_FOC} onClick={() => addFoc(i)}
-                className={`text-xs flex items-center gap-1 px-2 py-1.5 rounded border mb-0.5 ${focCount >= MAX_FOC ? 'text-gray-300 border-gray-100' : 'text-indigo-600 border-indigo-200 hover:bg-indigo-50'}`}>
-                <FiPlus size={13} /> Add FOC
-              </button>
+                <div className="text-xs text-gray-500 mt-1">
+                  Qty {e.qty} · PO ₹{fmt(e.po_rate)} · Labour ₹{fmt(e.labour)} · Margin {e.margin}% · FOC {(e.focs || []).length}
+                </div>
+                {(e.focs || []).length > 0 && (
+                  <div className="text-[11px] text-gray-400 mt-0.5 truncate">FOC: {(e.focs || []).map(f => `${f.name}×${f.qty}`).join(', ')}</div>
+                )}
+              </div>
+              <div className="text-right">
+                <div className="text-[10px] uppercase text-gray-400">TPA</div>
+                <div className="text-lg font-bold text-emerald-700">₹{fmt(e.tpa)}</div>
+                <div className="text-[10px] text-gray-400">cost ₹{fmt(e.cost)}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100 flex-wrap">
+              {(e.status === 'approved' || e.status === 're_approved') && (
+                <a href={`/po-foc/${e.id}/print`} target="_blank" rel="noreferrer" className="btn btn-secondary text-xs flex items-center gap-1"><FiFileText size={13} /> View PDF</a>
+              )}
+              <button onClick={() => openEdit(e)} className="btn btn-secondary text-xs flex items-center gap-1"><FiEdit2 size={13} /> Edit</button>
+              {e.status !== 'approved' && (
+                <button onClick={() => approve(e.id)} className="btn btn-success text-xs flex items-center gap-1"><FiCheck size={13} /> {e.status === 're_approved' ? 'Re-approve' : 'Approve'}</button>
+              )}
+              <button onClick={() => del(e.id)} className="text-red-400 hover:text-red-600 ml-auto"><FiTrash2 size={15} /></button>
             </div>
           </div>
-        );
-      })}
-
-      {/* Actions */}
-      <div className="flex flex-wrap items-center gap-3">
-        <button type="button" onClick={() => setRows(rs => [...rs, blankRow()])} className="btn btn-secondary flex items-center gap-1">
-          <FiPlus size={15} /> Add PO Item
-        </button>
-        <button type="button" onClick={exportSheet} className="btn btn-primary flex items-center gap-1">
-          <FiDownload size={15} /> Export (Excel)
-        </button>
+        ))}
       </div>
 
-      <p className="text-xs text-gray-400">
-        TPA = (PO Rate × Qty + Σ FOC Rate × Qty + Labour Rate) × (1 + Margin%). Item Name lists PO-type items; FOC lists FOC-type items (max {MAX_FOC} per PO item). Rates default from the item and stay editable.
-      </p>
+      {/* Edit / New modal */}
+      <Modal isOpen={modal} onClose={() => setModal(false)} title={form.id ? 'Edit PO/FOC item' : 'New PO/FOC item'} wide>
+        <div className="space-y-3">
+          <div>
+            <label className="label">PO Item (type to search)</label>
+            <SearchableSelect options={poItems} value={form.po_item_id} valueKey="id" displayKey="display_name" placeholder="Search PO items…" onChange={pickPo} />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div><label className="label">Qty</label><input className="input text-right" type="number" min="1" value={form.qty || ''} onChange={e => setF({ qty: e.target.value })} /></div>
+            <div><label className="label">PO Rate ₹</label><input className="input text-right" type="number" min="0" value={form.po_rate || ''} onChange={e => setF({ po_rate: e.target.value })} /></div>
+            <div><label className="label">Labour ₹</label><input className="input text-right" type="number" min="0" value={form.labour || ''} onChange={e => setF({ labour: e.target.value })} placeholder="0" /></div>
+            <div><label className="label">Margin %</label><select className="select" value={form.margin} onChange={e => setF({ margin: +e.target.value })}>{MARGINS.map(m => <option key={m} value={m}>{m}%</option>)}</select></div>
+          </div>
+
+          <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-gray-600">FOC Items <span className="text-gray-400">({(form.focs || []).length}/{MAX_FOC})</span></span>
+              <button type="button" disabled={(form.focs || []).length >= MAX_FOC} onClick={addFoc}
+                className={`text-xs flex items-center gap-1 px-2 py-1 rounded ${(form.focs || []).length >= MAX_FOC ? 'text-gray-300' : 'text-indigo-600 hover:bg-indigo-100'}`}><FiPlus size={13} /> Add FOC</button>
+            </div>
+            {(form.focs || []).length === 0 && <div className="text-[11px] text-gray-400 italic">No FOC items. Add up to {MAX_FOC}.</div>}
+            <div className="space-y-2">
+              {(form.focs || []).map((f, fi) => (
+                <div key={fi} className="flex items-center gap-2">
+                  <span className="text-[10px] text-gray-400 w-4">{fi + 1}</span>
+                  <div className="flex-1 min-w-0"><SearchableSelect options={focItems} value={f.item_id} valueKey="id" displayKey="display_name" placeholder="Search FOC item…" onChange={opt => pickFoc(fi, opt)} /></div>
+                  <select className="select text-xs py-1.5 w-14" value={f.qty} onChange={e => patchFoc(fi, { qty: +e.target.value })}>{Array.from({ length: 10 }, (_, n) => <option key={n + 1} value={n + 1}>{n + 1}</option>)}</select>
+                  <input className="input text-right text-xs py-1.5 w-20" type="number" min="0" value={f.rate || ''} onChange={e => patchFoc(fi, { rate: e.target.value })} placeholder="rate" />
+                  <button type="button" className="text-red-300 hover:text-red-500" onClick={() => removeFoc(fi)}><FiTrash2 size={13} /></button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
+            <span className="text-xs text-gray-500">Cost ₹{fmt(formCalc.cost)}</span>
+            <span className="text-sm font-bold text-emerald-700">TPA ₹{fmt(formCalc.tpa)}</span>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
+            <button onClick={() => save(false)} className="btn btn-primary">Save (keep pending)</button>
+            <button onClick={() => save(true)} className="btn btn-success flex items-center gap-1"><FiCheck size={14} /> Approve</button>
+          </div>
+        </div>
+      </Modal>
+
+      <p className="text-xs text-gray-400">TPA = (PO Rate × Qty + Σ FOC Rate × Qty + Labour) × (1 + Margin%). Editing an Approved item moves it to Re-Approved until you approve it again.</p>
     </div>
   );
 }
