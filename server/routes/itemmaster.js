@@ -101,10 +101,21 @@ router.get('/', requirePermission('item_master', 'view'), (req, res) => {
 // Lightweight dropdown — unchanged shape so callers don't break.
 router.get('/dropdown', (req, res) => {
   const { type } = req.query;
-  let sql = 'SELECT id, item_code, department, item_name, specification, size, uom, gst, type, current_price FROM item_master';
-  if (type) sql += ` WHERE type='${type}'`;
-  sql += ' ORDER BY department, item_name';
-  const items = getDb().prepare(sql).all();
+  // Dedupe make-variants (mam 2026-06-09): the same item in 2-3 makes shows
+  // as identical rows. Group to ONE row per unique item_name + specification
+  // + size — make is irrelevant in pickers. Representative id = lowest; price
+  // = any non-zero (reference only).
+  // Use a SINGLE aggregate (MIN id) so SQLite returns item_code, uom,
+  // current_price etc. from the SAME row as that min id — with two
+  // aggregates the bare columns came from indeterminate rows, so the shown
+  // code/unit didn't match the item (mam 2026-06-10).
+  const where = type ? 'WHERE type = ?' : '';
+  const sql = `SELECT MIN(id) AS id, item_code, department, item_name, specification, size, uom, gst, type, current_price
+                 FROM item_master ${where}
+                GROUP BY LOWER(TRIM(item_name)), LOWER(TRIM(COALESCE(specification, ''))), LOWER(TRIM(COALESCE(size, '')))
+                ORDER BY department, item_name`;
+  const stmt = getDb().prepare(sql);
+  const items = type ? stmt.all(type) : stmt.all();
   res.json(items.map(i => ({
     ...i,
     display_name: [i.item_name, i.specification, i.size].filter(Boolean).join(' / ')
