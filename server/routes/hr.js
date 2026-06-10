@@ -443,7 +443,7 @@ const canSeeSalary = (userId, userRole) => {
 router.get('/employees', (req, res) => {
   const rows = getDb().prepare(
     `SELECT e.*, u.name as linked_user_name, u.username as linked_username
-     FROM employees e LEFT JOIN users u ON u.id = e.user_id ORDER BY e.name`
+     FROM employees e LEFT JOIN users u ON u.id = e.user_id ORDER BY e.name COLLATE NOCASE`
   ).all();
   if (canSeeSalary(req.user.id, req.user.role)) return res.json(rows);
   // Redact salary for everyone else
