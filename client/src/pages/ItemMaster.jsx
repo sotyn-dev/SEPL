@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -62,9 +62,12 @@ export default function ItemMaster() {
   const [bulkModal, setBulkModal] = useState(false);
   const [historyModal, setHistoryModal] = useState(null); // { item, rows }
   const [form, setForm] = useState({ ...emptyForm });
-  // Allow opening pre-searched via ?search=CODE (e.g. an Edit-item link from
-  // the PO/FOC builder opens this page focused on that item).
-  const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get('search') || '');
+  // Allow opening pre-searched via ?search=CODE, or ?edit=CODE which also
+  // auto-opens that item's Edit modal (the ✎ button in the PO/FOC builder
+  // opens straight to this quick edit window).
+  const [search, setSearch] = useState(() => { const p = new URLSearchParams(window.location.search); return p.get('search') || p.get('edit') || ''; });
+  const autoEditCode = useRef((new URLSearchParams(window.location.search)).get('edit'));
+  const autoEditDone = useRef(false);
   const [filterDept, setFilterDept] = useState('');
   const [statusFilter, setStatusFilter] = useState(''); // expired | ageing | fresh | never | make_blank | no_vendor
   const [bulkData, setBulkData] = useState('');
@@ -87,6 +90,13 @@ export default function ItemMaster() {
   }, [search, filterDept, statusFilter, page]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Auto-open the Edit modal when launched via ?edit=CODE (from the PO/FOC ✎).
+  useEffect(() => {
+    if (autoEditDone.current || !autoEditCode.current || !items.length) return;
+    const it = items.find(i => String(i.item_code || '').toLowerCase() === String(autoEditCode.current).toLowerCase());
+    if (it) { setForm({ ...it, vendor_id: it.vendor_id || '' }); setModal('edit'); autoEditDone.current = true; }
+  }, [items]);
 
   // Snap back to page 1 whenever a filter or search changes so the user
   // doesn't end up on page 14 of a 2-page result and see "No items".

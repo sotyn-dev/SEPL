@@ -86,7 +86,9 @@ export default function PoFocStripped() {
   // Open the Item Master page (new tab) pre-searched to this item so you can
   // edit it; re-pick it here afterwards to pull the updated rate.
   const codeOf = (list, id) => (list.find(x => x.id === id) || {}).item_code || '';
-  const openItemEdit = (code, name) => window.open(`/item-master?search=${encodeURIComponent(code || name || '')}`, '_blank', 'noopener');
+  const openItemEdit = (code, name) => window.open(code
+    ? `/item-master?edit=${encodeURIComponent(code)}`
+    : `/item-master?search=${encodeURIComponent(name || '')}`, '_blank', 'noopener');
 
   const save = async (approveAfter) => {
     if (!form.po_name) { toast.error('Pick a PO item'); return; }
