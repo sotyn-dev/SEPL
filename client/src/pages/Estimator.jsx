@@ -33,6 +33,14 @@ export default function Estimator() {
   const [rows, setRows] = useState([blankRow()]);
   const [matching, setMatching] = useState(false);
   const [kitByPoId, setKitByPoId] = useState({}); // po_item_id → PO/FOC kit (labour, focs, po_rate)
+  // Manpower / additional cost block for the SUMMARY sheet (saizar format).
+  const [manpower, setManpower] = useState([
+    { name: 'Site Engineer', qty: 1, monthly_cost: 40000, months: 0 },
+    { name: 'Junior Engineer', qty: 1, monthly_cost: 25000, months: 0 },
+    { name: 'Room rent, Food etc', qty: 1, monthly_cost: 10000, months: 0 },
+    { name: 'Hydra', qty: 1, monthly_cost: 75000, months: 0 },
+    { name: 'Scaffolding', qty: 1, monthly_cost: 40000, months: 0 },
+  ]);
   const fileRef = useRef();
 
   useEffect(() => {
@@ -207,6 +215,29 @@ export default function Estimator() {
     // Totals line
     data.push(['', 'TOTAL', '', '', '', totals.sp, '', '', '', '', totals.cost, '', totals.sp, '']);
     exportCsv(`quotation-${title || 'estimate'}`, headers, data);
+  };
+
+  const patchMp = (i, patch) => setManpower(m => m.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  const addMp = () => setManpower(m => [...m, { name: '', qty: 1, monthly_cost: 0, months: 0 }]);
+  const removeMp = (i) => setManpower(m => m.filter((_, idx) => idx !== i));
+  const mpAmt = (m) => (Number(m.qty) || 0) * (Number(m.monthly_cost) || 0) * (Number(m.months) || 0);
+
+  // Full saizar-format export: per-category sheets + SUMMARY + manpower.
+  const exportXlsx = async () => {
+    const data = rows.filter(r => r.description).map((row, idx) => {
+      const c = calc(row);
+      return { s_no: idx + 1, description: row.description, make: '', unit: row.unit, qty: Number(row.qty) || 0, rate: c.rate, sp: c.sp, pp: Number(row.pp) || 0, acc: c.acc, lab: Number(row.lab) || 0, tp: c.tp, tpa: c.tpa, margin: c.mPct, category: row.category || 'General' };
+    });
+    if (!data.length) { toast.error('Add at least one item'); return; }
+    const clientName = leads.find(l => String(l.id) === String(leadId))?.company_name || '';
+    try {
+      const resp = await api.post('/quotations/estimate-export', { title, client_name: clientName, manpower, rows: data }, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([resp.data]));
+      const a = document.createElement('a'); a.href = url; a.download = `quotation-${(title || 'estimate').replace(/[^a-z0-9]/gi, '_')}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast.success('Quotation downloaded');
+    } catch (e) { toast.error('Export failed'); }
   };
 
   const lab = (s) => <span className="text-[10px] font-semibold text-gray-500 uppercase">{s}</span>;
@@ -401,11 +432,39 @@ export default function Estimator() {
         </table>
       </div>
 
+      {/* Manpower / Additional cost — flows into the SUMMARY sheet */}
+      <div className="card p-4">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-semibold text-gray-700">Manpower / Additional Cost (for the Summary sheet)</span>
+          <button type="button" onClick={addMp} className="text-xs text-indigo-600 hover:underline flex items-center gap-1"><FiPlus size={12} /> Add row</button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead><tr className="text-[10px] uppercase text-gray-400 text-left">
+              <th className="p-1 min-w-[180px]">Item</th><th className="p-1 text-right">Qty</th><th className="p-1 text-right">Monthly Cost ₹</th><th className="p-1 text-right">Months</th><th className="p-1 text-right">Amount ₹</th><th></th>
+            </tr></thead>
+            <tbody>
+              {manpower.map((m, i) => (
+                <tr key={i} className="border-t border-gray-100">
+                  <td className="p-1"><input className="input py-1" value={m.name} onChange={e => patchMp(i, { name: e.target.value })} placeholder="e.g. Site Engineer" /></td>
+                  <td className="p-1 w-16"><input className="input text-right py-1" type="number" min="0" value={m.qty} onChange={e => patchMp(i, { qty: e.target.value })} /></td>
+                  <td className="p-1 w-28"><input className="input text-right py-1" type="number" min="0" value={m.monthly_cost} onChange={e => patchMp(i, { monthly_cost: e.target.value })} /></td>
+                  <td className="p-1 w-20"><input className="input text-right py-1" type="number" min="0" value={m.months} onChange={e => patchMp(i, { months: e.target.value })} /></td>
+                  <td className="p-1 text-right font-medium">{fmt(mpAmt(m))}</td>
+                  <td className="p-1"><button type="button" className="text-red-400 hover:text-red-600" onClick={() => removeMp(i)}><FiTrash2 size={13} /></button></td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot><tr className="border-t-2 border-gray-200 font-semibold"><td className="p-1" colSpan={4}>Manpower Total</td><td className="p-1 text-right text-indigo-700">₹{fmt(manpower.reduce((t, m) => t + mpAmt(m), 0))}</td><td></td></tr></tfoot>
+          </table>
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" onClick={() => setRows(rs => [...rs, blankRow()])} className="btn btn-secondary text-sm flex items-center gap-1">
           <FiPlus size={14} /> Add Item
         </button>
-        <button type="button" onClick={exportSheet} className="btn btn-primary text-sm flex items-center gap-1">
+        <button type="button" onClick={exportXlsx} className="btn btn-primary text-sm flex items-center gap-1">
           <FiDownload size={14} /> Export Quotation (Excel)
         </button>
         <div className="ml-auto text-sm text-gray-600">

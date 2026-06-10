@@ -433,4 +433,65 @@ router.delete('/labour-rates/:id', (req, res) => {
   res.json({ message: 'Deleted' });
 });
 
+// Build the multi-sheet quotation Excel (mam's saizar format): one sheet per
+// category + a SUMMARY with letterhead, category totals and a manpower block.
+router.post('/estimate-export', (req, res) => {
+  try {
+    const { title = '', client_name = '', client_address = '', quotation_no = '', prep_by = '',
+      rows = [], manpower = [] } = req.body || {};
+    const wb = XLSX.utils.book_new();
+    const safeSheet = (s) => String(s || 'General').replace(/[\\/?*[\]:]/g, ' ').slice(0, 28).trim() || 'Sheet';
+    const byCat = {};
+    for (const r of rows) { const c = r.category || 'General'; (byCat[c] = byCat[c] || []).push(r); }
+
+    const catTotals = [];
+    for (const [cat, items] of Object.entries(byCat)) {
+      const aoa = [['S.NO.', 'DESCRIPTION', 'MAKE', 'UNIT', 'QTY', 'RATE', 'AMOUNT', '', 'PP', 'ACCESS', 'LAB', 'TP', 'TPA', 'MARGIN', 'SP']];
+      let sp = 0;
+      items.forEach((it, i) => {
+        aoa.push([i + 1, it.description || '', it.make || '', it.unit || '', it.qty || 0, it.rate || 0, it.sp || 0,
+          '', it.pp || 0, it.acc || 0, it.lab || 0, it.tp || 0, it.tpa || 0, (it.margin || 0) + '%', it.sp || 0]);
+        sp += Number(it.sp) || 0;
+      });
+      aoa.push(['TOTAL', '', '', '', '', '', Math.round(sp * 100) / 100, '', '', '', '', '', Math.round(sp * 100) / 100]);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), safeSheet(cat));
+      catTotals.push({ cat, sp });
+    }
+
+    const sum = [];
+    sum.push(['SECURED ENGINEERS PVT. LTD']);
+    sum.push(['H.O: 2480/1 , B.K. Towers, Janta Nagar, Gill Road, Ludhiana']);
+    sum.push(['C.O : 58/A/1, First Floor, Kalu Sarai, New Delhi - 110016']);
+    sum.push(['Website : www.securedengineers.com']);
+    sum.push([`QUOTATION FOR ${title || 'WORK'}`]);
+    sum.push(['NAME', client_name, '', 'Date-:', new Date().toISOString().slice(0, 10)]);
+    sum.push(['ADDRESS', client_address, '', 'Quotation No', quotation_no]);
+    sum.push(['PREP BY', prep_by, '', 'Revision No', 'R0']);
+    sum.push([]);
+    sum.push(['S.No.', 'Description', 'SP Amount (Rs)']);
+    let grand = 0;
+    catTotals.forEach((c, i) => { sum.push([i + 1, c.cat, Math.round(c.sp * 100) / 100]); grand += c.sp; });
+    sum.push(['', 'SUB TOTAL', Math.round(grand * 100) / 100]);
+    sum.push([]);
+    sum.push(['Additional / Manpower Cost', 'Qty', 'Monthly Cost', 'Months', 'Amount']);
+    let mTotal = 0;
+    manpower.filter(m => m && m.name).forEach(m => {
+      const amt = (Number(m.qty) || 0) * (Number(m.monthly_cost) || 0) * (Number(m.months) || 0);
+      sum.push([m.name, m.qty || 0, m.monthly_cost || 0, m.months || 0, Math.round(amt * 100) / 100]);
+      mTotal += amt;
+    });
+    sum.push(['', '', '', 'Manpower Total', Math.round(mTotal * 100) / 100]);
+    sum.push(['', '', '', 'GRAND TOTAL', Math.round((grand + mTotal) * 100) / 100]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sum), 'SUMMARY');
+    wb.SheetNames.unshift(wb.SheetNames.pop()); // SUMMARY first
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Disposition', `attachment; filename="quotation-${String(title || 'estimate').replace(/[^a-z0-9]/gi, '_')}.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
+  } catch (err) {
+    res.status(500).json({ error: 'Export failed: ' + err.message });
+  }
+});
+
 module.exports = router;
