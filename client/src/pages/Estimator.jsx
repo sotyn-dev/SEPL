@@ -172,12 +172,13 @@ export default function Estimator() {
     const pp = Number(row.pp) || 0;
     const qty = Number(row.qty) || 0;
     const lab = Number(row.lab) || 0;
-    const acc = r2(pp * (Number(accPct) || 0) / 100);
-    const tp = r2(pp + acc + lab);
-    // Charged (non-FOC) accessories add to the line total; FOC = ₹0.
+    // ACC = total of the FOC / accessory items of this PO line (mam 2026-06-10:
+    // "acc = foc total rate of that po item") + an optional % of material.
     const subsCharged = r2((row.subs || []).filter(s => !s.foc)
       .reduce((t, s) => t + (Number(s.rate) || 0) * (Number(s.qty) || 0), 0));
-    const tpa = r2(tp * qty + subsCharged);
+    const acc = r2(subsCharged + pp * qty * (Number(accPct) || 0) / 100);
+    const tp = r2(pp + lab);                 // per-unit base (material + labour)
+    const tpa = r2(tp * qty + acc);          // line total = base × qty + accessories
     const mPct = marginFor(row.category);
     const sp = r2(tpa * (1 + mPct / 100));
     const rate = qty ? r2(sp / qty) : 0;
@@ -413,7 +414,7 @@ export default function Estimator() {
       </div>
 
       <p className="text-xs text-gray-400">
-        Formula: SP = (PP + ACC + LAB) × Qty × (1 + category margin%). Material (PP) auto-fills from Item Master. When the picked/matched item has a 🔗 PO/FOC kit, its labour rate (LAB) and FOC accessories pull in automatically from the PO/FOC module — otherwise enter labour manually.
+        Formula: TPA = (PP + LAB) × Qty + ACC, where ACC = the total of this line's FOC / accessory items. SP = TPA × (1 + category margin%). Material (PP), labour (LAB) and FOC all pull from the 🔗 PO/FOC kit when the item has one.
       </p>
     </div>
   );
