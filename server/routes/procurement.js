@@ -671,7 +671,10 @@ router.get('/indents', (req, res) => {
   // displayed rate came from master or history.
   const allItems = db.prepare(
     `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity,
-            ii.unit, ii.item_type, ii.item_master_id,
+            -- Show the CURRENT Item Master UOM for linked items so a later
+            -- unit change in Item Master reflects here (mam 2026-06-10);
+            -- manual lines keep their own stored unit.
+            COALESCE(NULLIF(im.uom, ''), ii.unit) AS unit, ii.item_type, ii.item_master_id,
             ii.is_extra_schedule, ii.is_extra_non_schedule,
             ii.rental_days, ii.rental_rate_per_day,
             -- Source split (mam 2026-06-02): 'store' lines came from
