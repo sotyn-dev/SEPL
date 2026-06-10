@@ -273,6 +273,24 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Saved AI Auto-Quotation estimates (mam 2026-06-10): the whole estimator
+    -- state so quotations can be listed client-wise and edited later.
+    CREATE TABLE IF NOT EXISTS estimate_quotations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT,
+      lead_id INTEGER,
+      client_name TEXT,
+      acc_pct REAL DEFAULT 0,
+      margins_json TEXT,                              -- {category: marginPct}
+      rows_json TEXT,                                 -- full estimator rows (with subs)
+      manpower_json TEXT,
+      cost REAL DEFAULT 0,
+      sp REAL DEFAULT 0,
+      created_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Labour Rate sheet (mam 2026-06-10): item-wise labour / sub-contractor
     -- rates by UOM and category. Seeded once from her uploaded sheet.
     CREATE TABLE IF NOT EXISTS labour_rates (

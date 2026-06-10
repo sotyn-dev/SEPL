@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import api from '../api';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
-import { FiPlus, FiTrash2, FiDownload, FiUploadCloud } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiDownload, FiUploadCloud, FiEdit2, FiSave } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
 // AI Auto-Quotation (Estimator) — mam 2026-06-09.
@@ -41,6 +41,9 @@ export default function Estimator() {
     { name: 'Hydra', qty: 1, monthly_cost: 75000, months: 0 },
     { name: 'Scaffolding', qty: 1, monthly_cost: 40000, months: 0 },
   ]);
+  const [view, setView] = useState('build');     // 'build' | 'saved'
+  const [savedList, setSavedList] = useState([]);
+  const [currentId, setCurrentId] = useState(null);
   const fileRef = useRef();
 
   useEffect(() => {
@@ -240,14 +243,74 @@ export default function Estimator() {
     } catch (e) { toast.error('Export failed'); }
   };
 
+  // Save / list / edit saved quotations (client-wise).
+  const loadSavedList = () => api.get('/quotations/estimates').then(r => setSavedList(r.data || [])).catch(() => {});
+  useEffect(() => { if (view === 'saved') loadSavedList(); }, [view]);
+
+  const saveEstimate = async () => {
+    if (!rows.some(r => r.description)) { toast.error('Add at least one item'); return; }
+    const clientName = leads.find(l => String(l.id) === String(leadId))?.company_name || '';
+    const payload = { title, lead_id: leadId || null, client_name: clientName, acc_pct: accPct, margins, rows, manpower, cost: totals.cost, sp: totals.sp };
+    try {
+      if (currentId) { await api.put(`/quotations/estimates/${currentId}`, payload); }
+      else { const r = await api.post('/quotations/estimates', payload); setCurrentId(r.data.id); }
+      toast.success('Quotation saved');
+    } catch (e) { toast.error('Save failed'); }
+  };
+  const editEstimate = async (id) => {
+    try {
+      const { data } = await api.get(`/quotations/estimates/${id}`);
+      setTitle(data.title || ''); setLeadId(data.lead_id || ''); setAccPct(data.acc_pct || 0);
+      setMargins(data.margins || {}); setManpower((data.manpower && data.manpower.length) ? data.manpower : []);
+      setRows((data.rows && data.rows.length) ? data.rows : [blankRow()]);
+      setCurrentId(id); setView('build'); toast.success('Loaded — you can edit and re-save');
+    } catch (e) { toast.error('Failed to load'); }
+  };
+  const delEstimate = async (id) => { if (!confirm('Delete this saved quotation?')) return; try { await api.delete(`/quotations/estimates/${id}`); loadSavedList(); } catch (e) { toast.error('Failed'); } };
+  const newEstimate = () => { setTitle(''); setLeadId(''); setAccPct(0); setMargins({}); setRows([blankRow()]); setCurrentId(null); setView('build'); };
+
   const lab = (s) => <span className="text-[10px] font-semibold text-gray-500 uppercase">{s}</span>;
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">🧮 AI Auto-Quotation</h1>
-        <p className="text-sm text-gray-500">Pick items from Item Master — material rate auto-fills, add labour, set margin per category, and the sale price is built automatically.</p>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">🧮 AI Auto-Quotation {currentId && <span className="text-xs font-normal text-amber-600">(editing #{currentId})</span>}</h1>
+          <p className="text-sm text-gray-500">Pick items from Item Master — material rate auto-fills, add labour, set margin per category, and the sale price is built automatically.</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={newEstimate} className="btn btn-secondary text-sm flex items-center gap-1"><FiPlus size={14} /> New</button>
+          <button onClick={() => setView('build')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${view === 'build' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200'}`}>Build</button>
+          <button onClick={() => setView('saved')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${view === 'saved' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200'}`}>Saved (by client)</button>
+        </div>
       </div>
+
+      {view === 'saved' ? (
+        <div className="card p-0 overflow-hidden">
+          {savedList.length === 0 && <div className="p-8 text-center text-gray-400 text-sm">No saved quotations yet. Build one and click Save.</div>}
+          {(() => {
+            const byClient = {};
+            savedList.forEach(s => { const c = s.client_name || '— No client —'; (byClient[c] = byClient[c] || []).push(s); });
+            return Object.entries(byClient).map(([client, list]) => (
+              <div key={client}>
+                <div className="px-4 py-2 bg-gray-50 text-xs font-bold uppercase text-gray-600 border-b">{client} <span className="text-gray-400">({list.length})</span></div>
+                {list.map(s => (
+                  <div key={s.id} className="flex items-center justify-between gap-2 px-4 py-2 border-b border-gray-100 hover:bg-gray-50">
+                    <div className="min-w-0">
+                      <div className="font-medium text-gray-800 truncate">{s.title || '(untitled)'}</div>
+                      <div className="text-[11px] text-gray-400">Sale Price ₹{fmt(s.sp)} · {String(s.updated_at || '').slice(0, 10)}</div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button onClick={() => editEstimate(s.id)} className="btn btn-secondary text-xs flex items-center gap-1"><FiEdit2 size={12} /> Edit</button>
+                      <button onClick={() => delEstimate(s.id)} className="text-red-400 hover:text-red-600"><FiTrash2 size={14} /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ));
+          })()}
+        </div>
+      ) : (<>
 
       {/* Header inputs */}
       <div className="card p-4 grid grid-cols-1 sm:grid-cols-4 gap-4">
@@ -464,6 +527,9 @@ export default function Estimator() {
         <button type="button" onClick={() => setRows(rs => [...rs, blankRow()])} className="btn btn-secondary text-sm flex items-center gap-1">
           <FiPlus size={14} /> Add Item
         </button>
+        <button type="button" onClick={saveEstimate} className="btn btn-success text-sm flex items-center gap-1">
+          <FiSave size={14} /> {currentId ? 'Update Saved' : 'Save Quotation'}
+        </button>
         <button type="button" onClick={exportXlsx} className="btn btn-primary text-sm flex items-center gap-1">
           <FiDownload size={14} /> Export Quotation (Excel)
         </button>
@@ -475,6 +541,7 @@ export default function Estimator() {
       <p className="text-xs text-gray-400">
         Formula: TPA = (PP + LAB) × Qty + ACC, where ACC = the total of this line's FOC / accessory items. SP = TPA × (1 + category margin%). Material (PP), labour (LAB) and FOC all pull from the 🔗 PO/FOC kit when the item has one.
       </p>
+      </>)}
     </div>
   );
 }
