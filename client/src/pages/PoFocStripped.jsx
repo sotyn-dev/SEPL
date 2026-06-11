@@ -102,6 +102,9 @@ export default function PoFocStripped() {
   // Open the Item Master page (new tab) pre-searched to this item so you can
   // edit it; re-pick it here afterwards to pull the updated rate.
   const codeOf = (list, id) => (list.find(x => x.id === id) || {}).item_code || '';
+  // Unit of the picked item, read live off the loaded master list (mam 2026-06-11:
+  // "show the unit for PO item, FOC item, even labour item").
+  const uomOf = (list, id) => (list.find(x => x.id === id) || {}).uom || '';
   const openItemEdit = (code, name) => window.open(code
     ? `/item-master?edit=${encodeURIComponent(code)}`
     : `/item-master?search=${encodeURIComponent(name || '')}`, '_blank', 'noopener');
@@ -265,8 +268,8 @@ export default function PoFocStripped() {
             </div>
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <div><label className="label">Qty</label><input className="input text-right" type="number" min="1" value={form.qty || ''} onChange={e => setF({ qty: e.target.value })} /></div>
-            <div><label className="label">PO Rate ₹</label><input className="input text-right" type="number" min="0" value={form.po_rate || ''} onChange={e => setF({ po_rate: e.target.value })} /></div>
+            <div><label className="label">Qty{uomOf(poItems, form.po_item_id) && <span className="text-indigo-500 font-semibold"> · {uomOf(poItems, form.po_item_id)}</span>}</label><input className="input text-right" type="number" min="1" value={form.qty || ''} onChange={e => setF({ qty: e.target.value })} /></div>
+            <div><label className="label">PO Rate ₹{uomOf(poItems, form.po_item_id) && <span className="text-indigo-500 font-semibold"> / {uomOf(poItems, form.po_item_id)}</span>}</label><input className="input text-right" type="number" min="0" value={form.po_rate || ''} onChange={e => setF({ po_rate: e.target.value })} /></div>
             <div><label className="label" title="Margin on PO + FOC">Margin %</label><select className="select" value={form.margin} onChange={e => setF({ margin: +e.target.value })}>{MARGINS.map(m => <option key={m} value={m}>{m}%</option>)}</select></div>
           </div>
 
@@ -288,7 +291,7 @@ export default function PoFocStripped() {
                 </div>
               </div>
               <div className="sm:col-span-3">
-                <label className="label">Labour Rate ₹</label>
+                <label className="label">Labour Rate ₹{uomOf(labourItems, form.labour_item_id) && <span className="text-amber-600 font-semibold"> / {uomOf(labourItems, form.labour_item_id)}</span>}</label>
                 <input className="input text-right" type="number" min="0" value={form.labour || ''} onChange={e => setF({ labour: e.target.value })} placeholder="0" />
               </div>
               <div className="sm:col-span-3">
@@ -313,6 +316,7 @@ export default function PoFocStripped() {
                   <div className="flex-1 min-w-0"><SearchableSelect options={focItems} value={f.item_id} valueKey="id" displayKey="display_name" placeholder="Search FOC item…" onChange={opt => pickFoc(fi, opt)} /></div>
                   {f.item_id && <button type="button" title="Edit this item in Item Master (new tab)" onClick={() => openItemEdit(codeOf(focItems, f.item_id), f.name)} className="text-indigo-400 hover:text-indigo-600 shrink-0"><FiEdit2 size={13} /></button>}
                   <select className="select text-xs py-1.5 w-14" value={f.qty} onChange={e => patchFoc(fi, { qty: +e.target.value })}>{Array.from({ length: 10 }, (_, n) => <option key={n + 1} value={n + 1}>{n + 1}</option>)}</select>
+                  <span className="text-[10px] text-indigo-500 font-semibold w-10 text-center truncate" title={uomOf(focItems, f.item_id)}>{uomOf(focItems, f.item_id) || '—'}</span>
                   <input className="input text-right text-xs py-1.5 w-20" type="number" min="0" value={f.rate || ''} onChange={e => patchFoc(fi, { rate: e.target.value })} placeholder="rate" />
                   <button type="button" className="text-red-300 hover:text-red-500" onClick={() => removeFoc(fi)}><FiTrash2 size={13} /></button>
                 </div>
