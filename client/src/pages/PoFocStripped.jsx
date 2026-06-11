@@ -57,9 +57,9 @@ export default function PoFocStripped() {
   const load = useCallback(() => {
     api.get('/quotations/po-foc').then(r => { setEntries(r.data.rows || []); setCounts(r.data.counts || {}); }).catch(() => {});
   }, []);
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => {
-    // Show item CODE + UOM in the dropdown label (mam 2026-06-10).
+  // Reload the masters so a rate/UOM edit in Item Master is reflected here
+  // (mam 2026-06-11). Show item CODE + UOM in the dropdown label (mam 2026-06-10).
+  const loadMasters = useCallback(() => {
     const withCode = x => ({ ...x, display_name: `${x.item_code ? '[' + x.item_code + '] ' : ''}${[x.item_name, x.specification, x.size].filter(Boolean).join(' / ')}${x.uom ? ' · ' + x.uom : ''}` });
     api.get('/item-master/dropdown?type=PO').then(r => setPoItems((r.data || []).map(withCode))).catch(() => {});
     api.get('/item-master/dropdown?type=FOC').then(r => setFocItems((r.data || []).map(withCode))).catch(() => {});
@@ -68,9 +68,25 @@ export default function PoFocStripped() {
       display_name: `${x.item_name}${x.uom ? ' (' + x.uom + ')' : ''}`,
     })))).catch(() => {});
   }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadMasters(); }, [loadMasters]);
+  // Returning to this tab (e.g. after editing the item in the Item Master tab)
+  // re-pulls live rates/UOM so the cards and counts refresh without a reload.
+  useEffect(() => {
+    const onFocus = () => { load(); loadMasters(); };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [load, loadMasters]);
 
-  const openNew = () => { setForm(blankForm()); setModal(true); };
-  const openEdit = (e) => { setForm({ ...e, focs: (e.focs || []).map(f => ({ ...f })) }); setModal(true); };
+  const openNew = () => { setForm(blankForm()); setModal(true); loadMasters(); };
+  // Re-pull masters + the live entry so the modal shows the CURRENT Item Master
+  // rate/UOM, not the value snapshotted when the kit was first saved.
+  const openEdit = (e) => {
+    setForm({ ...e, focs: (e.focs || []).map(f => ({ ...f })) });
+    setModal(true);
+    loadMasters();
+    api.get(`/quotations/po-foc/${e.id}`).then(r => setForm({ ...r.data, focs: (r.data.focs || []).map(f => ({ ...f })) })).catch(() => {});
+  };
 
   // form helpers
   const setF = (patch) => setForm(f => ({ ...f, ...patch }));
@@ -89,6 +105,10 @@ export default function PoFocStripped() {
   const openItemEdit = (code, name) => window.open(code
     ? `/item-master?edit=${encodeURIComponent(code)}`
     : `/item-master?search=${encodeURIComponent(name || '')}`, '_blank', 'noopener');
+  // Labour items live in the Labour Rate sheet (matched by name) — ✎ opens that
+  // item's edit form, ➕ opens the sheet ready to add a new labour item.
+  const openLabourEdit = (name) => window.open(`/labour-rate?edit=${encodeURIComponent(name || '')}`, '_blank', 'noopener');
+  const openLabourAdd = () => window.open('/labour-rate?add=1', '_blank', 'noopener');
 
   const save = async (approveAfter) => {
     if (!form.po_name) { toast.error('Pick a PO item'); return; }
@@ -255,7 +275,17 @@ export default function PoFocStripped() {
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
               <div className="sm:col-span-6">
                 <label className="label">Labour Item (from Labour Rate sheet)</label>
-                <SearchableSelect options={labourItems} value={form.labour_item_id} valueKey="id" displayKey="display_name" placeholder="Search labour item…" onChange={pickLabour} />
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0"><SearchableSelect options={labourItems} value={form.labour_item_id} valueKey="id" displayKey="display_name" placeholder="Search labour item…" onChange={pickLabour} /></div>
+                  {form.labour_item_id && (
+                    <button type="button" title="Edit this labour item in the Labour Rate sheet (new tab)"
+                      onClick={() => openLabourEdit(form.labour_name)}
+                      className="text-indigo-500 hover:text-indigo-700 shrink-0"><FiEdit2 size={16} /></button>
+                  )}
+                  <button type="button" title="Add a new labour item to the Labour Rate sheet (new tab)"
+                    onClick={openLabourAdd}
+                    className="text-indigo-500 hover:text-indigo-700 shrink-0"><FiPlus size={16} /></button>
+                </div>
               </div>
               <div className="sm:col-span-3">
                 <label className="label">Labour Rate ₹</label>

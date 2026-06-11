@@ -369,18 +369,56 @@ function computePoFoc(body) {
   return { qty, poRate, labour, margin, labourMargin, focs, cost, tpa };
 }
 
+// Rebuild the same "[code] name / spec / size · uom" label the client shows.
+function itemDisplay(im) {
+  return `${im.item_code ? '[' + im.item_code + '] ' : ''}` +
+    `${[im.item_name, im.specification, im.size].filter(Boolean).join(' / ')}` +
+    `${im.uom ? ' · ' + im.uom : ''}`;
+}
+
+// Serve an entry LIVE against the Item Master (mam 2026-06-11): PO rate, FOC
+// rates, names and UOM are re-read from item_master by id every time, so
+// editing an item's rate/UOM in the master reflects on existing PO/FOC entries
+// — same idea as the indent BoQ live-UOM change. Stored values stay as a
+// fallback when the item was deleted or typed manually (no item_id). cost/TPA
+// are recomputed from the live rates so the cards and PDF stay consistent.
+function liveResolvePoFoc(db, row) {
+  const getItem = db.prepare('SELECT item_code, item_name, specification, size, uom, current_price FROM item_master WHERE id=?');
+  let { po_rate, po_name, labour, labour_name } = row;
+  if (row.po_item_id) {
+    const im = getItem.get(row.po_item_id);
+    if (im) { po_rate = im.current_price || 0; po_name = itemDisplay(im); }
+  }
+  // Labour is live off the Labour Rate sheet too: a rate or item-name edit
+  // there reflects on existing kits (mam 2026-06-11).
+  if (row.labour_item_id) {
+    const lr = db.prepare('SELECT item_name, rate FROM labour_rates WHERE id=?').get(row.labour_item_id);
+    if (lr) { labour = lr.rate || 0; labour_name = lr.item_name; }
+  }
+  const focs = JSON.parse(row.focs_json || '[]').map(f => {
+    if (f && f.item_id) {
+      const im = getItem.get(f.item_id);
+      if (im) return { ...f, rate: im.current_price || 0, name: itemDisplay(im) };
+    }
+    return f;
+  });
+  const c = computePoFoc({ qty: row.qty, po_rate, labour, margin: row.margin, labour_margin: row.labour_margin, focs });
+  return { ...row, po_rate, po_name, labour, labour_name, focs, cost: c.cost, tpa: c.tpa };
+}
+
 router.get('/po-foc', (req, res) => {
   const db = getDb();
   const rows = db.prepare('SELECT * FROM po_foc_entries ORDER BY updated_at DESC, id DESC').all();
   const counts = { non_approved: 0, approved: 0, re_approved: 0 };
   for (const r of rows) counts[r.status] = (counts[r.status] || 0) + 1;
-  res.json({ rows: rows.map(r => ({ ...r, focs: JSON.parse(r.focs_json || '[]') })), counts });
+  res.json({ rows: rows.map(r => liveResolvePoFoc(db, r)), counts });
 });
 
 router.get('/po-foc/:id', (req, res) => {
-  const r = getDb().prepare('SELECT * FROM po_foc_entries WHERE id=?').get(req.params.id);
+  const db = getDb();
+  const r = db.prepare('SELECT * FROM po_foc_entries WHERE id=?').get(req.params.id);
   if (!r) return res.status(404).json({ error: 'Not found' });
-  res.json({ ...r, focs: JSON.parse(r.focs_json || '[]') });
+  res.json(liveResolvePoFoc(db, r));
 });
 
 router.post('/po-foc', (req, res) => {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { FiPlus, FiEdit2, FiTrash2, FiX } from 'react-icons/fi';
@@ -13,12 +13,25 @@ const blank = () => ({ id: null, item_name: '', rate: '', uom: 'PCS', category: 
 
 export default function LabourRate() {
   const [rows, setRows] = useState([]);
-  const [search, setSearch] = useState('');
+  // Opened from the PO/FOC labour ✎ via ?edit=<name> (auto-opens that item's
+  // edit form) or the ➕ via ?add (focuses the add form). ?search= pre-filters.
+  const [search, setSearch] = useState(() => { const p = new URLSearchParams(window.location.search); return p.get('search') || p.get('edit') || ''; });
   const [catFilter, setCatFilter] = useState('');
   const [form, setForm] = useState(blank());
+  const autoEditName = useRef((new URLSearchParams(window.location.search)).get('edit'));
+  const autoEditDone = useRef(false);
+  const nameRef = useRef(null);
 
   const load = useCallback(() => { api.get('/quotations/labour-rates').then(r => setRows(r.data || [])).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load]);
+  // Focus the Item Name field when launched via ?add (quick-add from PO/FOC).
+  useEffect(() => { if ((new URLSearchParams(window.location.search)).has('add') && nameRef.current) nameRef.current.focus(); }, []);
+  // Auto-open the Edit form when launched via ?edit=<name> (the PO/FOC ✎).
+  useEffect(() => {
+    if (autoEditDone.current || !autoEditName.current || !rows.length) return;
+    const r = rows.find(x => String(x.item_name || '').toLowerCase() === String(autoEditName.current).toLowerCase());
+    if (r) { setForm({ id: r.id, item_name: r.item_name, rate: r.rate, uom: r.uom || 'PCS', category: r.category || 'Low Voltage' }); autoEditDone.current = true; }
+  }, [rows]);
 
   const filtered = useMemo(() => {
     let list = rows;
@@ -54,7 +67,7 @@ export default function LabourRate() {
         <div className="flex items-end gap-2 flex-wrap">
           <div className="flex-1 min-w-[200px]">
             <label className="block text-[10px] font-semibold uppercase text-gray-400 mb-0.5">Item Name</label>
-            <input className="input" value={form.item_name} onChange={e => setF({ item_name: e.target.value })} placeholder="e.g. SENSOR INSTALLATION" />
+            <input ref={nameRef} className="input" value={form.item_name} onChange={e => setF({ item_name: e.target.value })} placeholder="e.g. SENSOR INSTALLATION" />
           </div>
           <div className="w-28">
             <label className="block text-[10px] font-semibold uppercase text-gray-400 mb-0.5">Rate ₹</label>
