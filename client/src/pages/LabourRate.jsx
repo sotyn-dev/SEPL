@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import api from '../api';
+import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiTrash2, FiX } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2 } from 'react-icons/fi';
 
 // Labour Rate sheet (mam 2026-06-10) — item-wise labour / sub-contractor
 // rates by UOM and category. Seeded from her uploaded sheet; add/edit here.
@@ -14,23 +15,23 @@ const blank = () => ({ id: null, item_name: '', rate: '', uom: 'PCS', category: 
 export default function LabourRate() {
   const [rows, setRows] = useState([]);
   // Opened from the PO/FOC labour ✎ via ?edit=<name> (auto-opens that item's
-  // edit form) or the ➕ via ?add (focuses the add form). ?search= pre-filters.
+  // edit modal) or the ➕ via ?add (opens a blank add modal). ?search= pre-filters.
   const [search, setSearch] = useState(() => { const p = new URLSearchParams(window.location.search); return p.get('search') || p.get('edit') || ''; });
   const [catFilter, setCatFilter] = useState('');
   const [form, setForm] = useState(blank());
+  // Add/Edit now open in a modal (mam 2026-06-11: the inline form above the
+  // table was a poor interface — match the Item Master add window instead).
+  const [modal, setModal] = useState(() => (new URLSearchParams(window.location.search)).has('add'));
   const autoEditName = useRef((new URLSearchParams(window.location.search)).get('edit'));
   const autoEditDone = useRef(false);
-  const nameRef = useRef(null);
 
   const load = useCallback(() => { api.get('/quotations/labour-rates').then(r => setRows(r.data || [])).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load]);
-  // Focus the Item Name field when launched via ?add (quick-add from PO/FOC).
-  useEffect(() => { if ((new URLSearchParams(window.location.search)).has('add') && nameRef.current) nameRef.current.focus(); }, []);
-  // Auto-open the Edit form when launched via ?edit=<name> (the PO/FOC ✎).
+  // Auto-open the Edit modal when launched via ?edit=<name> (the PO/FOC ✎).
   useEffect(() => {
     if (autoEditDone.current || !autoEditName.current || !rows.length) return;
     const r = rows.find(x => String(x.item_name || '').toLowerCase() === String(autoEditName.current).toLowerCase());
-    if (r) { setForm({ id: r.id, item_name: r.item_name, rate: r.rate, uom: r.uom || 'PCS', category: r.category || 'Low Voltage' }); autoEditDone.current = true; }
+    if (r) { setForm({ id: r.id, item_name: r.item_name, rate: r.rate, uom: r.uom || 'PCS', category: r.category || 'Low Voltage' }); setModal(true); autoEditDone.current = true; }
   }, [rows]);
 
   const filtered = useMemo(() => {
@@ -42,6 +43,8 @@ export default function LabourRate() {
   }, [rows, catFilter, search]);
 
   const setF = (patch) => setForm(f => ({ ...f, ...patch }));
+  const openAdd = () => { setForm(blank()); setModal(true); };
+  const openEdit = (r) => { setForm({ id: r.id, item_name: r.item_name, rate: r.rate, uom: r.uom || 'PCS', category: r.category || 'Low Voltage' }); setModal(true); };
   const save = async () => {
     if (!form.item_name.trim()) { toast.error('Item name required'); return; }
     try {
@@ -49,41 +52,19 @@ export default function LabourRate() {
       if (form.id) await api.put(`/quotations/labour-rates/${form.id}`, payload);
       else await api.post('/quotations/labour-rates', payload);
       toast.success(form.id ? 'Updated' : 'Added');
-      setForm(blank()); load();
+      setModal(false); setForm(blank()); load();
     } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
   };
-  const edit = (r) => setForm({ id: r.id, item_name: r.item_name, rate: r.rate, uom: r.uom || 'PCS', category: r.category || 'Low Voltage' });
   const del = async (id) => { if (!confirm('Delete this labour rate?')) return; try { await api.delete(`/quotations/labour-rates/${id}`); load(); } catch (e) { toast.error('Failed'); } };
 
   return (
     <div className="space-y-4 pb-24">
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">🛠 Labour Rate</h1>
-        <p className="text-sm text-gray-500">Item-wise labour / sub-contractor rates by UOM and category.</p>
-      </div>
-
-      {/* Add / Edit form */}
-      <div className={`card p-3 ${form.id ? 'border-amber-300 bg-amber-50/40' : ''}`}>
-        <div className="flex items-end gap-2 flex-wrap">
-          <div className="flex-1 min-w-[200px]">
-            <label className="block text-[10px] font-semibold uppercase text-gray-400 mb-0.5">Item Name</label>
-            <input ref={nameRef} className="input" value={form.item_name} onChange={e => setF({ item_name: e.target.value })} placeholder="e.g. SENSOR INSTALLATION" />
-          </div>
-          <div className="w-28">
-            <label className="block text-[10px] font-semibold uppercase text-gray-400 mb-0.5">Rate ₹</label>
-            <input className="input text-right" type="number" min="0" value={form.rate} onChange={e => setF({ rate: e.target.value })} placeholder="0" />
-          </div>
-          <div className="w-28">
-            <label className="block text-[10px] font-semibold uppercase text-gray-400 mb-0.5">UOM</label>
-            <select className="select" value={form.uom} onChange={e => setF({ uom: e.target.value })}>{UOMS.map(u => <option key={u} value={u}>{u}</option>)}</select>
-          </div>
-          <div className="w-36">
-            <label className="block text-[10px] font-semibold uppercase text-gray-400 mb-0.5">Category</label>
-            <select className="select" value={form.category} onChange={e => setF({ category: e.target.value })}>{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select>
-          </div>
-          <button onClick={save} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> {form.id ? 'Update' : 'Add'}</button>
-          {form.id && <button onClick={() => setForm(blank())} className="btn btn-secondary flex items-center gap-1"><FiX size={14} /> Cancel</button>}
+      <div className="flex items-end justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">🛠 Labour Rate</h1>
+          <p className="text-sm text-gray-500">Item-wise labour / sub-contractor rates by UOM and category.</p>
         </div>
+        <button onClick={openAdd} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Labour Item</button>
       </div>
 
       {/* Filters */}
@@ -120,18 +101,46 @@ export default function LabourRate() {
                 <td className="p-2 text-gray-600">{r.category}</td>
                 <td className="p-2">
                   <div className="flex items-center gap-2">
-                    <button onClick={() => edit(r)} className="text-indigo-500 hover:text-indigo-700"><FiEdit2 size={14} /></button>
+                    <button onClick={() => openEdit(r)} className="text-indigo-500 hover:text-indigo-700"><FiEdit2 size={14} /></button>
                     <button onClick={() => del(r.id)} className="text-red-400 hover:text-red-600"><FiTrash2 size={14} /></button>
                   </div>
                 </td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-gray-400 text-sm">No labour rates. Add one above.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-gray-400 text-sm">No labour rates. Click “Add Labour Item”.</td></tr>}
           </tbody>
         </table>
         {filtered.length > RENDER_CAP && <div className="p-2 text-center text-xs text-gray-400">Showing {RENDER_CAP} of {filtered.length} — search or filter to narrow.</div>}
       </div>
       <div className="text-xs text-gray-400">{filtered.length} item(s){catFilter ? ` in ${catFilter}` : ''}.</div>
+
+      {/* Add / Edit modal */}
+      <Modal isOpen={modal} onClose={() => setModal(false)} title={form.id ? `Edit Labour Item — LR-${form.id}` : 'Add Labour Item'}>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-[10px] font-semibold uppercase text-gray-400 mb-0.5">Item Name</label>
+            <input autoFocus className="input" value={form.item_name} onChange={e => setF({ item_name: e.target.value })} placeholder="e.g. SENSOR INSTALLATION" />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-gray-400 mb-0.5">Rate ₹</label>
+              <input className="input text-right" type="number" min="0" value={form.rate} onChange={e => setF({ rate: e.target.value })} placeholder="0" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-gray-400 mb-0.5">UOM</label>
+              <select className="select" value={form.uom} onChange={e => setF({ uom: e.target.value })}>{UOMS.map(u => <option key={u} value={u}>{u}</option>)}</select>
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase text-gray-400 mb-0.5">Category</label>
+              <select className="select" value={form.category} onChange={e => setF({ category: e.target.value })}>{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button>
+            <button onClick={save} className="btn btn-primary flex items-center gap-1"><FiPlus size={14} /> {form.id ? 'Update' : 'Add'}</button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
