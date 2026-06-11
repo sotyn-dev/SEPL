@@ -1,8 +1,17 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { fireEmailEvent } = require('../lib/emailRules');
+const { getEmailConfig } = require('../lib/email');
 const router = express.Router();
 router.use(authMiddleware);
+
+// Resolve a user's email by id (for email-trigger recipients). Best-effort.
+function userEmail(db, id) {
+  try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; }
+  catch { return null; }
+}
+function directorEmail() { try { return getEmailConfig().director; } catch { return null; } }
 
 // Approver-side amount adjustment (mam 2026-05-28: "at approval amount
 // can be changed by approver like if some one fill 600 at approval
@@ -489,6 +498,17 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
   // Mam (2026-05-22): removed the in-app bell ping on create.
   // My Inbox tab + 60s badge poll already surface what each
   // approver needs to act on without bell noise.
+  fireEmailEvent('payment.requested', {
+    amount: Math.round(+b.amount || 0).toLocaleString('en-IN'),
+    party: b.vendor_name || '',
+    category: b.category || '',
+    site: b.site_name || '',
+    purpose: b.purpose || '',
+    requested_by: b.employee_name || req.user.name || '',
+    date: new Date().toISOString().slice(0, 10),
+    requester_email: req.user.email || userEmail(db, req.user.id),
+    director_email: directorEmail(),
+  });
   res.status(201).json({ id: r.lastInsertRowid, request_no: requestNo });
 });
 
@@ -589,6 +609,16 @@ router.put('/:id/approve', requirePermission('payment_required', 'approve'), (re
   }
 
   const result = advanceToNextStep(db, request, req.user.id);
+  fireEmailEvent('payment.approved', {
+    amount: Math.round(stepAmount || 0).toLocaleString('en-IN'),
+    party: request.vendor_name || '',
+    category: request.category || '',
+    step: stepInfo.name || '',
+    approved_by: req.user.name || '',
+    date: new Date().toISOString().slice(0, 10),
+    requester_email: userEmail(db, request.created_by),
+    director_email: directorEmail(),
+  });
   res.json({ message: `${stepInfo.name} approved`, result, approved_amount: stepAmount });
 });
 
@@ -606,6 +636,16 @@ router.put('/:id/reject', requirePermission('payment_required', 'approve'), (req
     .run(request.id, request.current_step, stepInfo?.name || 'Unknown', 'rejected', remarks, req.user.id);
   db.prepare('UPDATE payment_requests SET status=?, rejection_remarks=?, rejected_by=?, rejected_at=CURRENT_TIMESTAMP WHERE id=?')
     .run('rejected', remarks, req.user.id, request.id);
+  fireEmailEvent('payment.rejected', {
+    amount: Math.round(+request.amount || 0).toLocaleString('en-IN'),
+    party: request.vendor_name || '',
+    category: request.category || '',
+    rejected_by: req.user.name || '',
+    reason: remarks,
+    date: new Date().toISOString().slice(0, 10),
+    requester_email: userEmail(db, request.created_by),
+    director_email: directorEmail(),
+  });
   res.json({ message: 'Rejected' });
 });
 

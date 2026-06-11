@@ -1,6 +1,10 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
+const { fireEmailEvent } = require('../lib/emailRules');
+const { getEmailConfig } = require('../lib/email');
+const stUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
+const stDirector = () => { try { return getEmailConfig().director; } catch { return null; } };
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -116,6 +120,17 @@ router.post('/', (req, res) => {
       });
     }
   } catch {}
+  fireEmailEvent('ticket.created', {
+    ticket_no: ticketNo,
+    subject: subject || '',
+    priority: priority || 'medium',
+    category: category || 'bug',
+    created_by: req.user.name || '',
+    date: new Date().toISOString().slice(0, 10),
+    creator_email: req.user.email || stUserEmail(db, req.user.id),
+    assignee_email: assigned_to ? stUserEmail(db, +assigned_to) : null,
+    director_email: stDirector(),
+  });
   res.status(201).json({ id: r.lastInsertRowid, ticket_no: ticketNo });
 });
 
@@ -174,6 +189,17 @@ router.put('/:id', (req, res) => {
     ...(canFollowAll && assigned_to !== undefined ? [assigned_to ? +assigned_to : null] : []),
     resolvedBy, resolvedAt, req.params.id
   );
+  if (closing) {
+    fireEmailEvent('ticket.resolved', {
+      ticket_no: ticket.ticket_no,
+      subject: ticket.subject || '',
+      resolved_by: req.user.name || '',
+      date: new Date().toISOString().slice(0, 10),
+      creator_email: stUserEmail(db, ticket.user_id),
+      assignee_email: stUserEmail(db, ticket.assigned_to),
+      director_email: stDirector(),
+    });
+  }
   res.json({ message: 'Updated' });
 });
 

@@ -1,6 +1,11 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { fireEmailEvent } = require('../lib/emailRules');
+const { getEmailConfig } = require('../lib/email');
+// Email-trigger helpers (recipient resolution). Best-effort.
+const ceUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
+const ceDirector = () => { try { return getEmailConfig().director; } catch { return null; } };
 const {
   whatsappLink,
   generateOtp,
@@ -168,6 +173,16 @@ router.post('/', requirePermission('complaints', 'create'), (req, res) => {
     console.error('[complaints] notify dispatch failed:', err.message || err);
   }
 
+  fireEmailEvent('complaint.created', {
+    complaint_no: cn,
+    client: b.client_name || '',
+    category: b.category || '',
+    problem: b.problem_detail || '',
+    created_by: req.user.name || '',
+    date: new Date().toISOString().slice(0, 10),
+    creator_email: req.user.email || ceUserEmail(db, req.user.id),
+    director_email: ceDirector(),
+  });
   res.status(201).json({ id: r.lastInsertRowid, complaint_number: cn, whatsapp_client_register: wa });
 });
 
@@ -261,6 +276,15 @@ router.post('/:id/assign', requirePermission('complaints', 'edit'), (req, res) =
     otp,
   });
 
+  fireEmailEvent('complaint.assigned', {
+    complaint_no: c.complaint_number,
+    client: c.client_name || '',
+    engineer: eng.name || '',
+    date: new Date().toISOString().slice(0, 10),
+    engineer_email: ceUserEmail(db, engId),
+    creator_email: ceUserEmail(db, c.created_by),
+    director_email: ceDirector(),
+  });
   res.json({
     ok: true,
     otp,                                        // returned ONLY to admin caller for verification UI
@@ -325,6 +349,16 @@ router.post('/:id/verify-otp', requirePermission('complaints', 'edit'), (req, re
      WHERE id = ?
   `).run(id);
 
+  const full = db.prepare('SELECT complaint_number, client_name, assigned_engineer_id, created_by FROM complaints WHERE id=?').get(id);
+  fireEmailEvent('complaint.resolved', {
+    complaint_no: full?.complaint_number || '',
+    client: full?.client_name || '',
+    engineer: db.prepare('SELECT name FROM users WHERE id=?').get(full?.assigned_engineer_id)?.name || '',
+    date: new Date().toISOString().slice(0, 10),
+    creator_email: ceUserEmail(db, full?.created_by),
+    engineer_email: ceUserEmail(db, full?.assigned_engineer_id),
+    director_email: ceDirector(),
+  });
   res.json({ ok: true, status: 'resolved' });
 });
 

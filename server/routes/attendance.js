@@ -1,6 +1,10 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { fireEmailEvent } = require('../lib/emailRules');
+const { getEmailConfig } = require('../lib/email');
+const atUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
+const atDirector = () => { try { return getEmailConfig().director; } catch { return null; } };
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -696,6 +700,17 @@ router.post('/leave', (req, res) => {
 
   const r = db.prepare('INSERT INTO leave_requests (user_id, leave_type, from_date, to_date, days, hours, from_time, to_time, reason) VALUES (?,?,?,?,?,?,?,?,?)')
     .run(req.user.id, leave_type || 'casual', from_date, to_date || from_date, days, hours, from_time, to_time, reason);
+  fireEmailEvent('leave.requested', {
+    employee: req.user.name || '',
+    leave_type: leave_type || 'casual',
+    from_date: from_date,
+    to_date: to_date || from_date,
+    days: String(days),
+    reason: reason || '',
+    date: new Date().toISOString().slice(0, 10),
+    requester_email: req.user.email || atUserEmail(db, req.user.id),
+    director_email: atDirector(),
+  });
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
@@ -726,8 +741,19 @@ router.get('/leaves', requirePermission('attendance', 'view'), (req, res) => {
 
 router.put('/leave/:id/approve', requirePermission('attendance', 'approve'), (req, res) => {
   const { status, remarks } = req.body;
-  getDb().prepare('UPDATE leave_requests SET status=?, approved_by=?, remarks=? WHERE id=?')
+  const db = getDb();
+  db.prepare('UPDATE leave_requests SET status=?, approved_by=?, remarks=? WHERE id=?')
     .run(status, req.user.id, remarks, req.params.id);
+  const lr = db.prepare('SELECT lr.user_id, lr.leave_type, u.name FROM leave_requests lr LEFT JOIN users u ON u.id=lr.user_id WHERE lr.id=?').get(req.params.id);
+  fireEmailEvent('leave.decided', {
+    employee: lr?.name || '',
+    leave_type: lr?.leave_type || '',
+    status: status || '',
+    decided_by: req.user.name || '',
+    date: new Date().toISOString().slice(0, 10),
+    requester_email: atUserEmail(db, lr?.user_id),
+    director_email: atDirector(),
+  });
   res.json({ message: `Leave ${status}` });
 });
 
