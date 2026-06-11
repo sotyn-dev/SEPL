@@ -45,6 +45,8 @@ import {
   FiGitMerge,
   // Procurement · backward-pass Gantt (mam 2026-05-28)
   FiGitBranch,
+  // Lead-to-Dispatch Funnel (2026-06-11) — distinct icons, no dupes
+  FiMessageSquare, FiToggleRight,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 
@@ -76,6 +78,9 @@ const SIDEBAR_GROUPS = [
     // sales funnel please it[s] under crm". Different from /leads
     // (the legacy Sales Funnel) — this is the modern phase-A funnel.
     { path: '/crm-funnel',    label: 'CRM Sales Funnel',  icon: FiTrendingUp, module: 'crm_funnel' },
+    // Lead-to-Dispatch Funnel (2026-06-11): open to all authenticated users
+    // (open:true) — separate DB feature, no permission module seeded.
+    { path: '/lead-to-dispatch-funnel', label: 'Lead → Dispatch Funnel', icon: FiMessageSquare, module: null, open: true },
     { path: '/leads',         label: 'Sales Funnel',      icon: FiFilter,     module: 'leads' },
     { path: '/business-book', label: 'Business Book',     icon: FiBook,       module: 'business_book' },
     { path: '/customers',     label: 'Customers',         icon: FiUser,       module: 'customers' },
@@ -173,6 +178,7 @@ const SIDEBAR_GROUPS = [
 const SIDEBAR_SETTINGS = { id: 'settings', label: 'Settings', icon: FiSettings, adminOnly: true, items: [
   { path: '/admin/backups',        label: 'Backups',             icon: FiDatabase,  module: 'users' },
   { path: '/admin/ai-settings',    label: 'AI',                  icon: LuBrain,     module: 'users' },
+  { path: '/admin/lead-funnel-settings', label: 'Lead Funnel',  icon: FiToggleRight, module: 'users' },
   { path: '/admin/email-settings', label: 'Email',               icon: FiMail,      module: 'users' },
   { path: '/admin/email-triggers', label: 'Email Triggers',      icon: FiZap,       module: 'users' },
   { path: '/admin/users',          label: 'Users',               icon: FiUserCheck, module: 'users' },

@@ -233,6 +233,23 @@ try {
   console.warn('[procsch-reminder] Scheduler not started:', e.message);
 }
 
+// Lead-to-Dispatch Funnel — init the SEPARATE funnel DB (idempotent
+// CREATE TABLE IF NOT EXISTS in its own file), then schedule the IndiaMART
+// poller. Both isolated in try/catch so neither can disturb the main ERP
+// boot. Poller is a no-op until a glusr_crm_key is configured, and skips
+// entirely with ERP_DISABLE_INDIAMART_POLL=1.
+try {
+  require('./db/leadToDispatchFunnelDb').initFunnelDb();
+  console.log('[lead-funnel] funnel DB initialised (data/lead_to_dispatch_funnel.db)');
+} catch (e) {
+  console.warn('[lead-funnel] funnel DB init failed:', e.message);
+}
+try {
+  require('./scripts/indiamartPollCron').schedule();
+} catch (e) {
+  console.warn('[indiamart-poll] Scheduler not started:', e.message);
+}
+
 // Daily 09:00 CMD audit email — audit item B20 + TOC v3 P0 #5.
 // Reads the 07:30 snapshot JSON (falls back to live /audit/kpi if
 // the snapshot folder is missing) and emails the director address
@@ -345,6 +362,14 @@ app.use('/api/sub-contractors', require('./routes/subcontractors'));
 app.use('/api/subcon-hiring', require('./routes/subconHiring'));
 app.use('/api/procurement-schedule', require('./routes/procurementSchedule'));
 app.use('/api/crm-funnel', require('./routes/crmFunnel'));
+// Lead-to-Dispatch Funnel — fully isolated feature (separate DB file
+// data/lead_to_dispatch_funnel.db). Mounting the route never touches the
+// main ERP. Wrapped so a funnel-side failure can't take the ERP down.
+try {
+  app.use('/api/lead-funnel', require('./routes/leadToDispatchFunnel'));
+} catch (e) {
+  console.warn('[lead-funnel] Route not mounted:', e.message);
+}
 app.use('/api/cheques', require('./routes/cheques'));
 app.use('/api/dashboards', require('./routes/dashboards'));
 app.use('/api/fire-noc', require('./routes/fireNoc'));

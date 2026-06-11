@@ -60,6 +60,8 @@ import SubContractors from './pages/SubContractors';
 import SubconHiring from './pages/SubconHiring';
 import ProcurementSchedule from './pages/ProcurementSchedule';
 import CRMFunnel from './pages/CRMFunnel';
+import LeadToDispatchFunnel from './pages/LeadToDispatchFunnel';
+import LeadToDispatchFunnelSettings from './pages/LeadToDispatchFunnelSettings';
 import ChequeFMS from './pages/ChequeFMS';
 import EmailSettings from './pages/EmailSettings';
 import EmailTriggers from './pages/EmailTriggers';
@@ -208,6 +210,11 @@ export default function App() {
         <Route path="subcon-hiring" element={<ModuleRoute module="subcon_hiring"><SubconHiring /></ModuleRoute>} />
         <Route path="procurement-schedule" element={<ModuleRoute module="procurement_schedule"><ProcurementSchedule /></ModuleRoute>} />
         <Route path="crm-funnel" element={<ModuleRoute module="crm_funnel"><CRMFunnel /></ModuleRoute>} />
+        {/* Lead-to-Dispatch Funnel — isolated feature, separate DB. Open to
+            authenticated users (no permission module to seed → no main-DB
+            change); settings are admin-only. */}
+        <Route path="lead-to-dispatch-funnel" element={<LeadToDispatchFunnel />} />
+        <Route path="admin/lead-funnel-settings" element={<AdminRoute><LeadToDispatchFunnelSettings /></AdminRoute>} />
         <Route path="cheques" element={<ModuleRoute module="cheques"><ChequeFMS /></ModuleRoute>} />
       </Route>
     </Routes>
