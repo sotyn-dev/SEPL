@@ -20,7 +20,7 @@ const STATUS_LABELS = { pending: 'Pending', step1_approved: 'Step 1 Approved', a
 const STEPS = [
   { step: 1, name: 'L1 Approval (Accountant)' },
   { step: 2, name: 'L2 Approval (Nitin Jain)' },
-  { step: 3, name: 'L3 Approval (Ankur Kaplesh)' },
+  { step: 3, name: 'L3 Approval (MD - Ankur Kaplesh)' },
   { step: 5, name: 'Payment Release (Aanchal)' },
 ];
 const TADA_STEPS = STEPS;
@@ -31,7 +31,7 @@ const TADA_STEPS = STEPS;
 // every in-flight request — so everything piled into "HR Approval" and
 // the later stages showed 0. A request's true stage is its live
 // current_step_name; terminal states fall back to status.
-const STAGE_SEQ = ['L1 Approval (Accountant)', 'L2 Approval (Nitin Jain)', 'L3 Approval (Ankur Kaplesh)', 'Payment Release (Aanchal)'];
+const STAGE_SEQ = ['L1 Approval (Accountant)', 'L2 Approval (Nitin Jain)', 'L3 Approval (MD - Ankur Kaplesh)', 'Payment Release (Aanchal)'];
 const stageOf = (r) =>
   r.status === 'final_approved' ? 'Approved'
   : r.status === 'rejected' ? 'Rejected'
@@ -406,10 +406,10 @@ export default function PaymentRequired() {
               { border: 'border-indigo-500', label: 'text-indigo-700', num: 'text-indigo-700', activeBg: 'bg-indigo-50', ring: 'ring-indigo-300' },
               { border: 'border-sky-500',    label: 'text-sky-700',    num: 'text-sky-700',    activeBg: 'bg-sky-50',    ring: 'ring-sky-300' },
             ];
-            // Only show in-flight stages that actually have rows (canonical
-            // order), plus Showing / Approved / Rejected — so the strip
-            // mirrors the live workflow, never a phantom 0-stage.
-            const presentStages = STAGE_SEQ.filter(st => visible.some(r => stageOf(r) === st));
+            // Always show the full standard flow (L1 → L2 → L3 → Release),
+            // even a stage with 0 rows, so L3 Ankur Kaplesh is never hidden
+            // just because no request sits there yet (mam 2026-06-11).
+            const presentStages = STAGE_SEQ;
             const tiles = [
               { key: 'all', label: 'Showing', stage: null, color: { border: 'border-blue-500', label: 'text-gray-500', num: 'text-blue-700', activeBg: 'bg-blue-50', ring: 'ring-blue-300' } },
               ...presentStages.map((st, i) => ({ key: st, label: st, stage: st, color: PALETTE[i % PALETTE.length] })),
@@ -467,7 +467,7 @@ export default function PaymentRequired() {
               'bg-indigo-100 text-indigo-700 border-indigo-200',
               'bg-sky-100 text-sky-700 border-sky-200',
             ];
-            const presentStages = STAGE_SEQ.filter(st => visible.some(r => stageOf(r) === st));
+            const presentStages = STAGE_SEQ;
             const chips = [
               { id: 'all', stage: '', label: 'All', color: 'bg-blue-100 text-blue-700 border-blue-200' },
               ...presentStages.map((st, i) => ({ id: st, stage: st, label: st, color: CHIP_PALETTE[i % CHIP_PALETTE.length] })),
@@ -1206,7 +1206,7 @@ export default function PaymentRequired() {
           {/* Approval workflow info — one standard flow for every category */}
           {form.category && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
-              <strong>Approval Flow:</strong> <span>L1 Accountant → L2 Nitin Jain → L3 Ankur Kaplesh → Payment Release Aanchal</span>
+              <strong>Approval Flow:</strong> <span>L1 Accountant → L2 Nitin Jain → L3 MD (Ankur Kaplesh) → Payment Release Aanchal</span>
             </div>
           )}
 
@@ -1246,7 +1246,7 @@ export default function PaymentRequired() {
           <div className="space-y-4">
             <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-gray-700 leading-relaxed">
               <strong>How this works:</strong> Every category now uses one standard flow —
-              <em> L1 Accountant → L2 Nitin Jain → L3 Ankur Kaplesh → Payment Release Aanchal</em>.
+              <em> L1 Accountant → L2 Nitin Jain → L3 MD (Ankur Kaplesh) → Payment Release Aanchal</em>.
               L1 is open to anyone holding the Accountant role; L2/L3/Release are pinned to the named person.
               Pick a specific user here to <strong>override</strong> a step — from then on only that user (or admin) can clear it.
               Set back to "— Default —" to revert to the standard approver.

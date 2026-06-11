@@ -53,7 +53,7 @@ const seesAll = (req) => {
 const STANDARD_FLOW = [
   { step: 1, name: 'L1 Approval (Accountant)', approver_role: 'Accountant' },
   { step: 2, name: 'L2 Approval (Nitin Jain)', approver_name: 'Nitin Jain' },
-  { step: 3, name: 'L3 Approval (Ankur Kaplesh)', approver_name: 'Ankur Kaplesh' },
+  { step: 3, name: 'L3 Approval (MD - Ankur Kaplesh)', approver_name: 'Ankur Kaplesh' },
   { step: 5, name: 'Payment Release (Aanchal)', approver_name: 'Aanchal' },
 ];
 const WORKFLOW = {
