@@ -126,7 +126,19 @@ export default function PoFocStripped() {
       setModal(false); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
-  const approve = async (id) => { try { await api.post(`/quotations/po-foc/${id}/approve`); toast.success('Approved'); load(); } catch (e) { toast.error('Failed'); } };
+  // Approve in place — flip the one entry locally instead of re-downloading the
+  // whole 800-kit list (mam 2026-06-11 "when i approve it takes lots of time").
+  // A later load() (tab/window focus) reconciles if anything drifted.
+  const approve = async (id) => {
+    const cur = entries.find(e => e.id === id);
+    try {
+      await api.post(`/quotations/po-foc/${id}/approve`);
+      toast.success('Approved');
+      setEntries(es => es.map(e => e.id === id ? { ...e, status: 'approved' } : e));
+      const from = cur?.status;
+      if (from && from !== 'approved') setCounts(c => ({ ...c, [from]: Math.max(0, (c[from] || 0) - 1), approved: (c.approved || 0) + 1 }));
+    } catch (e) { toast.error('Failed'); }
+  };
   const del = async (id) => { if (!confirm('Delete this PO/FOC item?')) return; try { await api.delete(`/quotations/po-foc/${id}`); load(); } catch (e) { toast.error('Failed'); } };
 
   // "Auto-list PO items needing FOC" (mam 2026-06-10): Non-Approved lists PO

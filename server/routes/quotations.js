@@ -376,28 +376,38 @@ function itemDisplay(im) {
     `${im.uom ? ' · ' + im.uom : ''}`;
 }
 
+// Preload item_master + labour_rates into Maps so liveResolvePoFoc does O(1)
+// in-memory lookups instead of a DB query per entry AND per FOC item. The list
+// has 800+ kits × ~6-8 FOC each, so the old per-row queries meant thousands of
+// point lookups on every load/approve and the page crawled (mam 2026-06-11:
+// "takes lots of process time"). Two bulk reads replace all of them.
+function buildLiveMaps(db) {
+  const items = new Map();
+  for (const im of db.prepare('SELECT id, item_code, item_name, specification, size, uom, current_price FROM item_master').all()) items.set(im.id, im);
+  const labour = new Map();
+  for (const lr of db.prepare('SELECT id, item_name, rate FROM labour_rates').all()) labour.set(lr.id, lr);
+  return { items, labour };
+}
+
 // Serve an entry LIVE against the Item Master (mam 2026-06-11): PO rate, FOC
-// rates, names and UOM are re-read from item_master by id every time, so
-// editing an item's rate/UOM in the master reflects on existing PO/FOC entries
-// — same idea as the indent BoQ live-UOM change. Stored values stay as a
-// fallback when the item was deleted or typed manually (no item_id). cost/TPA
-// are recomputed from the live rates so the cards and PDF stay consistent.
-function liveResolvePoFoc(db, row) {
-  const getItem = db.prepare('SELECT item_code, item_name, specification, size, uom, current_price FROM item_master WHERE id=?');
+// rates, names and UOM are re-read by id every time, so editing an item's
+// rate/UOM in the master reflects on existing PO/FOC entries. Stored values
+// stay as a fallback when the item was deleted or typed manually (no item_id).
+// cost/TPA are recomputed from the live rates so cards and PDF stay consistent.
+function liveResolvePoFoc(row, maps) {
   let { po_rate, po_name, labour, labour_name } = row;
   if (row.po_item_id) {
-    const im = getItem.get(row.po_item_id);
+    const im = maps.items.get(row.po_item_id);
     if (im) { po_rate = im.current_price || 0; po_name = itemDisplay(im); }
   }
-  // Labour is live off the Labour Rate sheet too: a rate or item-name edit
-  // there reflects on existing kits (mam 2026-06-11).
+  // Labour is live off the Labour Rate sheet too.
   if (row.labour_item_id) {
-    const lr = db.prepare('SELECT item_name, rate FROM labour_rates WHERE id=?').get(row.labour_item_id);
+    const lr = maps.labour.get(row.labour_item_id);
     if (lr) { labour = lr.rate || 0; labour_name = lr.item_name; }
   }
   const focs = JSON.parse(row.focs_json || '[]').map(f => {
     if (f && f.item_id) {
-      const im = getItem.get(f.item_id);
+      const im = maps.items.get(f.item_id);
       if (im) return { ...f, rate: im.current_price || 0, name: itemDisplay(im) };
     }
     return f;
@@ -411,14 +421,15 @@ router.get('/po-foc', (req, res) => {
   const rows = db.prepare('SELECT * FROM po_foc_entries ORDER BY updated_at DESC, id DESC').all();
   const counts = { non_approved: 0, approved: 0, re_approved: 0 };
   for (const r of rows) counts[r.status] = (counts[r.status] || 0) + 1;
-  res.json({ rows: rows.map(r => liveResolvePoFoc(db, r)), counts });
+  const maps = buildLiveMaps(db);
+  res.json({ rows: rows.map(r => liveResolvePoFoc(r, maps)), counts });
 });
 
 router.get('/po-foc/:id', (req, res) => {
   const db = getDb();
   const r = db.prepare('SELECT * FROM po_foc_entries WHERE id=?').get(req.params.id);
   if (!r) return res.status(404).json({ error: 'Not found' });
-  res.json(liveResolvePoFoc(db, r));
+  res.json(liveResolvePoFoc(r, buildLiveMaps(db)));
 });
 
 router.post('/po-foc', (req, res) => {
