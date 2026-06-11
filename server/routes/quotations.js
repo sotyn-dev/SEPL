@@ -525,6 +525,40 @@ router.get('/labour-rates/template', (req, res) => {
   sendLabourXlsx(res, [['SENSOR INSTALLATION', 'MS Type', '25mm', 350, 'PCS', 'ELECTRICAL']], 'labour-rates-template.xlsx');
 });
 
+// Find labour items that share the same name (case/space-insensitive) —
+// duplicates that splinter one task across two rows (e.g. one MTRS + one Kg),
+// which breaks the live link from PO/FOC kits (mam 2026-06-11).
+router.get('/labour-rates/duplicates', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM labour_rates ORDER BY item_name, id').all();
+  const usage = db.prepare('SELECT labour_item_id AS id, COUNT(*) AS c FROM po_foc_entries WHERE labour_item_id IS NOT NULL GROUP BY labour_item_id').all();
+  const useMap = new Map(usage.map(u => [u.id, u.c]));
+  const groups = new Map();
+  for (const r of rows) {
+    const key = String(r.item_name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ ...r, used_in: useMap.get(r.id) || 0 });
+  }
+  res.json([...groups.values()].filter(g => g.length > 1));
+});
+
+// Merge duplicate labour rows: repoint every PO/FOC kit from the removed rows
+// onto the kept row, then delete the removed rows (one transaction).
+router.post('/labour-rates/merge', (req, res) => {
+  const keepId = Number(req.body.keep_id);
+  const removeIds = (Array.isArray(req.body.remove_ids) ? req.body.remove_ids : []).map(Number).filter(id => id && id !== keepId);
+  if (!keepId || !removeIds.length) return res.status(400).json({ error: 'keep_id and at least one remove_id required' });
+  const db = getDb();
+  if (!db.prepare('SELECT id FROM labour_rates WHERE id=?').get(keepId)) return res.status(404).json({ error: 'Kept item not found' });
+  const ph = removeIds.map(() => '?').join(',');
+  const result = db.transaction(() => {
+    const rep = db.prepare(`UPDATE po_foc_entries SET labour_item_id=? WHERE labour_item_id IN (${ph})`).run(keepId, ...removeIds);
+    const del = db.prepare(`DELETE FROM labour_rates WHERE id IN (${ph})`).run(...removeIds);
+    return { repointed: rep.changes, removed: del.changes };
+  })();
+  res.json(result);
+});
+
 // Bulk import from an uploaded .xlsx / .xls / .csv. First row = headers;
 // columns matched case-insensitively. Item Name required; others optional.
 router.post('/labour-rates/import', upload.single('file'), (req, res) => {

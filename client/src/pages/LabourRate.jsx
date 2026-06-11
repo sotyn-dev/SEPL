@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiDownload, FiCopy } from 'react-icons/fi';
 
 // Labour Rate sheet (mam 2026-06-10) — item-wise labour / sub-contractor
 // rates by UOM and category. Seeded from her uploaded sheet; add/edit here.
@@ -24,6 +24,10 @@ export default function LabourRate() {
   const [modal, setModal] = useState(() => (new URLSearchParams(window.location.search)).has('add'));
   const [bulkModal, setBulkModal] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [dupModal, setDupModal] = useState(false);
+  const [dupGroups, setDupGroups] = useState([]);
+  const [dupLoading, setDupLoading] = useState(false);
+  const [keepSel, setKeepSel] = useState({});
   const autoEditName = useRef((new URLSearchParams(window.location.search)).get('edit'));
   const autoEditDone = useRef(false);
 
@@ -93,6 +97,33 @@ export default function LabourRate() {
     finally { setImporting(false); }
   };
 
+  // Find & merge duplicate labour rows (same item name) — a merge repoints any
+  // PO/FOC kits onto the kept row, then deletes the others (mam 2026-06-11).
+  const loadDupes = async () => {
+    setDupLoading(true);
+    try {
+      const r = await api.get('/quotations/labour-rates/duplicates');
+      const groups = r.data || [];
+      setDupGroups(groups);
+      const sel = {};
+      groups.forEach((g, gi) => { sel[gi] = [...g].sort((a, b) => (b.used_in - a.used_in) || (a.id - b.id))[0].id; });
+      setKeepSel(sel);
+    } catch { toast.error('Could not load duplicates'); }
+    finally { setDupLoading(false); }
+  };
+  const openDuplicates = () => { setDupModal(true); loadDupes(); };
+  const mergeGroup = async (group, gi) => {
+    const keepId = keepSel[gi] ?? group[0].id;
+    const removeIds = group.map(r => r.id).filter(id => id !== keepId);
+    if (!removeIds.length) return;
+    if (!confirm(`Keep LR-${keepId} and delete ${removeIds.length} duplicate(s)? PO/FOC kits using the deleted rows will be repointed to LR-${keepId}.`)) return;
+    try {
+      const r = await api.post('/quotations/labour-rates/merge', { keep_id: keepId, remove_ids: removeIds });
+      toast.success(`Merged — ${r.data.removed} removed, ${r.data.repointed} kit(s) repointed`);
+      await loadDupes(); load();
+    } catch (e) { toast.error(e.response?.data?.error || 'Merge failed'); }
+  };
+
   return (
     <div className="space-y-4 pb-24">
       <div className="flex items-end justify-between gap-3 flex-wrap">
@@ -101,6 +132,7 @@ export default function LabourRate() {
           <p className="text-sm text-gray-500">Item-wise labour / sub-contractor rates by UOM and category.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={openDuplicates} className="btn btn-secondary flex items-center gap-2"><FiCopy size={15} /> Duplicates</button>
           <button onClick={() => setBulkModal(true)} className="btn btn-secondary flex items-center gap-2"><FiUpload size={15} /> Import</button>
           <button onClick={exportXlsx} className="btn btn-secondary flex items-center gap-2"><FiDownload size={15} /> Export Excel</button>
           <button onClick={openAdd} className="btn btn-primary flex items-center gap-2"><FiPlus size={15} /> Add Labour Item</button>
@@ -135,12 +167,7 @@ export default function LabourRate() {
             {filtered.slice(0, RENDER_CAP).map(r => (
               <tr key={r.id} className="border-t border-gray-100 hover:bg-gray-50">
                 <td className="p-2 text-gray-400 font-mono text-xs">LR-{r.id}</td>
-                <td className="p-2">
-                  <div className="font-medium text-gray-800">{r.item_name}</div>
-                  {[r.specification, r.size].filter(Boolean).length > 0 && (
-                    <div className="text-[11px] text-gray-400">{[r.specification, r.size].filter(Boolean).join(' / ')}</div>
-                  )}
-                </td>
+                <td className="p-2 font-medium text-gray-800">{[r.item_name, r.specification, r.size].filter(Boolean).join(' / ')}</td>
                 <td className="p-2 text-right">{fmt(r.rate)}</td>
                 <td className="p-2 text-gray-600">{r.uom}</td>
                 <td className="p-2 text-gray-600">{r.category}</td>
@@ -214,6 +241,38 @@ export default function LabourRate() {
           </div>
           <div className="flex justify-end">
             <button onClick={() => setBulkModal(false)} className="btn btn-secondary">Close</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Duplicate labour items — find & merge */}
+      <Modal isOpen={dupModal} onClose={() => setDupModal(false)} title="Duplicate Labour Items" wide>
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500">Labour items sharing the same name. Pick the row to <b>keep</b> (usually the one used by PO/FOC kits, shown with a badge); merging deletes the others and repoints any kits to the kept row.</p>
+          {dupLoading && <div className="text-center text-sm text-gray-400 py-6">Scanning…</div>}
+          {!dupLoading && dupGroups.length === 0 && <div className="text-center text-sm text-gray-400 py-6">No duplicate labour items. 🎉</div>}
+          {!dupLoading && dupGroups.map((g, gi) => (
+            <div key={gi} className="border border-gray-200 rounded-lg p-3">
+              <div className="text-sm font-semibold text-gray-800 mb-2">{g[0].item_name} <span className="text-gray-400 font-normal">({g.length} rows)</span></div>
+              <div className="space-y-1">
+                {g.map(r => (
+                  <label key={r.id} className={`flex items-center gap-2 text-sm p-1.5 rounded cursor-pointer ${keepSel[gi] === r.id ? 'bg-emerald-50' : 'hover:bg-gray-50'}`}>
+                    <input type="radio" name={`keep-${gi}`} checked={keepSel[gi] === r.id} onChange={() => setKeepSel(s => ({ ...s, [gi]: r.id }))} />
+                    <span className="font-mono text-xs text-gray-400 w-16">LR-{r.id}</span>
+                    <span className="flex-1 min-w-0 truncate text-gray-700">{[r.specification, r.size].filter(Boolean).join(' / ') || <span className="text-gray-300">no spec/size</span>}</span>
+                    <span className="text-gray-600">₹{fmt(r.rate)}</span>
+                    <span className="w-16 text-center font-semibold text-indigo-500">{r.uom || '—'}</span>
+                    <span className="w-20 text-right text-[10px]">{r.used_in > 0 ? <span className="text-emerald-600 font-semibold">{r.used_in} kit{r.used_in === 1 ? '' : 's'}</span> : <span className="text-gray-300">unused</span>}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex justify-end mt-2">
+                <button onClick={() => mergeGroup(g, gi)} className="btn btn-primary text-xs flex items-center gap-1"><FiCopy size={13} /> Merge — keep LR-{keepSel[gi] ?? g[0].id}</button>
+              </div>
+            </div>
+          ))}
+          <div className="flex justify-end">
+            <button onClick={() => setDupModal(false)} className="btn btn-secondary">Close</button>
           </div>
         </div>
       </Modal>
