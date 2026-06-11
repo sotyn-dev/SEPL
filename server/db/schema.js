@@ -296,6 +296,8 @@ function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS labour_rates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       item_name TEXT NOT NULL,
+      specification TEXT,
+      size TEXT,
       rate REAL DEFAULT 0,                            -- Purchase / Sub-Contractor rate
       uom TEXT,
       category TEXT,
@@ -2643,6 +2645,10 @@ function initializeDatabase() {
 
   // Safe schema migrations for columns added after initial release
   const migrations = [
+    // Labour Rate sheet: specification + size, alongside item_name/uom
+    // (mam 2026-06-11: "add specs, size also" to the labour item form).
+    ['labour_rates', 'specification TEXT'],
+    ['labour_rates', 'size TEXT'],
     // Payroll grace + per-minute late penalty (added when mam moved from a
     // simple "late mark" model to a graduated penalty: 3 free late marks per
     // month, then ₹20/min off the salary for any further late punch).

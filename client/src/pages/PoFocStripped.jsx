@@ -65,7 +65,7 @@ export default function PoFocStripped() {
     api.get('/item-master/dropdown?type=FOC').then(r => setFocItems((r.data || []).map(withCode))).catch(() => {});
     api.get('/quotations/labour-rates').then(r => setLabourItems((r.data || []).map(x => ({
       id: x.id, item_name: x.item_name, rate: x.rate, uom: x.uom,
-      display_name: `${x.item_name}${x.uom ? ' (' + x.uom + ')' : ''}`,
+      display_name: `${[x.item_name, x.specification, x.size].filter(Boolean).join(' / ')}${x.uom ? ' (' + x.uom + ')' : ''}`,
     })))).catch(() => {});
   }, []);
   useEffect(() => { load(); }, [load]);

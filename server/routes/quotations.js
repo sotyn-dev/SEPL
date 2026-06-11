@@ -474,24 +474,88 @@ router.get('/labour-rates', (req, res) => {
 });
 
 router.post('/labour-rates', (req, res) => {
-  const { item_name, rate, uom, category } = req.body;
+  const { item_name, specification, size, rate, uom, category } = req.body;
   if (!item_name || !String(item_name).trim()) return res.status(400).json({ error: 'Item name is required' });
-  const r = getDb().prepare('INSERT INTO labour_rates (item_name, rate, uom, category, created_by) VALUES (?,?,?,?,?)')
-    .run(String(item_name).trim(), Number(rate) || 0, uom || '', category || '', req.user.id);
+  const r = getDb().prepare('INSERT INTO labour_rates (item_name, specification, size, rate, uom, category, created_by) VALUES (?,?,?,?,?,?,?)')
+    .run(String(item_name).trim(), specification || '', size || '', Number(rate) || 0, uom || '', category || '', req.user.id);
   res.json({ id: r.lastInsertRowid, message: 'Saved' });
 });
 
 router.put('/labour-rates/:id', (req, res) => {
-  const { item_name, rate, uom, category } = req.body;
+  const { item_name, specification, size, rate, uom, category } = req.body;
   if (!item_name || !String(item_name).trim()) return res.status(400).json({ error: 'Item name is required' });
-  getDb().prepare('UPDATE labour_rates SET item_name=?, rate=?, uom=?, category=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
-    .run(String(item_name).trim(), Number(rate) || 0, uom || '', category || '', req.params.id);
+  getDb().prepare('UPDATE labour_rates SET item_name=?, specification=?, size=?, rate=?, uom=?, category=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+    .run(String(item_name).trim(), specification || '', size || '', Number(rate) || 0, uom || '', category || '', req.params.id);
   res.json({ message: 'Updated' });
 });
 
 router.delete('/labour-rates/:id', (req, res) => {
   getDb().prepare('DELETE FROM labour_rates WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
+});
+
+// ── Labour Rate Excel export / template / bulk import (mam 2026-06-11) ─
+const LR_HEADERS = ['Item Name', 'Specification', 'Size', 'Rate', 'UOM', 'Category'];
+function sendLabourXlsx(res, rowsAoA, filename) {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([LR_HEADERS, ...rowsAoA]);
+  ws['!cols'] = LR_HEADERS.map(h => ({ wch: Math.max(14, h.length + 2) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'Labour Rates');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(buf);
+}
+
+// Download every labour rate as a real .xlsx (respects ?search / ?category).
+router.get('/labour-rates/export', (req, res) => {
+  const db = getDb();
+  const { search, category } = req.query;
+  const cond = [], args = [];
+  if (category) { cond.push('category = ?'); args.push(category); }
+  if (search) { cond.push('LOWER(item_name) LIKE ?'); args.push('%' + String(search).toLowerCase() + '%'); }
+  const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+  const rows = db.prepare(`SELECT * FROM labour_rates ${where} ORDER BY category, item_name`).all(...args);
+  const aoa = rows.map(r => [r.item_name, r.specification || '', r.size || '', r.rate || 0, r.uom || '', r.category || '']);
+  sendLabourXlsx(res, aoa, 'labour-rates.xlsx');
+});
+
+// Blank template with the header row + one sample line.
+router.get('/labour-rates/template', (req, res) => {
+  sendLabourXlsx(res, [['SENSOR INSTALLATION', 'MS Type', '25mm', 350, 'PCS', 'ELECTRICAL']], 'labour-rates-template.xlsx');
+});
+
+// Bulk import from an uploaded .xlsx / .xls / .csv. First row = headers;
+// columns matched case-insensitively. Item Name required; others optional.
+router.post('/labour-rates/import', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const db = getDb();
+  let rows;
+  try {
+    const wb = XLSX.readFile(req.file.path);
+    rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+  } catch (e) {
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
+    return res.status(400).json({ error: 'Could not parse the file. Expected .xlsx / .xls / .csv' });
+  }
+  try { fs.unlinkSync(req.file.path); } catch (_) {}
+  if (!rows.length) return res.status(400).json({ error: 'No data rows. Row 1 must be headers; data starts on row 2.' });
+
+  const cleanKey = (k) => String(k || '').toLowerCase().replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+  const insert = db.prepare('INSERT INTO labour_rates (item_name, specification, size, rate, uom, category, created_by) VALUES (?,?,?,?,?,?,?)');
+  let added = 0; const errors = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = {};
+    Object.entries(rows[i]).forEach(([k, v]) => { r[cleanKey(k)] = typeof v === 'string' ? v.trim() : v; });
+    const item_name = String(r['item name'] || '').trim();
+    if (!item_name) { errors.push(`Row ${i + 2}: Item Name required`); continue; }
+    try {
+      insert.run(item_name, String(r['specification'] || ''), String(r['size'] || ''),
+        Number(r['rate']) || 0, String(r['uom'] || ''), String(r['category'] || ''), req.user.id);
+      added++;
+    } catch (err) { errors.push(`Row ${i + 2}: ${err.message}`); }
+  }
+  res.json({ added, total: rows.length, errors });
 });
 
 // ── Saved AI Auto-Quotation estimates (mam 2026-06-10) ────────────
