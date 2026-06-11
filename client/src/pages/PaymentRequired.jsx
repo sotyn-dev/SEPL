@@ -14,18 +14,16 @@ import { LuIndianRupee } from 'react-icons/lu';
 const CATEGORIES = ['TA/DA', 'Purchase', 'Labour', 'Transport', 'Salary', 'Compliance'];
 const STATUSES = ['pending', 'step1_approved', 'accounts_approved', 'dues_checked', 'velocity_checked', 'final_approved', 'rejected'];
 const STATUS_LABELS = { pending: 'Pending', step1_approved: 'Step 1 Approved', accounts_approved: 'Accounts Approved', dues_checked: 'Dues Checked', velocity_checked: 'Velocity Checked', final_approved: 'Final Approved', rejected: 'Rejected' };
+// One standard flow for every category (mam 2026-06-11):
+// L1 Accountant → L2 Nitin Jain → L3 Ankur Kaplesh → Payment Release Aanchal.
+// Step numbers (1,2,3,5) match the server WORKFLOW exactly.
 const STEPS = [
-  { step: 1, name: 'Category Approval' },
-  { step: 2, name: 'Accountant Approval' },
-  { step: 3, name: 'Velocity Check (Auto)' },
-  { step: 4, name: 'Billing Engineer' },
-  { step: 5, name: 'Payment Release' },
+  { step: 1, name: 'L1 Approval (Accountant)' },
+  { step: 2, name: 'L2 Approval (Nitin Jain)' },
+  { step: 3, name: 'L3 Approval (Ankur Kaplesh)' },
+  { step: 5, name: 'Payment Release (Aanchal)' },
 ];
-const TADA_STEPS = [
-  { step: 1, name: 'HR Approval' },
-  { step: 2, name: 'Accountant Approval' },
-  { step: 5, name: 'Payment Release' },
-];
+const TADA_STEPS = STEPS;
 
 // Canonical order of LIVE workflow stages for the dashboard tiles/chips
 // (union of the 5-step and TA/DA workflows). Mam (2026-05-30): the stage
@@ -33,7 +31,7 @@ const TADA_STEPS = [
 // every in-flight request — so everything piled into "HR Approval" and
 // the later stages showed 0. A request's true stage is its live
 // current_step_name; terminal states fall back to status.
-const STAGE_SEQ = ['HR Approval', 'Category Approval', 'Accountant Approval', 'Velocity Check (Auto)', 'Billing Engineer', 'Payment Release'];
+const STAGE_SEQ = ['L1 Approval (Accountant)', 'L2 Approval (Nitin Jain)', 'L3 Approval (Ankur Kaplesh)', 'Payment Release (Aanchal)'];
 const stageOf = (r) =>
   r.status === 'final_approved' ? 'Approved'
   : r.status === 'rejected' ? 'Rejected'
@@ -44,6 +42,14 @@ const stageOf = (r) =>
 const defaultRequiredByDate = () => {
   const d = new Date();
   d.setDate(d.getDate() + 5);
+  return d.toISOString().split('T')[0];
+};
+// TA/DA travel date window: today and the previous 3 days only — no future
+// dates (mam 2026-06-11: travel is already done, claim it within 3 days).
+const todayStr = () => new Date().toISOString().split('T')[0];
+const minTravelDate = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 3);
   return d.toISOString().split('T')[0];
 };
 
@@ -186,6 +192,10 @@ export default function PaymentRequired() {
 
   const handleSave = async (e) => {
     e.preventDefault();
+    // TA/DA travel date must be today or within the previous 3 days — no future.
+    if (form.category === 'TA/DA' && form.travel_dates && (form.travel_dates < minTravelDate() || form.travel_dates > todayStr())) {
+      return toast.error(`Travel Date must be between ${minTravelDate()} and ${todayStr()} (today or up to 3 days back).`, { duration: 7000 });
+    }
     const missing = requiredProofsMissing(form);
     if (missing.length > 0) {
       return toast.error(`Upload required proof${missing.length > 1 ? 's' : ''} before submitting: ${missing.join(', ')}`, { duration: 7000 });
@@ -1070,7 +1080,12 @@ export default function PaymentRequired() {
               <h4 className="font-semibold text-sm text-purple-700 mb-3">TA/DA Details</h4>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="label">Travel From-To *</label><input className="input" value={form.travel_from_to} onChange={e => F('travel_from_to', e.target.value)} required /></div>
-                <div><label className="label">Travel Dates *</label><input className="input" value={form.travel_dates} onChange={e => F('travel_dates', e.target.value)} required /></div>
+                <div><label className="label">Travel Dates *</label>
+                  <input className="input" type="date" value={form.travel_dates}
+                    min={minTravelDate()} max={todayStr()}
+                    onChange={e => F('travel_dates', e.target.value)} required />
+                  <p className="text-[10px] text-gray-400 mt-0.5">Today or up to 3 days back ({minTravelDate()} – {todayStr()}). No future dates.</p>
+                </div>
                 <div><label className="label">Mode of Travel *</label>
                   <select className="select" value={form.mode_of_travel} onChange={e => F('mode_of_travel', e.target.value)} required>
                     <option value="">Select</option><option>Bus / Rapido</option><option>Train</option><option>Flight</option><option>Car</option><option>Bike</option><option>Auto</option>
@@ -1188,14 +1203,10 @@ export default function PaymentRequired() {
             </div>
           )}
 
-          {/* Approval workflow info */}
+          {/* Approval workflow info — one standard flow for every category */}
           {form.category && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
-              <strong>Approval Flow:</strong> {form.category === 'TA/DA' ? (
-                <span>HR → Accountant → Payment Release</span>
-              ) : (
-                <span>{form.category === 'Purchase' ? 'Purchase Head' : form.category === 'Labour' ? 'Site Engineer' : 'Purchase Dept'} → Accountant → Velocity (Auto) → Billing Engineer → Payment Release</span>
-              )}
+              <strong>Approval Flow:</strong> <span>L1 Accountant → L2 Nitin Jain → L3 Ankur Kaplesh → Payment Release Aanchal</span>
             </div>
           )}
 
@@ -1234,10 +1245,11 @@ export default function PaymentRequired() {
         ) : (
           <div className="space-y-4">
             <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-gray-700 leading-relaxed">
-              <strong>How this works:</strong> Each payment category has fixed steps (HR → Accountant → Release, etc.).
-              By default, anyone holding the matching role can approve. Pick a specific user here to <strong>override</strong> —
-              from then on, only that user (or admin) can clear that step. Set back to "— Default —" to revert to role-based routing.
-              <br />Example: <em>TA/DA · HR Approval → pick Aanchal</em> means only Aanchal (or admin) can approve HR step on TA/DA requests, regardless of who holds "HR Manager" role.
+              <strong>How this works:</strong> Every category now uses one standard flow —
+              <em> L1 Accountant → L2 Nitin Jain → L3 Ankur Kaplesh → Payment Release Aanchal</em>.
+              L1 is open to anyone holding the Accountant role; L2/L3/Release are pinned to the named person.
+              Pick a specific user here to <strong>override</strong> a step — from then on only that user (or admin) can clear it.
+              Set back to "— Default —" to revert to the standard approver.
             </div>
             {Object.entries(routingMatrix).map(([category, steps]) => (
               <div key={category} className="card p-3">

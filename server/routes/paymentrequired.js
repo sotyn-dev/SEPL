@@ -41,48 +41,40 @@ const seesAll = (req) => {
   return !!row?.ok;
 };
 
-// Approval workflow based on category
-// TA/DA: Step 1 → Step 2 → Step 5 (skip velocity & billing eng)
-// Others: Step 1 → Step 2 → Step 3 (velocity auto) → Step 4 → Step 5
+// One standard approval flow for EVERY category (mam 2026-06-11): instead of
+// the old per-category chains (HR / Purchase-head / Site-engineer + auto
+// Velocity Check + Billing Engineer), every payment now runs:
+//   L1 Approval → Accountant (role)
+//   L2 Approval → Nitin Jain (named person)
+//   L3 Approval → Ankur Kaplesh (named person)
+//   Payment Release → Aanchal (named person)
+// Step numbers stay 1, 2, 3, 5 so the in-flight requests (parked on the old
+// step 1/2/5) keep flowing; step 4 (retired Billing Engineer) is migrated to 5.
+const STANDARD_FLOW = [
+  { step: 1, name: 'L1 Approval (Accountant)', approver_role: 'Accountant' },
+  { step: 2, name: 'L2 Approval (Nitin Jain)', approver_name: 'Nitin Jain' },
+  { step: 3, name: 'L3 Approval (Ankur Kaplesh)', approver_name: 'Ankur Kaplesh' },
+  { step: 5, name: 'Payment Release (Aanchal)', approver_name: 'Aanchal' },
+];
 const WORKFLOW = {
-  'TA/DA': [
-    { step: 1, name: 'HR Approval', approver_role: 'HR Manager' },
-    { step: 2, name: 'Accountant Approval', approver_role: 'Accountant' },
-    { step: 5, name: 'Payment Release', approver_role: 'Accountant' },
-  ],
-  'Purchase': [
-    { step: 1, name: 'Purchase Head Approval', approver_role: 'Purchase Manager' },
-    { step: 2, name: 'Accountant Approval', approver_role: 'Accountant' },
-    { step: 3, name: 'Velocity Check (Auto)', approver_role: 'System' },
-    { step: 4, name: 'Billing Engineer Approval', approver_role: 'Billing Engineer' },
-    { step: 5, name: 'Payment Release', approver_role: 'Accountant' },
-  ],
-  'Labour': [
-    { step: 1, name: 'Site Engineer Approval', approver_role: 'Site Engineer' },
-    { step: 2, name: 'Accountant Approval', approver_role: 'Accountant' },
-    { step: 3, name: 'Velocity Check (Auto)', approver_role: 'System' },
-    { step: 4, name: 'Billing Engineer Approval', approver_role: 'Billing Engineer' },
-    { step: 5, name: 'Payment Release', approver_role: 'Accountant' },
-  ],
-  'Transport': [
-    { step: 1, name: 'Purchase Dept Approval', approver_role: 'Purchase Manager' },
-    { step: 2, name: 'Accountant Approval', approver_role: 'Accountant' },
-    { step: 3, name: 'Velocity Check (Auto)', approver_role: 'System' },
-    { step: 4, name: 'Billing Engineer Approval', approver_role: 'Billing Engineer' },
-    { step: 5, name: 'Payment Release', approver_role: 'Accountant' },
-  ],
-  // Payroll / statutory payments — lighter approval (HR → Accountant → Release).
-  'Salary': [
-    { step: 1, name: 'HR Approval', approver_role: 'HR Manager' },
-    { step: 2, name: 'Accountant Approval', approver_role: 'Accountant' },
-    { step: 5, name: 'Payment Release', approver_role: 'Accountant' },
-  ],
-  'Compliance': [
-    { step: 1, name: 'HR Approval', approver_role: 'HR Manager' },
-    { step: 2, name: 'Accountant Approval', approver_role: 'Accountant' },
-    { step: 5, name: 'Payment Release', approver_role: 'Accountant' },
-  ],
+  'TA/DA': STANDARD_FLOW,
+  'Purchase': STANDARD_FLOW,
+  'Labour': STANDARD_FLOW,
+  'Transport': STANDARD_FLOW,
+  'Salary': STANDARD_FLOW,
+  'Compliance': STANDARD_FLOW,
 };
+
+// Resolve a named approver (the standard flow pins specific people) to an
+// active user record — exact name first, then a loose LIKE — so it survives
+// across the local/production DBs without hard-coded user ids.
+function resolveUserByName(db, name) {
+  if (!name) return null;
+  try {
+    return db.prepare('SELECT id, name FROM users WHERE active=1 AND LOWER(TRIM(name))=LOWER(TRIM(?)) LIMIT 1').get(name)
+      || db.prepare('SELECT id, name FROM users WHERE active=1 AND LOWER(name) LIKE LOWER(?) ORDER BY id LIMIT 1').get('%' + name + '%');
+  } catch (_) { return null; }
+}
 
 // Per-step approver override table (mam, 2026-05-16: "i want hr
 // approval will give to anchal how can be it dynamic all steps").
@@ -101,6 +93,23 @@ try {
     )
   `);
 } catch (_) {}
+
+// One-time standardization (mam 2026-06-11): every category now uses the named
+// L1→L2→L3→Release flow, so the OLD per-category routing overrides (e.g. step 1
+// HR → Ruksana) would shadow the new named approvers — clear them once. Also
+// move any request parked on the retired Billing-Engineer step (4) to Payment
+// Release (5) so it isn't stuck on a step that no longer exists. Guarded by a
+// marker row so it runs exactly once (won't wipe future manual overrides).
+try {
+  const db = getDb();
+  db.exec(`CREATE TABLE IF NOT EXISTS app_migrations (key TEXT PRIMARY KEY, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+  if (!db.prepare(`SELECT 1 FROM app_migrations WHERE key='pr_standard_flow_v1'`).get()) {
+    db.exec(`DELETE FROM payment_approval_overrides`);
+    db.exec(`UPDATE payment_requests SET current_step=5 WHERE current_step=4 AND status NOT IN ('final_approved','rejected')`);
+    db.prepare(`INSERT INTO app_migrations (key) VALUES ('pr_standard_flow_v1')`).run();
+    console.log('[migration] Payment Required standardized: L1 Accountant → L2 Nitin Jain → L3 Ankur Kaplesh → Release Aanchal');
+  }
+} catch (e) { console.error('[migration] PR standardize failed:', e.message); }
 
 function getApprovalRoutingFor(db, category, step) {
   try {
@@ -122,6 +131,11 @@ function canUserApproveStep(db, userId, category, step) {
   const overrideUserId = getApprovalRoutingFor(db, category, step);
   if (overrideUserId) {
     return overrideUserId === userId;
+  }
+  // Named approver (the standard flow pins L2/L3/Release to a person).
+  if (stepInfo.approver_name) {
+    const u = resolveUserByName(db, stepInfo.approver_name);
+    return !!u && u.id === userId;
   }
   // No override → role-based fallback (the original behaviour).
   const userRoles = db.prepare(`SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id=r.id WHERE ur.user_id=?`).all(userId);
@@ -203,11 +217,13 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
         if (overrideUserId) {
           const u = db.prepare('SELECT name FROM users WHERE id=?').get(overrideUserId);
           row.next_approver_name = u?.name || null;
-          row.next_approver_role = curStep.approver_role;
+        } else if (curStep.approver_name) {
+          const u = resolveUserByName(db, curStep.approver_name);
+          row.next_approver_name = u?.name || curStep.approver_name;
         } else {
-          row.next_approver_name = null;             // no specific person
-          row.next_approver_role = curStep.approver_role;
+          row.next_approver_name = null;             // role-based step, no specific person
         }
+        row.next_approver_role = curStep.approver_role || null;
       }
       // ── Last approval that cleared (skip system / velocity check)
       const lastApproval = db.prepare(`
@@ -546,22 +562,9 @@ function advanceToNextStep(db, request, approvedBy) {
   // Mam (2026-05-22): removed the in-app bell ping on step advance.
   // The 📥 My Inbox tab + 60s badge poll already surface what each
   // approver needs to act on; bells were too noisy.
-
-  // If next step is velocity check (Step 3), auto-approve if in top 3
-  if (nextStepInfo.step === 3) {
-    const inTop3 = isInTop3Velocity(db, request.site_name);
-    if (inTop3) {
-      db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, approved_by) VALUES (?,?,?,?,?,?)')
-        .run(request.id, 3, 'Velocity Check (Auto)', 'approved', `Auto-approved: Project in TOP 3 by velocity`, approvedBy);
-      const newReq = db.prepare('SELECT * FROM payment_requests WHERE id=?').get(request.id);
-      return advanceToNextStep(db, newReq, approvedBy);
-    } else {
-      db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, approved_by) VALUES (?,?,?,?,?,?)')
-        .run(request.id, 3, 'Velocity Check (Auto)', 'rejected', 'Auto-rejected: Project not in TOP 3 by velocity', approvedBy);
-      db.prepare('UPDATE payment_requests SET status=?, rejection_remarks=? WHERE id=?').run('rejected', 'Auto-rejected at velocity check (not in top 3)', request.id);
-      return 'rejected_velocity';
-    }
-  }
+  // (mam 2026-06-11: the auto Velocity Check at step 3 was retired when every
+  // category moved to the standard L1→L2→L3→Release flow — step 3 is now the
+  // manual L3 Approval, so there is no auto-advance/auto-reject here anymore.)
 
   return 'step_advanced';
 }
@@ -736,7 +739,7 @@ router.get('/approval-routing', (req, res) => {
         return {
           step: s.step,
           name: s.name,
-          role_default: s.approver_role,
+          role_default: s.approver_role || (s.approver_name ? `${s.approver_name} (named)` : null),
           override_user_id: o?.user_id || null,
           override_user_name: o?.user_name || null,
         };
