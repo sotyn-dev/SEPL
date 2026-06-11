@@ -53,6 +53,7 @@ export default function PoFocStripped() {
   const [form, setForm] = useState(blankForm());
   const [pendSearch, setPendSearch] = useState('');
   const [draftSearch, setDraftSearch] = useState('');
+  const [catFilter, setCatFilter] = useState('');
 
   const load = useCallback(() => {
     api.get('/quotations/po-foc').then(r => { setEntries(r.data.rows || []); setCounts(r.data.counts || {}); }).catch(() => {});
@@ -133,17 +134,29 @@ export default function PoFocStripped() {
   // Saved drafts (non_approved entries) show as cards above the list.
   const approvedPoIds = useMemo(() => new Set(entries.filter(e => e.status === 'approved' || e.status === 're_approved').map(e => e.po_item_id)), [entries]);
   const draftPoIds = useMemo(() => new Set(entries.filter(e => e.status === 'non_approved').map(e => e.po_item_id)), [entries]);
+  // Category filter = the PO item's Item Master department (mam 2026-06-11:
+  // "filter category wise — pick Fire Fighting, show all fire fighting"). The
+  // dropdown options come from whatever departments the PO items actually have.
+  const categories = useMemo(() => [...new Set(poItems.map(p => p.department).filter(Boolean))].sort(), [poItems]);
+  const poDeptById = useMemo(() => { const m = new Map(); poItems.forEach(p => m.set(p.id, p.department || '')); return m; }, [poItems]);
+  const inCat = (dept) => !catFilter || dept === catFilter;
+  const catOf = (e) => poDeptById.get(e.po_item_id) || '';
   const pendingItems = useMemo(() => {
-    let list = poItems.filter(p => !approvedPoIds.has(p.id) && !draftPoIds.has(p.id));
+    let list = poItems.filter(p => inCat(p.department || '') && !approvedPoIds.has(p.id) && !draftPoIds.has(p.id));
     const q = pendSearch.toLowerCase().trim();
     if (q) { const toks = q.split(/\s+/).filter(Boolean); list = list.filter(p => toks.every(t => (p.display_name || '').toLowerCase().includes(t))); }
     return list;
-  }, [poItems, approvedPoIds, draftPoIds, pendSearch]);
-  const pendingTotal = Math.max(0, poItems.length - approvedPoIds.size); // PO items still needing FOC (incl drafts)
-  const tabCount = (k) => k === 'non_approved' ? pendingTotal : (counts[k] || 0);
+  }, [poItems, approvedPoIds, draftPoIds, pendSearch, catFilter]);
+  // PO items still needing FOC (incl drafts), within the chosen category.
+  const pendingTotal = useMemo(() => poItems.filter(p => inCat(p.department || '') && !approvedPoIds.has(p.id)).length, [poItems, approvedPoIds, catFilter]);
+  const tabCount = (k) => {
+    if (k === 'non_approved') return pendingTotal;
+    if (!catFilter) return counts[k] || 0;
+    return entries.filter(e => e.status === k && catOf(e) === catFilter).length;
+  };
   const openForPoItem = (p) => { setForm({ ...blankForm(), po_item_id: p.id, po_name: p.display_name || p.item_name, po_rate: p.current_price || 0 }); setModal(true); };
 
-  const shown = entries.filter(e => e.status === tab);
+  const shown = entries.filter(e => e.status === tab && (!catFilter || catOf(e) === catFilter));
   const dq = draftSearch.toLowerCase().trim();
   const dToks = dq.split(/\s+/).filter(Boolean);
   const shownFiltered = dq ? shown.filter(e => dToks.every(t => (e.po_name || '').toLowerCase().includes(t))) : shown;
@@ -203,6 +216,16 @@ export default function PoFocStripped() {
             {t.label} <span className={`ml-1 ${tab === t.key ? 'opacity-90' : 'text-gray-400'}`}>({tabCount(t.key)})</span>
           </button>
         ))}
+      </div>
+
+      {/* Category (department) filter — applies to every tab */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Category</span>
+        <select className="select max-w-xs" value={catFilter} onChange={e => setCatFilter(e.target.value)}>
+          <option value="">All categories</option>
+          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        {catFilter && <button onClick={() => setCatFilter('')} className="text-xs text-indigo-600 hover:text-indigo-800">✕ Clear</button>}
       </div>
 
       {/* Body */}
