@@ -9,6 +9,88 @@ const { parseResume } = require('../utils/resumeParser');
 const router = express.Router();
 router.use(authMiddleware);
 
+// ── Project-wise manpower plan (mam 2026-06-12) ─────────────────────
+// For each UNIQUE project (business_book grouped by project / company
+// name) show the total project value, the REQUIRED manpower from the
+// value slab, the ACTUAL manpower from the latest DPR, and the gap — so
+// HR can see shortages at a glance and hire / redeploy.
+//
+//   Project value → required manpower:
+//     ≤ 5 L → 4 | ≤ 25 L → 6 | ≤ 50 L → 8 | ≤ 1 Cr → 10
+//     ≤ 5 Cr → 15 | ≤ 10 Cr → 25 | > 10 Cr → 40
+const LAKH = 100000, CRORE = 10000000;
+function requiredManpower(value) {
+  const v = +value || 0;
+  if (v <= 5 * LAKH)  return 4;
+  if (v <= 25 * LAKH) return 6;
+  if (v <= 50 * LAKH) return 8;
+  if (v <= 1 * CRORE) return 10;
+  if (v <= 5 * CRORE) return 15;
+  if (v <= 10 * CRORE) return 25;
+  return 40;
+}
+
+router.get('/manpower-plan', (req, res) => {
+  const db = getDb();
+  const bbs = db.prepare(
+    `SELECT id, lead_no, project_name, company_name, client_name, po_amount, status
+       FROM business_book`
+  ).all();
+  const sites = db.prepare(`SELECT id, business_book_id FROM sites`).all();
+  // Manpower per DPR: prefer the sum of dpr_contractors.manpower, else the
+  // legacy dpr.contractor_manpower.  One row per DPR; newest first.
+  const dprRows = db.prepare(
+    `SELECT d.id, d.site_id, d.report_date,
+            CASE WHEN COALESCE(SUM(dc.manpower), 0) > 0 THEN SUM(dc.manpower)
+                 ELSE COALESCE(d.contractor_manpower, 0) END AS mp
+       FROM dpr d
+       LEFT JOIN dpr_contractors dc ON dc.dpr_id = d.id
+      GROUP BY d.id
+      ORDER BY d.report_date DESC, d.id DESC`
+  ).all();
+  // Latest DPR manpower per site.
+  const latestBySite = new Map();
+  for (const r of dprRows) {
+    const cur = latestBySite.get(r.site_id);
+    if (!cur || (r.report_date || '') > cur.date) latestBySite.set(r.site_id, { date: r.report_date || '', mp: +r.mp || 0 });
+  }
+  // business_book_id → latest DPR manpower across its site(s).
+  const mpByBB = new Map();
+  for (const s of sites) {
+    const sm = latestBySite.get(s.id);
+    if (!sm) continue;
+    const cur = mpByBB.get(s.business_book_id);
+    if (!cur || sm.date > cur.date) mpByBB.set(s.business_book_id, sm);
+  }
+  // Group business_book rows into unique projects by normalized name.
+  const norm = s => String(s || '').trim();
+  const groups = new Map();
+  for (const bb of bbs) {
+    const display = norm(bb.project_name) || norm(bb.company_name) || norm(bb.client_name)
+      || (bb.lead_no ? `Lead ${bb.lead_no}` : `BB#${bb.id}`);
+    const key = display.toLowerCase();
+    if (!groups.has(key)) groups.set(key, { project: display, value: 0, lead_nos: [], actual: 0, actual_date: null });
+    const g = groups.get(key);
+    g.value += +bb.po_amount || 0;
+    if (bb.lead_no) g.lead_nos.push(bb.lead_no);
+    const m = mpByBB.get(bb.id);
+    if (m && (!g.actual_date || m.date > g.actual_date)) { g.actual = m.mp; g.actual_date = m.date; }
+  }
+  const projects = [...groups.values()].map(g => {
+    const required = requiredManpower(g.value);
+    return {
+      project: g.project,
+      lead_nos: g.lead_nos,
+      value: Math.round(g.value),
+      required,
+      actual: g.actual,
+      gap: required - g.actual,          // > 0 = short (hire), < 0 = surplus
+      last_dpr_date: g.actual_date,
+    };
+  }).sort((a, b) => b.gap - a.gap || b.value - a.value);
+  res.json(projects);
+});
+
 // Mam (2026-05-22): bulk Excel upload for checklists.  Re-uses the
 // /data/uploads dir + 10MB cap so behaviour matches the PO/BOQ
 // upload flow.  File is deleted after parsing to avoid junk.

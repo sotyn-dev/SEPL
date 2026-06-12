@@ -15,7 +15,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   FiPlus, FiEdit2, FiTrash2, FiCalendar, FiCheckCircle, FiUser, FiFileText,
   FiAward, FiDownload, FiClock, FiTag, FiPauseCircle, FiPlayCircle, FiBriefcase,
-  FiAlertTriangle, FiClipboard, FiBarChart2, FiHelpCircle,
+  FiAlertTriangle, FiClipboard, FiBarChart2, FiHelpCircle, FiUsers,
 } from 'react-icons/fi';
 // FiPlayCircle is already imported above for the Hold/Unhold button
 // — reused here for the Training Library tab icon.
@@ -485,6 +485,7 @@ export default function HR() {
       <div className="flex gap-2 border-b border-gray-200 overflow-x-auto">
         {[
           { id: 'dashboard',       label: 'Dashboard',          icon: FiBarChart2 },
+          { id: 'manpower',        label: 'Manpower Plan',      icon: FiUsers },
           { id: 'candidates',      label: 'Candidates (ATS)',   icon: FiUser },
           { id: 'hiring-requests', label: 'Hiring Requests',    icon: FiBriefcase },
           { id: 'jds',             label: 'Job Descriptions',   icon: FiFileText },
@@ -511,6 +512,7 @@ export default function HR() {
       </div>
 
       {tab === 'dashboard'       && <DashboardTab />}
+      {tab === 'manpower'        && <ManpowerTab />}
       {tab === 'hiring-requests' && <HiringRequestsTab employees={employees} />}
       {tab === 'jds'             && <JobDescriptionsTab />}
       {tab === 'screening'       && <ScreeningQuestionsTab />}
@@ -1509,6 +1511,99 @@ export default function HR() {
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Create'}</button></div>
         </form>
       </Modal>
+    </div>
+  );
+}
+
+// Project-wise manpower plan (mam 2026-06-12): per UNIQUE project, the
+// required manpower (from the value slab) vs the actual on site (latest
+// DPR), so HR can spot shortages and hire / redeploy.
+function ManpowerTab() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  useEffect(() => {
+    api.get('/hr/manpower-plan')
+      .then(r => setRows(r.data || []))
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
+  }, []);
+  const fmtMoney = n => '₹' + Math.round(+n || 0).toLocaleString('en-IN');
+  const fmtShort = n => {
+    const v = +n || 0;
+    if (v >= 1e7) return `₹${(v / 1e7).toFixed(2)} Cr`;
+    if (v >= 1e5) return `₹${(v / 1e5).toFixed(2)} L`;
+    return '₹' + Math.round(v).toLocaleString('en-IN');
+  };
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? rows.filter(r => (r.project || '').toLowerCase().includes(q) || (r.lead_nos || []).join(' ').toLowerCase().includes(q))
+    : rows;
+  const totalReq = filtered.reduce((s, r) => s + (r.required || 0), 0);
+  const totalAct = filtered.reduce((s, r) => s + (r.actual || 0), 0);
+  const totalGap = totalReq - totalAct;
+  const shortCount = filtered.filter(r => r.gap > 0).length;
+
+  return (
+    <div className="space-y-4">
+      <div className="text-xs text-gray-600 bg-blue-50 border border-blue-100 rounded px-3 py-2">
+        <b>Required</b> manpower comes from each project's total value
+        (0–5 L → 4 · 5–25 L → 6 · 25–50 L → 8 · 50 L–1 Cr → 10 · 1–5 Cr → 15 · 5–10 Cr → 25 · 10 Cr+ → 40).
+        <b> Actual</b> is the latest DPR's manpower. A red <b>gap</b> means more people are needed.
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="card p-3"><div className="text-[11px] text-gray-500">Projects</div><div className="text-2xl font-bold">{filtered.length}</div></div>
+        <div className="card p-3"><div className="text-[11px] text-gray-500">Required</div><div className="text-2xl font-bold text-blue-700">{totalReq}</div></div>
+        <div className="card p-3"><div className="text-[11px] text-gray-500">Actual (DPR)</div><div className="text-2xl font-bold text-emerald-700">{totalAct}</div></div>
+        <div className="card p-3">
+          <div className="text-[11px] text-gray-500">Shortfall</div>
+          <div className={`text-2xl font-bold ${totalGap > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{totalGap > 0 ? `-${totalGap}` : totalGap === 0 ? '0' : `+${-totalGap}`}</div>
+          <div className="text-[10px] text-gray-400">{shortCount} project(s) short</div>
+        </div>
+      </div>
+
+      <input className="input text-sm max-w-xs" placeholder="Search project / lead no…" value={search} onChange={e => setSearch(e.target.value)} />
+
+      <div className="card p-0 overflow-x-auto">
+        <table className="text-sm w-full">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-3 py-2 text-left">Project</th>
+              <th className="px-3 py-2 text-right">Project Value</th>
+              <th className="px-3 py-2 text-center">Required</th>
+              <th className="px-3 py-2 text-center">Actual (DPR)</th>
+              <th className="px-3 py-2 text-center">Gap</th>
+              <th className="px-3 py-2 text-left">Last DPR</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan="6" className="text-center py-6 text-gray-400">Loading…</td></tr>
+            ) : filtered.length === 0 ? (
+              <tr><td colSpan="6" className="text-center py-6 text-gray-400">No projects found</td></tr>
+            ) : filtered.map((r, i) => (
+              <tr key={i} className={`border-b ${r.gap > 0 ? 'bg-red-50/40' : ''}`}>
+                <td className="px-3 py-2">
+                  <div className="font-medium">{r.project}</div>
+                  {r.lead_nos?.length > 0 && <div className="text-[10px] text-gray-400">{r.lead_nos.join(', ')}</div>}
+                </td>
+                <td className="px-3 py-2 text-right font-medium" title={fmtMoney(r.value)}>{fmtShort(r.value)}</td>
+                <td className="px-3 py-2 text-center font-semibold text-blue-700">{r.required}</td>
+                <td className="px-3 py-2 text-center font-semibold text-emerald-700">{r.actual}</td>
+                <td className="px-3 py-2 text-center">
+                  {r.gap > 0
+                    ? <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700">-{r.gap} short</span>
+                    : r.gap === 0
+                      ? <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">OK</span>
+                      : <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">+{-r.gap} extra</span>}
+                </td>
+                <td className="px-3 py-2 text-xs text-gray-500">{r.last_dpr_date || '— no DPR —'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
