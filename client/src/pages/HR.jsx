@@ -1537,7 +1537,7 @@ function ManpowerTab() {
   };
   const q = search.trim().toLowerCase();
   const filtered = q
-    ? rows.filter(r => (r.project || '').toLowerCase().includes(q) || (r.lead_nos || []).join(' ').toLowerCase().includes(q))
+    ? rows.filter(r => (r.project || '').toLowerCase().includes(q))
     : rows;
   const totalReq = filtered.reduce((s, r) => s + (r.required || 0), 0);
   const totalAct = filtered.reduce((s, r) => s + (r.actual || 0), 0);
@@ -1549,7 +1549,7 @@ function ManpowerTab() {
       <div className="text-xs text-gray-600 bg-blue-50 border border-blue-100 rounded px-3 py-2">
         <b>Required</b> manpower comes from each project's total value
         (0–5 L → 4 · 5–25 L → 6 · 25–50 L → 8 · 50 L–1 Cr → 10 · 1–5 Cr → 15 · 5–10 Cr → 25 · 10 Cr+ → 40).
-        <b> Actual</b> is the latest DPR's manpower. A red <b>gap</b> means more people are needed.
+        <b> Actual</b> is the average manpower across the project's DPRs. A red <b>gap</b> means more people are needed.
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -1563,7 +1563,7 @@ function ManpowerTab() {
         </div>
       </div>
 
-      <input className="input text-sm max-w-xs" placeholder="Search project / lead no…" value={search} onChange={e => setSearch(e.target.value)} />
+      <input className="input text-sm max-w-xs" placeholder="Search project…" value={search} onChange={e => setSearch(e.target.value)} />
 
       <div className="card p-0 overflow-x-auto">
         <table className="text-sm w-full">
@@ -1586,7 +1586,6 @@ function ManpowerTab() {
               <tr key={i} className={`border-b ${r.gap > 0 ? 'bg-red-50/40' : ''}`}>
                 <td className="px-3 py-2">
                   <div className="font-medium">{r.project}</div>
-                  {r.lead_nos?.length > 0 && <div className="text-[10px] text-gray-400">{r.lead_nos.join(', ')}</div>}
                 </td>
                 <td className="px-3 py-2 text-right font-medium" title={fmtMoney(r.value)}>{fmtShort(r.value)}</td>
                 <td className="px-3 py-2 text-center font-semibold text-blue-700">{r.required}</td>

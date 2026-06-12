@@ -38,54 +38,53 @@ router.get('/manpower-plan', (req, res) => {
   ).all();
   const sites = db.prepare(`SELECT id, business_book_id FROM sites`).all();
   // Manpower per DPR: prefer the sum of dpr_contractors.manpower, else the
-  // legacy dpr.contractor_manpower.  One row per DPR; newest first.
+  // legacy dpr.contractor_manpower.  One row per DPR.
   const dprRows = db.prepare(
     `SELECT d.id, d.site_id, d.report_date,
             CASE WHEN COALESCE(SUM(dc.manpower), 0) > 0 THEN SUM(dc.manpower)
                  ELSE COALESCE(d.contractor_manpower, 0) END AS mp
        FROM dpr d
        LEFT JOIN dpr_contractors dc ON dc.dpr_id = d.id
-      GROUP BY d.id
-      ORDER BY d.report_date DESC, d.id DESC`
+      GROUP BY d.id`
   ).all();
-  // Latest DPR manpower per site.
-  const latestBySite = new Map();
-  for (const r of dprRows) {
-    const cur = latestBySite.get(r.site_id);
-    if (!cur || (r.report_date || '') > cur.date) latestBySite.set(r.site_id, { date: r.report_date || '', mp: +r.mp || 0 });
-  }
-  // business_book_id → latest DPR manpower across its site(s).
-  const mpByBB = new Map();
-  for (const s of sites) {
-    const sm = latestBySite.get(s.id);
-    if (!sm) continue;
-    const cur = mpByBB.get(s.business_book_id);
-    if (!cur || sm.date > cur.date) mpByBB.set(s.business_book_id, sm);
-  }
   // Group business_book rows into unique projects by normalized name.
   const norm = s => String(s || '').trim();
-  const groups = new Map();
+  const keyOf = bb => (norm(bb.project_name) || norm(bb.company_name) || norm(bb.client_name)
+    || (bb.lead_no ? `Lead ${bb.lead_no}` : `BB#${bb.id}`)).toLowerCase();
+  const groupByBB = new Map();   // business_book_id → group key
+  const groups = new Map();      // key → { project, value, mpSum, mpCount, last_dpr_date }
   for (const bb of bbs) {
+    const key = keyOf(bb);
+    groupByBB.set(bb.id, key);
     const display = norm(bb.project_name) || norm(bb.company_name) || norm(bb.client_name)
       || (bb.lead_no ? `Lead ${bb.lead_no}` : `BB#${bb.id}`);
-    const key = display.toLowerCase();
-    if (!groups.has(key)) groups.set(key, { project: display, value: 0, lead_nos: [], actual: 0, actual_date: null });
-    const g = groups.get(key);
-    g.value += +bb.po_amount || 0;
-    if (bb.lead_no) g.lead_nos.push(bb.lead_no);
-    const m = mpByBB.get(bb.id);
-    if (m && (!g.actual_date || m.date > g.actual_date)) { g.actual = m.mp; g.actual_date = m.date; }
+    if (!groups.has(key)) groups.set(key, { project: display, value: 0, mpSum: 0, mpCount: 0, last_dpr_date: null });
+    groups.get(key).value += +bb.po_amount || 0;
+  }
+  const siteToBB = new Map();
+  for (const s of sites) siteToBB.set(s.id, s.business_book_id);
+  // Actual = AVERAGE manpower across the project's DPRs (mam 2026-06-12:
+  // "actual from dpr average").  Only DPRs that actually recorded manpower
+  // (mp > 0) count toward the average, so unrecorded days don't drag it to 0.
+  for (const r of dprRows) {
+    const bbId = siteToBB.get(r.site_id);
+    if (bbId == null) continue;
+    const g = groups.get(groupByBB.get(bbId));
+    if (!g) continue;
+    const mp = +r.mp || 0;
+    if (mp > 0) { g.mpSum += mp; g.mpCount += 1; }
+    if (r.report_date && (!g.last_dpr_date || r.report_date > g.last_dpr_date)) g.last_dpr_date = r.report_date;
   }
   const projects = [...groups.values()].map(g => {
     const required = requiredManpower(g.value);
+    const actual = g.mpCount > 0 ? Math.round(g.mpSum / g.mpCount) : 0;
     return {
       project: g.project,
-      lead_nos: g.lead_nos,
       value: Math.round(g.value),
       required,
-      actual: g.actual,
-      gap: required - g.actual,          // > 0 = short (hire), < 0 = surplus
-      last_dpr_date: g.actual_date,
+      actual,
+      gap: required - actual,            // > 0 = short (hire), < 0 = surplus
+      last_dpr_date: g.last_dpr_date,
     };
   }).sort((a, b) => b.gap - a.gap || b.value - a.value);
   res.json(projects);
