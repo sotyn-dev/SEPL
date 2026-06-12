@@ -304,6 +304,15 @@ export default function Procurement() {
   const [indentItemsForPo, setIndentItemsForPo] = useState([]); // items of the currently picked indent (for the Create Vendor PO modal)
   const [poItemSelection, setPoItemSelection] = useState({}); // { indent_item_id: { checked, quantity, rate, terms, credit_days } }
   const [ratesFilter, setRatesFilter] = useState('all'); // all | pending | quoted | finalized
+  // Bulk-fill vendor + terms across ticked Vendor-Rate rows (mam 2026-06-12:
+  // "one one item vendor name again again select lots of time").  Tick rows,
+  // pick a vendor + terms once, apply to all at once for Vendor 1/2/3.
+  const [rateSel, setRateSel] = useState({});          // { [rowKey]: true }
+  const [bulkSlot, setBulkSlot] = useState(1);         // which vendor column (1|2|3)
+  const [bulkVendorName, setBulkVendorName] = useState('');
+  const [bulkTerms, setBulkTerms] = useState('');
+  const [bulkCreditDays, setBulkCreditDays] = useState('');
+  const [bulkApplying, setBulkApplying] = useState(false);
   const [finalModal, setFinalModal] = useState(null); // { row } being finalized
   const [finalForm, setFinalForm] = useState({});
   const [masterItems, setMasterItems] = useState([]); // Item Master dropdown source
@@ -2658,6 +2667,39 @@ export default function Procurement() {
             return hay.includes(rq);
           });
         const ratesPg = usePagination(filteredRates, ratesPerPage, ratesPage, setRatesPage);
+        // ── Bulk-fill helpers (mam 2026-06-12) ──────────────────────────
+        const rowKey = r => r.indent_item_ids.join('-');
+        const selectedRows = filteredRates.filter(r => rateSel[rowKey(r)]);
+        const pageAllSelected = ratesPg.rows.length > 0 && ratesPg.rows.every(r => rateSel[rowKey(r)]);
+        const toggleRow = r => setRateSel(prev => {
+          const k = rowKey(r); const next = { ...prev };
+          if (next[k]) delete next[k]; else next[k] = true;
+          return next;
+        });
+        const togglePage = () => setRateSel(prev => {
+          const next = { ...prev };
+          if (pageAllSelected) ratesPg.rows.forEach(r => { delete next[rowKey(r)]; });
+          else ratesPg.rows.forEach(r => { next[rowKey(r)] = true; });
+          return next;
+        });
+        const applyBulkVendor = async () => {
+          if (!selectedRows.length) return toast.error('Tick some item rows first');
+          if (!bulkVendorName && !bulkTerms) return toast.error('Pick a vendor and/or terms to apply');
+          const n = bulkSlot;
+          const patch = {};
+          if (bulkVendorName) patch[`vendor${n}_name`] = bulkVendorName;
+          if (bulkTerms) {
+            patch[`vendor${n}_terms`] = bulkTerms;
+            patch[`vendor${n}_credit_days`] = bulkTerms === 'Credit' ? (+bulkCreditDays || 0) : 0;
+          }
+          setBulkApplying(true);
+          try {
+            for (const row of selectedRows) await updateMergedRate(row, patch);
+            toast.success(`Applied Vendor ${n} to ${selectedRows.length} item(s)`);
+          } catch (e) {
+            toast.error('Some rows failed to save — please check');
+          } finally { setBulkApplying(false); }
+        };
         return (
         <>
           {/* Vendor Name uses SearchableSelect component now, sourced from
@@ -2695,6 +2737,62 @@ export default function Procurement() {
             </div>
           </div>
 
+          {/* Bulk-fill bar (mam 2026-06-12) — tick rows, pick ONE vendor +
+              terms, apply to all ticked at once for Vendor 1 / 2 / 3.  Rate
+              stays per-item (each item priced individually). */}
+          <div className="card p-3 flex flex-wrap items-end gap-2 text-xs border border-blue-200 bg-blue-50/40">
+            <div className="text-[11px] font-semibold text-blue-800 mr-1 leading-tight">
+              Bulk fill
+              <div className="font-normal text-gray-500 text-[10px]">tick rows → pick vendor + terms → Apply</div>
+            </div>
+            <div>
+              <label className="label text-[10px] mb-0.5">Apply to</label>
+              <div className="flex gap-1">
+                {[1,2,3].map(n => (
+                  <button key={n} type="button" onClick={() => setBulkSlot(n)}
+                    className={`px-2 py-1 rounded border text-[11px] font-semibold ${bulkSlot === n ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
+                    Vendor {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="min-w-[200px]">
+              <label className="label text-[10px] mb-0.5">Vendor</label>
+              <SearchableSelect
+                options={vendors}
+                value={bulkVendorName || null}
+                valueKey="name" displayKey="name"
+                placeholder="Pick vendor"
+                buttonClassName="text-[11px] px-2 py-1 w-full border border-gray-200 rounded-md bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-400 text-left flex items-center justify-between gap-1 cursor-pointer"
+                onChange={(v) => setBulkVendorName(v?.name || '')}
+              />
+            </div>
+            <div>
+              <label className="label text-[10px] mb-0.5">Terms</label>
+              <select className="select text-xs" style={{ width: '100px' }} value={bulkTerms} onChange={e => setBulkTerms(e.target.value)}>
+                <option value="">—</option>
+                <option value="Advance">Advance</option>
+                <option value="Credit">Credit</option>
+              </select>
+            </div>
+            {bulkTerms === 'Credit' && (
+              <div>
+                <label className="label text-[10px] mb-0.5">Credit days</label>
+                <input type="number" min="0" className="input text-xs text-right" style={{ width: '80px' }} placeholder="days"
+                  value={bulkCreditDays} onChange={e => setBulkCreditDays(e.target.value)} />
+              </div>
+            )}
+            <button type="button" disabled={bulkApplying || !selectedRows.length} onClick={applyBulkVendor}
+              className="btn btn-primary text-xs py-1 px-3 disabled:opacity-40">
+              {bulkApplying ? 'Applying…' : `Apply to ${selectedRows.length} ticked`}
+            </button>
+            {selectedRows.length > 0 && (
+              <button type="button" className="btn btn-secondary text-xs py-1 px-2" onClick={() => setRateSel({})}>
+                Clear ({selectedRows.length})
+              </button>
+            )}
+          </div>
+
           {/* Desktop table — BOQ Item column intentionally removed:
               mam's spec is purchase team enters a vendor rate ONCE per
               (indent · sub-item), regardless of which BOQ line that
@@ -2708,7 +2806,12 @@ export default function Procurement() {
                 <tr className="bg-gray-50">
                   {/* width matches --freeze-col-1-w so the 2nd sticky column
                       sits flush against this one with no gap or overlap. */}
-                  <th className="px-2 py-2 text-left" rowSpan="2" style={{ width: '150px', minWidth: '150px' }}>Indent</th>
+                  <th className="px-2 py-2 text-left" rowSpan="2" style={{ width: '150px', minWidth: '150px' }}>
+                    <div className="flex items-center gap-1.5">
+                      <input type="checkbox" checked={pageAllSelected} onChange={togglePage} title="Select all rows on this page" />
+                      <span>Indent</span>
+                    </div>
+                  </th>
                   <th className="px-2 py-2 text-left" rowSpan="2" style={{ width: '260px', minWidth: '260px' }}>Sub-Item<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(Item Master)</span></th>
                   <th className="px-2 py-2" rowSpan="2">Qty</th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 1</th>
@@ -2728,8 +2831,16 @@ export default function Procurement() {
                   const stat = r.rate_status || 'pending';
                   const statColor = stat === 'finalized' ? 'bg-emerald-100 text-emerald-700' : stat === 'quoted' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700';
                   return (
-                    <tr key={r.indent_item_ids.join('-')} className="border-b hover:bg-red-50/30">
-                      <td className="px-2 py-2 whitespace-nowrap"><div className="font-medium text-red-700">{r.indent_number}</div><div className="text-[10px] text-gray-400">{r.site_name}</div></td>
+                    <tr key={r.indent_item_ids.join('-')} className={`border-b hover:bg-red-50/30 ${rateSel[rowKey(r)] ? 'bg-blue-50/60' : ''}`}>
+                      <td className="px-2 py-2 whitespace-nowrap">
+                        <div className="flex items-start gap-1.5">
+                          <input type="checkbox" className="mt-0.5" checked={!!rateSel[rowKey(r)]} onChange={() => toggleRow(r)} />
+                          <div>
+                            <div className="font-medium text-red-700">{r.indent_number}</div>
+                            <div className="text-[10px] text-gray-400">{r.site_name}</div>
+                          </div>
+                        </div>
+                      </td>
                       <td className="px-2 py-2 align-top" style={{ width: '260px', minWidth: '260px', maxWidth: '260px' }}>
                         {r.item_code && <div className="text-[10px] font-mono text-gray-500">[{r.item_code}]</div>}
                         <div className="text-[11px] leading-snug font-medium">
@@ -2838,9 +2949,11 @@ export default function Procurement() {
             {ratesPg.rows.map(r => {
               const stat = r.rate_status || 'pending';
               return (
-                <div key={r.indent_item_ids.join('-')} className="card p-3 space-y-2">
-                  <div className="flex justify-between items-start">
-                    <div>
+                <div key={r.indent_item_ids.join('-')} className={`card p-3 space-y-2 ${rateSel[rowKey(r)] ? 'ring-1 ring-blue-300 bg-blue-50/40' : ''}`}>
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex items-start gap-2">
+                      <input type="checkbox" className="mt-1" checked={!!rateSel[rowKey(r)]} onChange={() => toggleRow(r)} title="Tick for bulk fill" />
+                      <div>
                       <div className="font-medium text-red-700 text-xs">{r.indent_number}</div>
                       {r.item_code && <div className="text-[10px] font-mono text-gray-500">[{r.item_code}]</div>}
                       <div className="text-sm font-medium line-clamp-2">{[r.master_name || r.description, r.specification, r.size].filter(Boolean).join(' / ')}</div>
@@ -2848,6 +2961,7 @@ export default function Procurement() {
                       {r.indent_item_ids.length > 1 && (
                         <div className="text-[9px] text-gray-400 italic mt-0.5">merged from {r.indent_item_ids.length} BOQ rows</div>
                       )}
+                      </div>
                     </div>
                     <span className={`badge ${stat === 'finalized' ? 'badge-green' : stat === 'quoted' ? 'badge-blue' : 'badge-yellow'}`}>{stat}</span>
                   </div>
