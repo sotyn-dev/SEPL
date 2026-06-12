@@ -2760,11 +2760,20 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   const yr = new Date().getFullYear();
   const poNum = nextSequence(db, 'vendor_pos', 'po_number', `VPO/${yr}/`, { startFrom: 0, pad: 4 });
 
+  // Freight terms + charge (mam 2026-06-12). 'Ex-Works' / 'FOR' instruct
+  // who bears freight; freight_amount (₹) is a flat charge added to the PO
+  // value (and prints as its own line on the PDF).
+  const VALID_FREIGHT = ['Ex-Works', 'FOR'];
+  const freight_terms = VALID_FREIGHT.includes(b.freight_terms) ? b.freight_terms : null;
+  const freight_amount = +b.freight_amount > 0 ? Math.round(+b.freight_amount * 100) / 100 : 0;
+
   // Total: prefer what the user typed (matches the Tally printout). Fall back
-  // to the computed sum of line items if blank.
+  // to the computed sum of line items if blank.  Freight is always added on
+  // top of either base so the stored total reflects the full PO value.
   const typedTotal = Number(b.total_amount);
   const computedTotal = lines.reduce((s, i) => s + (+i.quantity * +i.rate), 0);
-  const totalAmount = Number.isFinite(typedTotal) && typedTotal > 0 ? typedTotal : computedTotal;
+  const baseTotal = Number.isFinite(typedTotal) && typedTotal > 0 ? typedTotal : computedTotal;
+  const totalAmount = baseTotal + freight_amount;
 
   // Move uploaded file to a readable name so downloads show the original
   // filename, and save /uploads/<name> as the file_path.
@@ -2812,11 +2821,11 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
         `INSERT INTO vendor_pos
            (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks, expected_receipt_date,
             payment_block_type, payment_block_amount, payment_block_notes, payment_block_status,
-            payment_terms, credit_days)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            payment_terms, credit_days, freight_terms, freight_amount)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks, expected_receipt_date,
             pmtType, pmtAmount, pmtNotes, pmtStatus,
-            payment_terms, credit_days);
+            payment_terms, credit_days, freight_terms, freight_amount);
       const vpoId = r.lastInsertRowid;
 
       // Only write line items if the uploader chose to link indent lines.
@@ -2899,6 +2908,19 @@ router.put('/vendor-po/:id', (req, res) => {
   if (b.payment_block_amount !== undefined) set('payment_block_amount', +b.payment_block_amount > 0 ? +b.payment_block_amount : null);
   if (b.payment_block_notes !== undefined)  set('payment_block_notes', b.payment_block_notes ? String(b.payment_block_notes).trim().slice(0, 500) : null);
 
+  // Freight terms + charge (mam 2026-06-12) — printed on the PO and folded
+  // into the recomputed total below.
+  if (b.freight_terms !== undefined) {
+    const VALID_FREIGHT = ['Ex-Works', 'FOR'];
+    set('freight_terms', VALID_FREIGHT.includes(b.freight_terms) ? b.freight_terms : null);
+  }
+  if (b.freight_amount !== undefined) set('freight_amount', +b.freight_amount > 0 ? Math.round(+b.freight_amount * 100) / 100 : 0);
+  // Freight value to use when recomputing the total: the new amount if the
+  // caller sent one, else whatever is currently stored on the PO.
+  const freightForTotal = (b.freight_amount !== undefined)
+    ? (+b.freight_amount > 0 ? Math.round(+b.freight_amount * 100) / 100 : 0)
+    : (+cur.freight_amount || 0);
+
   // High-impact edits: blocked when bills exist (would invalidate them)
   if (b.total_amount !== undefined) {
     if (billCount > 0) {
@@ -2950,17 +2972,24 @@ router.put('/vendor-po/:id', (req, res) => {
         const r = updLine.run(qty, rate, amount, desc, hsn, itemId, id);
         itemUpdates += r.changes;
       }
-      // Auto-recompute total_amount = sum(line amounts) × 1.18 (GST).
+      // Auto-recompute total_amount = sum(line amounts) × 1.18 (GST) + freight.
       // Skips if caller explicitly set total_amount above (avoid double-set).
       if (b.total_amount === undefined) {
         const newTotal = db.prepare(
           'SELECT COALESCE(ROUND(SUM(amount) * 1.18, 2), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
         ).get(id).t;
-        db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(newTotal, id);
+        db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(+(newTotal + freightForTotal).toFixed(2), id);
       }
     });
     try { tx(); }
     catch (err) { return res.status(500).json({ error: 'Line items update failed: ' + err.message }); }
+  } else if (b.freight_amount !== undefined && b.total_amount === undefined && billCount === 0) {
+    // Freight changed without touching line items — refresh the stored total
+    // so the Vendor PO list reflects the new freight (sum × 1.18 + freight).
+    const newTotal = db.prepare(
+      'SELECT COALESCE(ROUND(SUM(amount) * 1.18, 2), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
+    ).get(id).t;
+    db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(+(newTotal + freightForTotal).toFixed(2), id);
   }
 
   if (sets.length === 0 && itemUpdates === 0) return res.status(400).json({ error: 'No fields to update' });

@@ -3149,6 +3149,13 @@ function initializeDatabase() {
     // the vendor PO.  Falls back to the vendor master's terms when blank.
     ['vendor_pos', 'payment_terms TEXT'],                 // 'Advance' | 'Credit' | 'PDC' | 'COD' | free text
     ['vendor_pos', 'credit_days INTEGER'],                // optional credit period for the above
+    // Freight terms + charge entered on the Create / Edit PO modal (mam
+    // 2026-06-12).  Printed on the vendor PO.  freight_terms is who bears
+    // the freight ('Ex-Works' = buyer arranges, 'FOR' = vendor delivers to
+    // site); freight_amount (₹) is added to the PO's taxable value so GST
+    // applies on it, matching how vendors bill freight.
+    ['vendor_pos', 'freight_terms TEXT'],                 // 'Ex-Works' | 'FOR' | NULL
+    ['vendor_pos', 'freight_amount REAL DEFAULT 0'],      // ₹ freight added to the PO total
     // Purchase Bills also get an uploaded file (the bill PDF / image / excel)
     ['purchase_bills', 'file_path TEXT'],
     // Material acceptance at bill entry (mam 2026-06-04): 'approved' (default)

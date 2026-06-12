@@ -372,6 +372,9 @@ export default function Procurement() {
       payment_block_type: v.payment_block_type || '',
       payment_block_amount: v.payment_block_amount || '',
       payment_block_notes: v.payment_block_notes || '',
+      // Freight terms + charge (mam 2026-06-12).
+      freight_terms: v.freight_terms || '',
+      freight_amount: v.freight_amount || '',
     });
     setEditPoItems([]);
     setEditPoLocked(false);
@@ -1340,6 +1343,9 @@ export default function Procurement() {
     if (form.indent_id) fd.append('indent_id', form.indent_id);
     if (form.total_amount) fd.append('total_amount', form.total_amount);
     if (form.remarks) fd.append('remarks', form.remarks);
+    // Freight terms + charge (mam 2026-06-12) — printed on the PDF PO.
+    if (form.freight_terms) fd.append('freight_terms', form.freight_terms);
+    if (+form.freight_amount > 0) fd.append('freight_amount', form.freight_amount);
     if (items.length) fd.append('items', JSON.stringify(items));
     if (form.po_file) fd.append('file', form.po_file);
     // Internal payment-block fields (mam 2026-05-27). Never printed on PO.
@@ -5522,6 +5528,22 @@ export default function Procurement() {
               <label className="label">Remarks <span className="text-gray-400 font-normal">(optional)</span></label>
               <input className="input" placeholder="Any note about this PO" value={form.remarks || ''} onChange={e => setForm({...form, remarks: e.target.value})} />
             </div>
+            {/* Freight terms + charge (mam 2026-06-12) — printed on the PDF PO.
+                Ex-Works = buyer arranges freight; FOR = vendor delivers to site.
+                Freight amount is added to the PO total. */}
+            <div>
+              <label className="label">Freight Terms <span className="text-gray-400 font-normal">(optional)</span></label>
+              <select className="select" value={form.freight_terms || ''} onChange={e => setForm({...form, freight_terms: e.target.value})}>
+                <option value="">— None —</option>
+                <option value="Ex-Works">Ex-Works (buyer arranges freight)</option>
+                <option value="FOR">FOR (vendor delivers to site)</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Freight Amount (₹) <span className="text-gray-400 font-normal">(optional)</span></label>
+              <input className="input text-right" type="number" step="0.01" min="0" placeholder="0" value={form.freight_amount || ''} onChange={e => setForm({...form, freight_amount: e.target.value})} />
+              <p className="text-[10px] text-gray-400 mt-0.5">Added to the PO total &amp; shown on the PDF.</p>
+            </div>
           </div>
 
           {/* Optional item linking — when an indent is picked, the uploader
@@ -5584,8 +5606,12 @@ export default function Procurement() {
                       })}
                     </tbody>
                     <tfoot className="bg-gray-50">
+                      {+form.freight_amount > 0 && (
+                        <tr><td colSpan="5" className="px-2 py-1 text-right text-gray-600">Freight{form.freight_terms ? ` (${form.freight_terms})` : ''}:</td>
+                            <td className="px-2 py-1 text-right text-gray-700">Rs {(+form.freight_amount).toLocaleString()}</td></tr>
+                      )}
                       <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">PO Total:</td>
-                          <td className="px-2 py-2 text-right font-bold text-red-700">Rs {poTotal.toLocaleString()}</td></tr>
+                          <td className="px-2 py-2 text-right font-bold text-red-700">Rs {(poTotal + (+form.freight_amount || 0)).toLocaleString()}</td></tr>
                     </tfoot>
                   </table>
                 </div>
@@ -6598,6 +6624,26 @@ export default function Procurement() {
                         value={editPoForm.remarks || ''}
                         onChange={e => setEditPoForm({ ...editPoForm, remarks: e.target.value })}
                         placeholder="Any notes about this PO — change reason, supplier follow-up, etc." />
+            </div>
+
+            {/* Freight terms + charge (mam 2026-06-12) — printed on the PDF PO. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Freight Terms</label>
+                <select className="select" value={editPoForm.freight_terms || ''}
+                        onChange={e => setEditPoForm({ ...editPoForm, freight_terms: e.target.value })}>
+                  <option value="">— None —</option>
+                  <option value="Ex-Works">Ex-Works (buyer arranges freight)</option>
+                  <option value="FOR">FOR (vendor delivers to site)</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Freight Amount (₹)</label>
+                <input className="input text-right" type="number" step="0.01" min="0" placeholder="0"
+                       value={editPoForm.freight_amount ?? ''}
+                       onChange={e => setEditPoForm({ ...editPoForm, freight_amount: e.target.value })} />
+                <p className="text-[10px] text-gray-400 mt-0.5">Added to the PO total &amp; shown on the PDF.</p>
+              </div>
             </div>
 
             {/* Payment-before-material (INTERNAL — mam 2026-05-27).
