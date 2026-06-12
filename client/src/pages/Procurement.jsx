@@ -705,8 +705,31 @@ export default function Procurement() {
   }, []);
 
   // Tab switch → lazy fetch the new tab's data (cached if already loaded).
+  // Raise-Indent is a live dashboard — its UNIT / RATE / LINE BUDGET pull
+  // the CURRENT Item Master UOM + price — so always refetch it fresh
+  // (mam 2026-06-12: "i edit in uom but not change here live"); other
+  // tabs keep using the cache.
   useEffect(() => {
-    loadTab(tab);
+    loadTab(tab, { force: tab === 'indents' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // Returning to this browser tab after editing an item's UOM / price on
+  // the Item Master page in another tab should show the live value here.
+  // Refetch the Raise-Indent data on focus; skipped for inline-edit tabs
+  // (e.g. Vendor Rates) so in-progress typing isn't clobbered.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'visible' && tab === 'indents') {
+        loadTab('indents', { force: true });
+      }
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
