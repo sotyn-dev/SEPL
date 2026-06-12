@@ -1543,65 +1543,116 @@ function ManpowerTab() {
   const totalAct = filtered.reduce((s, r) => s + (r.actual || 0), 0);
   const totalGap = totalReq - totalAct;
   const shortCount = filtered.filter(r => r.gap > 0).length;
+  const overallCoverage = totalReq > 0 ? Math.round((totalAct / totalReq) * 100) : 0;
+  const coverage = r => (r.required > 0 ? Math.min(100, Math.round((r.actual / r.required) * 100)) : 0);
+  const barColor = pct => (pct >= 100 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500');
+  const fmtDpr = s => {
+    if (!s) return null;
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return s;
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' });
+  };
+  const cards = [
+    { label: 'Projects', value: filtered.length, icon: FiBriefcase, ring: 'bg-slate-100 text-slate-600', text: 'text-slate-800' },
+    { label: 'Required', value: totalReq, icon: FiUsers, ring: 'bg-blue-100 text-blue-600', text: 'text-blue-700' },
+    { label: 'Actual (avg DPR)', value: totalAct, icon: FiCheckCircle, ring: 'bg-emerald-100 text-emerald-600', text: 'text-emerald-700' },
+    { label: 'Shortfall', value: totalGap > 0 ? `−${totalGap}` : totalGap === 0 ? '0' : `+${-totalGap}`, sub: `${shortCount} project(s) short`, icon: FiAlertTriangle, ring: totalGap > 0 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600', text: totalGap > 0 ? 'text-red-600' : 'text-emerald-600' },
+  ];
 
   return (
     <div className="space-y-4">
-      <div className="text-xs text-gray-600 bg-blue-50 border border-blue-100 rounded px-3 py-2">
+      {/* Info banner */}
+      <div className="text-xs text-gray-600 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-lg px-4 py-2.5">
         <b>Required</b> manpower comes from each project's total value
         (0–5 L → 4 · 5–25 L → 6 · 25–50 L → 8 · 50 L–1 Cr → 10 · 1–5 Cr → 15 · 5–10 Cr → 25 · 10 Cr+ → 40).
         <b> Actual</b> is the average manpower across the project's DPRs. A red <b>gap</b> means more people are needed.
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="card p-3"><div className="text-[11px] text-gray-500">Projects</div><div className="text-2xl font-bold">{filtered.length}</div></div>
-        <div className="card p-3"><div className="text-[11px] text-gray-500">Required</div><div className="text-2xl font-bold text-blue-700">{totalReq}</div></div>
-        <div className="card p-3"><div className="text-[11px] text-gray-500">Actual (DPR)</div><div className="text-2xl font-bold text-emerald-700">{totalAct}</div></div>
-        <div className="card p-3">
-          <div className="text-[11px] text-gray-500">Shortfall</div>
-          <div className={`text-2xl font-bold ${totalGap > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{totalGap > 0 ? `-${totalGap}` : totalGap === 0 ? '0' : `+${-totalGap}`}</div>
-          <div className="text-[10px] text-gray-400">{shortCount} project(s) short</div>
+      {/* Summary stat cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {cards.map((c, i) => {
+          const Icon = c.icon;
+          return (
+            <div key={i} className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${c.ring}`}><Icon size={18} /></div>
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wide text-gray-400 font-semibold truncate">{c.label}</div>
+                <div className={`text-2xl font-bold leading-tight ${c.text}`}>{c.value}</div>
+                {c.sub && <div className="text-[10px] text-gray-400">{c.sub}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Overall coverage bar */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-xs font-semibold text-gray-600">Overall manpower coverage</span>
+          <span className={`text-xs font-bold ${overallCoverage >= 100 ? 'text-emerald-600' : overallCoverage >= 50 ? 'text-amber-600' : 'text-red-600'}`}>{totalAct} / {totalReq} · {overallCoverage}%</span>
+        </div>
+        <div className="h-2.5 rounded-full bg-gray-100 overflow-hidden">
+          <div className={`h-full rounded-full transition-all ${barColor(overallCoverage)}`} style={{ width: `${Math.min(100, overallCoverage)}%` }} />
         </div>
       </div>
 
       <input className="input text-sm max-w-xs" placeholder="Search project…" value={search} onChange={e => setSearch(e.target.value)} />
 
-      <div className="card p-0 overflow-x-auto">
-        <table className="text-sm w-full">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-3 py-2 text-left">Project</th>
-              <th className="px-3 py-2 text-right">Project Value</th>
-              <th className="px-3 py-2 text-center">Required</th>
-              <th className="px-3 py-2 text-center">Actual (DPR)</th>
-              <th className="px-3 py-2 text-center">Gap</th>
-              <th className="px-3 py-2 text-left">Last DPR</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan="6" className="text-center py-6 text-gray-400">Loading…</td></tr>
-            ) : filtered.length === 0 ? (
-              <tr><td colSpan="6" className="text-center py-6 text-gray-400">No projects found</td></tr>
-            ) : filtered.map((r, i) => (
-              <tr key={i} className={`border-b ${r.gap > 0 ? 'bg-red-50/40' : ''}`}>
-                <td className="px-3 py-2">
-                  <div className="font-medium">{r.project}</div>
-                </td>
-                <td className="px-3 py-2 text-right font-medium" title={fmtMoney(r.value)}>{fmtShort(r.value)}</td>
-                <td className="px-3 py-2 text-center font-semibold text-blue-700">{r.required}</td>
-                <td className="px-3 py-2 text-center font-semibold text-emerald-700">{r.actual}</td>
-                <td className="px-3 py-2 text-center">
-                  {r.gap > 0
-                    ? <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700">-{r.gap} short</span>
-                    : r.gap === 0
-                      ? <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">OK</span>
-                      : <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">+{-r.gap} extra</span>}
-                </td>
-                <td className="px-3 py-2 text-xs text-gray-500">{r.last_dpr_date || '— no DPR —'}</td>
+      {/* Table */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="text-sm w-full">
+            <thead>
+              <tr className="bg-gradient-to-b from-gray-50 to-gray-100 border-b border-gray-200 text-[10px] uppercase tracking-wider text-gray-500">
+                <th className="px-4 py-3 text-left font-semibold">Project</th>
+                <th className="px-4 py-3 text-right font-semibold">Project Value</th>
+                <th className="px-4 py-3 text-center font-semibold">Required</th>
+                <th className="px-4 py-3 text-center font-semibold">Actual</th>
+                <th className="px-4 py-3 text-left font-semibold w-44">Coverage</th>
+                <th className="px-4 py-3 text-center font-semibold">Gap</th>
+                <th className="px-4 py-3 text-left font-semibold">Last DPR</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan="7" className="text-center py-10 text-gray-400">Loading…</td></tr>
+              ) : filtered.length === 0 ? (
+                <tr><td colSpan="7" className="text-center py-10 text-gray-400">No projects found</td></tr>
+              ) : filtered.map((r, i) => {
+                const pct = coverage(r);
+                const accent = r.gap > 0 ? 'border-l-red-400' : r.gap === 0 ? 'border-l-emerald-400' : 'border-l-blue-400';
+                return (
+                  <tr key={i} className={`border-b border-gray-100 border-l-4 ${accent} ${i % 2 ? 'bg-gray-50/40' : 'bg-white'} hover:bg-blue-50/50 transition-colors`}>
+                    <td className="px-4 py-2.5 font-medium text-gray-800">{r.project}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-gray-700 whitespace-nowrap" title={fmtMoney(r.value)}>{fmtShort(r.value)}</td>
+                    <td className="px-4 py-2.5 text-center"><span className="inline-flex items-center justify-center min-w-[28px] h-6 px-1.5 rounded-md bg-blue-50 text-blue-700 font-bold text-xs">{r.required}</span></td>
+                    <td className="px-4 py-2.5 text-center"><span className="inline-flex items-center justify-center min-w-[28px] h-6 px-1.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-xs">{r.actual}</span></td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden min-w-[56px]">
+                          <div className={`h-full rounded-full ${barColor(pct)}`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-[10px] font-semibold text-gray-500 w-8 text-right">{pct}%</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                      {r.gap > 0
+                        ? <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-red-100 text-red-700">−{r.gap} short</span>
+                        : r.gap === 0
+                          ? <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-700">On target</span>
+                          : <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-700">+{-r.gap} extra</span>}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs whitespace-nowrap">
+                      {r.last_dpr_date
+                        ? <span className="text-gray-600">{fmtDpr(r.last_dpr_date)}</span>
+                        : <span className="text-gray-300 italic">no DPR</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
