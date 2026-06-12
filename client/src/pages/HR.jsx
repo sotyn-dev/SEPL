@@ -1527,6 +1527,8 @@ function ManpowerTab() {
   const [editKey, setEditKey] = useState(null);   // project key currently being edited
   const [editVal, setEditVal] = useState('');
   const [saving, setSaving] = useState(false);
+  const [catFilter, setCatFilter] = useState('all');
+  const CATEGORIES = ['Live', 'Old', 'Service Team', 'Handover'];
   const load = () => {
     api.get('/hr/manpower-plan')
       .then(r => setRows(r.data || []))
@@ -1547,6 +1549,15 @@ function ManpowerTab() {
       toast.error(e.response?.data?.error || 'Update failed');
     } finally { setSaving(false); }
   };
+  const saveCategory = async (r, category) => {
+    try {
+      await api.put('/hr/manpower-plan/category', { key: r.key, category });
+      toast.success(category ? `Marked ${category}` : 'Category cleared');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Update failed');
+    }
+  };
   const fmtMoney = n => '₹' + Math.round(+n || 0).toLocaleString('en-IN');
   const fmtShort = n => {
     const v = +n || 0;
@@ -1555,9 +1566,10 @@ function ManpowerTab() {
     return '₹' + Math.round(v).toLocaleString('en-IN');
   };
   const q = search.trim().toLowerCase();
-  const filtered = q
-    ? rows.filter(r => (r.project || '').toLowerCase().includes(q))
-    : rows;
+  const filtered = rows.filter(r =>
+    (catFilter === 'all' || (r.category || '') === catFilter) &&
+    (!q || (r.project || '').toLowerCase().includes(q))
+  );
   const totalReq = filtered.reduce((s, r) => s + (r.required || 0), 0);
   const totalAct = filtered.reduce((s, r) => s + (r.actual || 0), 0);
   const totalGap = totalReq - totalAct;
@@ -1585,7 +1597,7 @@ function ManpowerTab() {
         <b>Required</b> manpower comes from each project's total value
         (0–5 L → 4 · 5–25 L → 6 · 25–50 L → 8 · 50 L–1 Cr → 10 · 1–5 Cr → 15 · 5–10 Cr → 25 · 10 Cr+ → 40).
         <b> Actual</b> is the average manpower across the project's DPRs. A red <b>gap</b> means more people are needed.
-        {editable && <span className="text-blue-700"> · Click the ✏️ on a project's <b>Required</b> to override it.</span>}
+        {editable && <span className="text-blue-700"> · Click the ✏️ on <b>Required</b> to override it, and set a <b>Category</b> per project — <b>Handover</b> needs no team / no planning.</span>}
       </div>
 
       {/* Summary stat cards */}
@@ -1616,7 +1628,14 @@ function ManpowerTab() {
         </div>
       </div>
 
-      <input className="input text-sm max-w-xs" placeholder="Search project…" value={search} onChange={e => setSearch(e.target.value)} />
+      <div className="flex flex-wrap items-center gap-2">
+        <input className="input text-sm max-w-xs flex-1 min-w-[180px]" placeholder="Search project…" value={search} onChange={e => setSearch(e.target.value)} />
+        <select className="select text-sm" style={{ width: '160px' }} value={catFilter} onChange={e => setCatFilter(e.target.value)} title="Filter by category">
+          <option value="all">All categories</option>
+          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          <option value="">Uncategorized</option>
+        </select>
+      </div>
 
       {/* Table */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -1625,6 +1644,7 @@ function ManpowerTab() {
             <thead>
               <tr className="bg-gradient-to-b from-gray-50 to-gray-100 border-b border-gray-200 text-[10px] uppercase tracking-wider text-gray-500">
                 <th className="px-4 py-3 text-left font-semibold">Project</th>
+                <th className="px-4 py-3 text-left font-semibold">Category</th>
                 <th className="px-4 py-3 text-right font-semibold">Project Value</th>
                 <th className="px-4 py-3 text-center font-semibold">Required</th>
                 <th className="px-4 py-3 text-center font-semibold">Actual</th>
@@ -1635,18 +1655,36 @@ function ManpowerTab() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="7" className="text-center py-10 text-gray-400">Loading…</td></tr>
+                <tr><td colSpan="8" className="text-center py-10 text-gray-400">Loading…</td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan="7" className="text-center py-10 text-gray-400">No projects found</td></tr>
+                <tr><td colSpan="8" className="text-center py-10 text-gray-400">No projects found</td></tr>
               ) : filtered.map((r, i) => {
                 const pct = coverage(r);
                 const accent = r.gap > 0 ? 'border-l-red-400' : r.gap === 0 ? 'border-l-emerald-400' : 'border-l-blue-400';
                 return (
                   <tr key={i} className={`border-b border-gray-100 border-l-4 ${accent} ${i % 2 ? 'bg-gray-50/40' : 'bg-white'} hover:bg-blue-50/50 transition-colors`}>
                     <td className="px-4 py-2.5 font-medium text-gray-800">{r.project}</td>
+                    <td className="px-4 py-2.5">
+                      {editable ? (
+                        <select
+                          className={`select text-xs ${r.category === 'Handover' ? 'text-gray-500' : ''}`}
+                          style={{ minWidth: '120px' }}
+                          value={r.category || ''}
+                          onChange={e => saveCategory(r, e.target.value)}>
+                          <option value="">—</option>
+                          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      ) : (
+                        r.category
+                          ? <span className={`text-[11px] px-2 py-0.5 rounded-full font-semibold ${r.category === 'Handover' ? 'bg-gray-100 text-gray-500' : r.category === 'Live' ? 'bg-emerald-100 text-emerald-700' : r.category === 'Service Team' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'}`}>{r.category}</span>
+                          : <span className="text-gray-300 text-xs">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-right font-semibold text-gray-700 whitespace-nowrap" title={fmtMoney(r.value)}>{fmtShort(r.value)}</td>
                     <td className="px-4 py-2.5 text-center">
-                      {editKey === r.key ? (
+                      {r.is_handover ? (
+                        <span className="text-gray-400 text-xs" title="Handover — no team required, no planning">—</span>
+                      ) : editKey === r.key ? (
                         <div className="inline-flex items-center gap-1">
                           <input type="number" min="0" autoFocus className="input text-xs text-center" style={{ width: '56px' }}
                             value={editVal} onChange={e => setEditVal(e.target.value)}
@@ -1672,19 +1710,25 @@ function ManpowerTab() {
                     </td>
                     <td className="px-4 py-2.5 text-center"><span className="inline-flex items-center justify-center min-w-[28px] h-6 px-1.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-xs">{r.actual}</span></td>
                     <td className="px-4 py-2.5">
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden min-w-[56px]">
-                          <div className={`h-full rounded-full ${barColor(pct)}`} style={{ width: `${pct}%` }} />
+                      {r.is_handover ? (
+                        <span className="text-gray-300 text-xs">—</span>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden min-w-[56px]">
+                            <div className={`h-full rounded-full ${barColor(pct)}`} style={{ width: `${pct}%` }} />
+                          </div>
+                          <span className="text-[10px] font-semibold text-gray-500 w-8 text-right">{pct}%</span>
                         </div>
-                        <span className="text-[10px] font-semibold text-gray-500 w-8 text-right">{pct}%</span>
-                      </div>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-center whitespace-nowrap">
-                      {r.gap > 0
-                        ? <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-red-100 text-red-700">−{r.gap} short</span>
-                        : r.gap === 0
-                          ? <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-700">On target</span>
-                          : <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-700">+{-r.gap} extra</span>}
+                      {r.is_handover
+                        ? <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-500" title="Handover — no team required">No planning</span>
+                        : r.gap > 0
+                          ? <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-red-100 text-red-700">−{r.gap} short</span>
+                          : r.gap === 0
+                            ? <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-700">On target</span>
+                            : <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-700">+{-r.gap} extra</span>}
                     </td>
                     <td className="px-4 py-2.5 text-xs whitespace-nowrap">
                       {r.last_dpr_date

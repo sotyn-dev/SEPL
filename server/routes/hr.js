@@ -75,24 +75,29 @@ router.get('/manpower-plan', (req, res) => {
     if (mp > 0) { g.mpSum += mp; g.mpCount += 1; }
     if (r.report_date && (!g.last_dpr_date || r.report_date > g.last_dpr_date)) g.last_dpr_date = r.report_date;
   }
-  // Admin overrides of the auto required-manpower, keyed by project key.
-  const overrides = new Map();
+  // Per-project settings — category + required override, keyed by project key.
+  const settings = new Map();
   try {
-    for (const o of db.prepare(`SELECT project_key, required FROM manpower_required_overrides`).all()) {
-      overrides.set(o.project_key, +o.required);
+    for (const s of db.prepare(`SELECT project_key, required_override, category FROM manpower_project_settings`).all()) {
+      settings.set(s.project_key, s);
     }
   } catch (e) { /* table may not exist on a very stale DB */ }
 
   const projects = [...groups.values()].map(g => {
+    const s = settings.get(g.key) || {};
+    const category = s.category || '';
+    const isHandover = category === 'Handover';           // no team required, no planning
     const requiredAuto = requiredManpower(g.value);
-    const ov = overrides.get(g.key);
-    const overridden = ov != null && ov >= 0;
-    const required = overridden ? ov : requiredAuto;
+    const ov = s.required_override;
+    const overridden = !isHandover && ov != null && ov >= 0;
+    const required = isHandover ? 0 : (overridden ? ov : requiredAuto);
     const actual = g.mpCount > 0 ? Math.round(g.mpSum / g.mpCount) : 0;
     return {
       key: g.key,
       project: g.project,
       value: Math.round(g.value),
+      category,
+      is_handover: isHandover,
       required,
       required_auto: requiredAuto,
       required_overridden: overridden,
@@ -116,17 +121,39 @@ router.put('/manpower-plan/required', requirePermission('hr', 'edit'), (req, res
   const reset = raw === '' || raw === null || raw === undefined || +raw <= 0;
   try {
     if (reset) {
-      db.prepare(`DELETE FROM manpower_required_overrides WHERE project_key=?`).run(key);
+      // Clear the override but keep any category on the row.
+      db.prepare(`UPDATE manpower_project_settings SET required_override=NULL, updated_at=CURRENT_TIMESTAMP WHERE project_key=?`).run(key);
       return res.json({ ok: true, reset: true });
     }
     const required = Math.round(+raw);
     if (!Number.isFinite(required) || required > 100000) return res.status(400).json({ error: 'required must be a positive number' });
     db.prepare(
-      `INSERT INTO manpower_required_overrides (project_key, required, updated_by, updated_at)
+      `INSERT INTO manpower_project_settings (project_key, required_override, updated_by, updated_at)
        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(project_key) DO UPDATE SET required=excluded.required, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`
+       ON CONFLICT(project_key) DO UPDATE SET required_override=excluded.required_override, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`
     ).run(key, required, req.user.id);
     res.json({ ok: true, required });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT a project's category (mam 2026-06-12): Live / Old / Service Team /
+// Handover.  Handover means no team required + no planning.  Gated by hr
+// edit permission; an empty / unknown value clears the category.
+router.put('/manpower-plan/category', requirePermission('hr', 'edit'), (req, res) => {
+  const db = getDb();
+  const key = String(req.body?.key || '').trim();
+  if (!key) return res.status(400).json({ error: 'project key is required' });
+  const ALLOWED = ['Live', 'Old', 'Service Team', 'Handover'];
+  const category = ALLOWED.includes(req.body?.category) ? req.body.category : null;
+  try {
+    db.prepare(
+      `INSERT INTO manpower_project_settings (project_key, category, updated_by, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(project_key) DO UPDATE SET category=excluded.category, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`
+    ).run(key, category, req.user.id);
+    res.json({ ok: true, category });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

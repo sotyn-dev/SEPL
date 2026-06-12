@@ -4006,6 +4006,24 @@ function initializeDatabase() {
     )`);
   } catch (e) { console.error('[schema] manpower_required_overrides create failed:', e.message); }
 
+  // Manpower Plan per-project settings (mam 2026-06-12): a project CATEGORY
+  // (Live / Old / Service Team / Handover) plus the required-manpower override.
+  // Handover ⇒ no team required, no planning (required forced to 0).
+  // Supersedes manpower_required_overrides; old overrides are backfilled.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS manpower_project_settings (
+      project_key       TEXT PRIMARY KEY,
+      required_override INTEGER,
+      category          TEXT,
+      updated_by        INTEGER REFERENCES users(id),
+      updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    try {
+      db.exec(`INSERT OR IGNORE INTO manpower_project_settings (project_key, required_override)
+               SELECT project_key, required FROM manpower_required_overrides`);
+    } catch (_) { /* old table may not exist */ }
+  } catch (e) { console.error('[schema] manpower_project_settings create failed:', e.message); }
+
   // Multiple BOQs per lead (mam 2026-06-12: "after some time again again
   // client send boq ... option + to add boq").  The single boq_* columns on
   // sales_funnel keep the LATEST for existing views; the full history lives
