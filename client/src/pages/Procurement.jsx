@@ -2700,6 +2700,21 @@ export default function Procurement() {
             toast.error('Some rows failed to save — please check');
           } finally { setBulkApplying(false); }
         };
+        // Edit one row; if that row is TICKED, copy the vendor NAME / TERMS
+        // pick to every other ticked row too — so changing one ticked row
+        // fills all of them (mam 2026-06-12: "i selected but not impact
+        // anothers").  Rate is never copied (each item is priced on its own).
+        const editRate = (r, patch) => {
+          updateMergedRate(r, patch);
+          const k = rowKey(r);
+          if (!rateSel[k]) return;                         // edited row not ticked → single edit
+          const field = Object.keys(patch)[0] || '';
+          if (!/_(name|terms)$/.test(field)) return;       // only propagate name/terms, not rate
+          const others = selectedRows.filter(o => rowKey(o) !== k);
+          if (!others.length) return;
+          for (const o of others) updateMergedRate(o, patch);
+          toast.success(`Also applied to ${others.length} other ticked row(s)`);
+        };
         return (
         <>
           {/* Vendor Name uses SearchableSelect component now, sourced from
@@ -2874,7 +2889,7 @@ export default function Procurement() {
                               valueKey="name" displayKey="name"
                               placeholder="Pick vendor"
                               buttonClassName="text-[11px] px-2 py-1 w-full border border-gray-200 rounded-md bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-red-400 text-left flex items-center justify-between gap-1 cursor-pointer"
-                              onChange={(v) => updateMergedRate(r, { [`vendor${n}_name`]: v?.name || '' })}
+                              onChange={(v) => editRate(r, { [`vendor${n}_name`]: v?.name || '' })}
                             />
                           </td>
                           <td className="px-1 py-1" style={{ minWidth: '120px' }}>
@@ -2893,7 +2908,7 @@ export default function Procurement() {
                                 className="select text-[11px] px-2 py-1"
                                 style={{ width: '90px', minWidth: '90px' }}
                                 value={r[`vendor${n}_terms`] || ''}
-                                onChange={e => updateMergedRate(r, { [`vendor${n}_terms`]: e.target.value })}
+                                onChange={e => editRate(r, { [`vendor${n}_terms`]: e.target.value })}
                               >
                                 <option value="">—</option>
                                 <option value="Advance">Advance</option>
@@ -2978,12 +2993,12 @@ export default function Procurement() {
                           valueKey="name" displayKey="name"
                           placeholder="Pick vendor from master"
                           buttonClassName="input text-xs w-full text-left flex items-center justify-between gap-1 cursor-pointer"
-                          onChange={(v) => updateMergedRate(r, { [`vendor${n}_name`]: v?.name || '' })}
+                          onChange={(v) => editRate(r, { [`vendor${n}_name`]: v?.name || '' })}
                         />
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <input className="input text-xs" type="number" placeholder="Rate" value={r[`vendor${n}_rate`] || ''} onChange={e => updateMergedRate(r, { [`vendor${n}_rate`]: +e.target.value })} />
-                        <select className="select text-xs" value={r[`vendor${n}_terms`] || ''} onChange={e => updateMergedRate(r, { [`vendor${n}_terms`]: e.target.value })}>
+                        <select className="select text-xs" value={r[`vendor${n}_terms`] || ''} onChange={e => editRate(r, { [`vendor${n}_terms`]: e.target.value })}>
                           <option value="">— Terms —</option>
                           <option value="Advance">Advance</option>
                           <option value="Credit">Credit</option>
