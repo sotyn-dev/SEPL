@@ -230,6 +230,27 @@ router.get('/my-month', (req, res) => {
   });
 });
 
+// GET the logged-in user's OWN attendance over a start→end date range
+// (mam 2026-06-12: "someone show their own previous attendance ... start to
+// end date").  Self-service — no admin permission needed; always scoped to
+// req.user.id so a user can only ever see their own rows.  Silent auto-mark
+// allow-list rows stay hidden, same as /my-today and /my-month.
+router.get('/my-history', (req, res) => {
+  const db = getDb();
+  const today = new Date().toISOString().split('T')[0];
+  const ok = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
+  let from = ok(req.query.from) ? req.query.from : today;
+  let to   = ok(req.query.to)   ? req.query.to   : today;
+  if (from > to) { const t = from; from = to; to = t; }   // tolerate swapped range
+  const rows = db.prepare(
+    `SELECT * FROM attendance
+       WHERE user_id=? AND date BETWEEN ? AND ?
+         AND NOT (COALESCE(admin_marked,0)=1 AND COALESCE(remarks,'')='Auto-marked (allow-list)')
+       ORDER BY date DESC, punch_in_time DESC`
+  ).all(req.user.id, from, to);
+  res.json(rows);
+});
+
 // GET attendance list (admin view) with filters
 router.get('/', requirePermission('attendance', 'view'), (req, res) => {
   const { date, user_id, status, date_from, date_to } = req.query;

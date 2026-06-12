@@ -34,6 +34,11 @@ export default function Attendance() {
   const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
   const [userDateFrom, setUserDateFrom] = useState(firstOfMonth);
   const [userDateTo, setUserDateTo] = useState(today);
+  // "My History" tab — every employee can review their OWN past attendance
+  // over a start→end date range (mam 2026-06-12).
+  const [myHistFrom, setMyHistFrom] = useState(firstOfMonth);
+  const [myHistTo, setMyHistTo] = useState(today);
+  const [myHistory, setMyHistory] = useState([]);
   const [location, setLocation] = useState(null);
   const [address, setAddress] = useState('');
   const [photo, setPhoto] = useState(null);
@@ -73,6 +78,15 @@ export default function Attendance() {
       .then(r => setUserRecords(r.data))
       .catch(() => setUserRecords([]));
   }, [tab, selectedUserId, userDateFrom, userDateTo, isAdmin]);
+
+  // Load the logged-in user's own attendance when the My History tab /
+  // its date range changes. Self-service — works for every employee.
+  useEffect(() => {
+    if (tab !== 'myhistory') return;
+    api.get(`/attendance/my-history?from=${myHistFrom}&to=${myHistTo}`)
+      .then(r => setMyHistory(r.data || []))
+      .catch(() => setMyHistory([]));
+  }, [tab, myHistFrom, myHistTo]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -203,6 +217,7 @@ export default function Attendance() {
     <div className="space-y-4">
       <div className="flex gap-2 flex-wrap">
         <button onClick={() => setTab('punch')} className={`btn ${tab === 'punch' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Punch In/Out</button>
+        <button onClick={() => setTab('myhistory')} className={`btn ${tab === 'myhistory' ? 'btn-primary' : 'btn-secondary'} text-sm`}>My History</button>
         {isAdmin() && <>
           <button onClick={() => setTab('dashboard')} className={`btn ${tab === 'dashboard' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Dashboard</button>
           <button onClick={() => setTab('records')} className={`btn ${tab === 'records' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Records</button>
@@ -617,6 +632,110 @@ export default function Attendance() {
       )}
 
       {/* BY USER TAB — pick a person, see their in/out/hours over a range */}
+      {/* MY HISTORY — self-service: every employee can review their OWN past
+          attendance over a start→end date range (mam 2026-06-12). */}
+      {tab === 'myhistory' && (
+        <div className="space-y-4">
+          <div className="card p-3">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+              <div>
+                <label className="label">From</label>
+                <input type="date" className="input" value={myHistFrom} max={myHistTo} onChange={e => setMyHistFrom(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">To</label>
+                <input type="date" className="input" value={myHistTo} max={today} onChange={e => setMyHistTo(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">&nbsp;</label>
+                <button type="button" className="btn btn-secondary text-sm w-full" onClick={() => { setMyHistFrom(firstOfMonth); setMyHistTo(today); }}>This month</button>
+              </div>
+              <div>
+                <label className="label">&nbsp;</label>
+                <button type="button" disabled={myHistory.length === 0} className="btn btn-secondary text-sm w-full flex items-center justify-center gap-2 disabled:opacity-40"
+                  onClick={() => exportCsv(`my-attendance-${myHistFrom}_to_${myHistTo}`,
+                    ['Date','In','Out','Hours','Site','Status'],
+                    myHistory.map(r => [
+                      r.date,
+                      r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '',
+                      r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '',
+                      r.total_hours || 0, r.site_name || '', r.status || '',
+                    ]))}>
+                  <FiDownload /> Export
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Summary cards */}
+          {(() => {
+            const total = myHistory.length;
+            const present = myHistory.filter(r => r.punch_in_time).length;
+            const late = myHistory.filter(r => r.status === 'late').length;
+            const halfDay = myHistory.filter(r => r.status === 'half_day').length;
+            const totalHours = myHistory.reduce((s, r) => s + (r.total_hours || 0), 0);
+            const avgHours = present > 0 ? (totalHours / present).toFixed(1) : '0';
+            return (
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+                <div className="card p-3"><div className="text-[11px] text-gray-500">Records</div><div className="text-2xl font-bold">{total}</div></div>
+                <div className="card p-3"><div className="text-[11px] text-gray-500">Present</div><div className="text-2xl font-bold text-emerald-600">{present}</div></div>
+                <div className="card p-3"><div className="text-[11px] text-gray-500">Late</div><div className="text-2xl font-bold text-amber-600">{late}</div></div>
+                <div className="card p-3"><div className="text-[11px] text-gray-500">Half Day</div><div className="text-2xl font-bold text-orange-600">{halfDay}</div></div>
+                <div className="card p-3"><div className="text-[11px] text-gray-500">Total Hours</div><div className="text-2xl font-bold">{totalHours.toFixed(1)}</div></div>
+                <div className="card p-3"><div className="text-[11px] text-gray-500">Avg Hours / day</div><div className="text-2xl font-bold">{avgHours}</div></div>
+              </div>
+            );
+          })()}
+
+          {/* Detail table */}
+          <div className="card p-0 overflow-x-auto">
+            <div className="p-3 border-b"><h4 className="font-semibold text-sm">My Attendance · {myHistFrom} → {myHistTo}</h4></div>
+            <div className="overflow-x-auto">
+              <table className="text-sm w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-2 py-2 text-left">Date</th>
+                    <th className="px-2 py-2">In</th>
+                    <th className="px-2 py-2">Out</th>
+                    <th className="px-2 py-2">Hours</th>
+                    <th className="px-2 py-2 text-left">Site</th>
+                    <th className="px-2 py-2">Status</th>
+                    <th className="px-2 py-2">Photos</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {myHistory.map(r => (
+                    <tr key={r.id} className="border-b">
+                      <td className="px-2 py-2 font-medium">{r.date}</td>
+                      <td className="px-2 py-2 text-center text-xs text-emerald-600">
+                        {r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                        {r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}
+                      </td>
+                      <td className="px-2 py-2 text-center text-xs text-red-600">
+                        {r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                        {r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}
+                      </td>
+                      <td className="px-2 py-2 text-center font-semibold">{r.total_hours || '-'}</td>
+                      <td className="px-2 py-2 text-xs">{r.site_name || '-'}</td>
+                      <td className="px-2 py-2 text-center"><StatusBadge status={r.status} /></td>
+                      <td className="px-2 py-2">
+                        <div className="flex gap-1 justify-center">
+                          {r.punch_in_photo && <img src={r.punch_in_photo} alt="In" onClick={() => setLightbox({ src: r.punch_in_photo, label: `Punch In — ${r.date || ''}` })} className="w-8 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" title="Punch In" />}
+                          {r.punch_out_photo && <img src={r.punch_out_photo} alt="Out" onClick={() => setLightbox({ src: r.punch_out_photo, label: `Punch Out — ${r.date || ''}` })} className="w-8 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" title="Punch Out" />}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {myHistory.length === 0 && (
+                    <tr><td colSpan="7" className="text-center py-6 text-gray-400">No attendance records in this range</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
       {tab === 'byuser' && isAdmin() && (
         <div className="space-y-4">
           <div className="card p-3">
