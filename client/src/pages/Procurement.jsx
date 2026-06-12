@@ -641,6 +641,9 @@ export default function Procurement() {
   const TAB_FETCHERS = {
     indents: () => Promise.all([
       api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
+      // Also pull Vendor POs so the Raise-Indent KPI strip can show the
+      // real "PO Generate" count + "Payment Required" total (mam 2026-06-12).
+      api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
     ]),
     rates: () => Promise.all([
       api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
@@ -1853,20 +1856,33 @@ export default function Procurement() {
             const rejected    = byStatus('rejected');
             const poSent      = byStatus('po_sent');
             const filterActive = !!(indFilterFrom || indFilterTo || indSearch.trim());
+            // PO Generate + Payment Required (mam 2026-06-12) — sourced from
+            // the Vendor PO list, not the indents, so the count matches the
+            // "View by PO" tab exactly.  Payment Required = POs still pending
+            // an advance / old-dues clearance (same filter as the Payment tab).
+            const poGenCount  = (vendorPos || []).length;
+            const poGenAmount = (vendorPos || []).reduce((s, p) => s + (+p.total_amount || 0), 0);
+            const urgentPos   = (vendorPos || []).filter(p => !p.cancelled && p.payment_block_status === 'pending');
+            const payReqCount = urgentPos.length;
+            const payReqAmount = urgentPos.reduce((s, p) => s + (+p.payment_block_amount || 0), 0);
             // Clicking a tile sets the status filter to that bucket so mam
             // can drill from the dashboard view into the matching rows
             // without typing in the toolbar.
-            const tile = (label, count, amount, color, statusKey) => {
-              const isActive = indFilterStatus === statusKey;
+            // statusKey drives the indent-status filter on click; pass an
+            // onClick override instead (e.g. for tiles that jump to another
+            // tab like PO Generate / Payment Required).
+            const tile = (label, count, amount, color, statusKey, onClick) => {
+              const isActive = !!statusKey && indFilterStatus === statusKey;
+              const handle = onClick || (() => { setIndFilterStatus(statusKey); setIndPage(1); });
               return (
                 <button
                   type="button"
-                  onClick={() => { setIndFilterStatus(statusKey); setIndPage(1); }}
-                  className={`flex-1 min-w-[150px] rounded-lg border ${color.border} ${color.bg} p-3 text-left transition hover:shadow-sm ${isActive ? 'ring-2 ring-offset-1 ' + color.ring : ''}`}>
-                  <div className={`text-[11px] font-semibold uppercase tracking-wide ${color.text}`}>{label}</div>
-                  <div className="flex items-baseline justify-between mt-1 gap-2">
+                  onClick={handle}
+                  className={`min-w-0 rounded-lg border ${color.border} ${color.bg} p-3 text-left transition hover:shadow-sm ${isActive ? 'ring-2 ring-offset-1 ' + color.ring : ''}`}>
+                  <div className={`text-[11px] font-semibold uppercase tracking-wide ${color.text} truncate`}>{label}</div>
+                  <div className="flex items-baseline justify-between mt-1 gap-1 flex-wrap">
                     <div className={`text-2xl font-bold ${color.text}`}>{count}</div>
-                    <div className={`text-xs font-medium ${color.text} opacity-80`}>
+                    <div className={`text-[11px] font-medium ${color.text} opacity-80 whitespace-nowrap`}>
                       {amount > 0 ? `₹${Math.round(amount).toLocaleString('en-IN')}` : '—'}
                     </div>
                   </div>
@@ -1880,13 +1896,18 @@ export default function Procurement() {
                     📊 Showing totals for the current filter ({kpiScope.length} of {indents.length} indents).
                   </div>
                 )}
-                <div className="flex flex-wrap gap-2">
+                {/* 7 KPI tiles auto-fit one row on large screens (mam
+                    2026-06-12): 2-up on phones, 4-up on tablets, 7-up on
+                    desktop.  PO Generate + Payment Required jump to their
+                    own tabs on click instead of filtering the indent list. */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
                   {tile('Total Indents',     kpiScope.length,   sum(kpiScope),   { border: 'border-gray-300',    bg: 'bg-gray-50',     text: 'text-gray-700',    ring: 'ring-gray-400'    }, 'all')}
                   {tile('Pending L1',        submitted.length,  sum(submitted),  { border: 'border-amber-300',   bg: 'bg-amber-50',    text: 'text-amber-700',   ring: 'ring-amber-400'   }, 'submitted')}
                   {tile('Pending L2',        l1Approved.length, sum(l1Approved), { border: 'border-purple-300',  bg: 'bg-purple-50',   text: 'text-purple-700',  ring: 'ring-purple-400'  }, 'l1_approved')}
                   {tile('Approved',          approved.length,   sum(approved),   { border: 'border-emerald-300', bg: 'bg-emerald-50',  text: 'text-emerald-700', ring: 'ring-emerald-400' }, 'approved')}
                   {tile('Rejected',          rejected.length,   sum(rejected),   { border: 'border-red-300',     bg: 'bg-red-50',      text: 'text-red-700',     ring: 'ring-red-400'     }, 'rejected')}
-                  {tile('PO Sent',           poSent.length,     sum(poSent),     { border: 'border-blue-300',    bg: 'bg-blue-50',     text: 'text-blue-700',    ring: 'ring-blue-400'    }, 'po_sent')}
+                  {tile('PO Generate',       poGenCount,        poGenAmount,     { border: 'border-blue-300',    bg: 'bg-blue-50',     text: 'text-blue-700',    ring: 'ring-blue-400'    }, null, () => { setTab('vendorpo'); setVpoSubTab('list'); })}
+                  {tile('Payment Required',  payReqCount,       payReqAmount,    { border: 'border-rose-300',    bg: 'bg-rose-50',     text: 'text-rose-700',    ring: 'ring-rose-400'    }, null, () => setTab('payment'))}
                 </div>
               </>
             );
