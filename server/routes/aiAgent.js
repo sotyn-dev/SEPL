@@ -446,11 +446,21 @@ const MODULE_GUIDES = {
 };
 const GUIDE_KEYS = Object.keys(MODULE_GUIDES);
 
+// Hard-cap the row count so a model-generated query with no LIMIT (e.g. an
+// accidental cartesian join) can't materialize the whole DB and freeze the
+// synchronous SQLite engine for every request (audit 2026-06-12).  We only
+// ADD a LIMIT when the query has none — column output is unchanged.
+function capSql(sql) {
+  const trimmed = String(sql).trim().replace(/;\s*$/, '');
+  if (/\blimit\s+\d+(\s*,\s*\d+|\s+offset\s+\d+)?\s*$/i.test(trimmed)) return trimmed;
+  return `${trimmed} LIMIT ${ROW_LIMIT + 1}`;
+}
+
 function safeRunQuery(db, sql) {
   const err = validateSelect(sql);
   if (err) return { error: err };
   try {
-    const stmt = db.prepare(sql);
+    const stmt = db.prepare(capSql(sql));
     const rows = stmt.all();
     const truncated = rows.length > ROW_LIMIT;
     return {

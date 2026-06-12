@@ -4026,6 +4026,11 @@ function initializeDatabase() {
     try { db.exec(`UPDATE manpower_project_settings SET category='Hold' WHERE category='Old'`); } catch (_) {}
   } catch (e) { console.error('[schema] manpower_project_settings create failed:', e.message); }
 
+  // Retention: GPS pings accumulate every 30s per user and were never purged
+  // (audit 2026-06-12).  Drop pings older than 60 days on each boot so the
+  // table — and the admin live-map self-join over it — stays fast.
+  try { db.exec(`DELETE FROM location_tracking WHERE date < date('now','-60 days')`); } catch (_) {}
+
   // Multiple BOQs per lead (mam 2026-06-12: "after some time again again
   // client send boq ... option + to add boq").  The single boq_* columns on
   // sales_funnel keep the LATEST for existing views; the full history lives

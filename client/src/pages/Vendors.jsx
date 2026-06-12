@@ -143,7 +143,7 @@ export default function Vendors() {
 
           <p className="text-sm text-gray-500">Showing {filtered.length} vendors</p>
 
-          <div className="card p-0"><table className="min-w-[1000px] text-xs freeze-head">
+          <div className="card p-0 overflow-x-auto"><table className="min-w-[1000px] text-xs freeze-head">
             <thead><tr className="bg-gray-50">
               <th className="px-2 py-2">Code</th><th className="px-2 py-2 text-left">Vendor Name</th><th className="px-2 py-2">Category</th>
               <th className="px-2 py-2 text-left">Deals In</th><th className="px-2 py-2">Type</th><th className="px-2 py-2 text-left">District</th>

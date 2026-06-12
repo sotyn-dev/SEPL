@@ -220,7 +220,7 @@ export default function BusinessBook() {
 
       {/* Table */}
       <div className="card p-0">
-        <div>
+        <div className="overflow-x-auto">
           <table className="min-w-full freeze-head">
             <thead><tr className="bg-gray-50">
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Lead No</th>

@@ -270,9 +270,10 @@ export default function Layout() {
       } catch (e) { /* ignore */ }
     };
     requestWakeLock();
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') requestWakeLock();
-    });
+    // Named handler so the cleanup can remove it — an anonymous listener here
+    // leaked a new one on every user change (audit 2026-06-12).
+    const onVisible = () => { if (document.visibilityState === 'visible') requestWakeLock(); };
+    document.addEventListener('visibilitychange', onVisible);
 
     trackLocation();
     const interval = setInterval(trackLocation, 30 * 1000);
@@ -280,6 +281,7 @@ export default function Layout() {
     return () => {
       cancelled = true;
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
       if (wakeLock && wakeLock.release) wakeLock.release().catch(() => {});
     };
   }, [user?.id]);
