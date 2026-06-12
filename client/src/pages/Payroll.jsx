@@ -100,6 +100,7 @@ export default function Payroll() {
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState(null);
   const [advanceEdits, setAdvanceEdits] = useState({}); // employee_id -> draft advance amount
+  const [foodEdits, setFoodEdits] = useState({});       // employee_id -> draft food amount (added to net)
   // CL Leave Balances tab
   const [leaveYear, setLeaveYear] = useState(new Date().getFullYear());
   const [leaveRows, setLeaveRows] = useState([]);
@@ -173,6 +174,17 @@ export default function Payroll() {
     try {
       await api.put(`/payroll/advance/${employeeId}`, { month, amount });
       setAdvanceEdits(s => { const n = { ...s }; delete n[employeeId]; return n; });
+      loadMonth();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  // Save an employee's food allowance for the open month; net pay recomputes.
+  const saveFood = async (employeeId, value) => {
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || amount < 0) { toast.error('Enter a valid amount'); return; }
+    try {
+      await api.put(`/payroll/food/${employeeId}`, { month, amount });
+      setFoodEdits(s => { const n = { ...s }; delete n[employeeId]; return n; });
       loadMonth();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
@@ -308,13 +320,14 @@ export default function Payroll() {
                   <th className="text-right" title="Overtime for hours worked beyond 9/day, paid at salary ÷ days ÷ 9 per hour">OT (&gt;9h)</th>
                   <th className="text-right" title="Salary before overtime is added">Before OT</th>
                   <th className="text-right" title="Advance salary taken this month — deducted from net pay">Advance</th>
-                  <th className="text-right" title="Final salary including overtime, after advance">Net Pay</th>
+                  <th className="text-right" title="Food allowance — added to net pay">Food</th>
+                  <th className="text-right" title="Final salary including overtime, after advance + food">Net Pay</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan="14" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
-                {!loading && list.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
+                {loading && <tr><td colSpan="15" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
+                {!loading && list.length === 0 && <tr><td colSpan="15" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
                 {!loading && list.map(r => (
                   <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : (r.user_linked === false ? 'bg-amber-50/40' : '')}>
                     <td className="font-medium">
@@ -355,7 +368,17 @@ export default function Payroll() {
                           title="Advance salary taken this month — deducted from net pay" />
                       ) : (r.advance ? <span className="text-rose-600">-{fmt(r.advance)}</span> : '-')}
                     </td>
-                    <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}{r.sunday_worked_pay ? <span className="block text-[9px] font-normal text-emerald-600">incl. +{r.sunday_worked_pay}d Sun work</span> : null}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}{r.advance ? <span className="block text-[9px] font-normal text-rose-500">less ₹{fmt(r.advance)} advance</span> : null}</td>
+                    <td className="text-right">
+                      {isAdmin && !r.locked ? (
+                        <input type="number" min="0" step="100"
+                          className="input text-right w-24 inline-block"
+                          value={foodEdits[r.employee_id] !== undefined ? foodEdits[r.employee_id] : (r.food || 0)}
+                          onChange={e => setFoodEdits(s => ({ ...s, [r.employee_id]: e.target.value }))}
+                          onBlur={e => { if (Number(e.target.value) !== Number(r.food || 0)) saveFood(r.employee_id, e.target.value); }}
+                          title="Food allowance — added to net pay" />
+                      ) : (r.food ? <span className="text-emerald-600">+{fmt(r.food)}</span> : '-')}
+                    </td>
+                    <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}{r.sunday_worked_pay ? <span className="block text-[9px] font-normal text-emerald-600">incl. +{r.sunday_worked_pay}d Sun work</span> : null}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}{r.food ? <span className="block text-[9px] font-normal text-emerald-600">incl. +₹{fmt(r.food)} food</span> : null}{r.advance ? <span className="block text-[9px] font-normal text-rose-500">less ₹{fmt(r.advance)} advance</span> : null}</td>
                     <td className="space-x-1 whitespace-nowrap">
                       <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs">Detail</button>
                       <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-primary text-xs">SEPL Slip</a>
@@ -442,6 +465,18 @@ export default function Payroll() {
                 ) : (r.advance > 0 && (
                   <div className="text-[11px] text-rose-700 font-semibold pt-1 border-t border-gray-100">
                     Advance: -{fmt(r.advance)}
+                  </div>
+                ))}
+                {isAdmin && !r.locked ? (
+                  <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
+                    <span className="text-[11px] text-gray-500 font-semibold whitespace-nowrap">Food ₹</span>
+                    <input type="number" min="0" step="100" className="input text-right text-xs py-1 flex-1"
+                      defaultValue={r.food || 0}
+                      onBlur={e => { if (Number(e.target.value) !== Number(r.food || 0)) saveFood(r.employee_id, e.target.value); }} />
+                  </div>
+                ) : (r.food > 0 && (
+                  <div className="text-[11px] text-emerald-700 font-semibold pt-1 border-t border-gray-100">
+                    Food: +{fmt(r.food)}
                   </div>
                 ))}
                 <div className="flex items-center gap-2 pt-1 border-t border-gray-100">

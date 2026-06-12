@@ -3415,6 +3415,9 @@ function initializeDatabase() {
     ['indent_items', 'parent_item_id INTEGER REFERENCES indent_items(id)'],
     ['indent_items', 'stock_issue_note_id INTEGER REFERENCES stock_issue_notes(id)'],
     ['indent_items', 'stock_movement_id INTEGER REFERENCES stock_movements(id)'],
+    // Food allowance per employee per month (mam 2026-06-12) — ADDED to net
+    // pay.  Lives on payroll_advances (already keyed by month + employee_id).
+    ['payroll_advances', 'food REAL DEFAULT 0'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}

@@ -106,12 +106,13 @@ function calculateForEmployee(db, settings, employee, month) {
   const [year, mm] = month.split('-').map(Number);
   const totalDays = daysInMonth(month);
 
-  // Advance salary taken this month (admin enters it in the monthly payroll
-  // screen). Recovered by deducting from this month's net pay.
-  const advance = round2(
-    db.prepare('SELECT amount FROM payroll_advances WHERE month=? AND employee_id=?')
-      .get(month, employee.id)?.amount || 0
-  );
+  // Advance salary taken this month (deducted from net pay) + a food
+  // allowance (ADDED to net pay) — both entered by admin on the payroll
+  // screen and stored on the same monthly row (mam 2026-06-12).
+  const adjRow = db.prepare('SELECT amount, food FROM payroll_advances WHERE month=? AND employee_id=?')
+    .get(month, employee.id) || {};
+  const advance = round2(adjRow.amount || 0);
+  const food = round2(adjRow.food || 0);
 
   // ─── Salary-exempt short-circuit (mam 2026-06-01) ────────────────
   // "this person every month make salary full" — Parul Goyal, Rajat
@@ -488,11 +489,11 @@ function calculateForEmployee(db, settings, employee, month) {
 
   // Deductions = late penalty + any advance salary taken this month.
   const totalDeductions = round2(latePenalty + advance);
-  // Salary BEFORE overtime = earned-for-days minus deductions (mam wants
-  // to see the base earning and the OT add-on separately). Net pay then
-  // = before-OT + OT.
-  const netBeforeOt = round2(grossEarned - totalDeductions);
-  const netPay = round2(grossEarned + otPay - totalDeductions);
+  // Salary BEFORE overtime = earned-for-days minus deductions PLUS the food
+  // allowance (mam wants base earning and the OT add-on shown separately).
+  // Net pay then = before-OT + OT.
+  const netBeforeOt = round2(grossEarned - totalDeductions + food);
+  const netPay = round2(grossEarned + otPay - totalDeductions + food);
   const deductions = baseSalary - grossEarned + totalDeductions; // informational
 
   return {
@@ -540,6 +541,7 @@ function calculateForEmployee(db, settings, employee, month) {
     misc: misc,
     total_earnings: round2(basicPay + conveyance + hra + adhoc + misc),
     advance,
+    food,
     late_penalty_only: round2(latePenalty),
     total_deductions: totalDeductions,
     deductions: round2(deductions),
@@ -672,6 +674,37 @@ router.put('/advance/:employee_id', adminOnly, (req, res) => {
     res.json({ message: 'Advance saved', amount: round2(amount) });
   } catch (err) {
     console.error('advance update error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT an employee's food allowance for a month (admin). ADDED to that
+// month's net pay. Blocked once the month is finalised. Stored on the same
+// payroll_advances row as the advance (mam 2026-06-12).
+router.put('/food/:employee_id', adminOnly, (req, res) => {
+  try {
+    const db = getDb();
+    const { month } = req.body;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: 'amount must be a non-negative number' });
+
+    const emp = db.prepare('SELECT id FROM employees WHERE id=?').get(req.params.employee_id);
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+
+    const locked = db.prepare('SELECT COUNT(*) AS c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
+    if (locked) return res.status(409).json({ error: `${month} is finalised — unlock it first to change food.` });
+
+    db.prepare(
+      `INSERT INTO payroll_advances (month, employee_id, food, updated_by, updated_at)
+       VALUES (?,?,?,?,CURRENT_TIMESTAMP)
+       ON CONFLICT(month, employee_id) DO UPDATE SET
+         food = excluded.food, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP`
+    ).run(month, emp.id, round2(amount), req.user.id);
+
+    res.json({ message: 'Food saved', amount: round2(amount) });
+  } catch (err) {
+    console.error('food update error', err);
     res.status(500).json({ error: err.message });
   }
 });
