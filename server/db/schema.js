@@ -4006,6 +4006,22 @@ function initializeDatabase() {
     )`);
   } catch (e) { console.error('[schema] manpower_required_overrides create failed:', e.message); }
 
+  // Multiple BOQs per lead (mam 2026-06-12: "after some time again again
+  // client send boq ... option + to add boq").  The single boq_* columns on
+  // sales_funnel keep the LATEST for existing views; the full history lives
+  // here so every re-sent BOQ is kept.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS sales_funnel_boqs (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      funnel_id     INTEGER REFERENCES sales_funnel(id) ON DELETE CASCADE,
+      boq_file_link TEXT,
+      boq_amount    REAL DEFAULT 0,
+      notes         TEXT,
+      created_by    TEXT,
+      created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  } catch (e) { console.error('[schema] sales_funnel_boqs create failed:', e.message); }
+
   // ─── 2-Level Indent Approval — tag Nitin Jain ji = L1, Nitin Sir = L2 ─
   // Idempotent: only sets approval_role on rows that don't already carry one,
   // and matches loosely (case-insensitive name LIKE) so minor punctuation in
