@@ -3994,6 +3994,18 @@ function initializeDatabase() {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
 
+  // Manpower Plan — admin override of the auto (value-slab) required manpower
+  // per project (mam 2026-06-12: "admin wants to edit required manpower").
+  // Keyed by the normalized project key the manpower-plan endpoint groups by.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS manpower_required_overrides (
+      project_key TEXT PRIMARY KEY,
+      required    INTEGER NOT NULL,
+      updated_by  INTEGER REFERENCES users(id),
+      updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  } catch (e) { console.error('[schema] manpower_required_overrides create failed:', e.message); }
+
   // ─── 2-Level Indent Approval — tag Nitin Jain ji = L1, Nitin Sir = L2 ─
   // Idempotent: only sets approval_role on rows that don't already carry one,
   // and matches loosely (case-insensitive name LIKE) so minor punctuation in

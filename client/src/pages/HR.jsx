@@ -1519,15 +1519,34 @@ export default function HR() {
 // required manpower (from the value slab) vs the actual on site (latest
 // DPR), so HR can spot shortages and hire / redeploy.
 function ManpowerTab() {
+  const { canEdit } = useAuth();
+  const editable = canEdit('hr');         // admins + HR-editors can override Required
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  useEffect(() => {
+  const [editKey, setEditKey] = useState(null);   // project key currently being edited
+  const [editVal, setEditVal] = useState('');
+  const [saving, setSaving] = useState(false);
+  const load = () => {
     api.get('/hr/manpower-plan')
       .then(r => setRows(r.data || []))
       .catch(() => setRows([]))
       .finally(() => setLoading(false));
-  }, []);
+  };
+  useEffect(() => { load(); }, []);
+  const startEdit = r => { setEditKey(r.key); setEditVal(String(r.required ?? '')); };
+  const cancelEdit = () => { setEditKey(null); setEditVal(''); };
+  const saveEdit = async (r, value) => {
+    setSaving(true);
+    try {
+      await api.put('/hr/manpower-plan/required', { key: r.key, required: value });
+      toast.success(value === '' || +value <= 0 ? 'Reset to auto value' : 'Required manpower updated');
+      cancelEdit();
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Update failed');
+    } finally { setSaving(false); }
+  };
   const fmtMoney = n => '₹' + Math.round(+n || 0).toLocaleString('en-IN');
   const fmtShort = n => {
     const v = +n || 0;
@@ -1566,6 +1585,7 @@ function ManpowerTab() {
         <b>Required</b> manpower comes from each project's total value
         (0–5 L → 4 · 5–25 L → 6 · 25–50 L → 8 · 50 L–1 Cr → 10 · 1–5 Cr → 15 · 5–10 Cr → 25 · 10 Cr+ → 40).
         <b> Actual</b> is the average manpower across the project's DPRs. A red <b>gap</b> means more people are needed.
+        {editable && <span className="text-blue-700"> · Click the ✏️ on a project's <b>Required</b> to override it.</span>}
       </div>
 
       {/* Summary stat cards */}
@@ -1625,7 +1645,31 @@ function ManpowerTab() {
                   <tr key={i} className={`border-b border-gray-100 border-l-4 ${accent} ${i % 2 ? 'bg-gray-50/40' : 'bg-white'} hover:bg-blue-50/50 transition-colors`}>
                     <td className="px-4 py-2.5 font-medium text-gray-800">{r.project}</td>
                     <td className="px-4 py-2.5 text-right font-semibold text-gray-700 whitespace-nowrap" title={fmtMoney(r.value)}>{fmtShort(r.value)}</td>
-                    <td className="px-4 py-2.5 text-center"><span className="inline-flex items-center justify-center min-w-[28px] h-6 px-1.5 rounded-md bg-blue-50 text-blue-700 font-bold text-xs">{r.required}</span></td>
+                    <td className="px-4 py-2.5 text-center">
+                      {editKey === r.key ? (
+                        <div className="inline-flex items-center gap-1">
+                          <input type="number" min="0" autoFocus className="input text-xs text-center" style={{ width: '56px' }}
+                            value={editVal} onChange={e => setEditVal(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') saveEdit(r, editVal); if (e.key === 'Escape') cancelEdit(); }} />
+                          <button type="button" disabled={saving} onClick={() => saveEdit(r, editVal)} className="text-emerald-600 hover:text-emerald-800" title="Save"><FiCheckCircle size={16} /></button>
+                          <button type="button" onClick={cancelEdit} className="text-gray-400 hover:text-gray-600 text-sm font-bold" title="Cancel">✕</button>
+                        </div>
+                      ) : (
+                        <div className="inline-flex items-center gap-1">
+                          <span
+                            className={`inline-flex items-center justify-center min-w-[28px] h-6 px-1.5 rounded-md font-bold text-xs ${r.required_overridden ? 'bg-amber-100 text-amber-700' : 'bg-blue-50 text-blue-700'}`}
+                            title={r.required_overridden ? `Manually set · auto would be ${r.required_auto}` : 'Auto from project value'}>
+                            {r.required}
+                          </span>
+                          {editable && (
+                            <button type="button" onClick={() => startEdit(r)} className="text-gray-300 hover:text-blue-600" title="Edit required manpower"><FiEdit2 size={12} /></button>
+                          )}
+                          {editable && r.required_overridden && (
+                            <button type="button" onClick={() => saveEdit(r, '')} className="text-gray-300 hover:text-red-500 text-sm leading-none" title={`Reset to auto (${r.required_auto})`}>↺</button>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-center"><span className="inline-flex items-center justify-center min-w-[28px] h-6 px-1.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-xs">{r.actual}</span></td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">

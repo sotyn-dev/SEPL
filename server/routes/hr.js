@@ -4,7 +4,7 @@ const fs = require('fs');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { parseResume } = require('../utils/resumeParser');
 const router = express.Router();
 router.use(authMiddleware);
@@ -58,7 +58,7 @@ router.get('/manpower-plan', (req, res) => {
     groupByBB.set(bb.id, key);
     const display = norm(bb.project_name) || norm(bb.company_name) || norm(bb.client_name)
       || (bb.lead_no ? `Lead ${bb.lead_no}` : `BB#${bb.id}`);
-    if (!groups.has(key)) groups.set(key, { project: display, value: 0, mpSum: 0, mpCount: 0, last_dpr_date: null });
+    if (!groups.has(key)) groups.set(key, { key, project: display, value: 0, mpSum: 0, mpCount: 0, last_dpr_date: null });
     groups.get(key).value += +bb.po_amount || 0;
   }
   const siteToBB = new Map();
@@ -75,19 +75,61 @@ router.get('/manpower-plan', (req, res) => {
     if (mp > 0) { g.mpSum += mp; g.mpCount += 1; }
     if (r.report_date && (!g.last_dpr_date || r.report_date > g.last_dpr_date)) g.last_dpr_date = r.report_date;
   }
+  // Admin overrides of the auto required-manpower, keyed by project key.
+  const overrides = new Map();
+  try {
+    for (const o of db.prepare(`SELECT project_key, required FROM manpower_required_overrides`).all()) {
+      overrides.set(o.project_key, +o.required);
+    }
+  } catch (e) { /* table may not exist on a very stale DB */ }
+
   const projects = [...groups.values()].map(g => {
-    const required = requiredManpower(g.value);
+    const requiredAuto = requiredManpower(g.value);
+    const ov = overrides.get(g.key);
+    const overridden = ov != null && ov >= 0;
+    const required = overridden ? ov : requiredAuto;
     const actual = g.mpCount > 0 ? Math.round(g.mpSum / g.mpCount) : 0;
     return {
+      key: g.key,
       project: g.project,
       value: Math.round(g.value),
       required,
+      required_auto: requiredAuto,
+      required_overridden: overridden,
       actual,
       gap: required - actual,            // > 0 = short (hire), < 0 = surplus
       last_dpr_date: g.last_dpr_date,
     };
   }).sort((a, b) => b.gap - a.gap || b.value - a.value);
   res.json(projects);
+});
+
+// PUT a manual override of a project's required manpower (mam 2026-06-12:
+// "admin wants to edit required manpower give then access").  Gated by hr
+// EDIT permission (admins always pass).  Body { key, required }.  A blank /
+// 0 / null required RESETS the project back to the auto value-slab number.
+router.put('/manpower-plan/required', requirePermission('hr', 'edit'), (req, res) => {
+  const db = getDb();
+  const key = String(req.body?.key || '').trim();
+  if (!key) return res.status(400).json({ error: 'project key is required' });
+  const raw = req.body?.required;
+  const reset = raw === '' || raw === null || raw === undefined || +raw <= 0;
+  try {
+    if (reset) {
+      db.prepare(`DELETE FROM manpower_required_overrides WHERE project_key=?`).run(key);
+      return res.json({ ok: true, reset: true });
+    }
+    const required = Math.round(+raw);
+    if (!Number.isFinite(required) || required > 100000) return res.status(400).json({ error: 'required must be a positive number' });
+    db.prepare(
+      `INSERT INTO manpower_required_overrides (project_key, required, updated_by, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(project_key) DO UPDATE SET required=excluded.required, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`
+    ).run(key, required, req.user.id);
+    res.json({ ok: true, required });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Mam (2026-05-22): bulk Excel upload for checklists.  Re-uses the
