@@ -568,6 +568,13 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
     const db = getDb();
     const settings = getSettings(db);
     const employees = db.prepare(`SELECT id, user_id, name, department, designation, join_date, salary, ot_eligible, cl_eligible, cl_opening_balance FROM employees WHERE status='active' AND salary > 0`).all();
+    // Active employees with NO salary set are silently excluded from payroll —
+    // surface them so admin knows who's missing and why (mam 2026-06-12:
+    // "X not in payroll even they present").  Salary, not attendance, gates
+    // inclusion.
+    const excludedNoSalary = db.prepare(
+      `SELECT id, name FROM employees WHERE status='active' AND (salary IS NULL OR salary <= 0) ORDER BY name COLLATE NOCASE`
+    ).all();
 
     // If a run is finalised for this month, return saved snapshots; else live-calc
     const finalised = db.prepare('SELECT COUNT(*) as c FROM payroll_runs WHERE month=? AND status=?').get(month, 'finalised').c;
@@ -579,7 +586,7 @@ router.get('/calculate', requirePermission('payroll', 'view'), (req, res) => {
       return calculateForEmployee(db, settings, emp, month);
     });
 
-    res.json({ month, settings, employees: out });
+    res.json({ month, settings, employees: out, excluded_no_salary: excludedNoSalary });
   } catch (err) {
     console.error('payroll calc error', err);
     res.status(500).json({ error: err.message });

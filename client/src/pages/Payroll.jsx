@@ -101,6 +101,7 @@ export default function Payroll() {
   const [detail, setDetail] = useState(null);
   const [advanceEdits, setAdvanceEdits] = useState({}); // employee_id -> draft advance amount
   const [foodEdits, setFoodEdits] = useState({});       // employee_id -> draft food amount (added to net)
+  const [excludedNoSalary, setExcludedNoSalary] = useState([]); // active employees with no salary → not in payroll
   // CL Leave Balances tab
   const [leaveYear, setLeaveYear] = useState(new Date().getFullYear());
   const [leaveRows, setLeaveRows] = useState([]);
@@ -114,7 +115,7 @@ export default function Payroll() {
   const loadMonth = useCallback(() => {
     setLoading(true);
     api.get(`/payroll/calculate?month=${month}`)
-      .then(r => setList(r.data.employees || []))
+      .then(r => { setList(r.data.employees || []); setExcludedNoSalary(r.data.excluded_no_salary || []); })
       .catch(err => toast.error(err.response?.data?.error || 'Failed'))
       .finally(() => setLoading(false));
   }, [month]);
@@ -281,6 +282,12 @@ export default function Payroll() {
             {list[0]?.is_future_month && (
               <div className="bg-blue-50 border border-blue-200 px-3 py-2 rounded text-xs text-blue-800">
                 Future month — nothing to calculate yet.
+              </div>
+            )}
+            {excludedNoSalary.length > 0 && (
+              <div className="bg-rose-50 border border-rose-200 px-3 py-2 rounded text-xs text-rose-800 w-full">
+                ⚠ <strong>{excludedNoSalary.length} active {excludedNoSalary.length === 1 ? 'employee is' : 'employees are'} NOT in payroll</strong> because their monthly salary isn't set (attendance doesn't matter — salary does):{' '}
+                <strong>{excludedNoSalary.map(e => e.name).join(', ')}</strong>. Set their salary in <strong>HR → Employees</strong> and they'll appear here.
               </div>
             )}
             <div className="flex-1" />
