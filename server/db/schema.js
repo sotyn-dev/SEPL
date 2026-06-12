@@ -4022,6 +4022,8 @@ function initializeDatabase() {
       db.exec(`INSERT OR IGNORE INTO manpower_project_settings (project_key, required_override)
                SELECT project_key, required FROM manpower_required_overrides`);
     } catch (_) { /* old table may not exist */ }
+    // Mam (2026-06-12): "Old" category renamed to "Hold".
+    try { db.exec(`UPDATE manpower_project_settings SET category='Hold' WHERE category='Old'`); } catch (_) {}
   } catch (e) { console.error('[schema] manpower_project_settings create failed:', e.message); }
 
   // Multiple BOQs per lead (mam 2026-06-12: "after some time again again

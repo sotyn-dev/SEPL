@@ -1528,7 +1528,7 @@ function ManpowerTab() {
   const [editVal, setEditVal] = useState('');
   const [saving, setSaving] = useState(false);
   const [catFilter, setCatFilter] = useState('all');
-  const CATEGORIES = ['Live', 'Old', 'Service Team', 'Handover'];
+  const CATEGORIES = ['Live', 'Hold', 'Service Team', 'Handover'];
   const load = () => {
     api.get('/hr/manpower-plan')
       .then(r => setRows(r.data || []))

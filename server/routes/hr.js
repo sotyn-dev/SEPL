@@ -145,7 +145,7 @@ router.put('/manpower-plan/category', requirePermission('hr', 'edit'), (req, res
   const db = getDb();
   const key = String(req.body?.key || '').trim();
   if (!key) return res.status(400).json({ error: 'project key is required' });
-  const ALLOWED = ['Live', 'Old', 'Service Team', 'Handover'];
+  const ALLOWED = ['Live', 'Hold', 'Service Team', 'Handover'];
   const category = ALLOWED.includes(req.body?.category) ? req.body.category : null;
   try {
     db.prepare(
