@@ -2694,8 +2694,15 @@ export default function Procurement() {
           }
           setBulkApplying(true);
           try {
+            const count = selectedRows.length;
             for (const row of selectedRows) await updateMergedRate(row, patch);
-            toast.success(`Applied Vendor ${n} to ${selectedRows.length} item(s)`);
+            // Clear the tick selection + reset the bar so it's obvious the
+            // apply finished (mam 2026-06-12: "after apply it, its is not clear").
+            setRateSel({});
+            setBulkVendorName('');
+            setBulkTerms('');
+            setBulkCreditDays('');
+            toast.success(`Applied Vendor ${n} to ${count} item(s)`);
           } catch (e) {
             toast.error('Some rows failed to save — please check');
           } finally { setBulkApplying(false); }
