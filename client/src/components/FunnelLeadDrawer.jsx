@@ -77,21 +77,9 @@ export default function FunnelLeadDrawer({ leadId, isAdmin, onClose, onChanged }
         <div className="text-sm text-gray-400 py-8 text-center">Loading…</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {/* Left: stepper + stage controls */}
-          <div className="md:col-span-1 space-y-3">
-            <FunnelStepper stage={lead.stage} />
-            <div>
-              <label className="label">Move to stage</label>
-              <select className="select" disabled={busy} value="" onChange={e => e.target.value && changeStage(e.target.value)}>
-                <option value="">Select…</option>
-                <optgroup label="Pipeline">
-                  {STAGES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-                </optgroup>
-                <optgroup label="Side states">
-                  {SIDE_STATES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-                </optgroup>
-              </select>
-            </div>
+          {/* Left: stepper grid */}
+          <div className="md:col-span-1">
+            <FunnelStepper stage={lead.stage} onStageClick={changeStage} busy={busy} />
           </div>
 
           {/* Middle + right: details */}
@@ -103,7 +91,7 @@ export default function FunnelLeadDrawer({ leadId, isAdmin, onClose, onChanged }
               <Field k="Company" v={lead.sender_company} />
               <Field k="Location" v={[lead.sender_city, lead.sender_state].filter(Boolean).join(', ')} />
               <Field k="Source" v={`${lead.source} · ${lead.query_type || ''}`} />
-              <Field k="Received" v={lead.query_time || fmtIST(lead.created_at)} />
+              <Field k="Received" v={fmtIST(lead.query_time) || fmtIST(lead.created_at)} />
             </Section>
 
             <Section title="Enquiry">

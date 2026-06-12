@@ -60,8 +60,8 @@ import SubContractors from './pages/SubContractors';
 import SubconHiring from './pages/SubconHiring';
 import ProcurementSchedule from './pages/ProcurementSchedule';
 import CRMFunnel from './pages/CRMFunnel';
-import LeadToDispatchFunnel from './pages/LeadToDispatchFunnel';
-import LeadToDispatchFunnelSettings from './pages/LeadToDispatchFunnelSettings';
+import L2DIndiamart from './pages/L2DIndiamart';
+import L2DIndiamartSettings from './pages/L2DIndiamartSettings';
 import ChequeFMS from './pages/ChequeFMS';
 import EmailSettings from './pages/EmailSettings';
 import EmailTriggers from './pages/EmailTriggers';
@@ -213,8 +213,8 @@ export default function App() {
         {/* Lead-to-Dispatch Funnel — isolated feature, separate DB. Open to
             authenticated users (no permission module to seed → no main-DB
             change); settings are admin-only. */}
-        <Route path="lead-to-dispatch-funnel" element={<LeadToDispatchFunnel />} />
-        <Route path="admin/lead-funnel-settings" element={<AdminRoute><LeadToDispatchFunnelSettings /></AdminRoute>} />
+        <Route path="l2d-indiamart" element={<L2DIndiamart />} />
+        <Route path="admin/l2d-settings-indiamart" element={<AdminRoute><L2DIndiamartSettings /></AdminRoute>} />
         <Route path="cheques" element={<ModuleRoute module="cheques"><ChequeFMS /></ModuleRoute>} />
       </Route>
     </Routes>

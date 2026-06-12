@@ -9,7 +9,7 @@ import { leadFunnel } from '../api';
 const linesToArr = (s) => (s || '').split('\n').map(x => x.trim()).filter(Boolean);
 const arrToLines = (json) => { try { const a = JSON.parse(json || '[]'); return Array.isArray(a) ? a.join('\n') : ''; } catch { return ''; } };
 
-export default function LeadToDispatchFunnelSettings() {
+export default function L2DIndiamartSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [polling, setPolling] = useState(false);
@@ -80,7 +80,7 @@ export default function LeadToDispatchFunnelSettings() {
   return (
     <div className="max-w-2xl space-y-4">
       <form onSubmit={save} className="card p-4 space-y-4">
-        <h3 className="font-semibold text-gray-800">Lead-to-Dispatch Funnel Settings</h3>
+        <h3 className="font-semibold text-gray-800">Lead Funnel (IndiaMART) Settings</h3>
 
         <div>
           <label className="label">IndiaMART Pull API Key (glusr_crm_key) {keyState.set && <span className="text-xs text-gray-500 font-normal">— configured: <span className="font-mono">{keyState.masked}</span> (leave blank to keep)</span>}</label>
