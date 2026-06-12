@@ -3373,6 +3373,14 @@ function initializeDatabase() {
     // line is stored in KG for pipes so amount = kg × ₹/kg works unchanged).
     ['vendor_po_items', 'weight_per_meter REAL'],
     ['vendor_po_items', 'original_qty_mtr REAL'],
+    // Editable PO line snapshot (mam 2026-05-25: edit PO line items after
+    // creation).  The Edit-PO modal lets the user override the printed
+    // description / HSN per line; these columns store that override.  Were
+    // referenced by /with-items + the PUT /vendor-po/:id line-item update
+    // since 2026-05-25 but never actually added — so /with-items threw
+    // "no such column" → 500 → the Edit modal showed zero line items.
+    ['vendor_po_items', 'description TEXT'],
+    ['vendor_po_items', 'hsn_code TEXT'],
     // CRM funnel ← Extra indent link (mam 2026-06-06): Extra-Schedule /
     // Extra-Non-Schedule indents drop a funnel "requirement" at raise time.
     ['crm_funnel', 'source_indent_id INTEGER'],
