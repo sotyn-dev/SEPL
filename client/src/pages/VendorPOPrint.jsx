@@ -8,8 +8,10 @@
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import api from '../api';
-import { FiPrinter, FiArrowLeft, FiMessageCircle } from 'react-icons/fi';
+import NumInput from '../components/NumInput';
+import { FiPrinter, FiArrowLeft, FiMessageCircle, FiEdit2 } from 'react-icons/fi';
 
 const fmtMoney = (n) => (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -90,11 +92,71 @@ export default function VendorPOPrint() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
+  // Inline quantity / rate editor (mam: "some time need to po items qty
+  // edit").  Lets the user edit each line item's qty directly from the
+  // print page — reuses the SAME /with-items fetch + PUT /vendor-po/:id
+  // flow as the Procurement Edit modal, so the same lock rules apply
+  // (blocked when a Purchase Bill / Delivery Note already references the PO).
+  const [editing, setEditing] = useState(false);
+  const [editItems, setEditItems] = useState([]);
+  const [editLocked, setEditLocked] = useState(false);
+  const [editLockReason, setEditLockReason] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+
+  const load = () => {
     api.get(`/procurement/vendor-po/${id}/print`)
       .then(r => setData(r.data))
       .catch(err => setError(err.response?.data?.error || 'Failed to load'));
-  }, [id]);
+  };
+  useEffect(() => { load(); }, [id]);
+
+  const openEdit = async () => {
+    setEditing(true);
+    setEditLocked(false);
+    setEditLockReason('');
+    try {
+      const r = await api.get(`/procurement/vendor-po/${id}/with-items`);
+      setEditItems((r.data?.items || []).map(it => ({
+        id: it.id,
+        quantity: it.quantity,
+        rate: it.rate,
+        description: it.description || it.master_name || it.indent_description || '',
+        unit: it.unit || '',
+        item_code: it.item_code || '',
+      })));
+      if (r.data?.edit_locked) {
+        setEditLocked(true);
+        setEditLockReason(`${r.data.bill_count || 0} bill(s) and ${r.data.dn_count || 0} delivery note(s) reference this PO — cancel them first to edit.`);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load items');
+      setEditing(false);
+    }
+  };
+
+  const saveEdit = async () => {
+    setEditSaving(true);
+    try {
+      // Only real vendor_po_items rows are editable; legacy POs with
+      // synthetic 'ind-<id>' rows (no vendor_po_items) are skipped.
+      const items = editItems
+        .filter(it => /^\d+$/.test(String(it.id)))
+        .map(it => ({ id: it.id, quantity: it.quantity, rate: it.rate }));
+      if (!items.length) {
+        toast.error('This PO has no editable line items.');
+        setEditSaving(false);
+        return;
+      }
+      await api.put(`/procurement/vendor-po/${id}`, { items });
+      toast.success('PO quantities updated');
+      setEditing(false);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Save failed');
+    } finally {
+      setEditSaving(false);
+    }
+  };
 
   if (error) return <div className="min-h-screen flex items-center justify-center text-red-600">{error}</div>;
   if (!data) return <div className="min-h-screen flex items-center justify-center text-gray-400">Loading…</div>;
@@ -178,6 +240,9 @@ export default function VendorPOPrint() {
             <FiArrowLeft size={14} /> Back
           </button>
           <div className="flex gap-2">
+            <button onClick={openEdit} className="btn btn-secondary flex items-center gap-2" title="Edit item quantities">
+              <FiEdit2 size={14} /> Edit Qty
+            </button>
             <button onClick={sharePO} className="btn btn-success flex items-center gap-2" title="Share via WhatsApp">
               <FiMessageCircle size={14} /> WhatsApp
             </button>
@@ -187,6 +252,88 @@ export default function VendorPOPrint() {
           </div>
         </div>
       </div>
+
+      {/* Inline qty / rate editor — hidden on print.  Edits each line
+          item's quantity (and rate) and saves via PUT /vendor-po/:id;
+          the print body re-fetches on save so the new qty shows at once. */}
+      {editing && (
+        <div className="fixed inset-0 z-30 bg-black/40 flex items-start justify-center p-4 overflow-y-auto print:hidden">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl my-8">
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <h3 className="font-bold text-gray-800">Edit Item Quantities — {data.po.po_number}</h3>
+              <button onClick={() => setEditing(false)} className="text-gray-400 hover:text-gray-700 text-2xl leading-none">×</button>
+            </div>
+            <div className="p-4 space-y-3 text-sm">
+              {editLocked && (
+                <div className="text-[12px] text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+                  🔒 LOCKED · {editLockReason}
+                </div>
+              )}
+              <div className="overflow-x-auto">
+                <table className="text-xs w-full">
+                  <thead className="bg-gray-50 text-gray-600">
+                    <tr>
+                      <th className="text-left px-2 py-1 w-8">#</th>
+                      <th className="text-left px-2 py-1">Description</th>
+                      <th className="text-left px-2 py-1 w-16">Unit</th>
+                      <th className="text-right px-2 py-1 w-24">Qty</th>
+                      <th className="text-right px-2 py-1 w-28">Rate (₹)</th>
+                      <th className="text-right px-2 py-1 w-28">Amount (₹)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {editItems.map((it, idx) => {
+                      const amt = (+it.quantity || 0) * (+it.rate || 0);
+                      return (
+                        <tr key={it.id} className="border-b align-top">
+                          <td className="px-2 py-1 text-gray-500">{idx + 1}</td>
+                          <td className="px-2 py-1">
+                            {it.item_code && <div className="text-[9px] font-mono text-gray-400">[{it.item_code}]</div>}
+                            {it.description}
+                          </td>
+                          <td className="px-2 py-1 text-gray-600">{it.unit || '—'}</td>
+                          <td className="px-2 py-1 text-right">
+                            <NumInput className="input text-xs w-full text-right" disabled={editLocked} emitZeroOnEmpty min="0"
+                              value={it.quantity}
+                              onChange={v => setEditItems(prev => prev.map((r, i) => i === idx ? { ...r, quantity: v } : r))} />
+                          </td>
+                          <td className="px-2 py-1 text-right">
+                            <NumInput className="input text-xs w-full text-right" disabled={editLocked} emitZeroOnEmpty min="0"
+                              value={it.rate}
+                              onChange={v => setEditItems(prev => prev.map((r, i) => i === idx ? { ...r, rate: v } : r))} />
+                          </td>
+                          <td className="px-2 py-1 text-right font-semibold whitespace-nowrap">
+                            ₹{amt.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-blue-50 font-semibold text-blue-800">
+                      <td colSpan="5" className="px-2 py-2 text-right">Sub-total + 18% GST · Grand Total</td>
+                      <td className="px-2 py-2 text-right">
+                        ₹{(editItems.reduce((s, it) => s + (+it.quantity || 0) * (+it.rate || 0), 0) * 1.18).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              {!editLocked && (
+                <p className="text-[11px] text-gray-500">
+                  Quantity changes always apply to this PO. If a rate was finalised in the 3-vendor step, the printed Rate keeps reflecting that latest value.
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end gap-3 border-t px-4 py-3">
+              <button onClick={() => setEditing(false)} className="btn btn-secondary">Cancel</button>
+              <button onClick={saveEdit} disabled={editSaving || editLocked} className="btn btn-primary">
+                {editSaving ? 'Saving…' : 'Save Quantities'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* PO body — printable. Branded Tally style with SEPL red accents.
           The outer text color is locked to gray-900 so no inherited link
