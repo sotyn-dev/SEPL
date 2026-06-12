@@ -546,7 +546,13 @@ export default function Payroll() {
             <div className="bg-purple-50 border border-purple-200 px-3 py-2 rounded text-xs text-purple-800 max-w-xl">
               <strong>Remaining = Carry-Forward + Accrued − Used.</strong> Everyone accrues the same monthly CL
               ({leaveRows[0]?.cl_per_month ?? '—'}/month); whatever is left at year-end can be carried into next year.
+              Accrued counts only the months that have <em>already passed</em> in the selected year.
             </div>
+            {leaveYear > new Date().getFullYear() && (
+              <div className="bg-amber-50 border border-amber-200 px-3 py-2 rounded text-xs text-amber-800 max-w-xl">
+                ⚠ <strong>{leaveYear} is a future year</strong> — 0 months have accrued yet, so <strong>Accrued = 0</strong> and Remaining is just the carry-forward. Select <strong>{new Date().getFullYear()}</strong> to see this year's monthly accrual.
+              </div>
+            )}
             <div className="flex-1" />
             <button onClick={() => exportCsv(`cl-balances-${leaveYear}`,
               ['Employee', 'Dept', 'Carry-Forward', 'Accrued', 'Used', 'Remaining'],
