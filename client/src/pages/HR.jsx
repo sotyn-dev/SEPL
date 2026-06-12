@@ -1535,7 +1535,23 @@ function ManpowerTab() {
       .catch(() => setRows([]))
       .finally(() => setLoading(false));
   };
-  useEffect(() => { load(); }, []);
+  // Keep the board live so one user's category / required edit shows up for
+  // everyone without a manual page refresh (mam 2026-06-12): poll every 20s
+  // and refetch whenever the tab regains focus.  The initial spinner only
+  // shows on first load; polls swap data in silently.
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 20000);
+    const onFocus = () => { if (document.visibilityState === 'visible') load(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const startEdit = r => { setEditKey(r.key); setEditVal(String(r.required ?? '')); };
   const cancelEdit = () => { setEditKey(null); setEditVal(''); };
   const saveEdit = async (r, value) => {
