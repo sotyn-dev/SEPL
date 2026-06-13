@@ -668,6 +668,30 @@ router.post('/finalise', requirePermission('payroll', 'approve'), (req, res) => 
   }
 });
 
+// PUT mark an employee Paid / unpaid for a finalised month (mam 2026-06-13:
+// "after account will give option paid ... if we dont pay someone that is in
+// our record").  Only works once the month is finalised — the snapshot row
+// must exist.  Gated by payroll edit (Accounts); admins always pass.
+router.put('/paid/:employee_id', requirePermission('payroll', 'edit'), (req, res) => {
+  try {
+    const db = getDb();
+    const { month } = req.body;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+    const paid = req.body.paid ? 1 : 0;
+    const row = db.prepare('SELECT id FROM payroll_runs WHERE month=? AND employee_id=?').get(month, req.params.employee_id);
+    if (!row) return res.status(409).json({ error: `Finalise ${month} first — you can only mark salary paid after it's finalised.` });
+    if (paid) {
+      db.prepare('UPDATE payroll_runs SET paid=1, paid_at=CURRENT_TIMESTAMP, paid_by=? WHERE id=?').run(req.user.id, row.id);
+    } else {
+      db.prepare('UPDATE payroll_runs SET paid=0, paid_at=NULL, paid_by=NULL WHERE id=?').run(row.id);
+    }
+    res.json({ message: paid ? 'Marked paid' : 'Marked unpaid', paid: !!paid });
+  } catch (err) {
+    console.error('payroll paid update error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST unlock a finalised month (admin only — for corrections)
 router.post('/unlock', adminOnly, (req, res) => {
   const { month } = req.body;

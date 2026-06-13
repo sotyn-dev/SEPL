@@ -3424,6 +3424,11 @@ function initializeDatabase() {
     ['payroll_advances', 'paid_days_override REAL'],
     ['payroll_advances', 'cl_override REAL'],
     ['payroll_advances', 'late_penalty_override REAL'],
+    // Disbursement tracking (mam 2026-06-13): after a month is finalised,
+    // Accounts marks each person Paid — anyone left unpaid stays in the record.
+    ['payroll_runs', 'paid INTEGER DEFAULT 0'],
+    ['payroll_runs', 'paid_at DATETIME'],
+    ['payroll_runs', 'paid_by INTEGER REFERENCES users(id)'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}

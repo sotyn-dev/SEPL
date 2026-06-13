@@ -90,7 +90,7 @@ const LABEL_PILL = {
 };
 
 export default function Payroll() {
-  const { user, canApprove } = useAuth();
+  const { user, canApprove, canEdit } = useAuth();
   const isAdmin = user?.role === 'admin';
   const [tab, setTab] = useUrlTab('monthly');
   const [month, setMonth] = useState(monthNow());
@@ -284,6 +284,17 @@ export default function Payroll() {
   const fmt = (n) => `Rs ${(Math.round(n || 0)).toLocaleString('en-IN')}`;
 
   const total = list.reduce((s, r) => s + (r.net_pay || 0), 0);
+  // Disbursement tracking — only meaningful once the month is finalised.
+  const isFinalised = list.some(r => r.locked);
+  const canMarkPaid = isAdmin || (canEdit && canEdit('payroll'));
+  const paidCount = list.filter(r => r.paid).length;
+  const unpaidCount = list.filter(r => r.locked && !r.paid).length;
+  const savePaid = async (employeeId, paid) => {
+    try {
+      await api.put(`/payroll/paid/${employeeId}`, { month, paid });
+      loadMonth();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
 
   return (
     <div className="space-y-6">
@@ -345,6 +356,12 @@ export default function Payroll() {
             <div className="text-right">
               <p className="text-xs text-gray-500">Total Net Payout</p>
               <p className="text-2xl font-bold text-emerald-600">{fmt(total)}</p>
+              {isFinalised && (
+                <p className="text-[11px] font-semibold mt-0.5">
+                  <span className="text-emerald-600">{paidCount} paid</span>
+                  {unpaidCount > 0 && <span className="text-rose-500"> · {unpaidCount} unpaid</span>}
+                </p>
+              )}
             </div>
             {canApprove && canApprove('payroll') && (
               <button onClick={finaliseMonth} className="btn btn-success text-sm flex items-center gap-1">
@@ -376,12 +393,13 @@ export default function Payroll() {
                   <th className="text-right" title="Advance salary taken this month — deducted from net pay">Advance</th>
                   <th className="text-right" title="Food allowance — added to net pay">Food</th>
                   <th className="text-right" title="Final salary including overtime, after advance + food">Net Pay</th>
+                  <th className="text-center" title="Accounts marks each person Paid after the month is finalised">Paid</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan="15" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
-                {!loading && list.length === 0 && <tr><td colSpan="15" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
+                {loading && <tr><td colSpan="16" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
+                {!loading && list.length === 0 && <tr><td colSpan="16" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
                 {!loading && list.map(r => (
                   <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : (r.user_linked === false ? 'bg-amber-50/40' : '')}>
                     <td className="font-medium">
@@ -445,6 +463,16 @@ export default function Payroll() {
                       ) : (r.food ? <span className="text-emerald-600">+{fmt(r.food)}</span> : '-')}
                     </td>
                     <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}{r.sunday_worked_pay ? <span className="block text-[9px] font-normal text-emerald-600">incl. +{r.sunday_worked_pay}d Sun work</span> : null}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}{r.food ? <span className="block text-[9px] font-normal text-emerald-600">incl. +₹{fmt(r.food)} food</span> : null}{r.advance ? <span className="block text-[9px] font-normal text-rose-500">less ₹{fmt(r.advance)} advance</span> : null}</td>
+                    <td className="text-center">
+                      {r.locked ? (
+                        <label className={`inline-flex items-center gap-1 ${canMarkPaid ? 'cursor-pointer' : 'cursor-default'}`}
+                          title={r.paid ? `Paid${r.paid_at ? ' on ' + new Date(r.paid_at).toLocaleDateString('en-IN') : ''}` : 'Not paid yet'}>
+                          <input type="checkbox" checked={!!r.paid} disabled={!canMarkPaid}
+                            onChange={e => savePaid(r.employee_id, e.target.checked)} />
+                          <span className={`text-[11px] font-semibold ${r.paid ? 'text-emerald-600' : 'text-rose-500'}`}>{r.paid ? 'Paid' : 'Unpaid'}</span>
+                        </label>
+                      ) : <span className="text-[10px] text-gray-300" title="Finalise the month to mark salary paid">—</span>}
+                    </td>
                     <td className="space-x-1 whitespace-nowrap">
                       <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs">Detail</button>
                       <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-primary text-xs">SEPL Slip</a>
