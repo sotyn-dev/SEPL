@@ -529,9 +529,10 @@ function calculateForEmployee(db, settings, employee, month) {
     paid_days_auto: round2(paidDays),                 // before any manual override
     paid_days_overridden: pdOverridden,
     // Components of paid_days, so the UI can show "attendance + Sunday + CL"
-    // (mam 2026-06-08). present_days = worked-day equivalents (full=1,
-    // half=0.5); the rest of paid_days is sundays + paid leaves.
-    present_days: round2(effPaidDays - sundayCount - effPaidLeaves - sundayWorkedPay),
+    // (mam 2026-06-08). present_days = the REAL worked-day equivalents from
+    // attendance (full=1, half=0.5) — always the auto figure so a manual Paid
+    // Days override doesn't distort the "att" breakdown.
+    present_days: round2(paidDays - sundayCount - paidLeaves - sundayWorkedPay),
     sunday_worked: sundayWorked,            // # of Sundays the person worked
     sunday_worked_pay: round2(sundayWorkedPay), // extra day-equivalents paid for them
     half_days: halfDays,
