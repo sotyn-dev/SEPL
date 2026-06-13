@@ -340,6 +340,13 @@ router.post('/admin-mark', (req, res) => {
     if (!ok?.ok) return res.status(403).json({ error: 'Forbidden' });
   }
 
+  // "clear" removes an admin mark, reverting the day to no-record (implicit
+  // absent / whatever the punch was).  Never touches a real punch row.
+  if (status === 'clear') {
+    const ex = db.prepare('SELECT id, admin_marked FROM attendance WHERE user_id=? AND date=?').get(user_id, date);
+    if (ex && ex.admin_marked) db.prepare('DELETE FROM attendance WHERE id=?').run(ex.id);
+    return res.json({ message: 'Cleared' });
+  }
   const finalStatus = ['present','half_day','short_day','absent','leave','holiday'].includes(status) ? status : 'present';
 
   // If a real attendance row already exists (user actually punched), don't
@@ -360,6 +367,162 @@ router.post('/admin-mark', (req, res) => {
      VALUES (?,?,?,?,1,?, ?)`
   ).run(user_id, date, finalStatus, remarks || null, req.user.id, finalStatus === 'half_day' ? 4 : finalStatus === 'present' ? 8 : 0);
   res.status(201).json({ id: r.lastInsertRowid, message: 'Marked' });
+});
+
+// ── Monthly Attendance Grid (mam 2026-06-13: "make automatic salary") ────
+// Admin marks present/absent/half/leave for everyone in one screen so the
+// no-punch days that drag payroll down get corrected fast.  All writes go
+// through admin-mark (admin_marked=1) so real punches are never overwritten.
+
+// Admin OR attendance.approve may use the grid.
+function canMarkAttendance(db, req) {
+  if (req.user.role === 'admin') return true;
+  try {
+    const ok = db.prepare(`
+      SELECT MAX(CASE WHEN rp.can_approve = 1 THEN 1 ELSE 0 END) AS ok
+      FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+      WHERE ur.user_id = ? AND rp.module = 'attendance'`).get(req.user.id);
+    return !!ok?.ok;
+  } catch { return false; }
+}
+const gpad = n => String(n).padStart(2, '0');
+
+// GET /attendance/grid?month=YYYY-MM — per-employee per-day status for the
+// month, plus the "no login linked" employees with suggested user matches.
+router.get('/grid', (req, res) => {
+  const db = getDb();
+  if (!canMarkAttendance(db, req)) return res.status(403).json({ error: 'Forbidden' });
+  const month = String(req.query.month || '');
+  if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+  const [y, m] = month.split('-').map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const start = `${month}-01`, end = `${month}-${gpad(lastDay)}`;
+  const todayStr = new Date(new Date().getTime() + 5.5 * 3600 * 1000).toISOString().split('T')[0]; // IST today
+
+  const days = [];
+  for (let d = 1; d <= lastDay; d++) {
+    const dateStr = `${month}-${gpad(d)}`;
+    const dow = new Date(y, m - 1, d).getDay();
+    days.push({ date: dateStr, d, dow, sunday: dow === 0, future: dateStr > todayStr });
+  }
+
+  const employees = db.prepare(
+    `SELECT id, name, user_id FROM employees WHERE (status IS NULL OR status='active') ORDER BY name`
+  ).all();
+  const activeUsers = db.prepare(`SELECT id, name FROM users WHERE active=1`).all();
+  const usersById = new Map(activeUsers.map(u => [u.id, u]));
+  const linkedUserIds = new Set(employees.map(e => e.user_id).filter(Boolean));
+  const tokens = s => String(s || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+  const suggestFor = (name) => {
+    const set = new Set(tokens(name)); const first = [...set][0] || '';
+    return activeUsers
+      .filter(u => !linkedUserIds.has(u.id))
+      .map(u => ({ u, overlap: tokens(u.name).filter(t => set.has(t)).length, first: tokens(u.name)[0] === first }))
+      .filter(c => c.overlap > 0 || c.first)
+      .sort((a, b) => b.overlap - a.overlap)
+      .slice(0, 4)
+      .map(c => ({ user_id: c.u.id, name: c.u.name }));
+  };
+
+  const userIds = [...linkedUserIds];
+  let attByUserDate = new Map(), leavesByUser = new Map();
+  if (userIds.length) {
+    const ph = userIds.map(() => '?').join(',');
+    for (const a of db.prepare(
+      `SELECT user_id, date, status, admin_marked, punch_in_time FROM attendance
+        WHERE user_id IN (${ph}) AND date BETWEEN ? AND ?`).all(...userIds, start, end)) {
+      attByUserDate.set(`${a.user_id}|${a.date}`, a);
+    }
+    for (const lr of db.prepare(
+      `SELECT user_id, leave_type, from_date, to_date FROM leave_requests
+        WHERE status='approved' AND user_id IN (${ph}) AND NOT (to_date < ? OR from_date > ?)`).all(...userIds, start, end)) {
+      if (!leavesByUser.has(lr.user_id)) leavesByUser.set(lr.user_id, []);
+      leavesByUser.get(lr.user_id).push(lr);
+    }
+  }
+
+  const rows = employees.map(e => {
+    const cells = {};
+    if (e.user_id) {
+      const leaves = leavesByUser.get(e.user_id) || [];
+      for (const day of days) {
+        const att = attByUserDate.get(`${e.user_id}|${day.date}`);
+        let status = '', source = '';
+        if (att) {
+          status = String(att.status || '').toLowerCase();
+          source = att.admin_marked ? 'admin' : 'punch';
+        } else if (leaves.some(l => day.date >= l.from_date && day.date <= l.to_date)) {
+          status = 'leave'; source = 'leave';
+        } else if (day.sunday) {
+          status = 'sunday'; source = 'auto';
+        } else if (!day.future) {
+          status = 'absent'; source = 'implicit';
+        } else {
+          status = ''; source = 'future';
+        }
+        cells[day.date] = { status, source };
+      }
+    }
+    return {
+      employee_id: e.id,
+      name: e.name,
+      user_id: e.user_id || null,
+      no_login: !e.user_id,
+      suggestions: e.user_id ? [] : suggestFor(e.name),
+      cells,
+    };
+  });
+
+  res.json({ month, today: todayStr, days, employees: rows });
+});
+
+// POST /attendance/admin-mark-bulk — mark every BLANK (no record) non-Sunday
+// past day of a month for one user as `status` (default present).  The fast
+// "mark this person present for the month" button.
+router.post('/admin-mark-bulk', (req, res) => {
+  const db = getDb();
+  if (!canMarkAttendance(db, req)) return res.status(403).json({ error: 'Forbidden' });
+  const { user_id, month } = req.body;
+  if (!user_id || !/^\d{4}-\d{2}$/.test(String(month || ''))) return res.status(400).json({ error: 'user_id and month=YYYY-MM required' });
+  const status = ['present', 'half_day', 'absent'].includes(req.body.status) ? req.body.status : 'present';
+  const [y, m] = String(month).split('-').map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const todayStr = new Date(new Date().getTime() + 5.5 * 3600 * 1000).toISOString().split('T')[0];
+  const existing = new Set(
+    db.prepare(`SELECT date FROM attendance WHERE user_id=? AND date BETWEEN ? AND ?`)
+      .all(user_id, `${month}-01`, `${month}-${gpad(lastDay)}`).map(r => r.date)
+  );
+  const ins = db.prepare(
+    `INSERT INTO attendance (user_id, date, status, admin_marked, marked_by, total_hours) VALUES (?,?,?,1,?,?)`
+  );
+  const hrs = status === 'half_day' ? 4 : status === 'present' ? 8 : 0;
+  let marked = 0;
+  const tx = db.transaction(() => {
+    for (let d = 1; d <= lastDay; d++) {
+      const dateStr = `${month}-${gpad(d)}`;
+      if (dateStr > todayStr) continue;
+      if (new Date(y, m - 1, d).getDay() === 0) continue;   // skip Sundays (auto-paid)
+      if (existing.has(dateStr)) continue;                  // never overwrite a punch/admin row
+      ins.run(user_id, dateStr, status, req.user.id, hrs);
+      marked++;
+    }
+  });
+  tx();
+  res.json({ message: `Marked ${marked} day(s)`, marked });
+});
+
+// POST /attendance/link-login — link an employee to a login user so their
+// attendance can be read (fixes the "⚠ no login" near-zero salaries).
+router.post('/link-login', (req, res) => {
+  const db = getDb();
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const employee_id = +req.body.employee_id, user_id = +req.body.user_id;
+  if (!employee_id || !user_id) return res.status(400).json({ error: 'employee_id and user_id required' });
+  const emp = db.prepare('SELECT id FROM employees WHERE id=?').get(employee_id);
+  const usr = db.prepare('SELECT id, name FROM users WHERE id=?').get(user_id);
+  if (!emp || !usr) return res.status(404).json({ error: 'Employee or user not found' });
+  db.prepare('UPDATE employees SET user_id=? WHERE id=?').run(user_id, employee_id);
+  res.json({ message: `Linked to ${usr.name}`, user_id });
 });
 
 // PUNCH IN

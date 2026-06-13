@@ -39,6 +39,12 @@ export default function Attendance() {
   const [myHistFrom, setMyHistFrom] = useState(firstOfMonth);
   const [myHistTo, setMyHistTo] = useState(today);
   const [myHistory, setMyHistory] = useState([]);
+  // Monthly Attendance Grid (mam 2026-06-13) — mark present/absent/half/leave
+  // for everyone in one screen so no-punch days don't drag payroll to absent.
+  const monthNow = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  const [gridMonth, setGridMonth] = useState(monthNow());
+  const [grid, setGrid] = useState(null);
+  const [gridBusy, setGridBusy] = useState(false);
   const [location, setLocation] = useState(null);
   const [address, setAddress] = useState('');
   const [photo, setPhoto] = useState(null);
@@ -213,6 +219,56 @@ export default function Attendance() {
   const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
   const dateStr = now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
+  // ── Monthly Attendance Grid helpers ──────────────────────────────
+  const loadGrid = useCallback(() => {
+    if (!isAdmin()) return;
+    api.get(`/attendance/grid?month=${gridMonth}`).then(r => setGrid(r.data)).catch(() => setGrid(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gridMonth]);
+  useEffect(() => { if (tab === 'grid') loadGrid(); }, [tab, gridMonth, loadGrid]);
+
+  const cellMeta = (c) => {
+    const s = c?.status || '';
+    if (s === 'present') return { t: 'P', cls: 'bg-emerald-100 text-emerald-700' };
+    if (s === 'late') return { t: 'L', cls: 'bg-amber-100 text-amber-700' };
+    if (s === 'half_day') return { t: '½', cls: 'bg-orange-100 text-orange-700' };
+    if (s === 'short_day') return { t: 'S', cls: 'bg-orange-100 text-orange-700' };
+    if (s === 'leave') return { t: 'CL', cls: 'bg-purple-100 text-purple-700' };
+    if (s === 'sunday') return { t: '–', cls: 'bg-gray-50 text-gray-300' };
+    if (s === 'absent') return { t: 'A', cls: 'bg-red-50 text-red-600' };
+    return { t: '·', cls: 'bg-white text-gray-300' };
+  };
+  const markCell = async (emp, date, status) => {
+    if (!emp.user_id) return;
+    setGridBusy(true);
+    try { await api.post('/attendance/admin-mark', { user_id: emp.user_id, date, status }); loadGrid(); }
+    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+    finally { setGridBusy(false); }
+  };
+  // Click cycles: blank/absent → Present → Absent → Half → Leave → (clear).
+  // Real punches and approved leaves are read-only here.
+  const onCellClick = (emp, day, c) => {
+    if (!emp.user_id || day.future) return;
+    if (c.source === 'punch') { toast('Real punch — edit it under Records'); return; }
+    if (c.source === 'leave') { toast('Approved leave — manage it under Leaves'); return; }
+    const order = ['present', 'absent', 'half_day', 'leave', 'clear'];
+    const next = c.source === 'admin' ? order[(order.indexOf(c.status) + 1) % order.length] : 'present';
+    markCell(emp, day.date, next);
+  };
+  const markAllPresent = async (emp) => {
+    if (!emp.user_id) return;
+    if (!confirm(`Mark ${emp.name} PRESENT on every blank working day in ${gridMonth}? (Sundays, real punches and leaves are left untouched.)`)) return;
+    setGridBusy(true);
+    try { const r = await api.post('/attendance/admin-mark-bulk', { user_id: emp.user_id, month: gridMonth, status: 'present' }); toast.success(r.data.message); loadGrid(); }
+    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+    finally { setGridBusy(false); }
+  };
+  const linkLogin = async (emp, userId) => {
+    if (!userId) return;
+    try { const r = await api.post('/attendance/link-login', { employee_id: emp.employee_id, user_id: +userId }); toast.success(r.data.message); loadGrid(); }
+    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex gap-2 flex-wrap">
@@ -220,6 +276,7 @@ export default function Attendance() {
         <button onClick={() => setTab('myhistory')} className={`btn ${tab === 'myhistory' ? 'btn-primary' : 'btn-secondary'} text-sm`}>My History</button>
         {isAdmin() && <>
           <button onClick={() => setTab('dashboard')} className={`btn ${tab === 'dashboard' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Dashboard</button>
+          <button onClick={() => setTab('grid')} className={`btn ${tab === 'grid' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Grid</button>
           <button onClick={() => setTab('records')} className={`btn ${tab === 'records' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Records</button>
           <button onClick={() => setTab('byuser')} className={`btn ${tab === 'byuser' ? 'btn-primary' : 'btn-secondary'} text-sm`}>By User</button>
           <button onClick={() => setTab('report')} className={`btn ${tab === 'report' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Report</button>
@@ -227,6 +284,85 @@ export default function Attendance() {
           <button onClick={() => setTab('leaves')} className={`btn ${tab === 'leaves' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Leaves</button>
         </>}
       </div>
+
+      {/* MONTHLY ATTENDANCE GRID TAB */}
+      {tab === 'grid' && isAdmin() && (
+        <div className="space-y-3">
+          <div className="text-xs text-gray-600 bg-amber-50 border border-amber-100 rounded-lg px-4 py-2.5">
+            A day with <b>no punch counts as absent</b> in payroll. Mark people here so salary is right.
+            Click a cell to cycle <b>P</b>resent → <b>A</b>bsent → <b>½</b> half → <b>CL</b> leave → clear.
+            Real punches and approved leaves are read-only. Use <b>“P all”</b> to fill a person’s blank working days as present.
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input type="month" className="input text-sm" value={gridMonth} onChange={e => setGridMonth(e.target.value)} />
+            <button onClick={loadGrid} className="btn btn-secondary text-sm">Refresh</button>
+            <div className="flex items-center gap-2 text-[11px] text-gray-500 ml-auto">
+              <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">P present</span>
+              <span className="px-1.5 py-0.5 rounded bg-red-50 text-red-600">A absent</span>
+              <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">½ half</span>
+              <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">CL leave</span>
+              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">L late</span>
+            </div>
+          </div>
+          {!grid ? (
+            <div className="card p-8 text-center text-gray-400 text-sm">Loading…</div>
+          ) : grid.employees.length === 0 ? (
+            <div className="card p-8 text-center text-gray-400 text-sm">No active employees found.</div>
+          ) : (
+            <div className="card p-0 overflow-x-auto">
+              <table className="text-xs border-collapse">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="sticky left-0 z-10 bg-gray-50 text-left px-3 py-2 font-semibold min-w-[160px]">Employee</th>
+                    {grid.days.map(day => (
+                      <th key={day.date} className={`px-0 py-2 text-center font-semibold w-7 ${day.sunday ? 'text-red-400' : 'text-gray-500'}`} title={day.date}>{day.d}</th>
+                    ))}
+                    <th className="px-2 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {grid.employees.map(emp => (
+                    <tr key={emp.employee_id} className="border-t border-gray-100">
+                      <td className="sticky left-0 z-10 bg-white px-3 py-1.5 font-medium text-gray-800 min-w-[160px]">
+                        {emp.name}
+                        {emp.no_login && (
+                          <div className="mt-0.5 flex items-center gap-1">
+                            <span className="text-[10px] bg-amber-200 text-amber-800 px-1 rounded">⚠ no login</span>
+                            <select className="select text-[10px] py-0 h-6" defaultValue="" onChange={e => linkLogin(emp, e.target.value)} title="Link this employee to their login user">
+                              <option value="" disabled>link…</option>
+                              {emp.suggestions.map(s => <option key={s.user_id} value={s.user_id}>{s.name}</option>)}
+                            </select>
+                          </div>
+                        )}
+                      </td>
+                      {grid.days.map(day => {
+                        const c = emp.cells[day.date] || {};
+                        const meta = cellMeta(c);
+                        const ro = !emp.user_id || day.future || c.source === 'punch' || c.source === 'leave';
+                        return (
+                          <td key={day.date} className="p-0 text-center">
+                            <button type="button" disabled={gridBusy || ro}
+                              onClick={() => onCellClick(emp, day, c)}
+                              title={`${day.date}${c.status ? ' · ' + c.status : ''}${c.source ? ' (' + c.source + ')' : ''}`}
+                              className={`w-7 h-7 text-[10px] font-bold ${meta.cls} ${c.source === 'punch' ? 'ring-1 ring-inset ring-blue-200' : ''} ${ro ? 'cursor-default opacity-90' : 'hover:brightness-95'}`}>
+                              {day.future ? '' : meta.t}
+                            </button>
+                          </td>
+                        );
+                      })}
+                      <td className="px-2 py-1.5 whitespace-nowrap">
+                        {emp.user_id
+                          ? <button onClick={() => markAllPresent(emp)} disabled={gridBusy} className="btn btn-secondary text-[11px] py-0.5">P all</button>
+                          : <span className="text-[10px] text-gray-300">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* PUNCH IN/OUT TAB */}
       {tab === 'punch' && (
