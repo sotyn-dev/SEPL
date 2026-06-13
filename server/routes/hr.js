@@ -153,7 +153,8 @@ router.get('/manpower-plan', (req, res) => {
           const u = engUsers.get(uid);
           if (!u) continue;
           const emp = findEmp(u);
-          const bucket = classifyDesignation(emp?.designation);
+          if (!emp) continue;            // only count people with an ACTIVE employee record
+          const bucket = classifyDesignation(emp.designation);
           if (bucket === 'fm') fm++; else if (bucket === 'jr') jr++; else se++;
         }
         g.seActual = se; g.jrActual = jr; g.fmActual = fm;
