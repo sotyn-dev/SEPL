@@ -187,12 +187,12 @@ export default function SalesBilling() {
       <Modal isOpen={modal} onClose={() => setModal(false)} title="New Sales Bill">
         <div className="space-y-3">
           <div>
-            <label className="label">Business Book order</label>
+            <label className="label">Order → Planning project <span className="text-[10px] font-normal text-gray-400">(★ = in Planning, shown first)</span></label>
             <select className="select w-full" value={orderId} onChange={e => pickOrder(e.target.value)}>
               <option value="">Select an order…</option>
               {orders.map(o => (
                 <option key={o.id} value={o.id}>
-                  {o.lead_no || ('BB#' + o.id)} — {o.customer_name || 'No name'}{o.project_name ? ` · ${o.project_name}` : ''}{o.po_amount ? ` (${fmt(o.po_amount)})` : ''}
+                  {o.status === 'planning' ? '★ ' : ''}{o.lead_no || ('BB#' + o.id)} — {o.customer_name || 'No name'}{o.project_name ? ` · ${o.project_name}` : ''}{o.po_amount ? ` (${fmt(o.po_amount)})` : ''}{o.status ? ` · ${o.status}` : ''}
                 </option>
               ))}
             </select>

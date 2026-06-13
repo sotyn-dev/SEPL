@@ -30,13 +30,19 @@ function nextBillNumber(db, dateStr) {
   return prefix + String(max + 1).padStart(3, '0');
 }
 
-// Business Book orders for the "new bill" picker.
+// Business Book orders for the "new bill" picker — Order→Planning projects
+// (status='planning') surface first, then the rest, so the Sales Order bill is
+// raised off the planning project's name / value / BOQ items.
 router.get('/orders', requirePermission('installation', 'view'), (req, res) => {
   const db = getDb();
   const rows = db.prepare(
     `SELECT id, lead_no, client_name, company_name, project_name, po_number,
-            po_date, po_amount, sale_amount_without_gst
-       FROM business_book ORDER BY id DESC`
+            po_date, po_amount, sale_amount_without_gst, status
+       FROM business_book
+      ORDER BY CASE status
+                 WHEN 'planning' THEN 0 WHEN 'execution' THEN 1
+                 WHEN 'advance_received' THEN 2 WHEN 'completed' THEN 3 ELSE 4 END,
+               id DESC`
   ).all();
   res.json(rows.map(r => ({
     ...r,
