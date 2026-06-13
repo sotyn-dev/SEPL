@@ -110,7 +110,7 @@ const SIDEBAR_GROUPS = [
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
     { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
     { path: '/fire-noc',     label: 'Fire NOC Renewal', icon: FiZap,         module: 'fire_noc' },
-    { path: '/installation', label: 'Installations',    icon: FiTool,        module: 'installation' },
+    { path: '/installation', label: 'Sales Billing',     icon: FiTool,        module: 'installation' },
   ]},
   { id: 'finance', label: 'Finance', icon: LuIndianRupee, items: [
     { path: '/cheques',          label: 'Cheques',     icon: FiFile,       module: 'cheques' },
