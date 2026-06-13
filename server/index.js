@@ -303,6 +303,7 @@ app.use('/api/pipe-weights', require('./routes/pipeweights'));
 app.use('/api/procurement', require('./routes/procurement'));
 app.use('/api/customers', require('./routes/customers'));
 app.use('/api/installation', require('./routes/installation'));
+app.use('/api/sales-billing', require('./routes/salesBilling'));
 app.use('/api/complaints', require('./routes/complaints'));
 app.use('/api/hr', require('./routes/hr'));
 // Mam (2026-05-22 Batch D): unauthenticated public offer-accept

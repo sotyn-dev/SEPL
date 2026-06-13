@@ -19,6 +19,7 @@ import Customers from './pages/Customers';
 import Procurement from './pages/Procurement';
 import PriceRequired from './pages/PriceRequired';
 import Installation from './pages/Installation';
+import SalesBilling from './pages/SalesBilling';
 import Billing from './pages/Billing';
 import Complaints from './pages/Complaints';
 import HR from './pages/HR';
@@ -177,7 +178,7 @@ export default function App() {
         <Route path="price-required" element={<PriceRequired />} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />
-        <Route path="installation" element={<ModuleRoute module="installation"><Installation /></ModuleRoute>} />
+        <Route path="installation" element={<ModuleRoute module="installation"><SalesBilling /></ModuleRoute>} />
         <Route path="billing" element={<ModuleRoute module="billing"><Billing /></ModuleRoute>} />
         <Route path="complaints" element={<ModuleRoute module="complaints"><Complaints /></ModuleRoute>} />
         <Route path="snags" element={<ModuleRoute module="snags"><Snags /></ModuleRoute>} />

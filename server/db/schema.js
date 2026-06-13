@@ -601,7 +601,9 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Sales Bills (to client)
+    -- Sales Bills (to client). The 4-type sequential columns (bill_type,
+    -- business_book_id, …) are added by migration so the legacy rows used by
+    -- the delivery-note flow keep working.
     CREATE TABLE IF NOT EXISTS sales_bills (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       po_id INTEGER REFERENCES purchase_orders(id),
@@ -612,6 +614,26 @@ function initializeDatabase() {
       total_amount REAL DEFAULT 0,
       payment_status TEXT DEFAULT 'pending' CHECK(payment_status IN ('pending','partial','paid')),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    -- Line items for a sales bill (snapshot from the Business Book order).
+    CREATE TABLE IF NOT EXISTS sales_bill_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sales_bill_id INTEGER REFERENCES sales_bills(id) ON DELETE CASCADE,
+      description TEXT,
+      qty_ordered REAL DEFAULT 0,
+      qty_delivered REAL DEFAULT 0,
+      unit TEXT,
+      rate REAL DEFAULT 0,
+      amount REAL DEFAULT 0
+    );
+    -- Status / approval audit trail for a sales bill.
+    CREATE TABLE IF NOT EXISTS sales_bill_status_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sales_bill_id INTEGER REFERENCES sales_bills(id) ON DELETE CASCADE,
+      status TEXT,
+      changed_by INTEGER REFERENCES users(id),
+      changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      notes TEXT
     );
 
     -- Debit Notes (mam 2026-06-04 post-PO chart, stage 7): a document
@@ -3429,6 +3451,22 @@ function initializeDatabase() {
     ['payroll_runs', 'paid INTEGER DEFAULT 0'],
     ['payroll_runs', 'paid_at DATETIME'],
     ['payroll_runs', 'paid_by INTEGER REFERENCES users(id)'],
+    // Sales Billing — 4-type sequential bill flow (mam 2026-06-13).  Added to
+    // the existing sales_bills table so legacy delivery-note rows (bill_type
+    // NULL) are untouched; the new module only handles bill_type 1-4.
+    ['sales_bills', 'bill_type INTEGER'],                 // 1=Sales Order 2=Delivery 3=Installation 4=Final
+    ['sales_bills', 'business_book_id INTEGER REFERENCES business_book(id)'],
+    ['sales_bills', 'customer_name TEXT'],
+    ['sales_bills', 'customer_gstin TEXT'],
+    ['sales_bills', 'project_name TEXT'],
+    ['sales_bills', 'gst_rate REAL DEFAULT 0'],
+    ['sales_bills', 'bill_status TEXT'],                  // ORDER BOOKED / MATERIAL DELIVERED / ...
+    ['sales_bills', 'previous_bill_id INTEGER'],
+    ['sales_bills', 'reference_doc_type TEXT'],
+    ['sales_bills', 'reference_doc_no TEXT'],
+    ['sales_bills', 'reference_id INTEGER'],
+    ['sales_bills', "approval_status TEXT DEFAULT 'draft'"],
+    ['sales_bills', 'created_by INTEGER REFERENCES users(id)'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}
