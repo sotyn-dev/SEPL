@@ -1100,19 +1100,29 @@ router.get('/engineer-compliance', (req, res) => {
   // Excludes leave/absent/holiday — legitimately DPR-free.
   const PRESENT_STATUSES = "('present','half_day','short_day','late')";
 
-  // 1) Engineer pool — ONLY users with the Site Engineer role.
-  //    Mam (2026-05-29 v2): "only site eng here".  Admins were
-  //    leaking in via the `OR u.role='admin'` clause; dropped.
+  // 1) Engineer pool — Site Engineers AND Jr. Site Engineers (mam 2026-06-13:
+  //    "show site eng and jr site eng record").  Any role whose name contains
+  //    "site eng" qualifies; each engineer is tagged with their role so the
+  //    card can show Site Engineer vs Jr. Site Eng.  Admins are excluded.
+  const classifyRole = (roleNames) => {
+    const d = String(roleNames || '').toLowerCase();
+    if (d.includes('foreman')) return 'fm';
+    if (/\b(jr|jnr|junior|trainee|gte|asst|assistant)\b/.test(d) || d.includes('junior')) return 'jr';
+    return 'se';
+  };
+  const ROLE_DISPLAY = { fm: 'Foreman', jr: 'Jr. Site Eng', se: 'Site Engineer' };
   let engineers = db.prepare(`
-    SELECT DISTINCT u.id, u.name, u.email
+    SELECT u.id, u.name, u.email, GROUP_CONCAT(r.name) AS role_names
       FROM users u
       JOIN user_roles ur ON ur.user_id = u.id
       JOIN roles r       ON r.id = ur.role_id
      WHERE u.active = 1
-       AND r.name = 'Site Engineer'
+     GROUP BY u.id
+     HAVING SUM(CASE WHEN LOWER(r.name) LIKE '%site eng%' THEN 1 ELSE 0 END) > 0
      ORDER BY u.name
   `).all();
   if (!canSeeAll) engineers = engineers.filter(e => e.id === uid);
+  const roleByEng = new Map(engineers.map(e => [e.id, classifyRole(e.role_names)]));
   if (engineers.length === 0) {
     return res.json({
       range: { date_from: from, date_to: to, calendar_days: calendarDays },
@@ -1367,6 +1377,8 @@ router.get('/engineer-compliance', (req, res) => {
     engineer_id: e.id,
     engineer_name: e.name,
     engineer_email: e.email,
+    engineer_role: roleByEng.get(e.id) || 'se',
+    engineer_role_display: ROLE_DISPLAY[roleByEng.get(e.id) || 'se'],
     sites: [],
     // Headline numbers (engineer-wide, any site / no site link)
     days_present_total:    totalPresentByEng.get(e.id) || 0,
@@ -1415,9 +1427,11 @@ router.get('/engineer-compliance', (req, res) => {
     acc.days_dpr_filled += e.days_dpr_filled_total;
     acc.profit_loss     += e.profit_loss_total;
     acc.manpower        += e.manpower_total;
+    if (e.engineer_role === 'jr') acc.jr += 1; else acc.se += 1;
     return acc;
-  }, { engineers: 0, sites: 0, days_present: 0, days_dpr_filled: 0, profit_loss: 0, manpower: 0 });
+  }, { engineers: 0, sites: 0, days_present: 0, days_dpr_filled: 0, profit_loss: 0, manpower: 0, se: 0, jr: 0 });
   totals.gap_days = Math.max(0, totals.days_present - totals.days_dpr_filled);
+  totals.engineer_breakdown = { se: totals.se, jr: totals.jr };
 
   res.json({
     range: { date_from: from, date_to: to, calendar_days: calendarDays },
