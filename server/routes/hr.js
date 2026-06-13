@@ -148,16 +148,18 @@ router.get('/manpower-plan', (req, res) => {
           .sort((a, b) => b.overlap - a.overlap)[0]?.emp || null;
       };
       for (const g of groups.values()) {
-        let se = 0, jr = 0, fm = 0;
+        const seN = [], jrN = [], fmN = [];
         for (const uid of g.engUserIds) {
           const u = engUsers.get(uid);
           if (!u) continue;
           const emp = findEmp(u);
           if (!emp) continue;            // only count people with an ACTIVE employee record
+          const nm = (emp.name || u.name || '').trim();
           const bucket = classifyDesignation(emp.designation);
-          if (bucket === 'fm') fm++; else if (bucket === 'jr') jr++; else se++;
+          if (bucket === 'fm') fmN.push(nm); else if (bucket === 'jr') jrN.push(nm); else seN.push(nm);
         }
-        g.seActual = se; g.jrActual = jr; g.fmActual = fm;
+        g.seActual = seN.length; g.jrActual = jrN.length; g.fmActual = fmN.length;
+        g.seNames = seN; g.jrNames = jrN; g.fmNames = fmN;
       }
     }
   } catch (e) { /* purchase_orders may lack site_engineer columns on a stale DB */ }
@@ -209,18 +211,21 @@ router.get('/manpower-plan', (req, res) => {
       se_required_overridden: seOverridden,
       se_actual: seActual,
       se_gap: seRequired - seActual,
+      se_names: g.seNames || [],
       // Jr. Site Engineers
       jr_required: jrRequired,
       jr_required_auto: engAuto.jr,
       jr_required_overridden: jrOverridden,
       jr_actual: jrActual,
       jr_gap: jrRequired - jrActual,
+      jr_names: g.jrNames || [],
       // Foreman
       fm_required: fmRequired,
       fm_required_auto: engAuto.fm,
       fm_required_overridden: fmOverridden,
       fm_actual: fmActual,
       fm_gap: fmRequired - fmActual,
+      fm_names: g.fmNames || [],
       last_dpr_date: g.last_dpr_date,
     };
   }).sort((a, b) => b.gap - a.gap || b.value - a.value);

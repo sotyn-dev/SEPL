@@ -1611,7 +1611,7 @@ function ManpowerTab() {
   // Compact "actual / target" cell for Site Eng & Jr. Site Eng — actual comes
   // from the project's PO site engineers (classified by Employee designation);
   // the target auto-fills from the value slab and the ✏️ overrides it.
-  const renderEngCell = (r, role, actualKey, gapKey) => {
+  const renderEngCell = (r, role, actualKey, gapKey, namesKey) => {
     if (r.is_handover) return <span className="text-gray-300 text-xs">—</span>;
     const cfg = ROLES[role];
     const required = r[cfg.val] || 0;
@@ -1619,6 +1619,7 @@ function ManpowerTab() {
     const overridden = r[cfg.ov];
     const actual = r[actualKey] || 0;
     const gap = r[gapKey];
+    const names = r[namesKey] || [];
     if (editKey === ekey(r, role)) {
       return (
         <div className="inline-flex items-center gap-1">
@@ -1632,11 +1633,16 @@ function ManpowerTab() {
     }
     const color = (required === 0 && actual === 0) ? 'text-gray-300' : gap > 0 ? 'text-red-600' : 'text-emerald-700';
     return (
-      <div className="inline-flex items-center gap-1" title={overridden ? `Target manually set · default would be ${auto}` : 'Default target: 1 per project'}>
-        <span className={`font-bold text-xs ${color}`}>{actual}</span>
-        <span className="text-gray-400 text-xs">/ {required}</span>
-        {editable && <button type="button" onClick={() => startEdit(r, role)} className="text-gray-300 hover:text-blue-600" title={`Edit ${cfg.label.toLowerCase()}`}><FiEdit2 size={11} /></button>}
-        {editable && overridden && <button type="button" onClick={() => saveEdit(r, '', role)} className="text-gray-300 hover:text-red-500 text-sm leading-none" title={`Reset to auto (${auto})`}>↺</button>}
+      <div className="inline-flex flex-col items-center gap-0.5">
+        <div className="inline-flex items-center gap-1" title={overridden ? `Target manually set · default would be ${auto}` : 'Default target: 1 per project'}>
+          <span className={`font-bold text-xs ${color}`}>{actual}</span>
+          <span className="text-gray-400 text-xs">/ {required}</span>
+          {editable && <button type="button" onClick={() => startEdit(r, role)} className="text-gray-300 hover:text-blue-600" title={`Edit ${cfg.label.toLowerCase()}`}><FiEdit2 size={11} /></button>}
+          {editable && overridden && <button type="button" onClick={() => saveEdit(r, '', role)} className="text-gray-300 hover:text-red-500 text-sm leading-none" title={`Reset to auto (${auto})`}>↺</button>}
+        </div>
+        {names.length > 0 && (
+          <div className="text-[10px] leading-tight text-gray-500 max-w-[104px] truncate" title={names.join(', ')}>{names.join(', ')}</div>
+        )}
       </div>
     );
   };
@@ -1770,9 +1776,9 @@ function ManpowerTab() {
                       )}
                     </td>
                     <td className="px-4 py-2.5 text-center"><span className="inline-flex items-center justify-center min-w-[28px] h-6 px-1.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-xs">{r.actual}</span></td>
-                    <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'site_eng', 'se_actual', 'se_gap')}</td>
-                    <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'jr_site_eng', 'jr_actual', 'jr_gap')}</td>
-                    <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'foreman', 'fm_actual', 'fm_gap')}</td>
+                    <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'site_eng', 'se_actual', 'se_gap', 'se_names')}</td>
+                    <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'jr_site_eng', 'jr_actual', 'jr_gap', 'jr_names')}</td>
+                    <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'foreman', 'fm_actual', 'fm_gap', 'fm_names')}</td>
                     <td className="px-4 py-2.5">
                       {r.is_handover ? (
                         <span className="text-gray-300 text-xs">—</span>
