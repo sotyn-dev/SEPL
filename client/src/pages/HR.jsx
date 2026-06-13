@@ -1646,6 +1646,13 @@ function ManpowerTab() {
       </div>
     );
   };
+  // Role totals across the filtered projects — required vs actual on site.
+  const sumOf = k => filtered.reduce((s, r) => s + (r[k] || 0), 0);
+  const roleCards = [
+    { label: 'Site Eng', actual: sumOf('se_actual'), required: sumOf('se_required'), ring: 'bg-indigo-100 text-indigo-600' },
+    { label: 'Jr. Site Eng', actual: sumOf('jr_actual'), required: sumOf('jr_required'), ring: 'bg-sky-100 text-sky-600' },
+    { label: 'Foreman', actual: sumOf('fm_actual'), required: sumOf('fm_required'), ring: 'bg-amber-100 text-amber-600' },
+  ];
   const cards = [
     { label: 'Projects', value: filtered.length, icon: FiBriefcase, ring: 'bg-slate-100 text-slate-600', text: 'text-slate-800' },
     { label: 'Required', value: totalReq, icon: FiUsers, ring: 'bg-blue-100 text-blue-600', text: 'text-blue-700' },
@@ -1675,6 +1682,26 @@ function ManpowerTab() {
                 <div className="text-[11px] uppercase tracking-wide text-gray-400 font-semibold truncate">{c.label}</div>
                 <div className={`text-2xl font-bold leading-tight ${c.text}`}>{c.value}</div>
                 {c.sub && <div className="text-[10px] text-gray-400">{c.sub}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Per-role required vs actual (on site) */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {roleCards.map((c, i) => {
+          const short = c.actual < c.required;
+          return (
+            <div key={i} className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${c.ring}`}><FiUsers size={18} /></div>
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wide text-gray-400 font-semibold truncate">{c.label}</div>
+                <div className="flex items-baseline gap-1.5 leading-tight">
+                  <span className={`text-2xl font-bold ${short ? 'text-red-600' : 'text-emerald-600'}`}>{c.actual}</span>
+                  <span className="text-sm text-gray-400">/ {c.required} needed</span>
+                </div>
+                <div className="text-[10px] text-gray-400">{short ? `${c.required - c.actual} short` : 'on target'}</div>
               </div>
             </div>
           );
