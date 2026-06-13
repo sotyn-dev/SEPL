@@ -101,6 +101,7 @@ export default function Payroll() {
   const [detail, setDetail] = useState(null);
   const [advanceEdits, setAdvanceEdits] = useState({}); // employee_id -> draft advance amount
   const [foodEdits, setFoodEdits] = useState({});       // employee_id -> draft food amount (added to net)
+  const [ovEdits, setOvEdits] = useState({});           // `${employee_id}:${field}` -> draft override (paid_days|cl|late_penalty)
   const [excludedNoSalary, setExcludedNoSalary] = useState([]); // active employees with no salary → not in payroll
   // CL Leave Balances tab
   const [leaveYear, setLeaveYear] = useState(new Date().getFullYear());
@@ -188,6 +189,41 @@ export default function Payroll() {
       setFoodEdits(s => { const n = { ...s }; delete n[employeeId]; return n; });
       loadMonth();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  // Save a manual override (paid_days | cl | late_penalty) for the open month;
+  // a blank value resets to the auto-calculated number. Net pay recomputes.
+  const saveOverride = async (employeeId, field, value) => {
+    const blank = value === '' || value === null || value === undefined;
+    if (!blank) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 0) { toast.error('Enter a valid number'); return; }
+    }
+    try {
+      await api.put(`/payroll/override/${employeeId}`, { month, field, value: blank ? '' : value });
+      setOvEdits(s => { const n = { ...s }; delete n[`${employeeId}:${field}`]; return n; });
+      loadMonth();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  // Compact editable input for a monthly override. savedVal = the value
+  // currently shown (auto or already-overridden); an amber ring flags an
+  // active override; clearing the box resets to auto.
+  const ovInput = (r, field, savedVal, overridden, opts = {}) => {
+    const k = `${r.employee_id}:${field}`;
+    const draft = ovEdits[k];
+    const display = draft !== undefined ? draft : (savedVal ?? '');
+    return (
+      <input type="number" min="0" step={opts.step || '0.5'}
+        className={`input text-right ${opts.w || 'w-16'} inline-block ${overridden ? 'ring-1 ring-amber-400 bg-amber-50' : ''}`}
+        value={display}
+        onChange={e => setOvEdits(s => ({ ...s, [k]: e.target.value }))}
+        onBlur={e => {
+          const v = e.target.value;
+          if (Number(v || 0) !== Number(savedVal || 0) || (v === '' && overridden)) saveOverride(r.employee_id, field, v);
+        }}
+        title={opts.title} />
+    );
   };
 
   const rolloverYear = async () => {
@@ -345,10 +381,18 @@ export default function Payroll() {
                     <td className="text-xs text-gray-500">{r.department || '-'}</td>
                     <td className="text-right">{fmt(r.base_salary)}</td>
                     <td className="text-right font-semibold">
-                      {r.paid_days}
+                      {isAdmin && !r.locked
+                        ? ovInput(r, 'paid_days', r.paid_days, r.paid_days_overridden, { w: 'w-16', step: '0.5', title: 'Paid days used for salary — type to override, clear to reset to auto' })
+                        : r.paid_days}
                       <div className="text-[9px] font-normal text-gray-400" title="attendance days + Sundays + paid CL">
                         att {r.present_days ?? 0} · sun {r.sunday_count ?? 0}{r.paid_leaves ? ` · CL ${r.paid_leaves}` : ''}
                       </div>
+                      {isAdmin && !r.locked && (
+                        <div className="text-[9px] font-normal text-gray-500 flex items-center justify-end gap-1 mt-0.5">
+                          <span>CL</span>
+                          {ovInput(r, 'cl', r.paid_leaves, r.cl_overridden, { w: 'w-12', step: '0.5', title: 'Casual / paid leave days for the month — type to override' })}
+                        </div>
+                      )}
                       {r.sunday_worked > 0 && (
                         <div className="text-[9px] font-normal text-emerald-600" title="Extra full-day pay for working on Sunday(s)">
                           +{r.sunday_worked_pay}d for {r.sunday_worked} Sun worked
@@ -358,7 +402,11 @@ export default function Payroll() {
                     <td className="text-center">{r.half_days || 0}</td>
                     <td className="text-center text-red-600">{r.absent_days || 0}</td>
                     <td className="text-center text-amber-600" title="Late count only — does not reduce pay. See Late ₹ for the deduction.">{r.late_marks || 0}{r.lates_converted_absent ? ` (-${r.lates_converted_absent})` : ''}</td>
-                    <td className="text-right text-amber-700">{r.late_penalty ? fmt(r.late_penalty) : '-'}</td>
+                    <td className="text-right text-amber-700">
+                      {isAdmin && !r.locked
+                        ? ovInput(r, 'late_penalty', r.late_penalty, r.late_penalty_overridden, { w: 'w-16', step: '10', title: 'Late deduction ₹ — type to override, clear to reset to auto' })
+                        : (r.late_penalty ? fmt(r.late_penalty) : '-')}
+                    </td>
                     <td className="text-center text-purple-600">{(r.paid_leaves || 0) + (r.unpaid_leaves || 0)}</td>
                     <td className="text-right text-blue-600" title={r.ot_per_hour_rate ? `Rs ${r.ot_per_hour_rate}/hr = ${fmt(r.base_salary)} ÷ ${r.total_days_in_month} days ÷ ${r.ot_threshold || 9}h` : 'No overtime'}>
                       {r.ot_hours || 0}h{r.ot_pay ? ` (+${fmt(r.ot_pay)})` : ''}
