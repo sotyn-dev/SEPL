@@ -40,11 +40,13 @@ function requiredEngineers(value) {
   return { se: big ? 1 : 0, jr: 1, fm: 1 };
 }
 
-// Classify a PO-linked person by their Employee designation into one bucket:
-//   'fm' (foreman) · 'jr' (junior / trainee / asst) · 'se' (senior Site Eng).
-// Foreman is checked first; anyone with no/odd designation defaults to Site Eng.
-function classifyDesignation(designation) {
-  const d = String(designation || '').toLowerCase();
+// Classify a PO-linked person by their assigned ROLE(S) — the same role badges
+// shown in User Management (e.g. "Jr. Site Eng", "Site Engineer", "Foreman") —
+// into one bucket: 'fm' · 'jr' · 'se'.  role_names is the comma-joined list of
+// the user's roles.  Foreman wins, then junior; anyone else (incl. a plain
+// "Site Engineer" or no matching role) counts as a senior Site Engineer.
+function classifyRole(roleNames) {
+  const d = String(roleNames || '').toLowerCase();
   if (d.includes('foreman')) return 'fm';
   if (/\b(jr|jnr|junior|trainee|gte|asst|assistant)\b/.test(d) || d.includes('junior')) return 'jr';
   return 'se';
@@ -96,10 +98,10 @@ router.get('/manpower-plan', (req, res) => {
     if (r.report_date && (!g.last_dpr_date || r.report_date > g.last_dpr_date)) g.last_dpr_date = r.report_date;
   }
 
-  // Actual Site Engineers / Jr. Site Engineers per project (mam 2026-06-13):
+  // Actual Site Eng / Jr. Site Eng / Foreman per project (mam 2026-06-13):
   // the site engineers attached to each project's POs, classified by their
-  // Employee designation.  Reuses the same forgiving user→employee match the
-  // DPR Staff Cost uses, so the link works even when it wasn't set by hand.
+  // assigned ROLE (same badge shown in User Management), counting only ACTIVE
+  // users.  So someone whose role is "Jr. Site Eng" lands in Jr, not Site Eng.
   try {
     const pos = db.prepare(
       `SELECT business_book_id, site_engineer_id, site_engineer_ids FROM purchase_orders`
@@ -116,53 +118,31 @@ router.get('/manpower-plan', (req, res) => {
     const allEngIds = [...new Set([...groups.values()].flatMap(g => [...g.engUserIds]))];
     if (allEngIds.length) {
       const ph = allEngIds.map(() => '?').join(',');
-      const engUsers = new Map(
-        db.prepare(`SELECT id, name, email FROM users WHERE id IN (${ph})`).all(...allEngIds)
-          .map(u => [u.id, u])
+      // Active users only, each with the comma-joined list of their role names.
+      const userMap = new Map(
+        db.prepare(
+          `SELECT u.id, u.name, GROUP_CONCAT(r.name) AS role_names
+             FROM users u
+             LEFT JOIN user_roles ur ON ur.user_id = u.id
+             LEFT JOIN roles r ON r.id = ur.role_id
+            WHERE u.id IN (${ph}) AND u.active = 1
+            GROUP BY u.id`
+        ).all(...allEngIds).map(u => [u.id, u])
       );
-      const allEmployees = db.prepare(
-        `SELECT user_id, name, email, designation FROM employees
-          WHERE (status IS NULL OR status = 'active')`
-      ).all();
-      const tokens = s => String(s || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
-      const firstWord = s => tokens(s)[0] || '';
-      const findEmp = (user) => {
-        let hit = allEmployees.find(e => e.user_id === user.id);
-        if (hit) return hit;
-        if (user.email) {
-          const ue = user.email.toLowerCase();
-          hit = allEmployees.find(e => (e.email || '').toLowerCase() === ue);
-          if (hit) return hit;
-        }
-        const un = (user.name || '').toLowerCase().trim();
-        if (un) {
-          hit = allEmployees.find(e => (e.name || '').toLowerCase().trim() === un);
-          if (hit) return hit;
-        }
-        const uf = firstWord(user.name);
-        if (!uf) return null;
-        const userSet = new Set(tokens(user.name));
-        return allEmployees
-          .filter(e => firstWord(e.name) === uf)
-          .map(e => ({ emp: e, overlap: tokens(e.name).filter(t => userSet.has(t)).length }))
-          .sort((a, b) => b.overlap - a.overlap)[0]?.emp || null;
-      };
       for (const g of groups.values()) {
         const seN = [], jrN = [], fmN = [];
         for (const uid of g.engUserIds) {
-          const u = engUsers.get(uid);
-          if (!u) continue;
-          const emp = findEmp(u);
-          if (!emp) continue;            // only count people with an ACTIVE employee record
-          const nm = (emp.name || u.name || '').trim();
-          const bucket = classifyDesignation(emp.designation);
+          const u = userMap.get(uid);
+          if (!u) continue;            // inactive or missing user → not counted
+          const nm = (u.name || '').trim();
+          const bucket = classifyRole(u.role_names);
           if (bucket === 'fm') fmN.push(nm); else if (bucket === 'jr') jrN.push(nm); else seN.push(nm);
         }
         g.seActual = seN.length; g.jrActual = jrN.length; g.fmActual = fmN.length;
         g.seNames = seN; g.jrNames = jrN; g.fmNames = fmN;
       }
     }
-  } catch (e) { /* purchase_orders may lack site_engineer columns on a stale DB */ }
+  } catch (e) { /* purchase_orders / roles tables may be absent on a stale DB */ }
 
   // Per-project settings — category + required override, keyed by project key.
   const settings = new Map();
