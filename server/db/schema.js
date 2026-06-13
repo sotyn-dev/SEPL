@@ -3467,6 +3467,10 @@ function initializeDatabase() {
     ['sales_bills', 'reference_id INTEGER'],
     ['sales_bills', "approval_status TEXT DEFAULT 'draft'"],
     ['sales_bills', 'created_by INTEGER REFERENCES users(id)'],
+    // Idempotency for the Type-3 installation auto-bill: each DPR is billed
+    // into exactly one Type-3 sales bill (mam 2026-06-13: installation bill
+    // every 15 days from DPRs).  NULL = not yet billed.
+    ['dpr', 'sales_bill_id INTEGER'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}

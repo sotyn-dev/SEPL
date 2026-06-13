@@ -91,6 +91,15 @@ export default function SalesBilling() {
     catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
   };
 
+  const genInstall = async () => {
+    if (!confirm('Generate installation (Type 3) bills from approved, billing-ready DPRs not yet billed? They are created as DRAFT for you to review.')) return;
+    try {
+      const r = await api.post('/sales-billing/generate-installation', {});
+      toast.success(r.data.message || 'Done');
+      load();
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  };
+
   const openPay = (b) => {
     setPayForm({ amount: '', payment_date: new Date().toISOString().split('T')[0], payment_mode: 'Bank', transaction_ref: '' });
     setPayModal(b);
@@ -117,6 +126,7 @@ export default function SalesBilling() {
             ['Bill No', 'Type', 'Customer', 'Project', 'Date', 'Amount', 'GST', 'Total', 'Status', 'Approval'],
             bills.map(b => [b.bill_number, TYPE_LABEL[b.bill_type], b.customer_name, b.project_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.bill_status, b.approval_status]))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
+          <button onClick={genInstall} className="btn btn-secondary flex items-center gap-2" title="Create Type-3 installation bills from approved DPRs (last fortnight)"><FiCheckCircle /> Generate Installation Bills</button>
           <button onClick={openNew} className="btn btn-primary flex items-center gap-2"><FiPlus /> New Sales Bill</button>
         </div>
       </div>

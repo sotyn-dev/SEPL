@@ -64,9 +64,10 @@ router.get('/orders/:bbId', requirePermission('installation', 'view'), (req, res
        FROM sales_bills WHERE business_book_id=? AND bill_type IS NOT NULL ORDER BY bill_type`
   ).all(bb.id);
   const haveTypes = new Set(bills.map(b => b.bill_type));
-  // Next type = smallest 1..4 not yet created (chain must be contiguous).
+  // In-module chain is 1 → 3 → 4. Type 2 (material delivery) is billed in
+  // Dispatch (mam kept the old flow), so it's not created here.
   let nextType = null;
-  for (let t = 1; t <= 4; t++) { if (!haveTypes.has(t)) { nextType = t; break; } }
+  for (const t of [1, 3, 4]) { if (!haveTypes.has(t)) { nextType = t; break; } }
   res.json({
     order: {
       id: bb.id, lead_no: bb.lead_no, po_number: bb.po_number,
@@ -117,21 +118,26 @@ router.post('/', requirePermission('installation', 'create'), (req, res) => {
     const business_book_id = +req.body.business_book_id;
     const bill_type = +req.body.bill_type;
     if (!business_book_id) return res.status(400).json({ error: 'Pick a Business Book order' });
-    if (![1, 2, 3, 4].includes(bill_type)) return res.status(400).json({ error: 'bill_type must be 1-4' });
+    if (bill_type === 2) return res.status(400).json({ error: 'Type 2 (material delivery) is billed in Dispatch, not here.' });
+    if (![1, 3, 4].includes(bill_type)) return res.status(400).json({ error: 'bill_type must be 1, 3 or 4' });
 
     const bb = db.prepare('SELECT * FROM business_book WHERE id=?').get(business_book_id);
     if (!bb) return res.status(404).json({ error: 'Order not found' });
 
-    // Chain validation — every earlier type must already exist; this type must not.
+    // Chain validation over the in-module sequence 1 → 3 → 4. Every earlier
+    // type must already exist; this type must not.
+    const SEQ = [1, 3, 4];
     const existing = db.prepare(
       'SELECT id, bill_type FROM sales_bills WHERE business_book_id=? AND bill_type IS NOT NULL'
     ).all(business_book_id);
     const byType = new Map(existing.map(b => [b.bill_type, b.id]));
     if (byType.has(bill_type)) return res.status(409).json({ error: `Type ${bill_type} bill already exists for this order` });
-    for (let t = 1; t < bill_type; t++) {
+    for (const t of SEQ) {
+      if (t >= bill_type) break;
       if (!byType.has(t)) return res.status(409).json({ error: `Create the Type ${t} bill first — bills are sequential` });
     }
-    const previous_bill_id = bill_type > 1 ? byType.get(bill_type - 1) : null;
+    const earlier = SEQ.filter(t => t < bill_type && byType.has(t));
+    const previous_bill_id = earlier.length ? byType.get(earlier[earlier.length - 1]) : null;
 
     const amount = round2(req.body.amount);
     const gst_rate = round2(req.body.gst_rate);
@@ -253,4 +259,82 @@ router.post('/:id/payment', requirePermission('installation', 'edit'), (req, res
   }
 });
 
+// Generate Type-3 Installation bills from DPRs (mam 2026-06-13: "installation
+// bill according to DPR every 15 days, auto"). Sums each project's DPR Table-A
+// value (grand_total_a = labour/installation billing value) for approved,
+// billing-ready, NOT-yet-billed DPRs, and raises one Type-3 bill per project.
+// Idempotent via dpr.sales_bill_id (a DPR is billed once). Returns a summary.
+// `draft=true` (default) creates the bills as DRAFT for review; the scheduled
+// fortnightly job calls this with draft=false to auto-approve.
+function generateInstallationBills(db, userId, { draft = true } = {}) {
+  const rows = db.prepare(
+    `SELECT d.id AS dpr_id, d.report_date, COALESCE(d.grand_total_a, 0) AS val,
+            s.business_book_id AS bb_id
+       FROM dpr d JOIN sites s ON s.id = d.site_id
+      WHERE d.approval_status = 'approved' AND d.billing_ready = 1
+        AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL`
+  ).all();
+  if (!rows.length) return { created: 0, bills: [] };
+
+  const groups = new Map();   // bb_id → { sum, dprIds, minDate, maxDate }
+  for (const r of rows) {
+    if (!groups.has(r.bb_id)) groups.set(r.bb_id, { sum: 0, dprIds: [], minDate: r.report_date, maxDate: r.report_date });
+    const g = groups.get(r.bb_id);
+    g.sum += +r.val || 0;
+    g.dprIds.push(r.dpr_id);
+    if (r.report_date < g.minDate) g.minDate = r.report_date;
+    if (r.report_date > g.maxDate) g.maxDate = r.report_date;
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  const out = [];
+  const tx = db.transaction(() => {
+    for (const [bbId, g] of groups) {
+      if (round2(g.sum) <= 0) continue;          // nothing billable this window
+      const bb = db.prepare('SELECT * FROM business_book WHERE id=?').get(bbId);
+      if (!bb) continue;
+      const prior = db.prepare(
+        `SELECT id FROM sales_bills WHERE business_book_id=? AND bill_type=1`
+      ).get(bbId);
+      const amount = round2(g.sum);
+      const gst_rate = 18;                        // installation service GST
+      const gst_amount = round2(amount * gst_rate / 100);
+      const total_amount = round2(amount + gst_amount);
+      const bill_number = nextBillNumber(db, today);
+      const r = db.prepare(
+        `INSERT INTO sales_bills
+           (bill_number, bill_date, amount, gst_amount, total_amount, gst_rate,
+            bill_type, business_book_id, customer_name, project_name, bill_status,
+            previous_bill_id, reference_doc_type, reference_doc_no, approval_status,
+            payment_status, created_by)
+         VALUES (?,?,?,?,?,?,3,?,?,?,?,?, 'DPR', ?, ?, 'pending', ?)`
+      ).run(bill_number, today, amount, gst_amount, total_amount, gst_rate,
+        bbId, (bb.client_name || bb.company_name || '').trim(), bb.project_name || null, BILL_STATUS[3],
+        prior ? prior.id : null, `DPRs ${g.minDate} → ${g.maxDate}`, draft ? 'draft' : 'approved', userId);
+      const billId = r.lastInsertRowid;
+      const upd = db.prepare('UPDATE dpr SET sales_bill_id=? WHERE id=?');
+      for (const dprId of g.dprIds) upd.run(billId, dprId);
+      db.prepare('INSERT INTO sales_bill_status_log (sales_bill_id, status, changed_by, notes) VALUES (?,?,?,?)')
+        .run(billId, draft ? 'draft' : 'approved', userId, `Auto installation bill from ${g.dprIds.length} DPR(s)`);
+      out.push({ bill_number, business_book_id: bbId, dprs: g.dprIds.length, amount, total_amount });
+    }
+  });
+  tx();
+  return { created: out.length, bills: out };
+}
+
+// Manual trigger — admin/accounts run it once to verify amounts before the
+// fortnightly job is switched on. Creates DRAFT bills.
+router.post('/generate-installation', requirePermission('installation', 'create'), (req, res) => {
+  try {
+    const db = getDb();
+    const result = generateInstallationBills(db, req.user.id, { draft: true });
+    res.json({ message: result.created ? `${result.created} installation bill(s) created (draft)` : 'No unbilled DPRs ready to bill', ...result });
+  } catch (err) {
+    console.error('sales-billing generate-installation error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
+module.exports.generateInstallationBills = generateInstallationBills;
