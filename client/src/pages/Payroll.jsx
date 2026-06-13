@@ -226,6 +226,17 @@ export default function Payroll() {
     );
   };
 
+  // Breakdown split for the Paid Days cell. A worked Sunday is folded into
+  // present_days (att); pull it back out so "att" = weekday attendance and
+  // "sun" shows ALL Sundays credited (weekly-off + worked). Pay is unchanged;
+  // the green "+Nd Sun worked" line still shows the extra bonus on top.
+  const dayBreakdown = (r) => {
+    const worked = +r.sunday_worked_pay || 0;
+    const att = Math.round(((+r.present_days || 0) - worked) * 100) / 100;
+    const sun = Math.round(((+r.sunday_count || 0) + worked) * 100) / 100;
+    return { att, sun };
+  };
+
   const rolloverYear = async () => {
     if (!confirm(`Roll ${leaveYear}'s leftover CL into each person's opening balance? Do this once ${leaveYear} is complete — it overwrites the current carry-forward.`)) return;
     try {
@@ -384,8 +395,8 @@ export default function Payroll() {
                       {isAdmin && !r.locked
                         ? ovInput(r, 'paid_days', r.paid_days, r.paid_days_overridden, { w: 'w-16', step: '0.5', title: 'Paid days used for salary — type to override, clear to reset to auto' })
                         : r.paid_days}
-                      <div className="text-[9px] font-normal text-gray-400" title="attendance days + Sundays + paid CL">
-                        att {r.present_days ?? 0} · sun {r.sunday_count ?? 0}{r.paid_leaves ? ` · CL ${r.paid_leaves}` : ''}
+                      <div className="text-[9px] font-normal text-gray-400" title="weekday attendance + Sundays (incl. worked) + paid CL">
+                        att {dayBreakdown(r).att} · sun {dayBreakdown(r).sun}{r.paid_leaves ? ` · CL ${r.paid_leaves}` : ''}
                       </div>
                       {isAdmin && !r.locked && (
                         <div className="text-[9px] font-normal text-gray-500 flex items-center justify-end gap-1 mt-0.5">
