@@ -1552,13 +1552,21 @@ function ManpowerTab() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const startEdit = r => { setEditKey(r.key); setEditVal(String(r.required ?? '')); };
+  // Each project row has three editable targets — manpower, Site Engineers and
+  // Jr. Site Engineers — so the edit key is composite: `${projectKey}|${role}`.
+  const ROLES = {
+    manpower:    { label: 'Required manpower',      val: 'required',    auto: 'required_auto',    ov: 'required_overridden' },
+    site_eng:    { label: 'Required Site Eng',      val: 'se_required', auto: 'se_required_auto', ov: 'se_required_overridden' },
+    jr_site_eng: { label: 'Required Jr. Site Eng',  val: 'jr_required', auto: 'jr_required_auto', ov: 'jr_required_overridden' },
+  };
+  const ekey = (r, role) => `${r.key}|${role}`;
+  const startEdit = (r, role) => { setEditKey(ekey(r, role)); setEditVal(String(r[ROLES[role].val] ?? '')); };
   const cancelEdit = () => { setEditKey(null); setEditVal(''); };
-  const saveEdit = async (r, value) => {
+  const saveEdit = async (r, value, role = 'manpower') => {
     setSaving(true);
     try {
-      await api.put('/hr/manpower-plan/required', { key: r.key, required: value });
-      toast.success(value === '' || +value <= 0 ? 'Reset to auto value' : 'Required manpower updated');
+      await api.put('/hr/manpower-plan/required', { key: r.key, required: value, role });
+      toast.success(value === '' || +value <= 0 ? 'Reset to auto value' : `${ROLES[role].label} updated`);
       cancelEdit();
       load();
     } catch (e) {
@@ -1599,6 +1607,38 @@ function ManpowerTab() {
     if (isNaN(d.getTime())) return s;
     return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' });
   };
+  // Compact "actual / target" cell for Site Eng & Jr. Site Eng — actual comes
+  // from the project's PO site engineers (classified by Employee designation);
+  // the target auto-fills from the value slab and the ✏️ overrides it.
+  const renderEngCell = (r, role, actualKey, gapKey) => {
+    if (r.is_handover) return <span className="text-gray-300 text-xs">—</span>;
+    const cfg = ROLES[role];
+    const required = r[cfg.val] || 0;
+    const auto = r[cfg.auto] || 0;
+    const overridden = r[cfg.ov];
+    const actual = r[actualKey] || 0;
+    const gap = r[gapKey];
+    if (editKey === ekey(r, role)) {
+      return (
+        <div className="inline-flex items-center gap-1">
+          <input type="number" min="0" autoFocus className="input text-xs text-center" style={{ width: '48px' }}
+            value={editVal} onChange={e => setEditVal(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') saveEdit(r, editVal, role); if (e.key === 'Escape') cancelEdit(); }} />
+          <button type="button" disabled={saving} onClick={() => saveEdit(r, editVal, role)} className="text-emerald-600 hover:text-emerald-800" title="Save"><FiCheckCircle size={15} /></button>
+          <button type="button" onClick={cancelEdit} className="text-gray-400 hover:text-gray-600 text-sm font-bold" title="Cancel">✕</button>
+        </div>
+      );
+    }
+    const color = (required === 0 && actual === 0) ? 'text-gray-300' : gap > 0 ? 'text-red-600' : 'text-emerald-700';
+    return (
+      <div className="inline-flex items-center gap-1" title={overridden ? `Target manually set · auto would be ${auto}` : 'Target auto from project value'}>
+        <span className={`font-bold text-xs ${color}`}>{actual}</span>
+        <span className="text-gray-400 text-xs">/ {required}</span>
+        {editable && <button type="button" onClick={() => startEdit(r, role)} className="text-gray-300 hover:text-blue-600" title={`Edit ${cfg.label.toLowerCase()}`}><FiEdit2 size={11} /></button>}
+        {editable && overridden && <button type="button" onClick={() => saveEdit(r, '', role)} className="text-gray-300 hover:text-red-500 text-sm leading-none" title={`Reset to auto (${auto})`}>↺</button>}
+      </div>
+    );
+  };
   const cards = [
     { label: 'Projects', value: filtered.length, icon: FiBriefcase, ring: 'bg-slate-100 text-slate-600', text: 'text-slate-800' },
     { label: 'Required', value: totalReq, icon: FiUsers, ring: 'bg-blue-100 text-blue-600', text: 'text-blue-700' },
@@ -1613,7 +1653,8 @@ function ManpowerTab() {
         <b>Required</b> manpower comes from each project's total value
         (0–5 L → 4 · 5–25 L → 6 · 25–50 L → 8 · 50 L–1 Cr → 10 · 1–5 Cr → 15 · 5–10 Cr → 25 · 10 Cr+ → 40).
         <b> Actual</b> is the average manpower across the project's DPRs. A red <b>gap</b> means more people are needed.
-        {editable && <span className="text-blue-700"> · Click the ✏️ on <b>Required</b> to override it, and set a <b>Category</b> per project — <b>Handover</b> needs no team / no planning.</span>}
+        <b> Site Eng / Jr. Site Eng</b> show <i>on site (from the project's PO engineers, split by designation) / target</i> — red means short.
+        {editable && <span className="text-blue-700"> · Click the ✏️ on any <b>Required</b> / target to override it, and set a <b>Category</b> per project — <b>Handover</b> needs no team / no planning.</span>}
       </div>
 
       {/* Summary stat cards */}
@@ -1664,6 +1705,8 @@ function ManpowerTab() {
                 <th className="px-4 py-3 text-right font-semibold">Project Value</th>
                 <th className="px-4 py-3 text-center font-semibold">Required</th>
                 <th className="px-4 py-3 text-center font-semibold">Actual</th>
+                <th className="px-4 py-3 text-center font-semibold" title="On site (from PO) / target">Site Eng</th>
+                <th className="px-4 py-3 text-center font-semibold" title="On site (from PO) / target">Jr. Site Eng</th>
                 <th className="px-4 py-3 text-left font-semibold w-44">Coverage</th>
                 <th className="px-4 py-3 text-center font-semibold">Gap</th>
                 <th className="px-4 py-3 text-left font-semibold">Last DPR</th>
@@ -1671,9 +1714,9 @@ function ManpowerTab() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="8" className="text-center py-10 text-gray-400">Loading…</td></tr>
+                <tr><td colSpan="10" className="text-center py-10 text-gray-400">Loading…</td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan="8" className="text-center py-10 text-gray-400">No projects found</td></tr>
+                <tr><td colSpan="10" className="text-center py-10 text-gray-400">No projects found</td></tr>
               ) : filtered.map((r, i) => {
                 const pct = coverage(r);
                 const accent = r.gap > 0 ? 'border-l-red-400' : r.gap === 0 ? 'border-l-emerald-400' : 'border-l-blue-400';
@@ -1700,7 +1743,7 @@ function ManpowerTab() {
                     <td className="px-4 py-2.5 text-center">
                       {r.is_handover ? (
                         <span className="text-gray-400 text-xs" title="Handover — no team required, no planning">—</span>
-                      ) : editKey === r.key ? (
+                      ) : editKey === ekey(r, 'manpower') ? (
                         <div className="inline-flex items-center gap-1">
                           <input type="number" min="0" autoFocus className="input text-xs text-center" style={{ width: '56px' }}
                             value={editVal} onChange={e => setEditVal(e.target.value)}
@@ -1716,7 +1759,7 @@ function ManpowerTab() {
                             {r.required}
                           </span>
                           {editable && (
-                            <button type="button" onClick={() => startEdit(r)} className="text-gray-300 hover:text-blue-600" title="Edit required manpower"><FiEdit2 size={12} /></button>
+                            <button type="button" onClick={() => startEdit(r, 'manpower')} className="text-gray-300 hover:text-blue-600" title="Edit required manpower"><FiEdit2 size={12} /></button>
                           )}
                           {editable && r.required_overridden && (
                             <button type="button" onClick={() => saveEdit(r, '')} className="text-gray-300 hover:text-red-500 text-sm leading-none" title={`Reset to auto (${r.required_auto})`}>↺</button>
@@ -1725,6 +1768,8 @@ function ManpowerTab() {
                       )}
                     </td>
                     <td className="px-4 py-2.5 text-center"><span className="inline-flex items-center justify-center min-w-[28px] h-6 px-1.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-xs">{r.actual}</span></td>
+                    <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'site_eng', 'se_actual', 'se_gap')}</td>
+                    <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'jr_site_eng', 'jr_actual', 'jr_gap')}</td>
                     <td className="px-4 py-2.5">
                       {r.is_handover ? (
                         <span className="text-gray-300 text-xs">—</span>

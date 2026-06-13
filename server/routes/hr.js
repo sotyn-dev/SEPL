@@ -30,6 +30,29 @@ function requiredManpower(value) {
   return 40;
 }
 
+// Project value → required Site Engineers / Jr. Site Engineers (mam 2026-06-13).
+// A bigger project needs more supervision; these are starting numbers mam can
+// override per project with the ✏️, exactly like required manpower.
+function requiredEngineers(value) {
+  const v = +value || 0;
+  if (v <= 5 * LAKH)  return { se: 1, jr: 0 };
+  if (v <= 25 * LAKH) return { se: 1, jr: 1 };
+  if (v <= 50 * LAKH) return { se: 1, jr: 1 };
+  if (v <= 1 * CRORE) return { se: 2, jr: 1 };
+  if (v <= 5 * CRORE) return { se: 2, jr: 2 };
+  if (v <= 10 * CRORE) return { se: 3, jr: 2 };
+  return { se: 4, jr: 3 };
+}
+
+// A site-engineer user counts as a JUNIOR when their Employee designation
+// reads junior / jr / trainee / GTE / assistant; otherwise they're a (senior)
+// Site Engineer.  Anyone listed as a site engineer on a PO but with no/odd
+// designation defaults to Site Engineer.
+function isJuniorDesignation(designation) {
+  const d = String(designation || '').toLowerCase();
+  return /\b(jr|jnr|junior|trainee|gte|asst|assistant)\b/.test(d) || d.includes('junior');
+}
+
 router.get('/manpower-plan', (req, res) => {
   const db = getDb();
   const bbs = db.prepare(
@@ -58,7 +81,7 @@ router.get('/manpower-plan', (req, res) => {
     groupByBB.set(bb.id, key);
     const display = norm(bb.project_name) || norm(bb.company_name) || norm(bb.client_name)
       || (bb.lead_no ? `Lead ${bb.lead_no}` : `BB#${bb.id}`);
-    if (!groups.has(key)) groups.set(key, { key, project: display, value: 0, mpSum: 0, mpCount: 0, last_dpr_date: null });
+    if (!groups.has(key)) groups.set(key, { key, project: display, value: 0, mpSum: 0, mpCount: 0, last_dpr_date: null, engUserIds: new Set() });
     groups.get(key).value += +bb.po_amount || 0;
   }
   const siteToBB = new Map();
@@ -75,10 +98,75 @@ router.get('/manpower-plan', (req, res) => {
     if (mp > 0) { g.mpSum += mp; g.mpCount += 1; }
     if (r.report_date && (!g.last_dpr_date || r.report_date > g.last_dpr_date)) g.last_dpr_date = r.report_date;
   }
+
+  // Actual Site Engineers / Jr. Site Engineers per project (mam 2026-06-13):
+  // the site engineers attached to each project's POs, classified by their
+  // Employee designation.  Reuses the same forgiving user→employee match the
+  // DPR Staff Cost uses, so the link works even when it wasn't set by hand.
+  try {
+    const pos = db.prepare(
+      `SELECT business_book_id, site_engineer_id, site_engineer_ids FROM purchase_orders`
+    ).all();
+    for (const po of pos) {
+      const g = groups.get(groupByBB.get(po.business_book_id));
+      if (!g) continue;
+      if (po.site_engineer_id) g.engUserIds.add(po.site_engineer_id);
+      if (po.site_engineer_ids) {
+        String(po.site_engineer_ids).split(',').map(s => parseInt(s, 10))
+          .filter(Boolean).forEach(i => g.engUserIds.add(i));
+      }
+    }
+    const allEngIds = [...new Set([...groups.values()].flatMap(g => [...g.engUserIds]))];
+    if (allEngIds.length) {
+      const ph = allEngIds.map(() => '?').join(',');
+      const engUsers = new Map(
+        db.prepare(`SELECT id, name, email FROM users WHERE id IN (${ph})`).all(...allEngIds)
+          .map(u => [u.id, u])
+      );
+      const allEmployees = db.prepare(
+        `SELECT user_id, name, email, designation FROM employees
+          WHERE (status IS NULL OR status = 'active')`
+      ).all();
+      const tokens = s => String(s || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+      const firstWord = s => tokens(s)[0] || '';
+      const findEmp = (user) => {
+        let hit = allEmployees.find(e => e.user_id === user.id);
+        if (hit) return hit;
+        if (user.email) {
+          const ue = user.email.toLowerCase();
+          hit = allEmployees.find(e => (e.email || '').toLowerCase() === ue);
+          if (hit) return hit;
+        }
+        const un = (user.name || '').toLowerCase().trim();
+        if (un) {
+          hit = allEmployees.find(e => (e.name || '').toLowerCase().trim() === un);
+          if (hit) return hit;
+        }
+        const uf = firstWord(user.name);
+        if (!uf) return null;
+        const userSet = new Set(tokens(user.name));
+        return allEmployees
+          .filter(e => firstWord(e.name) === uf)
+          .map(e => ({ emp: e, overlap: tokens(e.name).filter(t => userSet.has(t)).length }))
+          .sort((a, b) => b.overlap - a.overlap)[0]?.emp || null;
+      };
+      for (const g of groups.values()) {
+        let se = 0, jr = 0;
+        for (const uid of g.engUserIds) {
+          const u = engUsers.get(uid);
+          if (!u) continue;
+          const emp = findEmp(u);
+          if (isJuniorDesignation(emp?.designation)) jr++; else se++;
+        }
+        g.seActual = se; g.jrActual = jr;
+      }
+    }
+  } catch (e) { /* purchase_orders may lack site_engineer columns on a stale DB */ }
+
   // Per-project settings — category + required override, keyed by project key.
   const settings = new Map();
   try {
-    for (const s of db.prepare(`SELECT project_key, required_override, category FROM manpower_project_settings`).all()) {
+    for (const s of db.prepare(`SELECT project_key, required_override, category, site_eng_override, jr_site_eng_override FROM manpower_project_settings`).all()) {
       settings.set(s.project_key, s);
     }
   } catch (e) { /* table may not exist on a very stale DB */ }
@@ -92,6 +180,16 @@ router.get('/manpower-plan', (req, res) => {
     const overridden = !isHandover && ov != null && ov >= 0;
     const required = isHandover ? 0 : (overridden ? ov : requiredAuto);
     const actual = g.mpCount > 0 ? Math.round(g.mpSum / g.mpCount) : 0;
+    // Site Engineers / Jr. Site Engineers — auto from value slab, with optional
+    // per-project override.  Handover projects need no engineers either.
+    const engAuto = requiredEngineers(g.value);
+    const seOv = s.site_eng_override, jrOv = s.jr_site_eng_override;
+    const seOverridden = !isHandover && seOv != null && seOv >= 0;
+    const jrOverridden = !isHandover && jrOv != null && jrOv >= 0;
+    const seRequired = isHandover ? 0 : (seOverridden ? seOv : engAuto.se);
+    const jrRequired = isHandover ? 0 : (jrOverridden ? jrOv : engAuto.jr);
+    const seActual = g.seActual || 0;
+    const jrActual = g.jrActual || 0;
     return {
       key: g.key,
       project: g.project,
@@ -103,6 +201,18 @@ router.get('/manpower-plan', (req, res) => {
       required_overridden: overridden,
       actual,
       gap: required - actual,            // > 0 = short (hire), < 0 = surplus
+      // Site Engineers
+      se_required: seRequired,
+      se_required_auto: engAuto.se,
+      se_required_overridden: seOverridden,
+      se_actual: seActual,
+      se_gap: seRequired - seActual,
+      // Jr. Site Engineers
+      jr_required: jrRequired,
+      jr_required_auto: engAuto.jr,
+      jr_required_overridden: jrOverridden,
+      jr_actual: jrActual,
+      jr_gap: jrRequired - jrActual,
       last_dpr_date: g.last_dpr_date,
     };
   }).sort((a, b) => b.gap - a.gap || b.value - a.value);
@@ -117,20 +227,24 @@ router.put('/manpower-plan/required', requirePermission('hr', 'edit'), (req, res
   const db = getDb();
   const key = String(req.body?.key || '').trim();
   if (!key) return res.status(400).json({ error: 'project key is required' });
+  // role selects which target is being edited: manpower (default), Site
+  // Engineers, or Jr. Site Engineers — all stored on the same settings row.
+  const COLS = { manpower: 'required_override', site_eng: 'site_eng_override', jr_site_eng: 'jr_site_eng_override' };
+  const col = COLS[req.body?.role] || COLS.manpower;
   const raw = req.body?.required;
   const reset = raw === '' || raw === null || raw === undefined || +raw <= 0;
   try {
     if (reset) {
-      // Clear the override but keep any category on the row.
-      db.prepare(`UPDATE manpower_project_settings SET required_override=NULL, updated_at=CURRENT_TIMESTAMP WHERE project_key=?`).run(key);
+      // Clear this override but keep the rest of the row.
+      db.prepare(`UPDATE manpower_project_settings SET ${col}=NULL, updated_at=CURRENT_TIMESTAMP WHERE project_key=?`).run(key);
       return res.json({ ok: true, reset: true });
     }
     const required = Math.round(+raw);
     if (!Number.isFinite(required) || required > 100000) return res.status(400).json({ error: 'required must be a positive number' });
     db.prepare(
-      `INSERT INTO manpower_project_settings (project_key, required_override, updated_by, updated_at)
+      `INSERT INTO manpower_project_settings (project_key, ${col}, updated_by, updated_at)
        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(project_key) DO UPDATE SET required_override=excluded.required_override, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`
+       ON CONFLICT(project_key) DO UPDATE SET ${col}=excluded.${col}, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`
     ).run(key, required, req.user.id);
     res.json({ ok: true, required });
   } catch (e) {

@@ -4027,6 +4027,11 @@ function initializeDatabase() {
     } catch (_) { /* old table may not exist */ }
     // Mam (2026-06-12): "Old" category renamed to "Hold".
     try { db.exec(`UPDATE manpower_project_settings SET category='Hold' WHERE category='Old'`); } catch (_) {}
+    // Mam (2026-06-13): also plan Site Engineers / Jr. Site Engineers per
+    // project — required comes from a value slab, but allow an admin override
+    // of each, same as required manpower.
+    try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN site_eng_override INTEGER`); } catch (_) {}
+    try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN jr_site_eng_override INTEGER`); } catch (_) {}
   } catch (e) { console.error('[schema] manpower_project_settings create failed:', e.message); }
 
   // Retention: GPS pings accumulate every 30s per user and were never purged
