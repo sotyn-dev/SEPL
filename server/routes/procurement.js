@@ -1789,6 +1789,17 @@ router.put('/indents/:id', (req, res) => {
                    required_date, source, parent_item_id, stock_issue_note_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'store', ?, ?)`
             );
+            // The store child copies FK columns from the parent. If the parent
+            // carries a STALE reference (e.g. po_item_id whose po_items row was
+            // deleted when the Business Book order was re-saved), copying it into
+            // a fresh INSERT fails the FK check and rolls back the whole approval
+            // ("FOREIGN KEY constraint failed").  Null any dangling FK first.
+            const fkCheck = {
+              vendors: db.prepare('SELECT 1 FROM vendors WHERE id=?'),
+              po_items: db.prepare('SELECT 1 FROM po_items WHERE id=?'),
+              item_master: db.prepare('SELECT 1 FROM item_master WHERE id=?'),
+            };
+            const safeFk = (val, table) => (val != null && fkCheck[table].get(val)) ? val : null;
             let lastWarehouseId = null;
             for (const plan of storePlans) {
               const bal = balRows.all(plan.masterId);
@@ -1831,9 +1842,9 @@ router.put('/indents/:id', (req, res) => {
                 insertChild.run(
                   parent.indent_id, parent.description, plan.fromStore,
                   parent.unit, parent.rate, plan.fromStore * (+parent.rate || 0),
-                  parent.vendor_id, parent.item_master_id, parent.make,
+                  safeFk(parent.vendor_id, 'vendors'), safeFk(parent.item_master_id, 'item_master'), parent.make,
                   parent.is_foc, parent.is_tool, parent.item_type,
-                  parent.po_item_id, parent.required_date,
+                  safeFk(parent.po_item_id, 'po_items'), parent.required_date,
                   parent.id, issueNoteId,
                 );
               }
