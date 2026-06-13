@@ -1558,6 +1558,7 @@ function ManpowerTab() {
     manpower:    { label: 'Required manpower',      val: 'required',    auto: 'required_auto',    ov: 'required_overridden' },
     site_eng:    { label: 'Required Site Eng',      val: 'se_required', auto: 'se_required_auto', ov: 'se_required_overridden' },
     jr_site_eng: { label: 'Required Jr. Site Eng',  val: 'jr_required', auto: 'jr_required_auto', ov: 'jr_required_overridden' },
+    foreman:     { label: 'Required Foreman',       val: 'fm_required', auto: 'fm_required_auto', ov: 'fm_required_overridden' },
   };
   const ekey = (r, role) => `${r.key}|${role}`;
   const startEdit = (r, role) => { setEditKey(ekey(r, role)); setEditVal(String(r[ROLES[role].val] ?? '')); };
@@ -1653,7 +1654,7 @@ function ManpowerTab() {
         <b>Required</b> manpower comes from each project's total value
         (0–5 L → 4 · 5–25 L → 6 · 25–50 L → 8 · 50 L–1 Cr → 10 · 1–5 Cr → 15 · 5–10 Cr → 25 · 10 Cr+ → 40).
         <b> Actual</b> is the average manpower across the project's DPRs. A red <b>gap</b> means more people are needed.
-        <b> Site Eng / Jr. Site Eng</b> show <i>on site (from the project's PO engineers, split by designation) / target</i> — red means short.
+        <b> Site Eng / Jr. Site Eng / Foreman</b> show <i>on site (from the project's PO engineers, by designation) / target</i> — red means short. Every project needs 1 Jr. Site Eng + 1 Foreman; a Site Eng is added once the project is ₹1.5 Cr+.
         {editable && <span className="text-blue-700"> · Click the ✏️ on any <b>Required</b> / target to override it, and set a <b>Category</b> per project — <b>Handover</b> needs no team / no planning.</span>}
       </div>
 
@@ -1707,6 +1708,7 @@ function ManpowerTab() {
                 <th className="px-4 py-3 text-center font-semibold">Actual</th>
                 <th className="px-4 py-3 text-center font-semibold" title="On site (from PO) / target">Site Eng</th>
                 <th className="px-4 py-3 text-center font-semibold" title="On site (from PO) / target">Jr. Site Eng</th>
+                <th className="px-4 py-3 text-center font-semibold" title="On site (from PO) / target">Foreman</th>
                 <th className="px-4 py-3 text-left font-semibold w-44">Coverage</th>
                 <th className="px-4 py-3 text-center font-semibold">Gap</th>
                 <th className="px-4 py-3 text-left font-semibold">Last DPR</th>
@@ -1714,9 +1716,9 @@ function ManpowerTab() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="10" className="text-center py-10 text-gray-400">Loading…</td></tr>
+                <tr><td colSpan="11" className="text-center py-10 text-gray-400">Loading…</td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan="10" className="text-center py-10 text-gray-400">No projects found</td></tr>
+                <tr><td colSpan="11" className="text-center py-10 text-gray-400">No projects found</td></tr>
               ) : filtered.map((r, i) => {
                 const pct = coverage(r);
                 const accent = r.gap > 0 ? 'border-l-red-400' : r.gap === 0 ? 'border-l-emerald-400' : 'border-l-blue-400';
@@ -1770,6 +1772,7 @@ function ManpowerTab() {
                     <td className="px-4 py-2.5 text-center"><span className="inline-flex items-center justify-center min-w-[28px] h-6 px-1.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-xs">{r.actual}</span></td>
                     <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'site_eng', 'se_actual', 'se_gap')}</td>
                     <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'jr_site_eng', 'jr_actual', 'jr_gap')}</td>
+                    <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'foreman', 'fm_actual', 'fm_gap')}</td>
                     <td className="px-4 py-2.5">
                       {r.is_handover ? (
                         <span className="text-gray-300 text-xs">—</span>

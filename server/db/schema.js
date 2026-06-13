@@ -4032,6 +4032,7 @@ function initializeDatabase() {
     // of each, same as required manpower.
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN jr_site_eng_override INTEGER`); } catch (_) {}
+    try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN foreman_override INTEGER`); } catch (_) {}
   } catch (e) { console.error('[schema] manpower_project_settings create failed:', e.message); }
 
   // Retention: GPS pings accumulate every 30s per user and were never purged

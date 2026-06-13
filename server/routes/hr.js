@@ -30,20 +30,24 @@ function requiredManpower(value) {
   return 40;
 }
 
-// Required Site Engineers / Jr. Site Engineers per project (mam 2026-06-13):
-// "at every site one site engineer, jr. site eng" — a flat 1 + 1 per project,
-// editable per project with the ✏️ if a project needs more.
+// Required Site Eng / Jr. Site Eng / Foreman per project (mam 2026-06-13):
+// every project needs 1 Jr. Site Eng + 1 Foreman; a senior Site Engineer is
+// only needed once the project crosses ₹1.5 Cr.  Each is editable per project
+// with the ✏️ if a project needs more.
+const ENG_THRESHOLD = 1.5 * CRORE;
 function requiredEngineers(value) {
-  return { se: 1, jr: 1 };
+  const big = (+value || 0) >= ENG_THRESHOLD;
+  return { se: big ? 1 : 0, jr: 1, fm: 1 };
 }
 
-// A site-engineer user counts as a JUNIOR when their Employee designation
-// reads junior / jr / trainee / GTE / assistant; otherwise they're a (senior)
-// Site Engineer.  Anyone listed as a site engineer on a PO but with no/odd
-// designation defaults to Site Engineer.
-function isJuniorDesignation(designation) {
+// Classify a PO-linked person by their Employee designation into one bucket:
+//   'fm' (foreman) · 'jr' (junior / trainee / asst) · 'se' (senior Site Eng).
+// Foreman is checked first; anyone with no/odd designation defaults to Site Eng.
+function classifyDesignation(designation) {
   const d = String(designation || '').toLowerCase();
-  return /\b(jr|jnr|junior|trainee|gte|asst|assistant)\b/.test(d) || d.includes('junior');
+  if (d.includes('foreman')) return 'fm';
+  if (/\b(jr|jnr|junior|trainee|gte|asst|assistant)\b/.test(d) || d.includes('junior')) return 'jr';
+  return 'se';
 }
 
 router.get('/manpower-plan', (req, res) => {
@@ -144,14 +148,15 @@ router.get('/manpower-plan', (req, res) => {
           .sort((a, b) => b.overlap - a.overlap)[0]?.emp || null;
       };
       for (const g of groups.values()) {
-        let se = 0, jr = 0;
+        let se = 0, jr = 0, fm = 0;
         for (const uid of g.engUserIds) {
           const u = engUsers.get(uid);
           if (!u) continue;
           const emp = findEmp(u);
-          if (isJuniorDesignation(emp?.designation)) jr++; else se++;
+          const bucket = classifyDesignation(emp?.designation);
+          if (bucket === 'fm') fm++; else if (bucket === 'jr') jr++; else se++;
         }
-        g.seActual = se; g.jrActual = jr;
+        g.seActual = se; g.jrActual = jr; g.fmActual = fm;
       }
     }
   } catch (e) { /* purchase_orders may lack site_engineer columns on a stale DB */ }
@@ -159,7 +164,7 @@ router.get('/manpower-plan', (req, res) => {
   // Per-project settings — category + required override, keyed by project key.
   const settings = new Map();
   try {
-    for (const s of db.prepare(`SELECT project_key, required_override, category, site_eng_override, jr_site_eng_override FROM manpower_project_settings`).all()) {
+    for (const s of db.prepare(`SELECT project_key, required_override, category, site_eng_override, jr_site_eng_override, foreman_override FROM manpower_project_settings`).all()) {
       settings.set(s.project_key, s);
     }
   } catch (e) { /* table may not exist on a very stale DB */ }
@@ -173,16 +178,19 @@ router.get('/manpower-plan', (req, res) => {
     const overridden = !isHandover && ov != null && ov >= 0;
     const required = isHandover ? 0 : (overridden ? ov : requiredAuto);
     const actual = g.mpCount > 0 ? Math.round(g.mpSum / g.mpCount) : 0;
-    // Site Engineers / Jr. Site Engineers — auto from value slab, with optional
-    // per-project override.  Handover projects need no engineers either.
+    // Site Eng / Jr. Site Eng / Foreman — required from the value rule, with
+    // optional per-project override.  Handover projects need none.
     const engAuto = requiredEngineers(g.value);
-    const seOv = s.site_eng_override, jrOv = s.jr_site_eng_override;
+    const seOv = s.site_eng_override, jrOv = s.jr_site_eng_override, fmOv = s.foreman_override;
     const seOverridden = !isHandover && seOv != null && seOv >= 0;
     const jrOverridden = !isHandover && jrOv != null && jrOv >= 0;
+    const fmOverridden = !isHandover && fmOv != null && fmOv >= 0;
     const seRequired = isHandover ? 0 : (seOverridden ? seOv : engAuto.se);
     const jrRequired = isHandover ? 0 : (jrOverridden ? jrOv : engAuto.jr);
+    const fmRequired = isHandover ? 0 : (fmOverridden ? fmOv : engAuto.fm);
     const seActual = g.seActual || 0;
     const jrActual = g.jrActual || 0;
+    const fmActual = g.fmActual || 0;
     return {
       key: g.key,
       project: g.project,
@@ -206,6 +214,12 @@ router.get('/manpower-plan', (req, res) => {
       jr_required_overridden: jrOverridden,
       jr_actual: jrActual,
       jr_gap: jrRequired - jrActual,
+      // Foreman
+      fm_required: fmRequired,
+      fm_required_auto: engAuto.fm,
+      fm_required_overridden: fmOverridden,
+      fm_actual: fmActual,
+      fm_gap: fmRequired - fmActual,
       last_dpr_date: g.last_dpr_date,
     };
   }).sort((a, b) => b.gap - a.gap || b.value - a.value);
@@ -222,7 +236,7 @@ router.put('/manpower-plan/required', requirePermission('hr', 'edit'), (req, res
   if (!key) return res.status(400).json({ error: 'project key is required' });
   // role selects which target is being edited: manpower (default), Site
   // Engineers, or Jr. Site Engineers — all stored on the same settings row.
-  const COLS = { manpower: 'required_override', site_eng: 'site_eng_override', jr_site_eng: 'jr_site_eng_override' };
+  const COLS = { manpower: 'required_override', site_eng: 'site_eng_override', jr_site_eng: 'jr_site_eng_override', foreman: 'foreman_override' };
   const col = COLS[req.body?.role] || COLS.manpower;
   const raw = req.body?.required;
   const reset = raw === '' || raw === null || raw === undefined || +raw <= 0;
