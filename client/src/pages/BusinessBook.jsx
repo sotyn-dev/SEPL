@@ -299,7 +299,7 @@ export default function BusinessBook() {
             <DSection title="Committed Dates" items={[['Start', viewEntry.committed_start_date], ['Delivery', viewEntry.committed_delivery_date], ['Completion', viewEntry.committed_completion_date]]} />
             <DSection title="People" items={[['Employee', viewEntry.employee_assigned], ['Lead By', viewEntry.lead_by], ['Management Person', viewEntry.management_person_name], ['Mgmt Contact', viewEntry.management_person_contact], ['Operations Person', viewEntry.operations_person_name], ['Ops Contact', viewEntry.operations_person_contact], ['PMC Person', viewEntry.pmc_person_name], ['PMC Contact', viewEntry.pmc_person_contact], ['Architect', viewEntry.architect_person_name], ['Architect Contact', viewEntry.architect_person_contact], ['Accounts Person', viewEntry.accounts_person_name], ['Accounts Contact', viewEntry.accounts_person_contact]]} />
             <DSection title="TPA Details" items={[['TPA Items Count', viewEntry.tpa_items_count], ['TPA Qty', viewEntry.tpa_items_qty], ['TPA Material', fmt(viewEntry.tpa_material_amount)], ['TPA Labour', fmt(viewEntry.tpa_labour_amount)], ['Accessory Amt', fmt(viewEntry.accessory_amount)], ['Labour/Day', viewEntry.required_labour_per_day], ['Actual Margin %', viewEntry.actual_margin_pct]]} />
-            <DSection title="Payment Terms" items={[['Advance', viewEntry.payment_advance], ['Against Delivery', viewEntry.payment_against_delivery], ['Against Installation', viewEntry.payment_against_installation], ['Against Commissioning', viewEntry.payment_against_commissioning], ['Retention', viewEntry.payment_retention], ['Credit', viewEntry.payment_credit], ['Credit Days', viewEntry.credit_days]]} />
+            <DSection title="Payment Terms" items={[['Advance', viewEntry.payment_advance], ['Against Delivery', viewEntry.payment_against_delivery], ['Against Installation', viewEntry.payment_against_installation], ['Against Commissioning', viewEntry.payment_against_commissioning], ['Retention', viewEntry.payment_retention], ['Handover', viewEntry.payment_credit], ['Credit Days', viewEntry.credit_days]]} />
             {viewEntry.remarks && <div className="bg-yellow-50 p-3 rounded-lg"><p className="text-xs font-semibold text-yellow-700 mb-1">Remarks</p><p className="text-sm">{viewEntry.remarks}</p></div>}
             <div className="text-xs text-gray-400 text-right">Created: {viewEntry.created_at}</div>
           </div>
@@ -410,7 +410,7 @@ export default function BusinessBook() {
               <Inp label="Against Installation" value={form.payment_against_installation} onChange={v => F('payment_against_installation', v)} placeholder="%" />
               <Inp label="Against Commissioning" value={form.payment_against_commissioning} onChange={v => F('payment_against_commissioning', v)} placeholder="%" />
               <Inp label="Retention" value={form.payment_retention} onChange={v => F('payment_retention', v)} placeholder="%" />
-              <Inp label="Credit" value={form.payment_credit} onChange={v => F('payment_credit', v)} placeholder="%" />
+              <Inp label="Handover" value={form.payment_credit} onChange={v => F('payment_credit', v)} placeholder="%" />
               <Inp label="Credit Days" value={form.credit_days} onChange={v => F('credit_days', +v)} type="number" />
             </div>
           </FSection>
