@@ -19,6 +19,8 @@ export default function SalesBilling() {
   const [order, setOrder] = useState(null);          // detail {order, items, bills, next_type}
   const [form, setForm] = useState({ bill_date: new Date().toISOString().split('T')[0], amount: '', gst_rate: 18, reference_doc_no: '' });
   const [saving, setSaving] = useState(false);
+  const [payModal, setPayModal] = useState(null);   // the Type-4 bill being paid
+  const [payForm, setPayForm] = useState({ amount: '', payment_date: new Date().toISOString().split('T')[0], payment_mode: 'Bank', transaction_ref: '' });
 
   const load = () => {
     api.get('/sales-billing').then(r => setBills(r.data || [])).catch(() => setBills([])).finally(() => setLoading(false));
@@ -36,7 +38,15 @@ export default function SalesBilling() {
     setOrderId(id);
     setOrder(null);
     if (!id) return;
-    api.get(`/sales-billing/orders/${id}`).then(r => setOrder(r.data)).catch(() => toast.error('Could not load order'));
+    api.get(`/sales-billing/orders/${id}`).then(r => {
+      setOrder(r.data);
+      // Type 4 (Final) auto-sums the prior bills (mam's rule) — pre-fill the
+      // amount with the sum of Type 1+2+3 pre-GST amounts; she adds commissioning.
+      if (r.data.next_type === 4) {
+        const priorSum = (r.data.bills || []).reduce((s, b) => s + (+b.amount || 0), 0);
+        if (priorSum) setForm(f => ({ ...f, amount: String(priorSum) }));
+      }
+    }).catch(() => toast.error('Could not load order'));
   };
 
   const amount = +form.amount || 0;
@@ -81,6 +91,20 @@ export default function SalesBilling() {
     catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
   };
 
+  const openPay = (b) => {
+    setPayForm({ amount: '', payment_date: new Date().toISOString().split('T')[0], payment_mode: 'Bank', transaction_ref: '' });
+    setPayModal(b);
+  };
+  const savePay = async () => {
+    if (!payModal) return;
+    if ((+payForm.amount || 0) <= 0) return toast.error('Enter the payment amount');
+    try {
+      const r = await api.post(`/sales-billing/${payModal.id}/payment`, payForm);
+      toast.success(r.data.message || 'Payment recorded');
+      setPayModal(null); load();
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center flex-wrap gap-2">
@@ -111,14 +135,15 @@ export default function SalesBilling() {
               <th className="px-3 py-2 text-right">Total</th>
               <th className="px-3 py-2 text-center">Status</th>
               <th className="px-3 py-2 text-center">Approval</th>
+              <th className="px-3 py-2 text-center">Payment</th>
               <th className="px-3 py-2"></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan="11" className="text-center py-8 text-gray-400">Loading…</td></tr>
+              <tr><td colSpan="12" className="text-center py-8 text-gray-400">Loading…</td></tr>
             ) : bills.length === 0 ? (
-              <tr><td colSpan="11" className="text-center py-8 text-gray-400">No sales bills yet. Click “New Sales Bill” to create a Type 1 from a Business Book order.</td></tr>
+              <tr><td colSpan="12" className="text-center py-8 text-gray-400">No sales bills yet. Click “New Sales Bill” to create a Type 1 from a Business Book order.</td></tr>
             ) : bills.map(b => (
               <tr key={b.id} className="border-t border-gray-100 hover:bg-blue-50/40">
                 <td className="px-3 py-2 font-medium text-gray-800 whitespace-nowrap">{b.bill_number}</td>
@@ -134,6 +159,19 @@ export default function SalesBilling() {
                   <button onClick={() => approve(b)} className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${b.approval_status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'}`}>
                     {b.approval_status === 'approved' ? '✓ Approved' : 'Approve'}
                   </button>
+                </td>
+                <td className="px-3 py-2 text-center">
+                  {b.bill_type === 4 ? (
+                    <div className="flex flex-col items-center gap-0.5">
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap ${b.payment_status === 'paid' ? 'bg-emerald-100 text-emerald-700' : b.payment_status === 'partial' ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'}`}>
+                        {b.payment_status === 'paid' ? 'Paid' : b.payment_status === 'partial' ? 'Partial' : 'Unpaid'}
+                      </span>
+                      {b.received_amount > 0 && <span className="text-[10px] text-gray-400">{fmt(b.received_amount)} / {fmt(b.total_amount)}</span>}
+                      {b.approval_status === 'approved' && b.payment_status !== 'paid' && (
+                        <button onClick={() => openPay(b)} className="text-[10px] text-blue-600 hover:underline">+ Payment</button>
+                      )}
+                    </div>
+                  ) : <span className="text-gray-300 text-xs">—</span>}
                 </td>
                 <td className="px-3 py-2 text-right">
                   {canDelete && canDelete('installation') && (
@@ -174,6 +212,11 @@ export default function SalesBilling() {
               {nextType ? (
                 <div className="text-sm font-semibold text-blue-700 bg-blue-50 rounded-lg px-3 py-2">
                   Next bill: {TYPE_LABEL[nextType]}
+                  {nextType === 4 && (
+                    <div className="text-[11px] font-normal text-gray-600 mt-1">
+                      Amount pre-filled with the sum of bills {order.bills.map(x => `T${x.bill_type}`).join('+')} (₹{Math.round(order.bills.reduce((s, b) => s + (+b.amount || 0), 0)).toLocaleString('en-IN')}). Add commissioning charges on top — it's editable.
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-sm font-semibold text-gray-500 bg-gray-100 rounded-lg px-3 py-2">
@@ -231,6 +274,42 @@ export default function SalesBilling() {
             <button onClick={save} disabled={saving || !nextType} className="btn btn-primary flex items-center gap-1"><FiCheckCircle /> {saving ? 'Saving…' : 'Create Bill'}</button>
           </div>
         </div>
+      </Modal>
+
+      <Modal isOpen={!!payModal} onClose={() => setPayModal(null)} title={payModal ? `Record Payment · ${payModal.bill_number}` : 'Record Payment'}>
+        {payModal && (
+          <div className="space-y-3">
+            <div className="bg-gray-50 rounded-lg p-3 text-xs space-y-1">
+              <div><b>Customer:</b> {payModal.customer_name}</div>
+              <div><b>Final bill total:</b> {fmt(payModal.total_amount)}</div>
+              <div><b>Received so far:</b> {fmt(payModal.received_amount)} · <b>Outstanding:</b> {fmt((payModal.total_amount || 0) - (payModal.received_amount || 0))}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Amount received</label>
+                <input type="number" min="0" className="input w-full text-right" value={payForm.amount} onChange={e => setPayForm({ ...payForm, amount: e.target.value })} placeholder="0" />
+              </div>
+              <div>
+                <label className="label">Date</label>
+                <input type="date" className="input w-full" value={payForm.payment_date} onChange={e => setPayForm({ ...payForm, payment_date: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Mode</label>
+                <select className="select w-full" value={payForm.payment_mode} onChange={e => setPayForm({ ...payForm, payment_mode: e.target.value })}>
+                  {['Bank', 'Cash', 'UPI', 'Cheque', 'NEFT/RTGS'].map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">Reference no. (optional)</label>
+                <input className="input w-full" value={payForm.transaction_ref} onChange={e => setPayForm({ ...payForm, transaction_ref: e.target.value })} placeholder="UTR / cheque no." />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setPayModal(null)} className="btn btn-secondary">Cancel</button>
+              <button onClick={savePay} className="btn btn-primary flex items-center gap-1"><FiCheckCircle /> Record Payment</button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

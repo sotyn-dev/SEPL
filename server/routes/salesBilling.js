@@ -54,7 +54,7 @@ router.get('/orders/:bbId', requirePermission('installation', 'view'), (req, res
     `SELECT id, description, quantity, unit, rate, amount FROM po_items WHERE business_book_id=? ORDER BY id`
   ).all(bb.id);
   const bills = db.prepare(
-    `SELECT id, bill_type, bill_number, total_amount, bill_status, approval_status, bill_date
+    `SELECT id, bill_type, bill_number, amount, total_amount, bill_status, approval_status, bill_date
        FROM sales_bills WHERE business_book_id=? AND bill_type IS NOT NULL ORDER BY bill_type`
   ).all(bb.id);
   const haveTypes = new Set(bills.map(b => b.bill_type));
@@ -76,7 +76,9 @@ router.get('/orders/:bbId', requirePermission('installation', 'view'), (req, res
 router.get('/', requirePermission('installation', 'view'), (req, res) => {
   const db = getDb();
   const rows = db.prepare(
-    `SELECT sb.*, u.name AS created_by_name
+    `SELECT sb.*, u.name AS created_by_name,
+            COALESCE((SELECT SUM(p.amount) FROM payments p
+                       WHERE p.reference_type='sales_bill' AND p.reference_id=sb.id), 0) AS received_amount
        FROM sales_bills sb LEFT JOIN users u ON u.id = sb.created_by
       WHERE sb.bill_type IS NOT NULL
       ORDER BY sb.id DESC`
@@ -94,6 +96,11 @@ router.get('/:id', requirePermission('installation', 'view'), (req, res) => {
     `SELECT l.*, u.name AS by_name FROM sales_bill_status_log l LEFT JOIN users u ON u.id=l.changed_by
       WHERE l.sales_bill_id=? ORDER BY l.id`
   ).all(bill.id);
+  bill.payments = db.prepare(
+    `SELECT p.*, u.name AS by_name FROM payments p LEFT JOIN users u ON u.id=p.created_by
+      WHERE p.reference_type='sales_bill' AND p.reference_id=? ORDER BY p.id`
+  ).all(bill.id);
+  bill.received_amount = bill.payments.reduce((s, p) => s + (+p.amount || 0), 0);
   res.json(bill);
 });
 
@@ -184,6 +191,60 @@ router.delete('/:id', requirePermission('installation', 'delete'), (req, res) =>
   if (child) return res.status(409).json({ error: 'Delete the later bill in this chain first' });
   db.prepare('DELETE FROM sales_bills WHERE id=?').run(bill.id);
   res.json({ message: 'Bill deleted' });
+});
+
+// Record a payment against a Type-4 (Final) bill — payment is only allowed on
+// the final bill (spec rule). Logs into `payments`, updates the bill's
+// payment_status, and upserts a Receivables row so it shows in the ledger.
+router.post('/:id/payment', requirePermission('installation', 'edit'), (req, res) => {
+  try {
+    const db = getDb();
+    const bill = db.prepare('SELECT * FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
+    if (!bill) return res.status(404).json({ error: 'Bill not found' });
+    if (bill.bill_type !== 4) return res.status(400).json({ error: 'Payment can only be recorded against the Type 4 (Final) bill' });
+    if (bill.approval_status !== 'approved') return res.status(400).json({ error: 'Approve the Final bill before recording payment' });
+    const amount = round2(req.body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'amount must be a positive number' });
+    const payment_date = /^\d{4}-\d{2}-\d{2}$/.test(req.body.payment_date) ? req.body.payment_date : new Date().toISOString().split('T')[0];
+    const payment_mode = ['Cash', 'Bank', 'UPI', 'Cheque', 'NEFT/RTGS'].includes(req.body.payment_mode) ? req.body.payment_mode : 'Bank';
+
+    const out = db.transaction(() => {
+      db.prepare(
+        `INSERT INTO payments (type, reference_type, reference_id, amount, payment_date, payment_mode, transaction_ref, notes, created_by)
+         VALUES ('receivable', 'sales_bill', ?, ?, ?, ?, ?, ?, ?)`
+      ).run(bill.id, amount, payment_date, payment_mode, req.body.transaction_ref || null, req.body.notes || null, req.user.id);
+
+      const received = round2(db.prepare(
+        `SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE reference_type='sales_bill' AND reference_id=?`
+      ).get(bill.id).s);
+      const pstatus = received >= bill.total_amount - 0.01 ? 'paid' : received > 0 ? 'partial' : 'pending';
+      db.prepare('UPDATE sales_bills SET payment_status=? WHERE id=?').run(pstatus, bill.id);
+      db.prepare('INSERT INTO sales_bill_status_log (sales_bill_id, status, changed_by, notes) VALUES (?,?,?,?)')
+        .run(bill.id, pstatus, req.user.id, `Payment ₹${amount} (${payment_mode})`);
+
+      // Upsert the Receivables ledger row for this final bill.
+      const outstanding = round2(bill.total_amount - received);
+      const rstatus = outstanding <= 0.01 ? 'green' : received > 0 ? 'yellow' : 'red';
+      const existing = db.prepare('SELECT id FROM receivables WHERE invoice_number=?').get(bill.bill_number);
+      if (existing) {
+        db.prepare('UPDATE receivables SET received_amount=?, outstanding_amount=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+          .run(received, outstanding, rstatus, existing.id);
+      } else {
+        db.prepare(
+          `INSERT INTO receivables (client_name, project_name, business_book_id, invoice_number, invoice_date,
+             invoice_amount, received_amount, outstanding_amount, status, created_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?)`
+        ).run(bill.customer_name || 'Customer', bill.project_name || null, bill.business_book_id, bill.bill_number,
+          bill.bill_date, bill.total_amount, received, outstanding, rstatus, req.user.id);
+      }
+      return { received, outstanding, payment_status: pstatus };
+    })();
+
+    res.json({ message: 'Payment recorded', ...out });
+  } catch (err) {
+    console.error('sales-billing payment error', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;
