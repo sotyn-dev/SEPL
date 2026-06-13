@@ -780,7 +780,12 @@ router.put('/override/:employee_id', adminOnly, (req, res) => {
     if (!reset) {
       value = Number(raw);
       if (!Number.isFinite(value) || value < 0) return res.status(400).json({ error: 'value must be a non-negative number' });
-      if (field !== 'late_penalty' && value > 31) return res.status(400).json({ error: 'days cannot exceed 31' });
+      // Paid days can exceed the calendar days — worked Sundays add bonus days
+      // on top (mam 2026-06-13: Manoj = 34). CL stays within the month.
+      const dayMax = field === 'cl' ? 31 : 60;
+      if (field !== 'late_penalty' && value > dayMax) {
+        return res.status(400).json({ error: `${field === 'cl' ? 'CL' : 'days'} cannot exceed ${dayMax}` });
+      }
       value = round2(value);
     }
 
