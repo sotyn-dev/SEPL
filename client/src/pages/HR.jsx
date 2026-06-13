@@ -1631,7 +1631,7 @@ function ManpowerTab() {
     }
     const color = (required === 0 && actual === 0) ? 'text-gray-300' : gap > 0 ? 'text-red-600' : 'text-emerald-700';
     return (
-      <div className="inline-flex items-center gap-1" title={overridden ? `Target manually set · auto would be ${auto}` : 'Target auto from project value'}>
+      <div className="inline-flex items-center gap-1" title={overridden ? `Target manually set · default would be ${auto}` : 'Default target: 1 per project'}>
         <span className={`font-bold text-xs ${color}`}>{actual}</span>
         <span className="text-gray-400 text-xs">/ {required}</span>
         {editable && <button type="button" onClick={() => startEdit(r, role)} className="text-gray-300 hover:text-blue-600" title={`Edit ${cfg.label.toLowerCase()}`}><FiEdit2 size={11} /></button>}

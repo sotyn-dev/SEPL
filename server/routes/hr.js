@@ -30,18 +30,11 @@ function requiredManpower(value) {
   return 40;
 }
 
-// Project value → required Site Engineers / Jr. Site Engineers (mam 2026-06-13).
-// A bigger project needs more supervision; these are starting numbers mam can
-// override per project with the ✏️, exactly like required manpower.
+// Required Site Engineers / Jr. Site Engineers per project (mam 2026-06-13):
+// "at every site one site engineer, jr. site eng" — a flat 1 + 1 per project,
+// editable per project with the ✏️ if a project needs more.
 function requiredEngineers(value) {
-  const v = +value || 0;
-  if (v <= 5 * LAKH)  return { se: 1, jr: 0 };
-  if (v <= 25 * LAKH) return { se: 1, jr: 1 };
-  if (v <= 50 * LAKH) return { se: 1, jr: 1 };
-  if (v <= 1 * CRORE) return { se: 2, jr: 1 };
-  if (v <= 5 * CRORE) return { se: 2, jr: 2 };
-  if (v <= 10 * CRORE) return { se: 3, jr: 2 };
-  return { se: 4, jr: 3 };
+  return { se: 1, jr: 1 };
 }
 
 // A site-engineer user counts as a JUNIOR when their Employee designation
