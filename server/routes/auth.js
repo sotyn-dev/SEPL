@@ -294,12 +294,16 @@ function findUserFkReferences(db) {
     try {
       // PRAGMA foreign_key_list returns one row per FK column.
       const fks = db.prepare(`PRAGMA foreign_key_list("${name}")`).all();
-      for (const fk of fks) {
-        // fk.table is the REFERENCED table (e.g. "users"); fk.from is
-        // the LOCAL column.  Match case-insensitively.
-        if (String(fk.table).toLowerCase() === 'users') {
-          refs.push({ table: name, column: fk.from, on_delete: fk.on_delete });
-        }
+      // fk.table is the REFERENCED table (e.g. "users"); fk.from is the LOCAL
+      // column.  Match case-insensitively.
+      const userFks = fks.filter(fk => String(fk.table).toLowerCase() === 'users');
+      if (!userFks.length) continue;
+      // Whether the local FK column is NOT NULL — a NOT NULL column can't be
+      // nulled to clear the reference, so the force path must delete the row.
+      const cols = db.prepare(`PRAGMA table_info("${name}")`).all();
+      for (const fk of userFks) {
+        const col = cols.find(c => c.name === fk.from);
+        refs.push({ table: name, column: fk.from, on_delete: fk.on_delete, notnull: !!(col && col.notnull) });
       }
     } catch (_) { /* skip tables that can't be inspected */ }
   }
@@ -345,12 +349,18 @@ router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
         for (const ref of refs) {
           if (ref.table === 'user_roles') continue;  // gets DELETED below
           try {
-            const r = db.prepare(`UPDATE "${ref.table}" SET "${ref.column}" = NULL WHERE "${ref.column}" = ?`).run(id);
+            // A NOT NULL FK column can't be nulled — delete those per-user rows
+            // (push_subscriptions / notifications / KPI targets etc. are
+            // per-user transient data).  Nullable columns keep their row and
+            // just drop the join, preserving any snapshotted user_name.
+            const r = ref.notnull
+              ? db.prepare(`DELETE FROM "${ref.table}" WHERE "${ref.column}" = ?`).run(id)
+              : db.prepare(`UPDATE "${ref.table}" SET "${ref.column}" = NULL WHERE "${ref.column}" = ?`).run(id);
             if (r.changes > 0) cleared[`${ref.table}.${ref.column}`] = r.changes;
           } catch (e) {
             // Don't kill the whole transaction on a single column —
             // some FKs may point at views or have other oddities.
-            console.warn('[user-delete] could not null', ref.table + '.' + ref.column, '-', e.message);
+            console.warn('[user-delete] could not clear', ref.table + '.' + ref.column, '-', e.message);
           }
         }
         db.prepare('DELETE FROM user_roles WHERE user_id = ?').run(id);
