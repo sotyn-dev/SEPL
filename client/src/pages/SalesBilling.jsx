@@ -106,8 +106,12 @@ export default function SalesBilling() {
     catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
   };
   const genInstall = async () => {
-    if (!confirm('Generate installation (Type 3) bills from approved, billing-ready DPRs not yet billed? Created as DRAFT for review.')) return;
+    if (!confirm('Generate installation (Type 3) bills from approved, billing-ready DPRs not yet billed? Amount = the BOQ items × qty recorded in the DPR. Review, then mark Sent to Client.')) return;
     try { const r = await api.post('/sales-billing/generate-installation', {}); toast.success(r.data.message || 'Done'); load(); }
+    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  };
+  const sendToClient = async (b) => {
+    try { const r = await api.put(`/sales-billing/${b.id}/sent`, {}); toast.success(r.data.message || 'Updated'); load(); }
     catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
   };
 
@@ -138,7 +142,7 @@ export default function SalesBilling() {
     </button>
   );
 
-  const BillTable = ({ rows, showPayment }) => (
+  const BillTable = ({ rows, showPayment, sentMode }) => (
     <div className="card p-0 overflow-x-auto">
       <table className="text-sm w-full">
         <thead>
@@ -152,7 +156,7 @@ export default function SalesBilling() {
             <th className="px-3 py-2 text-right">GST</th>
             <th className="px-3 py-2 text-right">Total</th>
             <th className="px-3 py-2 text-center">Status</th>
-            <th className="px-3 py-2 text-center">Approval</th>
+            <th className="px-3 py-2 text-center">{sentMode ? 'Sent to Client' : 'Approval'}</th>
             {showPayment && <th className="px-3 py-2 text-center">Payment</th>}
             <th className="px-3 py-2"></th>
           </tr>
@@ -173,7 +177,13 @@ export default function SalesBilling() {
               <td className="px-3 py-2 text-right text-gray-500">{fmt(b.gst_amount)}<span className="text-[10px] ml-0.5">@{b.gst_rate}%</span></td>
               <td className="px-3 py-2 text-right font-semibold text-emerald-700">{fmt(b.total_amount)}</td>
               <td className="px-3 py-2 text-center">{StatusCell(b)}</td>
-              <td className="px-3 py-2 text-center">{ApprovalCell(b)}</td>
+              <td className="px-3 py-2 text-center">
+                {sentMode ? (
+                  <button onClick={() => sendToClient(b)} className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${b.sent_to_client ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}>
+                    {b.sent_to_client ? '✓ Sent to client' : 'Sent to client'}
+                  </button>
+                ) : ApprovalCell(b)}
+              </td>
               {showPayment && (
                 <td className="px-3 py-2 text-center">
                   {b.bill_type === 4 ? (
@@ -397,7 +407,7 @@ export default function SalesBilling() {
           <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2">
             Installation bills are generated from <b>submitted, approved DPRs</b> — each DPR is billed once. Click <b>Generate Installation Bills</b> to bill the latest approved DPRs (created as draft for review).
           </div>
-          <BillTable rows={t3} showPayment={false} />
+          <BillTable rows={t3} showPayment={false} sentMode />
         </div>
       )}
 

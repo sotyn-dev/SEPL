@@ -264,8 +264,23 @@ router.delete('/:id', requirePermission('installation', 'delete'), (req, res) =>
   if (!bill) return res.status(404).json({ error: 'Bill not found' });
   const child = db.prepare('SELECT id FROM sales_bills WHERE previous_bill_id=?').get(bill.id);
   if (child) return res.status(409).json({ error: 'Delete the later bill in this chain first' });
+  // Free the DPRs this installation bill consumed so they can be re-billed.
+  db.prepare('UPDATE dpr SET sales_bill_id=NULL WHERE sales_bill_id=?').run(bill.id);
   db.prepare('DELETE FROM sales_bills WHERE id=?').run(bill.id);
   res.json({ message: 'Bill deleted' });
+});
+
+// Mark an installation bill "Sent to Client" — the only manual step on an
+// auto-generated Type-3 bill (mam 2026-06-13). Toggle.
+router.put('/:id/sent', requirePermission('installation', 'edit'), (req, res) => {
+  const db = getDb();
+  const bill = db.prepare('SELECT id, sent_to_client FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
+  if (!bill) return res.status(404).json({ error: 'Bill not found' });
+  const sent = bill.sent_to_client ? 0 : 1;
+  db.prepare('UPDATE sales_bills SET sent_to_client=?, sent_at=' + (sent ? 'CURRENT_TIMESTAMP' : 'NULL') + ' WHERE id=?').run(sent, bill.id);
+  db.prepare('INSERT INTO sales_bill_status_log (sales_bill_id, status, changed_by, notes) VALUES (?,?,?,?)')
+    .run(bill.id, sent ? 'sent_to_client' : 'unsent', req.user.id, sent ? 'Sent to client' : 'Marked not sent');
+  res.json({ message: sent ? 'Marked Sent to Client' : 'Marked not sent', sent_to_client: sent });
 });
 
 // Record a payment against a Type-4 (Final) bill — payment is only allowed on
@@ -330,9 +345,11 @@ router.post('/:id/payment', requirePermission('installation', 'edit'), (req, res
 // `draft=true` (default) creates the bills as DRAFT for review; the scheduled
 // fortnightly job calls this with draft=false to auto-approve.
 function generateInstallationBills(db, userId, { draft = true } = {}) {
+  // Bill value = the BOQ items × qty recorded in the DPR (mam 2026-06-13),
+  // i.e. the sum of that DPR's work-item amounts — not the labour-only total.
   const rows = db.prepare(
-    `SELECT d.id AS dpr_id, d.report_date, COALESCE(d.grand_total_a, 0) AS val,
-            s.business_book_id AS bb_id
+    `SELECT d.id AS dpr_id, d.report_date, s.business_book_id AS bb_id,
+            COALESCE((SELECT SUM(wi.amount) FROM dpr_work_items wi WHERE wi.dpr_id = d.id), 0) AS val
        FROM dpr d JOIN sites s ON s.id = d.site_id
       WHERE d.approval_status = 'approved' AND d.billing_ready = 1
         AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL`
@@ -391,8 +408,8 @@ function generateInstallationBills(db, userId, { draft = true } = {}) {
 router.post('/generate-installation', requirePermission('installation', 'create'), (req, res) => {
   try {
     const db = getDb();
-    const result = generateInstallationBills(db, req.user.id, { draft: true });
-    res.json({ message: result.created ? `${result.created} installation bill(s) created (draft)` : 'No unbilled DPRs ready to bill', ...result });
+    const result = generateInstallationBills(db, req.user.id, { draft: false });
+    res.json({ message: result.created ? `${result.created} installation bill(s) generated — review, then mark Sent to Client` : 'No unbilled DPRs ready to bill', ...result });
   } catch (err) {
     console.error('sales-billing generate-installation error', err);
     res.status(500).json({ error: err.message });

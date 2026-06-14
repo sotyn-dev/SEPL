@@ -3471,6 +3471,10 @@ function initializeDatabase() {
     // into exactly one Type-3 sales bill (mam 2026-06-13: installation bill
     // every 15 days from DPRs).  NULL = not yet billed.
     ['dpr', 'sales_bill_id INTEGER'],
+    // "Sent to Client" — the only manual step on an auto-generated installation
+    // bill (mam 2026-06-13: "only give option sent to client").
+    ['sales_bills', 'sent_to_client INTEGER DEFAULT 0'],
+    ['sales_bills', 'sent_at DATETIME'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}
