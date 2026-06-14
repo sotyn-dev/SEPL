@@ -22,6 +22,7 @@ export default function SalesBilling() {
   const [bills, setBills] = useState([]);
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState([]);
+  const [pending, setPending] = useState(null);        // { orders_without_so:[], dpr_ready:{count,value} }
   const [expanded, setExpanded] = useState(null);      // material tab: order id expanded
   const [expItems, setExpItems] = useState({});        // order id → po_items
 
@@ -36,8 +37,16 @@ export default function SalesBilling() {
   const load = () => {
     api.get('/sales-billing').then(r => setBills(r.data || [])).catch(() => setBills([])).finally(() => setLoading(false));
     api.get('/sales-billing/orders').then(r => setOrders(r.data || [])).catch(() => setOrders([]));
+    api.get('/sales-billing/pending').then(r => setPending(r.data)).catch(() => setPending(null));
   };
   useEffect(() => { load(); }, []);
+
+  const openNewFor = (oid) => {
+    setForm({ bill_date: new Date().toISOString().split('T')[0], amount: '', gst_rate: 18, reference_doc_no: '' });
+    api.get('/sales-billing/orders').then(r => setOrders(r.data || [])).catch(() => setOrders([]));
+    setModal(true);
+    if (oid) pickOrder(String(oid));
+  };
 
   // ── create ───────────────────────────────────────────────────────
   const openNew = () => {
@@ -215,6 +224,38 @@ export default function SalesBilling() {
       {/* DASHBOARD */}
       {tab === 'dashboard' && (
         <div className="space-y-4">
+          {/* Auto pendency alerts — what still needs billing */}
+          {pending && (pending.orders_without_so.length > 0 || pending.dpr_ready.count > 0) ? (
+            <div className="space-y-2">
+              {pending.orders_without_so.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-semibold text-amber-800">⚠ {pending.orders_without_so.length} order(s) have NO Sales Order bill yet</span>
+                    <span className="text-[11px] text-amber-600">don't forget to bill these</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {pending.orders_without_so.slice(0, 12).map(o => (
+                      <button key={o.id} onClick={() => openNewFor(o.id)}
+                        className="text-[11px] bg-white border border-amber-200 rounded-full px-2 py-0.5 hover:bg-amber-100"
+                        title={`${o.customer_name} · ${o.project_name || ''} · ${fmt(o.value)} · ${o.status}`}>
+                        {o.lead_no || ('BB#' + o.id)} · {o.customer_name || 'order'} <span className="text-amber-600">+ bill</span>
+                      </button>
+                    ))}
+                    {pending.orders_without_so.length > 12 && <span className="text-[11px] text-amber-600 self-center">+{pending.orders_without_so.length - 12} more</span>}
+                  </div>
+                </div>
+              )}
+              {pending.dpr_ready.count > 0 && (
+                <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 flex items-center justify-between flex-wrap gap-2">
+                  <span className="text-sm font-semibold text-indigo-800">⚠ {pending.dpr_ready.count} approved DPR(s) ready to bill (≈ {fmt(pending.dpr_ready.value)}) — not billed yet</span>
+                  <button onClick={genInstall} className="btn btn-primary text-xs">Generate Installation Bills</button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm font-semibold text-emerald-700">✓ All caught up — no orders or DPRs pending a bill.</div>
+          )}
+
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {[
               { label: 'Total Bills', value: bills.length, sub: `${t1.length} SO · ${t3.length} install · ${t4.length} final`, ring: 'bg-slate-100 text-slate-700' },

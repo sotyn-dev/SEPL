@@ -93,6 +93,37 @@ router.get('/', requirePermission('installation', 'view'), (req, res) => {
   res.json(rows);
 });
 
+// Pending-billing alerts (mam 2026-06-13: "show data automatically as an alert
+// so we don't forget a sales order / bill"). Surfaces what still needs billing:
+//   - active orders (planning/execution) with NO Type-1 Sales Order bill
+//   - approved, billing-ready DPRs not yet billed (Type-3 install)
+// MUST be declared before GET /:id so it isn't captured as an :id.
+router.get('/pending', requirePermission('installation', 'view'), (req, res) => {
+  const db = getDb();
+  const ordersWithoutSo = db.prepare(
+    `SELECT bb.id, bb.lead_no, bb.client_name, bb.company_name, bb.project_name,
+            bb.po_amount, bb.sale_amount_without_gst, bb.status
+       FROM business_book bb
+      WHERE bb.status IN ('planning','execution','advance_received')
+        AND NOT EXISTS (SELECT 1 FROM sales_bills sb WHERE sb.business_book_id=bb.id AND sb.bill_type=1)
+      ORDER BY CASE bb.status WHEN 'planning' THEN 0 WHEN 'execution' THEN 1 ELSE 2 END, bb.id DESC`
+  ).all().map(r => ({
+    id: r.id, lead_no: r.lead_no, status: r.status, project_name: r.project_name,
+    customer_name: (r.client_name || r.company_name || '').trim(),
+    value: r.sale_amount_without_gst || r.po_amount || 0,
+  }));
+  let dprReady = { count: 0, value: 0 };
+  try {
+    dprReady = db.prepare(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(COALESCE(d.grand_total_a,0)),0) AS value
+         FROM dpr d JOIN sites s ON s.id = d.site_id
+        WHERE d.approval_status='approved' AND d.billing_ready=1
+          AND d.sales_bill_id IS NULL AND s.business_book_id IS NOT NULL`
+    ).get();
+  } catch (e) { /* dpr.sales_bill_id may be absent on a stale DB */ }
+  res.json({ orders_without_so: ordersWithoutSo, dpr_ready: dprReady });
+});
+
 // One bill + its items.
 router.get('/:id', requirePermission('installation', 'view'), (req, res) => {
   const db = getDb();
