@@ -245,6 +245,17 @@ try {
   console.warn('[cmd-email] Scheduler not started:', e.message);
 }
 
+// Fortnightly (1st & 16th) installation-billing — auto-generates Type-3 sales
+// bills from approved DPRs (work value × Against-Installation %). Idempotent;
+// bills are approved but a human still clicks "Sent to Client".
+// Skip via ERP_DISABLE_INSTALL_BILLING=1.
+try {
+  const { scheduleInstallationBillingCron } = require('./scripts/installationBillingCron');
+  scheduleInstallationBillingCron();
+} catch (e) {
+  console.warn('[install-billing] Scheduler not started:', e.message);
+}
+
 // Admin-triggered procurement reminder run — fires the 1-day-before
 // scan on demand so mam can verify the announcement + push delivery
 // without waiting for the 09:00 cron tick.  Uses the same auth

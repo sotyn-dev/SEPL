@@ -370,13 +370,18 @@ function generateInstallationBills(db, userId, { draft = true } = {}) {
   const out = [];
   const tx = db.transaction(() => {
     for (const [bbId, g] of groups) {
-      if (round2(g.sum) <= 0) continue;          // nothing billable this window
+      if (round2(g.sum) <= 0) continue;          // no work recorded this window
       const bb = db.prepare('SELECT * FROM business_book WHERE id=?').get(bbId);
       if (!bb) continue;
+      // Installation bill = work value × the "Against Installation" % from the
+      // order's Business Book payment terms (mam 2026-06-13).
+      const instPct = parseFloat(String(bb.payment_against_installation || '').replace(/[^0-9.]/g, '')) || 0;
+      const workValue = round2(g.sum);
+      const amount = round2(workValue * instPct / 100);
+      if (amount <= 0) continue;                  // no installation % set on this order — skip
       const prior = db.prepare(
         `SELECT id FROM sales_bills WHERE business_book_id=? AND bill_type=1`
       ).get(bbId);
-      const amount = round2(g.sum);
       const gst_rate = 18;                        // installation service GST
       const gst_amount = round2(amount * gst_rate / 100);
       const total_amount = round2(amount + gst_amount);
@@ -390,7 +395,7 @@ function generateInstallationBills(db, userId, { draft = true } = {}) {
          VALUES (?,?,?,?,?,?,3,?,?,?,?,?, 'DPR', ?, ?, 'pending', ?)`
       ).run(bill_number, today, amount, gst_amount, total_amount, gst_rate,
         bbId, (bb.client_name || bb.company_name || '').trim(), bb.project_name || null, BILL_STATUS[3],
-        prior ? prior.id : null, `DPRs ${g.minDate} → ${g.maxDate}`, draft ? 'draft' : 'approved', userId);
+        prior ? prior.id : null, `DPRs ${g.minDate} → ${g.maxDate} · ${instPct}% of ₹${workValue}`, draft ? 'draft' : 'approved', userId);
       const billId = r.lastInsertRowid;
       const upd = db.prepare('UPDATE dpr SET sales_bill_id=? WHERE id=?');
       for (const dprId of g.dprIds) upd.run(billId, dprId);
