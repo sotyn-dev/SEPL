@@ -23,8 +23,7 @@ export default function SalesBilling() {
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState([]);
   const [pending, setPending] = useState(null);        // { orders_without_so:[], dpr_ready:{count,value} }
-  const [expanded, setExpanded] = useState(null);      // material tab: order id expanded
-  const [expItems, setExpItems] = useState({});        // order id → po_items
+  const [material, setMaterial] = useState([]);        // dispatch challans + sales-bill status
 
   const [modal, setModal] = useState(false);
   const [orderId, setOrderId] = useState('');
@@ -38,8 +37,17 @@ export default function SalesBilling() {
     api.get('/sales-billing').then(r => setBills(r.data || [])).catch(() => setBills([])).finally(() => setLoading(false));
     api.get('/sales-billing/orders').then(r => setOrders(r.data || [])).catch(() => setOrders([]));
     api.get('/sales-billing/pending').then(r => setPending(r.data)).catch(() => setPending(null));
+    api.get('/sales-billing/material').then(r => setMaterial(r.data || [])).catch(() => setMaterial([]));
   };
   useEffect(() => { load(); }, []);
+
+  const genSalesBill = async (challanId) => {
+    try {
+      const r = await api.post(`/procurement/delivery-notes/${challanId}/generate-sales-bill`, {});
+      toast.success(r.data?.existing ? 'Sales bill already exists' : 'Sales bill generated');
+      load();
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  };
 
   const openNewFor = (oid) => {
     setForm({ bill_date: new Date().toISOString().split('T')[0], amount: '', gst_rate: 18, reference_doc_no: '' });
@@ -109,12 +117,6 @@ export default function SalesBilling() {
     if ((+payForm.amount || 0) <= 0) return toast.error('Enter the payment amount');
     try { const r = await api.post(`/sales-billing/${payModal.id}/payment`, payForm); toast.success(r.data.message || 'Payment recorded'); setPayModal(null); load(); }
     catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
-  };
-
-  const toggleExpand = (o) => {
-    if (expanded === o.id) { setExpanded(null); return; }
-    setExpanded(o.id);
-    if (!expItems[o.id]) api.get(`/sales-billing/orders/${o.id}`).then(r => setExpItems(s => ({ ...s, [o.id]: r.data.items || [] }))).catch(() => {});
   };
 
   // ── derived ──────────────────────────────────────────────────────
@@ -338,66 +340,51 @@ export default function SalesBilling() {
         </div>
       )}
 
-      {/* MATERIAL — PO items vs Sales Bill (read-only) */}
+      {/* MATERIAL — dispatch challans by indent, sales-bill done/pending */}
       {tab === 'material' && (
         <div className="space-y-2">
-          <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2 mb-1">
-            Material ordered (PO items) vs what's been billed for each order. Material-delivery billing is done in <b>Dispatch</b>; this is a read-only view of order value vs sales bills raised.
+          <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2">
+            Each material dispatch (challan, by <b>indent number</b>) and whether its client <b>Sales Bill</b> is done or pending. Generating the bill uses the Dispatch flow.
+            {material.length > 0 && <span className="ml-1 text-rose-600 font-semibold">{material.filter(m => m.sales_bill_status === 'pending').length} pending</span>}
           </div>
           <div className="card p-0 overflow-x-auto">
             <table className="text-sm w-full">
               <thead>
                 <tr className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
-                  <th className="px-3 py-2 text-left">Order</th>
-                  <th className="px-3 py-2 text-left">Customer</th>
-                  <th className="px-3 py-2 text-left">Project</th>
-                  <th className="px-3 py-2 text-right">Order value</th>
-                  <th className="px-3 py-2 text-right">Billed</th>
-                  <th className="px-3 py-2 text-right">Balance</th>
-                  <th className="px-3 py-2"></th>
+                  <th className="px-3 py-2 text-left">Indent</th>
+                  <th className="px-3 py-2 text-left">Challan</th>
+                  <th className="px-3 py-2 text-left">Site</th>
+                  <th className="px-3 py-2 text-left">Date</th>
+                  <th className="px-3 py-2 text-left">Source</th>
+                  <th className="px-3 py-2 text-right">Items</th>
+                  <th className="px-3 py-2 text-right">Value</th>
+                  <th className="px-3 py-2 text-left">Sales Bill</th>
                 </tr>
               </thead>
               <tbody>
-                {orders.length === 0 ? (
-                  <tr><td colSpan="7" className="text-center py-8 text-gray-400">No orders.</td></tr>
-                ) : orders.map(o => {
-                  const billed = billedByOrder[o.id] || 0;
-                  const val = +o.po_amount || +o.sale_amount_without_gst || 0;
-                  return [
-                    <tr key={o.id} className="border-t border-gray-100 hover:bg-blue-50/40 cursor-pointer" onClick={() => toggleExpand(o)}>
-                      <td className="px-3 py-2 font-medium whitespace-nowrap">{o.status === 'planning' ? '★ ' : ''}{o.lead_no || ('BB#' + o.id)}</td>
-                      <td className="px-3 py-2">{o.customer_name || '-'}</td>
-                      <td className="px-3 py-2 text-gray-500">{o.project_name || '-'}</td>
-                      <td className="px-3 py-2 text-right">{fmt(val)}</td>
-                      <td className="px-3 py-2 text-right text-emerald-700">{fmt(billed)}</td>
-                      <td className={`px-3 py-2 text-right font-semibold ${val - billed > 0 ? 'text-rose-600' : 'text-gray-400'}`}>{fmt(val - billed)}</td>
-                      <td className="px-3 py-2 text-right text-gray-400 text-xs">{expanded === o.id ? '▴' : '▾'}</td>
-                    </tr>,
-                    expanded === o.id && (
-                      <tr key={o.id + '-x'} className="bg-gray-50/60">
-                        <td colSpan="7" className="px-4 py-2">
-                          {(expItems[o.id] || []).length === 0 ? (
-                            <div className="text-xs text-gray-400 py-2">No PO items entered on this order.</div>
-                          ) : (
-                            <table className="text-[11px] w-full">
-                              <thead><tr className="text-gray-500"><th className="px-2 py-1 text-left">Item</th><th className="px-2 py-1 text-right">Qty</th><th className="px-2 py-1 text-right">Rate</th><th className="px-2 py-1 text-right">Amount</th></tr></thead>
-                              <tbody>
-                                {(expItems[o.id] || []).map(it => (
-                                  <tr key={it.id} className="border-t border-gray-100">
-                                    <td className="px-2 py-1">{it.description}</td>
-                                    <td className="px-2 py-1 text-right">{it.quantity} {it.unit}</td>
-                                    <td className="px-2 py-1 text-right">{fmt(it.rate)}</td>
-                                    <td className="px-2 py-1 text-right">{fmt(it.amount)}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          )}
-                        </td>
-                      </tr>
-                    ),
-                  ];
-                })}
+                {material.length === 0 ? (
+                  <tr><td colSpan="8" className="text-center py-8 text-gray-400">No material dispatches yet. Challans raised in Dispatch will appear here.</td></tr>
+                ) : material.map(m => (
+                  <tr key={m.id} className="border-t border-gray-100 hover:bg-blue-50/40">
+                    <td className="px-3 py-2 font-medium whitespace-nowrap">{m.indent_number || '-'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{m.challan_no || '-'}</td>
+                    <td className="px-3 py-2 text-gray-500">{m.site_name || '-'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{m.date || '-'}</td>
+                    <td className="px-3 py-2 text-xs uppercase text-gray-400">{m.source || '-'}</td>
+                    <td className="px-3 py-2 text-right">{m.item_count || 0}</td>
+                    <td className="px-3 py-2 text-right">{fmt(m.value)}</td>
+                    <td className="px-3 py-2">
+                      {m.sales_bill_status === 'done' ? (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">✓ {m.sales_bill_number || 'Done'}</span>
+                      ) : m.sales_bill_status === 'pending' ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700">Pending</span>
+                          <button onClick={() => genSalesBill(m.id)} className="text-[11px] text-blue-600 hover:underline">Generate</button>
+                        </div>
+                      ) : <span className="text-gray-300 text-xs">—</span>}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

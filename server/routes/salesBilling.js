@@ -124,6 +124,38 @@ router.get('/pending', requirePermission('installation', 'view'), (req, res) => 
   res.json({ orders_without_so: ordersWithoutSo, dpr_ready: dprReady });
 });
 
+// Material billing view (mam 2026-06-13): each material dispatch (delivery
+// challan, by indent number) and whether its client Sales Bill is DONE or
+// PENDING. The Sales Bill itself is still created in Dispatch (legacy flow);
+// this surfaces the pendency. MUST be before GET /:id.
+router.get('/material', requirePermission('installation', 'view'), (req, res) => {
+  const db = getDb();
+  let rows = [];
+  try {
+    rows = db.prepare(
+      `SELECT dn.id, dn.document_number, dn.delivery_date, dn.source,
+              dn.sales_bill_pending, dn.sales_bill_number, dn.grand_total_amount, dn.items_json,
+              COALESCE(vp.indent_id, dn.indent_id) AS indent_id, i.indent_number, i.site_name
+         FROM delivery_notes dn
+         LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
+         LEFT JOIN indents i ON i.id = COALESCE(vp.indent_id, dn.indent_id)
+        WHERE dn.document_type = 'challan'
+        ORDER BY dn.id DESC LIMIT 500`
+    ).all();
+  } catch (e) { /* tables may be absent on a stale DB */ }
+  const out = rows.map(r => {
+    let itemCount = 0, itemValue = +r.grand_total_amount || 0;
+    try { const items = JSON.parse(r.items_json || '[]'); itemCount = items.length; if (!itemValue) itemValue = items.reduce((s, it) => s + (+it.amount || 0), 0); } catch (_) {}
+    return {
+      id: r.id, challan_no: r.document_number, date: r.delivery_date, source: r.source,
+      indent_number: r.indent_number, site_name: r.site_name, item_count: itemCount, value: round2(itemValue),
+      sales_bill_status: r.sales_bill_number ? 'done' : (r.sales_bill_pending ? 'pending' : 'na'),
+      sales_bill_number: r.sales_bill_number || null,
+    };
+  });
+  res.json(out);
+});
+
 // One bill + its items.
 router.get('/:id', requirePermission('installation', 'view'), (req, res) => {
   const db = getDb();
