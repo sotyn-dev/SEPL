@@ -277,8 +277,66 @@ export default function SalesBilling() {
         </div>
       )}
 
-      {/* SALES ORDER BILLS (Type 1 + Final) */}
-      {tab === 'orders' && <BillTable rows={orderBills} showPayment />}
+      {/* SALES ORDER BILLS — order-centric: every Business Book order IS a
+          sales order; show its Type-1 bill status (create if missing) + Final. */}
+      {tab === 'orders' && (
+        <div className="space-y-2">
+          <div className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2">
+            Your <b>orders from Business Book</b> are the sales orders. Raise the <b>Sales Order bill</b> against each, then the Final bill. ★ = in Planning.
+          </div>
+          <div className="card p-0 overflow-x-auto">
+            <table className="text-sm w-full">
+              <thead>
+                <tr className="bg-gray-50 text-[11px] uppercase tracking-wide text-gray-500">
+                  <th className="px-3 py-2 text-left">Order</th>
+                  <th className="px-3 py-2 text-left">Customer</th>
+                  <th className="px-3 py-2 text-left">Project</th>
+                  <th className="px-3 py-2 text-right">Order value</th>
+                  <th className="px-3 py-2 text-left">Sales Order bill</th>
+                  <th className="px-3 py-2 text-left">Final bill / payment</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.length === 0 ? (
+                  <tr><td colSpan="6" className="text-center py-8 text-gray-400">No orders found in Business Book.</td></tr>
+                ) : orders.map(o => {
+                  const so = bills.find(b => b.business_book_id === o.id && b.bill_type === 1);
+                  const final = bills.find(b => b.business_book_id === o.id && b.bill_type === 4);
+                  const val = +o.po_amount || +o.sale_amount_without_gst || 0;
+                  return (
+                    <tr key={o.id} className="border-t border-gray-100 hover:bg-blue-50/40">
+                      <td className="px-3 py-2 font-medium whitespace-nowrap">{o.status === 'planning' ? '★ ' : ''}{o.lead_no || ('BB#' + o.id)}</td>
+                      <td className="px-3 py-2">{o.customer_name || '-'}</td>
+                      <td className="px-3 py-2 text-gray-500">{o.project_name || '-'}</td>
+                      <td className="px-3 py-2 text-right">{fmt(val)}</td>
+                      <td className="px-3 py-2">
+                        {so ? (
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-gray-700">{so.bill_number}</span>
+                            <span className="text-emerald-700">{fmt(so.total_amount)}</span>
+                            {ApprovalCell(so)}
+                          </div>
+                        ) : (
+                          <button onClick={() => openNewFor(o.id)} className="text-xs text-white bg-blue-600 hover:bg-blue-700 rounded-full px-3 py-1 flex items-center gap-1"><FiPlus size={12} /> Create Sales Order bill</button>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        {final ? (
+                          <div className="flex items-center gap-2">
+                            <span className="text-emerald-700">{fmt(final.total_amount)}</span>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full ${final.payment_status === 'paid' ? 'bg-emerald-100 text-emerald-700' : final.payment_status === 'partial' ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'}`}>{final.payment_status === 'paid' ? 'Paid' : final.payment_status === 'partial' ? 'Partial' : 'Unpaid'}</span>
+                            {final.approval_status === 'approved' && final.payment_status !== 'paid' && <button onClick={() => openPay(final)} className="text-[11px] text-blue-600 hover:underline">+ Payment</button>}
+                          </div>
+                        ) : so ? <span className="text-gray-300 text-xs">after installation</span> : <span className="text-gray-300 text-xs">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* MATERIAL — PO items vs Sales Bill (read-only) */}
       {tab === 'material' && (
