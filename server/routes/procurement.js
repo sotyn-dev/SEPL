@@ -4605,7 +4605,40 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     const shipStateCode = esc(dn.state_code || clientStateCode);
     return `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(docNo)}</title><style>${css}</style></head><body>
       <button class="print-btn" onclick="window.print()">🖨 Print</button>
-      ${isSalesBill ? '<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},400);});</script>' : ''}
+      <div id="pdfgen" style="position:fixed;inset:0;background:rgba(255,255,255,.94);display:flex;align-items:center;justify-content:center;font:600 15px Arial,sans-serif;color:#7a1b1b;z-index:99999">Generating PDF, please wait…</div>
+      <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+      <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+      <script>
+      (function(){
+        // Mam: "direct create and show here sales bill pdf" — the bill page
+        // renders itself to an actual PDF (html2canvas + jsPDF, no server
+        // engine needed) and shows it in the browser's PDF viewer. If the
+        // PDF libs can't load (no internet), we fall back to the printable
+        // HTML so the bill is never lost.
+        var btn=null;
+        function showHtml(){ var o=document.getElementById('pdfgen'); if(o)o.remove(); if(btn)btn.style.display=''; }
+        window.addEventListener('load', function(){
+          setTimeout(function(){
+            try{
+              btn=document.querySelector('.print-btn'); if(btn)btn.style.display='none';
+              if(!window.html2canvas||!window.jspdf){ showHtml(); return; }
+              html2canvas(document.body,{scale:2,backgroundColor:'#ffffff',useCORS:true,windowWidth:document.body.scrollWidth}).then(function(canvas){
+                var jsPDF=window.jspdf.jsPDF;
+                var img=canvas.toDataURL('image/jpeg',0.95);
+                var pdf=new jsPDF({unit:'pt',format:'a4',compress:true});
+                var pw=pdf.internal.pageSize.getWidth();
+                var ph=pdf.internal.pageSize.getHeight();
+                var imgH=canvas.height*pw/canvas.width;
+                var left=imgH,pos=0;
+                pdf.addImage(img,'JPEG',0,pos,pw,imgH,'','FAST'); left-=ph;
+                while(left>0){ pos-=ph; pdf.addPage(); pdf.addImage(img,'JPEG',0,pos,pw,imgH,'','FAST'); left-=ph; }
+                window.location.replace(URL.createObjectURL(pdf.output('blob')));
+              }).catch(function(){ showHtml(); });
+            }catch(e){ showHtml(); }
+          }, 400);
+        });
+      })();
+      </script>
       ${headerBlock}
       <table class="meta">
         <tr>
