@@ -382,7 +382,9 @@ export default function SalesBilling() {
                     <td className="px-3 py-2 whitespace-nowrap">{m.date || '-'}</td>
                     <td className="px-3 py-2 text-xs uppercase text-gray-400">{m.source || '-'}</td>
                     <td className="px-3 py-2 text-right">{m.item_count || 0}</td>
-                    <td className="px-3 py-2 text-right">{fmt(m.value)}</td>
+                    <td className="px-3 py-2 text-right" title={m.boq_value ? `${m.delivery_pct}% of BOQ ${fmt(m.boq_value)}` : 'No BOQ rate matched for this challan'}>
+                      {fmt(m.value)}{m.delivery_pct ? <span className="text-[9px] text-gray-400 ml-0.5">@{m.delivery_pct}%</span> : null}
+                    </td>
                     <td className="px-3 py-2">
                       {m.sales_bill_status === 'done' ? (
                         <div className="flex items-center gap-2">

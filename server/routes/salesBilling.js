@@ -147,12 +147,62 @@ router.get('/material', requirePermission('installation', 'view'), (req, res) =>
         ORDER BY dn.id DESC LIMIT 500`
     ).all();
   } catch (e) { /* tables may be absent on a stale DB */ }
+  // Resolve a challan's order (business_book) → its BOQ rates + Against-Delivery
+  // %, so VALUE = (delivered qty × BOQ rate) × delivery % (mam 2026-06-15).
+  const indentBb = new Map();   // indent_id/site → business_book_id
+  const bbCache = new Map();    // bb_id → { pct, rates: Map(descLower→rate) }
+  const resolveBb = (indentId, siteName) => {
+    const key = indentId ? ('i' + indentId) : ('s:' + (siteName || ''));
+    if (indentBb.has(key)) return indentBb.get(key);
+    let bbId = null;
+    try {
+      if (indentId) {
+        const r = db.prepare('SELECT op.business_book_id AS bb FROM indents i LEFT JOIN order_planning op ON op.id = i.planning_id WHERE i.id=?').get(indentId);
+        bbId = (r && r.bb) || null;
+        if (!bbId) { const i2 = db.prepare('SELECT site_name FROM indents WHERE id=?').get(indentId); siteName = (i2 && i2.site_name) || siteName; }
+      }
+      if (!bbId && siteName) {
+        const s = db.prepare('SELECT business_book_id AS bb FROM sites WHERE LOWER(TRIM(name))=LOWER(TRIM(?)) AND business_book_id IS NOT NULL LIMIT 1').get(siteName);
+        bbId = (s && s.bb) || null;
+      }
+    } catch (_) {}
+    indentBb.set(key, bbId);
+    return bbId;
+  };
+  const getBb = (bbId) => {
+    if (!bbId) return null;
+    if (bbCache.has(bbId)) return bbCache.get(bbId);
+    let pct = 0; const rates = new Map();
+    try {
+      const bb = db.prepare('SELECT payment_against_delivery FROM business_book WHERE id=?').get(bbId);
+      pct = parseFloat(String((bb && bb.payment_against_delivery) || '').replace(/[^0-9.]/g, '')) || 0;
+      for (const it of db.prepare('SELECT description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
+        if (it.description) rates.set(String(it.description).toLowerCase().trim(), +it.rate || 0);
+      }
+    } catch (_) {}
+    const v = { pct, rates };
+    bbCache.set(bbId, v);
+    return v;
+  };
+
   const out = rows.map(r => {
-    let itemCount = 0, itemValue = +r.grand_total_amount || 0;
-    try { const items = JSON.parse(r.items_json || '[]'); itemCount = items.length; if (!itemValue) itemValue = items.reduce((s, it) => s + (+it.amount || 0), 0); } catch (_) {}
+    let itemCount = 0, boqValue = 0;
+    const bb = getBb(resolveBb(r.indent_id, r.site_name));
+    try {
+      const items = JSON.parse(r.items_json || '[]');
+      itemCount = items.length;
+      for (const it of items) {
+        const qty = +it.qty || +it.quantity || 0;
+        const rate = bb ? (bb.rates.get(String(it.description || '').toLowerCase().trim()) || 0) : 0;
+        boqValue += qty * rate;
+      }
+    } catch (_) {}
+    const pct = bb ? bb.pct : 0;
+    const value = round2(boqValue * pct / 100);
     return {
       id: r.id, challan_no: r.document_number, date: r.delivery_date, source: r.source,
-      indent_number: r.indent_number, site_name: r.site_name, item_count: itemCount, value: round2(itemValue),
+      indent_number: r.indent_number, site_name: r.site_name, item_count: itemCount,
+      boq_value: round2(boqValue), delivery_pct: pct, value,
       sales_bill_status: r.sales_bill_number ? 'done' : (r.sales_bill_pending ? 'pending' : 'na'),
       sales_bill_number: r.sales_bill_number || null,
       sales_bill_file: r.sales_bill_file || null,
