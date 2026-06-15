@@ -669,8 +669,6 @@ export default function Procurement() {
       .then(r => {
         const n = r.data?.generated_count || 0;
         if (n > 0) toast.success(`${n} Sales Bill${n > 1 ? 's' : ''} auto-generated`, { duration: 5000 });
-        const needPct = (r.data?.skipped || []).filter(s => s.reason === 'no_delivery_pct').length;
-        if (needPct > 0) toast(`${needPct} PO${needPct > 1 ? 's' : ''} not billed — set "Against Delivery %" in Business Book → Payment Terms, then reopen this tab`, { icon: '⚠️', duration: 8000 });
       })
       .catch(() => {}).then(() => Promise.all([
       api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),

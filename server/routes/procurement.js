@@ -4211,7 +4211,9 @@ function computeClientPoItems(db, vendorPoId, isSalesBill) {
   `).all(vendorPoId);
 
   if (isSalesBill) {
-    // Sales-bill RATE = BOQ SITC rate × the order's Against-Delivery %.
+    // Sales-bill RATE = the FULL BOQ SITC rate (MD 2026-06-15: "sales bill
+    // rate full is ok ... dont change it" — do NOT reduce by Against-Delivery
+    // %). The delivery % is still read + returned for reference only.
     let pct = 0; const byId = new Map(), byDesc = new Map();
     try {
       const bbRow = db.prepare(
@@ -4236,8 +4238,8 @@ function computeClientPoItems(db, vendorPoId, isSalesBill) {
       if (!boq && r.po_item_id != null && byId.has(r.po_item_id)) boq = byId.get(r.po_item_id);
       if (!boq) boq = byDesc.get(String(r.description || '').toLowerCase().trim()) || 0;
       r.boq_rate = boq;
-      r.rate = pct > 0 ? r2(boq * pct / 100) : boq;
-      r.amount = r2(r.rate * (+r.quantity || 0));
+      r.rate = boq;                    // full BOQ SITC rate — no delivery-% reduction
+      r.amount = r2(boq * (+r.quantity || 0));
     }
     const withRate = rows.filter(r => +r.rate > 0).length;
     const noRate = rows.length - withRate;
@@ -4246,9 +4248,8 @@ function computeClientPoItems(db, vendorPoId, isSalesBill) {
       source: 'vendor_po_items',
       rate_source: noRate === 0 ? 'boq_sitc' : (withRate > 0 ? 'boq_sitc_partial' : 'rate_missing'),
       delivery_pct: pct,
-      warning: noRate === 0
-        ? (pct > 0 ? `Rate = BOQ SITC × ${pct}% (Against Delivery).` : null)
-        : `${noRate} of ${rows.length} line(s) have no BOQ SITC rate — fill the selling rate before saving.${pct > 0 ? ` Rate shown = BOQ × ${pct}%.` : ''}`,
+      warning: noRate === 0 ? null
+        : `${noRate} of ${rows.length} line(s) have no BOQ SITC rate — fill the selling rate before saving.`,
       rated_count: withRate,
       total_count: rows.length,
     };
@@ -4273,12 +4274,8 @@ function autoGenerateSalesBillForPO(db, vendorPoId, userId) {
   if (existing) return { skipped: 'exists', id: existing.id, document_number: existing.document_number };
 
   const data = computeClientPoItems(db, vendorPoId, true);
-  // Rate MUST be BOQ × Against-Delivery % (mam 2026-06-15).  If the order's
-  // "Against Delivery" payment-term % is blank, the rate would silently be
-  // the FULL BOQ — wrong.  Skip instead, so the PO stays in Ready-to-Dispatch
-  // and mam knows to set the % (Business Book → Payment Terms → Against
-  // Delivery).  An order that genuinely bills 100% on delivery = enter 100.
-  if (!(data.delivery_pct > 0)) return { skipped: 'no_delivery_pct' };
+  // Rate = full BOQ SITC rate (MD 2026-06-15: bill the full rate, no
+  // Against-Delivery % reduction).
   const items = (data.items || []).filter(r => (r.description && String(r.description).trim()) || +r.quantity > 0 || +r.rate > 0);
   if (!items.length) return { skipped: 'no_items' };
   if (items.some(r => !(+r.rate > 0))) return { skipped: 'unrated' };
@@ -4559,46 +4556,9 @@ router.get('/delivery-notes/:id/print', (req, res) => {
       }
     } catch (_) { /* fall through to po_items */ }
   }
-  // Sales bill rate is ALWAYS BOQ × the order's CURRENT Against-Delivery %
-  // (mam 2026-06-15 example: BOQ ₹83,400 × 60% = ₹50,040).  Recompute live
-  // from the order and OVERRIDE any stored rate, so a bill is correct even
-  // when it was generated before the % was set/changed.  Only kicks in when
-  // a delivery % is actually set (>0); otherwise the stored items / po_items
-  // are kept.
-  if (dn.document_type === 'sales_bill' && dn.vendor_po_id) {
-    try {
-      const computed = computeClientPoItems(db, dn.vendor_po_id, true);
-      // Use the delivery % from whichever path actually resolved the order:
-      // computeClientPoItems' own (narrow) lookup, OR the % the print query
-      // already resolved on the bill's business_book (broader join). This is
-      // why the rate wasn't changing — the narrow lookup missed the order.
-      let pct = +computed.delivery_pct || 0;
-      if (!pct && dn.bb_delivery_terms) pct = parseFloat(String(dn.bb_delivery_terms).replace(/[^0-9.]/g, '')) || 0;
-      const rws = (computed.items || []).filter(r => (r.description && String(r.description).trim()) || +r.quantity > 0 || +r.rate > 0);
-      if (rws.length && pct > 0) {
-        items = rws.map(it => {
-          const qty = +it.quantity || 0;
-          // Always start from the RAW BOQ rate and apply the % once.
-          const boq = +it.boq_rate || +it.rate || 0;
-          const rate = Math.round(boq * pct) / 100;     // BOQ × pct%
-          return {
-            description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
-            quantity: qty,
-            unit: it.unit || '',
-            rate,
-            disc_pct: 0,
-            amount: Math.round(rate * qty * 100) / 100,
-            item_code: it.item_code || '',
-            specification: it.specification || '',
-            size: it.size || '',
-            gst_text: it.hsn_code || '',
-            item_name: it.item_name || '',
-          };
-        });
-        itemsSource = 'client_po_computed';
-      }
-    } catch (_) {}
-  }
+  // (MD 2026-06-15: sales bill bills the FULL BOQ rate — no Against-Delivery
+  // % recompute. The stored items_json / po_items fallback below already
+  // carry the full BOQ rate.)
   if (!items.length) {
     // Client PO line items via the chain:
     //   delivery_notes.vendor_po_id → vendor_pos.indent_id
