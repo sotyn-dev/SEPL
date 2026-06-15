@@ -169,35 +169,33 @@ router.get('/material', requirePermission('installation', 'view'), (req, res) =>
     indentBb.set(key, bbId);
     return bbId;
   };
-  const getBb = (bbId) => {
-    if (!bbId) return null;
+  const getPct = (bbId) => {
+    if (!bbId) return 0;
     if (bbCache.has(bbId)) return bbCache.get(bbId);
-    let pct = 0; const rates = new Map();
+    let pct = 0;
     try {
       const bb = db.prepare('SELECT payment_against_delivery FROM business_book WHERE id=?').get(bbId);
       pct = parseFloat(String((bb && bb.payment_against_delivery) || '').replace(/[^0-9.]/g, '')) || 0;
-      for (const it of db.prepare('SELECT description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
-        if (it.description) rates.set(String(it.description).toLowerCase().trim(), +it.rate || 0);
-      }
     } catch (_) {}
-    const v = { pct, rates };
-    bbCache.set(bbId, v);
-    return v;
+    bbCache.set(bbId, pct);
+    return pct;
   };
+  // The dispatched material value = the indent's PO items × their BOQ rate
+  // (po_items.rate via indent_items.po_item_id; fall back to the indent line
+  // rate).  This is the qty "as per PO item" (mam 2026-06-15).
+  const indentBoq = db.prepare(
+    `SELECT COALESCE(SUM(ii.quantity * COALESCE(pi.rate, ii.rate, 0)), 0) AS val, COUNT(*) AS cnt
+       FROM indent_items ii LEFT JOIN po_items pi ON pi.id = ii.po_item_id
+      WHERE ii.indent_id = ?`
+  );
 
   const out = rows.map(r => {
-    let itemCount = 0, boqValue = 0;
-    const bb = getBb(resolveBb(r.indent_id, r.site_name));
-    try {
-      const items = JSON.parse(r.items_json || '[]');
-      itemCount = items.length;
-      for (const it of items) {
-        const qty = +it.qty || +it.quantity || 0;
-        const rate = bb ? (bb.rates.get(String(it.description || '').toLowerCase().trim()) || 0) : 0;
-        boqValue += qty * rate;
-      }
-    } catch (_) {}
-    const pct = bb ? bb.pct : 0;
+    const pct = getPct(resolveBb(r.indent_id, r.site_name));
+    let boqValue = 0, itemCount = 0;
+    if (r.indent_id) {
+      try { const w = indentBoq.get(r.indent_id); boqValue = +w.val || 0; itemCount = +w.cnt || 0; } catch (_) {}
+    }
+    if (!itemCount) { try { itemCount = JSON.parse(r.items_json || '[]').length; } catch (_) {} }
     const value = round2(boqValue * pct / 100);
     return {
       id: r.id, challan_no: r.document_number, date: r.delivery_date, source: r.source,
