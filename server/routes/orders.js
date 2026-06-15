@@ -3,7 +3,7 @@ const path = require('path');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { validatePoNumber } = require('../utils/validate');
 const router = express.Router();
 router.use(authMiddleware);
@@ -108,7 +108,7 @@ router.get('/po', (req, res) => {
   res.json(rows);
 });
 
-router.post('/po', (req, res) => {
+router.post('/po', requirePermission('orders', 'create'), (req, res) => {
   const { business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, crm_name, items } = req.body;
   const db = getDb();
 
@@ -172,7 +172,7 @@ router.post('/po', (req, res) => {
   res.status(201).json({ id: poId });
 });
 
-router.put('/po/:id', (req, res) => {
+router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {
   const { business_book_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, status, site_engineer_id, site_engineer_ids, crm_name } = req.body;
   // Same regex guard on edit — junk PO numbers can't be re-saved.
   if (po_number !== undefined && po_number !== null && String(po_number).trim() !== '') {
@@ -255,7 +255,7 @@ router.put('/po/:id', (req, res) => {
   }
 });
 
-router.delete('/po/:id', (req, res) => {
+router.delete('/po/:id', requirePermission('orders', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   // ?force=1 cascades down through the entire procurement chain so admin
@@ -396,7 +396,7 @@ router.delete('/po/:id', (req, res) => {
   }
 });
 
-router.delete('/planning/:id', (req, res) => {
+router.delete('/planning/:id', requirePermission('orders', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM order_planning WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -417,7 +417,7 @@ router.get('/po/:id/items', (req, res) => {
 // bcs after labour rate add this happen". Used when a labour rate sheet
 // was applied to the wrong PO or with a wrong-shape sheet; mam can
 // reset and re-upload cleanly. Idempotent and scoped by business_book_id.
-router.post('/po/:id/labour-rates/reset', (req, res) => {
+router.post('/po/:id/labour-rates/reset', requirePermission('orders', 'edit'), (req, res) => {
   const db = getDb();
   const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
   if (!po?.business_book_id) return res.status(404).json({ error: 'PO not found or has no business_book link' });
@@ -434,7 +434,7 @@ router.post('/po/:id/labour-rates/reset', (req, res) => {
 // uploads the Labour Rate Sheet — the rate from each row is matched
 // to a po_item and written here without disturbing rate / quantity /
 // description. From here the rate flows into dpr_work_items.
-router.post('/po/:id/labour-rates', (req, res) => {
+router.post('/po/:id/labour-rates', requirePermission('orders', 'edit'), (req, res) => {
   const db = getDb();
   const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
   if (!po) return res.status(404).json({ error: 'PO not found' });
@@ -469,7 +469,7 @@ router.post('/po/:id/labour-rates', (req, res) => {
   }
 });
 
-router.post('/po/:id/items', (req, res) => {
+router.post('/po/:id/items', requirePermission('orders', 'edit'), (req, res) => {
  try {
   const { items } = req.body;
   const db = getDb();
@@ -596,7 +596,7 @@ router.get('/planning', (req, res) => {
     LEFT JOIN purchase_orders po ON op.po_id=po.id LEFT JOIN business_book bb ON op.business_book_id=bb.id ORDER BY op.created_at DESC`).all());
 });
 
-router.post('/planning', (req, res) => {
+router.post('/planning', requirePermission('orders', 'create'), (req, res) => {
   const { po_id, business_book_id, planned_start, planned_end, notes } = req.body;
   const r = getDb().prepare(
     'INSERT INTO order_planning (po_id, business_book_id, planned_start, planned_end, notes, created_by) VALUES (?,?,?,?,?,?)'
@@ -604,7 +604,7 @@ router.post('/planning', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put('/planning/:id', (req, res) => {
+router.put('/planning/:id', requirePermission('orders', 'edit'), (req, res) => {
   const { status, planned_start, planned_end, notes } = req.body;
   getDb().prepare('UPDATE order_planning SET status=?, planned_start=?, planned_end=?, notes=? WHERE id=?')
     .run(status, planned_start, planned_end, notes, req.params.id);
@@ -664,7 +664,7 @@ router.get('/po-template', (req, res) => {
 // Upload PO Excel / BOQ and auto-import items
 // Supports: SEPL BOQ format (SN, Item Name, QTY, UNIT, Supply Rate, Installation Rate, SITC Rate, Total Cost)
 // Also supports: simple template (Item Name, Specification, Size, Qty, Unit, Rate, Amount, HSN)
-router.post('/po-upload-excel', upload.single('file'), (req, res) => {
+router.post('/po-upload-excel', requirePermission('orders', 'create'), upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const wb = XLSX.readFile(req.file.path);
@@ -826,7 +826,7 @@ router.post('/po-upload-excel', upload.single('file'), (req, res) => {
 // frontend can merge them onto the existing BOQ items without losing
 // SITC rates / quantities. Also persists the file so it can be re-shown
 // on the PO view later.
-router.post('/labour-upload-excel', upload.single('file'), (req, res) => {
+router.post('/labour-upload-excel', requirePermission('orders', 'edit'), upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const wb = XLSX.readFile(req.file.path);
