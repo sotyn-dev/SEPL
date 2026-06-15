@@ -31,6 +31,34 @@ export function AuthProvider({ children }) {
     }
   }, [token]);
 
+  // Live-refresh permissions so a grant an admin just made takes effect WITHOUT
+  // a re-login (mam 2026-06-15: "if I give permission, not working proper").
+  // Backend enforces permissions live; the frontend used to only read them at
+  // login. Re-pull /auth/me when the tab regains focus and every 2 min while
+  // active, debounced. Background failures are ignored (never auto-logout here).
+  useEffect(() => {
+    if (!token) return;
+    let last = Date.now();
+    const refresh = () => {
+      if (Date.now() - last < 5000) return;     // debounce double events
+      last = Date.now();
+      api.get('/auth/me').then(r => {
+        setPermissions(r.data.permissions || {});
+        setUserRoles(r.data.userRoles || []);
+        setUser(u => u ? { ...u, role: r.data.role, department: r.data.department } : u);
+      }).catch(() => {});
+    };
+    const onVis = () => { if (document.visibilityState === 'visible') refresh(); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', onVis);
+    const id = setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 120000);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', onVis);
+      clearInterval(id);
+    };
+  }, [token]);
+
   const login = async (identifier, password) => {
     // Accept username or email — backend matches either.
     const { data } = await api.post('/auth/login', { username: identifier, email: identifier, password });
