@@ -52,6 +52,7 @@ export default function ChequeFMS() {
   const [actionForm, setActionForm] = useState({ action: '', remarks: '', next_date: '' });
   const [selected, setSelected] = useState(null);
   const [history, setHistory] = useState([]);
+  const [vendors, setVendors] = useState([]);
 
   const load = () => {
     const params = new URLSearchParams();
@@ -62,6 +63,8 @@ export default function ChequeFMS() {
     api.get('/cheques/stats/summary').then(r => setStats(r.data || { by_status: [], action_due_count: 0 })).catch(() => {});
   };
   useEffect(load, [tab, search]);
+  // Vendor suggestions for the Payee field (mam 2026-06-15 automation).
+  useEffect(() => { api.get('/procurement/vendors').then(r => setVendors(r.data || [])).catch(() => {}); }, []);
 
   // STAGE 1 — open the issue modal with sensible defaults.
   const openIssue = () => {
@@ -309,7 +312,7 @@ export default function ChequeFMS() {
         <form onSubmit={saveIssue} className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Cheque Number *</label><input className="input" value={form.cheque_number || ''} onChange={e => setForm({ ...form, cheque_number: e.target.value })} required /></div>
-            <div><label className="label">Payee To *</label><input className="input" value={form.payee_to || ''} onChange={e => setForm({ ...form, payee_to: e.target.value })} required /></div>
+            <div><label className="label">Payee To *</label><input className="input" list="chqVendorsDL" value={form.payee_to || ''} onChange={e => setForm({ ...form, payee_to: e.target.value })} placeholder="Pick vendor or type" required /><datalist id="chqVendorsDL">{vendors.map(v => <option key={v.id} value={v.name} />)}</datalist></div>
             <div>
               <label className="label">Bank Name *</label>
               <select className="select" value={form.bank_name || ''} onChange={e => setForm({ ...form, bank_name: e.target.value })} required>

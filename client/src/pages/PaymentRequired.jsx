@@ -81,6 +81,7 @@ export default function PaymentRequired() {
   const [stats, setStats] = useState(null);
   const [sites, setSites] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [vendors, setVendors] = useState([]);
   const [modal, setModal] = useState(null);
   const [viewData, setViewData] = useState(null);
   const [form, setForm] = useState({ ...emptyForm });
@@ -168,6 +169,7 @@ export default function PaymentRequired() {
     // mam's ask on 2026-04-23.
     api.get('/dpr/sites?all=1').then(r => setSites(r.data)).catch(() => {});
     api.get('/hr/employees').then(r => setEmployees(r.data)).catch(() => {});
+    api.get('/procurement/vendors').then(r => setVendors(r.data || [])).catch(() => {});
   }, [load]);
 
   // Mandatory-proof validation per category + mode (mam: 'if proof
@@ -1031,6 +1033,10 @@ export default function PaymentRequired() {
         <form onSubmit={handleSave} className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
 
           {/* Common fields */}
+          {/* Shared suggestion lists — pick from the master OR keep typing
+              (mam 2026-06-15 automation: vendor / person fields). */}
+          <datalist id="prVendorsDL">{vendors.map(v => <option key={v.id} value={v.name} />)}</datalist>
+          <datalist id="prEmployeesDL">{employees.map(e => <option key={e.id} value={e.name} />)}</datalist>
           <div className="border rounded-lg p-3 bg-gray-50">
             <h4 className="font-semibold text-sm text-gray-700 mb-3">Request Details</h4>
             <div className="grid grid-cols-3 gap-3">
@@ -1168,7 +1174,7 @@ export default function PaymentRequired() {
               <h4 className="font-semibold text-sm text-red-700 mb-3">Purchase Details</h4>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="label">Indent Number *</label><input className="input" value={form.indent_number} onChange={e => F('indent_number', e.target.value)} required /></div>
-                <div><label className="label">Vendor Name *</label><input className="input" value={form.vendor_name} onChange={e => F('vendor_name', e.target.value)} required /></div>
+                <div><label className="label">Vendor Name *</label><input className="input" list="prVendorsDL" value={form.vendor_name} onChange={e => F('vendor_name', e.target.value)} placeholder="Pick or type" required /></div>
                 <div className="col-span-2"><label className="label">Item Description</label><textarea className="input" rows="2" value={form.item_description} onChange={e => F('item_description', e.target.value)} /></div>
                 <div><label className="label">Purchase Order Upload *</label>
                   {form.quotation_link ? (
@@ -1193,7 +1199,7 @@ export default function PaymentRequired() {
                 <div><label className="label">Labour Type *</label><select className="select" value={form.labour_type} onChange={e => F('labour_type', e.target.value)} required><option value="">Select</option><option>Skilled</option><option>Unskilled</option><option>Semi-skilled</option><option>Contractor</option></select></div>
                 <div><label className="label">Number of Workers *</label><input className="input" type="number" value={form.number_of_workers || ''} onChange={e => F('number_of_workers', +e.target.value)} required /></div>
                 <div><label className="label">Work Duration</label><input className="input" value={form.work_duration} onChange={e => F('work_duration', e.target.value)} placeholder="e.g. 5 days, 2 weeks" /></div>
-                <div><label className="label">Site Engineer Name</label><input className="input" value={form.site_engineer_name} onChange={e => F('site_engineer_name', e.target.value)} /></div>
+                <div><label className="label">Site Engineer Name</label><input className="input" list="prEmployeesDL" value={form.site_engineer_name} onChange={e => F('site_engineer_name', e.target.value)} placeholder="Pick or type" /></div>
               </div>
             </div>
           )}
@@ -1206,7 +1212,7 @@ export default function PaymentRequired() {
                 <div><label className="label">Vehicle Type *</label><select className="select" value={form.vehicle_type} onChange={e => F('vehicle_type', e.target.value)} required><option value="">Select</option><option>Truck</option><option>Pickup</option><option>Tempo</option><option>Car</option><option>Auto</option><option>Crane</option></select></div>
                 <div><label className="label">From-To Location *</label><input className="input" value={form.from_to_location} onChange={e => F('from_to_location', e.target.value)} required /></div>
                 <div><label className="label">Material Description</label><input className="input" value={form.material_description} onChange={e => F('material_description', e.target.value)} /></div>
-                <div><label className="label">Driver / Vendor Name</label><input className="input" value={form.driver_vendor_name} onChange={e => F('driver_vendor_name', e.target.value)} /></div>
+                <div><label className="label">Driver / Vendor Name</label><input className="input" list="prVendorsDL" value={form.driver_vendor_name} onChange={e => F('driver_vendor_name', e.target.value)} placeholder="Pick or type" /></div>
               </div>
             </div>
           )}
