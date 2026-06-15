@@ -480,7 +480,7 @@ export default function Delegation() {
       {/* Reverted to the original 10-column table per mam
           (2026-05-21: "not change delegation like previous"). */}
       <div className="card p-0 overflow-auto max-h-[70vh]">
-        <table className="text-sm min-w-[1100px]">
+        <table className="text-sm min-w-[1100px] lg:min-w-0 lg:w-full">
           <thead className="sticky top-0 z-10 bg-gray-100">
             <tr>
               <th className="w-12 text-center">S.No.</th>
@@ -514,7 +514,7 @@ export default function Delegation() {
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
                   <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
-                  <td className="align-top" style={{ minWidth: '220px', maxWidth: '420px' }}>
+                  <td className="align-top" style={{ minWidth: '180px', maxWidth: '340px' }}>
                     <div className="text-gray-800 font-medium whitespace-normal break-words leading-snug">
                       {cleanDesc(t.description || t.title)}
                     </div>
