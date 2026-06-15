@@ -4522,6 +4522,18 @@ router.get('/delivery-notes/:id/print', (req, res) => {
   `).get(req.params.id);
   if (!dn) return res.status(404).send('Dispatch not found');
 
+  // Robust Against-Delivery % for the "Payment Due" line (mam 2026-06-15):
+  // if the main join didn't surface it, resolve it via the same PO→order
+  // path computeClientPoItems uses, so the line shows whenever the order has
+  // the % set.
+  if (dn.document_type === 'sales_bill' && dn.vendor_po_id &&
+      !(parseFloat(String(dn.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) > 0)) {
+    try {
+      const c = computeClientPoItems(db, dn.vendor_po_id, true);
+      if (c && c.delivery_pct > 0) dn.bb_delivery_terms = String(c.delivery_pct);
+    } catch (_) {}
+  }
+
   // Resolve items in priority order:
   //   1) dn.items_json — per-row overrides the user tweaked in the create
   //      modal (qty / rate / disc % / include flag). Authoritative when set.
