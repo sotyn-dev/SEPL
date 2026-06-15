@@ -592,10 +592,15 @@ export default function PaymentRequired() {
                   <td className="text-sm">{r.site_display || r.site_name || '-'}</td>
                   <td><span className={`badge ${r.category === 'TA/DA' ? 'badge-purple' : r.category === 'Purchase' ? 'badge-blue' : r.category === 'Labour' ? 'badge-green' : 'badge-gray'}`}>{r.category}</span></td>
                   <td className="font-semibold">{fmt(r.amount)}</td>
+                  {/* Approval Amt — always show a number (mam 2026-06-15
+                      "show how much amount"): the latest approver-agreed
+                      amount once any level approves, else the requested
+                      amount (greyed = not yet approved). Emerald = a level
+                      reduced it. */}
                   <td className="font-semibold">
                     {r.approved_amount != null
-                      ? <span className={+r.approved_amount !== +r.amount ? 'text-emerald-700' : ''} title={+r.approved_amount !== +r.amount ? `Adjusted from ${fmt(r.amount)}` : 'Same as requested'}>{fmt(r.approved_amount)}</span>
-                      : <span className="text-gray-300" title="Not adjusted — pays the requested amount">—</span>}
+                      ? <span className={+r.approved_amount !== +r.amount ? 'text-emerald-700' : ''} title={+r.approved_amount !== +r.amount ? `Adjusted from ${fmt(r.amount)}` : 'Approved at requested amount'}>{fmt(r.approved_amount)}</span>
+                      : <span className="text-gray-400" title="Not yet approved — will pay the requested amount unless a level adjusts it">{fmt(r.amount)}</span>}
                   </td>
                   <td className="text-sm max-w-[280px]">
                     {/* Show full purpose text, wrap to multiple lines for
