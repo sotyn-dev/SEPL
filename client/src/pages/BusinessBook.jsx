@@ -104,8 +104,21 @@ export default function BusinessBook() {
 
   const handleDelete = async (id, leadNo) => {
     if (!confirm(`Delete entry ${leadNo}?`)) return;
-    try { await api.delete(`/business-book/${id}`); toast.success('Deleted'); loadEntries(); loadStats(); }
-    catch { toast.error('Failed to delete'); }
+    try {
+      await api.delete(`/business-book/${id}`);
+      toast.success('Deleted'); loadEntries(); loadStats();
+    } catch (e) {
+      // Server refuses if the order has DPRs/attendance (deleting wipes them).
+      // Ask once more, then force-delete.
+      if (e.response?.status === 409 && e.response?.data?.needs_force) {
+        const d = e.response.data;
+        if (!confirm(`⚠ ${d.error}\n\nThis CANNOT be undone. Delete anyway?`)) return;
+        try { await api.delete(`/business-book/${id}?force=1`); toast.success('Deleted'); loadEntries(); loadStats(); }
+        catch { toast.error('Failed to delete'); }
+      } else {
+        toast.error(e.response?.data?.error || 'Failed to delete');
+      }
+    }
   };
 
   const handleView = (entry) => { setViewEntry(entry); setModal('view'); };

@@ -319,6 +319,21 @@ router.delete('/:id', requirePermission('business_book', 'delete'), (req, res) =
   try {
     const db = getDb();
     const id = req.params.id;
+    // Safety guard (mam 2026-06-15: a mistaken delete cascade-wiped Hero Homes'
+    // DPRs).  Deleting a Business Book order ALSO erases its sites' DPRs +
+    // attendance.  Refuse if any DPRs/attendance exist unless ?force=1, so an
+    // accidental click can't destroy filled DPRs.
+    if (req.query.force !== '1') {
+      const sub = '(SELECT id FROM sites WHERE business_book_id=?)';
+      const dprCount = db.prepare(`SELECT COUNT(*) c FROM dpr WHERE site_id IN ${sub}`).get(id).c;
+      const attCount = db.prepare(`SELECT COUNT(*) c FROM attendance WHERE site_id IN ${sub}`).get(id).c;
+      if (dprCount > 0 || attCount > 0) {
+        return res.status(409).json({
+          error: `This order has ${dprCount} DPR(s) and ${attCount} attendance record(s) under its site(s). Deleting will permanently erase them.`,
+          dpr_count: dprCount, attendance_count: attCount, needs_force: true,
+        });
+      }
+    }
     // Disable foreign keys temporarily for clean delete
     db.pragma('foreign_keys = OFF');
     db.prepare('DELETE FROM project_finance WHERE business_book_id=?').run(id);
