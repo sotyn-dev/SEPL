@@ -385,7 +385,10 @@ export default function SalesBilling() {
                     <td className="px-3 py-2 text-right">{fmt(m.value)}</td>
                     <td className="px-3 py-2">
                       {m.sales_bill_status === 'done' ? (
-                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">✓ {m.sales_bill_number || 'Done'}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">✓ {m.sales_bill_number || 'Done'}</span>
+                          {m.sales_bill_file && <a href={m.sales_bill_file} target="_blank" rel="noopener noreferrer" className="text-[11px] text-blue-600 hover:underline">📎 PDF</a>}
+                        </div>
                       ) : m.sales_bill_status === 'pending' ? (
                         <div className="flex items-center gap-2">
                           <span className="text-[11px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700">Pending</span>

@@ -135,11 +135,15 @@ router.get('/material', requirePermission('installation', 'view'), (req, res) =>
     rows = db.prepare(
       `SELECT dn.id, dn.document_number, dn.delivery_date, dn.source,
               dn.sales_bill_pending, dn.sales_bill_number, dn.grand_total_amount, dn.items_json,
+              COALESCE(dn.sales_bill_file_path,
+                       (SELECT sbn.file_path FROM delivery_notes sbn
+                         WHERE sbn.document_type='sales_bill' AND sbn.document_number=dn.sales_bill_number LIMIT 1)
+              ) AS sales_bill_file,
               COALESCE(vp.indent_id, dn.indent_id) AS indent_id, i.indent_number, i.site_name
          FROM delivery_notes dn
          LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
          LEFT JOIN indents i ON i.id = COALESCE(vp.indent_id, dn.indent_id)
-        WHERE dn.document_type = 'challan'
+        WHERE dn.document_type = 'challan' AND COALESCE(dn.source,'') <> 'rgp'
         ORDER BY dn.id DESC LIMIT 500`
     ).all();
   } catch (e) { /* tables may be absent on a stale DB */ }
@@ -151,6 +155,7 @@ router.get('/material', requirePermission('installation', 'view'), (req, res) =>
       indent_number: r.indent_number, site_name: r.site_name, item_count: itemCount, value: round2(itemValue),
       sales_bill_status: r.sales_bill_number ? 'done' : (r.sales_bill_pending ? 'pending' : 'na'),
       sales_bill_number: r.sales_bill_number || null,
+      sales_bill_file: r.sales_bill_file || null,
     };
   });
   res.json(out);
