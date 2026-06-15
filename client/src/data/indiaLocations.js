@@ -16,6 +16,31 @@ export const STATES = [
   'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry',
 ];
 
+// GST state codes (mirrors the server's stateCodeFor in procurement.js) so
+// the State Code + intra/inter-state GST split can auto-fill from the State
+// dropdown instead of being typed (mam 2026-06-15 automation audit).
+export const STATE_GST_CODES = {
+  'jammu and kashmir': '01', 'himachal pradesh': '02', 'punjab': '03',
+  'chandigarh': '04', 'uttarakhand': '05', 'haryana': '06', 'delhi': '07',
+  'rajasthan': '08', 'uttar pradesh': '09', 'bihar': '10', 'sikkim': '11',
+  'arunachal pradesh': '12', 'nagaland': '13', 'manipur': '14',
+  'mizoram': '15', 'tripura': '16', 'meghalaya': '17', 'assam': '18',
+  'west bengal': '19', 'jharkhand': '20', 'odisha': '21', 'chhattisgarh': '22',
+  'madhya pradesh': '23', 'gujarat': '24', 'daman and diu': '25',
+  'dadra and nagar haveli': '26', 'dadra and nagar haveli and daman and diu': '26',
+  'maharashtra': '27', 'andhra pradesh': '37', 'karnataka': '29', 'goa': '30',
+  'lakshadweep': '31', 'kerala': '32', 'tamil nadu': '33', 'puducherry': '34',
+  'andaman and nicobar islands': '35', 'telangana': '36', 'ladakh': '38',
+};
+
+// SEPL's own (seller) state — used to decide intra- vs inter-state GST.
+export const SEPL_HOME_STATE = 'punjab';
+
+// Resolve the 2-digit GST state code from a state name (case-insensitive).
+export function gstStateCode(stateName) {
+  return STATE_GST_CODES[String(stateName || '').trim().toLowerCase()] || '';
+}
+
 export const DISTRICTS_BY_STATE = {
   'Andhra Pradesh': [
     'Alluri Sitharama Raju', 'Anakapalli', 'Anantapur', 'Annamayya', 'Bapatla',

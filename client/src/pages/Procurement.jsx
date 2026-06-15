@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
+import { STATES, gstStateCode, SEPL_HOME_STATE } from '../data/indiaLocations';
 import StatusBadge from '../components/StatusBadge';
 import NumInput from '../components/NumInput';
 import Pagination, { usePagination } from '../components/Pagination';
@@ -6461,8 +6462,21 @@ export default function Procurement() {
             <div className="border border-emerald-200 bg-emerald-50/40 rounded p-3 space-y-3">
               <div className="text-[10px] font-bold uppercase text-emerald-700">Tax Invoice Details</div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div><label className="label">Place of Supply</label><input className="input" value={form.place_of_supply || ''} onChange={e => setForm({ ...form, place_of_supply: e.target.value })} placeholder="e.g. Punjab" /></div>
-                <div><label className="label">State Code</label><input className="input" value={form.state_code || ''} onChange={e => setForm({ ...form, state_code: e.target.value })} placeholder="e.g. 03" /></div>
+                <div><label className="label">Place of Supply</label>
+                  <select className="select" value={form.place_of_supply || ''} onChange={e => {
+                    // Pick the client's state → auto-fill State Code + the
+                    // intra/inter-state GST split (Punjab=home → CGST+SGST,
+                    // else IGST). All stay editable for the odd exception.
+                    const st = e.target.value;
+                    const home = st.trim().toLowerCase() === SEPL_HOME_STATE;
+                    setForm({ ...form, place_of_supply: st, state_code: gstStateCode(st),
+                      cgst_pct: home ? 9 : 0, sgst_pct: home ? 9 : 0, igst_pct: home ? 0 : 18 });
+                  }}>
+                    <option value="">Select state</option>
+                    {STATES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div><label className="label">State Code <span className="text-gray-400 text-[10px]">(auto)</span></label><input className="input" value={form.state_code || ''} onChange={e => setForm({ ...form, state_code: e.target.value })} placeholder="auto from state" /></div>
                 <div><label className="label">E-Way Bill No.</label><input className="input" value={form.e_way_bill_no || ''} onChange={e => setForm({ ...form, e_way_bill_no: e.target.value })} /></div>
                 <div className="flex items-center gap-2"><input type="checkbox" id="rev_charge" checked={!!form.reverse_charge} onChange={e => setForm({ ...form, reverse_charge: e.target.checked })} className="w-4 h-4" /><label htmlFor="rev_charge" className="text-sm">Reverse Charge</label></div>
                 <div><label className="label">Vehicle No.</label><input className="input" value={form.vehicle_no || ''} onChange={e => setForm({ ...form, vehicle_no: e.target.value })} /></div>

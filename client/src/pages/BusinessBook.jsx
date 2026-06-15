@@ -10,7 +10,7 @@ import {
 } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 import SearchableSelect from '../components/SearchableSelect';
-import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
+import { STATES, DISTRICTS_BY_STATE, gstStateCode } from '../data/indiaLocations';
 
 const STATUSES = ['booked', 'advance_received', 'planning', 'execution', 'completed'];
 const CATEGORIES = ['Low Voltage', 'Fire Fighting', 'Fire NOC', 'Fire Alarm', 'CCTV', 'Access Control', 'PA System', 'Networking', 'Solar', 'Other'];
@@ -350,7 +350,7 @@ export default function BusinessBook() {
                   options={STATES.map(s => ({ value: s, label: s }))}
                   value={form.state} valueKey="value" displayKey="label"
                   placeholder="Pick state"
-                  onChange={(opt) => { F('state', opt?.value || ''); F('district', ''); }}
+                  onChange={(opt) => { const st = opt?.value || ''; F('state', st); F('district', ''); F('state_code', gstStateCode(st)); }}
                 />
               </div>
               <div>
@@ -362,7 +362,7 @@ export default function BusinessBook() {
                   onChange={(opt) => F('district', opt?.value || '')}
                 />
               </div>
-              <Inp label="State Code" value={form.state_code} onChange={v => F('state_code', v)} placeholder="e.g. 03" />
+              <Inp label="State Code" value={form.state_code} onChange={v => F('state_code', v)} placeholder="auto from State (e.g. 03)" />
               {/* GSTIN feeds into the auto-generated Sales Bill / Tax
                   Invoice. Punjab GSTINs start with 03; verify the format
                   is 15 chars (2 digit state + 10 char PAN + entity code +
