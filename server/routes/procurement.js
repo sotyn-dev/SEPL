@@ -4522,15 +4522,36 @@ router.get('/delivery-notes/:id/print', (req, res) => {
   `).get(req.params.id);
   if (!dn) return res.status(404).send('Dispatch not found');
 
-  // Robust Against-Delivery % for the "Payment Due" line (mam 2026-06-15):
-  // if the main join didn't surface it, resolve it via the same PO→order
-  // path computeClientPoItems uses, so the line shows whenever the order has
-  // the % set.
-  if (dn.document_type === 'sales_bill' && dn.vendor_po_id &&
-      !(parseFloat(String(dn.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) > 0)) {
+  // Recover the CLIENT from Business Book when the order didn't resolve via
+  // order_planning (common: indent has no planning_id) — the PO's BOQ items
+  // carry business_book_id directly, so we backfill client address / GSTIN /
+  // state / contact + the Against-Delivery % from there (mam 2026-06-15:
+  // "its full address in business book").
+  if (dn.document_type === 'sales_bill' && dn.vendor_po_id && (!dn.client_address || !dn.client_gstin || !dn.client_state)) {
     try {
-      const c = computeClientPoItems(db, dn.vendor_po_id, true);
-      if (c && c.delivery_pct > 0) dn.bb_delivery_terms = String(c.delivery_pct);
+      const bbRow = db.prepare(`
+        SELECT poi.business_book_id AS id
+          FROM vendor_po_items vpi
+          JOIN indent_items ii ON ii.id = vpi.indent_item_id
+          JOIN po_items poi ON poi.id = ii.po_item_id
+         WHERE vpi.vendor_po_id = ? AND poi.business_book_id IS NOT NULL
+         LIMIT 1`).get(dn.vendor_po_id);
+      if (bbRow && bbRow.id) {
+        const bb = db.prepare('SELECT * FROM business_book WHERE id=?').get(bbRow.id);
+        if (bb) {
+          dn.client_company     = dn.client_company     || bb.company_name;
+          dn.client_person_name = dn.client_person_name || bb.client_name;
+          dn.client_phone       = dn.client_phone       || bb.client_contact;
+          dn.client_email       = dn.client_email       || bb.client_email;
+          dn.client_address     = dn.client_address     || bb.billing_address;
+          dn.site_address       = dn.site_address       || bb.shipping_address;
+          dn.client_state       = dn.client_state       || bb.state;
+          dn.client_state_code  = dn.client_state_code  || bb.state_code;
+          dn.client_gstin       = dn.client_gstin       || bb.gstin;
+          if (!dn.site_name)    dn.site_name = bb.project_name;
+          if (!(parseFloat(String(dn.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) > 0)) dn.bb_delivery_terms = bb.payment_against_delivery;
+        }
+      }
     } catch (_) {}
   }
 
@@ -4685,13 +4706,13 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     // otherwise compute from the disc %.
     const taxable = +it.amount || (gross * (1 - discPct / 100));
     if (isSalesBill) {
-      return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td class="num">${fmt(rate)}</td><td class="num">${discPct ? fmt(discPct) : '0'}</td><td class="num">${fmt(taxable)}</td><td class="num">${fmt(taxable)}</td></tr>`;
+      return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td class="num">${fmt(rate)}</td><td class="num">${discPct ? fmt(discPct) : '0'}</td><td class="num">${fmt(taxable)}</td></tr>`;
     }
     return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td></td></tr>`;
   }).join('') + Array.from({ length: padCount }, (_, i) => {
     const idx = items.length + i + 1;
     return isSalesBill
-      ? `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`
+      ? `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`
       : `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
   }).join('');
 
@@ -4938,7 +4959,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       </table>`;
       })()}
       <table class="items">
-        <thead><tr><th style="width:30px">SL NO.</th><th>DESCRIPTION OF GOODS / SERVICES</th><th style="width:60px">HSN / SAC</th><th style="width:50px">QTY</th><th style="width:40px">UOM</th><th style="width:60px">RATE (₹)</th><th style="width:40px">DISC. %</th><th style="width:80px">TAXABLE VALUE (₹)</th><th style="width:80px">AMOUNT (₹)</th></tr></thead>
+        <thead><tr><th style="width:30px">SL NO.</th><th>DESCRIPTION OF GOODS / SERVICES</th><th style="width:60px">HSN / SAC</th><th style="width:50px">QTY</th><th style="width:40px">UOM</th><th style="width:70px">RATE (₹)</th><th style="width:40px">DISC. %</th><th style="width:90px">AMOUNT (₹)</th></tr></thead>
         <tbody>${rowsHtml}</tbody>
       </table>
       <table class="totals">
