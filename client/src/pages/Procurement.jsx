@@ -661,11 +661,17 @@ export default function Procurement() {
       api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
       api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
     ]),
-    delivery: () => Promise.all([
+    // Mam (2026-06-15) "auto generated, no Dispatch click": opening this tab
+    // first sweeps every Ready-to-Dispatch PO and auto-creates its client
+    // Sales Bill server-side (idempotent; skips unrated POs), THEN loads — so
+    // bills appear on their own with the PDF viewable, no button press.
+    delivery: () => api.post('/procurement/auto-sales-bills/sweep')
+      .then(r => { const n = r.data?.generated_count || 0; if (n > 0) toast.success(`${n} Sales Bill${n > 1 ? 's' : ''} auto-generated`, { duration: 5000 }); })
+      .catch(() => {}).then(() => Promise.all([
       api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
       api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
       api.get('/procurement/delivery-notes').then(r => setDeliveryNotes(r.data)).catch(() => setDeliveryNotes([])),
-    ]),
+    ])),
   };
 
   // Fetch a tab's data, honouring cache.  Pass force=true after a CRUD
@@ -4399,6 +4405,15 @@ export default function Procurement() {
             if (!rows.length) {
               closeWin();
               toast.error('No PO items to bill — opening manual entry');
+              openAddDispatch(po);
+              return;
+            }
+            // Mirror the server's safety rule: never auto-bill a line with no
+            // rate. If any line is unrated, open the manual modal so mam can
+            // fill the selling rate instead of billing zero.
+            if (rows.some(r => !(+r.rate > 0))) {
+              closeWin();
+              toast('Some items have no rate — fill rates to bill', { icon: '✏️' });
               openAddDispatch(po);
               return;
             }

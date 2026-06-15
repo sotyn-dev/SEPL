@@ -3398,6 +3398,19 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       } catch (e) { console.error('[auto-short-debit] failed (bill saved anyway):', e.message); }
     }
 
+    // Auto SALES BILL (mam 2026-06-15: "i dont want to dispatch button click
+    // auto generated"): the moment a Purchase Bill is uploaded and the
+    // material is accepted, raise the client Sales Bill automatically
+    // (BOQ×delivery% rates + client GST).  Idempotent + skips POs with no
+    // rates.  Failure never blocks the bill upload.
+    let autoSalesBill = null;
+    if (materialStatus === 'approved' && vendor_po_id) {
+      try {
+        const sb = autoGenerateSalesBillForPO(db, vendor_po_id, req.user?.id);
+        if (sb && sb.id) autoSalesBill = { id: sb.id, document_number: sb.document_number };
+      } catch (e) { console.error('[auto-sales-bill] failed (bill saved anyway):', e.message); }
+    }
+
     res.status(201).json({
       id: r.lastInsertRowid,
       file_path: filePath,
@@ -3406,6 +3419,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       auto_debit: autoDebit,
       auto_short_debit: autoShortDebit,
       auto_reject_debit: autoRejectDebit,
+      auto_sales_bill: autoSalesBill,
       material_status: materialStatus,
       vendor_mailed: vendorMailed,
     });
@@ -3708,13 +3722,13 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
                                     vehicle_no, driver_name, driver_mobile, lr_challan_no, total_packages,
                                     place_of_supply, state_code, reverse_charge, e_way_bill_no,
                                     cgst_pct, sgst_pct, igst_pct, freight_amount, round_off_amount,
-                                    subtotal_amount, grand_total_amount, sales_bill_pending)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                    subtotal_amount, grand_total_amount, items_json, sales_bill_pending)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(vendor_po_id, delivery_date, req.user.id, notes, document_type, document_number, filePath,
       fields.vehicle_no, fields.driver_name, fields.driver_mobile, fields.lr_challan_no, fields.total_packages,
       fields.place_of_supply, fields.state_code, fields.reverse_charge, fields.e_way_bill_no,
       fields.cgst_pct, fields.sgst_pct, fields.igst_pct, fields.freight_amount, fields.round_off_amount,
-      fields.subtotal_amount, fields.grand_total_amount, salesBillPending);
+      fields.subtotal_amount, fields.grand_total_amount, fields.items_json, salesBillPending);
     res.status(201).json({ id: r.lastInsertRowid, file_path: filePath, document_number, document_type, sales_bill_pending: salesBillPending });
   } catch (err) {
     if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
@@ -4151,6 +4165,139 @@ router.get('/vendor-pos/:id/bill-to', (req, res) => {
   res.json(r);
 });
 
+// Shared core for the client-facing line items of a Vendor PO. Used by
+// GET /vendor-pos/:id/client-po-items AND the server-side auto-sales-bill
+// generator below, so both produce identical items + rates.  For a sales
+// bill, rate = BOQ SITC rate × the order's Against-Delivery %.
+function computeClientPoItems(db, vendorPoId, isSalesBill) {
+  // Scope to THIS Vendor PO's items (mam 2026-05-25: "you pick all not
+  // pick all boq boq fill indent so here is indent wise").
+  const rows = db.prepare(`
+    SELECT vpi.id,
+           COALESCE(NULLIF(TRIM(im.item_name), ''),
+                    NULLIF(TRIM(ii.description), ''),
+                    poi.description) as description,
+           vpi.quantity,
+           COALESCE(ii.unit, poi.unit, im.uom) as unit,
+           COALESCE(poi.rate, 0) as rate,
+           COALESCE(poi.amount, 0) as amount,
+           poi.hsn_code,
+           im.item_code, im.specification, im.size, im.gst AS gst_text,
+           COALESCE(NULLIF(TRIM(im.item_name), ''), NULLIF(TRIM(ii.description), '')) as item_name,
+           vpi.rate as vendor_rate,
+           poi.id as po_item_id
+      FROM vendor_po_items vpi
+      LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
+      LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+     WHERE vpi.vendor_po_id = ?
+     ORDER BY vpi.id
+  `).all(vendorPoId);
+
+  if (isSalesBill) {
+    // Sales-bill RATE = BOQ SITC rate × the order's Against-Delivery %.
+    let pct = 0; const byId = new Map(), byDesc = new Map();
+    try {
+      const bbRow = db.prepare(
+        `SELECT op.business_book_id AS bb FROM vendor_pos vp
+           LEFT JOIN indents i ON i.id = vp.indent_id
+           LEFT JOIN order_planning op ON op.id = i.planning_id
+          WHERE vp.id = ?`
+      ).get(vendorPoId);
+      const bbId = bbRow && bbRow.bb;
+      if (bbId) {
+        const bb = db.prepare('SELECT payment_against_delivery FROM business_book WHERE id=?').get(bbId);
+        pct = parseFloat(String((bb && bb.payment_against_delivery) || '').replace(/[^0-9.]/g, '')) || 0;
+        for (const it of db.prepare('SELECT id, description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
+          byId.set(it.id, +it.rate || 0);
+          if (it.description) byDesc.set(String(it.description).toLowerCase().trim(), +it.rate || 0);
+        }
+      }
+    } catch (_) {}
+    const r2 = n => Math.round((+n || 0) * 100) / 100;
+    for (const r of rows) {
+      let boq = +r.rate || 0;
+      if (!boq && r.po_item_id != null && byId.has(r.po_item_id)) boq = byId.get(r.po_item_id);
+      if (!boq) boq = byDesc.get(String(r.description || '').toLowerCase().trim()) || 0;
+      r.boq_rate = boq;
+      r.rate = pct > 0 ? r2(boq * pct / 100) : boq;
+      r.amount = r2(r.rate * (+r.quantity || 0));
+    }
+    const withRate = rows.filter(r => +r.rate > 0).length;
+    const noRate = rows.length - withRate;
+    return {
+      items: rows,
+      source: 'vendor_po_items',
+      rate_source: noRate === 0 ? 'boq_sitc' : (withRate > 0 ? 'boq_sitc_partial' : 'rate_missing'),
+      delivery_pct: pct,
+      warning: noRate === 0
+        ? (pct > 0 ? `Rate = BOQ SITC × ${pct}% (Against Delivery).` : null)
+        : `${noRate} of ${rows.length} line(s) have no BOQ SITC rate — fill the selling rate before saving.${pct > 0 ? ` Rate shown = BOQ × ${pct}%.` : ''}`,
+      rated_count: withRate,
+      total_count: rows.length,
+    };
+  }
+
+  // Challan / non-billable doc — vendor cost is fine for internal docs.
+  const vpRowsWithCost = rows.map(r => ({ ...r, rate: +r.rate > 0 ? r.rate : (+r.vendor_rate || 0) }));
+  return { items: vpRowsWithCost, source: 'vendor_po_items', rate_source: 'mixed' };
+}
+
+// Auto-generate the client SALES BILL for a Vendor PO, server-side, with no
+// human click (mam 2026-06-15: "i dont want to dispatch button click auto
+// generated").  Idempotent (skips if a sales bill already exists) and SAFE
+// (only bills when EVERY line has a rate — partial/unrated POs are left for
+// manual handling so we never bill a wrong amount).  Returns {id,
+// document_number} on create, or {skipped:<reason>}.
+function autoGenerateSalesBillForPO(db, vendorPoId, userId) {
+  if (!vendorPoId) return { skipped: 'no_po' };
+  const existing = db.prepare(
+    `SELECT id, document_number FROM delivery_notes WHERE vendor_po_id=? AND document_type='sales_bill' LIMIT 1`
+  ).get(vendorPoId);
+  if (existing) return { skipped: 'exists', id: existing.id, document_number: existing.document_number };
+
+  const data = computeClientPoItems(db, vendorPoId, true);
+  const items = (data.items || []).filter(r => (r.description && String(r.description).trim()) || +r.quantity > 0 || +r.rate > 0);
+  if (!items.length) return { skipped: 'no_items' };
+  if (items.some(r => !(+r.rate > 0))) return { skipped: 'unrated' };
+
+  const bt = db.prepare(`
+    SELECT bb.state AS client_state, bb.state_code AS client_state_code
+      FROM vendor_pos vp
+      LEFT JOIN indents i ON i.id = vp.indent_id
+      LEFT JOIN order_planning op ON op.id = i.planning_id
+      LEFT JOIN business_book bb ON bb.id = op.business_book_id
+     WHERE vp.id = ?`).get(vendorPoId) || {};
+  const sameState = String(bt.client_state || '').toLowerCase() === 'punjab';
+  const cgst_pct = sameState ? 9 : 0, sgst_pct = sameState ? 9 : 0, igst_pct = sameState ? 0 : 18;
+
+  const r2 = n => Math.round((+n || 0) * 100) / 100;
+  const payloadItems = items.map(it => {
+    const qty = +it.quantity || 0, rate = +it.rate || 0;
+    return {
+      description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
+      hsn: it.hsn_code || '', unit: it.unit || '',
+      quantity: qty, rate, disc_pct: 0, amount: r2(qty * rate),
+      item_code: it.item_code || '', specification: it.specification || '', size: it.size || '', item_name: it.item_name || '',
+    };
+  });
+  const subtotal = r2(payloadItems.reduce((s, it) => s + (it.amount || 0), 0));
+  const grand = r2(subtotal + subtotal * (cgst_pct + sgst_pct + igst_pct) / 100);
+
+  const { nextSequence } = require('../db/nextSequence');
+  const document_number = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
+
+  const ins = db.prepare(
+    `INSERT INTO delivery_notes (vendor_po_id, delivery_date, received_by, document_type, document_number,
+        place_of_supply, state_code, reverse_charge, cgst_pct, sgst_pct, igst_pct,
+        freight_amount, round_off_amount, subtotal_amount, grand_total_amount, items_json, sales_bill_pending)
+     VALUES (?, ?, ?, 'sales_bill', ?, ?, ?, 0, ?, ?, ?, 0, 0, ?, ?, ?, 0)`
+  ).run(vendorPoId, new Date().toISOString().slice(0, 10), userId || null, document_number,
+        bt.client_state || null, bt.client_state_code || null,
+        cgst_pct, sgst_pct, igst_pct, subtotal, grand, JSON.stringify(payloadItems));
+  return { id: ins.lastInsertRowid, document_number };
+}
+
 router.get('/vendor-pos/:id/client-po-items', (req, res) => {
   const db = getDb();
   // Sales Bill must always quote the BOQ SITC rate (mam, 2026-05-16:
@@ -4159,7 +4306,41 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
   // fallback — better empty + clear warning than wrong rate billed.
   const docType = String(req.query.doc_type || '').toLowerCase();
   const isSalesBill = docType === 'sales_bill';
+  return res.json(computeClientPoItems(db, req.params.id, isSalesBill));
+});
 
+// Sweep: auto-generate the client Sales Bill for every PO that's ready to
+// dispatch (has a Purchase Bill, no sales bill yet) — fired automatically
+// when mam opens the Dispatch tab so bills appear with NO click.
+router.post('/auto-sales-bills/sweep', needsApprove, (req, res) => {
+  const db = getDb();
+  let candidates = [];
+  try {
+    candidates = db.prepare(`
+      SELECT DISTINCT vp.id AS id
+        FROM vendor_pos vp
+        JOIN purchase_bills pb ON pb.vendor_po_id = vp.id
+       WHERE vp.id NOT IN (
+               SELECT vendor_po_id FROM delivery_notes
+                WHERE document_type='sales_bill' AND vendor_po_id IS NOT NULL)
+    `).all();
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+  const generated = [], skipped = [];
+  for (const c of candidates) {
+    try {
+      const r = autoGenerateSalesBillForPO(db, c.id, req.user?.id);
+      if (r && r.id) generated.push({ vendor_po_id: c.id, ...r });
+      else skipped.push({ vendor_po_id: c.id, reason: r?.skipped || 'unknown' });
+    } catch (e) { skipped.push({ vendor_po_id: c.id, reason: e.message }); }
+  }
+  res.json({ generated_count: generated.length, generated, skipped });
+});
+
+// Legacy alias retained for clarity — original inline body kept below was
+// replaced by computeClientPoItems(); guard block left intentionally blank.
+function _clientPoItemsUnusedTail() {
+  const db = getDb();
+  const isSalesBill = false;
   // Scope to THIS Vendor PO's items (mam 2026-05-25: "you pick all not
   // pick all boq boq fill indent so here is indent wise").  Earlier
   // version loaded the entire Client PO BOQ (~all items for the
@@ -4277,7 +4458,7 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
     rated_count: 0,
     total_count: 0,
   });
-});
+}
 
 // Print-page renderer for a dispatch row. Returns a self-contained HTML
 // page styled to match mam's SEPL Delivery Note / Sales Bill templates
