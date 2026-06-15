@@ -4605,6 +4605,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     const shipStateCode = esc(dn.state_code || clientStateCode);
     return `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(docNo)}</title><style>${css}</style></head><body>
       <button class="print-btn" onclick="window.print()">🖨 Print</button>
+      ${isSalesBill ? '<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},400);});</script>' : ''}
       ${headerBlock}
       <table class="meta">
         <tr>
