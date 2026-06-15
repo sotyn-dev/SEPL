@@ -169,31 +169,47 @@ router.get('/material', requirePermission('installation', 'view'), (req, res) =>
     indentBb.set(key, bbId);
     return bbId;
   };
-  const getPct = (bbId) => {
-    if (!bbId) return 0;
+  // For an order: the Against-Delivery % + its BOQ rates, indexed BOTH by
+  // po_item id and by item description, so a dispatched line resolves its BOQ
+  // rate even when it isn't linked by po_item_id (mam 2026-06-15: some rows
+  // showed ₹0 because the indent items weren't linked to the BOQ).
+  const getBb = (bbId) => {
+    if (!bbId) return null;
     if (bbCache.has(bbId)) return bbCache.get(bbId);
-    let pct = 0;
+    let pct = 0; const byId = new Map(), byDesc = new Map();
     try {
       const bb = db.prepare('SELECT payment_against_delivery FROM business_book WHERE id=?').get(bbId);
       pct = parseFloat(String((bb && bb.payment_against_delivery) || '').replace(/[^0-9.]/g, '')) || 0;
+      for (const it of db.prepare('SELECT id, description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
+        byId.set(it.id, +it.rate || 0);
+        if (it.description) byDesc.set(String(it.description).toLowerCase().trim(), +it.rate || 0);
+      }
     } catch (_) {}
-    bbCache.set(bbId, pct);
-    return pct;
+    const v = { pct, byId, byDesc };
+    bbCache.set(bbId, v);
+    return v;
   };
-  // The dispatched material value = the indent's PO items × their BOQ rate
-  // (po_items.rate via indent_items.po_item_id; fall back to the indent line
-  // rate).  This is the qty "as per PO item" (mam 2026-06-15).
-  const indentBoq = db.prepare(
-    `SELECT COALESCE(SUM(ii.quantity * COALESCE(pi.rate, ii.rate, 0)), 0) AS val, COUNT(*) AS cnt
-       FROM indent_items ii LEFT JOIN po_items pi ON pi.id = ii.po_item_id
-      WHERE ii.indent_id = ?`
-  );
+  const indentItemsStmt = db.prepare('SELECT quantity, po_item_id, description, rate FROM indent_items WHERE indent_id=?');
 
   const out = rows.map(r => {
-    const pct = getPct(resolveBb(r.indent_id, r.site_name));
+    const bb = getBb(resolveBb(r.indent_id, r.site_name));
+    const pct = bb ? bb.pct : 0;
     let boqValue = 0, itemCount = 0;
     if (r.indent_id) {
-      try { const w = indentBoq.get(r.indent_id); boqValue = +w.val || 0; itemCount = +w.cnt || 0; } catch (_) {}
+      try {
+        const items = indentItemsStmt.all(r.indent_id);
+        itemCount = items.length;
+        for (const it of items) {
+          // BOQ rate: by po_item link → by description → the indent line rate.
+          let rate = 0;
+          if (bb) {
+            if (it.po_item_id != null && bb.byId.has(it.po_item_id)) rate = bb.byId.get(it.po_item_id);
+            if (!rate) rate = bb.byDesc.get(String(it.description || '').toLowerCase().trim()) || 0;
+          }
+          if (!rate) rate = +it.rate || 0;
+          boqValue += (+it.quantity || 0) * rate;
+        }
+      } catch (_) {}
     }
     if (!itemCount) { try { itemCount = JSON.parse(r.items_json || '[]').length; } catch (_) {} }
     const value = round2(boqValue * pct / 100);
