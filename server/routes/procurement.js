@@ -4539,11 +4539,13 @@ router.get('/delivery-notes/:id/print', (req, res) => {
       }
     } catch (_) { /* fall through to po_items */ }
   }
-  // Sales bill with no stored line overrides — recompute from the order's
-  // CURRENT BOQ × Against-Delivery % so the rate is always right (mam
-  // 2026-06-15), incl. legacy bills created before items_json was saved.
-  // Only when a delivery % is actually set (else fall through to po_items).
-  if (!items.length && dn.document_type === 'sales_bill' && dn.vendor_po_id) {
+  // Sales bill rate is ALWAYS BOQ × the order's CURRENT Against-Delivery %
+  // (mam 2026-06-15 example: BOQ ₹83,400 × 60% = ₹50,040).  Recompute live
+  // from the order and OVERRIDE any stored rate, so a bill is correct even
+  // when it was generated before the % was set/changed.  Only kicks in when
+  // a delivery % is actually set (>0); otherwise the stored items / po_items
+  // are kept.
+  if (dn.document_type === 'sales_bill' && dn.vendor_po_id) {
     try {
       const computed = computeClientPoItems(db, dn.vendor_po_id, true);
       const rws = (computed.items || []).filter(r => (r.description && String(r.description).trim()) || +r.quantity > 0 || +r.rate > 0);
