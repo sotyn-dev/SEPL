@@ -389,7 +389,13 @@ export default function ItemMaster() {
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div><label className="label">UOM</label><select className="select" value={form.uom} onChange={e => F('uom', e.target.value)}>{UOMS.map(u => <option key={u}>{u}</option>)}</select></div>
-            <div><label className="label">GST</label><input className="input" value={form.gst || ''} onChange={e => F('gst', e.target.value)} /></div>
+            <div><label className="label">GST</label>
+              <select className="select" value={form.gst || ''} onChange={e => F('gst', e.target.value)}>
+                <option value="">Select</option>
+                {['0%', '5%', '12%', '18%', '28%'].map(g => <option key={g} value={g}>{g}</option>)}
+                {form.gst && !['', '0%', '5%', '12%', '18%', '28%'].includes(form.gst) && <option value={form.gst}>{form.gst}</option>}
+              </select>
+            </div>
             <div><label className="label">Make</label><input className="input" value={form.make || ''} onChange={e => F('make', e.target.value)} /></div>
             <div><label className="label">Model #</label><input className="input" value={form.model_number || ''} onChange={e => F('model_number', e.target.value)} /></div>
           </div>

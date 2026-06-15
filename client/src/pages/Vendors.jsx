@@ -425,7 +425,7 @@ export default function Vendors() {
             ))}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div><label className="label">Final Rate</label><input className="input" type="number" value={form.final_rate || 0} onChange={e => setForm({...form, final_rate: +e.target.value})} /></div>
+            <div><label className="label">Final Rate <span className="text-gray-400 text-[10px]">(auto from selected vendor)</span></label><input className="input" type="number" value={form.final_rate || 0} onChange={e => setForm({...form, final_rate: +e.target.value})} /></div>
             <div>
               <label className="label">Selected Vendor</label>
               <SearchableSelect
@@ -433,7 +433,16 @@ export default function Vendors() {
                 value={form.selected_vendor_id || null}
                 valueKey="id" displayKey="name"
                 placeholder="Search vendor…"
-                onChange={(v) => setForm({ ...form, selected_vendor_id: v?.id || '' })}
+                onChange={(v) => {
+                  // Auto-fill Final Rate from the chosen vendor's quoted rate
+                  // (one of the 3 above). Still editable for a negotiated rate.
+                  const id = v?.id || '';
+                  let fr = form.final_rate;
+                  for (const n of [1, 2, 3]) {
+                    if (id && String(form[`vendor${n}_id`]) === String(id)) { fr = +form[`vendor${n}_rate`] || 0; break; }
+                  }
+                  setForm({ ...form, selected_vendor_id: id, final_rate: fr });
+                }}
               />
             </div>
           </div>
