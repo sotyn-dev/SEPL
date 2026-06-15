@@ -519,6 +519,9 @@ export default function PaymentRequired() {
                     </div>
                     <div className="text-right">
                       <div className="font-bold text-gray-900">{fmt(r.amount)}</div>
+                      {r.approved_amount != null && +r.approved_amount !== +r.amount && (
+                        <div className="text-[11px] font-semibold text-emerald-700">approved {fmt(r.approved_amount)}</div>
+                      )}
                       <div className="mt-1"><StatusBadge status={r.status} /></div>
                     </div>
                   </div>
@@ -571,7 +574,7 @@ export default function PaymentRequired() {
 
           {/* ─── DESKTOP TABLE (md+) ───────────────────────────────── */}
           <div className="hidden md:block card p-0"><table className="freeze-head">
-            <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th title="Amount the approver agreed — may be less than requested">Approval Amt</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody>
               {(tab === 'inbox' ? myInbox : requests).filter(r => {
                 if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
@@ -587,6 +590,11 @@ export default function PaymentRequired() {
                   <td className="text-sm">{r.site_display || r.site_name || '-'}</td>
                   <td><span className={`badge ${r.category === 'TA/DA' ? 'badge-purple' : r.category === 'Purchase' ? 'badge-blue' : r.category === 'Labour' ? 'badge-green' : 'badge-gray'}`}>{r.category}</span></td>
                   <td className="font-semibold">{fmt(r.amount)}</td>
+                  <td className="font-semibold">
+                    {r.approved_amount != null
+                      ? <span className={+r.approved_amount !== +r.amount ? 'text-emerald-700' : ''} title={+r.approved_amount !== +r.amount ? `Adjusted from ${fmt(r.amount)}` : 'Same as requested'}>{fmt(r.approved_amount)}</span>
+                      : <span className="text-gray-300" title="Not adjusted — pays the requested amount">—</span>}
+                  </td>
                   <td className="text-sm max-w-[280px]">
                     {/* Show full purpose text, wrap to multiple lines for
                         long entries. Hover shows it again as a tooltip
@@ -656,7 +664,7 @@ export default function PaymentRequired() {
                   </div></td>
                 </tr>
               ))}
-              {requests.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No requests found</td></tr>}
+              {requests.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No requests found</td></tr>}
             </tbody>
           </table></div>
         </>
