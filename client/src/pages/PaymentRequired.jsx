@@ -508,7 +508,9 @@ export default function PaymentRequired() {
                     requests that level has signed off + the amount it approved. */}
                 <span className="text-gray-300 mx-0.5">|</span>
                 {APPROVED_LEVELS.map(lv => {
-                  const n = visible.filter(r => clearedAt(r, lv.step)).length;
+                  const lvRows = visible.filter(r => clearedAt(r, lv.step));
+                  const n = lvRows.length;
+                  const amt = lvRows.reduce((s, r) => s + (+r.step_amounts[lv.step] || 0), 0);
                   const active = approvedLevel === lv.step;
                   return (
                     <button
@@ -518,6 +520,7 @@ export default function PaymentRequired() {
                     >
                       ✓ {lv.label}
                       <span className={`text-[10px] font-bold rounded-full bg-white/70 px-1.5 ${n === 0 ? 'text-gray-400' : ''}`}>{n}</span>
+                      {amt > 0 && <span className="text-[10px] font-semibold opacity-90">Rs {fmt(amt)}</span>}
                     </button>
                   );
                 })}
