@@ -637,7 +637,18 @@ export default function PaymentRequired() {
                       </div>
                     )}
                   </td>
-                  <td><StatusBadge status={r.status} /></td>
+                  {/* Status follows the STAGE (mam 2026-06-15): pending at
+                      L1/L2/L3, 'Approved' once all 3 sign-offs are done and
+                      it's awaiting payment release, 'Paid' when released,
+                      'Rejected' if rejected. */}
+                  <td>{(() => {
+                    const st = stageOf(r);
+                    const cls = 'px-2 py-0.5 rounded text-[11px] font-semibold whitespace-nowrap ';
+                    if (st === 'Rejected') return <span className={cls + 'bg-red-100 text-red-700'}>Rejected</span>;
+                    if (st === 'Approved') return <span className={cls + 'bg-green-600 text-white'}>Paid</span>;
+                    if (st === 'Payment Release (Aanchal)') return <span className={cls + 'bg-emerald-100 text-emerald-700'}>Approved</span>;
+                    return <span className={cls + 'bg-amber-100 text-amber-700'}>Pending</span>;
+                  })()}</td>
                   {/* Date column — mam (2026-05-22): "this is pick wrong
                       time according to indian" — SQLite stores UTC,
                       now converted to IST via fmtISTPair so the row
