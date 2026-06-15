@@ -4522,34 +4522,38 @@ router.get('/delivery-notes/:id/print', (req, res) => {
   `).get(req.params.id);
   if (!dn) return res.status(404).send('Dispatch not found');
 
-  // Recover the CLIENT from Business Book when the order didn't resolve via
-  // order_planning (common: indent has no planning_id) — the PO's BOQ items
-  // carry business_book_id directly, so we backfill client address / GSTIN /
-  // state / contact + the Against-Delivery % from there (mam 2026-06-15:
-  // "its full address in business book").
-  if (dn.document_type === 'sales_bill' && dn.vendor_po_id && (!dn.client_address || !dn.client_gstin || !dn.client_state)) {
+  // CLIENT + Against-Delivery % must come from the Business Book ORDER the
+  // BILLED ITEMS belong to (po_items.business_book_id) — this is authoritative.
+  // The indent→order_planning path can point at the WRONG order (mam
+  // 2026-06-15: bill showed 40% but GRA's order SEPL20175 is 60%, and the
+  // address was blank). So resolve the order from the items and OVERRIDE.
+  // Pick the order most of the lines belong to, in case lines span orders.
+  if (dn.document_type === 'sales_bill' && dn.vendor_po_id) {
     try {
       const bbRow = db.prepare(`
-        SELECT poi.business_book_id AS id
+        SELECT poi.business_book_id AS id, COUNT(*) AS n
           FROM vendor_po_items vpi
           JOIN indent_items ii ON ii.id = vpi.indent_item_id
           JOIN po_items poi ON poi.id = ii.po_item_id
          WHERE vpi.vendor_po_id = ? AND poi.business_book_id IS NOT NULL
-         LIMIT 1`).get(dn.vendor_po_id);
+         GROUP BY poi.business_book_id
+         ORDER BY n DESC LIMIT 1`).get(dn.vendor_po_id);
       if (bbRow && bbRow.id) {
         const bb = db.prepare('SELECT * FROM business_book WHERE id=?').get(bbRow.id);
         if (bb) {
-          dn.client_company     = dn.client_company     || bb.company_name;
-          dn.client_person_name = dn.client_person_name || bb.client_name;
-          dn.client_phone       = dn.client_phone       || bb.client_contact;
-          dn.client_email       = dn.client_email       || bb.client_email;
-          dn.client_address     = dn.client_address     || bb.billing_address;
-          dn.site_address       = dn.site_address       || bb.shipping_address;
-          dn.client_state       = dn.client_state       || bb.state;
-          dn.client_state_code  = dn.client_state_code  || bb.state_code;
-          dn.client_gstin       = dn.client_gstin       || bb.gstin;
+          // Authoritative order wins; keep existing value only where the
+          // order's field is blank.
+          dn.bb_delivery_terms  = bb.payment_against_delivery;
+          dn.client_company     = bb.company_name   || dn.client_company;
+          dn.client_person_name = bb.client_name    || dn.client_person_name;
+          dn.client_phone       = bb.client_contact || dn.client_phone;
+          dn.client_email       = bb.client_email   || dn.client_email;
+          dn.client_address     = bb.billing_address|| dn.client_address;
+          dn.site_address       = bb.shipping_address || dn.site_address;
+          dn.client_state       = bb.state          || dn.client_state;
+          dn.client_state_code  = bb.state_code      || dn.client_state_code;
+          dn.client_gstin       = bb.gstin          || dn.client_gstin;
           if (!dn.site_name)    dn.site_name = bb.project_name;
-          if (!(parseFloat(String(dn.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) > 0)) dn.bb_delivery_terms = bb.payment_against_delivery;
         }
       }
     } catch (_) {}
