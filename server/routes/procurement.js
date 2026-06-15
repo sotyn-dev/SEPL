@@ -4803,16 +4803,32 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
             try{
               btn=document.querySelector('.print-btn'); if(btn)btn.style.display='none';
               if(!window.html2canvas||!window.jspdf){ showHtml(); return; }
-              html2canvas(document.body,{scale:2,backgroundColor:'#ffffff',useCORS:true,windowWidth:document.body.scrollWidth}).then(function(canvas){
+              // EXCLUDE the loading overlay + print button from the capture
+              // (else the faded "Generating PDF…" sheet gets baked into the
+              // PDF — mam 2026-06-15). ignoreElements keeps them on screen
+              // for the user but leaves them out of the rendered image.
+              html2canvas(document.body,{scale:2,backgroundColor:'#ffffff',useCORS:true,windowWidth:document.body.scrollWidth,
+                ignoreElements:function(el){ return el.id==='pdfgen' || (el.classList && el.classList.contains('print-btn')); }}).then(function(canvas){
                 var jsPDF=window.jspdf.jsPDF;
                 var img=canvas.toDataURL('image/jpeg',0.95);
                 var pdf=new jsPDF({unit:'pt',format:'a4',compress:true});
                 var pw=pdf.internal.pageSize.getWidth();
                 var ph=pdf.internal.pageSize.getHeight();
                 var imgH=canvas.height*pw/canvas.width;
-                var left=imgH,pos=0;
-                pdf.addImage(img,'JPEG',0,pos,pw,imgH,'','FAST'); left-=ph;
-                while(left>0){ pos-=ph; pdf.addPage(); pdf.addImage(img,'JPEG',0,pos,pw,imgH,'','FAST'); left-=ph; }
+                if(imgH<=ph+2){
+                  // Fits one page.
+                  pdf.addImage(img,'JPEG',0,0,pw,imgH,'','FAST');
+                } else if(imgH<=ph*1.12){
+                  // Only slightly over one page — scale to fit a single A4
+                  // page (avoids a near-empty page 2), keeping aspect ratio.
+                  var w2=pw*ph/imgH;
+                  pdf.addImage(img,'JPEG',(pw-w2)/2,0,w2,ph,'','FAST');
+                } else {
+                  // Genuine multi-page bill — slice across A4 pages.
+                  var left=imgH,pos=0;
+                  pdf.addImage(img,'JPEG',0,pos,pw,imgH,'','FAST'); left-=ph;
+                  while(left>0){ pos-=ph; pdf.addPage(); pdf.addImage(img,'JPEG',0,pos,pw,imgH,'','FAST'); left-=ph; }
+                }
                 window.location.replace(URL.createObjectURL(pdf.output('blob')));
               }).catch(function(){ showHtml(); });
             }catch(e){ showHtml(); }
