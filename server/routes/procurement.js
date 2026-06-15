@@ -4257,6 +4257,12 @@ function autoGenerateSalesBillForPO(db, vendorPoId, userId) {
   if (existing) return { skipped: 'exists', id: existing.id, document_number: existing.document_number };
 
   const data = computeClientPoItems(db, vendorPoId, true);
+  // Rate MUST be BOQ × Against-Delivery % (mam 2026-06-15).  If the order's
+  // "Against Delivery" payment-term % is blank, the rate would silently be
+  // the FULL BOQ — wrong.  Skip instead, so the PO stays in Ready-to-Dispatch
+  // and mam knows to set the % (Business Book → Payment Terms → Against
+  // Delivery).  An order that genuinely bills 100% on delivery = enter 100.
+  if (!(data.delivery_pct > 0)) return { skipped: 'no_delivery_pct' };
   const items = (data.items || []).filter(r => (r.description && String(r.description).trim()) || +r.quantity > 0 || +r.rate > 0);
   if (!items.length) return { skipped: 'no_items' };
   if (items.some(r => !(+r.rate > 0))) return { skipped: 'unrated' };
@@ -4532,6 +4538,32 @@ router.get('/delivery-notes/:id/print', (req, res) => {
         itemsSource = 'overrides';
       }
     } catch (_) { /* fall through to po_items */ }
+  }
+  // Sales bill with no stored line overrides — recompute from the order's
+  // CURRENT BOQ × Against-Delivery % so the rate is always right (mam
+  // 2026-06-15), incl. legacy bills created before items_json was saved.
+  // Only when a delivery % is actually set (else fall through to po_items).
+  if (!items.length && dn.document_type === 'sales_bill' && dn.vendor_po_id) {
+    try {
+      const computed = computeClientPoItems(db, dn.vendor_po_id, true);
+      const rws = (computed.items || []).filter(r => (r.description && String(r.description).trim()) || +r.quantity > 0 || +r.rate > 0);
+      if (rws.length && computed.delivery_pct > 0) {
+        items = rws.map(it => ({
+          description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
+          quantity: +it.quantity || 0,
+          unit: it.unit || '',
+          rate: +it.rate || 0,
+          disc_pct: 0,
+          amount: +it.amount || ((+it.quantity || 0) * (+it.rate || 0)),
+          item_code: it.item_code || '',
+          specification: it.specification || '',
+          size: it.size || '',
+          gst_text: it.hsn_code || '',
+          item_name: it.item_name || '',
+        }));
+        itemsSource = 'client_po_computed';
+      }
+    } catch (_) {}
   }
   if (!items.length) {
     // Client PO line items via the chain:
