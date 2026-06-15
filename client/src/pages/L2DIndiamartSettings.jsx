@@ -16,7 +16,8 @@ export default function L2DIndiamartSettings() {
   const [keyState, setKeyState] = useState({ set: false, masked: null });
   const [form, setForm] = useState({
     keyword_include: '', keyword_exclude: '', ai_scope_prompt: '', margin_pct: '0',
-    welcome_template_sid: '', bank_template_sid: '', followup_template_sid: '', indiamart_crm_key: '',
+    welcome_priced_template_sid: '', welcome_unpriced_template_sid: '',
+    bank_template_sid: '', followup_template_sid: '', indiamart_crm_key: '',
   });
 
   useEffect(() => {
@@ -29,7 +30,8 @@ export default function L2DIndiamartSettings() {
           keyword_exclude: arrToLines(d.keyword_exclude),
           ai_scope_prompt: d.ai_scope_prompt || '',
           margin_pct: d.margin_pct || '0',
-          welcome_template_sid: d.welcome_template_sid || '',
+          welcome_priced_template_sid:   d.welcome_priced_template_sid   || '',
+          welcome_unpriced_template_sid: d.welcome_unpriced_template_sid || '',
           bank_template_sid: d.bank_template_sid || '',
           followup_template_sid: d.followup_template_sid || '',
           indiamart_crm_key: '',
@@ -48,7 +50,8 @@ export default function L2DIndiamartSettings() {
         keyword_exclude: linesToArr(form.keyword_exclude),
         ai_scope_prompt: form.ai_scope_prompt,
         margin_pct: String(form.margin_pct || '0'),
-        welcome_template_sid: form.welcome_template_sid,
+        welcome_priced_template_sid:   form.welcome_priced_template_sid,
+        welcome_unpriced_template_sid: form.welcome_unpriced_template_sid,
         bank_template_sid: form.bank_template_sid,
         followup_template_sid: form.followup_template_sid,
       };
@@ -114,10 +117,25 @@ export default function L2DIndiamartSettings() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div><label className="label">Welcome template SID</label><input className="input font-mono text-xs" value={form.welcome_template_sid} onChange={e => setForm({ ...form, welcome_template_sid: e.target.value })} placeholder="HX…" /></div>
-          <div><label className="label">Bank-details template SID</label><input className="input font-mono text-xs" value={form.bank_template_sid} onChange={e => setForm({ ...form, bank_template_sid: e.target.value })} placeholder="HX…" /></div>
-          <div><label className="label">Follow-up template SID</label><input className="input font-mono text-xs" value={form.followup_template_sid} onChange={e => setForm({ ...form, followup_template_sid: e.target.value })} placeholder="HX…" /></div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="label">Welcome template — priced</label>
+            <input className="input font-mono text-xs" value={form.welcome_priced_template_sid} onChange={e => setForm({ ...form, welcome_priced_template_sid: e.target.value })} placeholder="HX…" />
+            <p className="text-[11px] text-gray-500 mt-1">Scenarios A + C: lead has a price. Shows price + "Confirm Order" + "Expect a Call" buttons.</p>
+          </div>
+          <div>
+            <label className="label">Welcome template — unpriced</label>
+            <input className="input font-mono text-xs" value={form.welcome_unpriced_template_sid} onChange={e => setForm({ ...form, welcome_unpriced_template_sid: e.target.value })} placeholder="HX…" />
+            <p className="text-[11px] text-gray-500 mt-1">Scenario B: no catalogue match yet. Shows "Expect a Call" only — no price, no Confirm Order.</p>
+          </div>
+          <div>
+            <label className="label">Bank-details template SID</label>
+            <input className="input font-mono text-xs" value={form.bank_template_sid} onChange={e => setForm({ ...form, bank_template_sid: e.target.value })} placeholder="HX…" />
+          </div>
+          <div>
+            <label className="label">Follow-up template SID</label>
+            <input className="input font-mono text-xs" value={form.followup_template_sid} onChange={e => setForm({ ...form, followup_template_sid: e.target.value })} placeholder="HX…" />
+          </div>
         </div>
 
         <div className="flex justify-between items-center">
@@ -130,7 +148,7 @@ export default function L2DIndiamartSettings() {
         <h4 className="font-semibold text-gray-800">Notes</h4>
         <ul className="list-disc pl-5 space-y-1 text-[13px]">
           <li>Twilio account SID / auth token / WhatsApp sender live in the server <span className="font-mono">.env</span>, not here.</li>
-          <li>Templates (welcome with CTA buttons, bank details, follow-up) must be Meta-approved before sends work.</li>
+          <li>Four templates need Meta approval before sends work: <strong>welcome (priced)</strong> with price + two buttons, <strong>welcome (unpriced)</strong> with "Expect a Call" only, <strong>bank details</strong>, and <strong>follow-up</strong>.</li>
           <li>The inbound webhook URL is <span className="font-mono">/api/lead-funnel/whatsapp/webhook</span> — point your Twilio number's "when a message comes in" at it (needs a public URL).</li>
         </ul>
       </div>

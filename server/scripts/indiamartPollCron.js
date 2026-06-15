@@ -113,7 +113,8 @@ async function processNewLead(db, lead) {
     const exclude = parseList(getFunnelSetting('keyword_exclude'));
     const scopePrompt = getFunnelSetting('ai_scope_prompt') || '';
     const marginPct = Number(getFunnelSetting('margin_pct')) || 0;
-    const welcomeSid = getFunnelSetting('welcome_template_sid') || process.env.L2D_WELCOME_TEMPLATE_SID || null;
+    const pricedSid   = getFunnelSetting('welcome_priced_template_sid')   || process.env.L2D_WELCOME_PRICED_TEMPLATE_SID   || null;
+    const unpricedSid = getFunnelSetting('welcome_unpriced_template_sid') || process.env.L2D_WELCOME_UNPRICED_TEMPLATE_SID || null;
 
     // 1. Keyword pass (plain JS, no AI)
     const kw = keywordPass(lead, include, exclude);
@@ -151,22 +152,21 @@ async function processNewLead(db, lead) {
       db.prepare(
         'UPDATE l2d_leads SET matched_item_id=?, matched_item_name=?, quoted_price=?, price_source=? WHERE id=?'
       ).run(match.item_id, match.item_name, match.price, match.price_source, lead.id);
-      // Send welcome WITH price (template carries Confirm Order + Expect a Call buttons)
+      // Scenario A: send priced welcome (Confirm Order + Expect a Call buttons)
       const sent = await sendTemplate({
-        lead, templateSid: welcomeSid, templateLabel: 'welcome',
+        lead, templateSid: pricedSid, templateLabel: 'welcome_priced',
         variables: { 1: lead.sender_name || 'there', 2: match.item_name, 3: fmtMoney(match.price) },
       });
       recordStage(db, lead.id, 'LEAD_ENTERED', 'WELCOME_SENT',
-        `matched "${match.item_name}" @ ${fmtMoney(match.price)} (${match.price_source}); welcome ${sent.ok ? 'sent' : 'send failed: ' + sent.error}`);
+        `matched "${match.item_name}" @ ${fmtMoney(match.price)} (${match.price_source}); welcome_priced ${sent.ok ? 'sent' : 'send failed: ' + sent.error}`);
     } else {
-      // Relevant but no confident price → human prices it; still greet
-      // (the template's "no price" variant shows Expect-a-Call only).
+      // Scenario B: relevant but no price — unpriced template (Expect a Call only, no price shown)
       const sent = await sendTemplate({
-        lead, templateSid: welcomeSid, templateLabel: 'welcome',
-        variables: { 1: lead.sender_name || 'there', 2: lead.query_product_name || 'your enquiry', 3: 'on request' },
+        lead, templateSid: unpricedSid, templateLabel: 'welcome_unpriced',
+        variables: { 1: lead.sender_name || 'there', 2: lead.query_product_name || 'your enquiry' },
       });
       recordStage(db, lead.id, 'LEAD_ENTERED', 'NEEDS_REVIEW',
-        `relevant, no confident price match; welcome ${sent.ok ? 'sent' : 'send failed: ' + sent.error}`);
+        `relevant, no confident price match; welcome_unpriced ${sent.ok ? 'sent' : 'send failed: ' + sent.error}`);
     }
   } catch (e) {
     console.error('[indiamart-poll] processNewLead failed for', lead.unique_query_id, e.message);

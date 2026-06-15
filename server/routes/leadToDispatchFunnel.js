@@ -163,22 +163,28 @@ router.patch('/leads/:id/advance', async (req, res) => {
     // Idempotency: a welcome already went out → skip, UNLESS we're upgrading a
     // prior "price on request" greeting to a real price (the one allowed re-send,
     // so a priced welcome reaches a customer who first saw "on request").
-    const prior = lastGoodSend(db, lead.id, 'welcome');
-    let priorHadPrice = false;
-    if (prior) {
-      try { const v = JSON.parse(prior.body || '{}'); priorHadPrice = v['3'] && !/on request/i.test(String(v['3'])); } catch (_) {}
-    }
-    const isPriceUpgrade = wantPrice && prior && !priorHadPrice;
-    if (prior && !isPriceUpgrade) {
+    const priorPriced   = lastGoodSend(db, lead.id, 'welcome_priced');
+    const priorUnpriced = lastGoodSend(db, lead.id, 'welcome_unpriced');
+    // Allow one re-send when coordinator sets a real price after the unpriced greeting went out.
+    const isPriceUpgrade = wantPrice && priorUnpriced && !priorPriced;
+    if ((priorPriced || priorUnpriced) && !isPriceUpgrade) {
       sendNote = '; welcome already sent — skipped duplicate';
-    } else {
-      const sid = getFunnelSetting('welcome_template_sid') || process.env.L2D_WELCOME_TEMPLATE_SID || null;
-      const price = wantPrice ? fmtMoney(lead.quoted_price) : 'on request';
+    } else if (wantPrice) {
+      // Scenario C (and A re-send path): send priced template.
+      const sid = getFunnelSetting('welcome_priced_template_sid') || process.env.L2D_WELCOME_PRICED_TEMPLATE_SID || null;
       const sent = await sendTemplate({
-        lead, templateSid: sid, templateLabel: 'welcome',
-        variables: { 1: lead.sender_name || 'there', 2: lead.matched_item_name || lead.query_product_name || 'your enquiry', 3: price },
+        lead, templateSid: sid, templateLabel: 'welcome_priced',
+        variables: { 1: lead.sender_name || 'there', 2: lead.matched_item_name || lead.query_product_name || 'your enquiry', 3: fmtMoney(lead.quoted_price) },
       });
-      sendNote = `; welcome ${sent.ok ? (isPriceUpgrade ? 'sent with price' : 'sent') : 'send failed: ' + sent.error}`;
+      sendNote = `; welcome_priced ${sent.ok ? (isPriceUpgrade ? 'sent with price upgrade' : 'sent') : 'send failed: ' + sent.error}`;
+    } else {
+      // No price — send unpriced template (graceful fallback; coordinator flow always has a price).
+      const sid = getFunnelSetting('welcome_unpriced_template_sid') || process.env.L2D_WELCOME_UNPRICED_TEMPLATE_SID || null;
+      const sent = await sendTemplate({
+        lead, templateSid: sid, templateLabel: 'welcome_unpriced',
+        variables: { 1: lead.sender_name || 'there', 2: lead.matched_item_name || lead.query_product_name || 'your enquiry' },
+      });
+      sendNote = `; welcome_unpriced ${sent.ok ? 'sent' : 'send failed: ' + sent.error}`;
     }
   } else if (send === 'bank') {
     // Bank details never change → one good send is enough.
@@ -346,7 +352,8 @@ router.get('/settings', adminOnly, (req, res) => {
     keyword_exclude: getFunnelSetting('keyword_exclude') || '[]',
     ai_scope_prompt: getFunnelSetting('ai_scope_prompt') || '',
     margin_pct: getFunnelSetting('margin_pct') || '0',
-    welcome_template_sid: getFunnelSetting('welcome_template_sid') || '',
+    welcome_priced_template_sid:   getFunnelSetting('welcome_priced_template_sid')   || '',
+    welcome_unpriced_template_sid: getFunnelSetting('welcome_unpriced_template_sid') || '',
     bank_template_sid: getFunnelSetting('bank_template_sid') || '',
     followup_template_sid: getFunnelSetting('followup_template_sid') || '',
     indiamart_crm_key_set: !!crmKey,
@@ -357,7 +364,7 @@ router.get('/settings', adminOnly, (req, res) => {
 router.put('/settings', adminOnly, (req, res) => {
   const b = req.body || {};
   const passthrough = ['keyword_include', 'keyword_exclude', 'ai_scope_prompt', 'margin_pct',
-    'welcome_template_sid', 'bank_template_sid', 'followup_template_sid'];
+    'welcome_priced_template_sid', 'welcome_unpriced_template_sid', 'bank_template_sid', 'followup_template_sid'];
   for (const k of passthrough) {
     if (Object.prototype.hasOwnProperty.call(b, k)) {
       let v = b[k];
