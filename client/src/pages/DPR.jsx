@@ -1296,7 +1296,7 @@ export default function DPR() {
           <div><label className="label">Address</label><textarea className="input" rows="2" value={form.address || ''} onChange={e => setForm({ ...form, address: e.target.value })} /></div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div><label className="label">Client</label><input className="input" value={form.client_name || ''} onChange={e => setForm({ ...form, client_name: e.target.value })} /></div>
-            <div><label className="label">Supervisor</label><input className="input" value={form.supervisor || ''} onChange={e => setForm({ ...form, supervisor: e.target.value })} /></div>
+            <div><label className="label">Supervisor</label><input className="input" list="dprUsersDL" value={form.supervisor || ''} onChange={e => setForm({ ...form, supervisor: e.target.value })} placeholder="Pick or type" /><datalist id="dprUsersDL">{users.map(u => <option key={u.id} value={u.name} />)}</datalist></div>
             <div><label className="label">Site Engineer</label><select className="select" value={form.site_engineer_id || ''} onChange={e => setForm({ ...form, site_engineer_id: e.target.value })}><option value="">Select</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
           </div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setSiteModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Create Site</button></div>

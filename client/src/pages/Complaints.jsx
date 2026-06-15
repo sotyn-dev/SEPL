@@ -65,6 +65,10 @@ export default function Complaints() {
   };
 
   useEffect(() => { load(); }, [q]);
+  // Best-effort load of the engineer/user list on mount so the "Assigned To"
+  // fields can suggest names (mam 2026-06-15 automation). Admins-only
+  // endpoint — silently empty for others, fields stay free-text.
+  useEffect(() => { api.get('/users').then(({ data }) => setEngineers(Array.isArray(data) ? data : (data?.users || []))).catch(() => {}); }, []);
 
   const create = async (e) => {
     e.preventDefault();
@@ -317,7 +321,7 @@ export default function Complaints() {
                 {STATES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </Field>
-            <Field label="EMP Name"><input value={form.emp_name} onChange={e=>setForm({...form, emp_name:e.target.value})} className="inp" placeholder="Who received the complaint" /></Field>
+            <Field label="EMP Name"><input list="cmpEngDL1" value={form.emp_name} onChange={e=>setForm({...form, emp_name:e.target.value})} className="inp" placeholder="Who received the complaint" /><datalist id="cmpEngDL1">{engineers.map(u => <option key={u.id} value={u.name} />)}</datalist></Field>
             <Field label="Complaint Type *">
               <div className="flex gap-2">
                 {COMPLAINT_TYPES.map(t => (
@@ -388,7 +392,7 @@ export default function Complaints() {
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Field label="Assigned To (name / team) *">
-                  <input value={viewing.step1_assigned_to||''} onChange={e=>setViewing({...viewing, step1_assigned_to:e.target.value})} className="inp" placeholder="e.g. LV Team / Himank / Gagan" />
+                  <input list="cmpEngDL2" value={viewing.step1_assigned_to||''} onChange={e=>setViewing({...viewing, step1_assigned_to:e.target.value})} className="inp" placeholder="e.g. LV Team / Himank / Gagan" /><datalist id="cmpEngDL2">{engineers.map(u => <option key={u.id} value={u.name} />)}</datalist>
                 </Field>
                 <Field label="Planned Date">
                   <input type="date" value={viewing.step1_planned_date||''} onChange={e=>setViewing({...viewing, step1_planned_date:e.target.value})} className="inp" />
@@ -419,7 +423,7 @@ export default function Complaints() {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <Field label="Assigned To (resolver)">
-                    <input value={viewing.step2_assigned_to||''} onChange={e=>setViewing({...viewing, step2_assigned_to:e.target.value})} className="inp" placeholder="Technician / engineer name" />
+                    <input list="cmpEngDL3" value={viewing.step2_assigned_to||''} onChange={e=>setViewing({...viewing, step2_assigned_to:e.target.value})} className="inp" placeholder="Technician / engineer name" /><datalist id="cmpEngDL3">{engineers.map(u => <option key={u.id} value={u.name} />)}</datalist>
                   </Field>
                   <Field label="Planned Date">
                     <input type="date" value={viewing.step2_planned_date||''} onChange={e=>setViewing({...viewing, step2_planned_date:e.target.value})} className="inp" />
