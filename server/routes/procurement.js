@@ -4926,6 +4926,13 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         <tr><td class="label">Add: Freight / Packing / Other Charges</td><td class="val">₹ ${fmt(freight)}</td></tr>
         <tr><td class="label">Less: Round Off</td><td class="val">₹ ${fmt(roundOff)}</td></tr>
         <tr><td class="label grand">GRAND TOTAL (₹)</td><td class="val grand">₹ ${fmt(grandTotal)}</td></tr>
+        ${(() => {
+          // MD 2026-06-15: keep the full BOQ rate/total, but show the amount
+          // payable now against delivery = Grand Total × Against-Delivery %.
+          const dpct = parseFloat(String(dn.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) || 0;
+          if (!dpct) return '';
+          return `<tr><td class="label" style="color:#7a1b1b;font-weight:bold">Payment Due (Against Delivery ${dpct}%) = Total × ${dpct}%</td><td class="val" style="color:#7a1b1b;font-weight:bold">₹ ${fmt(grandTotal * dpct / 100)}</td></tr>`;
+        })()}
       </table>
       <div style="margin-top:6px;font-size:11px;border:1px solid #e7d4d4;padding:5px 8px;"><b>Amount Chargeable (in words):</b> Rupees ${esc(numToWords(grandTotal))} Only</div>
       <div style="display:flex;gap:8px;margin-top:6px;">
