@@ -3681,6 +3681,19 @@ export default function Procurement() {
                             edit
                           </button>
                         )}
+                        {canDelete('procurement') && (
+                          <button
+                            onClick={async () => {
+                              if (!confirm(`Permanently delete vendor PO "${po.po_number}"?`)) return;
+                              try { await api.delete(`/procurement/vendor-po/${po.id}`); toast.success('Deleted'); load(); }
+                              catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                            }}
+                            className="ml-1 text-[10px] text-red-600 hover:underline"
+                            title="Delete this PO (blocked if any bill / delivery note references it — use Cancel instead)"
+                          >
+                            delete
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
