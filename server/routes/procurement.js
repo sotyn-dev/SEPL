@@ -4885,6 +4885,18 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
           <td class="lbl">E-Way Bill No.</td><td>${esc(dn.e_way_bill_no || '')}</td>
         </tr>
       </table>
+      ${(() => {
+        // BILL TO / SHIP TO pulled from Business Book with sensible fallbacks
+        // (mam 2026-06-15: "gra address pick from business book and bill to
+        // also show").  GRA-type orders keep the client name in the site /
+        // project field (company_name blank), and only one address column is
+        // filled — so the client name falls back to the site name (minus any
+        // leading "M/s"), and the two addresses cross-fall-back.
+        const stripMs = (s) => String(s || '').replace(/^\s*M\/?s\.?\s*/i, '').trim();
+        var billToName = dn.client_company || stripMs(dn.site_name) || dn.client_person_name || '';
+        var billToAddr = dn.client_address || dn.site_address || '';
+        var shipAddr = dn.site_address || dn.client_address || '';
+        return `
       <table class="parties">
         <tr>
           <td class="lbl" style="width:50%">Bill To</td>
@@ -4892,21 +4904,22 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         </tr>
         <tr>
           <td style="width:50%">
-            <div><b>M/s</b> ${fill(dn.client_company, '220px')}</div>
-            <div style="margin-top:3px"><b>Address:</b> ${fill(dn.client_address, '220px')}</div>
+            <div><b>M/s</b> ${fill(billToName, '220px')}</div>
+            <div style="margin-top:3px"><b>Address:</b> ${fill(billToAddr, '220px')}</div>
             <div style="margin-top:3px"><b>GSTIN:</b> ${fill(dn.client_gstin, '180px')}</div>
             <div style="margin-top:3px"><b>State:</b> ${fill(dn.client_state, '100px')} &nbsp; <b>Code:</b> ${fill(clientStateCode, '40px')}</div>
             <div style="margin-top:3px"><b>Contact:</b> ${fill([dn.client_person_name, dn.client_phone].filter(Boolean).join(' · '), '180px')}</div>
           </td>
           <td>
-            <div><b>Site Name:</b> ${fill(dn.site_name, '220px')}</div>
-            <div style="margin-top:3px"><b>Address:</b> ${fill(dn.site_address, '220px')}</div>
+            <div><b>Site Name:</b> ${fill(dn.site_name || billToName, '220px')}</div>
+            <div style="margin-top:3px"><b>Address:</b> ${fill(shipAddr, '220px')}</div>
             <div style="margin-top:3px"><b>GSTIN (if diff.):</b> ${fill(dn.client_gstin, '180px')}</div>
             <div style="margin-top:3px"><b>State:</b> ${fill(dn.client_state, '100px')} &nbsp; <b>Code:</b> ${fill(dn.state_code || clientStateCode, '40px')}</div>
             <div style="margin-top:3px"><b>Site Engineer / Contact:</b> ${fill(dn.client_phone, '180px')}</div>
           </td>
         </tr>
-      </table>
+      </table>`;
+      })()}
       <table class="items">
         <thead><tr><th style="width:30px">SL NO.</th><th>DESCRIPTION OF GOODS / SERVICES</th><th style="width:60px">HSN / SAC</th><th style="width:50px">QTY</th><th style="width:40px">UOM</th><th style="width:60px">RATE (₹)</th><th style="width:40px">DISC. %</th><th style="width:80px">TAXABLE VALUE (₹)</th><th style="width:80px">AMOUNT (₹)</th></tr></thead>
         <tbody>${rowsHtml}</tbody>
