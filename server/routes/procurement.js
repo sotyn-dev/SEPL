@@ -4766,9 +4766,20 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     const discPct = +it.disc_pct || 0;
     subtotal += +it.amount || (qty * rate * (1 - discPct / 100));
   }
-  const cgst = subtotal * (+dn.cgst_pct || 0) / 100;
-  const sgst = subtotal * (+dn.sgst_pct || 0) / 100;
-  const igst = subtotal * (+dn.igst_pct || 0) / 100;
+  // GST split is decided by place of supply vs SEPL's Punjab GSTIN: intra-state
+  // (blank or Punjab) → CGST + SGST 9% each; a KNOWN other state → IGST 18%.
+  // Recompute for sales bills so only the right lines show (mam 2026-06-15:
+  // "CGST 9% SGST 9% ... 18% not need remove here").
+  let cgstPct = +dn.cgst_pct || 0, sgstPct = +dn.sgst_pct || 0, igstPct = +dn.igst_pct || 0;
+  if (isSalesBill) {
+    const cs = String(dn.client_state || '').trim().toLowerCase();
+    const interState = cs && cs !== 'punjab';
+    if (interState) { cgstPct = 0; sgstPct = 0; igstPct = 18; }
+    else { cgstPct = 9; sgstPct = 9; igstPct = 0; }
+  }
+  const cgst = subtotal * cgstPct / 100;
+  const sgst = subtotal * sgstPct / 100;
+  const igst = subtotal * igstPct / 100;
   const freight = +dn.freight_amount || 0;
   const roundOff = +dn.round_off_amount || 0;
   const grandTotal = subtotal + cgst + sgst + igst + freight + roundOff;
@@ -4920,9 +4931,9 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       </table>
       <table class="totals">
         <tr><td class="label">Sub Total (Taxable Value)</td><td class="val">₹ ${fmt(subtotal)}</td></tr>
-        <tr><td class="label">Add: CGST @ ${dn.cgst_pct || 0} %</td><td class="val">₹ ${fmt(cgst)}</td></tr>
-        <tr><td class="label">Add: SGST / UTGST @ ${dn.sgst_pct || 0} %</td><td class="val">₹ ${fmt(sgst)}</td></tr>
-        <tr><td class="label">Add: IGST @ ${dn.igst_pct || 0} %</td><td class="val">₹ ${fmt(igst)}</td></tr>
+        ${cgstPct > 0 ? `<tr><td class="label">Add: CGST @ ${cgstPct} %</td><td class="val">₹ ${fmt(cgst)}</td></tr>` : ''}
+        ${sgstPct > 0 ? `<tr><td class="label">Add: SGST / UTGST @ ${sgstPct} %</td><td class="val">₹ ${fmt(sgst)}</td></tr>` : ''}
+        ${igstPct > 0 ? `<tr><td class="label">Add: IGST @ ${igstPct} %</td><td class="val">₹ ${fmt(igst)}</td></tr>` : ''}
         <tr><td class="label">Add: Freight / Packing / Other Charges</td><td class="val">₹ ${fmt(freight)}</td></tr>
         <tr><td class="label">Less: Round Off</td><td class="val">₹ ${fmt(roundOff)}</td></tr>
         <tr><td class="label grand">GRAND TOTAL (₹)</td><td class="val grand">₹ ${fmt(grandTotal)}</td></tr>
