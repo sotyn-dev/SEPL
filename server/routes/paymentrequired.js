@@ -245,6 +245,16 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
           WHERE request_id = ? AND action = 'approved'`
       ).get(row.id);
       row.approvals_count = cleared?.c || 0;
+      // Per-step approved amount (mam 2026-06-15: per-level Pending/Approved
+      // views — "when I select Approved on L1 then show how much amount").
+      // step_amounts = { <step>: <amount approved at that step> }.
+      row.step_amounts = {};
+      for (const s of db.prepare(
+        `SELECT step, step_amount FROM payment_approvals
+          WHERE request_id = ? AND action = 'approved'`
+      ).all(row.id)) {
+        row.step_amounts[s.step] = (s.step_amount != null ? +s.step_amount : (+row.approved_amount || +row.amount || 0));
+      }
     } catch (e) {
       // Don't blow up the list response on a single bad row
       console.warn('[payment-required GET] enrich failed for row', row.id, e.message);
@@ -350,6 +360,16 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
           WHERE request_id = ? AND action = 'approved'`
       ).get(row.id);
       row.approvals_count = cleared?.c || 0;
+      // Per-step approved amount (mam 2026-06-15: per-level Pending/Approved
+      // views — "when I select Approved on L1 then show how much amount").
+      // step_amounts = { <step>: <amount approved at that step> }.
+      row.step_amounts = {};
+      for (const s of db.prepare(
+        `SELECT step, step_amount FROM payment_approvals
+          WHERE request_id = ? AND action = 'approved'`
+      ).all(row.id)) {
+        row.step_amounts[s.step] = (s.step_amount != null ? +s.step_amount : (+row.approved_amount || +row.amount || 0));
+      }
     } catch (_) {}
     inbox.push(row);
   }

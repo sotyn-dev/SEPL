@@ -90,6 +90,13 @@ export default function PaymentRequired() {
   // Client-side filter by LIVE workflow stage (current_step_name / Approved /
   // Rejected). Set by clicking a stage tile or chip. Empty = all stages.
   const [stageFilter, setStageFilter] = useState('');
+  // "Approved by L1/L2/L3" view (mam 2026-06-15): step number 1/2/3, or null.
+  // When set, the list shows requests that level has signed off and the
+  // Approval Amt column shows the amount THAT level approved. Mutually
+  // exclusive with stageFilter (the pending-stage chips).
+  const [approvedLevel, setApprovedLevel] = useState(null);
+  const APPROVED_LEVELS = [{ step: 1, label: 'Approved by L1' }, { step: 2, label: 'Approved by L2' }, { step: 3, label: 'Approved by L3' }];
+  const clearedAt = (r, step) => !!(r.step_amounts && r.step_amounts[step] != null);
   const [uploading, setUploading] = useState(false);
 
   // Approval routing — admin-only (mam, 2026-05-16: "i want hr
@@ -370,7 +377,7 @@ export default function PaymentRequired() {
             <select className="select w-40" value={filters.category} onChange={e => setFilters(f => ({ ...f, category: e.target.value }))}><option value="">All Categories</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
             <select className="select w-40" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}><option value="">All Status</option>{STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}</select>
             {(filters.date_from || filters.date_to || filters.category || filters.status || stageFilter || search) && (
-              <button onClick={() => { setSearch(''); setStageFilter(''); setFilters({ status: '', category: '', date_from: '', date_to: '' }); }}
+              <button onClick={() => { setSearch(''); setStageFilter(''); setApprovedLevel(null); setFilters({ status: '', category: '', date_from: '', date_to: '' }); }}
                 className="btn btn-secondary text-xs flex items-center gap-1 text-red-600 whitespace-nowrap">
                 <FiX size={12} /> Clear filters
               </button>
@@ -481,11 +488,11 @@ export default function PaymentRequired() {
                 <span className="text-[10px] uppercase font-semibold text-gray-500 mr-1">Filter:</span>
                 {chips.map(c => {
                   const n = cnt(c.stage);
-                  const active = (stageFilter || '') === c.stage && c.stage !== '';
+                  const active = (stageFilter || '') === c.stage && c.stage !== '' && !approvedLevel;
                   return (
                     <button
                       key={c.id}
-                      onClick={() => setStageFilter(active ? '' : c.stage)}
+                      onClick={() => { setApprovedLevel(null); setStageFilter(active ? '' : c.stage); }}
                       className={`text-xs font-semibold px-2.5 py-1 rounded-full border transition flex items-center gap-1.5 ${
                         active
                           ? `${c.color} ring-2 ring-offset-1 ring-red-400`
@@ -493,6 +500,23 @@ export default function PaymentRequired() {
                       }`}
                     >
                       {c.label}
+                      <span className={`text-[10px] font-bold rounded-full bg-white/70 px-1.5 ${n === 0 ? 'text-gray-400' : ''}`}>{n}</span>
+                    </button>
+                  );
+                })}
+                {/* Per-level "Approved by Lx" views (mam 2026-06-15): show
+                    requests that level has signed off + the amount it approved. */}
+                <span className="text-gray-300 mx-0.5">|</span>
+                {APPROVED_LEVELS.map(lv => {
+                  const n = visible.filter(r => clearedAt(r, lv.step)).length;
+                  const active = approvedLevel === lv.step;
+                  return (
+                    <button
+                      key={lv.step}
+                      onClick={() => { setStageFilter(''); setApprovedLevel(active ? null : lv.step); }}
+                      className={`text-xs font-semibold px-2.5 py-1 rounded-full border transition flex items-center gap-1.5 bg-green-100 text-green-700 border-green-200 ${active ? 'ring-2 ring-offset-1 ring-green-500' : 'opacity-70 hover:opacity-100'}`}
+                    >
+                      ✓ {lv.label}
                       <span className={`text-[10px] font-bold rounded-full bg-white/70 px-1.5 ${n === 0 ? 'text-gray-400' : ''}`}>{n}</span>
                     </button>
                   );
@@ -507,7 +531,8 @@ export default function PaymentRequired() {
               if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
               if (tab === 'approved' && r.status !== 'final_approved') return false;
               if (tab === 'rejected' && r.status !== 'rejected') return false;
-              if (stageFilter && stageOf(r) !== stageFilter) return false;
+              if (approvedLevel) { if (!clearedAt(r, approvedLevel)) return false; }
+              else if (stageFilter && stageOf(r) !== stageFilter) return false;
               return true;
             }).map(r => {
               const { date, time } = fmtISTPair(r.created_at);
@@ -582,8 +607,9 @@ export default function PaymentRequired() {
                 if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
                 if (tab === 'approved' && r.status !== 'final_approved') return false;
                 if (tab === 'rejected' && r.status !== 'rejected') return false;
-                // Live-stage filter set by clicking a stage tile / chip.
-                if (stageFilter && stageOf(r) !== stageFilter) return false;
+                // "Approved by Lx" view, else the live-stage chip filter.
+                if (approvedLevel) { if (!clearedAt(r, approvedLevel)) return false; }
+                else if (stageFilter && stageOf(r) !== stageFilter) return false;
                 return true;
               }).map(r => (
                 <tr key={r.id}>
@@ -598,9 +624,11 @@ export default function PaymentRequired() {
                       amount (greyed = not yet approved). Emerald = a level
                       reduced it. */}
                   <td className="font-semibold">
-                    {r.approved_amount != null
-                      ? <span className={+r.approved_amount !== +r.amount ? 'text-emerald-700' : ''} title={+r.approved_amount !== +r.amount ? `Adjusted from ${fmt(r.amount)}` : 'Approved at requested amount'}>{fmt(r.approved_amount)}</span>
-                      : <span className="text-gray-400" title="Not yet approved — will pay the requested amount unless a level adjusts it">{fmt(r.amount)}</span>}
+                    {approvedLevel && r.step_amounts && r.step_amounts[approvedLevel] != null
+                      ? <span className="text-green-700" title={`Amount approved at L${approvedLevel}`}>{fmt(r.step_amounts[approvedLevel])}</span>
+                      : r.approved_amount != null
+                        ? <span className={+r.approved_amount !== +r.amount ? 'text-emerald-700' : ''} title={+r.approved_amount !== +r.amount ? `Adjusted from ${fmt(r.amount)}` : 'Approved at requested amount'}>{fmt(r.approved_amount)}</span>
+                        : <span className="text-gray-400" title="Not yet approved — will pay the requested amount unless a level adjusts it">{fmt(r.amount)}</span>}
                   </td>
                   <td className="text-sm max-w-[280px]">
                     {/* Show full purpose text, wrap to multiple lines for
