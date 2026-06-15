@@ -35,6 +35,35 @@ const STAGE_FILTER_GROUPS = [
 
 const sameStageSet = (a, b) => a.length === b.length && a.every(s => b.includes(s));
 
+// Stages where the funnel is waiting on the CUSTOMER — these can silently
+// stall. A lead idle here past STALE_DAYS gets an amber "waiting Nd" badge.
+const STALE_STAGES = ['WELCOME_SENT', 'BANK_SENT'];
+const STALE_DAYS = 2;
+function staleDays(r) {
+  if (!STALE_STAGES.includes(r.stage)) return 0;
+  const ts = r.updated_at || r.created_at;
+  if (!ts) return 0;
+  const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z');
+  if (isNaN(d.getTime())) return 0;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
+}
+
+// Turn the /stats pollHealth block into an admin banner, or null when healthy.
+// Surfaces a silent ingestion failure (expired key, error, stale) so leads
+// don't just quietly stop arriving.
+function pollHealthAlert(ph) {
+  if (!ph) return null;
+  if (ph.status === 'auth_failed') return { tone: 'red', msg: 'IndiaMART CRM key is invalid or expired — new leads are NOT being ingested. Regenerate it in Lead Funnel settings.' };
+  if (ph.status === 'error') return { tone: 'red', msg: `IndiaMART polling failed${ph.error ? ': ' + ph.error : ''}. New leads may not be arriving.` };
+  if (ph.status === 'rate_limited') return { tone: 'amber', msg: 'IndiaMART rate-limited the last poll — ingestion will retry shortly.' };
+  if (ph.status === 'no_key') return { tone: 'amber', msg: 'No IndiaMART CRM key configured — lead ingestion is off. Add it in Lead Funnel settings.' };
+  if (ph.lastOkAt) {
+    const ageH = Math.floor((Date.now() - new Date(ph.lastOkAt).getTime()) / 3600000);
+    if (ageH >= 1) return { tone: 'amber', msg: `No successful IndiaMART poll in over ${ageH}h — check ingestion.` };
+  }
+  return null;
+}
+
 function pageWindows(current, total) {
   if (total <= 5) return Array.from({ length: total }, (_, i) => i + 1);
   const pages = new Set([1, total, current, current - 1, current + 1].filter(p => p >= 1 && p <= total));
@@ -53,6 +82,7 @@ export default function L2DIndiamart() {
   const [page, setPage]       = useState(1);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo]     = useState('');
+  const [staleOnly, setStaleOnly] = useState(false);
 
   const loadStats = useCallback(() => {
     leadFunnel.stats().then(setStats).catch(() => {});
@@ -92,6 +122,7 @@ export default function L2DIndiamart() {
       if (dateTo && ts > new Date(dateTo).getTime() + 86400000) return false;
       return true;
     })
+    .filter(r => !staleOnly || staleDays(r) >= STALE_DAYS)
     .sort((a, b) => {
       const aTime = getTimestamp(a);
       const bTime = getTimestamp(b);
@@ -100,7 +131,7 @@ export default function L2DIndiamart() {
 
   const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
   const paginated  = filtered.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE);
-  const hasFilters = stageFilter.length || q || dateFrom || dateTo;
+  const hasFilters = stageFilter.length || q || dateFrom || dateTo || staleOnly;
 
   const counts = stats?.counts || {};
   // Card count = total for "All", else the sum across the card's stage set.
@@ -138,6 +169,21 @@ export default function L2DIndiamart() {
           </button>
         </div>
       </div>
+
+      {/* Poll-health banner — admin only, shown when ingestion is failing/stale */}
+      {isAdmin() && (() => {
+        const alert = pollHealthAlert(stats?.pollHealth);
+        if (!alert) return null;
+        const cls = alert.tone === 'red'
+          ? 'bg-red-50 border-red-200 text-red-700'
+          : 'bg-amber-50 border-amber-200 text-amber-800';
+        return (
+          <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${cls}`}>
+            <FiAlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <span>{alert.msg}</span>
+          </div>
+        );
+      })()}
 
       {/* Metric cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -210,9 +256,23 @@ export default function L2DIndiamart() {
             onChange={e => { setDateTo(e.target.value); setPage(1); }}
           />
         </div>
+        {/* Stale toggle — leads waiting on the customer past the threshold */}
+        <button
+          type="button"
+          onClick={() => { setStaleOnly(v => !v); setPage(1); }}
+          aria-pressed={staleOnly}
+          className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs whitespace-nowrap transition-colors ${
+            staleOnly
+              ? 'bg-amber-50 border-amber-300 text-amber-800'
+              : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+          }`}
+          title={`Show only leads waiting on the customer for ${STALE_DAYS}+ days`}
+        >
+          <FiAlertTriangle size={12} /> Stale
+        </button>
         {hasFilters && (
           <button
-            onClick={() => { setStageFilter([]); setQ(''); setDateFrom(''); setDateTo(''); setPage(1); }}
+            onClick={() => { setStageFilter([]); setQ(''); setDateFrom(''); setDateTo(''); setStaleOnly(false); setPage(1); }}
             className="text-xs text-blue-600 hover:underline whitespace-nowrap"
           >
             Clear
@@ -257,7 +317,14 @@ export default function L2DIndiamart() {
                 </td>
                 <td className="p-2 text-gray-700">{r.query_product_name || '—'}</td>
                 <td className="p-2">
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">{stageLabel(r.stage)}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700">{stageLabel(r.stage)}</span>
+                    {staleDays(r) >= STALE_DAYS && (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 whitespace-nowrap" title="Waiting on customer reply">
+                        waiting {staleDays(r)}d
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="p-2 text-right text-gray-700">{r.quoted_price ? money(r.quoted_price) : '—'}</td>
                 <td className="p-2 text-xs text-gray-400">{fmtIST(r.query_time) || fmtIST(r.created_at)}</td>

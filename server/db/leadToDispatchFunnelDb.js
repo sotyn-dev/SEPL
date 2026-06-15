@@ -164,7 +164,18 @@ function initFunnelDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_l2d_followups_due ON l2d_followups(due_date, sent);
   `);
+  // Idempotent column adds (CREATE TABLE IF NOT EXISTS won't add new columns to
+  // an existing table, so back-fill any missing ones here on every boot).
+  ensureColumn(d, 'l2d_leads', 'payment_amount', 'REAL');
   return d;
+}
+
+// Add a column only if it's missing — safe to call on every boot.
+function ensureColumn(d, table, column, type) {
+  const cols = d.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some(c => c.name === column)) {
+    d.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
 }
 
 // Small key/value helpers over l2d_settings (mirrors aiAgent.js getSetting).

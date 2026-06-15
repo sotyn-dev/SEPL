@@ -43,6 +43,18 @@ function resolveCrmKey() {
   return (getFunnelSetting('indiamart_crm_key') || process.env.INDIAMART_CRM_KEY || '').trim();
 }
 
+// Persist the latest poll outcome so the UI can surface a silent ingestion
+// failure (expired key, rate limit, network) instead of leads just stopping.
+function recordPollStatus(status, error) {
+  try {
+    const now = new Date().toISOString();
+    setFunnelSetting('last_poll_at', now);
+    setFunnelSetting('last_poll_status', status);
+    setFunnelSetting('last_poll_error', error || '');
+    if (status === 'ok') setFunnelSetting('last_poll_ok_at', now);
+  } catch (_) { /* best-effort */ }
+}
+
 function parseList(raw) {
   if (!raw) return [];
   try { const v = JSON.parse(raw); return Array.isArray(v) ? v : []; } catch { return []; }
@@ -169,6 +181,7 @@ async function runOnce() {
   const key = resolveCrmKey();
   if (!key) {
     // By design: no key configured → poller does nothing, makes NO API call.
+    recordPollStatus('no_key');
     return { skipped: 'no_key' };
   }
 
@@ -187,6 +200,7 @@ async function runOnce() {
     resp = await fetchIndiamartLeads(key, startTime, endTime);
   } catch (e) {
     console.error('[indiamart-poll] fetch error:', e.message);
+    recordPollStatus('error', e.message);
     return { error: e.message };
   }
 
@@ -194,14 +208,17 @@ async function runOnce() {
   // Rate limited or auth failure → log, back off, DO NOT advance the window.
   if (code === 429) {
     console.warn('[indiamart-poll] 429 rate limited — backing off, window unchanged');
+    recordPollStatus('rate_limited', 'HTTP 429 — rate limited');
     return { code: 429, ingested: 0 };
   }
   if (code === 401) {
     console.warn('[indiamart-poll] 401 invalid/expired key — regenerate in Lead Manager');
+    recordPollStatus('auth_failed', 'HTTP 401 — invalid or expired CRM key');
     return { code: 401, ingested: 0 };
   }
   if (code !== 200 && code !== 204) {
     console.warn('[indiamart-poll] unexpected response code', code, resp.body?.MESSAGE || '');
+    recordPollStatus('error', `HTTP ${code} ${resp.body?.MESSAGE || ''}`.trim());
     return { code, ingested: 0 };
   }
 
@@ -240,6 +257,7 @@ async function runOnce() {
   if (newLeads.length) {
     console.log(`[indiamart-poll] ingested ${newLeads.length} new lead(s) of ${records.length} fetched`);
   }
+  recordPollStatus('ok');
   return { code, fetched: records.length, ingested: newLeads.length };
 }
 

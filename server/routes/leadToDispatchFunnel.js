@@ -29,6 +29,32 @@ function recordStage(db, leadId, toStage, req, note) {
      VALUES (?, ?, ?, ?, ?, ?)`
   ).run(leadId, cur?.stage || null, toStage, req?.user?.id || null, req?.user?.name || 'system', note || null);
   db.prepare('UPDATE l2d_leads SET stage=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(toStage, leadId);
+  // Closing a deal seeds the nurture loop so the daily follow-up tick has
+  // something to send — the Keep in Touch screen lets a human adjust/cancel it.
+  if (toStage === 'KEEP_IN_TOUCH' && cur?.stage !== 'KEEP_IN_TOUCH') seedKeepInTouchFollowup(db, leadId);
+}
+
+// Auto-create one default follow-up (+30 days) on deal close, but only if the
+// lead has none yet — so re-entering KEEP_IN_TOUCH never piles up duplicates.
+function seedKeepInTouchFollowup(db, leadId) {
+  const existing = db.prepare('SELECT 1 FROM l2d_followups WHERE lead_id=? LIMIT 1').get(leadId);
+  if (existing) return;
+  const due = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10); // YYYY-MM-DD
+  db.prepare('INSERT INTO l2d_followups (lead_id, due_date, note) VALUES (?, ?, ?)')
+    .run(leadId, due, 'Auto-scheduled on deal close');
+}
+
+function fmtMoney(n) { return '₹' + (Number(n) || 0).toLocaleString('en-IN'); }
+
+// Most recent non-failed outbound send of a template for a lead, or null.
+// Used to make template sends idempotent (no duplicate welcome/bank on retry).
+function lastGoodSend(db, leadId, template) {
+  return db.prepare(
+    `SELECT * FROM l2d_messages
+      WHERE lead_id=? AND direction='out' AND template=?
+        AND status NOT IN ('failed', 'skipped')
+      ORDER BY created_at DESC LIMIT 1`
+  ).get(leadId, template);
 }
 
 // ─── Twilio inbound webhook (NO AUTH — must precede authMiddleware) ───
@@ -43,8 +69,13 @@ router.post('/whatsapp/webhook', express.urlencoded({ extended: false }), async 
     if (!from) return;
     const db = getFunnelDb();
     const last10 = from.slice(-10);
+    // Prefer the most-recent ACTIVE lead for this number. A repeat buyer can have
+    // an old closed/rejected lead AND a fresh open enquiry — terminal stages
+    // (KEEP_IN_TOUCH/REJECTED) sort last so the open enquiry advances, not the
+    // dead one. Falls back to newest overall if every match is terminal.
     const lead = db.prepare(
-      `SELECT * FROM l2d_leads WHERE sender_mobile LIKE ? ORDER BY created_at DESC LIMIT 1`
+      `SELECT * FROM l2d_leads WHERE sender_mobile LIKE ?
+        ORDER BY (stage IN ('KEEP_IN_TOUCH', 'REJECTED')) ASC, created_at DESC LIMIT 1`
     ).get(`%${last10}%`);
     // Log the inbound regardless so it shows in the message log.
     db.prepare(
@@ -106,9 +137,67 @@ router.patch('/leads/:id/stage', (req, res) => {
   res.json({ message: 'Stage updated', stage });
 });
 
+// Gate-state transitions for the "Next Action" panel (LEAD_ENTERED / NEEDS_REVIEW).
+// Optionally records a manually-entered price and fires the welcome/bank WhatsApp
+// template — a plain stage change never sends anything, so the coordinator's
+// green "Approve & send welcome" button routes through here to be truthful.
+router.patch('/leads/:id/advance', async (req, res) => {
+  const db = getFunnelDb();
+  const { to, send, quoted_price, matched_item_name, note } = req.body || {};
+  if (!isValidStage(to)) return res.status(400).json({ error: 'Invalid target stage' });
+  const lead = db.prepare('SELECT * FROM l2d_leads WHERE id=?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+  if (quoted_price != null && quoted_price !== '') {
+    db.prepare(
+      `UPDATE l2d_leads SET quoted_price=?, price_source='manual',
+         matched_item_name=COALESCE(?, matched_item_name), updated_at=CURRENT_TIMESTAMP WHERE id=?`
+    ).run(Number(quoted_price), matched_item_name || null, lead.id);
+    lead.quoted_price = Number(quoted_price);
+    if (matched_item_name) lead.matched_item_name = matched_item_name;
+  }
+
+  let sendNote = '';
+  if (send === 'welcome') {
+    const wantPrice = Number(lead.quoted_price) > 0;
+    // Idempotency: a welcome already went out → skip, UNLESS we're upgrading a
+    // prior "price on request" greeting to a real price (the one allowed re-send,
+    // so a priced welcome reaches a customer who first saw "on request").
+    const prior = lastGoodSend(db, lead.id, 'welcome');
+    let priorHadPrice = false;
+    if (prior) {
+      try { const v = JSON.parse(prior.body || '{}'); priorHadPrice = v['3'] && !/on request/i.test(String(v['3'])); } catch (_) {}
+    }
+    const isPriceUpgrade = wantPrice && prior && !priorHadPrice;
+    if (prior && !isPriceUpgrade) {
+      sendNote = '; welcome already sent — skipped duplicate';
+    } else {
+      const sid = getFunnelSetting('welcome_template_sid') || process.env.L2D_WELCOME_TEMPLATE_SID || null;
+      const price = wantPrice ? fmtMoney(lead.quoted_price) : 'on request';
+      const sent = await sendTemplate({
+        lead, templateSid: sid, templateLabel: 'welcome',
+        variables: { 1: lead.sender_name || 'there', 2: lead.matched_item_name || lead.query_product_name || 'your enquiry', 3: price },
+      });
+      sendNote = `; welcome ${sent.ok ? (isPriceUpgrade ? 'sent with price' : 'sent') : 'send failed: ' + sent.error}`;
+    }
+  } else if (send === 'bank') {
+    // Bank details never change → one good send is enough.
+    if (lastGoodSend(db, lead.id, 'bank')) {
+      sendNote = '; bank already sent — skipped duplicate';
+    } else {
+      const sid = getFunnelSetting('bank_template_sid') || process.env.L2D_BANK_TEMPLATE_SID || null;
+      const sent = await sendTemplate({ lead, templateSid: sid, templateLabel: 'bank', variables: { 1: lead.sender_name || 'there' } });
+      sendNote = `; bank ${sent.ok ? 'sent' : 'send failed: ' + sent.error}`;
+    }
+  }
+
+  recordStage(db, lead.id, to, req, (note || 'manual advance') + sendNote);
+  res.json({ message: 'Lead advanced', stage: to });
+});
+
 // Capture fields (steps 8–12) + opt-out. Whitelisted columns only.
 const CAPTURE_COLS = [
-  'po_number', 'po_amount', 'payment_ref', 'dispatch_ref', 'purchase_bill_url',
+  'po_number', 'po_amount', 'payment_ref', 'payment_amount', 'dispatch_ref', 'purchase_bill_url',
   'purchase_bill_number', 'sales_bill_number', 'sales_bill_amount', 'receipt_amount',
   'receipt_date', 'opted_out', 'assigned_to', 'quoted_price', 'matched_item_name',
 ];
@@ -141,7 +230,48 @@ router.get('/stats', (req, res) => {
     counts,
     stages: STAGES.map(s => ({ ...s, count: counts[s.key] || 0 })),
     sideStates: SIDE_STATES.map(s => ({ ...s, count: counts[s.key] || 0 })),
+    pollHealth: {
+      status: getFunnelSetting('last_poll_status') || null, // ok | no_key | auth_failed | rate_limited | error
+      error: getFunnelSetting('last_poll_error') || null,
+      lastPollAt: getFunnelSetting('last_poll_at') || null,
+      lastOkAt: getFunnelSetting('last_poll_ok_at') || null,
+    },
   });
+});
+
+// ─── Keep in Touch (post-sale relationship surface) ───────────────────
+// Closed customers (KEEP_IN_TOUCH) enriched with their nurture schedule, deal
+// value, and close date so the coordinator can re-engage them for repeat sales.
+router.get('/keep-in-touch', (req, res) => {
+  const db = getFunnelDb();
+  const leads = db.prepare(
+    `SELECT * FROM l2d_leads WHERE stage='KEEP_IN_TOUCH' ORDER BY updated_at DESC LIMIT 1000`
+  ).all();
+  const nextStmt  = db.prepare(`SELECT MIN(due_date) AS d FROM l2d_followups WHERE lead_id=? AND sent=0`);
+  const sentStmt  = db.prepare(`SELECT COUNT(*) AS n FROM l2d_followups WHERE lead_id=? AND sent=1`);
+  const closeStmt = db.prepare(`SELECT MAX(created_at) AS c FROM l2d_stage_history WHERE lead_id=? AND to_stage='KEEP_IN_TOUCH'`);
+  res.json(leads.map(l => ({
+    ...l,
+    next_followup:  nextStmt.get(l.id)?.d || null,
+    followups_sent: sentStmt.get(l.id)?.n || 0,
+    closed_at:      closeStmt.get(l.id)?.c || null,
+  })));
+});
+
+// Send a follow-up to a closed customer right now (manual nudge from the
+// Keep in Touch screen). Honours opt-out; never throws past sendTemplate.
+router.post('/leads/:id/followup-now', async (req, res) => {
+  const db = getFunnelDb();
+  const lead = db.prepare('SELECT * FROM l2d_leads WHERE id=?').get(req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  if (lead.opted_out) return res.status(400).json({ error: 'Customer has opted out of follow-ups' });
+  const sid = getFunnelSetting('followup_template_sid') || process.env.L2D_FOLLOWUP_TEMPLATE_SID || null;
+  const sent = await sendTemplate({
+    lead, templateSid: sid, templateLabel: 'followup',
+    variables: { 1: lead.sender_name || 'there', 2: req.body?.note || '' },
+  });
+  if (!sent.ok) return res.status(502).json({ error: 'Send failed: ' + sent.error });
+  res.json({ message: 'Follow-up sent' });
 });
 
 // ─── Vendor PO (funnel-only draft; never touches main ERP vendor_pos) ──

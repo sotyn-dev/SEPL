@@ -47,6 +47,8 @@ import {
   FiGitBranch,
   // Lead-to-Dispatch Funnel (2026-06-11) — distinct icons, no dupes
   FiMessageSquare, FiToggleRight,
+  // L2D Keep in Touch — post-sale nurture surface (2026-06-15)
+  FiHeart,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
 
@@ -81,6 +83,8 @@ const SIDEBAR_GROUPS = [
     // Lead-to-Dispatch Funnel (2026-06-11): open to all authenticated users
     // (open:true) — separate DB feature, no permission module seeded.
     { path: '/l2d-indiamart', label: 'Lead → Dispatch (IndiaMart)', icon: FiMessageSquare, module: null, open: true },
+    // Post-sale nurture surface for closed L2D customers (open to all, like its parent feature).
+    { path: '/l2d-keep-in-touch', label: 'Keep in Touch', icon: FiHeart, module: null, open: true },
     { path: '/leads',         label: 'Sales Funnel',      icon: FiFilter,     module: 'leads' },
     { path: '/business-book', label: 'Business Book',     icon: FiBook,       module: 'business_book' },
     { path: '/customers',     label: 'Customers',         icon: FiUser,       module: 'customers' },

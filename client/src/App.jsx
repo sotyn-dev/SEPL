@@ -61,6 +61,7 @@ import SubconHiring from './pages/SubconHiring';
 import ProcurementSchedule from './pages/ProcurementSchedule';
 import CRMFunnel from './pages/CRMFunnel';
 import L2DIndiamart from './pages/L2DIndiamart';
+import L2DKeepInTouch from './pages/L2DKeepInTouch';
 import L2DIndiamartSettings from './pages/L2DIndiamartSettings';
 import ChequeFMS from './pages/ChequeFMS';
 import EmailSettings from './pages/EmailSettings';
@@ -214,6 +215,7 @@ export default function App() {
             authenticated users (no permission module to seed → no main-DB
             change); settings are admin-only. */}
         <Route path="l2d-indiamart" element={<L2DIndiamart />} />
+        <Route path="l2d-keep-in-touch" element={<L2DKeepInTouch />} />
         <Route path="admin/l2d-settings-indiamart" element={<AdminRoute><L2DIndiamartSettings /></AdminRoute>} />
         <Route path="cheques" element={<ModuleRoute module="cheques"><ChequeFMS /></ModuleRoute>} />
       </Route>
