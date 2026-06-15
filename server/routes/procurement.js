@@ -1663,7 +1663,13 @@ router.put('/indents/:id', (req, res) => {
         }
         if (fromStore === 0) continue;
         const row = db.prepare(
-          'SELECT id, indent_id, item_master_id, quantity, unit, rate, description, item_type FROM indent_items WHERE id=?'
+          `SELECT ii.id, ii.indent_id, ii.item_master_id, ii.quantity, ii.unit, ii.rate,
+                  COALESCE(NULLIF(TRIM(ii.description), ''), NULLIF(TRIM(im.item_name), ''),
+                           NULLIF(TRIM(im.specification), '')) AS description,
+                  ii.item_type
+             FROM indent_items ii
+             LEFT JOIN item_master im ON im.id = ii.item_master_id
+            WHERE ii.id = ?`
         ).get(itemId);
         if (!row || +row.indent_id !== +id) {
           return res.status(400).json({ error: `Item #${itemId} does not belong to this indent.` });
@@ -4497,7 +4503,10 @@ router.get('/delivery-notes/:id/print', (req, res) => {
     FROM delivery_notes dn
     LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
     LEFT JOIN vendors v ON vp.vendor_id = v.id
-    LEFT JOIN indents ind ON vp.indent_id = ind.id
+    -- Resolve the indent via the vendor PO, OR the DN's own indent_id for
+    -- store-issue / RGP challans that have no vendor PO (mam 2026-06-15:
+    -- store Delivery Note showed empty CLIENT / SITE because vp was NULL).
+    LEFT JOIN indents ind ON ind.id = COALESCE(vp.indent_id, dn.indent_id)
     LEFT JOIN order_planning op ON ind.planning_id = op.id
     LEFT JOIN business_book bb ON bb.id = op.business_book_id
     LEFT JOIN purchase_orders po ON op.po_id = po.id
@@ -4991,6 +5000,15 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         <td class="lbl">Indent No.</td><td>${esc(dn.indent_number || '')}</td>
       </tr>
     </table>
+    ${(() => {
+      // Same Business-Book fallbacks as the sales bill (mam 2026-06-15
+      // "not showing proper data"): client name falls back to the site /
+      // project field (minus leading "M/s"), addresses cross-fall-back.
+      const stripMs = (s) => String(s || '').replace(/^\s*M\/?s\.?\s*/i, '').trim();
+      var clientName = dn.client_company || stripMs(dn.site_name) || dn.client_person_name || '';
+      var clientAddr = dn.client_address || dn.site_address || '';
+      var siteAddr = dn.site_address || dn.client_address || '';
+      return `
     <table class="parties">
       <tr>
         <td class="lbl" style="width:50%">Client / Company</td>
@@ -4998,19 +5016,20 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       </tr>
       <tr>
         <td style="width:50%">
-          <div><b>M/s</b> ${fill(dn.client_company, '220px')}</div>
+          <div><b>M/s</b> ${fill(clientName, '220px')}</div>
           <div style="margin-top:4px"><b>Address:</b></div>
-          <div style="margin-left:4px">${fill(dn.client_address, '260px')}</div>
+          <div style="margin-left:4px">${fill(clientAddr, '260px')}</div>
           <div style="margin-top:4px"><b>GSTIN:</b> ${fill(dn.client_gstin, '180px')}</div>
         </td>
         <td>
-          <div><b>Site Name:</b> ${fill(dn.site_name, '220px')}</div>
+          <div><b>Site Name:</b> ${fill(dn.site_name || clientName, '220px')}</div>
           <div style="margin-top:4px"><b>Address:</b></div>
-          <div style="margin-left:4px">${fill(dn.site_address, '260px')}</div>
+          <div style="margin-left:4px">${fill(siteAddr, '260px')}</div>
           <div style="margin-top:4px"><b>Site Engineer / Contact:</b> ${fill(dn.client_phone, '180px')}</div>
         </td>
       </tr>
-    </table>
+    </table>`;
+    })()}
     <table class="items">
       <thead><tr><th style="width:30px">SL NO.</th><th>DESCRIPTION OF MATERIAL / WORK</th><th style="width:80px">HSN / CODE</th><th style="width:70px">QUANTITY</th><th style="width:50px">UOM</th><th style="width:130px">REMARKS</th></tr></thead>
       <tbody>${rowsHtml}</tbody>
