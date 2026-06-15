@@ -3535,10 +3535,24 @@ export default function Procurement() {
         // status live in Purchase Bills > Follow-up directly.
         const activePos = (vendorPos || []).filter(po => !po.cancelled);
 
-        // Bucket each PO by payment status
+        // Collapse duplicate POs for the SAME indent + vendor + amount (mam
+        // 2026-06-15: "indent one against one vendor → only one need to show").
+        // Keeps the first (newest) PO; a genuinely different-amount PO to the
+        // same vendor still shows, so a real second PO is never hidden.
+        const dedupPos = (list) => {
+          const seen = new Set();
+          return list.filter(po => {
+            const total = Math.round(+po.display_total || +po.total_amount || 0);
+            const key = `${(po.indent_number || '').toLowerCase()}|${(po.vendor_name || '').toLowerCase()}|${total}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        };
+        // Bucket each PO by payment status (deduped)
         const buckets = {
-          urgent:  activePos.filter(po => po.payment_block_status === 'pending'),
-          cleared: activePos.filter(po => po.payment_block_status === 'cleared'),
+          urgent:  dedupPos(activePos.filter(po => po.payment_block_status === 'pending')),
+          cleared: dedupPos(activePos.filter(po => po.payment_block_status === 'cleared')),
         };
         const sumUrgent  = buckets.urgent.reduce((s, p) => s + (+p.payment_block_amount || 0), 0);
         const sumCleared = buckets.cleared.reduce((s, p) => s + (+p.payment_block_amount || 0), 0);
