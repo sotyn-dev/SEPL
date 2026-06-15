@@ -4497,6 +4497,7 @@ router.get('/delivery-notes/:id/print', (req, res) => {
            bb.billing_address AS client_address, bb.shipping_address AS site_address,
            bb.state AS client_state, bb.district AS client_district,
            bb.gstin AS client_gstin, bb.state_code AS client_state_code,
+           bb.payment_against_delivery AS bb_delivery_terms,
            COALESCE(NULLIF(TRIM(ind.site_name), ''), bb.project_name) AS site_name,
            ind.indent_number,
            bb.lead_no AS bb_lead_no
@@ -4557,21 +4558,33 @@ router.get('/delivery-notes/:id/print', (req, res) => {
   if (dn.document_type === 'sales_bill' && dn.vendor_po_id) {
     try {
       const computed = computeClientPoItems(db, dn.vendor_po_id, true);
+      // Use the delivery % from whichever path actually resolved the order:
+      // computeClientPoItems' own (narrow) lookup, OR the % the print query
+      // already resolved on the bill's business_book (broader join). This is
+      // why the rate wasn't changing — the narrow lookup missed the order.
+      let pct = +computed.delivery_pct || 0;
+      if (!pct && dn.bb_delivery_terms) pct = parseFloat(String(dn.bb_delivery_terms).replace(/[^0-9.]/g, '')) || 0;
       const rws = (computed.items || []).filter(r => (r.description && String(r.description).trim()) || +r.quantity > 0 || +r.rate > 0);
-      if (rws.length && computed.delivery_pct > 0) {
-        items = rws.map(it => ({
-          description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
-          quantity: +it.quantity || 0,
-          unit: it.unit || '',
-          rate: +it.rate || 0,
-          disc_pct: 0,
-          amount: +it.amount || ((+it.quantity || 0) * (+it.rate || 0)),
-          item_code: it.item_code || '',
-          specification: it.specification || '',
-          size: it.size || '',
-          gst_text: it.hsn_code || '',
-          item_name: it.item_name || '',
-        }));
+      if (rws.length && pct > 0) {
+        items = rws.map(it => {
+          const qty = +it.quantity || 0;
+          // Always start from the RAW BOQ rate and apply the % once.
+          const boq = +it.boq_rate || +it.rate || 0;
+          const rate = Math.round(boq * pct) / 100;     // BOQ × pct%
+          return {
+            description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
+            quantity: qty,
+            unit: it.unit || '',
+            rate,
+            disc_pct: 0,
+            amount: Math.round(rate * qty * 100) / 100,
+            item_code: it.item_code || '',
+            specification: it.specification || '',
+            size: it.size || '',
+            gst_text: it.hsn_code || '',
+            item_name: it.item_name || '',
+          };
+        });
         itemsSource = 'client_po_computed';
       }
     } catch (_) {}
