@@ -10,7 +10,11 @@ import { exportCsv } from '../utils/exportCsv';
 import TimePicker from '../components/TimePicker';
 
 export default function Attendance() {
-  const { user, isAdmin, canDelete } = useAuth();
+  const { user, isAdmin, canDelete, canSeeAll } = useAuth();
+  // Admins, or anyone granted "See All" on the attendance module, can view
+  // everyone's attendance (mam 2026-06-15: "show all attendance if I give some
+  // permission to see all"). Write tools (Grid / Geofence) stay admin-only.
+  const seeAll = isAdmin() || canSeeAll('attendance');
   const [tab, setTab] = useUrlTab('punch');
   const [myToday, setMyToday] = useState(null);
   // Mam: daily attendance detail (in/out times + leave) belongs on the
@@ -67,7 +71,7 @@ export default function Attendance() {
     api.get('/attendance/my-month').then(r => setMyMonth(r.data)).catch(() => {});
     // Everyone needs geofence list to see auto-punch status live
     api.get('/attendance/geofence').then(r => setGeofences(r.data || [])).catch(() => {});
-    if (isAdmin()) {
+    if (seeAll) {
       api.get('/attendance/dashboard').then(r => setDashboard(r.data)).catch(() => {});
       api.get(`/attendance?date=${filterDate}`).then(r => setRecords(r.data)).catch(() => {});
       api.get('/attendance/leaves').then(r => setLeaves(r.data)).catch(() => {});
@@ -79,7 +83,7 @@ export default function Attendance() {
 
   // Load per-user records when the By User tab filters change
   useEffect(() => {
-    if (!isAdmin() || tab !== 'byuser' || !selectedUserId) { setUserRecords([]); return; }
+    if (!seeAll || tab !== 'byuser' || !selectedUserId) { setUserRecords([]); return; }
     api.get(`/attendance?user_id=${selectedUserId}&date_from=${userDateFrom}&date_to=${userDateTo}`)
       .then(r => setUserRecords(r.data))
       .catch(() => setUserRecords([]));
@@ -274,14 +278,16 @@ export default function Attendance() {
       <div className="flex gap-2 flex-wrap">
         <button onClick={() => setTab('punch')} className={`btn ${tab === 'punch' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Punch In/Out</button>
         <button onClick={() => setTab('myhistory')} className={`btn ${tab === 'myhistory' ? 'btn-primary' : 'btn-secondary'} text-sm`}>My History</button>
-        {isAdmin() && <>
+        {seeAll && <>
           <button onClick={() => setTab('dashboard')} className={`btn ${tab === 'dashboard' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Dashboard</button>
-          <button onClick={() => setTab('grid')} className={`btn ${tab === 'grid' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Grid</button>
           <button onClick={() => setTab('records')} className={`btn ${tab === 'records' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Records</button>
           <button onClick={() => setTab('byuser')} className={`btn ${tab === 'byuser' ? 'btn-primary' : 'btn-secondary'} text-sm`}>By User</button>
           <button onClick={() => setTab('report')} className={`btn ${tab === 'report' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Report</button>
-          <button onClick={() => setTab('geofence')} className={`btn ${tab === 'geofence' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Geofence</button>
           <button onClick={() => setTab('leaves')} className={`btn ${tab === 'leaves' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Leaves</button>
+        </>}
+        {isAdmin() && <>
+          <button onClick={() => setTab('grid')} className={`btn ${tab === 'grid' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Grid</button>
+          <button onClick={() => setTab('geofence')} className={`btn ${tab === 'geofence' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Geofence</button>
         </>}
       </div>
 
@@ -872,7 +878,7 @@ export default function Attendance() {
         </div>
       )}
 
-      {tab === 'byuser' && isAdmin() && (
+      {tab === 'byuser' && seeAll && (
         <div className="space-y-4">
           <div className="card p-3">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
