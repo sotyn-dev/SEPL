@@ -4553,6 +4553,7 @@ router.get('/delivery-notes/:id/print', (req, res) => {
           dn.client_state       = bb.state          || dn.client_state;
           dn.client_state_code  = bb.state_code      || dn.client_state_code;
           dn.client_gstin       = bb.gstin          || dn.client_gstin;
+          dn.bb_lead_no         = bb.lead_no         || dn.bb_lead_no;
           if (!dn.site_name)    dn.site_name = bb.project_name;
         }
       }
@@ -4918,6 +4919,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
           <td class="lbl">Client PO No.</td><td>${esc(dn.client_po_no || '')}</td>
           <td class="lbl">PO Date</td><td>${dispDate(dn.client_po_date)}</td>
           <td class="lbl">Delivery Note Ref.</td><td>${esc(dnNum)}</td>
+          <td class="lbl">Sales Order</td><td>${esc(dn.bb_lead_no || '')}</td>
         </tr>
         <tr>
           <td class="lbl">Place of Supply</td><td>${esc(dn.place_of_supply || dn.client_state || '')}</td>
@@ -4925,6 +4927,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
           <td class="lbl">Reverse Charge</td><td>${dn.reverse_charge ? 'YES' : 'NO'}</td>
           <td class="lbl">Vehicle No.</td><td>${esc(dn.vehicle_no || '')}</td>
           <td class="lbl">E-Way Bill No.</td><td>${esc(dn.e_way_bill_no || '')}</td>
+          <td class="lbl"></td><td></td>
         </tr>
       </table>
       ${(() => {
