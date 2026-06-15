@@ -457,13 +457,17 @@ export default function Procurement() {
   // Generate (not upload) a Sales Bill from a challan, then open its
   // printable invoice — mam (2026-06-04): "sales bill generate, not upload".
   const generateSalesBill = async (d) => {
+    // Park the print tab synchronously (popup blockers eat window.open
+    // after an await) — navigate it once the bill is ready.
+    const printWin = window.open('', '_blank');
     try {
       const r = await api.post(`/procurement/delivery-notes/${d.id}/generate-sales-bill`);
       toast.success(`Sales Bill ${r.data.document_number} ${r.data.existing ? 'already exists' : 'generated'}${r.data.is_draft ? ' · DRAFT — fill client GSTIN / rates' : ''}`, { duration: 6000 });
       load();
       const res = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'arraybuffer' });
-      window.open(URL.createObjectURL(new Blob([res.data], { type: 'text/html' })), '_blank');
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed to generate Sales Bill'); }
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/html;charset=utf-8' }));
+      if (printWin) printWin.location = url; else window.open(url, '_blank');
+    } catch (err) { if (printWin) printWin.close(); toast.error(err.response?.data?.error || 'Failed to generate Sales Bill'); }
   };
   const submitSalesBill = async () => {
     if (!sbTarget) return;
@@ -1512,6 +1516,13 @@ export default function Procurement() {
       fd.append('grand_total_amount', grandTotal.toFixed(2));
     }
     if (form.dispatch_file) fd.append('file', form.dispatch_file);
+    // Open the print tab NOW, synchronously, while we're still inside the
+    // click gesture. If we wait until after the awaits below, the popup
+    // blocker silently eats window.open and nothing appears — that was
+    // mam's "not showing pdf sales bill". We park a blank tab here and
+    // navigate it to the bill once it's generated; the bill's own page
+    // auto-fires the print → Save-as-PDF dialog.
+    const printWin = window.open('', '_blank');
     try {
       const r = await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const which = form.document_type === 'challan' ? 'Delivery Challan' : 'Sales Bill';
@@ -1520,7 +1531,7 @@ export default function Procurement() {
       const generatedNo = r.data?.document_number;
       toast.success(generatedNo ? `${which} ${generatedNo} created` : `${which} created`);
       setModal(false); load();
-      // Auto-open the generated document in a new tab so mam can print
+      // Auto-open the generated document in the parked tab so mam can print
       // immediately, matching the "create like a PO" feel she asked for.
       if (r.data?.id) {
         try {
@@ -1528,10 +1539,11 @@ export default function Procurement() {
           // don't render as mojibake when opened via blob: URL.
           const printRes = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'arraybuffer' });
           const blob = new Blob([printRes.data], { type: 'text/html;charset=utf-8' });
-          window.open(URL.createObjectURL(blob), '_blank', 'noopener');
-        } catch (_) { /* user can still click 🖨 Print in the list */ }
-      }
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+          const url = URL.createObjectURL(blob);
+          if (printWin) printWin.location = url; else window.open(url, '_blank');
+        } catch (_) { if (printWin) printWin.close(); /* user can still click 🖨 Print in the list */ }
+      } else if (printWin) { printWin.close(); }
+    } catch (err) { if (printWin) printWin.close(); toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   // Mark a dispatch row as "Received by <name> on <date>" + attach the
