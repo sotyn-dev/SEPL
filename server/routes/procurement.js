@@ -3643,8 +3643,10 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
   if (!document_number) {
     const { nextSequence } = require('../db/nextSequence');
     const year = new Date().getFullYear();
-    const prefix = (document_type === 'sales_bill' ? `INV/${year}/` : `DC/${year}/`);
-    document_number = nextSequence(getDb(), 'delivery_notes', 'document_number', prefix, { pad: 4 });
+    // Sales-bill series GST/26-26/NN starting at 61 (mam 2026-06-15); challans keep DC/.
+    document_number = document_type === 'sales_bill'
+      ? nextSequence(getDb(), 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 })
+      : nextSequence(getDb(), 'delivery_notes', 'document_number', `DC/${year}/`, { pad: 4 });
   }
 
   let filePath = null;
@@ -3811,7 +3813,7 @@ router.post('/delivery-notes/:id/generate-sales-bill', needsApprove, (req, res) 
   const isDraft = (items.some(it => !(it.rate > 0)) || !client.gstin) ? 1 : 0;
   const { nextSequence } = require('../db/nextSequence');
   const year = new Date().getFullYear();
-  const invNum = nextSequence(db, 'delivery_notes', 'document_number', `INV/${year}/`, { pad: 4 });
+  const invNum = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
   const today = new Date().toISOString().slice(0, 10);
   const sb = db.prepare(`
     INSERT INTO delivery_notes (vendor_po_id, indent_id, source, delivery_date, document_type, document_number, status, is_draft, items_json, notes)
@@ -4075,7 +4077,7 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
           const isDraft = (items.some(it => !(it.rate > 0)) || !client.gstin) ? 1 : 0;
           const { nextSequence } = require('../db/nextSequence');
           const year = new Date().getFullYear();
-          const invNum = nextSequence(db, 'delivery_notes', 'document_number', `INV/${year}/`, { pad: 4 });
+          const invNum = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
           const today = new Date().toISOString().slice(0, 10);
           const sb = db.prepare(`
             INSERT INTO delivery_notes (vendor_po_id, indent_id, source, delivery_date, document_type, document_number, status, is_draft, items_json, notes)
@@ -4200,40 +4202,49 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
      ORDER BY vpi.id
   `).all(req.params.id);
 
-  // Decide what to return based on what data we found:
-  // - rows with po_item_id AND rate > 0  →  proper BOQ SITC link
-  // - rows with po_item_id but rate = 0  →  BOQ exists but SITC blank
-  // - rows with no po_item_id            →  indent-only fallback
-  const withBoqRate    = rows.filter(r => r.po_item_id && +r.rate > 0).length;
-  const withBoqNoRate  = rows.filter(r => r.po_item_id && +r.rate === 0).length;
-  const indentOnly     = rows.filter(r => !r.po_item_id).length;
-
-  if (rows.length && withBoqRate === rows.length) {
-    // Best case: every line has a BOQ SITC rate.  Just return.
+  if (isSalesBill) {
+    // Sales-bill RATE = BOQ SITC rate × the order's Against-Delivery %
+    // (mam 2026-06-15: "boq item rate × against delivery terms %"). Resolve
+    // this PO's Business Book order, then the BOQ rate per line (po_item link
+    // first, then a description match), then apply the %.
+    let pct = 0; const byId = new Map(), byDesc = new Map();
+    try {
+      const bbRow = db.prepare(
+        `SELECT op.business_book_id AS bb FROM vendor_pos vp
+           LEFT JOIN indents i ON i.id = vp.indent_id
+           LEFT JOIN order_planning op ON op.id = i.planning_id
+          WHERE vp.id = ?`
+      ).get(req.params.id);
+      const bbId = bbRow && bbRow.bb;
+      if (bbId) {
+        const bb = db.prepare('SELECT payment_against_delivery FROM business_book WHERE id=?').get(bbId);
+        pct = parseFloat(String((bb && bb.payment_against_delivery) || '').replace(/[^0-9.]/g, '')) || 0;
+        for (const it of db.prepare('SELECT id, description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
+          byId.set(it.id, +it.rate || 0);
+          if (it.description) byDesc.set(String(it.description).toLowerCase().trim(), +it.rate || 0);
+        }
+      }
+    } catch (_) {}
+    const r2 = n => Math.round((+n || 0) * 100) / 100;
+    for (const r of rows) {
+      let boq = +r.rate || 0;
+      if (!boq && r.po_item_id != null && byId.has(r.po_item_id)) boq = byId.get(r.po_item_id);
+      if (!boq) boq = byDesc.get(String(r.description || '').toLowerCase().trim()) || 0;
+      r.boq_rate = boq;
+      r.rate = pct > 0 ? r2(boq * pct / 100) : boq;
+      r.amount = r2(r.rate * (+r.quantity || 0));
+    }
+    const withRate = rows.filter(r => +r.rate > 0).length;
+    const noRate = rows.length - withRate;
     return res.json({
       items: rows,
       source: 'vendor_po_items',
-      rate_source: 'boq_sitc',
-      rated_count: withBoqRate,
-      total_count: rows.length,
-    });
-  }
-
-  // Some / all rows are missing rates.  For Sales Bill, surface a
-  // warning so mam fills the SELLING rate before saving (vendor cost
-  // is NEVER auto-used for Sales Bills — mam: "if sales bill we enter
-  // BOQ SITC rate").
-  if (isSalesBill) {
-    const safeRows = rows.map(r => ({ ...r, rate: +r.rate > 0 ? r.rate : 0, amount: +r.rate > 0 ? r.amount : 0 }));
-    return res.json({
-      items: safeRows,
-      source: 'vendor_po_items',
-      rate_source: withBoqRate > 0 ? 'boq_sitc_partial' : 'rate_missing',
-      warning:
-        withBoqRate > 0
-          ? `${withBoqNoRate + indentOnly} of ${rows.length} line(s) are missing the BOQ SITC rate.  Fill those before saving.`
-          : `${rows.length} line(s) pre-filled from the indent.  BOQ SITC rates not found → SELLING RATE column is blank.  Fill in the SITC selling rate before saving.`,
-      rated_count: withBoqRate,
+      rate_source: noRate === 0 ? 'boq_sitc' : (withRate > 0 ? 'boq_sitc_partial' : 'rate_missing'),
+      delivery_pct: pct,
+      warning: noRate === 0
+        ? (pct > 0 ? `Rate = BOQ SITC × ${pct}% (Against Delivery).` : null)
+        : `${noRate} of ${rows.length} line(s) have no BOQ SITC rate — fill the selling rate before saving.${pct > 0 ? ` Rate shown = BOQ × ${pct}%.` : ''}`,
+      rated_count: withRate,
       total_count: rows.length,
     });
   }
@@ -4516,7 +4527,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
   const docTitle = isSalesBill ? 'TAX INVOICE / SALES BILL' : 'DELIVERY NOTE';
   // Use the stored document_number (auto-generated INV/YYYY/#### or
   // DC/YYYY/####); only fall back to id-based if somehow blank.
-  const docNo = dn.document_number || (isSalesBill ? `INV/${new Date().getFullYear()}/${dn.id}` : `DN/${new Date().getFullYear()}/${dn.id}`);
+  const docNo = dn.document_number || (isSalesBill ? `GST/26-26/${dn.id}` : `DN/${new Date().getFullYear()}/${dn.id}`);
   const dnNum = dn.document_number || docNo;
 
   // Best-effort state-name → GST state code lookup. Used when business_book

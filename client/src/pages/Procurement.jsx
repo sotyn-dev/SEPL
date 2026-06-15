@@ -6135,7 +6135,7 @@ export default function Procurement() {
                 <span className="font-mono font-semibold">
                   {form.document_type === 'challan'
                     ? `DC/${new Date().getFullYear()}/####`
-                    : `INV/${new Date().getFullYear()}/####`}
+                    : `GST/26-26/##`}
                 </span>
                 <span className="text-emerald-600">— auto-generated on save</span>
               </div>
@@ -6145,7 +6145,7 @@ export default function Procurement() {
                   className="input mt-1"
                   value={form.document_number || ''}
                   onChange={e => setForm({...form, document_number: e.target.value})}
-                  placeholder={form.document_type === 'challan' ? 'e.g. DC/2026/0042' : 'e.g. INV/2026/0042'}
+                  placeholder={form.document_type === 'challan' ? 'e.g. DC/2026/0042' : 'e.g. GST/26-26/61'}
                 />
               </details>
             </div>
@@ -6402,7 +6402,7 @@ export default function Procurement() {
             </div>
             <div>
               <label className="label">Sales Bill Number <span className="text-red-600">*</span></label>
-              <input className="input" placeholder="e.g. INV/2026/0042"
+              <input className="input" placeholder="e.g. GST/26-26/61"
                 value={sbForm.sales_bill_number}
                 onChange={(e) => setSbForm(f => ({ ...f, sales_bill_number: e.target.value }))} />
             </div>
