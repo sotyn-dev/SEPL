@@ -4363,6 +4363,76 @@ export default function Procurement() {
             }).finally(() => setDispatchItemsLoading(false));
           }
         };
+        // Mam (2026-06-15) "fully auto on Dispatch": clicking Dispatch on a
+        // Ready-to-Dispatch PO instantly generates the SALES BILL — items +
+        // BOQ×delivery% rates from the PO, GST defaulted from the client
+        // state (Punjab → CGST/SGST 9% each, else IGST 18%) — and opens its
+        // PDF, with NO modal / no fields to fill. Falls back to the manual
+        // modal only when the PO has no billable items.
+        const autoDispatchSalesBill = async (po) => {
+          if (!po?.id) return;
+          // Park the PDF tab synchronously so the popup blocker can't eat it.
+          const printWin = window.open('', '_blank');
+          const closeWin = () => { try { if (printWin) printWin.close(); } catch (_) {} };
+          try {
+            const [itemsRes, billRes] = await Promise.all([
+              api.get(`/procurement/vendor-pos/${po.id}/client-po-items`, { params: { doc_type: 'sales_bill' } }).catch(() => ({ data: { items: [], source: 'empty' } })),
+              api.get(`/procurement/vendor-pos/${po.id}/bill-to`).catch(() => ({ data: null })),
+            ]);
+            const rows = (itemsRes.data?.items || []).map(it => {
+              const qty = +it.quantity || 0;
+              const rate = +it.rate || 0;
+              return {
+                description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
+                hsn: it.hsn_code || '',
+                unit: it.unit || '',
+                quantity: qty,
+                rate,
+                disc_pct: 0,
+                amount: +(qty * rate).toFixed(2),
+                item_code: it.item_code || '',
+                specification: it.specification || '',
+                size: it.size || '',
+                item_name: it.item_name || '',
+              };
+            }).filter(r => (r.description && r.description.trim()) || r.quantity > 0 || r.rate > 0);
+            if (!rows.length) {
+              closeWin();
+              toast.error('No PO items to bill — opening manual entry');
+              openAddDispatch(po);
+              return;
+            }
+            const sameState = (billRes.data?.client_state || '').toLowerCase() === 'punjab';
+            const cgst_pct = sameState ? 9 : 0;
+            const sgst_pct = sameState ? 9 : 0;
+            const igst_pct = sameState ? 0 : 18;
+            const subtotal = rows.reduce((s, it) => s + (it.amount || 0), 0);
+            const grandTotal = subtotal + subtotal * (cgst_pct + sgst_pct + igst_pct) / 100;
+            const fd = new FormData();
+            fd.append('vendor_po_id', po.id);
+            fd.append('document_type', 'sales_bill');
+            fd.append('delivery_date', new Date().toISOString().slice(0, 10));
+            if (billRes.data?.client_state) fd.append('place_of_supply', billRes.data.client_state);
+            if (billRes.data?.client_state_code) fd.append('state_code', billRes.data.client_state_code);
+            fd.append('cgst_pct', cgst_pct);
+            fd.append('sgst_pct', sgst_pct);
+            fd.append('igst_pct', igst_pct);
+            fd.append('items', JSON.stringify(rows));
+            fd.append('subtotal_amount', subtotal.toFixed(2));
+            fd.append('grand_total_amount', grandTotal.toFixed(2));
+            const r = await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+            toast.success(`Sales Bill ${r.data?.document_number || ''} generated`);
+            load();
+            if (r.data?.id) {
+              const printRes = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'arraybuffer' });
+              const url = URL.createObjectURL(new Blob([printRes.data], { type: 'text/html;charset=utf-8' }));
+              if (printWin) printWin.location = url; else window.open(url, '_blank');
+            } else { closeWin(); }
+          } catch (err) {
+            closeWin();
+            toast.error(err.response?.data?.error || 'Failed to generate Sales Bill');
+          }
+        };
         // Helper — fetch the items on the linked vendor PO so mam can
         // adjust received qty per line in the modal (mam 2026-06-02:
         // "delivery note item of qty 10 but when erec its 9" +
@@ -4586,7 +4656,7 @@ export default function Procurement() {
                           )}
                         </td>
                         <td className="px-2 py-1.5">
-                          <button onClick={() => openAddDispatch(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap" title="Create the Delivery Note / Sales Bill — the PO then moves to Dispatch & Receiving for the site engineer to upload the signed receipt.">Dispatch</button>
+                          <button onClick={() => autoDispatchSalesBill(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap" title="Auto-generate the Sales Bill PDF (BOQ×delivery% rates + client GST) and open it — no form to fill. The PO then moves to Dispatch & Receiving for the site engineer to upload the signed receipt.">Dispatch</button>
                         </td>
                       </tr>
                     ))}
@@ -4635,7 +4705,7 @@ export default function Procurement() {
                         🚚 Delivery Note
                       </a>
                     </div>
-                    <button onClick={() => openAddDispatch(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">Dispatch</button>
+                    <button onClick={() => autoDispatchSalesBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">Dispatch</button>
                   </div>
                 ))}
                 {filteredReady.length === 0 && (
