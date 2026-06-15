@@ -707,7 +707,7 @@ router.get('/employees', (req, res) => {
   res.json(rows.map(({ salary, ...rest }) => rest));
 });
 
-router.post('/employees', (req, res) => {
+router.post('/employees', requirePermission('employees', 'create'), (req, res) => {
   const { name, phone, email, designation, department, join_date, salary,
           aadhar_file, pan_file, qualification_file } = req.body;
   let { user_id } = req.body;
@@ -733,7 +733,7 @@ router.post('/employees', (req, res) => {
 
 // Auto-link existing employees to users by matching email (case-insensitive).
 // Safe to run any time — only fills rows where user_id IS NULL.
-router.post('/employees/auto-link', (req, res) => {
+router.post('/employees/auto-link', requirePermission('employees', 'edit'), (req, res) => {
   const db = getDb();
   const candidates = db.prepare(
     `SELECT e.id, u.id as user_id FROM employees e
@@ -747,7 +747,7 @@ router.post('/employees/auto-link', (req, res) => {
 });
 
 // Bulk import employees
-router.post('/employees/bulk', (req, res) => {
+router.post('/employees/bulk', requirePermission('employees', 'create'), (req, res) => {
   const { employees } = req.body;
   if (!employees || !Array.isArray(employees) || employees.length === 0) {
     return res.status(400).json({ error: 'No employee data provided' });
@@ -766,7 +766,7 @@ router.post('/employees/bulk', (req, res) => {
   res.json({ added, errors, total: employees.length });
 });
 
-router.put('/employees/:id', (req, res) => {
+router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
   const { name, phone, email, designation, department, salary, status, user_id,
           aadhar_file, pan_file, qualification_file } = req.body;
   // COALESCE so passing undefined for a doc field doesn't wipe the existing
@@ -783,7 +783,7 @@ router.put('/employees/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/employees/:id', (req, res) => {
+router.delete('/employees/:id', requirePermission('employees', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM employees WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -818,7 +818,7 @@ router.get('/expenses', (req, res) => {
     LEFT JOIN users u1 ON e.submitted_by=u1.id LEFT JOIN users u2 ON e.approved_by=u2.id ORDER BY e.created_at DESC`).all());
 });
 
-router.post('/expenses', (req, res) => {
+router.post('/expenses', requirePermission('expenses', 'create'), (req, res) => {
   const { title, description, amount, category, expense_date } = req.body;
   const db = getDb();
   // Server-side dedup — mam: "entry one time but showing data 4 to 5
@@ -846,7 +846,7 @@ router.post('/expenses', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put('/expenses/:id', (req, res) => {
+router.put('/expenses/:id', requirePermission('expenses', 'edit'), (req, res) => {
   // Two flows mam uses, both go through this endpoint:
   //   (1) edit the expense details (title/description/amount/category/date)
   //   (2) change status (approve / reject / mark paid / un-mark paid)
@@ -888,7 +888,7 @@ router.put('/expenses/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/expenses/:id', (req, res) => {
+router.delete('/expenses/:id', requirePermission('expenses', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM expenses WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });

@@ -201,7 +201,7 @@ export default function Vendors() {
                       <button onClick={() => approveRate(r.id, 'rejected')} className="text-[10px] text-red-600 font-bold">Reject</button>
                     </>
                   )}
-                  {canDelete('procurement') && <button onClick={async () => {
+                  {(canDelete('vendors') || canDelete('procurement')) && <button onClick={async () => {
                     if (!confirm(`Delete rate comparison for "${r.item_description}"?`)) return;
                     try { await api.delete(`/procurement/vendor-rates/${r.id}`); toast.success('Deleted'); load(); }
                     catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
