@@ -253,6 +253,16 @@ const parseBoqExcel = (filePath) => {
 };
 
 // Vendors
+// Mam (2026-06-15): per-vendor list of brands / makes the vendor deals in
+// (up to 10), entered with a "+ Add" on the form. Stored comma-joined.
+try { getDb().exec('ALTER TABLE vendors ADD COLUMN makes TEXT'); } catch (_) {}
+// Normalise the form's makes (array OR string) → a clean comma-joined string
+// capped at 10 brands.
+function normaliseMakes(m) {
+  const arr = Array.isArray(m) ? m : (m == null ? [] : String(m).split(','));
+  const clean = arr.map(s => String(s || '').trim()).filter(Boolean).slice(0, 10);
+  return clean.length ? clean.join(', ') : null;
+}
 router.get('/vendors', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM vendors WHERE active=1 ORDER BY name').all());
 });
@@ -297,8 +307,8 @@ router.post('/vendors', (req, res) => {
     if (!Number.isFinite(n)) return null;
     return Math.max(0, Math.min(10, n));
   };
-  const r = db.prepare('INSERT OR IGNORE INTO vendors (vendor_code,name,firm_name,contact_person,phone,email,district,state,address,category,deals_in,authorized_dealer,type,turnover,team_size,payment_terms,credit_days,gst_number,source,category_wise,sub_category,existing_vendor,rating) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-    .run(code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state, b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size, b.payment_terms, b.credit_days, b.gst_number, b.source, b.category_wise, b.sub_category, b.existing_vendor, clampRating(b.rating));
+  const r = db.prepare('INSERT OR IGNORE INTO vendors (vendor_code,name,firm_name,contact_person,phone,email,district,state,address,category,deals_in,authorized_dealer,type,turnover,team_size,payment_terms,credit_days,gst_number,source,category_wise,sub_category,existing_vendor,rating,makes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state, b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size, b.payment_terms, b.credit_days, b.gst_number, b.source, b.category_wise, b.sub_category, b.existing_vendor, clampRating(b.rating), normaliseMakes(b.makes));
   res.status(201).json({ id: r.lastInsertRowid, vendor_code: code });
 });
 
@@ -307,8 +317,8 @@ router.put('/vendors/:id', (req, res) => {
   const rating = (b.rating === '' || b.rating === null || b.rating === undefined)
     ? null
     : Math.max(0, Math.min(10, Number(b.rating) || 0));
-  getDb().prepare('UPDATE vendors SET vendor_code=?,name=?,firm_name=?,contact_person=?,phone=?,email=?,district=?,state=?,address=?,category=?,deals_in=?,authorized_dealer=?,type=?,turnover=?,team_size=?,payment_terms=?,credit_days=?,gst_number=?,source=?,sub_category=?,rating=?,active=? WHERE id=?')
-    .run(b.vendor_code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state, b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size, b.payment_terms, b.credit_days, b.gst_number, b.source, b.sub_category, rating, b.active !== undefined ? (b.active ? 1 : 0) : 1, req.params.id);
+  getDb().prepare('UPDATE vendors SET vendor_code=?,name=?,firm_name=?,contact_person=?,phone=?,email=?,district=?,state=?,address=?,category=?,deals_in=?,authorized_dealer=?,type=?,turnover=?,team_size=?,payment_terms=?,credit_days=?,gst_number=?,source=?,sub_category=?,rating=?,makes=?,active=? WHERE id=?')
+    .run(b.vendor_code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state, b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size, b.payment_terms, b.credit_days, b.gst_number, b.source, b.sub_category, rating, normaliseMakes(b.makes), b.active !== undefined ? (b.active ? 1 : 0) : 1, req.params.id);
   res.json({ message: 'Updated' });
 });
 

@@ -9,9 +9,9 @@ import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiTruck, FiDownload } from 
 import { exportCsv } from '../utils/exportCsv';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 
-const CATEGORIES = ['FF', 'ELE', 'LV', 'Solar', 'HVAC', 'INTERIOR', 'OTHER'];
+const CATEGORIES = ['FF', 'ELE', 'LV', 'Solar', 'HVAC', 'Plumbing', 'INTERIOR', 'OTHER'];
 const TYPES = ['Distributor', 'Trader', 'Manufacture', 'Direct Company', 'Stockist'];
-const CAT_COLORS = { FF: 'bg-red-100 text-red-700', ELE: 'bg-amber-100 text-amber-700', LV: 'bg-red-100 text-red-700', Solar: 'bg-emerald-100 text-emerald-700', HVAC: 'bg-cyan-100 text-cyan-700', INTERIOR: 'bg-purple-100 text-purple-700' };
+const CAT_COLORS = { FF: 'bg-red-100 text-red-700', ELE: 'bg-amber-100 text-amber-700', LV: 'bg-red-100 text-red-700', Solar: 'bg-emerald-100 text-emerald-700', HVAC: 'bg-cyan-100 text-cyan-700', Plumbing: 'bg-blue-100 text-blue-700', INTERIOR: 'bg-purple-100 text-purple-700' };
 
 // GSTIN format: 2-digit state code + 10-char PAN + 1-digit entity + Z + 1-digit checksum.
 // Mam (2026-05-16) asked for GST auto-fetch.  We can't pull the
@@ -224,6 +224,7 @@ export default function Vendors() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               <div><span className="text-gray-400 text-xs">Deals In:</span><br/><span className="font-medium">{viewData.deals_in || '-'}</span></div>
+              <div><span className="text-gray-400 text-xs">Make / Brand:</span><br/><span className="font-medium">{viewData.makes || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Authorized:</span><br/><span className="font-medium">{viewData.authorized_dealer || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Contact Person:</span><br/><span className="font-medium">{viewData.contact_person || '-'}</span></div>
               <div><span className="text-gray-400 text-xs">Sub Category:</span><br/><span className="font-medium">{viewData.sub_category || '-'}</span></div>
@@ -271,6 +272,39 @@ export default function Vendors() {
             <div><label className="label">Type <span className="text-red-500">*</span></label><select className="select" value={form.type || ''} onChange={e => setForm({...form, type: e.target.value})} required><option value="">Select</option>{TYPES.map(t => <option key={t}>{t}</option>)}</select></div>
             <div><label className="label">Deals In <span className="text-red-500">*</span></label><input className="input" value={form.deals_in || ''} onChange={e => setForm({...form, deals_in: e.target.value})} required /></div>
             <div><label className="label">Authorized Dealer <span className="text-red-500">*</span></label><input className="input" value={form.authorized_dealer || ''} onChange={e => setForm({...form, authorized_dealer: e.target.value})} required /></div>
+            {/* Make / Brand — mam (2026-06-15): list the brands this vendor
+                deals in, add with "+", up to 10. Stored comma-joined in
+                vendors.makes. */}
+            <div className="sm:col-span-2 md:col-span-3">
+              <label className="label">Make / Brand <span className="text-gray-400 font-normal text-[10px]">(brands this vendor deals in — add up to 10)</span></label>
+              {(() => {
+                const makesArr = Array.isArray(form.makes)
+                  ? form.makes
+                  : (form.makes ? String(form.makes).split(',').map(s => s.trim()).filter(Boolean) : []);
+                const rows = makesArr.length ? makesArr : [''];
+                const setMakes = (arr) => setForm({ ...form, makes: arr });
+                return (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                      {rows.map((mk, i) => (
+                        <div key={i} className="flex items-center gap-1">
+                          <input className="input flex-1" value={mk} placeholder={`Make ${i + 1} — e.g. Havells`}
+                            onChange={e => { const next = [...rows]; next[i] = e.target.value; setMakes(next); }} />
+                          {rows.length > 1 && (
+                            <button type="button" title="Remove" onClick={() => setMakes(rows.filter((_, idx) => idx !== i))}
+                              className="text-red-500 hover:text-red-700 px-1 text-lg leading-none">×</button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {rows.filter(Boolean).length < 10 && (
+                      <button type="button" onClick={() => setMakes([...rows.filter(Boolean), ''])}
+                        className="text-blue-600 hover:text-blue-800 text-sm font-medium">+ Add make</button>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
             {/* Contact Person — mam (2026-05-16): "contact person name
                 add here and fill in po".  Already in the vendors
                 schema (contact_person column) and the Vendor PO print
