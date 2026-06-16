@@ -42,6 +42,25 @@ try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_bill_po_date  ON item_mast
 try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_item_code     ON item_master(item_code)`); } catch (_) {}
 try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_approval       ON item_master(approval_status)`); } catch (_) {}
 
+// Guarantee the pricing/approval columns the list query joins on actually
+// exist (mam 2026-06-16: "data is missing"). The central migration adds these
+// with a "REFERENCES users(id)" clause, which some SQLite builds reject in an
+// ALTER ... ADD COLUMN — and since that migration is wrapped in a silent
+// try/catch, the column ends up missing on those servers. The Item Master list
+// JOINs on approved_by / priced_by, so a missing column made the WHOLE list
+// 500 and show "0 items / No items found", while the completion dashboard
+// (which never touches these columns) kept reporting the real count. Re-adding
+// them here with a plain ADD COLUMN (no REFERENCES) is idempotent and safe.
+for (const col of [
+  'priced_at DATETIME',
+  'priced_by INTEGER',
+  'approved_by INTEGER',
+  'approved_at DATETIME',
+  "approval_status TEXT DEFAULT 'approved'",
+]) {
+  try { getDb().exec(`ALTER TABLE item_master ADD COLUMN ${col}`); } catch (_) {}
+}
+
 // One-time backfill (mam 2026-06-16): flag items added in the LAST 2 DAYS
 // (i.e. "yesterday's new entries") as pending so an Admin reviews them;
 // everything older stays approved (the column default already grandfathered
@@ -121,12 +140,40 @@ router.get('/', requirePermission('item_master', 'view'), (req, res) => {
   const countSql = `SELECT COUNT(*) AS n FROM item_master im ${where}`;
 
   const db = getDb();
-  const rows  = db.prepare(sql).all(...params, limit, offset);
-  const total = db.prepare(countSql).get(...params).n;
-  res.json({
-    items: rows.map(r => ({ ...r, age_status: ageStatus(r.age_days) })),
-    total, limit, offset,
-  });
+  try {
+    const rows  = db.prepare(sql).all(...params, limit, offset);
+    const total = db.prepare(countSql).get(...params).n;
+    res.json({
+      items: rows.map(r => ({ ...r, age_status: ageStatus(r.age_days) })),
+      total, limit, offset,
+    });
+  } catch (e) {
+    // Never let a schema hiccup (e.g. a column an older server failed to add)
+    // blank out the entire Item Master. Log it, then fall back to a query that
+    // only touches base columns + the vendor name so the list still loads.
+    console.error('[item_master] list query failed, using degraded fallback:', e.message);
+    try {
+      const fbSql = `
+        SELECT im.*, v.name AS vendor_name,
+               CASE WHEN ${AGE_DATE_EXPR} IS NULL THEN NULL
+                    ELSE CAST((julianday('now','localtime') - julianday(${AGE_DATE_EXPR})) AS INTEGER)
+               END AS age_days
+          FROM item_master im
+          LEFT JOIN vendors v ON v.id = im.vendor_id
+        ${where}
+        ORDER BY im.item_code
+        LIMIT ? OFFSET ?`;
+      const rows  = db.prepare(fbSql).all(...params, limit, offset);
+      const total = db.prepare(countSql).get(...params).n;
+      res.json({
+        items: rows.map(r => ({ ...r, age_status: ageStatus(r.age_days) })),
+        total, limit, offset,
+      });
+    } catch (e2) {
+      console.error('[item_master] list fallback also failed:', e2.message);
+      res.status(500).json({ error: 'Could not load items', detail: e2.message });
+    }
+  }
 });
 
 // Data-completion dashboard (mam 2026-06-15): across ALL items, how many of

@@ -90,7 +90,7 @@ export default function ItemMaster() {
     setLoading(true);
     api.get(`/item-master?${params}`)
       .then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0); })
-      .catch(() => {})
+      .catch(err => { toast.error(err.response?.data?.error || 'Could not load items'); })
       .finally(() => setLoading(false));
   }, [search, filterDept, statusFilter, approvalFilter, page]);
 
