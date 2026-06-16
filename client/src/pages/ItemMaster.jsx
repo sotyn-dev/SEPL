@@ -3,6 +3,7 @@ import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import PipeWeightsModal from '../components/PipeWeightsModal';
+import { MAKES } from '../data/makes';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiDownload, FiUpload, FiPackage, FiFilter, FiX, FiClock, FiAlertTriangle, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
@@ -34,7 +35,7 @@ const SOURCE_TYPES = ['PO', 'Quote', 'Manual', 'Online'];
 const emptyForm = {
   item_code: '', department: 'FF', item_name: '', specification: '', size: '',
   uom: 'PCS', gst: '18%', type: 'PO', make: '', model_number: '',
-  current_price: 0,
+  current_price: '',
   vendor_id: '', source_type: 'Manual', bill_po_number: '', bill_po_date: '',
   weight_per_meter: '',
 };
@@ -115,8 +116,25 @@ export default function ItemMaster() {
 
   const handleSave = async (e) => {
     e.preventDefault();
+    // Mandatory fields (mam 2026-06-15): Item Name, Type, Specification, Size,
+    // UOM, GST, Make, Rate.
+    const missing = [];
+    if (!String(form.item_name || '').trim()) missing.push('Item Name');
+    if (!String(form.type || '').trim()) missing.push('Type');
+    if (!String(form.specification || '').trim()) missing.push('Specification');
+    if (!String(form.size || '').trim()) missing.push('Size');
+    if (!String(form.uom || '').trim()) missing.push('UOM');
+    if (!String(form.gst || '').trim()) missing.push('GST');
+    if (!String(form.make || '').trim()) missing.push('Make');
+    if (form.current_price === '' || form.current_price == null) missing.push('Rate');
+    if (missing.length) { toast.error(`Required: ${missing.join(', ')}`); return; }
     try {
-      const payload = { ...form, vendor_id: form.vendor_id || null };
+      const payload = {
+        ...form,
+        vendor_id: form.vendor_id || null,
+        // '' (cleared) → 0 so the rate field can be blanked while typing.
+        current_price: form.current_price === '' || form.current_price == null ? 0 : Number(form.current_price),
+      };
       if (modal === 'edit' && form.id) {
         await api.put(`/item-master/${form.id}`, payload);
         toast.success('Item updated');
@@ -380,23 +398,23 @@ export default function ItemMaster() {
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             <div><label className="label">Item Code</label><input className="input font-mono" value={form.item_code || ''} onChange={e => F('item_code', e.target.value)} placeholder="Auto-generated if empty" /></div>
             <div><label className="label">Department *</label><select className="select" value={form.department} onChange={e => F('department', e.target.value)}>{DEPARTMENTS.map(d => <option key={d} value={d}>{d} - {DEPT_LABELS[d] || d}</option>)}</select></div>
-            <div><label className="label">Type</label><select className="select" value={form.type} onChange={e => F('type', e.target.value)}>{TYPES.map(t => <option key={t}>{t}</option>)}</select></div>
+            <div><label className="label">Type *</label><select className="select" value={form.type} onChange={e => F('type', e.target.value)}>{TYPES.map(t => <option key={t}>{t}</option>)}</select></div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             <div><label className="label">Item Name *</label><input className="input" value={form.item_name || ''} onChange={e => F('item_name', e.target.value)} required /></div>
-            <div><label className="label">Specification</label><input className="input" value={form.specification || ''} onChange={e => F('specification', e.target.value)} /></div>
-            <div><label className="label">Size</label><input className="input" value={form.size || ''} onChange={e => F('size', e.target.value)} /></div>
+            <div><label className="label">Specification *</label><input className="input" value={form.specification || ''} onChange={e => F('specification', e.target.value)} /></div>
+            <div><label className="label">Size *</label><input className="input" value={form.size || ''} onChange={e => F('size', e.target.value)} /></div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div><label className="label">UOM</label><select className="select" value={form.uom} onChange={e => F('uom', e.target.value)}>{UOMS.map(u => <option key={u}>{u}</option>)}</select></div>
-            <div><label className="label">GST</label>
+            <div><label className="label">UOM *</label><select className="select" value={form.uom} onChange={e => F('uom', e.target.value)}>{UOMS.map(u => <option key={u}>{u}</option>)}</select></div>
+            <div><label className="label">GST *</label>
               <select className="select" value={form.gst || ''} onChange={e => F('gst', e.target.value)}>
                 <option value="">Select</option>
                 {['0%', '5%', '12%', '18%', '28%'].map(g => <option key={g} value={g}>{g}</option>)}
                 {form.gst && !['', '0%', '5%', '12%', '18%', '28%'].includes(form.gst) && <option value={form.gst}>{form.gst}</option>}
               </select>
             </div>
-            <div><label className="label">Make</label><input className="input" value={form.make || ''} onChange={e => F('make', e.target.value)} /></div>
+            <div><label className="label">Make *</label><input className="input" list="itemMakesDL" value={form.make || ''} onChange={e => F('make', e.target.value)} placeholder="Pick brand or type" /><datalist id="itemMakesDL">{MAKES.map(m => <option key={m} value={m} />)}</datalist></div>
             <div><label className="label">Model #</label><input className="input" value={form.model_number || ''} onChange={e => F('model_number', e.target.value)} /></div>
           </div>
 
@@ -424,7 +442,10 @@ export default function ItemMaster() {
           <div className="border border-red-200 bg-red-50/40 rounded-lg p-3 space-y-3">
             <div className="text-xs font-bold uppercase text-red-700">Pricing — full traceability for tenders</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              <div><label className="label">Rate (₹) *</label><input className="input" type="number" min="0" step="0.01" value={form.current_price || 0} onChange={e => F('current_price', +e.target.value)} /></div>
+              {/* Rate can be CLEARED to blank (mam 2026-06-15: "rate 0 is not
+                  delete") — empty string while typing, normalised to a number
+                  on save. Number() also strips a leading 0 (018 → 18). */}
+              <div><label className="label">Rate (₹) *</label><input className="input" type="number" min="0" step="0.01" value={form.current_price ?? ''} onChange={e => F('current_price', e.target.value === '' ? '' : Number(e.target.value))} /></div>
               <div>
                 <label className="label">Vendor (link)</label>
                 <SearchableSelect
