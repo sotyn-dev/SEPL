@@ -4983,7 +4983,9 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     // in words, "Payable on Delivery = basic × % + 100% GST", an e-Invoice /
     // IRN block, bank details, T&C, and dual acknowledgement.
     const stripMs = (s) => String(s || '').replace(/^\s*M\/?s\.?\s*/i, '').trim();
-    const billToName = dn.client_company || stripMs(dn.site_name) || dn.client_person_name || '';
+    // Strip any leading "M/s" from the source so the template's own "M/s "
+    // prefix doesn't double up ("M/s M/s GRA Spinning Mill").
+    const billToName = stripMs(dn.client_company || dn.site_name || dn.client_person_name || '');
     const billToAddr = dn.client_address || dn.site_address || '';
     const shipAddr = dn.site_address || dn.client_address || '';
     const interState = igstPct > 0;
@@ -5020,46 +5022,48 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
 
     const sbCss = `
       .sb { color:#1a1a1a; }
-      .sb .top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #7a1b1b; padding-bottom:8px; }
+      /* Royal-blue brand theme (mam 2026-06-16). */
+      .print-btn { background:#1e40af; }
+      .sb .top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #1e40af; padding-bottom:8px; }
       .sb .brand { display:flex; align-items:center; gap:10px; }
-      .sb .mono { width:42px; height:42px; border:2px solid #7a1b1b; color:#7a1b1b; font-weight:800; font-size:16px; display:flex; align-items:center; justify-content:center; border-radius:6px; letter-spacing:-1px; }
-      .sb .cn { font-size:18px; font-weight:800; color:#7a1b1b; line-height:1.1; }
+      .sb .mono { width:42px; height:42px; border:2px solid #1e40af; color:#1e40af; font-weight:800; font-size:16px; display:flex; align-items:center; justify-content:center; border-radius:6px; letter-spacing:-1px; }
+      .sb .cn { font-size:18px; font-weight:800; color:#1e40af; line-height:1.1; }
       .sb .tag { font-size:8px; letter-spacing:1px; color:#555; text-transform:uppercase; margin-top:2px; }
       .sb .orig { text-align:right; font-size:9px; color:#444; line-height:1.5; }
-      .sb .orig b { color:#7a1b1b; }
-      .sb .invtitle { text-align:center; font-size:20px; font-weight:800; letter-spacing:3px; color:#7a1b1b; margin:7px 0 2px; }
+      .sb .orig b { color:#1e40af; }
+      .sb .invtitle { text-align:center; font-size:20px; font-weight:800; letter-spacing:3px; color:#1e40af; margin:7px 0 2px; }
       .sb .addr { text-align:center; font-size:8.5px; color:#555; }
       .sb table { width:100%; border-collapse:collapse; }
-      .sb .meta td { border:1px solid #e2cccc; padding:4px 7px; font-size:9.5px; vertical-align:top; }
-      .sb .meta .l { background:#f8efef; color:#7a1b1b; font-weight:700; text-transform:uppercase; font-size:8.5px; white-space:nowrap; }
-      .sb .parties td { border:1px solid #e2cccc; padding:7px 9px; font-size:9.5px; vertical-align:top; width:50%; }
-      .sb .parties .h { background:#f8efef; color:#7a1b1b; font-weight:700; text-transform:uppercase; font-size:9px; padding:4px 9px; }
+      .sb .meta td { border:1px solid #c9d8f5; padding:4px 7px; font-size:9.5px; vertical-align:top; }
+      .sb .meta .l { background:#eef3ff; color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; white-space:nowrap; }
+      .sb .parties td { border:1px solid #c9d8f5; padding:7px 9px; font-size:9.5px; vertical-align:top; width:50%; }
+      .sb .parties .h { background:#eef3ff; color:#1e40af; font-weight:700; text-transform:uppercase; font-size:9px; padding:4px 9px; }
       .sb .items { margin-top:7px; }
-      .sb .items th { background:#7a1b1b; color:#fff; font-size:9px; text-transform:uppercase; padding:6px 5px; border:1px solid #7a1b1b; }
-      .sb .items td { border:1px solid #e2cccc; padding:5px; font-size:9.5px; vertical-align:top; }
+      .sb .items th { background:#1e40af; color:#fff; font-size:9px; text-transform:uppercase; padding:6px 5px; border:1px solid #1e40af; }
+      .sb .items td { border:1px solid #c9d8f5; padding:5px; font-size:9.5px; vertical-align:top; }
       .sb .items td.c { text-align:center; } .sb .items td.r { text-align:right; }
       .sb .lower { display:flex; gap:8px; margin-top:7px; align-items:flex-start; }
-      .sb .words { flex:1; border:1px solid #e2cccc; padding:7px 9px; font-size:9.5px; }
-      .sb .words .k { color:#7a1b1b; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-top:4px; }
-      .sb .words .pod { margin-top:6px; background:#f8efef; padding:5px 7px; border-radius:4px; }
+      .sb .words { flex:1; border:1px solid #c9d8f5; padding:7px 9px; font-size:9.5px; }
+      .sb .words .k { color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-top:4px; }
+      .sb .words .pod { margin-top:6px; background:#eef3ff; padding:5px 7px; border-radius:4px; }
       .sb .tot { width:46%; }
-      .sb .tot td { padding:4px 8px; font-size:10px; border-bottom:1px solid #f0e3e3; }
+      .sb .tot td { padding:4px 8px; font-size:10px; border-bottom:1px solid #e8eefb; }
       .sb .tot .lab { text-align:right; color:#444; } .sb .tot .v { text-align:right; white-space:nowrap; }
-      .sb .tot .grand td { background:#7a1b1b; color:#fff; font-weight:800; font-size:12px; }
-      .sb .tot .podr td { color:#7a1b1b; font-weight:700; }
+      .sb .tot .grand td { background:#1e40af; color:#fff; font-weight:800; font-size:12px; }
+      .sb .tot .podr td { color:#1e40af; font-weight:700; }
       .sb .cols { display:flex; gap:8px; margin-top:7px; }
-      .sb .box { flex:1; border:1px solid #e2cccc; padding:7px 9px; font-size:9px; line-height:1.5; }
-      .sb .box .h { color:#7a1b1b; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-bottom:4px; }
+      .sb .box { flex:1; border:1px solid #c9d8f5; padding:7px 9px; font-size:9px; line-height:1.5; }
+      .sb .box .h { color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-bottom:4px; }
       .sb .sign { display:flex; gap:8px; margin-top:7px; }
-      .sb .sign .b { flex:1; border:1px solid #e2cccc; padding:7px 9px; min-height:66px; font-size:9px; position:relative; }
-      .sb .sign .b .h { color:#7a1b1b; font-weight:700; text-transform:uppercase; font-size:8.5px; }
+      .sb .sign .b { flex:1; border:1px solid #c9d8f5; padding:7px 9px; min-height:66px; font-size:9px; position:relative; }
+      .sb .sign .b .h { color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; }
       .sb .sign .b .ln { position:absolute; bottom:18px; left:9px; right:9px; border-top:1px solid #999; }
       .sb .sign .b .cap { position:absolute; bottom:5px; left:9px; right:9px; text-align:center; color:#666; }
       .sb .foot { text-align:center; font-size:8.5px; color:#777; border-top:1px dashed #ccc; margin-top:8px; padding-top:6px; }
     `;
     return `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(docNo)}</title><style>${css}${sbCss}</style></head><body>
       <button class="print-btn" onclick="window.print()">🖨 Print</button>
-      <div id="pdfgen" style="position:fixed;inset:0;background:rgba(255,255,255,.94);display:flex;align-items:center;justify-content:center;font:600 15px Arial,sans-serif;color:#7a1b1b;z-index:99999">Generating PDF, please wait…</div>
+      <div id="pdfgen" style="position:fixed;inset:0;background:rgba(255,255,255,.94);display:flex;align-items:center;justify-content:center;font:600 15px Arial,sans-serif;color:#1e40af;z-index:99999">Generating PDF, please wait…</div>
       <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
       <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
       <script>
@@ -5106,7 +5110,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         </div>
         <div class="invtitle">TAX INVOICE</div>
         <div class="addr">HO: 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, Ludhiana, Punjab – 141003 &nbsp;|&nbsp; Noida: 91, Springboard, Sector 2, Noida (UP)</div>
-        <div class="addr" style="font-weight:700;color:#7a1b1b;margin-top:1px">PAN-INDIA · LUDHIANA | NOIDA | BANGALORE | MUMBAI</div>
+        <div class="addr" style="font-weight:700;color:#1e40af;margin-top:1px">PAN-INDIA · LUDHIANA | NOIDA | BANGALORE | MUMBAI</div>
 
         <table class="meta" style="margin-top:7px">
           <tr><td class="l">Invoice No.</td><td>${esc(docNo)}</td><td class="l">Invoice Date</td><td>${dispDate(dn.delivery_date)}</td><td class="l">Sales Order</td><td>${fill(dn.bb_lead_no)}</td></tr>
@@ -5125,7 +5129,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
               <div><b>Contact:</b> ${fill([dn.client_person_name, dn.client_phone].filter(Boolean).join(' · '))}</div>
             </td>
             <td>
-              <div><b>${fill(dn.site_name || billToName)} (Site)</b></div>
+              <div><b>${fill(stripMs(dn.site_name) || billToName)} (Site)</b></div>
               <div style="margin-top:2px">${fill(shipAddr)}</div>
               <div style="margin-top:2px"><b>GSTIN:</b> ${fill(dn.client_gstin)}</div>
               <div><b>State:</b> ${fill(dn.client_state)} &nbsp; <b>Code:</b> ${fill(dn.state_code || clientStateCode)}</div>
@@ -5145,7 +5149,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
             <div>${esc(rupeesWhole(grand))}</div>
             <div class="k">${interState ? 'IGST' : 'CGST + SGST'} (in words)</div>
             <div>${esc(rupeesPaise(taxTotal))}</div>
-            ${dpct ? `<div class="pod"><b style="color:#7a1b1b">Payable on Delivery</b><br>${dpct}% of basic value + 100% GST = ₹ ${fmt(payable)}</div>` : ''}
+            ${dpct ? `<div class="pod"><b style="color:#1e40af">Payable on Delivery</b><br>${dpct}% of basic value + 100% GST = ₹ ${fmt(payable)}</div>` : ''}
           </div>
           <table class="tot">
             <tr><td class="lab">Sub Total (Taxable Value)</td><td class="v">₹ ${fmt(subtotal)}</td></tr>
