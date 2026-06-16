@@ -23,6 +23,7 @@ const emptyForm = {
   client_contact: '', client_email: '', email_address: '',
   source_of_enquiry: '', district: '', state: '', state_code: '', gstin: '', billing_address: '', shipping_address: '',
   guarantee_required: 'No', guarantee_percentage: '', sale_amount_without_gst: 0, po_amount: 0,
+  management_discount_pct: 0, management_discount_amount: 0, net_sale_amount: 0,
   order_type: 'Supply', penalty_clause: 'No', penalty_clause_date: '',
   committed_start_date: '', committed_delivery_date: '', committed_completion_date: '', freight_extra: 'No',
   category: '', customer_type: '', client_type: '', customer_code: '',
@@ -127,10 +128,12 @@ export default function BusinessBook() {
   const exportCSV = () => {
     if (entries.length === 0) return toast.error('No data');
     const headers = ['Lead No','Lead Type','Client','Company','Project','Category','Order Type','PO Number',
-      'Sale Amount','PO Amount','Advance','Balance','Start','Delivery','Completion','District','State',
+      'Sale Amount','Discount %','Discount Amount','Net Sale','PO Amount','Advance','Balance','Start','Delivery','Completion','District','State',
       'Customer Type','Employee','Status','Remarks'];
     const rows = entries.map(e => [e.lead_no, e.lead_type, e.client_name, e.company_name, e.project_name,
-      e.category, e.order_type, e.po_number, e.sale_amount_without_gst, e.po_amount, e.advance_received,
+      e.category, e.order_type, e.po_number, e.sale_amount_without_gst,
+      e.management_discount_pct, e.management_discount_amount, e.net_sale_amount,
+      e.po_amount, e.advance_received,
       e.balance_amount, e.committed_start_date, e.committed_delivery_date, e.committed_completion_date,
       e.district, e.state, e.customer_type, e.employee_assigned, e.status, e.remarks]);
     const csv = [headers, ...rows].map(r => r.map(c => `"${(c ?? '').toString().replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -143,14 +146,31 @@ export default function BusinessBook() {
   const clearFilters = () => { setFilters({ status: '', category: '', order_type: '', lead_type: '' }); setSearch(''); };
   const activeFilters = Object.values(filters).filter(Boolean).length + (search ? 1 : 0);
   const fmt = (n) => `Rs ${(n || 0).toLocaleString('en-IN')}`;
-  // Mam (2026-05-21): PO Amount (with GST) is always Sale × 1.18.
-  // We force-compute on Sale Amount edits so the field can't drift.
-  // Server also re-computes on save as a final guard.
+  // Mam (2026-05-21): PO Amount (with GST) is always (NET Sale) × 1.18.
+  // Mam (2026-06-16): a Management Discount comes off the Sale Amount first.
+  // The % and Rs discount fields are kept in two-way sync, then Net Sale =
+  // Sale − discount and PO recomputes off the net.  Server re-computes on
+  // save as the final guard, so the field can never drift.
   const F = (key, val) => setForm(f => {
     const next = { ...f, [key]: val };
-    if (key === 'sale_amount_without_gst') {
-      const s = Number(val) || 0;
-      next.po_amount = Math.round(s * 1.18 * 100) / 100;
+    if (['sale_amount_without_gst', 'management_discount_pct', 'management_discount_amount'].includes(key)) {
+      const sale = Number(next.sale_amount_without_gst) || 0;
+      let pct = Number(next.management_discount_pct) || 0;
+      let amt = Number(next.management_discount_amount) || 0;
+      if (key === 'management_discount_amount') {
+        // Rs typed/overridden → clamp, then derive the matching % so the two
+        // fields always agree (even if someone over-types the discount).
+        amt = Math.max(0, Math.min(amt, sale));
+        pct = sale > 0 ? Math.round((amt / sale) * 100 * 100) / 100 : 0;
+      } else {
+        // Sale or % changed → derive the Rs discount from the %, then clamp.
+        amt = Math.max(0, Math.min(Math.round(sale * pct / 100 * 100) / 100, sale));
+      }
+      const net = Math.round((sale - amt) * 100) / 100;
+      next.management_discount_pct = pct;
+      next.management_discount_amount = amt;
+      next.net_sale_amount = net;
+      next.po_amount = Math.round(net * 1.18 * 100) / 100;
     }
     return next;
   });
@@ -306,6 +326,14 @@ export default function BusinessBook() {
               <div className="bg-emerald-50 p-3 rounded-lg text-center"><p className="text-xs text-gray-500">Advance</p><p className="font-bold text-emerald-600">{fmt(viewEntry.advance_received)}</p></div>
               <div className="bg-red-50 p-3 rounded-lg text-center"><p className="text-xs text-gray-500">Balance</p><p className="font-bold text-red-600">{fmt(viewEntry.balance_amount)}</p></div>
             </div>
+            {/* Management discount row — only shown when a discount was given. */}
+            {Number(viewEntry.management_discount_amount) > 0 && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="bg-amber-50 p-3 rounded-lg text-center"><p className="text-xs text-gray-500">Mgmt Discount %</p><p className="font-bold text-amber-700">{viewEntry.management_discount_pct || 0}%</p></div>
+                <div className="bg-amber-50 p-3 rounded-lg text-center"><p className="text-xs text-gray-500">Mgmt Discount</p><p className="font-bold text-amber-700">- {fmt(viewEntry.management_discount_amount)}</p></div>
+                <div className="bg-emerald-50 p-3 rounded-lg text-center"><p className="text-xs text-gray-500">Net Sale Amount</p><p className="font-bold text-emerald-700">{fmt(viewEntry.net_sale_amount)}</p></div>
+              </div>
+            )}
             <DSection title="Client & Company" items={[['Client', viewEntry.client_name], ['Company/Dept', viewEntry.company_name], ['Contact', viewEntry.client_contact], ['Client Email', viewEntry.client_email], ['Email', viewEntry.email_address], ['Source', viewEntry.source_of_enquiry], ['Customer Type', viewEntry.customer_type], ['Client Type', viewEntry.client_type], ['Customer Code', viewEntry.customer_code]]} />
             <DSection title="Location" items={[['District', viewEntry.district], ['State', viewEntry.state], ['State Code', viewEntry.state_code], ['GSTIN', viewEntry.gstin], ['Billing Address', viewEntry.billing_address], ['Shipping Address', viewEntry.shipping_address]]} />
             <DSection title="Project & Order" items={[['Project', viewEntry.project_name], ['Category', viewEntry.category], ['Order Type', viewEntry.order_type], ['PO Number', viewEntry.po_number], ['PO Date', viewEntry.po_date], ['Guarantee', viewEntry.guarantee_required], ['Guarantee %', viewEntry.guarantee_percentage], ['Penalty Clause', viewEntry.penalty_clause], ['Penalty Date', viewEntry.penalty_clause_date], ['Freight Extra', viewEntry.freight_extra]]} />
@@ -406,7 +434,25 @@ export default function BusinessBook() {
                   value={form.po_amount || 0}
                   readOnly
                   className="w-full px-3 py-2 border border-emerald-200 bg-emerald-50 rounded-lg text-sm font-semibold text-emerald-900 cursor-not-allowed"
-                  title="Auto-computed from Sale Amount × 1.18"
+                  title="Auto-computed from (Net Sale Amount) × 1.18"
+                />
+              </div>
+              {/* Management discount (mam 2026-06-16): % and Rs are two-way
+                  synced; either one reduces the Sale Amount.  Net Sale (and
+                  therefore PO with GST) recompute automatically. */}
+              <Inp label="Management Discount %" value={form.management_discount_pct} onChange={v => F('management_discount_pct', +v)} type="number" />
+              <Inp label="Management Discount (Rs)" value={form.management_discount_amount} onChange={v => F('management_discount_amount', +v)} type="number" />
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">
+                  Net Sale Amount
+                  <span className="ml-1 normal-case font-normal text-emerald-700">· Sale − Discount</span>
+                </label>
+                <input
+                  type="number"
+                  value={form.net_sale_amount || 0}
+                  readOnly
+                  className="w-full px-3 py-2 border border-emerald-200 bg-emerald-50 rounded-lg text-sm font-semibold text-emerald-900 cursor-not-allowed"
+                  title="Sale Amount minus Management Discount — PO is computed from this"
                 />
               </div>
               <Inp label="Advance Received" value={form.advance_received} onChange={v => F('advance_received', +v)} type="number" />

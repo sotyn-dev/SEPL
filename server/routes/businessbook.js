@@ -20,6 +20,25 @@ const computePoAmount = (saleAmt) => {
   const s = Number(saleAmt) || 0;
   return Math.round(s * (1 + PO_GST_PCT / 100) * 100) / 100;  // 2-dp
 };
+// Management discount (mam 2026-06-16): the discount is taken off the Sale
+// Amount, then PO (with GST) = NET Sale × 1.18.  The UI keeps the % and the
+// Rs amount in sync (two-way); the server is the final guard — if only a %
+// arrives we derive the Rs amount, and we clamp the discount to 0..sale so
+// a fat-finger can never push net/PO negative.
+const computeFinance = (saleAmt, discPct, discAmt) => {
+  const s = Number(saleAmt) || 0;
+  const pct = Number(discPct) || 0;
+  let amt = Number(discAmt) || 0;
+  if (!amt && pct) amt = s * pct / 100;          // % given without Rs → derive
+  amt = Math.max(0, Math.min(amt, s));           // clamp to 0..sale
+  const net = Math.round((s - amt) * 100) / 100;
+  return {
+    discountPct: Math.round(pct * 100) / 100,
+    discountAmount: Math.round(amt * 100) / 100,
+    netSale: net,
+    poAmount: Math.round(net * (1 + PO_GST_PCT / 100) * 100) / 100,
+  };
+};
 
 // Idempotent backfill at module load.
 try {
@@ -46,6 +65,7 @@ const ALL_FIELDS = [
   'lead_type', 'client_name', 'company_name', 'project_name', 'client_contact', 'client_email', 'email_address',
   'source_of_enquiry', 'district', 'state', 'state_code', 'gstin', 'billing_address', 'shipping_address',
   'guarantee_required', 'guarantee_percentage', 'sale_amount_without_gst', 'po_amount',
+  'management_discount_pct', 'management_discount_amount', 'net_sale_amount',
   'order_type', 'penalty_clause', 'penalty_clause_date',
   'committed_start_date', 'committed_delivery_date', 'committed_completion_date', 'freight_extra',
   'category', 'customer_type', 'client_type', 'customer_code',
@@ -149,15 +169,20 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
   const { nextSequence } = require('../db/nextSequence');
   const leadNo = nextSequence(db, 'business_book', 'lead_no', 'SEPL', { startFrom: 20000, pad: 5 });
 
-  // Force PO = Sale × 1.18 (mam, 2026-05-21).  Override any value
-  // the client sent — the rule is non-negotiable.
-  b.po_amount = computePoAmount(b.sale_amount_without_gst);
+  // Force PO = NET Sale × 1.18 (mam, 2026-05-21 + discount 2026-06-16).
+  // Override any value the client sent — the rule is non-negotiable.
+  const fin = computeFinance(b.sale_amount_without_gst, b.management_discount_pct, b.management_discount_amount);
+  b.po_amount = fin.poAmount;
+  b.management_discount_pct = fin.discountPct;
+  b.management_discount_amount = fin.discountAmount;
+  b.net_sale_amount = fin.netSale;
   const balanceAmount = (b.po_amount || 0) - (b.advance_received || 0);
 
   const r = db.prepare(`INSERT INTO business_book (
     lead_no, lead_type, client_name, company_name, project_name, client_contact, client_email, email_address,
     source_of_enquiry, district, state, state_code, gstin, billing_address, shipping_address,
     guarantee_required, guarantee_percentage, sale_amount_without_gst, po_amount,
+    management_discount_pct, management_discount_amount, net_sale_amount,
     order_type, penalty_clause, penalty_clause_date,
     committed_start_date, committed_delivery_date, committed_completion_date, freight_extra,
     category, customer_type, client_type, customer_code,
@@ -177,10 +202,11 @@ router.post('/', requirePermission('business_book', 'create'), (req, res) => {
     tpa_labour_link, tpa_labour_signed_link, final_drawing_link,
     working_sheet_link,
     remarks, created_by
-  ) VALUES (${Array(72).fill('?').join(',')})`).run(
+  ) VALUES (${Array(75).fill('?').join(',')})`).run(
     leadNo, b.lead_type || 'Private', b.client_name, b.company_name, b.project_name, b.client_contact, b.client_email, b.email_address,
     b.source_of_enquiry, b.district, b.state, b.state_code || null, b.gstin || null, b.billing_address, b.shipping_address,
     b.guarantee_required || 'No', b.guarantee_percentage, b.sale_amount_without_gst || 0, b.po_amount || 0,
+    b.management_discount_pct || 0, b.management_discount_amount || 0, b.net_sale_amount || 0,
     b.order_type || 'Supply', b.penalty_clause || 'No', b.penalty_clause_date || null,
     b.committed_start_date || null, b.committed_delivery_date || null, b.committed_completion_date || null, b.freight_extra || 'No',
     b.category, b.customer_type, b.client_type, b.customer_code,
@@ -260,15 +286,20 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
     const poErr = validatePoNumber(b.po_number);
     if (poErr) return res.status(400).json({ error: poErr });
   }
-  // Force PO = Sale × 1.18 (mam, 2026-05-21).  Override any value
-  // the client sent so edits can't drift from the rule.
-  b.po_amount = computePoAmount(b.sale_amount_without_gst);
+  // Force PO = NET Sale × 1.18 (mam, 2026-05-21 + discount 2026-06-16).
+  // Override any value the client sent so edits can't drift from the rule.
+  const fin = computeFinance(b.sale_amount_without_gst, b.management_discount_pct, b.management_discount_amount);
+  b.po_amount = fin.poAmount;
+  b.management_discount_pct = fin.discountPct;
+  b.management_discount_amount = fin.discountAmount;
+  b.net_sale_amount = fin.netSale;
   const computedBalance = b.balance_amount !== undefined ? b.balance_amount : (b.po_amount || 0) - (b.advance_received || 0);
 
   getDb().prepare(`UPDATE business_book SET
     lead_type=?, client_name=?, company_name=?, project_name=?, client_contact=?, client_email=?, email_address=?,
     source_of_enquiry=?, district=?, state=?, state_code=?, gstin=?, billing_address=?, shipping_address=?,
     guarantee_required=?, guarantee_percentage=?, sale_amount_without_gst=?, po_amount=?,
+    management_discount_pct=?, management_discount_amount=?, net_sale_amount=?,
     order_type=?, penalty_clause=?, penalty_clause_date=?,
     committed_start_date=?, committed_delivery_date=?, committed_completion_date=?, freight_extra=?,
     category=?, customer_type=?, client_type=?, customer_code=?,
@@ -291,6 +322,7 @@ router.put('/:id', requirePermission('business_book', 'edit'), (req, res) => {
     b.lead_type, b.client_name, b.company_name, b.project_name, b.client_contact, b.client_email, b.email_address,
     b.source_of_enquiry, b.district, b.state, b.state_code || null, b.gstin || null, b.billing_address, b.shipping_address,
     b.guarantee_required || 'No', b.guarantee_percentage, b.sale_amount_without_gst || 0, b.po_amount || 0,
+    b.management_discount_pct || 0, b.management_discount_amount || 0, b.net_sale_amount || 0,
     b.order_type, b.penalty_clause, b.penalty_clause_date || null,
     b.committed_start_date || null, b.committed_delivery_date || null, b.committed_completion_date || null, b.freight_extra || 'No',
     b.category, b.customer_type, b.client_type, b.customer_code,

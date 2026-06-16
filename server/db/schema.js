@@ -2992,6 +2992,13 @@ function initializeDatabase() {
     // Bill / Tax Invoice (templates require these in the Bill To block).
     ['business_book', 'gstin TEXT'],
     ['business_book', 'state_code TEXT'],
+    // Management discount (mam 2026-06-16): a discount given on the Sale
+    // Amount.  Stored as both a % and the resolved Rs amount (kept in
+    // sync by the UI / server).  Net Sale = Sale − discount, and the
+    // PO Amount (with GST) recomputes off the NET, not the gross sale.
+    ['business_book', 'management_discount_pct REAL DEFAULT 0'],
+    ['business_book', 'management_discount_amount REAL DEFAULT 0'],
+    ['business_book', 'net_sale_amount REAL DEFAULT 0'],
     // Item Master pricing audit — MD's Phase 1: "Right now Price is
     // just a number — no date, no vendor, no bill. We can't trust it
     // for tenders." Adds vendor link, source provenance (PO / Quote /
@@ -3004,6 +3011,13 @@ function initializeDatabase() {
     ['item_master', 'bill_po_date DATE'],
     ['item_master', 'priced_at DATETIME'],                     // when current price was captured
     ['item_master', 'priced_by INTEGER REFERENCES users(id)'],
+    // Item approval (mam 2026-06-16): a new item entered from anywhere
+    // must be approved by an Admin (e.g. Ankur Kaplesh) before it counts
+    // as "correct".  DEFAULT 'approved' grandfathers every existing row;
+    // new manual entries are inserted as 'pending' (see routes/itemMaster).
+    ['item_master', "approval_status TEXT DEFAULT 'approved'"], // approved | pending | rejected
+    ['item_master', 'approved_by INTEGER REFERENCES users(id)'],
+    ['item_master', 'approved_at DATETIME'],
     // item_price_history exists for BOQ-row rates already; extend so a
     // full Master-page edit also lands here with the same provenance
     // fields the master row carries. Older rows keep null in these.
@@ -4720,29 +4734,39 @@ in your first week. If a process feels broken, raise a Help Ticket
 
   // Mam (2026-05-22): "add frequency fortnightly mean month 2 time
   // b/w 15 days distance" — relax the checklists.frequency CHECK so
-  // the new 'fortnightly' value is accepted.  Uses writable_schema
-  // to edit the constraint in place (same pattern as the
-  // payment_requests CHECK rebuild).  Idempotent via app_settings.
+  // the new 'fortnightly' value is accepted.  The old approach edited
+  // sqlite_master via `PRAGMA writable_schema`, but SQLite's defensive
+  // mode rejects that with "table sqlite_master may not be modified",
+  // so the migration silently failed and fortnightly inserts errored.
+  // Rebuild the table instead (same proven pattern as the
+  // payment_requests / indents CHECK rebuilds).  Idempotent: the CHECK
+  // check short-circuits once 'fortnightly' is present.
   try {
-    const done = db.prepare("SELECT value FROM app_settings WHERE key='checklist_freq_fortnightly_v1'").get();
-    if (!done) {
-      // Check current CHECK clause — only patch if it's the old one.
-      const cur = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='checklists'").get();
-      if (cur?.sql && !cur.sql.includes("'fortnightly'")) {
-        db.exec('PRAGMA writable_schema = 1');
-        db.exec(`
-          UPDATE sqlite_master SET sql = REPLACE(sql,
-            "CHECK(frequency IN ('daily','weekly','monthly','quarterly','yearly','once'))",
-            "CHECK(frequency IN ('daily','weekly','fortnightly','monthly','quarterly','yearly','once'))"
-          ) WHERE type='table' AND name='checklists'
-        `);
-        db.exec('PRAGMA writable_schema = 0');
-        console.log('[migration] checklists CHECK relaxed to allow fortnightly');
+    const cur = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='checklists'").get();
+    if (cur?.sql && /CHECK\s*\(\s*frequency\s+IN/i.test(cur.sql) && !cur.sql.includes("'fortnightly'")) {
+      const newSql = cur.sql
+        .replace(/CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(?:"checklists"|checklists)/i, 'CREATE TABLE checklists_new')
+        .replace(/CHECK\s*\(\s*frequency\s+IN\s*\([^)]*\)\s*\)/i,
+          "CHECK(frequency IN ('daily','weekly','fortnightly','monthly','quarterly','yearly','once'))");
+      if (newSql === cur.sql || !/CREATE TABLE checklists_new/.test(newSql)) {
+        throw new Error('regex did not rewrite checklists CREATE — CHECK shape unexpected');
       }
-      db.prepare("INSERT INTO app_settings (key, value) VALUES ('checklist_freq_fortnightly_v1', '1')").run();
+      db.pragma('foreign_keys = OFF');
+      try { db.exec('DROP TABLE IF EXISTS checklists_new'); } catch (_) {}
+      const cols = db.prepare('PRAGMA table_info(checklists)').all().map(c => `"${c.name}"`).join(', ');
+      db.exec('BEGIN');
+      db.exec(newSql);
+      db.exec(`INSERT INTO checklists_new (${cols}) SELECT ${cols} FROM checklists`);
+      db.exec('DROP TABLE checklists');
+      db.exec('ALTER TABLE checklists_new RENAME TO checklists');
+      db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
+      console.log('[migration] checklists CHECK rebuilt to allow fortnightly');
     }
   } catch (e) {
-    console.warn('[migration] checklist freq fortnightly CHECK relax failed:', e.message);
+    try { db.exec('ROLLBACK'); } catch (_) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.warn('[migration] checklist freq fortnightly CHECK rebuild failed:', e.message);
   }
 
   // Seed the canonical 5 lead-source values per MD's TOC v3 spec.
