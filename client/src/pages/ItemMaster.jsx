@@ -53,7 +53,8 @@ function AgeBadge({ status, days }) {
 }
 
 export default function ItemMaster() {
-  const { canCreate, canEdit, canDelete } = useAuth();
+  const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
+  const admin = typeof isAdmin === 'function' ? isAdmin() : !!isAdmin;
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);  // 0-based
@@ -71,6 +72,8 @@ export default function ItemMaster() {
   const autoEditDone = useRef(false);
   const [filterDept, setFilterDept] = useState('');
   const [statusFilter, setStatusFilter] = useState(''); // expired | ageing | fresh | never | make_blank | no_vendor
+  const [approvalFilter, setApprovalFilter] = useState(''); // '' | pending | approved | rejected
+  const [pendingCount, setPendingCount] = useState(0);
   const [bulkData, setBulkData] = useState('');
   const [bulkPreview, setBulkPreview] = useState([]);
   const [pipeModal, setPipeModal] = useState(false);
@@ -81,6 +84,7 @@ export default function ItemMaster() {
     if (search) params.set('search', search);
     if (filterDept) params.set('department', filterDept);
     if (statusFilter) params.set('status', statusFilter);
+    if (approvalFilter) params.set('approval', approvalFilter);
     params.set('limit', PAGE_SIZE);
     params.set('offset', page * PAGE_SIZE);
     setLoading(true);
@@ -88,9 +92,42 @@ export default function ItemMaster() {
       .then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0); })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [search, filterDept, statusFilter, page]);
+  }, [search, filterDept, statusFilter, approvalFilter, page]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Data-completion dashboard (mam 2026-06-15) — global stats across ALL items
+  // (not the current page/filter). Reloaded on mount + after any save/delete.
+  const [completion, setCompletion] = useState(null);
+  const loadCompletion = useCallback(() => {
+    api.get('/item-master/completion').then(r => setCompletion(r.data)).catch(() => {});
+  }, []);
+  useEffect(() => { loadCompletion(); }, [loadCompletion]);
+
+  // Pending-approval count for the review banner (refreshes with the list).
+  const loadPendingCount = useCallback(() => {
+    api.get('/item-master/approval/pending-count')
+      .then(r => setPendingCount(r.data?.pending || 0))
+      .catch(() => {});
+  }, []);
+  useEffect(() => { loadPendingCount(); }, [loadPendingCount, items]);
+
+  // Approve / reject a pending item (Admin only). Refreshes list + count.
+  const setApproval = async (item, action) => {
+    try {
+      await api.post(`/item-master/${item.id}/${action}`);
+      toast.success(action === 'approve' ? 'Item approved' : 'Item rejected');
+      load(); loadPendingCount();
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  };
+  const approveAllPending = async () => {
+    if (!window.confirm(`Approve all ${pendingCount} pending item(s)?`)) return;
+    try {
+      const r = await api.post('/item-master/approval/approve-all');
+      toast.success(r.data?.message || 'Approved');
+      load(); loadPendingCount();
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  };
 
   // Auto-open the Edit modal when launched via ?edit=CODE (from the PO/FOC ✎).
   useEffect(() => {
@@ -101,7 +138,7 @@ export default function ItemMaster() {
 
   // Snap back to page 1 whenever a filter or search changes so the user
   // doesn't end up on page 14 of a 2-page result and see "No items".
-  useEffect(() => { setPage(0); }, [search, filterDept, statusFilter]);
+  useEffect(() => { setPage(0); }, [search, filterDept, statusFilter, approvalFilter]);
   useEffect(() => {
     // Lazy-load vendors so the Vendor dropdown in the modal works.
     api.get('/procurement/vendors').then(r => setVendors(r.data || [])).catch(() => setVendors([]));
@@ -148,13 +185,13 @@ export default function ItemMaster() {
         const res = await api.post('/item-master', payload);
         toast.success(`Item created: ${res.data.item_code}`);
       }
-      setModal(null); setForm({ ...emptyForm }); load();
+      setModal(null); setForm({ ...emptyForm }); load(); loadCompletion();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   const handleDelete = async (id, code) => {
     if (!confirm(`Delete item ${code}?`)) return;
-    try { await api.delete(`/item-master/${id}`); toast.success('Deleted'); load(); } catch { toast.error('Failed'); }
+    try { await api.delete(`/item-master/${id}`); toast.success('Deleted'); load(); loadCompletion(); } catch { toast.error('Failed'); }
   };
 
   const openHistory = async (item) => {
@@ -270,6 +307,42 @@ export default function ItemMaster() {
           </div>
         </div>
 
+        {/* Data-completion dashboard (mam 2026-06-15): how much of the required
+            item data is filled across ALL items = items × required fields. */}
+        {completion && completion.total_items > 0 && (() => {
+          const pct = completion.required_total ? Math.round((completion.filled_total / completion.required_total) * 100) : 0;
+          const barColor = pct >= 80 ? 'bg-emerald-500' : pct >= 40 ? 'bg-amber-500' : 'bg-red-500';
+          const LBL = { item_name: 'Item Name', type: 'Type', specification: 'Specification', size: 'Size', uom: 'UOM', gst: 'GST', make: 'Make', rate: 'Rate', vendor: 'Vendor', source_type: 'Source', bill_po_number: 'Bill/PO No', bill_po_date: 'Bill/PO Date' };
+          return (
+            <div className="bg-white border rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="font-semibold text-sm text-gray-700">📊 Data Completion</div>
+                <div className="text-xs text-gray-500">
+                  <b className="text-gray-800">{completion.filled_total.toLocaleString('en-IN')}</b> / {completion.required_total.toLocaleString('en-IN')} fields filled
+                  {' · '}<b className="text-emerald-700">{completion.complete_items.toLocaleString('en-IN')}</b> of {completion.total_items.toLocaleString('en-IN')} items fully complete
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden"><div className={`h-full ${barColor}`} style={{ width: `${pct}%` }} /></div>
+                <div className="text-sm font-bold w-12 text-right">{pct}%</div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {completion.per_field.filter(f => f.missing > 0).sort((a, b) => b.missing - a.missing).map(f => {
+                  const target = f.key === 'make' ? 'make_blank' : f.key === 'vendor' ? 'no_vendor' : null;
+                  return (
+                    <button key={f.key} type="button" onClick={() => target && setStatusFilter(target)}
+                      className={`text-[10px] px-2 py-0.5 rounded-full border bg-gray-50 text-gray-600 border-gray-200 ${target ? 'hover:bg-red-50 hover:border-red-300 cursor-pointer' : 'cursor-default'}`}
+                      title={target ? 'Click to filter these items' : ''}>
+                      {LBL[f.key] || f.key}: <b className="text-red-600">{f.missing.toLocaleString('en-IN')}</b> missing
+                    </button>
+                  );
+                })}
+                {completion.per_field.every(f => f.missing === 0) && <span className="text-[11px] text-emerald-700 font-semibold">✓ All items fully filled</span>}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* MD's filter buttons */}
         <div className="flex flex-wrap gap-2">
           {statusPills.map(p => (
@@ -277,6 +350,25 @@ export default function ItemMaster() {
               key={p.id}
               onClick={() => setStatusFilter(p.id)}
               className={`text-[11px] font-semibold px-3 py-1.5 rounded-full border transition ${statusFilter === p.id ? `${p.cls} ring-2 ring-offset-1 ring-red-400` : 'bg-white text-gray-600 border-gray-200 hover:border-red-300 hover:text-red-700'}`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Approval filter (mam 2026-06-16) — new items need an Admin's OK. */}
+        <div className="flex flex-wrap gap-2 items-center">
+          <span className="text-[11px] font-semibold text-gray-500 mr-1">Approval:</span>
+          {[
+            { id: '', label: 'All' },
+            { id: 'pending', label: `Pending${pendingCount ? ` (${pendingCount})` : ''}`, cls: 'bg-amber-100 text-amber-800 border-amber-300' },
+            { id: 'approved', label: 'Approved', cls: 'bg-green-100 text-green-800 border-green-300' },
+            { id: 'rejected', label: 'Rejected', cls: 'bg-red-100 text-red-700 border-red-300' },
+          ].map(p => (
+            <button
+              key={p.id || 'all'}
+              onClick={() => setApprovalFilter(p.id)}
+              className={`text-[11px] font-semibold px-3 py-1.5 rounded-full border transition ${approvalFilter === p.id ? `${p.cls || 'bg-blue-100 text-blue-800 border-blue-300'} ring-2 ring-offset-1 ring-red-400` : 'bg-white text-gray-600 border-gray-200 hover:border-red-300 hover:text-red-700'}`}
             >
               {p.label}
             </button>
@@ -298,13 +390,27 @@ export default function ItemMaster() {
               <input className="input pl-10" placeholder="Type to search…" value={search} onChange={e => setSearch(e.target.value)} />
             </div>
           </div>
-          {(search || filterDept || statusFilter) && (
-            <button onClick={() => { setSearch(''); setFilterDept(''); setStatusFilter(''); }} className="btn btn-secondary text-red-500 flex items-center gap-1 whitespace-nowrap">
+          {(search || filterDept || statusFilter || approvalFilter) && (
+            <button onClick={() => { setSearch(''); setFilterDept(''); setStatusFilter(''); setApprovalFilter(''); }} className="btn btn-secondary text-red-500 flex items-center gap-1 whitespace-nowrap">
               <FiX size={14} /> Clear
             </button>
           )}
         </div>
       </div>
+
+      {/* Pending-approval review banner — new items wait for an Admin's OK. */}
+      {pendingCount > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-amber-50 border border-amber-300 rounded-lg px-4 py-3">
+          <div className="text-sm text-amber-900">
+            <span className="font-bold">{pendingCount}</span> item{pendingCount > 1 ? 's' : ''} awaiting approval.
+            {admin ? ' Review and approve so the item master stays correct.' : ' An Admin (e.g. Ankur Kaplesh) will approve them.'}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setApprovalFilter('pending')} className="btn btn-secondary text-xs whitespace-nowrap">Review pending</button>
+            {admin && <button onClick={approveAllPending} className="btn btn-primary text-xs whitespace-nowrap">Approve all</button>}
+          </div>
+        </div>
+      )}
 
       {/* Table */}
       <div className="card p-0">
@@ -323,6 +429,7 @@ export default function ItemMaster() {
             <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Price Age</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Vendor</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Source · Bill / PO</th>
+            <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Approval</th>
             <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Actions</th>
           </tr></thead>
           <tbody className="divide-y divide-gray-100">
@@ -362,6 +469,28 @@ export default function ItemMaster() {
                     <div>{i.source_type || '—'}</div>
                     {i.bill_po_number && <div className="font-mono text-[10px] text-gray-500">{i.bill_po_number}{i.bill_po_date ? ` · ${i.bill_po_date}` : ''}</div>}
                   </td>
+                  {/* Approval status + Admin approve/reject (mam 2026-06-16). */}
+                  <td className="px-3 py-2 text-center">
+                    {(() => {
+                      const st = i.approval_status || 'approved';
+                      const badge = st === 'pending'
+                        ? 'bg-amber-100 text-amber-800'
+                        : st === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700';
+                      const label = st.charAt(0).toUpperCase() + st.slice(1);
+                      return (
+                        <div className="flex flex-col items-center gap-1">
+                          <span className={`inline-flex px-2 py-0.5 rounded text-[11px] font-semibold ${badge}`}>{label}</span>
+                          {st === 'approved' && i.approved_by_name && <span className="text-[9px] text-gray-400">by {i.approved_by_name}</span>}
+                          {admin && st !== 'approved' && (
+                            <div className="flex gap-1">
+                              <button onClick={() => setApproval(i, 'approve')} className="text-[10px] font-semibold px-2 py-0.5 rounded bg-green-600 text-white hover:bg-green-700">Approve</button>
+                              {st !== 'rejected' && <button onClick={() => setApproval(i, 'reject')} className="text-[10px] font-semibold px-2 py-0.5 rounded bg-white text-red-600 border border-red-300 hover:bg-red-50">Reject</button>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </td>
                   <td className="px-3 py-2">
                     <div className="flex items-center justify-center gap-1">
                       <button onClick={() => openHistory(i)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Price history"><FiClock size={14} /></button>
@@ -372,7 +501,7 @@ export default function ItemMaster() {
                 </tr>
               );
             })}
-            {items.length === 0 && <tr><td colSpan="10" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>{loading ? 'Loading…' : 'No items found'}</p></td></tr>}
+            {items.length === 0 && <tr><td colSpan="11" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>{loading ? 'Loading…' : 'No items found'}</p></td></tr>}
           </tbody>
         </table>
         {/* Paginator — keeps the page snappy even on 2,000+ item masters. */}
