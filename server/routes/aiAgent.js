@@ -507,11 +507,22 @@ async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, 
   }
   contents.push({ role: 'user', parts: [{ text: question }] });
 
-  const post = async (body) => fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-    body: JSON.stringify(body),
-  });
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  // Free-tier rate limits (429) are usually per-minute and clear quickly —
+  // retry with backoff so a transient limit doesn't surface as an error
+  // (mam 2026-06-15). The route's heartbeat keeps the connection alive while
+  // we wait.
+  const post = async (body, retries = 2) => {
+    for (let attempt = 0; ; attempt++) {
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify(body),
+      });
+      if (r.status !== 429 || attempt >= retries) return r;
+      await sleep(4000 * (attempt + 1)); // 4s, then 8s
+    }
+  };
 
   const sqlRuns = [];
   let answer = '';
@@ -744,7 +755,7 @@ Guidance:
       console.error('[AI Agent /ask] Gemini call failed:', e.status, e.message);
       let hint = '';
       if (e.status === 401 || e.status === 403) hint = ' Check the Gemini API key in Admin → AI Settings.';
-      else if (e.status === 429) hint = ' Gemini free-tier rate limit hit — wait a few seconds and retry.';
+      else if (e.status === 429) hint = ' Gemini free-tier quota hit (even after auto-retry). If this keeps happening you\'ve likely used the daily free limit — wait a while, slow down between questions, or switch to Anthropic Haiku in Admin → AI Settings.';
       return sendJson(200, { error: `AI request failed (Gemini): ${String(e.message).slice(0, 300)}${hint}` });
     }
   }
