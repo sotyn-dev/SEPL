@@ -92,6 +92,8 @@ function restore() {
     copy('dpr_work_items', `dpr_id IN (${dprSub})`);
     copy('dpr_manpower', `dpr_id IN (${dprSub})`);
     copy('dpr_machinery', `dpr_id IN (${dprSub})`);
+    copy('dpr_material', `dpr_id IN (${dprSub})`);       // material lines
+    copy('dpr_contractors', `dpr_id IN (${dprSub})`);    // subcontractor lines
     copy('attendance', `site_id IN (${siteSub})`);
     copy('geofence_settings', `site_id IN (${siteSub})`);
   });
