@@ -4975,25 +4975,98 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
   };
 
   if (isSalesBill) {
-    // Match the SEPL Sales Bill template page 1:1 — Bill To / Ship To
-    // with State + Code as two fields, GSTIN (if diff.) on Ship To,
-    // bank details + numbered T&C in side-by-side cards, and two
-    // separate signature panels.
-    const billState = esc(dn.client_state || '');
-    const billStateCode = esc(clientStateCode);
-    const shipStateCode = esc(dn.state_code || clientStateCode);
-    return `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(docNo)}</title><style>${css}</style></head><body>
+    // Tax Invoice redesigned to match the format mam supplied
+    // (Tax Invoice — Secured Engineers Pvt. Ltd_.pdf, 2026-06-16): monogram
+    // header + "ORIGINAL FOR RECIPIENT" GSTIN/PAN, meta grid with Financial
+    // Yr / Place of Supply (+ code) / Supply Type / Reverse Charge / E-Way
+    // Bill, Bill To + Ship To, items WITHOUT a discount column, amount + tax
+    // in words, "Payable on Delivery = basic × % + 100% GST", an e-Invoice /
+    // IRN block, bank details, T&C, and dual acknowledgement.
+    const stripMs = (s) => String(s || '').replace(/^\s*M\/?s\.?\s*/i, '').trim();
+    const billToName = dn.client_company || stripMs(dn.site_name) || dn.client_person_name || '';
+    const billToAddr = dn.client_address || dn.site_address || '';
+    const shipAddr = dn.site_address || dn.client_address || '';
+    const interState = igstPct > 0;
+
+    // Financial year (India, Apr–Mar) derived from the invoice date.
+    const fyOf = (d) => { const m = String(d || '').match(/^(\d{4})-(\d{2})/); if (!m) return ''; const y = +m[1], mo = +m[2]; const s = mo >= 4 ? y : y - 1; return `${s}-${String(s + 1).slice(2)}`; };
+    const placeOfSupply = [esc(dn.place_of_supply || dn.client_state || ''), clientStateCode ? `(${esc(clientStateCode)})` : ''].filter(Boolean).join(' ');
+
+    // Auto-round the grand total to the whole rupee (matches the supplied
+    // PDF's "Round Off (–) 0.17 → 1,44,053.00").
+    const taxTotal = cgst + sgst + igst;
+    const rawTotal = subtotal + taxTotal + freight;
+    const grand = Math.round(rawTotal);
+    const round = grand - rawTotal;
+
+    // Amount-in-words; the tax line carries paise like the PDF.
+    const rupeesWhole = (amt) => `Rupees ${numToWords(Math.floor(+amt || 0))} Only`;
+    const rupeesPaise = (amt) => { const r = Math.round((+amt || 0) * 100); const ru = Math.floor(r / 100), pa = r % 100; return `Rupees ${numToWords(ru)}${pa ? ` and ${numToWords(pa)} Paise` : ''} Only`; };
+
+    // Payable on delivery = basic value × against-delivery % + 100% of GST.
+    // Round each part to paise before adding (matches the supplied PDF).
+    const r2 = (n) => Math.round((+n || 0) * 100) / 100;
+    const dpct = parseFloat(String(dn.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) || 0;
+    const payable = dpct ? (r2(subtotal * dpct / 100) + r2(taxTotal)) : 0;
+
+    // Item rows — no discount column (SL / DESC / HSN / QTY / UOM / RATE / AMOUNT).
+    const sbRows = items.map((it, idx) => {
+      const rawDesc = [it.description, it.specification, it.size].filter(Boolean).join(' / ');
+      const desc = toSupplyDescription(rawDesc);
+      const qty = +it.quantity || 0, rate = +it.rate || 0, discPct = +it.disc_pct || 0;
+      const amount = +it.amount || (qty * rate * (1 - discPct / 100));
+      return `<tr><td class="c">${idx + 1}</td><td>${esc(desc)}</td><td class="c">${esc(it.gst_text || '')}</td><td class="r">${fmt(qty)}</td><td class="c">${esc(it.unit || '')}</td><td class="r">${fmt(rate)}</td><td class="r">${fmt(amount)}</td></tr>`;
+    }).join('');
+
+    const sbCss = `
+      .sb { color:#1a1a1a; }
+      .sb .top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #7a1b1b; padding-bottom:8px; }
+      .sb .brand { display:flex; align-items:center; gap:10px; }
+      .sb .mono { width:42px; height:42px; border:2px solid #7a1b1b; color:#7a1b1b; font-weight:800; font-size:16px; display:flex; align-items:center; justify-content:center; border-radius:6px; letter-spacing:-1px; }
+      .sb .cn { font-size:18px; font-weight:800; color:#7a1b1b; line-height:1.1; }
+      .sb .tag { font-size:8px; letter-spacing:1px; color:#555; text-transform:uppercase; margin-top:2px; }
+      .sb .orig { text-align:right; font-size:9px; color:#444; line-height:1.5; }
+      .sb .orig b { color:#7a1b1b; }
+      .sb .invtitle { text-align:center; font-size:20px; font-weight:800; letter-spacing:3px; color:#7a1b1b; margin:7px 0 2px; }
+      .sb .addr { text-align:center; font-size:8.5px; color:#555; }
+      .sb table { width:100%; border-collapse:collapse; }
+      .sb .meta td { border:1px solid #e2cccc; padding:4px 7px; font-size:9.5px; vertical-align:top; }
+      .sb .meta .l { background:#f8efef; color:#7a1b1b; font-weight:700; text-transform:uppercase; font-size:8.5px; white-space:nowrap; }
+      .sb .parties td { border:1px solid #e2cccc; padding:7px 9px; font-size:9.5px; vertical-align:top; width:50%; }
+      .sb .parties .h { background:#f8efef; color:#7a1b1b; font-weight:700; text-transform:uppercase; font-size:9px; padding:4px 9px; }
+      .sb .items { margin-top:7px; }
+      .sb .items th { background:#7a1b1b; color:#fff; font-size:9px; text-transform:uppercase; padding:6px 5px; border:1px solid #7a1b1b; }
+      .sb .items td { border:1px solid #e2cccc; padding:5px; font-size:9.5px; vertical-align:top; }
+      .sb .items td.c { text-align:center; } .sb .items td.r { text-align:right; }
+      .sb .lower { display:flex; gap:8px; margin-top:7px; align-items:flex-start; }
+      .sb .words { flex:1; border:1px solid #e2cccc; padding:7px 9px; font-size:9.5px; }
+      .sb .words .k { color:#7a1b1b; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-top:4px; }
+      .sb .words .pod { margin-top:6px; background:#f8efef; padding:5px 7px; border-radius:4px; }
+      .sb .tot { width:46%; }
+      .sb .tot td { padding:4px 8px; font-size:10px; border-bottom:1px solid #f0e3e3; }
+      .sb .tot .lab { text-align:right; color:#444; } .sb .tot .v { text-align:right; white-space:nowrap; }
+      .sb .tot .grand td { background:#7a1b1b; color:#fff; font-weight:800; font-size:12px; }
+      .sb .tot .podr td { color:#7a1b1b; font-weight:700; }
+      .sb .cols { display:flex; gap:8px; margin-top:7px; }
+      .sb .box { flex:1; border:1px solid #e2cccc; padding:7px 9px; font-size:9px; line-height:1.5; }
+      .sb .box .h { color:#7a1b1b; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-bottom:4px; }
+      .sb .sign { display:flex; gap:8px; margin-top:7px; }
+      .sb .sign .b { flex:1; border:1px solid #e2cccc; padding:7px 9px; min-height:66px; font-size:9px; position:relative; }
+      .sb .sign .b .h { color:#7a1b1b; font-weight:700; text-transform:uppercase; font-size:8.5px; }
+      .sb .sign .b .ln { position:absolute; bottom:18px; left:9px; right:9px; border-top:1px solid #999; }
+      .sb .sign .b .cap { position:absolute; bottom:5px; left:9px; right:9px; text-align:center; color:#666; }
+      .sb .foot { text-align:center; font-size:8.5px; color:#777; border-top:1px dashed #ccc; margin-top:8px; padding-top:6px; }
+    `;
+    return `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(docNo)}</title><style>${css}${sbCss}</style></head><body>
       <button class="print-btn" onclick="window.print()">🖨 Print</button>
       <div id="pdfgen" style="position:fixed;inset:0;background:rgba(255,255,255,.94);display:flex;align-items:center;justify-content:center;font:600 15px Arial,sans-serif;color:#7a1b1b;z-index:99999">Generating PDF, please wait…</div>
       <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
       <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
       <script>
       (function(){
-        // Mam: "direct create and show here sales bill pdf" — the bill page
-        // renders itself to an actual PDF (html2canvas + jsPDF, no server
-        // engine needed) and shows it in the browser's PDF viewer. If the
-        // PDF libs can't load (no internet), we fall back to the printable
-        // HTML so the bill is never lost.
+        // The bill page renders itself to a PDF (html2canvas + jsPDF) and
+        // shows it in the browser's PDF viewer; falls back to printable HTML
+        // if the libs can't load.
         var btn=null;
         function showHtml(){ var o=document.getElementById('pdfgen'); if(o)o.remove(); if(btn)btn.style.display=''; }
         window.addEventListener('load', function(){
@@ -5001,10 +5074,6 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
             try{
               btn=document.querySelector('.print-btn'); if(btn)btn.style.display='none';
               if(!window.html2canvas||!window.jspdf){ showHtml(); return; }
-              // EXCLUDE the loading overlay + print button from the capture
-              // (else the faded "Generating PDF…" sheet gets baked into the
-              // PDF — mam 2026-06-15). ignoreElements keeps them on screen
-              // for the user but leaves them out of the rendered image.
               html2canvas(document.body,{scale:2,backgroundColor:'#ffffff',useCORS:true,windowWidth:document.body.scrollWidth,
                 ignoreElements:function(el){ return el.id==='pdfgen' || (el.classList && el.classList.contains('print-btn')); }}).then(function(canvas){
                 var jsPDF=window.jspdf.jsPDF;
@@ -5014,15 +5083,11 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
                 var ph=pdf.internal.pageSize.getHeight();
                 var imgH=canvas.height*pw/canvas.width;
                 if(imgH<=ph+2){
-                  // Fits one page.
                   pdf.addImage(img,'JPEG',0,0,pw,imgH,'','FAST');
                 } else if(imgH<=ph*1.12){
-                  // Only slightly over one page — scale to fit a single A4
-                  // page (avoids a near-empty page 2), keeping aspect ratio.
                   var w2=pw*ph/imgH;
                   pdf.addImage(img,'JPEG',(pw-w2)/2,0,w2,ph,'','FAST');
                 } else {
-                  // Genuine multi-page bill — slice across A4 pages.
                   var left=imgH,pos=0;
                   pdf.addImage(img,'JPEG',0,pos,pw,imgH,'','FAST'); left-=ph;
                   while(left>0){ pos-=ph; pdf.addPage(); pdf.addImage(img,'JPEG',0,pos,pw,imgH,'','FAST'); left-=ph; }
@@ -5034,115 +5099,99 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         });
       })();
       </script>
-      ${headerBlock}
-      <table class="meta">
-        <tr>
-          <td class="lbl">Invoice No.</td><td>${esc(docNo)}</td>
-          <td class="lbl">Invoice Date</td><td>${dispDate(dn.delivery_date)}</td>
-          <td class="lbl">Client PO No.</td><td>${esc(dn.client_po_no || '')}</td>
-          <td class="lbl">PO Date</td><td>${dispDate(dn.client_po_date)}</td>
-          <td class="lbl">Delivery Note Ref.</td><td>${esc(dnNum)}</td>
-          <td class="lbl">Sales Order</td><td>${esc(dn.bb_lead_no || '')}</td>
-        </tr>
-        <tr>
-          <td class="lbl">Place of Supply</td><td>${esc(dn.place_of_supply || dn.client_state || '')}</td>
-          <td class="lbl">State Code</td><td>${esc(dn.state_code || clientStateCode)}</td>
-          <td class="lbl">Reverse Charge</td><td>${dn.reverse_charge ? 'YES' : 'NO'}</td>
-          <td class="lbl">Vehicle No.</td><td>${esc(dn.vehicle_no || '')}</td>
-          <td class="lbl">E-Way Bill No.</td><td>${esc(dn.e_way_bill_no || '')}</td>
-          <td class="lbl"></td><td></td>
-        </tr>
-      </table>
-      ${(() => {
-        // BILL TO / SHIP TO pulled from Business Book with sensible fallbacks
-        // (mam 2026-06-15: "gra address pick from business book and bill to
-        // also show").  GRA-type orders keep the client name in the site /
-        // project field (company_name blank), and only one address column is
-        // filled — so the client name falls back to the site name (minus any
-        // leading "M/s"), and the two addresses cross-fall-back.
-        const stripMs = (s) => String(s || '').replace(/^\s*M\/?s\.?\s*/i, '').trim();
-        var billToName = dn.client_company || stripMs(dn.site_name) || dn.client_person_name || '';
-        var billToAddr = dn.client_address || dn.site_address || '';
-        var shipAddr = dn.site_address || dn.client_address || '';
-        return `
-      <table class="parties">
-        <tr>
-          <td class="lbl" style="width:50%">Bill To</td>
-          <td class="lbl">Ship To / Site</td>
-        </tr>
-        <tr>
-          <td style="width:50%">
-            <div><b>M/s</b> ${fill(billToName, '220px')}</div>
-            <div style="margin-top:3px"><b>Address:</b> ${fill(billToAddr, '220px')}</div>
-            <div style="margin-top:3px"><b>GSTIN:</b> ${fill(dn.client_gstin, '180px')}</div>
-            <div style="margin-top:3px"><b>State:</b> ${fill(dn.client_state, '100px')} &nbsp; <b>Code:</b> ${fill(clientStateCode, '40px')}</div>
-            <div style="margin-top:3px"><b>Contact:</b> ${fill([dn.client_person_name, dn.client_phone].filter(Boolean).join(' · '), '180px')}</div>
-          </td>
-          <td>
-            <div><b>Site Name:</b> ${fill(dn.site_name || billToName, '220px')}</div>
-            <div style="margin-top:3px"><b>Address:</b> ${fill(shipAddr, '220px')}</div>
-            <div style="margin-top:3px"><b>GSTIN (if diff.):</b> ${fill(dn.client_gstin, '180px')}</div>
-            <div style="margin-top:3px"><b>State:</b> ${fill(dn.client_state, '100px')} &nbsp; <b>Code:</b> ${fill(dn.state_code || clientStateCode, '40px')}</div>
-            <div style="margin-top:3px"><b>Site Engineer / Contact:</b> ${fill(dn.client_phone, '180px')}</div>
-          </td>
-        </tr>
-      </table>`;
-      })()}
-      <table class="items">
-        <thead><tr><th style="width:30px">SL NO.</th><th>DESCRIPTION OF GOODS / SERVICES</th><th style="width:60px">HSN / SAC</th><th style="width:50px">QTY</th><th style="width:40px">UOM</th><th style="width:70px">RATE (₹)</th><th style="width:40px">DISC. %</th><th style="width:90px">AMOUNT (₹)</th></tr></thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-      <table class="totals">
-        <tr><td class="label">Sub Total (Taxable Value)</td><td class="val">₹ ${fmt(subtotal)}</td></tr>
-        ${cgstPct > 0 ? `<tr><td class="label">Add: CGST @ ${cgstPct} %</td><td class="val">₹ ${fmt(cgst)}</td></tr>` : ''}
-        ${sgstPct > 0 ? `<tr><td class="label">Add: SGST / UTGST @ ${sgstPct} %</td><td class="val">₹ ${fmt(sgst)}</td></tr>` : ''}
-        ${igstPct > 0 ? `<tr><td class="label">Add: IGST @ ${igstPct} %</td><td class="val">₹ ${fmt(igst)}</td></tr>` : ''}
-        <tr><td class="label">Add: Freight / Packing / Other Charges</td><td class="val">₹ ${fmt(freight)}</td></tr>
-        <tr><td class="label">Less: Round Off</td><td class="val">₹ ${fmt(roundOff)}</td></tr>
-        <tr><td class="label grand">GRAND TOTAL (₹)</td><td class="val grand">₹ ${fmt(grandTotal)}</td></tr>
-        ${(() => {
-          // MD 2026-06-15: keep the full BOQ rate/total, but show the amount
-          // payable now against delivery = Grand Total × Against-Delivery %.
-          const dpct = parseFloat(String(dn.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) || 0;
-          if (!dpct) return '';
-          return `<tr><td class="label" style="color:#7a1b1b;font-weight:bold">Payment Due (Against Delivery ${dpct}%) = Total × ${dpct}%</td><td class="val" style="color:#7a1b1b;font-weight:bold">₹ ${fmt(grandTotal * dpct / 100)}</td></tr>`;
-        })()}
-      </table>
-      <div style="margin-top:6px;font-size:11px;border:1px solid #e7d4d4;padding:5px 8px;"><b>Amount Chargeable (in words):</b> Rupees ${esc(numToWords(grandTotal))} Only</div>
-      <div style="display:flex;gap:8px;margin-top:6px;">
-        <div class="bank" style="flex:1">
-          <div class="hdr">Bank Details for Payment</div>
-          <div><b>Beneficiary:</b> SECURED ENGINEERS PVT. LTD.</div>
-          <div><b>Bank Name:</b> Punjab National Bank</div>
-          <div><b>Branch:</b> Sarabha Nagar, Ludhiana</div>
-          <div><b>A/c No.:</b> 02054011000748</div>
-          <div><b>IFSC Code:</b> PUNB0020510</div>
+      <div class="sb">
+        <div class="top">
+          <div class="brand"><div class="mono">SE</div><div><div class="cn">Secured Engineers Pvt. Ltd.</div><div class="tag">Electrical · HVAC · Fire Safety · Plumbing · Solar EPC</div></div></div>
+          <div class="orig"><b>ORIGINAL FOR RECIPIENT</b><br>GSTIN: 03AASCS7836D2Z3<br>PAN: AASCS7836D</div>
         </div>
-        <div class="terms" style="flex:1">
-          <div class="hdr">Terms &amp; Conditions</div>
-          <ol style="margin:0;padding-left:18px;line-height:1.6">
-            <li>Payment due within ______ days from invoice date.</li>
-            <li>Interest @ 18% p.a. shall be charged on overdue amounts.</li>
-            <li>Goods once sold will not be taken back / exchanged.</li>
-            <li>Subject to <b>LUDHIANA</b> jurisdiction only.</li>
-            <li>Cheque / DD to be drawn in favour of <b>"Secured Engineers Pvt. Ltd."</b></li>
-            <li>Please quote Invoice No. while making payment.</li>
+        <div class="invtitle">TAX INVOICE</div>
+        <div class="addr">HO: 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, Ludhiana, Punjab – 141003 &nbsp;|&nbsp; Noida: 91, Springboard, Sector 2, Noida (UP)</div>
+        <div class="addr" style="font-weight:700;color:#7a1b1b;margin-top:1px">PAN-INDIA · LUDHIANA | NOIDA | BANGALORE | MUMBAI</div>
+
+        <table class="meta" style="margin-top:7px">
+          <tr><td class="l">Invoice No.</td><td>${esc(docNo)}</td><td class="l">Invoice Date</td><td>${dispDate(dn.delivery_date)}</td><td class="l">Sales Order</td><td>${fill(dn.bb_lead_no)}</td></tr>
+          <tr><td class="l">Financial Yr</td><td>${esc(fyOf(dn.delivery_date))}</td><td class="l">Place of Supply</td><td>${placeOfSupply || fill('')}</td><td class="l">Reverse Charge</td><td>${dn.reverse_charge ? 'Yes' : 'No'}</td></tr>
+          <tr><td class="l">Client PO No.</td><td>${fill(dn.client_po_no)}</td><td class="l">Supply Type</td><td>${interState ? 'Inter-State (IGST)' : 'Intra-State (CGST + SGST)'}</td><td class="l">E-Way Bill</td><td>${esc(dn.e_way_bill_no || 'As applicable')}</td></tr>
+        </table>
+
+        <table class="parties" style="margin-top:7px">
+          <tr><td class="h">Bill To</td><td class="h">Ship To / Site</td></tr>
+          <tr>
+            <td>
+              <div><b>M/s ${fill(billToName)}</b></div>
+              <div style="margin-top:2px">${fill(billToAddr)}</div>
+              <div style="margin-top:2px"><b>GSTIN:</b> ${fill(dn.client_gstin)}</div>
+              <div><b>State:</b> ${fill(dn.client_state)} &nbsp; <b>Code:</b> ${fill(clientStateCode)}</div>
+              <div><b>Contact:</b> ${fill([dn.client_person_name, dn.client_phone].filter(Boolean).join(' · '))}</div>
+            </td>
+            <td>
+              <div><b>${fill(dn.site_name || billToName)} (Site)</b></div>
+              <div style="margin-top:2px">${fill(shipAddr)}</div>
+              <div style="margin-top:2px"><b>GSTIN:</b> ${fill(dn.client_gstin)}</div>
+              <div><b>State:</b> ${fill(dn.client_state)} &nbsp; <b>Code:</b> ${fill(dn.state_code || clientStateCode)}</div>
+              <div><b>Site Engineer:</b> ${fill(dn.client_phone)}</div>
+            </td>
+          </tr>
+        </table>
+
+        <table class="items">
+          <thead><tr><th style="width:26px">SL</th><th>Description of Goods &amp; Accessories</th><th style="width:52px">HSN</th><th style="width:44px">Qty</th><th style="width:40px">UOM</th><th style="width:74px">Rate (₹)</th><th style="width:90px">Amount (₹)</th></tr></thead>
+          <tbody>${sbRows}</tbody>
+        </table>
+
+        <div class="lower">
+          <div class="words">
+            <div class="k" style="margin-top:0">Amount Chargeable (in words)</div>
+            <div>${esc(rupeesWhole(grand))}</div>
+            <div class="k">${interState ? 'IGST' : 'CGST + SGST'} (in words)</div>
+            <div>${esc(rupeesPaise(taxTotal))}</div>
+            ${dpct ? `<div class="pod"><b style="color:#7a1b1b">Payable on Delivery</b><br>${dpct}% of basic value + 100% GST = ₹ ${fmt(payable)}</div>` : ''}
+          </div>
+          <table class="tot">
+            <tr><td class="lab">Sub Total (Taxable Value)</td><td class="v">₹ ${fmt(subtotal)}</td></tr>
+            ${cgstPct > 0 ? `<tr><td class="lab">Add: CGST @ ${cgstPct}%</td><td class="v">₹ ${fmt(cgst)}</td></tr>` : ''}
+            ${sgstPct > 0 ? `<tr><td class="lab">Add: SGST @ ${sgstPct}%</td><td class="v">₹ ${fmt(sgst)}</td></tr>` : ''}
+            ${igstPct > 0 ? `<tr><td class="lab">Add: IGST @ ${igstPct}%</td><td class="v">₹ ${fmt(igst)}</td></tr>` : ''}
+            <tr><td class="lab">Freight / Packing / Other</td><td class="v">₹ ${fmt(freight)}</td></tr>
+            <tr><td class="lab">Round Off</td><td class="v">${round < 0 ? '(–) ' : ''}₹ ${fmt(Math.abs(round))}</td></tr>
+            <tr class="grand"><td class="lab" style="color:#fff">Grand Total (₹)</td><td class="v">₹ ${fmt(grand)}</td></tr>
+            ${dpct ? `<tr class="podr"><td class="lab">Payable on Delivery (${dpct}% + GST)</td><td class="v">₹ ${fmt(payable)}</td></tr>` : ''}
+          </table>
+        </div>
+
+        <div class="cols">
+          <div class="box">
+            <div class="h">e-Invoice details (mandatory — turnover &gt; ₹5 Cr)</div>
+            <div>IRN: ____________________________________</div>
+            <div>Ack No.: ______________ &nbsp; Ack Date: ____________</div>
+            <div style="color:#777">Generate IRN + signed QR on the IRP before issuing.</div>
+          </div>
+          <div class="box">
+            <div class="h">Bank Details for Payment</div>
+            <div><b>Beneficiary:</b> Secured Engineers Pvt. Ltd.</div>
+            <div><b>Bank:</b> Punjab National Bank · Sarabha Nagar, Ludhiana</div>
+            <div><b>A/c No.:</b> 02054011000748 &nbsp; <b>IFSC:</b> PUNB0020510</div>
+          </div>
+        </div>
+
+        <div class="box" style="margin-top:7px">
+          <div class="h">Terms &amp; Conditions</div>
+          <ol style="margin:0;padding-left:16px;line-height:1.5">
+            <li>${dpct ? `${dpct}% of basic value + 100% GST due on delivery; balance per agreed terms.` : 'Payment per agreed terms.'}</li>
+            <li>Interest @ 18% p.a. on overdue amounts.</li>
+            <li>Goods once sold are not taken back / exchanged.</li>
+            <li>Subject to Ludhiana jurisdiction.</li>
+            <li>Cheque / DD in favour of "Secured Engineers Pvt. Ltd."; quote Invoice No. on payment.</li>
           </ol>
         </div>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:6px;">
-        <div class="signblk" style="flex:1">
-          <div class="hdr">Receiver's Acknowledgement</div>
-          <div style="font-size:10px;color:#444;">Received the above material / services in good condition.</div>
-          <div class="row"><div>Name, Signature &amp; Stamp with Date</div></div>
+
+        <div class="sign">
+          <div class="b"><div class="h">Receiver's Acknowledgement</div><div style="color:#555">Received the above goods / services in good condition.</div><div class="ln"></div><div class="cap">Name, Signature &amp; Stamp with Date</div></div>
+          <div class="b"><div class="h">For Secured Engineers Pvt. Ltd.</div><div class="ln"></div><div class="cap">Authorised Signatory</div></div>
         </div>
-        <div class="signblk" style="flex:1">
-          <div class="hdr">For Secured Engineers Pvt. Ltd.</div>
-          <div style="height:14px"></div>
-          <div class="row"><div>Authorised Signatory</div></div>
-        </div>
+
+        <div class="foot">This is a Computer-Generated Tax Invoice and is valid with the IRN / signed QR code. E. &amp; O.E. · Certified that the particulars given above are true and correct.</div>
       </div>
-      <div class="footnote">This is a Computer Generated Tax Invoice. &nbsp;|&nbsp; E. &amp; O.E. &nbsp;|&nbsp; Certified that the particulars given above are true and correct.</div>
     </body></html>`;
   }
 
