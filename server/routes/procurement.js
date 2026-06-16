@@ -4713,10 +4713,32 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     };
   })();
 
+  // On a material Supply sales bill the line scope must read "Supply of …".
+  // BOQ text is written for the FULL scope ("S/I/T & commisioning of …",
+  // "Supplying installing testing & commissioning of …"), which can't be billed
+  // on a goods invoice — so on a sales bill we strip the Installation / Testing /
+  // Commissioning scope and lead with "Supply of" (mam 2026-06-16, auto by bill
+  // type). Installation/DPR bills don't print through here, so they keep their
+  // full wording. Lines with nothing to strip are left untouched.
+  const toSupplyDescription = (raw) => {
+    const s = String(raw == null ? '' : raw).trim();
+    if (!s) return s;
+    // The scope prefix sits before the FIRST " of " (e.g. "S/I/T & commisioning of").
+    const m = s.match(/^(.*?)\bof\b\s+/i);
+    if (!m) return s;
+    const prefix = m[1];
+    const hasScope = /\binstall|\btest|commiss?ion/i.test(prefix)        // install / testing / commission(ing)
+      || /\bs\s*[\/.\-]?\s*i\s*[\/.\-]?\s*t\b/i.test(prefix)              // S/I/T abbreviation
+      || /\bsitc\b/i.test(prefix);                                       // SITC abbreviation
+    if (!hasScope) return s;                                             // already supply-only — leave as-is
+    return ('Supply of ' + s.slice(m[0].length)).replace(/\s+/g, ' ').trim();
+  };
+
   // Build items rows (pad to 8 like the template)
   const padCount = Math.max(0, 8 - items.length);
   const rowsHtml = items.map((it, idx) => {
-    const desc = [it.description, it.specification, it.size].filter(Boolean).join(' / ');
+    const rawDesc = [it.description, it.specification, it.size].filter(Boolean).join(' / ');
+    const desc = isSalesBill ? toSupplyDescription(rawDesc) : rawDesc;
     const qty = +it.quantity || 0;
     const rate = +it.rate || 0;
     const discPct = +it.disc_pct || 0;
@@ -5004,11 +5026,10 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         <div class="bank" style="flex:1">
           <div class="hdr">Bank Details for Payment</div>
           <div><b>Beneficiary:</b> SECURED ENGINEERS PVT. LTD.</div>
-          <div><b>Bank Name:</b> __________________________</div>
-          <div><b>Branch:</b> ______________________________</div>
-          <div><b>A/c No.:</b> _____________________________</div>
-          <div><b>IFSC Code:</b> ___________________________</div>
-          <div><b>UPI ID:</b> ______________________________</div>
+          <div><b>Bank Name:</b> Punjab National Bank</div>
+          <div><b>Branch:</b> Sarabha Nagar, Ludhiana</div>
+          <div><b>A/c No.:</b> 02054011000748</div>
+          <div><b>IFSC Code:</b> PUNB0020510</div>
         </div>
         <div class="terms" style="flex:1">
           <div class="hdr">Terms &amp; Conditions</div>
