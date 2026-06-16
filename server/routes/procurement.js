@@ -312,11 +312,15 @@ router.post('/vendors', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, vendor_code: code });
 });
 
-// Bulk vendor import (mam 2026-06-16: "i need vendor i can add bulk with full
-// details in excel"). Mirrors the single POST — auto-codes blank codes, skips
-// duplicates (same phone OR same GSTIN as an existing vendor, or another row in
-// the same upload), and accepts the full vendor detail set. Excel users save
-// the sheet as CSV; the client parses it (quote-aware) and posts the rows here.
+// Bulk vendor upsert (mam 2026-06-16: "add bulk with full details in excel" +
+// "bulk vendor details update"). One import does BOTH:
+//   - matches an EXISTING vendor by Vendor Code (exact), else phone, else GSTIN
+//     → UPDATES it, overwriting ONLY the columns the sheet actually fills in.
+//     Blank cells are left untouched, so a partial sheet enriches a vendor
+//     without wiping the rest of its details.
+//   - no match → INSERTS a new vendor (auto-codes a blank Vendor Code).
+// Excel users save the sheet as CSV; the client parses it (quote-aware) and
+// posts the rows here.
 router.post('/vendors/bulk', (req, res) => {
   const rows = Array.isArray(req.body?.vendors) ? req.body.vendors : [];
   if (!rows.length) return res.status(400).json({ error: 'No vendors to import' });
@@ -329,44 +333,70 @@ router.post('/vendors/bulk', (req, res) => {
     return Math.max(0, Math.min(10, n));
   };
   const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
+  const filled = (v) => v !== undefined && v !== null && String(v).trim() !== '';
 
-  // Pre-load existing phone / GST so we can skip duplicates without a per-row
-  // round-trip, and dedupe within the uploaded batch itself.
-  const existingPhones = new Set(db.prepare(`SELECT phone FROM vendors WHERE phone IS NOT NULL AND TRIM(phone)<>''`).all().map(r => norm(r.phone)));
-  const existingGst = new Set(db.prepare(`SELECT gst_number FROM vendors WHERE gst_number IS NOT NULL AND TRIM(gst_number)<>''`).all().map(r => norm(r.gst_number)));
+  // Lookup maps so we can resolve each row to an existing vendor id without a
+  // per-row query: by code, by phone, by GSTIN.
+  const allVendors = db.prepare(`SELECT id, vendor_code, phone, gst_number FROM vendors`).all();
+  const byCode = new Map(), byPhone = new Map(), byGst = new Map();
+  for (const v of allVendors) {
+    if (filled(v.vendor_code)) byCode.set(norm(v.vendor_code), v.id);
+    if (filled(v.phone)) byPhone.set(norm(v.phone), v.id);
+    if (filled(v.gst_number)) byGst.set(norm(v.gst_number), v.id);
+  }
 
   const insert = db.prepare('INSERT OR IGNORE INTO vendors (vendor_code,name,firm_name,contact_person,phone,email,district,state,address,category,deals_in,authorized_dealer,type,turnover,team_size,payment_terms,credit_days,gst_number,source,category_wise,sub_category,existing_vendor,rating,makes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
 
-  let added = 0;
+  // Columns the sheet can fill. makes/rating are normalised separately.
+  const PLAIN = ['name','firm_name','contact_person','phone','email','district','state','address','category','deals_in','authorized_dealer','type','turnover','team_size','payment_terms','credit_days','gst_number','source','category_wise','sub_category','existing_vendor'];
+
+  let added = 0, updated = 0;
   const skipped = [];
   const errors = [];
   const run = db.transaction(() => {
     for (let i = 0; i < rows.length; i++) {
       const b = rows[i] || {};
       const rowNo = i + 1;
-      if (!b.name || !String(b.name).trim()) { errors.push(`Row ${rowNo}: Vendor name required`); continue; }
-      const phoneKey = norm(b.phone);
-      const gstKey = norm(b.gst_number);
-      if (phoneKey && existingPhones.has(phoneKey)) { skipped.push(`Row ${rowNo}: ${b.name} — phone ${b.phone} already exists`); continue; }
-      if (gstKey && existingGst.has(gstKey)) { skipped.push(`Row ${rowNo}: ${b.name} — GSTIN ${b.gst_number} already exists`); continue; }
+      if (!filled(b.name)) { errors.push(`Row ${rowNo}: Vendor name required`); continue; }
+      const codeKey = norm(b.vendor_code), phoneKey = norm(b.phone), gstKey = norm(b.gst_number);
+      const existingId =
+        (codeKey && byCode.get(codeKey)) ||
+        (phoneKey && byPhone.get(phoneKey)) ||
+        (gstKey && byGst.get(gstKey)) || null;
       try {
-        let code = b.vendor_code && String(b.vendor_code).trim()
-          ? String(b.vendor_code).trim()
-          : nextSequence(db, 'vendors', 'vendor_code', 'SEVC', { startFrom: 1999, pad: 4 });
-        insert.run(
-          code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state,
-          b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size,
-          b.payment_terms, b.credit_days, b.gst_number, b.source, b.category_wise, b.sub_category,
-          b.existing_vendor, clampRating(b.rating), normaliseMakes(b.makes),
-        );
-        added++;
-        if (phoneKey) existingPhones.add(phoneKey);
-        if (gstKey) existingGst.add(gstKey);
+        if (existingId) {
+          // UPDATE — only the columns the sheet actually fills in.
+          const sets = [], vals = [];
+          for (const k of PLAIN) { if (filled(b[k])) { sets.push(`${k}=?`); vals.push(String(b[k]).trim()); } }
+          if (Array.isArray(b.makes) ? b.makes.length : filled(b.makes)) { sets.push('makes=?'); vals.push(normaliseMakes(b.makes)); }
+          if (filled(b.rating)) { sets.push('rating=?'); vals.push(clampRating(b.rating)); }
+          if (!sets.length) { skipped.push(`Row ${rowNo}: ${b.name} — nothing to update (all cells blank)`); continue; }
+          db.prepare(`UPDATE vendors SET ${sets.join(',')} WHERE id=?`).run(...vals, existingId);
+          updated++;
+          // Keep maps fresh so later rows can match newly-set phone/GST.
+          if (phoneKey) byPhone.set(phoneKey, existingId);
+          if (gstKey) byGst.set(gstKey, existingId);
+        } else {
+          const code = filled(b.vendor_code)
+            ? String(b.vendor_code).trim()
+            : nextSequence(db, 'vendors', 'vendor_code', 'SEVC', { startFrom: 1999, pad: 4 });
+          const r = insert.run(
+            code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state,
+            b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size,
+            b.payment_terms, b.credit_days, b.gst_number, b.source, b.category_wise, b.sub_category,
+            b.existing_vendor, clampRating(b.rating), normaliseMakes(b.makes),
+          );
+          added++;
+          const newId = r.lastInsertRowid;
+          if (codeKey) byCode.set(codeKey, newId);
+          if (phoneKey) byPhone.set(phoneKey, newId);
+          if (gstKey) byGst.set(gstKey, newId);
+        }
       } catch (err) { errors.push(`Row ${rowNo}: ${err.message}`); }
     }
   });
   run();
-  res.json({ added, skipped, errors, total: rows.length });
+  res.json({ added, updated, skipped, errors, total: rows.length });
 });
 
 router.put('/vendors/:id', (req, res) => {

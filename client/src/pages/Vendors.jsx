@@ -180,8 +180,8 @@ export default function Vendors() {
     setImporting(true);
     try {
       const r = await api.post('/procurement/vendors/bulk', { vendors: bulkPreview });
-      const { added = 0, skipped = [], errors = [] } = r.data || {};
-      toast.success(`Added ${added} vendor${added === 1 ? '' : 's'}${skipped.length ? ` · ${skipped.length} skipped` : ''}${errors.length ? ` · ${errors.length} error(s)` : ''}`);
+      const { added = 0, updated = 0, skipped = [], errors = [] } = r.data || {};
+      toast.success(`${added} added · ${updated} updated${skipped.length ? ` · ${skipped.length} skipped` : ''}${errors.length ? ` · ${errors.length} error(s)` : ''}`);
       if (skipped.length || errors.length) console.warn('Vendor bulk import:', { skipped, errors });
       setBulkModal(false); setBulkText(''); setBulkPreview([]); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Import failed'); }
@@ -493,10 +493,14 @@ export default function Vendors() {
       <Modal isOpen={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Import Vendors" wide>
         <div className="space-y-4">
           <div className="bg-red-50 p-3 rounded-lg text-sm text-red-700">
-            <p className="font-semibold mb-1">How to use:</p>
-            <p className="text-[12px]">In Excel, fill one vendor per row, then <b>Save As → CSV</b> and upload it here (or paste the rows below). Only <b>Vendor Name</b> is required; fill the rest for full details.</p>
+            <p className="font-semibold mb-1">Add new vendors OR update existing ones:</p>
+            <p className="text-[12px]">In Excel, fill one vendor per row, then <b>Save As → CSV</b> and upload it here (or paste the rows below). Only <b>Vendor Name</b> is required.</p>
+            <ul className="text-[11px] mt-1 list-disc pl-4 space-y-0.5">
+              <li><b>To update an existing vendor</b>, put its <b>Vendor Code</b> (or its existing phone / GSTIN) in the row — only the cells you fill in get updated, blanks are left as-is.</li>
+              <li><b>To add a new vendor</b>, leave Vendor Code blank — a code is generated automatically.</li>
+              <li>Separate multiple Make/Brand values with a semicolon (e.g. <code>Havells; Agni</code>).</li>
+            </ul>
             <p className="font-mono text-[10px] mt-2 break-words">{BULK_COLS.map(([l]) => l).join(', ')}</p>
-            <p className="text-[11px] mt-1">Separate multiple Make/Brand values with a semicolon (e.g. <code>Havells; Agni</code>). Vendors with a phone or GSTIN that already exists are skipped automatically.</p>
           </div>
           <button onClick={downloadVendorTemplate} className="btn btn-secondary text-sm flex items-center gap-2"><FiDownload size={14} /> Download Template</button>
           <div>
