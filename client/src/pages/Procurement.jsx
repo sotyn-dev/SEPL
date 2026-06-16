@@ -1901,6 +1901,12 @@ export default function Procurement() {
             const rejected    = byStatus('rejected');
             const poSent      = byStatus('po_sent');
             const filterActive = !!(indFilterFrom || indFilterTo || indSearch.trim());
+            // Billable booked once an indent clears approval (mam 2026-06-16):
+            // total BOQ sale value of every indent that has PASSED approval —
+            // approved or anything beyond it (PO sent / dispatched / received).
+            // Sums the same billable_amount shown in the list's Billable column.
+            const billableSum = (arr) => arr.reduce((s, i) => s + (+i.billable_amount || 0), 0);
+            const postApproval = kpiScope.filter(i => ['approved', 'po_sent', 'dispatched', 'received'].includes(i.status));
             // PO Generate + Payment Required (mam 2026-06-12) — sourced from
             // the Vendor PO list, not the indents, so the count matches the
             // "View by PO" tab exactly.  Payment Required = POs still pending
@@ -1945,11 +1951,15 @@ export default function Procurement() {
                     2026-06-12): 2-up on phones, 4-up on tablets, 7-up on
                     desktop.  PO Generate + Payment Required jump to their
                     own tabs on click instead of filtering the indent list. */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
                   {tile('Total Indents',     kpiScope.length,   sum(kpiScope),   { border: 'border-gray-300',    bg: 'bg-gray-50',     text: 'text-gray-700',    ring: 'ring-gray-400'    }, 'all')}
                   {tile('Pending L1',        submitted.length,  sum(submitted),  { border: 'border-amber-300',   bg: 'bg-amber-50',    text: 'text-amber-700',   ring: 'ring-amber-400'   }, 'submitted')}
                   {tile('Pending L2',        l1Approved.length, sum(l1Approved), { border: 'border-purple-300',  bg: 'bg-purple-50',   text: 'text-purple-700',  ring: 'ring-purple-400'  }, 'l1_approved')}
                   {tile('Approved',          approved.length,   sum(approved),   { border: 'border-emerald-300', bg: 'bg-emerald-50',  text: 'text-emerald-700', ring: 'ring-emerald-400' }, 'approved')}
+                  {/* Billable · Approved (mam 2026-06-16): BOQ sale value booked
+                      once indents clear approval. Clicking jumps to the Approved
+                      bucket — closest single-status filter to "post-approval". */}
+                  {tile('Billable · Approved', postApproval.length, billableSum(postApproval), { border: 'border-indigo-300', bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'ring-indigo-400' }, 'approved')}
                   {tile('Rejected',          rejected.length,   sum(rejected),   { border: 'border-red-300',     bg: 'bg-red-50',      text: 'text-red-700',     ring: 'ring-red-400'     }, 'rejected')}
                   {tile('PO Generate',       poGenCount,        poGenAmount,     { border: 'border-blue-300',    bg: 'bg-blue-50',     text: 'text-blue-700',    ring: 'ring-blue-400'    }, null, () => { setTab('vendorpo'); setVpoSubTab('list'); })}
                   {tile('Payment Required',  payReqCount,       payReqAmount,    { border: 'border-rose-300',    bg: 'bg-rose-50',     text: 'text-rose-700',    ring: 'ring-rose-400'    }, null, () => setTab('payment'))}
