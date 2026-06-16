@@ -30,7 +30,7 @@ const DEPT_LABELS = { FF: 'Fire Fighting', LV: 'Low Voltage', ELE: 'Electrical',
 //          against current_price so renting can't cost ≥ buying outright.
 const TYPES = ['PO', 'FOC', 'RGP', 'RENTAL'];
 const UOMS = ['PCS', 'MTR', 'KG', 'SQMM', 'PACKET', 'SET', 'LOT', 'PAIR', 'RFT', 'LTR', 'BOX'];
-const SOURCE_TYPES = ['PO', 'Quote', 'Manual', 'Online'];
+const SOURCE_TYPES = ['PO', 'Quote', 'Manual', 'Online', 'Bill'];
 
 const emptyForm = {
   item_code: '', department: 'FF', item_name: '', specification: '', size: '',
@@ -656,7 +656,7 @@ export default function ItemMaster() {
           <div className="bg-red-50 p-3 rounded-lg text-sm text-red-700">
             <p className="font-semibold mb-1">CSV columns (in order):</p>
             <p className="font-mono text-[11px]">Item Code, Department, Item Name, Specification, Size, UOM, GST, Type, Make, Rate, Vendor Name, Source Type, Bill/PO Number, Bill/PO Date</p>
-            <p className="text-[11px] mt-1">Vendor Name is matched against the Vendors Master (case-insensitive). Source Type: PO / Quote / Manual / Online.</p>
+            <p className="text-[11px] mt-1">Vendor Name is matched against the Vendors Master (case-insensitive). Source Type: PO / Quote / Manual / Online / Bill.</p>
           </div>
           <button onClick={downloadTemplate} className="btn btn-secondary text-sm flex items-center gap-2"><FiDownload size={14} /> Download Template</button>
           <div><label className="label">Upload CSV</label><input type="file" accept=".csv" onChange={handleFile} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100" /></div>
