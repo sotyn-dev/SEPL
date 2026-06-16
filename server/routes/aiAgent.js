@@ -473,11 +473,78 @@ function safeRunQuery(db, sql) {
   }
 }
 
+// ── Google Gemini path (mam 2026-06-15: wants a FREE AI key) ───────────────
+// Runs the same agent loop (read the ERP DB + pull module guides) against
+// Gemini's OpenAI-compatible endpoint, so the assistant works on Gemini's free
+// tier. No web_search (Gemini has no built-in one) — DB + guides only.
+async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, db }) {
+  if (typeof fetch !== 'function') {
+    const e = new Error('This server\'s Node is too old for Gemini (needs Node 18+).'); e.status = 500; throw e;
+  }
+  const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+  const tools = [
+    { type: 'function', function: {
+      name: 'query_database',
+      description: 'Run a single read-only SQL query (SELECT or WITH only) against the ERP SQLite DB. Returns rows as JSON, max 500 rows.',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: 'A single SELECT/WITH query. No semicolons, no DDL/DML.' } }, required: ['query'] },
+    } },
+    { type: 'function', function: {
+      name: 'get_module_guide',
+      description: 'Look up the official step-by-step guide for an ERP module. Use for any "how to" / training / workflow question.',
+      parameters: { type: 'object', properties: { module: { type: 'string', enum: GUIDE_KEYS, description: `Module key — one of: ${GUIDE_KEYS.join(', ')}.` } }, required: ['module'] },
+    } },
+  ];
+  const messages = [{ role: 'system', content: systemPrompt }];
+  for (const m of history) {
+    if (!m || !m.role || !m.content) continue;
+    if (m.role !== 'user' && m.role !== 'assistant') continue;
+    messages.push({ role: m.role, content: String(m.content).slice(0, 4000) });
+  }
+  messages.push({ role: 'user', content: question });
+
+  const sqlRuns = [];
+  let answer = '';
+  for (let iter = 0; iter < MAX_TOOL_ITER; iter++) {
+    const r = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, tools, max_tokens: 4000, temperature: 0.2 }),
+    });
+    if (!r.ok) {
+      const txt = await r.text().catch(() => '');
+      const e = new Error(txt || `Gemini HTTP ${r.status}`); e.status = r.status; throw e;
+    }
+    const data = await r.json();
+    const msg = data.choices?.[0]?.message;
+    if (!msg) break;
+    messages.push(msg);
+    const calls = msg.tool_calls || [];
+    if (!calls.length) { answer = msg.content || ''; break; }
+    for (const call of calls) {
+      const fn = call.function?.name;
+      let args = {}; try { args = JSON.parse(call.function?.arguments || '{}'); } catch (_) {}
+      let content;
+      if (fn === 'query_database') {
+        const result = safeRunQuery(db, args.query || '');
+        sqlRuns.push({ query: args.query, row_count: result.row_count ?? 0, error: result.error || null });
+        content = JSON.stringify(result).slice(0, 50000);
+      } else if (fn === 'get_module_guide') {
+        const guide = MODULE_GUIDES[String(args.module || '').toLowerCase().trim()];
+        content = JSON.stringify(guide || { error: `Unknown module. Available: ${GUIDE_KEYS.join(', ')}` }).slice(0, 50000);
+      } else {
+        content = JSON.stringify({ error: `unknown tool ${fn}` });
+      }
+      messages.push({ role: 'tool', tool_call_id: call.id, content });
+    }
+  }
+  return { answer: answer || '(no answer)', sqlRuns };
+}
+
 router.post('/ask', requirePermission('ai_agent', 'view'), async (req, res) => {
   const apiKey = getSetting('ai_api_key');
   if (!apiKey) {
     return res.status(400).json({
-      error: 'AI Agent not configured. Ask an admin to paste an Anthropic API key in Admin → AI Settings.',
+      error: 'AI Agent not configured. Ask an admin to paste an API key in Admin → AI Settings.',
     });
   }
   const question = String(req.body?.question || '').trim();
@@ -638,6 +705,25 @@ Guidance:
     messages.push({ role: m.role, content: String(m.content).slice(0, 4000) });
   }
   messages.push({ role: 'user', content: question });
+
+  // ── Provider fork: Google Gemini (free) vs Anthropic ─────────────────────
+  const provider = (getSetting('ai_provider') || 'anthropic').toLowerCase();
+  if (provider === 'gemini' || provider === 'google') {
+    const gStart = Date.now();
+    let gmodel = getSetting('ai_model');
+    if (!gmodel || !/gemini/i.test(gmodel)) gmodel = 'gemini-2.0-flash';
+    try {
+      const { answer, sqlRuns } = await runGeminiAgent({ apiKey, model: gmodel, systemPrompt, history: priorHistory, question, db });
+      console.log(`[AI Agent /ask] ok ${gmodel} (gemini) elapsed=${Date.now() - gStart}ms sqlRuns=${sqlRuns.length}`);
+      return sendJson(200, { answer, sql_runs: sqlRuns, model: gmodel });
+    } catch (e) {
+      console.error('[AI Agent /ask] Gemini call failed:', e.status, e.message);
+      let hint = '';
+      if (e.status === 401 || e.status === 403) hint = ' Check the Gemini API key in Admin → AI Settings.';
+      else if (e.status === 429) hint = ' Gemini free-tier rate limit hit — wait a few seconds and retry.';
+      return sendJson(200, { error: `AI request failed (Gemini): ${String(e.message).slice(0, 300)}${hint}` });
+    }
+  }
 
   // supportsAdaptive declared earlier; reused for both adaptive thinking
   // params here and the conditional web_search tool above.
