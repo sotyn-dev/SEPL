@@ -5134,7 +5134,10 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       .print-btn { background:#1e40af; }
       .sb .top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #1e40af; padding-bottom:8px; }
       .sb .brand { display:flex; align-items:center; gap:10px; }
-      .sb .mono { width:42px; height:42px; border:2px solid #1e40af; color:#1e40af; font-weight:800; font-size:16px; display:flex; align-items:center; justify-content:center; border-radius:6px; letter-spacing:-1px; }
+      /* Brand badge — filled royal-blue "SE" mark recreated as vector
+         CSS (mam 2026-06-16) so it prints razor-sharp in the html2canvas
+         PDF with no external image / CORS dependency. */
+      .sb .mono { width:48px; height:48px; background:#1e40af; color:#fff; font-weight:900; font-style:italic; font-size:23px; display:flex; align-items:center; justify-content:center; border-radius:11px; letter-spacing:-2px; box-shadow:0 1px 3px rgba(30,64,175,.35); }
       .sb .cn { font-size:18px; font-weight:800; color:#1e40af; line-height:1.1; }
       .sb .tag { font-size:8px; letter-spacing:1px; color:#555; text-transform:uppercase; margin-top:2px; }
       .sb .orig { text-align:right; font-size:9px; color:#444; line-height:1.5; }
