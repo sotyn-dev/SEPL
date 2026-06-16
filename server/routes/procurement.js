@@ -828,47 +828,78 @@ router.get('/indents', (req, res) => {
   }
 
   // ── Billable + Delivery-Bill preview (mam 2026-06-16) ───────────────
-  // Billable = Σ (BOQ item rate × indent qty) per indent, where the BOQ
-  // rate is the CLIENT SALE rate from the priced BOQ (po_items) — matched
-  // by po_item link first, then description — NOT the internal master cost.
-  // Delivery Bill = Billable × the order's Against-Delivery % (the slice
-  // invoiceable on delivery, mirroring the Sales Bill: "boq rate × against
-  // delivery %").  Both fall back to 0 → UI shows "—" when no priced BOQ
-  // rate or delivery term exists.  po_items are cached per Business Book so
-  // we hit the DB once per order, not once per indent.
-  const bbByIndent = new Map();        // indent.id → business_book_id
-  const pctByIndent = new Map();       // indent.id → against-delivery %
-  for (const i of indents) {
-    if (i.business_book_id) bbByIndent.set(i.id, i.business_book_id);
-    pctByIndent.set(i.id, parseFloat(String(i.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) || 0);
+  // Billable = Σ (BOQ item rate × indent qty). The BOQ rate is the CLIENT
+  // SALE rate from the priced BOQ (po_items), resolved EXACTLY like the
+  // Sales Bill: the line's po_item link first, then a description match
+  // within the same order's BOQ. We deliberately DON'T require the indent
+  // to have a planning→Business Book link — in practice most indents reach
+  // their BOQ purely through indent_items.po_item_id (planning_id is often
+  // unset), so keying off that link directly is what makes the numbers
+  // appear. Delivery Bill = Billable × the order's Against-Delivery %.
+  // Both fall back to 0 → UI shows "—" when the BOQ rate or % is missing.
+
+  // Global po_item lookup: id → { rate, business_book }. One pass, reused
+  // for every indent so we never query per line.
+  const poItemById = new Map();
+  for (const p of db.prepare('SELECT id, business_book_id, rate FROM po_items').all()) {
+    poItemById.set(p.id, { rate: +p.rate || 0, bb: p.business_book_id });
   }
-  const bbRateCache = new Map();       // bbId → { byId:Map, byDesc:Map }
-  const bbRates = (bbId) => {
-    if (bbRateCache.has(bbId)) return bbRateCache.get(bbId);
-    const byId = new Map(), byDesc = new Map();
-    for (const it of db.prepare('SELECT id, description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
-      byId.set(it.id, +it.rate || 0);
-      if (it.description) byDesc.set(String(it.description).toLowerCase().trim(), +it.rate || 0);
+  // Lazy per-Business-Book description→rate map (the fallback the Sales
+  // Bill uses when a line has no usable po_item rate) — only priced rows.
+  const bbDescCache = new Map();
+  const bbDescMap = (bbId) => {
+    if (bbDescCache.has(bbId)) return bbDescCache.get(bbId);
+    const m = new Map();
+    for (const p of db.prepare('SELECT description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
+      if (p.description && +p.rate > 0) m.set(String(p.description).toLowerCase().trim(), +p.rate || 0);
     }
-    const data = { byId, byDesc };
-    bbRateCache.set(bbId, data);
-    return data;
+    bbDescCache.set(bbId, m);
+    return m;
   };
+  // Lazy Business-Book against-delivery % (used when the planning join
+  // didn't carry the term — e.g. the bb was inferred from a po_item).
+  const bbPctCache = new Map();
+  const bbPct = (bbId) => {
+    if (bbPctCache.has(bbId)) return bbPctCache.get(bbId);
+    const row = db.prepare('SELECT payment_against_delivery FROM business_book WHERE id=?').get(bbId);
+    const pct = parseFloat(String((row && row.payment_against_delivery) || '').replace(/[^0-9.]/g, '')) || 0;
+    bbPctCache.set(bbId, pct);
+    return pct;
+  };
+  // Planning-derived Business Book + % per indent (primary, from the join).
+  const planBbByIndent = new Map();
+  const planPctByIndent = new Map();
+  for (const i of indents) {
+    if (i.business_book_id) planBbByIndent.set(i.id, i.business_book_id);
+    planPctByIndent.set(i.id, parseFloat(String(i.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) || 0);
+  }
   const billableByIndent = new Map();
   const deliveryByIndent = new Map();
+  const pctByIndent = new Map();
   for (const [indentId, its] of itemsByIndent) {
-    const bbId = bbByIndent.get(indentId);
-    if (!bbId) continue;
-    const { byId, byDesc } = bbRates(bbId);
+    // Resolve the order's Business Book: planning link first, else infer
+    // from the first line that carries a po_item link.
+    let bbId = planBbByIndent.get(indentId) || null;
+    if (!bbId) {
+      for (const it of its) {
+        const po = it.po_item_id != null ? poItemById.get(it.po_item_id) : null;
+        if (po && po.bb) { bbId = po.bb; break; }
+      }
+    }
+    const descMap = bbId ? bbDescMap(bbId) : null;
     let billable = 0;
     for (const it of its) {
-      let boq = 0;
-      if (it.po_item_id != null && byId.has(it.po_item_id)) boq = byId.get(it.po_item_id);
-      if (!boq) boq = byDesc.get(String(it.description || '').toLowerCase().trim()) || 0;
-      billable += boq * (+it.quantity || 0);
+      let rate = 0;
+      const po = it.po_item_id != null ? poItemById.get(it.po_item_id) : null;
+      if (po && po.rate > 0) rate = po.rate;
+      if (!rate && descMap) rate = descMap.get(String(it.description || '').toLowerCase().trim()) || 0;
+      billable += rate * (+it.quantity || 0);
     }
-    const pct = pctByIndent.get(indentId) || 0;
+    // Against-delivery %: planning value first, else the resolved bb's.
+    let pct = planPctByIndent.get(indentId) || 0;
+    if (!pct && bbId) pct = bbPct(bbId);
     billableByIndent.set(indentId, billable);
+    pctByIndent.set(indentId, pct);
     deliveryByIndent.set(indentId, pct > 0 ? billable * pct / 100 : 0);
   }
 
