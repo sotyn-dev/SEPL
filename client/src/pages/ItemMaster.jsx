@@ -127,6 +127,12 @@ export default function ItemMaster() {
     if (!String(form.gst || '').trim()) missing.push('GST');
     if (!String(form.make || '').trim()) missing.push('Make');
     if (form.current_price === '' || form.current_price == null) missing.push('Rate');
+    // Full pricing traceability (mam 2026-06-15): every rate must carry its
+    // source — Vendor, Source Type, Bill/PO Number, Bill/PO Date.
+    if (!form.vendor_id) missing.push('Vendor');
+    if (!String(form.source_type || '').trim()) missing.push('Source Type');
+    if (!String(form.bill_po_number || '').trim()) missing.push('Bill/PO Number');
+    if (!String(form.bill_po_date || '').trim()) missing.push('Bill/PO Date');
     if (missing.length) { toast.error(`Required: ${missing.join(', ')}`); return; }
     try {
       const payload = {
@@ -447,7 +453,7 @@ export default function ItemMaster() {
                   on save. Number() also strips a leading 0 (018 → 18). */}
               <div><label className="label">Rate (₹) *</label><input className="input" type="number" min="0" step="0.01" value={form.current_price ?? ''} onChange={e => F('current_price', e.target.value === '' ? '' : Number(e.target.value))} /></div>
               <div>
-                <label className="label">Vendor (link)</label>
+                <label className="label">Vendor (link) *</label>
                 <SearchableSelect
                   options={vendors.map(v => ({ id: v.id, label: v.name, ...v }))}
                   value={form.vendor_id || null}
@@ -457,13 +463,13 @@ export default function ItemMaster() {
                   onChange={v => F('vendor_id', v?.id || '')}
                 />
               </div>
-              <div><label className="label">Source Type</label>
+              <div><label className="label">Source Type *</label>
                 <select className="select" value={form.source_type || 'Manual'} onChange={e => F('source_type', e.target.value)}>
                   {SOURCE_TYPES.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
-              <div><label className="label">Bill / PO Number</label><input className="input" value={form.bill_po_number || ''} onChange={e => F('bill_po_number', e.target.value)} placeholder="e.g. SEPL/PO/2026/042" /></div>
-              <div><label className="label">Bill / PO Date</label><input className="input" type="date" value={form.bill_po_date || ''} onChange={e => F('bill_po_date', e.target.value)} /></div>
+              <div><label className="label">Bill / PO Number *</label><input className="input" value={form.bill_po_number || ''} onChange={e => F('bill_po_number', e.target.value)} placeholder="e.g. SEPL/PO/2026/042" /></div>
+              <div><label className="label">Bill / PO Date *</label><input className="input" type="date" value={form.bill_po_date || ''} onChange={e => F('bill_po_date', e.target.value)} /></div>
               {modal === 'edit' && (
                 <div className="text-[11px] text-gray-500 italic flex flex-col justify-end pb-1">
                   {form.priced_at && <div>Last captured: {String(form.priced_at).replace('T', ' ').slice(0, 16)}</div>}
