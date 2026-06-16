@@ -9,6 +9,7 @@ import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiTruck, FiDownload, FiUplo
 import { exportCsv } from '../utils/exportCsv';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 
+const PAGE_SIZE = 50;  // vendors per page — keeps the list short instead of one 654-row scroll
 const CATEGORIES = ['FF', 'ELE', 'LV', 'Solar', 'HVAC', 'Plumbing', 'INTERIOR', 'OTHER'];
 const TYPES = ['Distributor', 'Trader', 'Manufacture', 'Direct Company', 'Stockist'];
 const CAT_COLORS = { FF: 'bg-red-100 text-red-700', ELE: 'bg-amber-100 text-amber-700', LV: 'bg-red-100 text-red-700', Solar: 'bg-emerald-100 text-emerald-700', HVAC: 'bg-cyan-100 text-cyan-700', Plumbing: 'bg-blue-100 text-blue-700', INTERIOR: 'bg-purple-100 text-purple-700' };
@@ -52,6 +53,7 @@ export default function Vendors() {
   const [viewData, setViewData] = useState(null);
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('');
+  const [page, setPage] = useState(0);  // 0-based; client-side paginator over the filtered list
   // Bulk import (mam 2026-06-16): add many vendors at once from an Excel sheet
   // saved as CSV. Same flow as the Item Master bulk import.
   const [bulkModal, setBulkModal] = useState(false);
@@ -194,6 +196,14 @@ export default function Vendors() {
     return true;
   });
 
+  // Paginate the filtered list so the page shows PAGE_SIZE rows at a time
+  // instead of all 654 (mam 2026-06-16: "i need to scroll very down").
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const paged = filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+  // Snap back to page 1 whenever the search / category filter changes.
+  useEffect(() => { setPage(0); }, [search, filterCat]);
+
   // Category counts
   const catCounts = {};
   vendors.forEach(v => { if (v.category) catCounts[v.category] = (catCounts[v.category] || 0) + 1; });
@@ -225,7 +235,9 @@ export default function Vendors() {
             {canCreate('vendors') && <button onClick={() => { setEditing(null); setForm({ rating: 2 }); setModal('vendor'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15} /> Add Vendor</button>}
           </div>
 
-          <p className="text-sm text-gray-500">Showing {filtered.length} vendors</p>
+          <p className="text-sm text-gray-500">
+            Showing {filtered.length ? safePage * PAGE_SIZE + 1 : 0}–{Math.min(filtered.length, (safePage + 1) * PAGE_SIZE)} of {filtered.length} vendors
+          </p>
 
           <div className="card p-0 overflow-x-auto"><table className="min-w-[1000px] text-xs freeze-head">
             <thead><tr className="bg-gray-50">
@@ -233,7 +245,7 @@ export default function Vendors() {
               <th className="px-2 py-2 text-left">Deals In</th><th className="px-2 py-2">Type</th><th className="px-2 py-2 text-left">District</th>
               <th className="px-2 py-2">Phone</th><th className="px-2 py-2">Payment</th><th className="px-2 py-2">Credit</th><th className="px-2 py-2">Actions</th>
             </tr></thead>
-            <tbody>{filtered.map(v => (
+            <tbody>{paged.map(v => (
               <tr key={v.id} className="border-b hover:bg-red-50/30">
                 <td className="px-2 py-2 font-mono text-[10px] text-red-600">{v.vendor_code || '-'}</td>
                 <td className="px-2 py-2"><div className="font-semibold">{v.name}</div>{v.authorized_dealer && <div className="text-[10px] text-gray-400">{v.authorized_dealer}</div>}</td>
@@ -258,6 +270,19 @@ export default function Vendors() {
               </tr>
             ))}{filtered.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No vendors found</td></tr>}</tbody>
           </table></div>
+
+          {/* Paginator — only when there's more than one page */}
+          {pageCount > 1 && (
+            <div className="flex items-center justify-between text-xs text-gray-600 mt-1">
+              <span>Page <b>{safePage + 1}</b> of <b>{pageCount}</b></span>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={safePage === 0}
+                  className="btn btn-secondary text-xs disabled:opacity-40 disabled:cursor-not-allowed">‹ Prev</button>
+                <button onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))} disabled={safePage >= pageCount - 1}
+                  className="btn btn-secondary text-xs disabled:opacity-40 disabled:cursor-not-allowed">Next ›</button>
+              </div>
+            </div>
+          )}
         </>
       )}
 
