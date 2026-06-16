@@ -474,68 +474,92 @@ function safeRunQuery(db, sql) {
 }
 
 // ── Google Gemini path (mam 2026-06-15: wants a FREE AI key) ───────────────
-// Runs the same agent loop (read the ERP DB + pull module guides) against
-// Gemini's OpenAI-compatible endpoint, so the assistant works on Gemini's free
-// tier. No web_search (Gemini has no built-in one) — DB + guides only.
+// Runs the agent against Gemini's NATIVE generateContent API so we get BOTH
+// our function tools (read the ERP DB + module guides) AND Google Search
+// grounding — so it can quote live MARKET RATES, not only ERP data (mam:
+// "not satisfied ... give me rate from market also"). Search grounding is
+// handled server-side by Gemini; we only execute our own function calls.
 async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, db }) {
   if (typeof fetch !== 'function') {
     const e = new Error('This server\'s Node is too old for Gemini (needs Node 18+).'); e.status = 500; throw e;
   }
-  const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
-  const tools = [
-    { type: 'function', function: {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const functionDeclarations = [
+    {
       name: 'query_database',
       description: 'Run a single read-only SQL query (SELECT or WITH only) against the ERP SQLite DB. Returns rows as JSON, max 500 rows.',
       parameters: { type: 'object', properties: { query: { type: 'string', description: 'A single SELECT/WITH query. No semicolons, no DDL/DML.' } }, required: ['query'] },
-    } },
-    { type: 'function', function: {
+    },
+    {
       name: 'get_module_guide',
       description: 'Look up the official step-by-step guide for an ERP module. Use for any "how to" / training / workflow question.',
       parameters: { type: 'object', properties: { module: { type: 'string', enum: GUIDE_KEYS, description: `Module key — one of: ${GUIDE_KEYS.join(', ')}.` } }, required: ['module'] },
-    } },
+    },
   ];
-  const messages = [{ role: 'system', content: systemPrompt }];
+  // Both tools: our functions + Google Search grounding (for market rates).
+  let tools = [{ function_declarations: functionDeclarations }, { google_search: {} }];
+
+  const contents = [];
   for (const m of history) {
     if (!m || !m.role || !m.content) continue;
     if (m.role !== 'user' && m.role !== 'assistant') continue;
-    messages.push({ role: m.role, content: String(m.content).slice(0, 4000) });
+    contents.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: String(m.content).slice(0, 4000) }] });
   }
-  messages.push({ role: 'user', content: question });
+  contents.push({ role: 'user', parts: [{ text: question }] });
+
+  const post = async (body) => fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify(body),
+  });
 
   const sqlRuns = [];
   let answer = '';
   for (let iter = 0; iter < MAX_TOOL_ITER; iter++) {
-    const r = await fetch(ENDPOINT, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, tools, max_tokens: 4000, temperature: 0.2 }),
-    });
+    const body = {
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents, tools,
+      generationConfig: { temperature: 0.2, maxOutputTokens: 4000 },
+    };
+    let r = await post(body);
     if (!r.ok) {
       const txt = await r.text().catch(() => '');
-      const e = new Error(txt || `Gemini HTTP ${r.status}`); e.status = r.status; throw e;
+      // Some models reject Search-grounding + function-calling together —
+      // retry once with our function tools only so the chat still works.
+      if (tools.length > 1 && /(tool|search|grounding|function)/i.test(txt)) {
+        tools = [{ function_declarations: functionDeclarations }];
+        r = await post({ ...body, tools });
+        if (!r.ok) { const t2 = await r.text().catch(() => ''); const e = new Error(t2 || `Gemini HTTP ${r.status}`); e.status = r.status; throw e; }
+      } else {
+        const e = new Error(txt || `Gemini HTTP ${r.status}`); e.status = r.status; throw e;
+      }
     }
     const data = await r.json();
-    const msg = data.choices?.[0]?.message;
-    if (!msg) break;
-    messages.push(msg);
-    const calls = msg.tool_calls || [];
-    if (!calls.length) { answer = msg.content || ''; break; }
-    for (const call of calls) {
-      const fn = call.function?.name;
-      let args = {}; try { args = JSON.parse(call.function?.arguments || '{}'); } catch (_) {}
-      let content;
-      if (fn === 'query_database') {
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    const fnCalls = parts.filter(p => p.functionCall).map(p => p.functionCall);
+    if (!fnCalls.length) {
+      answer = parts.filter(p => p.text).map(p => p.text).join('\n').trim();
+      break;
+    }
+    contents.push({ role: 'model', parts });
+    const responseParts = [];
+    for (const fc of fnCalls) {
+      const args = fc.args || {};
+      let resultObj;
+      if (fc.name === 'query_database') {
         const result = safeRunQuery(db, args.query || '');
         sqlRuns.push({ query: args.query, row_count: result.row_count ?? 0, error: result.error || null });
-        content = JSON.stringify(result).slice(0, 50000);
-      } else if (fn === 'get_module_guide') {
-        const guide = MODULE_GUIDES[String(args.module || '').toLowerCase().trim()];
-        content = JSON.stringify(guide || { error: `Unknown module. Available: ${GUIDE_KEYS.join(', ')}` }).slice(0, 50000);
+        resultObj = result;
+      } else if (fc.name === 'get_module_guide') {
+        resultObj = MODULE_GUIDES[String(args.module || '').toLowerCase().trim()] || { error: `Unknown module. Available: ${GUIDE_KEYS.join(', ')}` };
       } else {
-        content = JSON.stringify({ error: `unknown tool ${fn}` });
+        resultObj = { error: `unknown tool ${fc.name}` };
       }
-      messages.push({ role: 'tool', tool_call_id: call.id, content });
+      let safe = resultObj;
+      try { if (JSON.stringify(resultObj).length > 50000) safe = { note: 'truncated', data: JSON.stringify(resultObj).slice(0, 50000) }; } catch (_) {}
+      responseParts.push({ functionResponse: { name: fc.name, response: { result: safe } } });
     }
+    contents.push({ role: 'user', parts: responseParts });
   }
   return { answer: answer || '(no answer)', sqlRuns };
 }
