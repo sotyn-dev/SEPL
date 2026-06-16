@@ -5132,7 +5132,9 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       .sb { color:#1a1a1a; }
       /* Royal-blue brand theme (mam 2026-06-16). */
       .print-btn { background:#1e40af; }
-      .sb .top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #1e40af; padding-bottom:8px; }
+      /* Vertical spacing tightened (mam 2026-06-16: "set it best way") so
+         a typical bill lands cleanly on one A4 page. */
+      .sb .top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #1e40af; padding-bottom:6px; }
       .sb .brand { display:flex; align-items:center; gap:10px; }
       /* Brand badge — filled royal-blue "SE" mark recreated as vector
          CSS (mam 2026-06-16) so it prints razor-sharp in the html2canvas
@@ -5142,33 +5144,33 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       .sb .tag { font-size:8px; letter-spacing:1px; color:#555; text-transform:uppercase; margin-top:2px; }
       .sb .orig { text-align:right; font-size:9px; color:#444; line-height:1.5; }
       .sb .orig b { color:#1e40af; }
-      .sb .invtitle { text-align:center; font-size:20px; font-weight:800; letter-spacing:3px; color:#1e40af; margin:7px 0 2px; }
+      .sb .invtitle { text-align:center; font-size:20px; font-weight:800; letter-spacing:3px; color:#1e40af; margin:5px 0 2px; }
       .sb .addr { text-align:center; font-size:8.5px; color:#555; }
       .sb table { width:100%; border-collapse:collapse; }
-      .sb .meta td { border:1px solid #c9d8f5; padding:4px 7px; font-size:9.5px; vertical-align:top; }
+      .sb .meta td { border:1px solid #c9d8f5; padding:3px 6px; font-size:9.5px; vertical-align:top; }
       .sb .meta .l { background:#eef3ff; color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; white-space:nowrap; }
-      .sb .parties td { border:1px solid #c9d8f5; padding:7px 9px; font-size:9.5px; vertical-align:top; width:50%; }
-      .sb .parties .h { background:#eef3ff; color:#1e40af; font-weight:700; text-transform:uppercase; font-size:9px; padding:4px 9px; }
-      .sb .items { margin-top:7px; }
-      .sb .items th { background:#1e40af; color:#fff; font-size:9px; text-transform:uppercase; padding:6px 5px; border:1px solid #1e40af; }
-      .sb .items td { border:1px solid #c9d8f5; padding:5px; font-size:9.5px; vertical-align:top; }
+      .sb .parties td { border:1px solid #c9d8f5; padding:5px 8px; font-size:9.5px; vertical-align:top; width:50%; }
+      .sb .parties .h { background:#eef3ff; color:#1e40af; font-weight:700; text-transform:uppercase; font-size:9px; padding:3px 8px; }
+      .sb .items { margin-top:5px; }
+      .sb .items th { background:#1e40af; color:#fff; font-size:9px; text-transform:uppercase; padding:5px; border:1px solid #1e40af; }
+      .sb .items td { border:1px solid #c9d8f5; padding:4px 5px; font-size:9.5px; vertical-align:top; }
       .sb .items td.c { text-align:center; } .sb .items td.r { text-align:right; }
-      .sb .lower { display:flex; gap:8px; margin-top:7px; align-items:flex-start; }
-      .sb .words { flex:1; border:1px solid #c9d8f5; padding:7px 9px; font-size:9.5px; }
+      .sb .lower { display:flex; gap:8px; margin-top:5px; align-items:flex-start; }
+      .sb .words { flex:1; border:1px solid #c9d8f5; padding:5px 8px; font-size:9.5px; }
       .sb .words .k { color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-top:4px; }
-      .sb .words .pod { margin-top:6px; background:#eef3ff; padding:5px 7px; border-radius:4px; }
+      .sb .words .pod { margin-top:5px; background:#eef3ff; padding:5px 7px; border-radius:4px; }
       .sb .tot { width:46%; }
-      .sb .tot td { padding:4px 8px; font-size:10px; border-bottom:1px solid #e8eefb; }
+      .sb .tot td { padding:3px 8px; font-size:10px; border-bottom:1px solid #e8eefb; }
       .sb .tot .lab { text-align:right; color:#444; } .sb .tot .v { text-align:right; white-space:nowrap; }
       .sb .tot .grand td { background:#1e40af; color:#fff; font-weight:800; font-size:12px; }
       .sb .tot .podr td { color:#1e40af; font-weight:700; }
-      .sb .cols { display:flex; gap:8px; margin-top:7px; }
-      .sb .box { flex:1; border:1px solid #c9d8f5; padding:7px 9px; font-size:9px; line-height:1.5; }
-      .sb .box .h { color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-bottom:4px; }
-      .sb .sign { display:flex; gap:8px; margin-top:7px; }
-      .sb .sign .b { flex:1; border:1px solid #c9d8f5; padding:7px 9px; min-height:66px; font-size:9px; position:relative; }
+      .sb .cols { display:flex; gap:8px; margin-top:5px; }
+      .sb .box { flex:1; border:1px solid #c9d8f5; padding:5px 8px; font-size:9px; line-height:1.45; }
+      .sb .box .h { color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-bottom:3px; }
+      .sb .sign { display:flex; gap:8px; margin-top:5px; }
+      .sb .sign .b { flex:1; border:1px solid #c9d8f5; padding:6px 9px; min-height:54px; font-size:9px; position:relative; }
       .sb .sign .b .h { color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; }
-      .sb .sign .b .ln { position:absolute; bottom:18px; left:9px; right:9px; border-top:1px solid #999; }
+      .sb .sign .b .ln { position:absolute; bottom:16px; left:9px; right:9px; border-top:1px solid #999; }
       .sb .sign .b .cap { position:absolute; bottom:5px; left:9px; right:9px; text-align:center; color:#666; }
       .sb .foot { text-align:center; font-size:8.5px; color:#777; border-top:1px dashed #ccc; margin-top:8px; padding-top:6px; }
     `;
