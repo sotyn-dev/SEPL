@@ -62,6 +62,12 @@ function entityTypeFromPath(p) {
   // /api/complaints/:id   -> 'complaints'
   // /api/auth/register    -> 'auth'
   const m = p.replace(/^\/+/, '').split('/');
+  // A few sub-resources live under a parent router but deserve their own
+  // module line in the Daily Activity log. Vendors are created/edited under
+  // /api/procurement/vendors, which otherwise lumped all vendor data entry
+  // into "Indent to Dispatch" (mam 2026-06-16: "no Vendors line"). Surface
+  // them as 'vendors' so the report shows the work under its real module.
+  if (m[0] === 'api' && m[1] === 'procurement' && (m[2] === 'vendors' || m[2] === 'vendor-rates')) return 'vendors';
   if (m[0] === 'api' && m[1]) return m[1];
   if (m[0]) return m[0];
   return null;

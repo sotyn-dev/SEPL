@@ -5,7 +5,7 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiTruck, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiTruck, FiDownload, FiUpload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 
@@ -52,6 +52,12 @@ export default function Vendors() {
   const [viewData, setViewData] = useState(null);
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('');
+  // Bulk import (mam 2026-06-16): add many vendors at once from an Excel sheet
+  // saved as CSV. Same flow as the Item Master bulk import.
+  const [bulkModal, setBulkModal] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [bulkPreview, setBulkPreview] = useState([]);
+  const [importing, setImporting] = useState(false);
 
   const load = () => {
     api.get('/procurement/vendors').then(r => setVendors(r.data));
@@ -105,6 +111,83 @@ export default function Vendors() {
     toast.success(`Rate ${status}`); load();
   };
 
+  // ── Bulk import ──────────────────────────────────────────────────────
+  // Column header (in order) → vendor field. Keep labels Excel-friendly so
+  // mam can fill the sheet by hand. Only "Vendor Name" is required; the rest
+  // are optional but recommended ("full details").
+  const BULK_COLS = [
+    ['Vendor Code', 'vendor_code'], ['Vendor Name', 'name'], ['Firm Name', 'firm_name'],
+    ['Category', 'category'], ['Type', 'type'], ['Deals In', 'deals_in'],
+    ['Authorized Dealer', 'authorized_dealer'], ['Make/Brand', 'makes'], ['Contact Person', 'contact_person'],
+    ['Phone', 'phone'], ['Email', 'email'], ['State', 'state'], ['District', 'district'],
+    ['GST Number', 'gst_number'], ['Payment Terms', 'payment_terms'], ['Credit Days', 'credit_days'],
+    ['Sub Category', 'sub_category'], ['Rating', 'rating'], ['Turnover', 'turnover'],
+    ['Team Size', 'team_size'], ['Source', 'source'], ['Address', 'address'],
+  ];
+
+  // Quote-aware CSV parser — vendor addresses contain commas, so a naive
+  // split(',') would shred them. Handles "..." quoted fields and "" escapes.
+  const parseCsvLine = (line) => {
+    const out = []; let cur = ''; let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQ) {
+        if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+        else cur += ch;
+      } else if (ch === '"') inQ = true;
+      else if (ch === ',') { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    out.push(cur);
+    return out.map(s => s.trim());
+  };
+
+  const parseVendorCsv = (text) => {
+    const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim());
+    if (lines.length < 2) return [];
+    // Skip the header row (we map by fixed column order).
+    return lines.slice(1).map(line => {
+      const c = parseCsvLine(line);
+      const v = {};
+      BULK_COLS.forEach(([, key], idx) => { v[key] = c[idx] || ''; });
+      // Makes are entered semicolon-separated (comma is the CSV delimiter);
+      // send as an array so the server stores each brand cleanly.
+      v.makes = v.makes ? v.makes.split(/[;,]/).map(s => s.trim()).filter(Boolean) : [];
+      return v;
+    }).filter(v => v.name);
+  };
+
+  const downloadVendorTemplate = () => {
+    const header = BULK_COLS.map(([label]) => label).join(',');
+    const sample = ['', 'Agni Devices Ltd', 'Agni Devices Pvt Ltd', 'FF', 'Distributor', 'Fire pumps & hydrants',
+      'Agni', 'Havells; Agni', 'Ramesh Kumar', '9876543210', 'sales@agni.com', 'Rajasthan', 'Jaipur',
+      '08AAAAA0000A1Z5', 'Credit', '30', 'Pumps', '8', '5 Cr', '25', 'Reference', '"12, MI Road, Jaipur"'].join(',');
+    const csv = header + '\n' + sample;
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'vendors-template.csv'; a.click();
+  };
+
+  const handleBulkFile = (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => { setBulkText(ev.target.result); setBulkPreview(parseVendorCsv(ev.target.result)); };
+    reader.readAsText(file); e.target.value = '';
+  };
+
+  const runBulkImport = async () => {
+    if (bulkPreview.length === 0) return toast.error('No valid rows — every row needs at least a Vendor Name');
+    setImporting(true);
+    try {
+      const r = await api.post('/procurement/vendors/bulk', { vendors: bulkPreview });
+      const { added = 0, skipped = [], errors = [] } = r.data || {};
+      toast.success(`Added ${added} vendor${added === 1 ? '' : 's'}${skipped.length ? ` · ${skipped.length} skipped` : ''}${errors.length ? ` · ${errors.length} error(s)` : ''}`);
+      if (skipped.length || errors.length) console.warn('Vendor bulk import:', { skipped, errors });
+      setBulkModal(false); setBulkText(''); setBulkPreview([]); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Import failed'); }
+    setImporting(false);
+  };
+
   const filtered = vendors.filter(v => {
     if (filterCat && v.category !== filterCat) return false;
     if (search && !(v.name || '').toLowerCase().includes(search.toLowerCase()) && !(v.deals_in || '').toLowerCase().includes(search.toLowerCase()) && !(v.vendor_code || '').toLowerCase().includes(search.toLowerCase()) && !(v.district || '').toLowerCase().includes(search.toLowerCase())) return false;
@@ -138,6 +221,7 @@ export default function Vendors() {
               ['Code','Name','Firm','Category','Deals In','Type','Phone','Email','District','State','Authorized Dealer','Turnover'],
               filtered.map(v => [v.vendor_code, v.name, v.firm_name, v.category, v.deals_in, v.type, v.phone, v.email, v.district, v.state, v.authorized_dealer, v.turnover]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={15} /> Export Excel</button>
+            {canCreate('vendors') && <button onClick={() => { setBulkText(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiUpload size={15} /> Bulk Import</button>}
             {canCreate('vendors') && <button onClick={() => { setEditing(null); setForm({ rating: 2 }); setModal('vendor'); }} className="btn btn-primary flex items-center gap-2 text-sm"><FiPlus size={15} /> Add Vendor</button>}
           </div>
 
@@ -403,6 +487,59 @@ export default function Vendors() {
           <div><label className="label">Address <span className="text-red-500">*</span></label><textarea className="input" rows="2" value={form.address || ''} onChange={e => setForm({...form, address: e.target.value})} required /></div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Create'}</button></div>
         </form>
+      </Modal>
+
+      {/* Bulk Import Modal */}
+      <Modal isOpen={bulkModal} onClose={() => setBulkModal(false)} title="Bulk Import Vendors" wide>
+        <div className="space-y-4">
+          <div className="bg-red-50 p-3 rounded-lg text-sm text-red-700">
+            <p className="font-semibold mb-1">How to use:</p>
+            <p className="text-[12px]">In Excel, fill one vendor per row, then <b>Save As → CSV</b> and upload it here (or paste the rows below). Only <b>Vendor Name</b> is required; fill the rest for full details.</p>
+            <p className="font-mono text-[10px] mt-2 break-words">{BULK_COLS.map(([l]) => l).join(', ')}</p>
+            <p className="text-[11px] mt-1">Separate multiple Make/Brand values with a semicolon (e.g. <code>Havells; Agni</code>). Vendors with a phone or GSTIN that already exists are skipped automatically.</p>
+          </div>
+          <button onClick={downloadVendorTemplate} className="btn btn-secondary text-sm flex items-center gap-2"><FiDownload size={14} /> Download Template</button>
+          <div>
+            <label className="label">Upload CSV</label>
+            <input type="file" accept=".csv" onChange={handleBulkFile} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100" />
+          </div>
+          <div>
+            <label className="label">Or paste CSV rows</label>
+            <textarea className="input font-mono text-xs" rows="5" value={bulkText}
+              onChange={e => { setBulkText(e.target.value); setBulkPreview(parseVendorCsv(e.target.value)); }}
+              placeholder="Paste rows here (include the header row)" />
+          </div>
+          {bulkPreview.length > 0 && (
+            <div>
+              <p className="text-sm font-semibold mb-2">{bulkPreview.length} vendor{bulkPreview.length === 1 ? '' : 's'} ready to import</p>
+              <div className="max-h-52 overflow-auto border rounded text-xs">
+                <table className="w-full">
+                  <thead><tr className="bg-gray-50">
+                    <th className="px-2 py-1 text-left">Name</th><th className="px-2 py-1 text-left">Firm</th>
+                    <th className="px-2 py-1">Category</th><th className="px-2 py-1">Phone</th>
+                    <th className="px-2 py-1">GST</th><th className="px-2 py-1 text-left">District</th>
+                  </tr></thead>
+                  <tbody>{bulkPreview.map((v, i) => (
+                    <tr key={i} className="border-t">
+                      <td className="px-2 py-1 font-medium">{v.name}</td>
+                      <td className="px-2 py-1">{v.firm_name}</td>
+                      <td className="px-2 py-1 text-center">{v.category}</td>
+                      <td className="px-2 py-1 text-center">{v.phone}</td>
+                      <td className="px-2 py-1 text-center font-mono text-[10px]">{v.gst_number}</td>
+                      <td className="px-2 py-1">{v.district}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          <div className="flex justify-end gap-3">
+            <button onClick={() => setBulkModal(false)} className="btn btn-secondary">Cancel</button>
+            <button onClick={runBulkImport} disabled={bulkPreview.length === 0 || importing} className="btn btn-primary disabled:opacity-50 flex items-center gap-1">
+              <FiUpload size={14} /> {importing ? 'Importing…' : `Import ${bulkPreview.length} Vendor${bulkPreview.length === 1 ? '' : 's'}`}
+            </button>
+          </div>
+        </div>
       </Modal>
 
       {/* Rate Comparison Modal */}

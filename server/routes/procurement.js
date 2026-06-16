@@ -312,6 +312,63 @@ router.post('/vendors', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid, vendor_code: code });
 });
 
+// Bulk vendor import (mam 2026-06-16: "i need vendor i can add bulk with full
+// details in excel"). Mirrors the single POST — auto-codes blank codes, skips
+// duplicates (same phone OR same GSTIN as an existing vendor, or another row in
+// the same upload), and accepts the full vendor detail set. Excel users save
+// the sheet as CSV; the client parses it (quote-aware) and posts the rows here.
+router.post('/vendors/bulk', (req, res) => {
+  const rows = Array.isArray(req.body?.vendors) ? req.body.vendors : [];
+  if (!rows.length) return res.status(400).json({ error: 'No vendors to import' });
+  const db = getDb();
+  const { nextSequence } = require('../db/nextSequence');
+  const clampRating = (v) => {
+    if (v === '' || v === null || v === undefined) return null;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return Math.max(0, Math.min(10, n));
+  };
+  const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
+
+  // Pre-load existing phone / GST so we can skip duplicates without a per-row
+  // round-trip, and dedupe within the uploaded batch itself.
+  const existingPhones = new Set(db.prepare(`SELECT phone FROM vendors WHERE phone IS NOT NULL AND TRIM(phone)<>''`).all().map(r => norm(r.phone)));
+  const existingGst = new Set(db.prepare(`SELECT gst_number FROM vendors WHERE gst_number IS NOT NULL AND TRIM(gst_number)<>''`).all().map(r => norm(r.gst_number)));
+
+  const insert = db.prepare('INSERT OR IGNORE INTO vendors (vendor_code,name,firm_name,contact_person,phone,email,district,state,address,category,deals_in,authorized_dealer,type,turnover,team_size,payment_terms,credit_days,gst_number,source,category_wise,sub_category,existing_vendor,rating,makes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+
+  let added = 0;
+  const skipped = [];
+  const errors = [];
+  const run = db.transaction(() => {
+    for (let i = 0; i < rows.length; i++) {
+      const b = rows[i] || {};
+      const rowNo = i + 1;
+      if (!b.name || !String(b.name).trim()) { errors.push(`Row ${rowNo}: Vendor name required`); continue; }
+      const phoneKey = norm(b.phone);
+      const gstKey = norm(b.gst_number);
+      if (phoneKey && existingPhones.has(phoneKey)) { skipped.push(`Row ${rowNo}: ${b.name} — phone ${b.phone} already exists`); continue; }
+      if (gstKey && existingGst.has(gstKey)) { skipped.push(`Row ${rowNo}: ${b.name} — GSTIN ${b.gst_number} already exists`); continue; }
+      try {
+        let code = b.vendor_code && String(b.vendor_code).trim()
+          ? String(b.vendor_code).trim()
+          : nextSequence(db, 'vendors', 'vendor_code', 'SEVC', { startFrom: 1999, pad: 4 });
+        insert.run(
+          code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state,
+          b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size,
+          b.payment_terms, b.credit_days, b.gst_number, b.source, b.category_wise, b.sub_category,
+          b.existing_vendor, clampRating(b.rating), normaliseMakes(b.makes),
+        );
+        added++;
+        if (phoneKey) existingPhones.add(phoneKey);
+        if (gstKey) existingGst.add(gstKey);
+      } catch (err) { errors.push(`Row ${rowNo}: ${err.message}`); }
+    }
+  });
+  run();
+  res.json({ added, skipped, errors, total: rows.length });
+});
+
 router.put('/vendors/:id', (req, res) => {
   const b = req.body;
   const rating = (b.rating === '' || b.rating === null || b.rating === undefined)
