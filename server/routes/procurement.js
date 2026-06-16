@@ -873,12 +873,35 @@ router.get('/indents', (req, res) => {
     if (i.business_book_id) planBbByIndent.set(i.id, i.business_book_id);
     planPctByIndent.set(i.id, parseFloat(String(i.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) || 0);
   }
+  // Indent site (name) — the most reliable bridge to the Order-to-Planning
+  // order when neither a planning link nor a po_item link is present.
+  const siteByIndent = new Map();
+  for (const i of indents) siteByIndent.set(i.id, i.site_name || i.client_name || '');
+  // site/project name → business_book_id, resolved the same way findBoq
+  // links a site to its order (sites.business_book_id, else a project /
+  // company name match on business_book). Cached per name.
+  const bbIdBySiteCache = new Map();
+  const bbIdForSite = (siteName) => {
+    if (!siteName) return null;
+    if (bbIdBySiteCache.has(siteName)) return bbIdBySiteCache.get(siteName);
+    const row = db.prepare(
+      `SELECT id FROM business_book
+        WHERE id IN (SELECT DISTINCT business_book_id FROM sites
+                      WHERE name = ? AND business_book_id IS NOT NULL)
+           OR project_name = ? OR company_name = ?
+        ORDER BY id DESC LIMIT 1`
+    ).get(siteName, siteName, siteName);
+    const id = row?.id || null;
+    bbIdBySiteCache.set(siteName, id);
+    return id;
+  };
   const billableByIndent = new Map();
   const deliveryByIndent = new Map();
   const pctByIndent = new Map();
   for (const [indentId, its] of itemsByIndent) {
-    // Resolve the order's Business Book: planning link first, else infer
-    // from the first line that carries a po_item link.
+    // Resolve the order's Business Book (the Order-to-Planning order the
+    // BOQ rate is picked from): planning link first, else the first line's
+    // po_item link, else the indent's site → order mapping.
     let bbId = planBbByIndent.get(indentId) || null;
     if (!bbId) {
       for (const it of its) {
@@ -886,6 +909,7 @@ router.get('/indents', (req, res) => {
         if (po && po.bb) { bbId = po.bb; break; }
       }
     }
+    if (!bbId) bbId = bbIdForSite(siteByIndent.get(indentId));
     const descMap = bbId ? bbDescMap(bbId) : null;
     let billable = 0;
     for (const it of its) {
