@@ -735,7 +735,12 @@ router.get('/indents', (req, res) => {
             -- CRM person assigned on the linked Client PO (Sushila/Lovely).
             -- The frontend lets this person act on the CRM stage even without
             -- crm_funnel role access — must agree with the server gate.
-            opo.crm_name as planning_crm_name
+            opo.crm_name as planning_crm_name,
+            -- Billable preview (mam 2026-06-16): the order's Business Book and
+            -- its Against-Delivery % so the list can show BOQ-sale value and
+            -- the delivery-billable slice next to the internal Budget.
+            op.business_book_id AS business_book_id,
+            opb.payment_against_delivery AS bb_delivery_terms
      FROM indents i
      LEFT JOIN users u ON i.created_by = u.id
      LEFT JOIN users au ON i.approved_by = au.id
@@ -767,7 +772,7 @@ router.get('/indents', (req, res) => {
   // rate_source tells the UI which fallback hit so mam knows whether the
   // displayed rate came from master or history.
   const allItems = db.prepare(
-    `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity,
+    `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity, ii.po_item_id,
             -- Show the CURRENT Item Master UOM for linked items so a later
             -- unit change in Item Master reflects here (mam 2026-06-10);
             -- manual lines keep their own stored unit.
@@ -822,6 +827,51 @@ router.get('/indents', (req, res) => {
     budgetByIndent.set(it.indent_id, (budgetByIndent.get(it.indent_id) || 0) + (+it.line_budget || 0));
   }
 
+  // ── Billable + Delivery-Bill preview (mam 2026-06-16) ───────────────
+  // Billable = Σ (BOQ item rate × indent qty) per indent, where the BOQ
+  // rate is the CLIENT SALE rate from the priced BOQ (po_items) — matched
+  // by po_item link first, then description — NOT the internal master cost.
+  // Delivery Bill = Billable × the order's Against-Delivery % (the slice
+  // invoiceable on delivery, mirroring the Sales Bill: "boq rate × against
+  // delivery %").  Both fall back to 0 → UI shows "—" when no priced BOQ
+  // rate or delivery term exists.  po_items are cached per Business Book so
+  // we hit the DB once per order, not once per indent.
+  const bbByIndent = new Map();        // indent.id → business_book_id
+  const pctByIndent = new Map();       // indent.id → against-delivery %
+  for (const i of indents) {
+    if (i.business_book_id) bbByIndent.set(i.id, i.business_book_id);
+    pctByIndent.set(i.id, parseFloat(String(i.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) || 0);
+  }
+  const bbRateCache = new Map();       // bbId → { byId:Map, byDesc:Map }
+  const bbRates = (bbId) => {
+    if (bbRateCache.has(bbId)) return bbRateCache.get(bbId);
+    const byId = new Map(), byDesc = new Map();
+    for (const it of db.prepare('SELECT id, description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
+      byId.set(it.id, +it.rate || 0);
+      if (it.description) byDesc.set(String(it.description).toLowerCase().trim(), +it.rate || 0);
+    }
+    const data = { byId, byDesc };
+    bbRateCache.set(bbId, data);
+    return data;
+  };
+  const billableByIndent = new Map();
+  const deliveryByIndent = new Map();
+  for (const [indentId, its] of itemsByIndent) {
+    const bbId = bbByIndent.get(indentId);
+    if (!bbId) continue;
+    const { byId, byDesc } = bbRates(bbId);
+    let billable = 0;
+    for (const it of its) {
+      let boq = 0;
+      if (it.po_item_id != null && byId.has(it.po_item_id)) boq = byId.get(it.po_item_id);
+      if (!boq) boq = byDesc.get(String(it.description || '').toLowerCase().trim()) || 0;
+      billable += boq * (+it.quantity || 0);
+    }
+    const pct = pctByIndent.get(indentId) || 0;
+    billableByIndent.set(indentId, billable);
+    deliveryByIndent.set(indentId, pct > 0 ? billable * pct / 100 : 0);
+  }
+
   // One BOQ-link lookup per unique site_name — cached in the loop so we
   // don't hit the DB once per indent when many share the same site.
   const boqCache = new Map();
@@ -861,6 +911,9 @@ router.get('/indents', (req, res) => {
     boq_file_link: findBoq(i.site_name || i.client_name),
     items: itemsByIndent.get(i.id) || [],
     budget_amount: +(budgetByIndent.get(i.id) || 0).toFixed(2),
+    billable_amount: +(billableByIndent.get(i.id) || 0).toFixed(2),
+    delivery_bill_amount: +(deliveryByIndent.get(i.id) || 0).toFixed(2),
+    delivery_pct: pctByIndent.get(i.id) || 0,
     approver_names: approverNames,
   })));
 });
