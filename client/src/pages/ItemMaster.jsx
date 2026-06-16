@@ -29,7 +29,7 @@ const DEPT_LABELS = { FF: 'Fire Fighting', LV: 'Low Voltage', ELE: 'Electrical',
 //          Picked from this list in the Rental indent flow, validated
 //          against current_price so renting can't cost ≥ buying outright.
 const TYPES = ['PO', 'FOC', 'RGP', 'RENTAL'];
-const UOMS = ['PCS', 'MTR', 'KG', 'SQMM', 'PACKET', 'SET', 'LOT', 'PAIR', 'RFT', 'LTR', 'BOX'];
+const UOMS = ['PCS', 'MTR', 'KG', 'SQMM', 'PACKET', 'SET', 'LOT', 'PAIR', 'RFT', 'LTR', 'BOX', 'COIL'];
 const SOURCE_TYPES = ['PO', 'Quote', 'Manual', 'Online', 'Bill'];
 
 const emptyForm = {
