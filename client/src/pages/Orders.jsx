@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { FiPlus, FiTrash2, FiUpload, FiEdit2, FiExternalLink, FiEye, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import SearchableSelect from '../components/SearchableSelect';
+import MultiUserSelect from '../components/MultiUserSelect';
 import { useAuth } from '../context/AuthContext';
 
 const CRM_OPTIONS = ['Sushila', 'Lovely'];
@@ -371,8 +372,8 @@ export default function Orders() {
                 )}
               </div>
               {/* Extra project roles (mam 2026-06-17): jr site eng / supervisor /
-                  welder / helper — pick one or more system users each. These
-                  sometimes fill site data too. All optional. */}
+                  welder / helper — compact multi-select dropdowns (one row each)
+                  instead of repeating the whole user list as chips. All optional. */}
               {[
                 { key: 'jr_site_engineer_ids', label: 'Jr. Site Engineer(s)' },
                 { key: 'supervisor_ids', label: 'Supervisor(s)' },
@@ -380,27 +381,13 @@ export default function Orders() {
                 { key: 'helper_ids', label: 'Helper(s)' },
               ].map(role => (
                 <div className="col-span-2" key={role.key}>
-                  <label className="label">{role.label} <span className="text-gray-400 font-normal">(optional · select one or more)</span></label>
-                  <div className="border rounded-lg p-2 bg-white flex flex-wrap gap-1.5 min-h-[42px]">
-                    {allUsers.map(u => {
-                      const cur = form[role.key] || [];
-                      const selected = cur.includes(u.id);
-                      return (
-                        <button key={u.id} type="button"
-                          onClick={() => {
-                            const next = selected ? cur.filter(id => id !== u.id) : [...cur, u.id];
-                            setForm({ ...form, [role.key]: next });
-                          }}
-                          className={`px-2 py-1 rounded-full text-xs font-medium border transition ${selected ? 'bg-red-600 text-white border-red-600' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}>
-                          {selected && <span className="mr-1">✓</span>}{u.name}
-                        </button>
-                      );
-                    })}
-                    {allUsers.length === 0 && <p className="text-[10px] text-amber-600">No active users found</p>}
-                  </div>
-                  {(form[role.key] || []).length > 0 && (
-                    <p className="text-[10px] text-red-600 mt-0.5">{(form[role.key] || []).length} selected</p>
-                  )}
+                  <label className="label">{role.label} <span className="text-gray-400 font-normal">(optional)</span></label>
+                  <MultiUserSelect
+                    options={allUsers.map(u => ({ id: u.id, name: u.name }))}
+                    value={form[role.key] || []}
+                    onChange={(ids) => setForm({ ...form, [role.key]: ids })}
+                    placeholder="Select one or more…"
+                  />
                 </div>
               ))}
               <div>
