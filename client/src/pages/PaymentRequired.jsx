@@ -222,6 +222,22 @@ export default function PaymentRequired() {
   // Approver-side amount adjustment (mam 2026-05-28). String state so
   // an empty input doesn't snap to 0 mid-typing.
   const [approvalAmount, setApprovalAmount] = useState('');
+  // Admin amount edit (mam 2026-06-17, e.g. salary increase). null = not
+  // editing; a string = the value being typed.
+  const [editAmt, setEditAmt] = useState(null);
+
+  const saveAmount = async () => {
+    const n = +editAmt;
+    if (!Number.isFinite(n) || n <= 0) return toast.error('Enter a valid amount');
+    try {
+      const res = await api.patch(`/payment-required/${viewData.id}/amount`, { amount: n });
+      toast.success(res.data.message || 'Amount updated');
+      setEditAmt(null);
+      setViewData(prev => ({ ...prev, amount: n, approved_amount: n }));
+      setApprovalAmount(String(n));
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed to update amount'); }
+  };
 
   const handleApprove = async (id) => {
     if (!approvalRemarks || approvalRemarks.trim().length < 5) {
@@ -730,6 +746,26 @@ export default function PaymentRequired() {
               <div className="text-right">
                 <p className="text-2xl font-bold text-orange-700">{fmt(viewData.amount)}</p>
                 <StatusBadge status={viewData.status} />
+                {/* Admin amount edit (e.g. salary increase) — can set any
+                    positive figure, unlike approvers who can only decrease. */}
+                {isAdmin && viewData.status !== 'final_approved' && viewData.status !== 'rejected' && (
+                  editAmt === null ? (
+                    <button onClick={() => setEditAmt(String(viewData.amount))}
+                            className="block ml-auto mt-1 text-[10px] text-blue-600 hover:text-blue-800 underline"
+                            title="Edit the request amount (admin only)">
+                      ✏️ Edit amount
+                    </button>
+                  ) : (
+                    <div className="mt-1 flex items-center gap-1 justify-end">
+                      <span className="text-[11px]">₹</span>
+                      <input type="number" value={editAmt} onChange={e => setEditAmt(e.target.value)} autoFocus
+                             className="input text-xs w-28 py-0.5"
+                             onKeyDown={e => { if (e.key === 'Enter') saveAmount(); if (e.key === 'Escape') setEditAmt(null); }} />
+                      <button onClick={saveAmount} className="text-[10px] text-emerald-700 font-bold">Save</button>
+                      <button onClick={() => setEditAmt(null)} className="text-[10px] text-gray-500">Cancel</button>
+                    </div>
+                  )
+                )}
                 {isAdmin && (
                   <button onClick={openRoutingModal}
                           className="block ml-auto mt-2 text-[10px] text-blue-600 hover:text-blue-800 underline"

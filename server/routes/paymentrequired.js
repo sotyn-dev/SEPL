@@ -707,6 +707,33 @@ router.delete('/:id', requirePermission('payment_required', 'delete'), (req, res
   res.json({ message: 'Deleted' });
 });
 
+// Admin-only: edit the request amount (mam 2026-06-17, e.g. a salary increase).
+// Unlike the approver decrease-only guard, the admin can set ANY positive
+// amount. We sync approved_amount to the new figure so the rest of the chain
+// (and the final payout) use it, and log an audit line. Not allowed once the
+// request is finalised / rejected.
+router.patch('/:id/amount', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an admin can edit the amount' });
+  const db = getDb();
+  const request = db.prepare('SELECT * FROM payment_requests WHERE id=?').get(req.params.id);
+  if (!request) return res.status(404).json({ error: 'Not found' });
+  if (request.status === 'final_approved' || request.status === 'rejected') {
+    return res.status(400).json({ error: 'Cannot edit the amount of a finalised / rejected request' });
+  }
+  const n = +req.body?.amount;
+  if (!Number.isFinite(n) || n <= 0) return res.status(400).json({ error: 'Amount must be a positive number' });
+  const old = +request.amount;
+  db.prepare('UPDATE payment_requests SET amount=?, approved_amount=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+    .run(n, n, req.params.id);
+  try {
+    db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, step_amount, approved_by) VALUES (?,?,?,?,?,?,?)')
+      .run(request.id, request.current_step, 'Amount edited (admin)', 'amount_edit',
+           `Amount changed from Rs ${old.toLocaleString('en-IN')} to Rs ${n.toLocaleString('en-IN')} by ${req.user.name || 'admin'}`,
+           n, req.user.id);
+  } catch (_) {}
+  res.json({ message: 'Amount updated', amount: n });
+});
+
 // PATCH attach a proof URL to an existing request. Some users miss the
 // upload step on the form and the approver only sees "No proofs uploaded"
 // — this endpoint lets the original creator OR an approver fix it after
