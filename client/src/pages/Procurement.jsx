@@ -1902,7 +1902,7 @@ export default function Procurement() {
                 <button
                   onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
                   disabled={raiseClosed}
-                  title={raiseClosed ? 'Indents can be raised only on Saturday. Ask an admin to open emergency raising for today.' : ''}
+                  title={raiseClosed ? 'Indents can be raised only on Saturday.' : ''}
                   className={`btn flex items-center gap-2 ${raiseClosed ? 'opacity-50 cursor-not-allowed bg-gray-300 text-gray-600' : 'btn-primary'}`}>
                   <FiPlus /> Raise Indent
                 </button>
@@ -1928,7 +1928,7 @@ export default function Procurement() {
               </div>
             ) : (
               <div className="text-[12px] rounded border px-3 py-2 flex items-center justify-between gap-2 bg-amber-50 border-amber-200 text-amber-800">
-                <span>🔒 Indents can be raised only on <b>Saturday</b>. {isAdmin() ? 'For a weekday emergency, open today below.' : 'For an emergency, ask an admin to open today.'}</span>
+                <span>🔒 Indents can be raised only on <b>Saturday</b>.{isAdmin() ? ' For a weekday emergency, open today below.' : ''}</span>
                 {isAdmin() && (
                   <button onClick={toggleIndentEmergency} className="text-[11px] font-semibold px-2 py-1 rounded border border-amber-400 bg-amber-100 hover:bg-amber-200 whitespace-nowrap">
                     ⚡ Enable emergency raising for today
