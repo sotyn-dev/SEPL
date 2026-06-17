@@ -2,14 +2,17 @@
 // project. Same lifecycle as Delegations but with a project dropdown that
 // auto-captures the CRM name from that project's latest Client PO.
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiCalendar, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiUpload, FiMic, FiMicOff, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiCalendar, FiDownload } from 'react-icons/fi';
+
+// Web Speech API — live mic dictation (Chromium browsers only).
+const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 import { exportCsv } from '../utils/exportCsv';
 import { compressImage } from '../utils/compressImage';
 
@@ -59,6 +62,57 @@ export default function PMSTasks() {
   const [submitForm, setSubmitForm] = useState({ proof_url: '', uploading: false });
   const [rejectReason, setRejectReason] = useState('');
   const [extendForm, setExtendForm] = useState({ requested_due_date: '', reason: '' });
+  // Voice dictation + audio-file transcription for the Task Description.
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const audioInputRef = useRef(null);
+
+  // Live mic → description (appends so typing + speaking can be combined).
+  const toggleVoice = () => {
+    if (!SR) { toast.error("Your browser doesn't support voice input. Use Chrome or Edge."); return; }
+    if (listening) { recognitionRef.current?.stop(); setListening(false); return; }
+    const rec = new SR();
+    rec.lang = 'en-IN';
+    rec.interimResults = true;
+    rec.continuous = true;
+    let finalBuf = '';
+    rec.onresult = (ev) => {
+      let interim = '';
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const t = ev.results[i][0].transcript;
+        if (ev.results[i].isFinal) finalBuf += t + ' '; else interim += t;
+      }
+      setForm(f => ({ ...f, description: ((f._base || '') + finalBuf + interim).trim() }));
+    };
+    rec.onstart = () => setForm(f => ({ ...f, _base: (f.description ? f.description + ' ' : '') }));
+    rec.onerror = (e) => { toast.error('Voice error: ' + (e.error || 'unknown')); setListening(false); };
+    rec.onend = () => setListening(false);
+    recognitionRef.current = rec;
+    rec.start();
+    setListening(true);
+  };
+
+  // Upload a recorded audio file → server transcribes (self-hosted Whisper) →
+  // text appended to the description. Reuses the delegations transcribe route.
+  const handleAudioUpload = async (file) => {
+    if (!file) return;
+    setTranscribing(true);
+    try {
+      const fd = new FormData();
+      fd.append('audio', file);
+      const r = await api.post('/delegations/transcribe', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const text = (r.data?.text || '').trim();
+      if (!text) { toast.error('No speech detected in that audio.'); return; }
+      setForm(f => ({ ...f, description: (f.description ? f.description.trim() + ' ' : '') + text, _base: undefined }));
+      toast.success('Audio transcribed into the task description');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not transcribe the audio.');
+    } finally {
+      setTranscribing(false);
+      if (audioInputRef.current) audioInputRef.current.value = '';
+    }
+  };
 
   const load = () => {
     const params = new URLSearchParams({ scope });
@@ -530,8 +584,25 @@ export default function PMSTasks() {
             )}
           </div>
           <div>
-            <label className="label">Task Description *</label>
-            <textarea className="input" rows="4" required value={form.description || ''} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What needs to be done?" />
+            <label className="label flex items-center justify-between">
+              <span>Task Description *
+                {listening && <span className="ml-2 text-[10px] text-red-600 animate-pulse">● Listening…</span>}
+                {transcribing && <span className="ml-2 text-[10px] text-blue-600 animate-pulse">● Transcribing audio…</span>}
+              </span>
+              <span className="flex items-center gap-1.5">
+                <button type="button" onClick={toggleVoice} className={`text-[11px] px-2 py-1 rounded-full flex items-center gap-1 ${listening ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  {listening ? <><FiMicOff size={12} /> Stop</> : <><FiMic size={12} /> Voice</>}
+                </button>
+                <button type="button" disabled={transcribing} onClick={() => audioInputRef.current?.click()}
+                  className={`text-[11px] px-2 py-1 rounded-full flex items-center gap-1 ${transcribing ? 'bg-gray-100 text-gray-400 cursor-wait' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  <FiUpload size={12} /> {transcribing ? 'Transcribing…' : 'Upload audio'}
+                </button>
+                <input ref={audioInputRef} type="file" accept="audio/*,.m4a,.mp3,.wav,.ogg,.opus,.webm" className="hidden"
+                  onChange={e => handleAudioUpload(e.target.files?.[0])} />
+              </span>
+            </label>
+            <textarea className="input" rows="4" required value={form.description || ''} onChange={e => setForm({ ...form, description: e.target.value, _base: undefined })} placeholder="What needs to be done? — or speak / upload an audio note" />
+            {!SR && <p className="text-[10px] text-amber-600 mt-0.5">Live voice needs Chrome or Edge — “Upload audio” works in any browser.</p>}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
