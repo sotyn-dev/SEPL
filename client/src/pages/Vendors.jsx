@@ -201,6 +201,17 @@ export default function Vendors() {
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const paged = filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
+  // Vendor master data-completeness (mam 2026-06-17): across ALL vendors, how
+  // many of the important fields are filled vs blank → one quality %.
+  // total fields = vendors × fields-per-vendor (e.g. 660 × 14).
+  const COMPLETENESS_FIELDS = ['name', 'firm_name', 'category', 'type', 'deals_in', 'authorized_dealer', 'contact_person', 'phone', 'email', 'state', 'district', 'gst_number', 'payment_terms', 'address'];
+  const cmpFieldsPer = COMPLETENESS_FIELDS.length;
+  const cmpTotal = vendors.length * cmpFieldsPer;
+  let cmpFilled = 0;
+  for (const v of vendors) for (const f of COMPLETENESS_FIELDS) if (v[f] != null && String(v[f]).trim() !== '') cmpFilled++;
+  const cmpPending = cmpTotal - cmpFilled;
+  const cmpPct = cmpTotal ? Math.round((cmpFilled / cmpTotal) * 100) : 0;
   // Snap back to page 1 whenever the search / category filter changes.
   useEffect(() => { setPage(0); }, [search, filterCat]);
 
@@ -238,6 +249,21 @@ export default function Vendors() {
           <p className="text-sm text-gray-500">
             Showing {filtered.length ? safePage * PAGE_SIZE + 1 : 0}–{Math.min(filtered.length, (safePage + 1) * PAGE_SIZE)} of {filtered.length} vendors
           </p>
+
+          {/* Master data-completeness box (mam 2026-06-17): vendors × fields =
+              total, filled vs pending, and overall % across ALL vendors. */}
+          <div className="card p-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+            <div className="font-semibold text-gray-700">📋 Master Completeness</div>
+            <div><span className="text-gray-500">Fields:</span> <b>{vendors.length.toLocaleString('en-IN')} × {cmpFieldsPer} = {cmpTotal.toLocaleString('en-IN')}</b></div>
+            <div className="text-emerald-700"><span className="text-gray-500">Filled:</span> <b>{cmpFilled.toLocaleString('en-IN')}</b></div>
+            <div className="text-amber-700"><span className="text-gray-500">Pending:</span> <b>{cmpPending.toLocaleString('en-IN')}</b></div>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500">Complete:</span>
+              <b className={cmpPct >= 80 ? 'text-emerald-700' : cmpPct >= 50 ? 'text-amber-700' : 'text-red-600'}>{cmpPct}%</b>
+              <div className="w-32 h-2 bg-gray-200 rounded overflow-hidden"><div className="h-full bg-blue-600" style={{ width: `${cmpPct}%` }} /></div>
+            </div>
+            <span className="text-[11px] text-gray-400">across all {vendors.length} vendors · {cmpFieldsPer} key fields each</span>
+          </div>
 
           <div className="card p-0 overflow-x-auto"><table className="min-w-[1000px] text-xs freeze-head">
             <thead><tr className="bg-gray-50">
