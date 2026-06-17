@@ -53,6 +53,9 @@ export default function Delegation() {
   // Voice input
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef(null);
+  // Audio-file → text (server-side transcription)
+  const [transcribing, setTranscribing] = useState(false);
+  const audioInputRef = useRef(null);
 
   const load = () => {
     const params = new URLSearchParams({ scope });
@@ -134,6 +137,27 @@ export default function Delegation() {
     recognitionRef.current = rec;
     rec.start();
     setListening(true);
+  };
+
+  // Upload an audio file → server transcribes (self-hosted Whisper) → text is
+  // appended to the description. Works for recordings shared on WhatsApp etc.
+  const handleAudioUpload = async (file) => {
+    if (!file) return;
+    setTranscribing(true);
+    try {
+      const fd = new FormData();
+      fd.append('audio', file);
+      const r = await api.post('/delegations/transcribe', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const text = (r.data?.text || '').trim();
+      if (!text) { toast.error('No speech detected in that audio.'); return; }
+      setForm(f => ({ ...f, description: (f.description ? f.description.trim() + ' ' : '') + text, _base: undefined }));
+      toast.success('Audio transcribed into the task description');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not transcribe the audio.');
+    } finally {
+      setTranscribing(false);
+      if (audioInputRef.current) audioInputRef.current.value = '';
+    }
   };
 
   const openCreate = () => {
@@ -711,10 +735,22 @@ export default function Delegation() {
         <form onSubmit={save} className="space-y-3">
           <div>
             <label className="label flex items-center justify-between">
-              <span>Task Description * {listening && <span className="ml-2 text-[10px] text-red-600 animate-pulse">● Listening…</span>}</span>
-              <button type="button" onClick={toggleVoice} className={`text-[11px] px-2 py-1 rounded-full flex items-center gap-1 ${listening ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                {listening ? <><FiMicOff size={12} /> Stop</> : <><FiMic size={12} /> Voice</>}
-              </button>
+              <span>Task Description *
+                {listening && <span className="ml-2 text-[10px] text-red-600 animate-pulse">● Listening…</span>}
+                {transcribing && <span className="ml-2 text-[10px] text-blue-600 animate-pulse">● Transcribing audio…</span>}
+              </span>
+              <span className="flex items-center gap-1.5">
+                <button type="button" onClick={toggleVoice} className={`text-[11px] px-2 py-1 rounded-full flex items-center gap-1 ${listening ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  {listening ? <><FiMicOff size={12} /> Stop</> : <><FiMic size={12} /> Voice</>}
+                </button>
+                {/* Upload a recorded audio file → server transcribes it to text. */}
+                <button type="button" disabled={transcribing} onClick={() => audioInputRef.current?.click()}
+                  className={`text-[11px] px-2 py-1 rounded-full flex items-center gap-1 ${transcribing ? 'bg-gray-100 text-gray-400 cursor-wait' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  <FiUpload size={12} /> {transcribing ? 'Transcribing…' : 'Upload audio'}
+                </button>
+                <input ref={audioInputRef} type="file" accept="audio/*,.m4a,.mp3,.wav,.ogg,.opus,.webm" className="hidden"
+                  onChange={e => handleAudioUpload(e.target.files?.[0])} />
+              </span>
             </label>
             <textarea className="input" rows="4" required value={form.description || ''} onChange={e => setForm({ ...form, description: e.target.value, _base: undefined })} placeholder="Type or speak the task details…" />
             {!SR && <p className="text-[10px] text-amber-600 mt-0.5">Voice input needs Chrome or Edge browser.</p>}

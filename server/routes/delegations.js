@@ -1,9 +1,53 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const { execFile } = require('child_process');
+const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
 const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
 const router = express.Router();
 router.use(authMiddleware);
+
+// ─── Voice-note → text (self-hosted, mam 2026-06-17: "give me free") ──────
+// Upload a recorded audio file; the server converts it to 16kHz mono WAV with
+// ffmpeg and runs whisper.cpp locally (no API key, no per-use cost). Paths are
+// configurable via env so the box can be set up without code changes; if the
+// binary/model aren't there yet we return a clear "not set up" message.
+const audioTmpDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'audio_tmp');
+try { fs.mkdirSync(audioTmpDir, { recursive: true }); } catch (_) {}
+const audioUpload = multer({ dest: audioTmpDir, limits: { fileSize: 25 * 1024 * 1024 } });
+const WHISPER_BIN = process.env.WHISPER_BIN || '/root/whisper.cpp/main';
+const WHISPER_MODEL = process.env.WHISPER_MODEL || '/root/whisper.cpp/models/ggml-base.bin';
+const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
+
+router.post('/transcribe', audioUpload.single('audio'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No audio file received.' });
+  const inPath = req.file.path;
+  const wavPath = `${inPath}.wav`;
+  const txtPath = `${wavPath}.txt`;
+  const cleanup = () => { for (const f of [inPath, wavPath, txtPath]) { try { fs.unlinkSync(f); } catch (_) {} } };
+
+  if (!fs.existsSync(WHISPER_BIN) || !fs.existsSync(WHISPER_MODEL)) {
+    cleanup();
+    return res.status(503).json({ error: 'Voice transcription is not set up on the server yet. Ask the admin to install Whisper (one-time setup).' });
+  }
+  // 1) Normalise to the WAV format whisper.cpp expects.
+  execFile(FFMPEG_BIN, ['-y', '-i', inPath, '-ar', '16000', '-ac', '1', '-f', 'wav', wavPath], (ffErr) => {
+    if (ffErr) { cleanup(); return res.status(400).json({ error: 'Could not read that audio. Try mp3 / m4a / wav / ogg.' }); }
+    // 2) Transcribe. `nice` keeps it low-priority so the ERP stays responsive.
+    //    -nt no timestamps, -np no progress spew, -otxt writes <wavPath>.txt.
+    execFile('nice', ['-n', '15', WHISPER_BIN, '-m', WHISPER_MODEL, '-f', wavPath, '-nt', '-np', '-otxt', '-of', wavPath],
+      { maxBuffer: 10 * 1024 * 1024, timeout: 180000 }, (wErr, stdout) => {
+        let text = '';
+        try { text = fs.readFileSync(txtPath, 'utf8').trim(); } catch (_) {}
+        if (!text) text = String(stdout || '').replace(/\[[0-9:.\s\->]+\]/g, '').trim();
+        cleanup();
+        if (wErr && !text) return res.status(500).json({ error: 'Transcription failed on the server.' });
+        res.json({ text });
+      });
+  });
+});
 
 // Is this user an EA / supervisor? Treated as having the can_approve flag on
 // the delegations module — mam grants this to whoever's her assistant, and
