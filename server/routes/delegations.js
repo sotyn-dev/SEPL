@@ -29,9 +29,11 @@ const audioUpload = multer({ dest: audioTmpDir, limits: { fileSize: 25 * 1024 * 
 const WHISPER_BIN = process.env.WHISPER_BIN || '/root/whisper.cpp/main';
 const WHISPER_MODELS_DIR = process.env.WHISPER_MODELS_DIR || '/root/whisper.cpp/models';
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
-// Language: 'auto' handles Hindi/Hinglish (code-switching) best. Set 'hi' to
-// force Hindi if auto keeps guessing English on mixed speech.
-const WHISPER_LANG = process.env.WHISPER_LANG || 'auto';
+// Language: default 'hi' (Hindi) — these are Hindi/Hinglish voice notes, and
+// leaving it on auto/English made Whisper spell Hindi as gibberish English.
+// Forcing Hindi makes it transcribe the actual words (in Devanagari). Override
+// with WHISPER_LANG=auto or =en if a user mostly speaks English.
+const WHISPER_LANG = process.env.WHISPER_LANG || 'hi';
 const WHISPER_THREADS = Math.max(1, (require('os').cpus().length || 1) - 1);
 let transcribeBusy = false;  // single-flight guard — one job at a time
 
