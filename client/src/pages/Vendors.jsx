@@ -205,7 +205,9 @@ export default function Vendors() {
   // Vendor master data-completeness (mam 2026-06-17): across ALL vendors, how
   // many of the important fields are filled vs blank → one quality %.
   // total fields = vendors × fields-per-vendor (e.g. 660 × 14).
-  const COMPLETENESS_FIELDS = ['name', 'firm_name', 'category', 'type', 'deals_in', 'authorized_dealer', 'contact_person', 'phone', 'email', 'state', 'district', 'gst_number', 'payment_terms', 'address'];
+  // 17 vendor data fields (every form field except the auto code + the
+  // always-defaulted rating). makes may be an array → treated below.
+  const COMPLETENESS_FIELDS = ['name', 'firm_name', 'category', 'type', 'deals_in', 'authorized_dealer', 'makes', 'contact_person', 'phone', 'email', 'state', 'district', 'gst_number', 'payment_terms', 'credit_days', 'sub_category', 'address'];
   const cmpFieldsPer = COMPLETENESS_FIELDS.length;
   const cmpTotal = vendors.length * cmpFieldsPer;
   let cmpFilled = 0;
