@@ -258,6 +258,9 @@ export default function Procurement() {
   };
   const [indents, setIndents] = useState([]);
   const [vendorPos, setVendorPos] = useState([]);
+  // Indent raising window (mam 2026-06-16): { isSaturday, emergencyActive,
+  // allowed }. Saturday-only raising with an admin one-day emergency override.
+  const [raiseWindow, setRaiseWindow] = useState(null);
   const [purchaseBills, setPurchaseBills] = useState([]);
   const [deliveryNotes, setDeliveryNotes] = useState([]);
   const [vendors, setVendors] = useState([]);
@@ -649,6 +652,8 @@ export default function Procurement() {
       // Also pull Vendor POs so the Raise-Indent KPI strip can show the
       // real "PO Generate" count + "Payment Required" total (mam 2026-06-12).
       api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
+      // Is raising open today? (Saturday-only + admin emergency override.)
+      api.get('/procurement/indent-raise-window').then(r => setRaiseWindow(r.data)).catch(() => setRaiseWindow(null)),
     ]),
     rates: () => Promise.all([
       api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
@@ -948,6 +953,17 @@ export default function Procurement() {
       }
       setModal(false); setEditingIndentId(null); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  // Admin-only: open / close emergency indent raising for today (mam
+  // 2026-06-16). Server stores today's IST date so it auto-expires tomorrow.
+  const toggleIndentEmergency = async () => {
+    try {
+      const enable = !(raiseWindow && raiseWindow.emergencyActive);
+      const r = await api.put('/procurement/indent-raise-window', { enable });
+      setRaiseWindow(r.data);
+      toast.success(r.data.emergencyActive ? 'Emergency raising opened for today' : 'Emergency raising turned off');
+    } catch (err) { toast.error(err.response?.data?.error || 'Could not update'); }
   };
 
   // Pre-fill the Raise Indent modal with an existing indent's data so a
@@ -1880,8 +1896,47 @@ export default function Procurement() {
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
             <h3 className="font-semibold">Raise Indent</h3>
-            <button onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Raise Indent</button>
+            {(() => {
+              const raiseClosed = !!raiseWindow && !raiseWindow.allowed;
+              return (
+                <button
+                  onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
+                  disabled={raiseClosed}
+                  title={raiseClosed ? 'Indents can be raised only on Saturday. Ask an admin to open emergency raising for today.' : ''}
+                  className={`btn flex items-center gap-2 ${raiseClosed ? 'opacity-50 cursor-not-allowed bg-gray-300 text-gray-600' : 'btn-primary'}`}>
+                  <FiPlus /> Raise Indent
+                </button>
+              );
+            })()}
           </div>
+
+          {/* Raise window banner (mam 2026-06-16): indents only on Saturday;
+              admin can open an emergency one-day window for everyone. */}
+          {raiseWindow && (
+            raiseWindow.allowed ? (
+              <div className="text-[12px] rounded border px-3 py-2 flex items-center justify-between gap-2 bg-emerald-50 border-emerald-200 text-emerald-800">
+                <span>
+                  {raiseWindow.isSaturday
+                    ? '✅ Saturday — indent raising is open for everyone.'
+                    : '⚡ Emergency raising is OPEN for today (enabled by admin).'}
+                </span>
+                {isAdmin() && !raiseWindow.isSaturday && (
+                  <button onClick={toggleIndentEmergency} className="text-[11px] font-semibold px-2 py-1 rounded border border-emerald-300 hover:bg-emerald-100 whitespace-nowrap">
+                    Turn off emergency
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="text-[12px] rounded border px-3 py-2 flex items-center justify-between gap-2 bg-amber-50 border-amber-200 text-amber-800">
+                <span>🔒 Indents can be raised only on <b>Saturday</b>. {isAdmin() ? 'For a weekday emergency, open today below.' : 'For an emergency, ask an admin to open today.'}</span>
+                {isAdmin() && (
+                  <button onClick={toggleIndentEmergency} className="text-[11px] font-semibold px-2 py-1 rounded border border-amber-400 bg-amber-100 hover:bg-amber-200 whitespace-nowrap">
+                    ⚡ Enable emergency raising for today
+                  </button>
+                )}
+              </div>
+            )
+          )}
 
           {/* KPI strip — mam (2026-05-25): "show also dashbaord total indent .
               approved indent count with amount , reject count with amount".

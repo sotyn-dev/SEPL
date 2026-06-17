@@ -973,11 +973,57 @@ router.get('/indents', (req, res) => {
   })));
 });
 
+// ─── Indent raising window (mam 2026-06-16) ──────────────────────────
+// Indents may be raised ONLY on Saturday. For a mid-week emergency an
+// admin flips a one-day override: app_settings.indent_emergency_date holds
+// the IST date (YYYY-MM-DD) for which raising is open to everyone. It
+// lapses on its own the next day — the stored date no longer equals today,
+// so nobody can leave indents open forever. All dates computed in IST so
+// the rule follows India's calendar regardless of server timezone.
+function indentRaiseWindow(db) {
+  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const todayStr = `${ist.getFullYear()}-${String(ist.getMonth() + 1).padStart(2, '0')}-${String(ist.getDate()).padStart(2, '0')}`;
+  const isSaturday = ist.getDay() === 6;
+  const row = db.prepare("SELECT value FROM app_settings WHERE key='indent_emergency_date'").get();
+  const emergencyDate = (row && row.value) || '';
+  const emergencyActive = !!emergencyDate && emergencyDate === todayStr;
+  return { todayStr, isSaturday, emergencyDate, emergencyActive, allowed: isSaturday || emergencyActive };
+}
+
+// Raise-window status — read by the Raise Indent screen to show whether
+// indents are open today and to drive the admin emergency toggle.
+router.get('/indent-raise-window', (req, res) => {
+  res.json(indentRaiseWindow(getDb()));
+});
+
+// Admin-only: open ("enable") or close emergency raising for TODAY. Stores
+// today's IST date so it auto-expires tomorrow.
+router.put('/indent-raise-window', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only — only an admin can open emergency indent raising.' });
+  const db = getDb();
+  const win = indentRaiseWindow(db);
+  const val = req.body && req.body.enable ? win.todayStr : '';
+  const exists = db.prepare("SELECT 1 FROM app_settings WHERE key='indent_emergency_date'").get();
+  if (exists) db.prepare("UPDATE app_settings SET value=?, updated_at=CURRENT_TIMESTAMP WHERE key='indent_emergency_date'").run(val);
+  else db.prepare("INSERT INTO app_settings (key, value) VALUES ('indent_emergency_date', ?)").run(val);
+  res.json(indentRaiseWindow(db));
+});
+
 router.post('/indents', (req, res) => {
   const db = getDb();
   const { planning_id, items, notes, site_name, raised_by_name, business_book_id, indent_category } = req.body;
   if (!items || items.length === 0) {
     return res.status(400).json({ error: 'At least one item is required' });
+  }
+  // Day gate (mam 2026-06-16): indents only on Saturday, unless an admin
+  // has opened today for an emergency. Applies to everyone (admin included
+  // — the admin opens the day via the toggle, then raises).
+  const win = indentRaiseWindow(db);
+  if (!win.allowed) {
+    return res.status(403).json({
+      error: 'Indents can be raised only on Saturday. For a weekday emergency, ask an admin to enable emergency raising for today.',
+      code: 'INDENT_DAY_BLOCKED',
+    });
   }
   // ─── Indent Category (mam's spec 2026-05-26) ─────────────────────────
   // Validate and normalise the category. Default 'material' so any
