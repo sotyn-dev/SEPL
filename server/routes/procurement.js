@@ -5189,52 +5189,52 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     }).join('');
 
     const sbCss = `
-      .sb { color:#1C2333; }
+      .sb { color:#1a1a1a; }
       /* Royal-blue brand theme (mam 2026-06-16). */
-      .print-btn { background:#13318C; }
+      .print-btn { background:#1e40af; }
       /* Vertical spacing tightened (mam 2026-06-16: "set it best way") so
          a typical bill lands cleanly on one A4 page. */
-      .sb .top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #13318C; padding-bottom:6px; }
+      .sb .top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #1e40af; padding-bottom:6px; }
       .sb .brand { display:flex; align-items:center; gap:10px; }
       /* Brand badge — filled royal-blue "SE" mark recreated as vector
          CSS (mam 2026-06-16) so it prints razor-sharp in the html2canvas
          PDF with no external image / CORS dependency. */
-      .sb .mono { width:48px; height:48px; background:#13318C; color:#fff; font-weight:900; font-style:italic; font-size:23px; display:flex; align-items:center; justify-content:center; border-radius:11px; letter-spacing:-2px; box-shadow:0 1px 3px rgba(30,64,175,.35); }
-      .sb .cn { font-size:18px; font-weight:800; color:#13318C; line-height:1.1; }
-      .sb .tag { font-size:8px; letter-spacing:1px; color:#5D6B85; text-transform:uppercase; margin-top:2px; }
-      .sb .orig { text-align:right; font-size:9px; color:#5D6B85; line-height:1.5; }
-      .sb .orig b { color:#13318C; }
-      .sb .invtitle { text-align:center; font-size:20px; font-weight:800; letter-spacing:3px; color:#13318C; margin:5px 0 2px; }
-      .sb .addr { text-align:center; font-size:8.5px; color:#5D6B85; }
+      .sb .mono { width:48px; height:48px; background:#1e40af; color:#fff; font-weight:900; font-style:italic; font-size:23px; display:flex; align-items:center; justify-content:center; border-radius:11px; letter-spacing:-2px; box-shadow:0 1px 3px rgba(30,64,175,.35); }
+      .sb .cn { font-size:18px; font-weight:800; color:#1e40af; line-height:1.1; }
+      .sb .tag { font-size:8px; letter-spacing:1px; color:#555; text-transform:uppercase; margin-top:2px; }
+      .sb .orig { text-align:right; font-size:9px; color:#444; line-height:1.5; }
+      .sb .orig b { color:#1e40af; }
+      .sb .invtitle { text-align:center; font-size:20px; font-weight:800; letter-spacing:3px; color:#1e40af; margin:5px 0 2px; }
+      .sb .addr { text-align:center; font-size:8.5px; color:#555; }
       .sb table { width:100%; border-collapse:collapse; }
       .sb .meta td { border:1px solid #c9d8f5; padding:3px 6px; font-size:9.5px; vertical-align:top; }
-      .sb .meta .l { background:#eef3ff; color:#13318C; font-weight:700; text-transform:uppercase; font-size:8.5px; white-space:nowrap; }
+      .sb .meta .l { background:#eef3ff; color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; white-space:nowrap; }
       .sb .parties td { border:1px solid #c9d8f5; padding:5px 8px; font-size:9.5px; vertical-align:top; width:50%; }
-      .sb .parties .h { background:#eef3ff; color:#13318C; font-weight:700; text-transform:uppercase; font-size:9px; padding:3px 8px; }
+      .sb .parties .h { background:#eef3ff; color:#1e40af; font-weight:700; text-transform:uppercase; font-size:9px; padding:3px 8px; }
       .sb .items { margin-top:5px; }
-      .sb .items th { background:#13318C; color:#fff; font-size:9px; text-transform:uppercase; padding:5px; border:1px solid #13318C; }
+      .sb .items th { background:#1e40af; color:#fff; font-size:9px; text-transform:uppercase; padding:5px; border:1px solid #1e40af; }
       .sb .items td { border:1px solid #c9d8f5; padding:4px 5px; font-size:9.5px; vertical-align:top; }
       .sb .items td.c { text-align:center; } .sb .items td.r { text-align:right; }
       .sb .lower { display:flex; gap:8px; margin-top:5px; align-items:flex-start; }
       .sb .words { flex:1; border:1px solid #c9d8f5; padding:5px 8px; font-size:9.5px; }
-      .sb .words .k { color:#13318C; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-top:4px; }
+      .sb .words .k { color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-top:4px; }
       .sb .words .pod { margin-top:5px; background:#eef3ff; padding:5px 7px; border-radius:4px; }
       .sb .tot { width:46%; }
       .sb .tot td { padding:3px 8px; font-size:10px; border-bottom:1px solid #e8eefb; }
-      .sb .tot .lab { text-align:right; color:#5D6B85; } .sb .tot .v { text-align:right; white-space:nowrap; }
-      .sb .tot .grand td { background:#13318C; color:#fff; font-weight:800; font-size:12px; }
-      .sb .tot .podr td { color:#13318C; font-weight:700; }
+      .sb .tot .lab { text-align:right; color:#444; } .sb .tot .v { text-align:right; white-space:nowrap; }
+      .sb .tot .grand td { background:#1e40af; color:#fff; font-weight:800; font-size:12px; }
+      .sb .tot .podr td { color:#1e40af; font-weight:700; }
       .sb .cols { display:flex; gap:8px; margin-top:5px; }
       .sb .box { flex:1; border:1px solid #c9d8f5; padding:5px 8px; font-size:9px; line-height:1.45; }
-      .sb .box .h { color:#13318C; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-bottom:3px; }
+      .sb .box .h { color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-bottom:3px; }
       .sb .sign { display:flex; gap:8px; margin-top:5px; }
       .sb .sign .b { flex:1; border:1px solid #c9d8f5; padding:6px 9px; min-height:54px; font-size:9px; position:relative; }
-      .sb .sign .b .h { color:#13318C; font-weight:700; text-transform:uppercase; font-size:8.5px; }
+      .sb .sign .b .h { color:#1e40af; font-weight:700; text-transform:uppercase; font-size:8.5px; }
       .sb .sign .b .ln { position:absolute; bottom:16px; left:9px; right:9px; border-top:1px solid #999; }
-      .sb .sign .b .cap { position:absolute; bottom:5px; left:9px; right:9px; text-align:center; color:#5D6B85; }
-      .sb .foot { text-align:center; font-size:8.5px; color:#5D6B85; border-top:1px dashed #ccc; margin-top:8px; padding-top:6px; }
+      .sb .sign .b .cap { position:absolute; bottom:5px; left:9px; right:9px; text-align:center; color:#666; }
+      .sb .foot { text-align:center; font-size:8.5px; color:#777; border-top:1px dashed #ccc; margin-top:8px; padding-top:6px; }
       .sb .logo-img { height:54px; width:auto; display:block; }
-      .sb .promo { margin-top:5px; padding:4px 8px; background:#eef3ff; border:1px solid #c9d8f5; border-radius:4px; font-size:8.5px; color:#13318C; font-style:italic; text-align:center; }
+      .sb .promo { margin-top:5px; padding:4px 8px; background:#eef3ff; border:1px solid #c9d8f5; border-radius:4px; font-size:8.5px; color:#1e40af; font-style:italic; text-align:center; }
     `;
     // Brand block (mam 2026-06-17): prefer the real lockup logo
     // (client/public/sepl-logo.png — also copied to dist on build), embedded
@@ -5248,7 +5248,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       : `<div class="mono">SE</div><div><div class="cn">Secured Engineers Pvt. Ltd.</div><div class="tag">${TAGLINE}</div></div>`;
     return `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(docNo)}</title><style>${css}${sbCss}</style></head><body>
       <button class="print-btn" onclick="window.print()">🖨 Print</button>
-      <div id="pdfgen" style="position:fixed;inset:0;background:rgba(255,255,255,.94);display:flex;align-items:center;justify-content:center;font:600 15px Arial,sans-serif;color:#13318C;z-index:99999">Generating PDF, please wait…</div>
+      <div id="pdfgen" style="position:fixed;inset:0;background:rgba(255,255,255,.94);display:flex;align-items:center;justify-content:center;font:600 15px Arial,sans-serif;color:#1e40af;z-index:99999">Generating PDF, please wait…</div>
       <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
       <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
       <script>
@@ -5295,7 +5295,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         </div>
         <div class="invtitle">TAX INVOICE</div>
         <div class="addr">HO: 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, Ludhiana, Punjab – 141003 &nbsp;|&nbsp; Noida: 91, Springboard, Sector 2, Noida (UP)</div>
-        <div class="addr" style="font-weight:700;color:#13318C;margin-top:1px">PAN-INDIA · LUDHIANA | NOIDA | BANGALORE | MUMBAI</div>
+        <div class="addr" style="font-weight:700;color:#1e40af;margin-top:1px">PAN-INDIA · LUDHIANA | NOIDA | BANGALORE | MUMBAI</div>
 
         <table class="meta" style="margin-top:7px">
           <tr><td class="l">Invoice No.</td><td>${esc(docNo)}</td><td class="l">Invoice Date</td><td>${dispDate(dn.delivery_date)}</td><td class="l">Sales Order</td><td>${fill(dn.bb_lead_no)}</td></tr>
@@ -5336,7 +5336,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
             <div>${esc(rupeesWhole(grand))}</div>
             <div class="k">${interState ? 'IGST' : 'CGST + SGST'} (in words)</div>
             <div>${esc(rupeesPaise(taxTotal))}</div>
-            ${dpct ? `<div class="k">Payable on Delivery (in words)</div><div>${esc(rupeesPaise(payable))}</div><div class="pod"><b style="color:#13318C">Payable on Delivery</b><br>${dpct}% of basic value + 100% GST = ₹ ${fmt(payable)}</div>` : ''}
+            ${dpct ? `<div class="k">Payable on Delivery (in words)</div><div>${esc(rupeesPaise(payable))}</div><div class="pod"><b style="color:#1e40af">Payable on Delivery</b><br>${dpct}% of basic value + 100% GST = ₹ ${fmt(payable)}</div>` : ''}
           </div>
           <table class="tot">
             <tr><td class="lab">Sub Total (Taxable Value)</td><td class="v">₹ ${fmt(subtotal)}</td></tr>
@@ -5355,7 +5355,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
             <div class="h">e-Invoice details (mandatory — turnover &gt; ₹5 Cr)</div>
             <div>IRN: ____________________________________</div>
             <div>Ack No.: ______________ &nbsp; Ack Date: ____________</div>
-            <div style="color:#5D6B85">Generate IRN + signed QR on the IRP before issuing.</div>
+            <div style="color:#777">Generate IRN + signed QR on the IRP before issuing.</div>
           </div>
           <div class="box">
             <div class="h">Bank Details for Payment</div>
@@ -5377,7 +5377,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         </div>
 
         <div class="sign">
-          <div class="b"><div class="h">Receiver's Acknowledgement</div><div style="color:#5D6B85">Received the above goods / services in good condition.</div><div class="ln"></div><div class="cap">Name, Signature &amp; Stamp with Date</div></div>
+          <div class="b"><div class="h">Receiver's Acknowledgement</div><div style="color:#555">Received the above goods / services in good condition.</div><div class="ln"></div><div class="cap">Name, Signature &amp; Stamp with Date</div></div>
           <div class="b"><div class="h">For Secured Engineers Pvt. Ltd.</div><div class="ln"></div><div class="cap">Authorised Signatory</div></div>
         </div>
 
