@@ -67,9 +67,11 @@ router.get('/sites', (req, res) => {
     sql += ` WHERE (s.site_engineer_id = ? OR EXISTS (
       SELECT 1 FROM purchase_orders po
       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
-        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?)
+        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?
+          OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ?
+          OR (',' || COALESCE(po.supervisor_ids,'') || ',') LIKE ?)
     ))`;
-    params.push(uid, `%,${uid},%`, uid);
+    params.push(uid, `%,${uid},%`, uid, `%,${uid},%`, `%,${uid},%`);
   }
 
   sql += ` GROUP BY ${siteKeySql('s.name')} ORDER BY name`;
@@ -452,9 +454,11 @@ router.get('/', (req, res) => {
     sql += ` AND (s.site_engineer_id = ? OR EXISTS (
       SELECT 1 FROM purchase_orders po
       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
-        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?)
+        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?
+          OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ?
+          OR (',' || COALESCE(po.supervisor_ids,'') || ',') LIKE ?)
     ))`;
-    params.push(uid, `%,${uid},%`, uid);
+    params.push(uid, `%,${uid},%`, uid, `%,${uid},%`, `%,${uid},%`);
   }
   sql += ' ORDER BY d.report_date DESC, s.name';
   res.json(db.prepare(sql).all(...params));
@@ -493,9 +497,11 @@ router.get('/summary', (req, res) => {
     missingSql += ` AND (s.site_engineer_id = ? OR EXISTS (
       SELECT 1 FROM purchase_orders po
       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
-        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?)
+        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?
+          OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ?
+          OR (',' || COALESCE(po.supervisor_ids,'') || ',') LIKE ?)
     ))`;
-    missingParams.push(uid, `%,${uid},%`, uid);
+    missingParams.push(uid, `%,${uid},%`, uid, `%,${uid},%`, `%,${uid},%`);
   }
   missingSql += ` GROUP BY ${siteKeySql('s.name')} ORDER BY name`;
   const missingSites = db.prepare(missingSql).all(...missingParams);
