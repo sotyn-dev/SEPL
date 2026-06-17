@@ -119,6 +119,22 @@ try {
   }
 } catch (e) { console.error('[migration] PR standardize failed:', e.message); }
 
+// One-time TA/DA → HR backfill (mam 2026-06-17): TA/DA raised on/after
+// 15/06/2026 that are still waiting at L1 (not yet approved / not finalised)
+// move to the new HR step (0) so they show on Prabhdeep's HR dashboard.
+// Guarded so it runs exactly once; only touches in-flight, at-L1, dated rows.
+try {
+  const db = getDb();
+  if (!db.prepare(`SELECT 1 FROM app_migrations WHERE key='pr_tada_hr_backfill_v1'`).get()) {
+    const r = db.prepare(`UPDATE payment_requests SET current_step=0, updated_at=CURRENT_TIMESTAMP
+       WHERE category='TA/DA' AND current_step=1
+         AND status NOT IN ('final_approved','rejected')
+         AND DATE(created_at) >= '2026-06-15'`).run();
+    db.prepare(`INSERT INTO app_migrations (key) VALUES ('pr_tada_hr_backfill_v1')`).run();
+    console.log('[migration] TA/DA HR backfill: moved', r.changes, 'pending TA/DA (≥15/06) to HR step 0');
+  }
+} catch (e) { console.error('[migration] TA/DA HR backfill failed:', e.message); }
+
 function getApprovalRoutingFor(db, category, step) {
   try {
     const row = db.prepare(`SELECT user_id FROM payment_approval_overrides WHERE category=? AND step=?`).get(category, step);
