@@ -2739,6 +2739,9 @@ function initializeDatabase() {
     ['purchase_orders', 'welder_ids TEXT'],
     ['purchase_orders', 'helper_ids TEXT'],
     ['purchase_orders', 'crm_name TEXT'],
+    // EA's manual followup note for the MD on a delegation (mam 2026-06-17) —
+    // informational only, does not affect task status.
+    ['delegations', 'followup_remarks TEXT'],
     ['purchase_orders', 'boq_file_link TEXT'],
     ['attendance', 'auto_punched_in INTEGER DEFAULT 0'],
     ['attendance', 'auto_punched_out INTEGER DEFAULT 0'],

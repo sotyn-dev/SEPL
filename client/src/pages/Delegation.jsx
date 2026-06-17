@@ -221,6 +221,22 @@ export default function Delegation() {
     }
   };
 
+  // Followup remark (mam 2026-06-17): a manual note the EA keeps for the MD.
+  // Purely informational — it does NOT affect task status / completion.
+  // EA (or admin) edits; everyone else sees it read-only.
+  const saveFollowup = async (task, newValue) => {
+    const trimmed = (newValue || '').trim();
+    const current = task.followup_remarks || '';
+    if (trimmed === current) return;
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, followup_remarks: trimmed || null } : t));
+    try {
+      await api.patch(`/delegations/${task.id}/followup-remarks`, { followup_remarks: trimmed });
+    } catch (err) {
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, followup_remarks: current || null } : t));
+      toast.error(err.response?.data?.error || 'Failed to save followup remark');
+    }
+  };
+
   // Extension request / approval (admin)
   const requestExtension = async (e) => {
     e.preventDefault();
@@ -516,6 +532,7 @@ export default function Delegation() {
               <th>Status</th>
               <th>Upload Proof</th>
               <th>Extension</th>
+              <th>Followup Remarks<br/><span className="text-[9px] font-normal normal-case text-gray-400">(EA → MD)</span></th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -606,6 +623,23 @@ export default function Delegation() {
                     ) : t.extension_status === 'rejected' ? (
                       <span className="text-[10px] text-gray-400">Rejected</span>
                     ) : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  {/* Followup Remarks — EA writes a manual note for the MD;
+                      read-only for everyone else. Does not affect task status. */}
+                  <td className="align-top">
+                    {isEA ? (
+                      <textarea
+                        defaultValue={t.followup_remarks || ''}
+                        placeholder="— add note —"
+                        rows={2}
+                        className="text-xs bg-transparent border border-transparent hover:border-gray-200 focus:border-red-400 focus:bg-white rounded px-1.5 py-0.5 w-40 resize-y focus:outline-none align-top"
+                        onBlur={e => saveFollowup(t, e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Escape') { e.target.value = t.followup_remarks || ''; e.target.blur(); } }}
+                        title="EA followup note for MD — does not affect task status"
+                      />
+                    ) : (
+                      <span className="text-xs text-gray-700 whitespace-normal break-words block max-w-[180px]">{t.followup_remarks || <span className="text-gray-300">—</span>}</span>
+                    )}
                   </td>
                   <td>
                     <div className="flex gap-1 items-center">

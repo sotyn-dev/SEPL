@@ -383,6 +383,22 @@ router.patch('/:id/project', (req, res) => {
   res.json({ message: 'Project updated', project_name: value });
 });
 
+// Inline edit of the EA's followup remark for the MD (mam 2026-06-17).
+// EA (can_approve on delegations) or admin only — it's the EA's note, and it
+// does NOT change the task's status/completion. Empty string clears it.
+router.patch('/:id/followup-remarks', (req, res) => {
+  const db = getDb();
+  const d = db.prepare('SELECT id FROM delegations WHERE id=?').get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Task not found' });
+  if (req.user.role !== 'admin' && !isEA(req.user.id)) {
+    return res.status(403).json({ error: 'Only the EA or an admin can edit followup remarks' });
+  }
+  const raw = req.body?.followup_remarks;
+  const value = raw && String(raw).trim() ? String(raw).trim() : null;
+  db.prepare('UPDATE delegations SET followup_remarks=? WHERE id=?').run(value, req.params.id);
+  res.json({ message: 'Followup remark saved', followup_remarks: value });
+});
+
 // Assignee requests a due-date extension. Admin (not the assigner) approves.
 router.post('/:id/request-extension', (req, res) => {
   const { requested_due_date, reason } = req.body;
