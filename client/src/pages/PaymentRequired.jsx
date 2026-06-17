@@ -23,7 +23,9 @@ const STEPS = [
   { step: 3, name: 'L3 Approval (MD - Ankur Kaplesh)' },
   { step: 5, name: 'Payment Release (Aanchal)' },
 ];
-const TADA_STEPS = STEPS;
+// TA/DA gets an HR pre-approval step (mam 2026-06-17): HR (Prabhdeep Singh)
+// before L1 Accountant, for new requests from 15/06/2026.
+const TADA_STEPS = [{ step: 0, name: 'HR Approval (Prabhdeep Singh)' }, ...STEPS];
 
 // Canonical order of LIVE workflow stages for the dashboard tiles/chips
 // (union of the 5-step and TA/DA workflows). Mam (2026-05-30): the stage
@@ -31,7 +33,7 @@ const TADA_STEPS = STEPS;
 // every in-flight request — so everything piled into "HR Approval" and
 // the later stages showed 0. A request's true stage is its live
 // current_step_name; terminal states fall back to status.
-const STAGE_SEQ = ['L1 Approval (Accountant)', 'L2 Approval (Nitin Jain)', 'L3 Approval (MD - Ankur Kaplesh)', 'Payment Release (Aanchal)'];
+const STAGE_SEQ = ['HR Approval (Prabhdeep Singh)', 'L1 Approval (Accountant)', 'L2 Approval (Nitin Jain)', 'L3 Approval (MD - Ankur Kaplesh)', 'Payment Release (Aanchal)'];
 const stageOf = (r) =>
   r.status === 'final_approved' ? 'Approved'
   : r.status === 'rejected' ? 'Rejected'

@@ -56,8 +56,16 @@ const STANDARD_FLOW = [
   { step: 3, name: 'L3 Approval (MD - Ankur Kaplesh)', approver_name: 'Ankur Kaplesh' },
   { step: 5, name: 'Payment Release (Aanchal)', approver_name: 'Aanchal' },
 ];
+// TA/DA pre-approval (mam 2026-06-17): from 15/06/2026 every NEW TA/DA request
+// must clear HR (Prabhdeep Singh) BEFORE L1 Accountant. Step 0 is prepended so
+// it always sorts ahead of L1. Existing in-flight requests keep their current
+// step (1+) and simply never visit step 0 — i.e. only new requests get HR.
+const TADA_FLOW = [
+  { step: 0, name: 'HR Approval (Prabhdeep Singh)', approver_name: 'Prabhdeep Singh' },
+  ...STANDARD_FLOW,
+];
 const WORKFLOW = {
-  'TA/DA': STANDARD_FLOW,
+  'TA/DA': TADA_FLOW,
   'Purchase': STANDARD_FLOW,
   'Labour': STANDARD_FLOW,
   'Transport': STANDARD_FLOW,
@@ -496,6 +504,10 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
   try { db.exec('ALTER TABLE payment_requests ADD COLUMN km_photo TEXT'); } catch(e) {}
   try { db.exec('ALTER TABLE payment_requests ADD COLUMN end_km_photo TEXT'); } catch(e) {}
 
+  // Starting step: TA/DA now begins at the HR step (0); every other category
+  // still begins at L1 (1). This is what makes only NEW TA/DA requests require
+  // HR before L1 — existing rows are untouched.
+  const startStep = (b.category === 'TA/DA') ? TADA_FLOW[0].step : 1;
   const r = db.prepare(`INSERT INTO payment_requests (
     request_no, employee_name, site_id, site_name, department, contact_number, category, amount, purpose,
     payment_mode, required_by_date,
@@ -503,8 +515,8 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
     indent_number, item_description, vendor_name, quotation_link,
     labour_type, number_of_workers, work_duration, site_engineer_name,
     vehicle_type, from_to_location, material_description, driver_vendor_name,
-    created_by
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    created_by, current_step
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     requestNo, b.employee_name, b.site_id || null, b.site_name, b.department, b.contact_number,
     b.category, b.amount, b.purpose, b.payment_mode || 'Bank', b.required_by_date || null,
     b.travel_from_to, b.travel_dates, b.mode_of_travel, b.stay_details,
@@ -512,7 +524,7 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
     b.indent_number, b.item_description, b.vendor_name, b.quotation_link,
     b.labour_type, b.number_of_workers || 0, b.work_duration, b.site_engineer_name,
     b.vehicle_type, b.from_to_location, b.material_description, b.driver_vendor_name,
-    req.user.id
+    req.user.id, startStep
   );
   // Push to step-1 approvers (everyone with payment_required.approve permission)
   try {
@@ -698,7 +710,8 @@ router.patch('/:id/proof', requirePermission('payment_required', 'view'), (req, 
   // Permission: admin, original creator, OR anyone who can approve this category
   const isOwner = request.created_by === req.user.id;
   const isAdmin = req.user.role === 'admin';
-  const canApprove = canUserApproveStep(db, req.user.id, request.category, 1) ||
+  const canApprove = canUserApproveStep(db, req.user.id, request.category, 0) ||
+                     canUserApproveStep(db, req.user.id, request.category, 1) ||
                      canUserApproveStep(db, req.user.id, request.category, 2) ||
                      canUserApproveStep(db, req.user.id, request.category, 4) ||
                      canUserApproveStep(db, req.user.id, request.category, 5);
