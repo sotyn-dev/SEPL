@@ -5099,6 +5099,18 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
   const roundOff = +dn.round_off_amount || 0;
   const grandTotal = subtotal + cgst + sgst + igst + freight + roundOff;
 
+  // Shared brand logo (mam 2026-06-17: "old also change") — the real SE
+  // lockup embedded as a data URI, used by BOTH the Delivery Note and the
+  // Sales Bill so every printed document carries the logo. Null until the
+  // file (client/public/sepl-logo.png) is present.
+  let logoDataUri = null;
+  try {
+    for (const lp of [
+      path.join(__dirname, '..', '..', 'client', 'public', 'sepl-logo.png'),
+      path.join(__dirname, '..', '..', 'client', 'dist', 'sepl-logo.png'),
+    ]) { if (fs.existsSync(lp)) { logoDataUri = `data:image/png;base64,${fs.readFileSync(lp).toString('base64')}`; break; } }
+  } catch (_) {}
+
   const headerBlock = `
     <div class="header">
       <div class="gstin">GSTIN : 03AASCS7836D2Z3</div>
@@ -5106,7 +5118,9 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       <div class="pan">PAN : AASCS7836D</div>
     </div>
     <div class="companyblock">
-      <h1>SECURED ENGINEERS PVT. LTD - 24-25</h1>
+      ${logoDataUri
+        ? `<img src="${logoDataUri}" alt="Secured Engineers Pvt. Ltd." style="height:46px;width:auto;display:block;margin:0 auto 4px" />`
+        : `<h1>SECURED ENGINEERS PVT. LTD - 24-25</h1>`}
       <div class="addr"><b>HO:</b> 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, LUDHIANA, Punjab - 141003 &nbsp;|&nbsp; <b>Noida:</b> 91, Springboard, Sector 2, Noida (UP)</div>
       <div class="tag">PAN-INDIA PRESENCE : <b>LUDHIANA | NOIDA | BANGALORE | MUMBAI</b> — ELECTRICAL | HVAC | FIRE SAFETY | PLUMBING | SOLAR | ELV</div>
     </div>
@@ -5229,19 +5243,9 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     // add the service tagline under it. Falls back to the CSS "SE" badge +
     // name + tagline if the file isn't present.
     const TAGLINE = 'Electrical · HVAC · Fire Safety · Plumbing · Solar EPC';
-    let brandInner = `<div class="mono">SE</div><div><div class="cn">Secured Engineers Pvt. Ltd.</div><div class="tag">${TAGLINE}</div></div>`;
-    try {
-      for (const lp of [
-        path.join(__dirname, '..', '..', 'client', 'public', 'sepl-logo.png'),
-        path.join(__dirname, '..', '..', 'client', 'dist', 'sepl-logo.png'),
-      ]) {
-        if (fs.existsSync(lp)) {
-          const b64 = fs.readFileSync(lp).toString('base64');
-          brandInner = `<div><img class="logo-img" src="data:image/png;base64,${b64}" alt="Secured Engineers Pvt. Ltd." /><div class="tag" style="margin-top:3px">${TAGLINE}</div></div>`;
-          break;
-        }
-      }
-    } catch (_) {}
+    const brandInner = logoDataUri
+      ? `<div><img class="logo-img" src="${logoDataUri}" alt="Secured Engineers Pvt. Ltd." /><div class="tag" style="margin-top:3px">${TAGLINE}</div></div>`
+      : `<div class="mono">SE</div><div><div class="cn">Secured Engineers Pvt. Ltd.</div><div class="tag">${TAGLINE}</div></div>`;
     return `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(docNo)}</title><style>${css}${sbCss}</style></head><body>
       <button class="print-btn" onclick="window.print()">🖨 Print</button>
       <div id="pdfgen" style="position:fixed;inset:0;background:rgba(255,255,255,.94);display:flex;align-items:center;justify-content:center;font:600 15px Arial,sans-serif;color:#1e40af;z-index:99999">Generating PDF, please wait…</div>
