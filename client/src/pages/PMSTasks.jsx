@@ -17,7 +17,10 @@ import { exportCsv } from '../utils/exportCsv';
 import { compressImage } from '../utils/compressImage';
 
 export default function PMSTasks() {
-  const { user, isAdmin, canCreate } = useAuth();
+  const { user, isAdmin, canCreate, canApprove } = useAuth();
+  // A user granted PMS Tasks → Approve (or admin) can approve/reject and
+  // upload proof on ANYONE's task — mam 2026-06-17.
+  const pmsApprover = isAdmin() || canApprove('pms_tasks');
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -319,7 +322,7 @@ export default function PMSTasks() {
           { id: 'mine', label: 'My Tasks' },
           { id: 'given', label: 'Given by me' },
           { id: 'followup', label: 'Followup (all active)' },
-          ...(isAdmin() ? [{ id: 'all', label: 'All (admin)' }] : []),
+          ...(pmsApprover ? [{ id: 'all', label: isAdmin() ? 'All (admin)' : 'All' }] : []),
         ].map(t => (
           <button key={t.id} onClick={() => setScope(t.id)}
             className={`px-3 py-1.5 rounded-lg font-medium border ${scope === t.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
@@ -404,7 +407,7 @@ export default function PMSTasks() {
                 const u = String(user.name).toLowerCase().trim();
                 return c === u || c.split(/\s+/)[0] === u.split(/\s+/)[0];
               })();
-              const canActOnTask = isAssigner || isAdmin() || isCrmOwner;
+              const canActOnTask = isAssigner || isAdmin() || isCrmOwner || pmsApprover;
               const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
@@ -452,12 +455,12 @@ export default function PMSTasks() {
                       {t.proof_url && (
                         <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View</a>
                       )}
-                      {(isAssignee || isAssigner || isAdmin()) && (t.status === 'pending' || t.status === 'rejected') && (
+                      {(isAssignee || isAssigner || isAdmin() || pmsApprover) && (t.status === 'pending' || t.status === 'rejected') && (
                         <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit">
                           <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
                         </button>
                       )}
-                      {!t.proof_url && !((isAssignee || isAssigner || isAdmin()) && (t.status === 'pending' || t.status === 'rejected')) && (
+                      {!t.proof_url && !((isAssignee || isAssigner || isAdmin() || pmsApprover) && (t.status === 'pending' || t.status === 'rejected')) && (
                         <span className="text-gray-400 text-xs">—</span>
                       )}
                     </div>
@@ -533,7 +536,7 @@ export default function PMSTasks() {
               )}
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
-                {(isAssignee || isAssigner || isAdmin()) && (t.status === 'pending' || t.status === 'rejected') && (
+                {(isAssignee || isAssigner || isAdmin() || pmsApprover) && (t.status === 'pending' || t.status === 'rejected') && (
                   <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
                     <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
                   </button>
@@ -541,7 +544,7 @@ export default function PMSTasks() {
                 {isAssignee && t.status !== 'approved' && t.extension_status !== 'pending' && (
                   <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }} className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiCalendar size={11} /> Extension</button>
                 )}
-                {isAssigner && t.status === 'submitted' && (
+                {(isAssigner || isAdmin() || pmsApprover) && t.status === 'submitted' && (
                   <>
                     <button onClick={() => approve(t)} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiCheck size={11} /> Approve</button>
                     <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="btn btn-danger text-[11px] px-2 py-1 flex items-center gap-1"><FiX size={11} /> Reject</button>

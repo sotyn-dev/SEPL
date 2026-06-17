@@ -241,6 +241,9 @@ function canApprovePmsTask(t, user) {
   if (user.role === 'admin') return true;
   if (t.assigned_by === user.id) return true;
   if (isCrmOwner(t, user)) return true;
+  // Honour the role-matrix "Approve" permission (mam 2026-06-17): a user
+  // granted PMS Tasks → Approve can approve/reject anyone's task.
+  if (can(user.id, 'approve')) return true;
   return false;
 }
 
