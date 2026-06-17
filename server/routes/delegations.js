@@ -27,10 +27,26 @@ const audioTmpDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'audio_t
 try { fs.mkdirSync(audioTmpDir, { recursive: true }); } catch (_) {}
 const audioUpload = multer({ dest: audioTmpDir, limits: { fileSize: 25 * 1024 * 1024 } });
 const WHISPER_BIN = process.env.WHISPER_BIN || '/root/whisper.cpp/main';
-const WHISPER_MODEL = process.env.WHISPER_MODEL || '/root/whisper.cpp/models/ggml-base.bin';
+const WHISPER_MODELS_DIR = process.env.WHISPER_MODELS_DIR || '/root/whisper.cpp/models';
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
+// Language: 'auto' handles Hindi/Hinglish (code-switching) best. Set 'hi' to
+// force Hindi if auto keeps guessing English on mixed speech.
+const WHISPER_LANG = process.env.WHISPER_LANG || 'auto';
 const WHISPER_THREADS = Math.max(1, (require('os').cpus().length || 1) - 1);
 let transcribeBusy = false;  // single-flight guard — one job at a time
+
+// Pick the most accurate model that's actually installed (medium > small >
+// base). The tiny `base` model badly mis-hears Hindi/Hinglish, so dropping a
+// bigger model into the models dir + restarting upgrades accuracy with NO
+// config change. WHISPER_MODEL env overrides this outright.
+function resolveWhisperModel() {
+  if (process.env.WHISPER_MODEL) return process.env.WHISPER_MODEL;
+  for (const name of ['ggml-medium.bin', 'ggml-small.bin', 'ggml-base.bin']) {
+    const p = path.join(WHISPER_MODELS_DIR, name);
+    try { if (fs.existsSync(p)) return p; } catch (_) {}
+  }
+  return path.join(WHISPER_MODELS_DIR, 'ggml-base.bin');
+}
 
 router.post('/transcribe', audioUpload.single('audio'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No audio file received.' });
@@ -38,6 +54,7 @@ router.post('/transcribe', audioUpload.single('audio'), (req, res) => {
   const wavPath = `${inPath}.wav`;
   const txtPath = `${wavPath}.txt`;
   const drop = (f) => { try { fs.unlinkSync(f); } catch (_) {} };
+  const WHISPER_MODEL = resolveWhisperModel();
 
   if (transcribeBusy) {
     drop(inPath);
@@ -62,10 +79,12 @@ router.post('/transcribe', audioUpload.single('audio'), (req, res) => {
   execFile(FFMPEG_BIN, ['-y', '-t', '600', '-i', inPath, '-ar', '16000', '-ac', '1', '-f', 'wav', wavPath],
     { timeout: 60000 }, (ffErr) => {
       if (ffErr) return finish(400, { error: 'Could not read that audio. Try mp3 / m4a / wav / ogg.' });
-      // 2) Transcribe at lowest priority, bounded threads, hard-killed at 3 min.
+      // 2) Transcribe at lowest priority, bounded threads, hard-killed at 5 min
+      //    (bigger/more-accurate models are slower). `-l auto` keeps Hinglish
+      //    in its own words instead of forcing English.
       execFile('nice', ['-n', '19', WHISPER_BIN, '-m', WHISPER_MODEL, '-t', String(WHISPER_THREADS),
-        '-f', wavPath, '-nt', '-np', '-otxt', '-of', wavPath],
-        { maxBuffer: 10 * 1024 * 1024, timeout: 180000, killSignal: 'SIGKILL' }, (wErr, stdout) => {
+        '-l', WHISPER_LANG, '-f', wavPath, '-nt', '-np', '-otxt', '-of', wavPath],
+        { maxBuffer: 10 * 1024 * 1024, timeout: 300000, killSignal: 'SIGKILL' }, (wErr, stdout) => {
           let text = '';
           try { text = fs.readFileSync(txtPath, 'utf8').trim(); } catch (_) {}
           if (!text) text = String(stdout || '').replace(/\[[0-9:.\s\->]+\]/g, '').trim();
