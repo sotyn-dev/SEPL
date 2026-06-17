@@ -50,6 +50,37 @@ function resolveWhisperModel() {
   return path.join(WHISPER_MODELS_DIR, 'ggml-base.bin');
 }
 
+function getSetting(key) {
+  try { const row = getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(key); return row?.value ?? null; }
+  catch (_) { return null; }
+}
+
+// Staff type tasks in Roman letters, so convert Whisper's accurate Hindi
+// (Devanagari) into casual Hinglish using the Claude key the ERP already has.
+// Best-effort: no key, or any failure, just returns the original text so
+// transcription never breaks. Set WHISPER_ROMANIZE=0 to keep Devanagari.
+async function romanizeToHinglish(text) {
+  if (!text) return text;
+  if (process.env.WHISPER_ROMANIZE === '0') return text;
+  if (!/[ऀ-ॿ]/.test(text)) return text;   // no Hindi script → nothing to do
+  const apiKey = getSetting('ai_api_key');
+  if (!apiKey) return text;                          // no Claude key → keep the Hindi text
+  try {
+    const Anthropic = require('@anthropic-ai/sdk');
+    const client = new Anthropic.default({ apiKey, timeout: 30000 });
+    const r = await client.messages.create({
+      model: process.env.ROMANIZE_MODEL || 'claude-haiku-4-5-20251001',
+      max_tokens: 1200,
+      system: 'You transliterate Hindi (Devanagari) into casual Romanized Hinglish exactly how an Indian office worker types in English letters (e.g. "मटेरियल भेजो" -> "material bhejo"). Keep English / brand / product words in English. Do NOT translate the meaning, and do NOT add, remove, or explain anything. Output ONLY the transliterated text.',
+      messages: [{ role: 'user', content: text }],
+    });
+    const out = (r.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    return out || text;
+  } catch (_) {
+    return text;                                     // any error → keep the Hindi text
+  }
+}
+
 router.post('/transcribe', audioUpload.single('audio'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No audio file received.' });
   const inPath = req.file.path;
@@ -82,16 +113,20 @@ router.post('/transcribe', audioUpload.single('audio'), (req, res) => {
     { timeout: 60000 }, (ffErr) => {
       if (ffErr) return finish(400, { error: 'Could not read that audio. Try mp3 / m4a / wav / ogg.' });
       // 2) Transcribe at lowest priority, bounded threads, hard-killed at 5 min
-      //    (bigger/more-accurate models are slower). `-l auto` keeps Hinglish
-      //    in its own words instead of forcing English.
+      //    (bigger/more-accurate models are slower). Language is forced to
+      //    Hindi (WHISPER_LANG) so it captures the real words instead of
+      //    spelling them as English gibberish.
       execFile('nice', ['-n', '19', WHISPER_BIN, '-m', WHISPER_MODEL, '-t', String(WHISPER_THREADS),
         '-l', WHISPER_LANG, '-f', wavPath, '-nt', '-np', '-otxt', '-of', wavPath],
-        { maxBuffer: 10 * 1024 * 1024, timeout: 300000, killSignal: 'SIGKILL' }, (wErr, stdout) => {
+        { maxBuffer: 10 * 1024 * 1024, timeout: 300000, killSignal: 'SIGKILL' }, async (wErr, stdout) => {
           let text = '';
           try { text = fs.readFileSync(txtPath, 'utf8').trim(); } catch (_) {}
           if (!text) text = String(stdout || '').replace(/\[[0-9:.\s\->]+\]/g, '').trim();
           if (wErr && !text) return finish(500, { error: 'Transcription failed or timed out on the server.' });
-          finish(200, { text });
+          // 3) Convert the Hindi text into the Roman Hinglish staff type in.
+          let out = text;
+          try { out = await romanizeToHinglish(text); } catch (_) {}
+          finish(200, { text: out });
         });
     });
 });
