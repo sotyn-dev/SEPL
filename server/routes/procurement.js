@@ -5219,7 +5219,8 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       .sb .sign .b .ln { position:absolute; bottom:16px; left:9px; right:9px; border-top:1px solid #999; }
       .sb .sign .b .cap { position:absolute; bottom:5px; left:9px; right:9px; text-align:center; color:#666; }
       .sb .foot { text-align:center; font-size:8.5px; color:#777; border-top:1px dashed #ccc; margin-top:8px; padding-top:6px; }
-      .sb .logo-img { height:46px; width:auto; display:block; }
+      .sb .logo-img { height:54px; width:auto; display:block; }
+      .sb .promo { margin-top:5px; padding:4px 8px; background:#eef3ff; border:1px solid #c9d8f5; border-radius:4px; font-size:8.5px; color:#1e40af; font-style:italic; text-align:center; }
     `;
     // Brand block (mam 2026-06-17): prefer the real lockup logo
     // (client/public/sepl-logo.png — also copied to dist on build), embedded
@@ -5323,13 +5324,15 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
           <tbody>${sbRows}</tbody>
         </table>
 
+        <div class="promo">＋ Our crews handle turnkey MEPF · Fire-Safety · Solar EPC · HVAC. Get a same-site quote. &nbsp; ★ Add an AMC in future &amp; save up to 15%.</div>
+
         <div class="lower">
           <div class="words">
             <div class="k" style="margin-top:0">Amount Chargeable (in words)</div>
             <div>${esc(rupeesWhole(grand))}</div>
             <div class="k">${interState ? 'IGST' : 'CGST + SGST'} (in words)</div>
             <div>${esc(rupeesPaise(taxTotal))}</div>
-            ${dpct ? `<div class="pod"><b style="color:#1e40af">Payable on Delivery</b><br>${dpct}% of basic value + 100% GST = ₹ ${fmt(payable)}</div>` : ''}
+            ${dpct ? `<div class="k">Payable on Delivery (in words)</div><div>${esc(rupeesPaise(payable))}</div><div class="pod"><b style="color:#1e40af">Payable on Delivery</b><br>${dpct}% of basic value + 100% GST = ₹ ${fmt(payable)}</div>` : ''}
           </div>
           <table class="tot">
             <tr><td class="lab">Sub Total (Taxable Value)</td><td class="v">₹ ${fmt(subtotal)}</td></tr>
