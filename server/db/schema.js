@@ -2732,6 +2732,12 @@ function initializeDatabase() {
     ['indents', 'crm_margin_pct REAL'],
     ['purchase_orders', 'site_engineer_id INTEGER REFERENCES users(id)'],
     ['purchase_orders', 'site_engineer_ids TEXT'],
+    // Extra project roles who sometimes fill site data (mam 2026-06-17) —
+    // each a CSV of user ids, same shape as site_engineer_ids.
+    ['purchase_orders', 'jr_site_engineer_ids TEXT'],
+    ['purchase_orders', 'supervisor_ids TEXT'],
+    ['purchase_orders', 'welder_ids TEXT'],
+    ['purchase_orders', 'helper_ids TEXT'],
     ['purchase_orders', 'crm_name TEXT'],
     ['purchase_orders', 'boq_file_link TEXT'],
     ['attendance', 'auto_punched_in INTEGER DEFAULT 0'],

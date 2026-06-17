@@ -104,13 +104,31 @@ router.get('/po', (req, res) => {
       r.site_engineer_ids_list = [];
       r.site_engineer_names = '';
     }
+    // Extra project roles (mam 2026-06-17): jr site eng / supervisor /
+    // welder / helper — same CSV-of-user-ids shape as site engineers.
+    for (const f of ['jr_site_engineer', 'supervisor', 'welder', 'helper']) {
+      const ids = String(r[`${f}_ids`] || '').split(',').map(x => parseInt(x, 10)).filter(Boolean);
+      r[`${f}_ids_list`] = ids;
+      if (ids.length) {
+        const ph = ids.map(() => '?').join(',');
+        const us = db.prepare(`SELECT id, name FROM users WHERE id IN (${ph})`).all(...ids);
+        const byId = new Map(us.map(u => [u.id, u.name]));
+        r[`${f}_names`] = ids.map(id => byId.get(id)).filter(Boolean).join(', ');
+      } else {
+        r[`${f}_names`] = '';
+      }
+    }
   }
   res.json(rows);
 });
 
 router.post('/po', requirePermission('orders', 'create'), (req, res) => {
-  const { business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, crm_name, items } = req.body;
+  const { business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, crm_name, items, jr_site_engineer_ids, supervisor_ids, welder_ids, helper_ids } = req.body;
   const db = getDb();
+  // Extra-role CSVs (jr site eng / supervisor / welder / helper). Accept an
+  // array of user ids (preferred) or a CSV string; store as a clean CSV.
+  const csvIds = (v) => Array.isArray(v) ? v.map(x => parseInt(x, 10)).filter(Boolean).join(',') : (v == null ? '' : String(v));
+  const jrCsv = csvIds(jr_site_engineer_ids), supCsv = csvIds(supervisor_ids), weldCsv = csvIds(welder_ids), helpCsv = csvIds(helper_ids);
 
   // PO number regex / junk-blocklist guard per TOC v3 P0 #1 — stops
   // historical junk like "5252525", "141414", "1111111111", "00".
@@ -128,8 +146,8 @@ router.post('/po', requirePermission('orders', 'create'), (req, res) => {
   const engCsv = engIds.join(',');
 
   const r = db.prepare(
-    'INSERT INTO purchase_orders (business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, crm_name, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-  ).run(business_book_id || null, lead_id || null, quotation_id || null, po_number, po_date, total_amount, advance_amount || 0, po_copy_link || null, boq_file_link || null, pt_advance || 0, pt_delivery || 0, pt_installation || 0, pt_commissioning || 0, pt_retention || 0, primaryEng, engCsv, crm_name, req.user.id);
+    'INSERT INTO purchase_orders (business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, jr_site_engineer_ids, supervisor_ids, welder_ids, helper_ids, crm_name, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+  ).run(business_book_id || null, lead_id || null, quotation_id || null, po_number, po_date, total_amount, advance_amount || 0, po_copy_link || null, boq_file_link || null, pt_advance || 0, pt_delivery || 0, pt_installation || 0, pt_commissioning || 0, pt_retention || 0, primaryEng, engCsv, jrCsv, supCsv, weldCsv, helpCsv, crm_name, req.user.id);
   const poId = r.lastInsertRowid;
 
   // Insert PO items — scoped to THIS PO (po_id = poId) so a later edit
@@ -173,7 +191,11 @@ router.post('/po', requirePermission('orders', 'create'), (req, res) => {
 });
 
 router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {
-  const { business_book_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, status, site_engineer_id, site_engineer_ids, crm_name } = req.body;
+  const { business_book_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, status, site_engineer_id, site_engineer_ids, crm_name, jr_site_engineer_ids, supervisor_ids, welder_ids, helper_ids } = req.body;
+  // Extra-role CSVs — null when the field is absent so COALESCE keeps the
+  // existing value; an explicit [] clears it (csvIds → '').
+  const csvIds = (v) => v === undefined ? null : (Array.isArray(v) ? v.map(x => parseInt(x, 10)).filter(Boolean).join(',') : (v == null ? '' : String(v)));
+  const jrCsv = csvIds(jr_site_engineer_ids), supCsv = csvIds(supervisor_ids), weldCsv = csvIds(welder_ids), helpCsv = csvIds(helper_ids);
   // Same regex guard on edit — junk PO numbers can't be re-saved.
   if (po_number !== undefined && po_number !== null && String(po_number).trim() !== '') {
     const poErr = validatePoNumber(po_number);
@@ -225,7 +247,12 @@ router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {
       total_amount=COALESCE(?,total_amount), advance_amount=COALESCE(?,advance_amount),
       po_copy_link=?, boq_file_link=?,
       pt_advance=?, pt_delivery=?, pt_installation=?, pt_commissioning=?, pt_retention=?,
-      site_engineer_id=?, site_engineer_ids=?, crm_name=?,
+      site_engineer_id=?, site_engineer_ids=?,
+      jr_site_engineer_ids=COALESCE(?,jr_site_engineer_ids),
+      supervisor_ids=COALESCE(?,supervisor_ids),
+      welder_ids=COALESCE(?,welder_ids),
+      helper_ids=COALESCE(?,helper_ids),
+      crm_name=?,
       status=COALESCE(?,status) WHERE id=?`)
       .run(
         safeBbId,
@@ -233,7 +260,9 @@ router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {
         num(total_amount), num(advance_amount),
         po_copy_link || null, boq_file_link || null,
         num(pt_advance, 0), num(pt_delivery, 0), num(pt_installation, 0), num(pt_commissioning, 0), num(pt_retention, 0),
-        primaryEng, engCsv, crm_name,
+        primaryEng, engCsv,
+        jrCsv, supCsv, weldCsv, helpCsv,
+        crm_name,
         safeStatus, req.params.id
       );
 
