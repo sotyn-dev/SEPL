@@ -5219,7 +5219,28 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       .sb .sign .b .ln { position:absolute; bottom:16px; left:9px; right:9px; border-top:1px solid #999; }
       .sb .sign .b .cap { position:absolute; bottom:5px; left:9px; right:9px; text-align:center; color:#666; }
       .sb .foot { text-align:center; font-size:8.5px; color:#777; border-top:1px dashed #ccc; margin-top:8px; padding-top:6px; }
+      .sb .logo-img { height:46px; width:auto; display:block; }
     `;
+    // Brand block (mam 2026-06-17): prefer the real lockup logo
+    // (client/public/sepl-logo.png — also copied to dist on build), embedded
+    // as a data URI so it prints sharp with no network/CORS dependency. The
+    // lockup ALREADY contains the company name, so we don't repeat it — just
+    // add the service tagline under it. Falls back to the CSS "SE" badge +
+    // name + tagline if the file isn't present.
+    const TAGLINE = 'Electrical · HVAC · Fire Safety · Plumbing · Solar EPC';
+    let brandInner = `<div class="mono">SE</div><div><div class="cn">Secured Engineers Pvt. Ltd.</div><div class="tag">${TAGLINE}</div></div>`;
+    try {
+      for (const lp of [
+        path.join(__dirname, '..', '..', 'client', 'public', 'sepl-logo.png'),
+        path.join(__dirname, '..', '..', 'client', 'dist', 'sepl-logo.png'),
+      ]) {
+        if (fs.existsSync(lp)) {
+          const b64 = fs.readFileSync(lp).toString('base64');
+          brandInner = `<div><img class="logo-img" src="data:image/png;base64,${b64}" alt="Secured Engineers Pvt. Ltd." /><div class="tag" style="margin-top:3px">${TAGLINE}</div></div>`;
+          break;
+        }
+      }
+    } catch (_) {}
     return `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(docNo)}</title><style>${css}${sbCss}</style></head><body>
       <button class="print-btn" onclick="window.print()">🖨 Print</button>
       <div id="pdfgen" style="position:fixed;inset:0;background:rgba(255,255,255,.94);display:flex;align-items:center;justify-content:center;font:600 15px Arial,sans-serif;color:#1e40af;z-index:99999">Generating PDF, please wait…</div>
@@ -5264,7 +5285,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       </script>
       <div class="sb">
         <div class="top">
-          <div class="brand"><div class="mono">SE</div><div><div class="cn">Secured Engineers Pvt. Ltd.</div><div class="tag">Electrical · HVAC · Fire Safety · Plumbing · Solar EPC</div></div></div>
+          <div class="brand">${brandInner}</div>
           <div class="orig"><b>ORIGINAL FOR RECIPIENT</b><br>GSTIN: 03AASCS7836D2Z3<br>PAN: AASCS7836D</div>
         </div>
         <div class="invtitle">TAX INVOICE</div>
