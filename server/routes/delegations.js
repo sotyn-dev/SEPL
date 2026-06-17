@@ -14,39 +14,65 @@ router.use(authMiddleware);
 // ffmpeg and runs whisper.cpp locally (no API key, no per-use cost). Paths are
 // configurable via env so the box can be set up without code changes; if the
 // binary/model aren't there yet we return a clear "not set up" message.
+//
+// VPS-safety (mam 2026-06-17: "my erp should not hang"). The box is tiny and
+// shared with the live ERP, so transcription is fenced in four ways:
+//   1. `nice -n 19` — lowest CPU priority, so ANY ERP request preempts it.
+//   2. whisper threads capped at (cores − 1, min 1) — always leaves a core
+//      free for Node, so the app keeps answering while a note transcribes.
+//   3. a single-flight busy lock — only one job at a time, so two big files
+//      can't pile up and exhaust CPU/RAM (the real "hang" risk on 1-2 GB RAM).
+//   4. ffmpeg caps input to 10 min and whisper is hard-killed after 3 min.
 const audioTmpDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'audio_tmp');
 try { fs.mkdirSync(audioTmpDir, { recursive: true }); } catch (_) {}
 const audioUpload = multer({ dest: audioTmpDir, limits: { fileSize: 25 * 1024 * 1024 } });
 const WHISPER_BIN = process.env.WHISPER_BIN || '/root/whisper.cpp/main';
 const WHISPER_MODEL = process.env.WHISPER_MODEL || '/root/whisper.cpp/models/ggml-base.bin';
 const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
+const WHISPER_THREADS = Math.max(1, (require('os').cpus().length || 1) - 1);
+let transcribeBusy = false;  // single-flight guard — one job at a time
 
 router.post('/transcribe', audioUpload.single('audio'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No audio file received.' });
   const inPath = req.file.path;
   const wavPath = `${inPath}.wav`;
   const txtPath = `${wavPath}.txt`;
-  const cleanup = () => { for (const f of [inPath, wavPath, txtPath]) { try { fs.unlinkSync(f); } catch (_) {} } };
+  const drop = (f) => { try { fs.unlinkSync(f); } catch (_) {} };
 
+  if (transcribeBusy) {
+    drop(inPath);
+    return res.status(429).json({ error: 'Another voice note is being transcribed right now. Please try again in a few seconds.' });
+  }
   if (!fs.existsSync(WHISPER_BIN) || !fs.existsSync(WHISPER_MODEL)) {
-    cleanup();
+    drop(inPath);
     return res.status(503).json({ error: 'Voice transcription is not set up on the server yet. Ask the admin to install Whisper (one-time setup).' });
   }
-  // 1) Normalise to the WAV format whisper.cpp expects.
-  execFile(FFMPEG_BIN, ['-y', '-i', inPath, '-ar', '16000', '-ac', '1', '-f', 'wav', wavPath], (ffErr) => {
-    if (ffErr) { cleanup(); return res.status(400).json({ error: 'Could not read that audio. Try mp3 / m4a / wav / ogg.' }); }
-    // 2) Transcribe. `nice` keeps it low-priority so the ERP stays responsive.
-    //    -nt no timestamps, -np no progress spew, -otxt writes <wavPath>.txt.
-    execFile('nice', ['-n', '15', WHISPER_BIN, '-m', WHISPER_MODEL, '-f', wavPath, '-nt', '-np', '-otxt', '-of', wavPath],
-      { maxBuffer: 10 * 1024 * 1024, timeout: 180000 }, (wErr, stdout) => {
-        let text = '';
-        try { text = fs.readFileSync(txtPath, 'utf8').trim(); } catch (_) {}
-        if (!text) text = String(stdout || '').replace(/\[[0-9:.\s\->]+\]/g, '').trim();
-        cleanup();
-        if (wErr && !text) return res.status(500).json({ error: 'Transcription failed on the server.' });
-        res.json({ text });
-      });
-  });
+
+  transcribeBusy = true;
+  // Centralised exit — always frees the temp files AND releases the lock, so
+  // the box can never get stuck "busy" after an error / timeout.
+  const finish = (status, body) => {
+    for (const f of [inPath, wavPath, txtPath]) drop(f);
+    transcribeBusy = false;
+    if (!res.headersSent) res.status(status).json(body);
+  };
+
+  // 1) Normalise to the WAV whisper.cpp expects; `-t 600` caps reading to the
+  //    first 10 minutes so a huge file can't peg the CPU indefinitely.
+  execFile(FFMPEG_BIN, ['-y', '-t', '600', '-i', inPath, '-ar', '16000', '-ac', '1', '-f', 'wav', wavPath],
+    { timeout: 60000 }, (ffErr) => {
+      if (ffErr) return finish(400, { error: 'Could not read that audio. Try mp3 / m4a / wav / ogg.' });
+      // 2) Transcribe at lowest priority, bounded threads, hard-killed at 3 min.
+      execFile('nice', ['-n', '19', WHISPER_BIN, '-m', WHISPER_MODEL, '-t', String(WHISPER_THREADS),
+        '-f', wavPath, '-nt', '-np', '-otxt', '-of', wavPath],
+        { maxBuffer: 10 * 1024 * 1024, timeout: 180000, killSignal: 'SIGKILL' }, (wErr, stdout) => {
+          let text = '';
+          try { text = fs.readFileSync(txtPath, 'utf8').trim(); } catch (_) {}
+          if (!text) text = String(stdout || '').replace(/\[[0-9:.\s\->]+\]/g, '').trim();
+          if (wErr && !text) return finish(500, { error: 'Transcription failed or timed out on the server.' });
+          finish(200, { text });
+        });
+    });
 });
 
 // Is this user an EA / supervisor? Treated as having the can_approve flag on
