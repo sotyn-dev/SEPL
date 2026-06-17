@@ -59,26 +59,61 @@ function getSetting(key) {
 // (Devanagari) into casual Hinglish using the Claude key the ERP already has.
 // Best-effort: no key, or any failure, just returns the original text so
 // transcription never breaks. Set WHISPER_ROMANIZE=0 to keep Devanagari.
+// Free, dependency-free Devanagari → Roman transliteration. Not perfect
+// Hinglish (some inherent-'a' artifacts remain) but always readable Roman,
+// no API key / no cost. Used as the guaranteed fallback so output is NEVER
+// left in Hindi script.
+function devanagariToRoman(input) {
+  const V = { 'अ':'a','आ':'aa','इ':'i','ई':'ee','उ':'u','ऊ':'oo','ऋ':'ri','ए':'e','ऐ':'ai','ओ':'o','औ':'au','ऍ':'e','ऑ':'o','ॲ':'a' };
+  const M = { 'ा':'aa','ि':'i','ी':'ee','ु':'u','ू':'oo','ृ':'ri','े':'e','ै':'ai','ो':'o','ौ':'au','ॅ':'e','ॉ':'o','ं':'n','ँ':'n','ः':'h' };
+  const C = {
+    'क':'k','ख':'kh','ग':'g','घ':'gh','ङ':'n','च':'ch','छ':'chh','ज':'j','झ':'jh','ञ':'n',
+    'ट':'t','ठ':'th','ड':'d','ढ':'dh','ण':'n','त':'t','थ':'th','द':'d','ध':'dh','न':'n',
+    'प':'p','फ':'ph','ब':'b','भ':'bh','म':'m','य':'y','र':'r','ल':'l','व':'v',
+    'श':'sh','ष':'sh','स':'s','ह':'h','ळ':'l','ड़':'r','ढ़':'rh','क़':'q','ख़':'kh','ग़':'g','ज़':'z','फ़':'f','य़':'y',
+  };
+  const D = { '०':'0','१':'1','२':'2','३':'3','४':'4','५':'5','६':'6','७':'7','८':'8','९':'9' };
+  const HALANT = '्';
+  const chars = Array.from(input);
+  let out = '';
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (C[ch]) {
+      out += C[ch];
+      const nxt = chars[i + 1];
+      if (nxt === HALANT) { i++; continue; }            // conjunct → no vowel
+      if (nxt && M[nxt]) { out += M[nxt]; i++; continue; } // explicit matra
+      out += 'a';                                        // inherent vowel
+    } else if (V[ch]) { out += V[ch]; }
+    else if (M[ch]) { out += M[ch]; }
+    else if (D[ch]) { out += D[ch]; }
+    else { out += ch; }                                  // spaces / punctuation / latin
+  }
+  return out.replace(/([a-z])a\b/g, '$1');               // drop most word-final inherent 'a'
+}
+
 async function romanizeToHinglish(text) {
   if (!text) return text;
   if (process.env.WHISPER_ROMANIZE === '0') return text;
   if (!/[ऀ-ॿ]/.test(text)) return text;   // no Hindi script → nothing to do
+  // Prefer Claude (natural Hinglish) IF a key is set — use the SAME model the
+  // ERP's AI agent already uses, so we never fail on an unsupported model id.
   const apiKey = getSetting('ai_api_key');
-  if (!apiKey) return text;                          // no Claude key → keep the Hindi text
-  try {
-    const Anthropic = require('@anthropic-ai/sdk');
-    const client = new Anthropic.default({ apiKey, timeout: 30000 });
-    const r = await client.messages.create({
-      model: process.env.ROMANIZE_MODEL || 'claude-haiku-4-5-20251001',
-      max_tokens: 1200,
-      system: 'You transliterate Hindi (Devanagari) into casual Romanized Hinglish exactly how an Indian office worker types in English letters (e.g. "मटेरियल भेजो" -> "material bhejo"). Keep English / brand / product words in English. Do NOT translate the meaning, and do NOT add, remove, or explain anything. Output ONLY the transliterated text.',
-      messages: [{ role: 'user', content: text }],
-    });
-    const out = (r.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-    return out || text;
-  } catch (_) {
-    return text;                                     // any error → keep the Hindi text
+  if (apiKey) {
+    try {
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic.default({ apiKey, timeout: 30000 });
+      const model = process.env.ROMANIZE_MODEL || getSetting('ai_model') || 'claude-opus-4-7';
+      const r = await client.messages.create({
+        model, max_tokens: 1200,
+        system: 'You transliterate Hindi (Devanagari) into casual Romanized Hinglish exactly how an Indian office worker types in English letters (e.g. "मटेरियल भेजो" -> "material bhejo"). Keep English / brand / product words in English. Do NOT translate the meaning, and do NOT add, remove, or explain anything. Output ONLY the transliterated text.',
+        messages: [{ role: 'user', content: text }],
+      });
+      const out = (r.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+      if (out && !/[ऀ-ॿ]/.test(out)) return out;        // good Roman result from Claude
+    } catch (_) { /* fall through to the free local transliterator */ }
   }
+  return devanagariToRoman(text);                         // guaranteed Roman, no key needed
 }
 
 router.post('/transcribe', audioUpload.single('audio'), (req, res) => {
