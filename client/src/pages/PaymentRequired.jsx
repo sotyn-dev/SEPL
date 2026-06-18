@@ -1027,7 +1027,7 @@ export default function PaymentRequired() {
               const reduceBy = willReduce ? currentApproved - draft : 0;
               return (
               <div className="border-2 border-amber-300 rounded-lg p-4 bg-amber-50 space-y-3">
-                <h5 className="font-bold text-amber-800">Your Approval Required - Step {viewData.current_step}: {viewData.workflow?.[viewData.current_step - 1]?.name}</h5>
+                <h5 className="font-bold text-amber-800">Your Approval Required - Step {viewData.current_step}: {(viewData.workflow?.find(w => w.step === viewData.current_step) || {}).name || viewData.current_step_name}</h5>
 
                 {/* Approver-side amount adjustment (mam 2026-05-28) */}
                 <div>
