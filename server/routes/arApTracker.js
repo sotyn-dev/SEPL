@@ -9,10 +9,13 @@
 // searchable, exportable change log (old → new, who, when, why). Creating a
 // brand-new entry does NOT need a remark.
 const express = require('express');
+const XLSX = require('xlsx');
+const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
+const uploadXlsx = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // Idempotent schema — created at module load so the tables exist before any
 // handler runs, without touching the central schema.js SQL block.
@@ -173,6 +176,114 @@ router.delete('/:id', requirePermission('ar_ap_tracker', 'delete'), (req, res) =
   logChange(db, cur, 'deleted', `${cur.kind} · ${cur.party} · ${cur.due_date} · ₹${effective(cur)}L`, '', String(remark).trim(), req.user);
   db.prepare('DELETE FROM arap_entries WHERE id=?').run(cur.id);
   res.json({ ok: true });
+});
+
+// ── Excel import (mam 2026-06-18) ──────────────────────────────────────
+// Upload the "Cash Flow" workbook (AR sheet + AP sheet, party × week grid),
+// match each AR party to a Business Book client and each AP party to a
+// Vendor, and upsert the cells into the tracker. The sheet's dates are
+// entered inconsistently (some as "13-06" text, some as real dates that got
+// month/day swapped), so we normalise using the fact that this is a
+// June–July forecast: whichever component is 6 or 7 is the month.
+const IMPORT_YEAR = 2026;
+// Headers are read as FORMATTED text (the "DD-MM" Excel shows), not as Date
+// objects — the workbook's real-date cells are corrupted (off-by-one + the
+// source stored them wrong), but the displayed text is always correct.
+function parseHeaderDate(v) {
+  const m = String(v == null ? '' : v).match(/(\d{1,2})\s*[-/.]\s*(\d{1,2})/);
+  if (!m) return null;
+  const day = +m[1], month = +m[2];                  // sheet convention is DD-MM
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return `${IMPORT_YEAR}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+function parseSheet(ws, kind) {
+  // raw:false → every cell becomes its formatted display string, so date
+  // headers arrive as "10-06" etc. and amounts as "15" / "9.6".
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: null, raw: false });
+  if (!rows.length) return [];
+  const header = rows[0] || [];
+  const dateCols = [];
+  for (let c = 1; c < header.length; c++) { const d = parseHeaderDate(header[c]); if (d) dateCols.push({ c, date: d }); }
+  const out = [];
+  for (let r = 1; r < rows.length; r++) {
+    const raw = rows[r][0];
+    const party = typeof raw === 'string' ? raw.trim() : '';
+    if (!party || /^(planned|actual|total)$/i.test(party)) continue;
+    for (const dc of dateCols) {
+      const amt = parseFloat(String(rows[r][dc.c] == null ? '' : rows[r][dc.c]).replace(/,/g, ''));
+      if (Number.isFinite(amt) && amt > 0) out.push({ kind, party, due_date: dc.date, planned: amt });
+    }
+  }
+  return out;
+}
+// Match a sheet party to a master name: exact (case/space-insensitive) first,
+// then a contains-either-way fuzzy. Returns the canonical master name or null.
+function buildMatcher(names) {
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const list = names.filter(Boolean).map(n => ({ name: n, k: norm(n) }));
+  return (party) => {
+    const p = norm(party);
+    if (!p) return null;
+    const exact = list.find(x => x.k === p); if (exact) return exact.name;
+    const fuzzy = list.find(x => x.k && (x.k.includes(p) || p.includes(x.k)));
+    return fuzzy ? fuzzy.name : null;
+  };
+}
+
+router.post('/import', requirePermission('ar_ap_tracker', 'create'), uploadXlsx.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const db = getDb();
+  let wb;
+  try { wb = XLSX.read(req.file.buffer); }
+  catch (e) { return res.status(400).json({ error: 'Could not read the Excel file' }); }
+
+  // Classify sheets: SUMMARY skipped; names beginning AR / AP.
+  let entries = [];
+  for (const sn of wb.SheetNames) {
+    const up = sn.trim().toUpperCase();
+    if (up.startsWith('SUMMARY')) continue;
+    const kind = up.startsWith('AR') ? 'AR' : up.startsWith('AP') ? 'AP' : null;
+    if (!kind) continue;
+    entries = entries.concat(parseSheet(wb.Sheets[sn], kind));
+  }
+  if (!entries.length) return res.status(400).json({ error: 'No AR/AP rows found. Expecting sheets named "AR…" and "AP…" with a party column and date columns.' });
+
+  // Masters for name matching.
+  const bb = db.prepare('SELECT client_name, company_name FROM business_book').all();
+  const matchAR = buildMatcher(bb.flatMap(r => [r.client_name, r.company_name]));
+  const matchAP = buildMatcher(db.prepare('SELECT name FROM vendors').all().map(r => r.name));
+
+  if (req.body && (req.body.replace === '1' || req.body.replace === 'true')) {
+    db.prepare('DELETE FROM arap_entries').run();
+  }
+
+  const upd = db.prepare('UPDATE arap_entries SET planned=?, updated_at=CURRENT_TIMESTAMP WHERE id=?');
+  const ins = db.prepare(`INSERT INTO arap_entries (kind, party, due_date, planned, status, note, created_by, created_by_name) VALUES (?,?,?,?,?,?,?,?)`);
+  const findExisting = db.prepare('SELECT id FROM arap_entries WHERE kind=? AND party=? AND due_date=?');
+
+  let imported = 0, updated = 0, matched = 0;
+  const unmatched = new Set();
+  const tx = db.transaction(() => {
+    for (const e of entries) {
+      const canonical = e.kind === 'AR' ? matchAR(e.party) : matchAP(e.party);
+      const party = canonical || e.party;
+      if (canonical) matched++; else unmatched.add(`${e.kind}: ${e.party}`);
+      const note = canonical && canonical.toLowerCase() !== e.party.toLowerCase() ? `sheet: ${e.party}` : null;
+      const ex = findExisting.get(e.kind, party, e.due_date);
+      if (ex) { upd.run(e.planned, ex.id); updated++; }
+      else { ins.run(e.kind, party, e.due_date, e.planned, 'planned', note, req.user.id, req.user.name || ''); imported++; }
+    }
+    db.prepare(`INSERT INTO arap_changelog (entry_id, kind, party, field, old_value, new_value, remark, changed_by, changed_by_name)
+                VALUES (NULL,?,?,?,?,?,?,?,?)`)
+      .run('AR/AP', '—', 'imported', '', `${imported} new · ${updated} updated`, `Imported from ${req.file.originalname || 'Excel'}`, req.user.id, req.user.name || '');
+  });
+  tx();
+
+  res.json({
+    imported, updated, matched, total: entries.length,
+    unmatched: [...unmatched].sort(),
+    byKind: { AR: entries.filter(e => e.kind === 'AR').length, AP: entries.filter(e => e.kind === 'AP').length },
+  });
 });
 
 module.exports = router;

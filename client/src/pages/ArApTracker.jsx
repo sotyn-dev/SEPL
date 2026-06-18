@@ -5,14 +5,14 @@
 //
 // The key rule: changing an amount or a date is blocked until a remark is
 // entered, and every change lands in a searchable, exportable Change Log.
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtDateTime } from '../utils/datetime';
 import { exportCsv } from '../utils/exportCsv';
-import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiTrendingUp, FiTrendingDown, FiBarChart2, FiClock } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiTrendingUp, FiTrendingDown, FiBarChart2, FiClock } from 'react-icons/fi';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const fmtCol = (d) => { const m = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]} ${MONTHS[+m[2] - 1]}` : (d || ''); };
@@ -30,6 +30,9 @@ export default function ArApTracker() {
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState(null);          // original row when editing
   const [form, setForm] = useState({});
+  const [importResult, setImportResult] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef(null);
 
   const load = useCallback(() => {
     api.get('/ar-ap-tracker').then(r => setEntries(r.data || [])).catch(() => {});
@@ -90,6 +93,22 @@ export default function ArApTracker() {
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  // Upload the Cash-Flow workbook — server parses both sheets, matches AR
+  // parties to Business Book clients and AP parties to Vendors, and upserts.
+  const doImport = async (file) => {
+    if (!file) return;
+    setImporting(true);
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const r = await api.post('/ar-ap-tracker/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setImportResult(r.data);
+      toast.success(`Imported ${r.data.imported} new · ${r.data.updated} updated · ${r.data.matched}/${r.data.total} matched`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Import failed'); }
+    finally { setImporting(false); if (fileRef.current) fileRef.current.value = ''; }
+  };
+
   const exportLog = () => exportCsv('arap-change-log',
     ['When (IST)', 'User', 'Kind', 'Party', 'Field', 'Old', 'New', 'Remark'],
     log.map(l => [fmtDateTime(l.changed_at), l.changed_by_name, l.kind, l.party, l.field, l.old_value, l.new_value, l.remark]));
@@ -108,9 +127,19 @@ export default function ArApTracker() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><FiBarChart2 className="text-blue-700" /> AR / AP Tracker</h1>
           <p className="text-sm text-gray-500">Rolling weekly cash-flow forecast · amounts in ₹ Lakhs · every amount/date edit needs a remark</p>
         </div>
-        {(tab === 'ar' || tab === 'ap') && canCreate('ar_ap_tracker') && (
-          <button onClick={openAdd} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add {kind}</button>
-        )}
+        <div className="flex gap-2 flex-wrap">
+          {canCreate('ar_ap_tracker') && (
+            <>
+              <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={e => doImport(e.target.files?.[0])} />
+              <button onClick={() => fileRef.current?.click()} disabled={importing} className="btn btn-secondary flex items-center gap-2" title="Upload the Cash-Flow Excel — AR matched to Business Book clients, AP to Vendors">
+                <FiUpload /> {importing ? 'Importing…' : 'Import Excel'}
+              </button>
+            </>
+          )}
+          {(tab === 'ar' || tab === 'ap') && canCreate('ar_ap_tracker') && (
+            <button onClick={openAdd} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add {kind}</button>
+          )}
+        </div>
       </div>
 
       <div className="flex gap-2 flex-wrap">
@@ -276,6 +305,29 @@ export default function ArApTracker() {
             <button type="button" onClick={() => setModal(false)} className="btn border">Cancel</button>
           </div>
         </form>
+      </Modal>
+
+      {/* ── Import result ──────────────────────────────────────── */}
+      <Modal isOpen={!!importResult} onClose={() => setImportResult(null)} title="Import result">
+        {importResult && (
+          <div className="space-y-3 text-sm">
+            <div className="grid grid-cols-3 gap-2">
+              <div className="bg-emerald-50 rounded p-2 text-center"><div className="text-lg font-bold text-emerald-700">{importResult.imported}</div><div className="text-[11px] text-gray-500">New</div></div>
+              <div className="bg-blue-50 rounded p-2 text-center"><div className="text-lg font-bold text-blue-700">{importResult.updated}</div><div className="text-[11px] text-gray-500">Updated</div></div>
+              <div className="bg-amber-50 rounded p-2 text-center"><div className="text-lg font-bold text-amber-700">{importResult.matched}/{importResult.total}</div><div className="text-[11px] text-gray-500">Name-matched</div></div>
+            </div>
+            <div className="text-xs text-gray-500">AR rows: {importResult.byKind?.AR ?? 0} · AP rows: {importResult.byKind?.AP ?? 0}</div>
+            {importResult.unmatched?.length > 0 ? (
+              <div>
+                <div className="font-semibold text-amber-700 mb-1">Not matched to a Business Book client / Vendor ({importResult.unmatched.length}):</div>
+                <div className="max-h-48 overflow-y-auto border rounded p-2 bg-amber-50/40 text-xs space-y-0.5">
+                  {importResult.unmatched.map((u, i) => <div key={i}>• {u}</div>)}
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">Imported under the sheet's own name. Add these to Business Book / Vendors (or rename to match) and re-import to link them.</p>
+              </div>
+            ) : <div className="text-emerald-700 text-xs">✓ Every party matched a client / vendor.</div>}
+          </div>
+        )}
       </Modal>
     </div>
   );
