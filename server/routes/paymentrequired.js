@@ -156,6 +156,17 @@ function canUserApproveStep(db, userId, category, step) {
   if (overrideUserId) {
     return overrideUserId === userId;
   }
+  // COO escalation (mam 2026-06-18: "coo@securedengineers unable to approve").
+  // The COO may clear the L2 and L3 sign-offs. Matched by EMAIL (the `coo@`
+  // login is unique) rather than the display name "Nitin Jain", so a
+  // duplicate / differently-spelled name account can never block them, and
+  // the COO can stand in for the MD at L3. Skipped when an explicit
+  // Approval-Routing override is set (handled above — the override wins).
+  if (stepInfo.step === 2 || stepInfo.step === 3) {
+    const me = db.prepare('SELECT email, username FROM users WHERE id=?').get(userId);
+    const isCoo = (v) => String(v || '').trim().toLowerCase().startsWith('coo@');
+    if (isCoo(me?.email) || isCoo(me?.username)) return true;
+  }
   // Named approver (the standard flow pins L2/L3/Release to a person).
   if (stepInfo.approver_name) {
     const u = resolveUserByName(db, stepInfo.approver_name);
@@ -358,6 +369,10 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
     } else {
       // No override — any user with the matching role is "next".
       isMine = myRoles.includes(stepInfo.approver_role) || isAdmin;
+      // Also surface steps pinned to a NAMED approver (L2/L3/Release) and
+      // the COO escalation, using the same check the approve action uses —
+      // the role-only test above misses those (mam 2026-06-18).
+      if (!isMine) isMine = canUserApproveStep(db, uid, row.category, row.current_step);
     }
     if (!isMine) continue;
 
