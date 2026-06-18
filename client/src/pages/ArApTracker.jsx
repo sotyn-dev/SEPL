@@ -45,9 +45,12 @@ export default function ArApTracker() {
   const [importing, setImporting] = useState(false);
   const fileRef = useRef(null);
   const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkText, setBulkText] = useState('');
+  const [bulkRows, setBulkRows] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [parties, setParties] = useState({ ar: [], ap: [] });
+  const blankBulkRow = () => ({ party: '', due_date: '', planned: '' });
+  const openBulk = () => { setBulkRows(Array.from({ length: 6 }, blankBulkRow)); setBulkOpen(true); };
+  const setBulkCell = (i, k, v) => setBulkRows(rs => rs.map((r, j) => j === i ? { ...r, [k]: v } : r));
 
   const load = useCallback(() => {
     api.get('/ar-ap-tracker').then(r => setEntries(r.data || [])).catch(() => {});
@@ -129,13 +132,16 @@ export default function ArApTracker() {
     finally { setImporting(false); if (fileRef.current) fileRef.current.value = ''; }
   };
 
-  // Bulk paste — send the textarea + active kind to the same matching/upsert.
+  // Bulk add — send the filled rows (party + date + amount) to the same
+  // matching/upsert as the Excel import, via the /bulk endpoint's text form.
   const doBulk = async () => {
-    if (!bulkText.trim()) return toast.error('Paste some rows first');
+    const valid = bulkRows.filter(r => r.party?.trim() && r.due_date && +r.planned > 0);
+    if (!valid.length) return toast.error('Fill at least one row (party, date, amount)');
+    const text = valid.map(r => `${r.party.trim()}, ${r.due_date}, ${r.planned}`).join('\n');
     setBulkBusy(true);
     try {
-      const r = await api.post('/ar-ap-tracker/bulk', { kind, text: bulkText });
-      setBulkOpen(false); setBulkText(''); setImportResult(r.data);
+      const r = await api.post('/ar-ap-tracker/bulk', { kind, text });
+      setBulkOpen(false); setImportResult(r.data);
       toast.success(`Added ${r.data.imported} · updated ${r.data.updated}`);
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Bulk add failed'); }
@@ -155,6 +161,11 @@ export default function ArApTracker() {
 
   return (
     <div className="space-y-5">
+      {/* Shared party suggestions (Business Book clients for AR, Vendors for
+          AP) — top-level so both the Add and Bulk modals can use it. */}
+      <datalist id="arapPartyDL">
+        {(kind === 'AR' ? parties.ar : parties.ap).map(n => <option key={n} value={n} />)}
+      </datalist>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2"><FiBarChart2 className="text-blue-700" /> AR / AP Tracker</h1>
@@ -170,7 +181,7 @@ export default function ArApTracker() {
             </>
           )}
           {(tab === 'ar' || tab === 'ap') && canCreate('ar_ap_tracker') && (
-            <button onClick={() => setBulkOpen(true)} className="btn btn-secondary flex items-center gap-2" title="Paste many rows at once"><FiClipboard /> Bulk {kind}</button>
+            <button onClick={openBulk} className="btn btn-secondary flex items-center gap-2" title="Add many rows at once"><FiClipboard /> Bulk {kind}</button>
           )}
           {(tab === 'ar' || tab === 'ap') && canCreate('ar_ap_tracker') && (
             <button onClick={openAdd} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add {kind}</button>
@@ -331,9 +342,6 @@ export default function ArApTracker() {
             <label className="label">{kind === 'AR' ? 'Client / Site' : 'Vendor / Party'} * <span className="text-gray-400 font-normal normal-case">(pick from {kind === 'AR' ? 'Business Book' : 'Vendors'}, or type)</span></label>
             <input className="input" list="arapPartyDL" value={form.party || ''} onChange={e => setForm({ ...form, party: e.target.value })}
               placeholder={kind === 'AR' ? 'Search Business Book clients…' : 'Search Vendors…'} required />
-            <datalist id="arapPartyDL">
-              {(kind === 'AR' ? parties.ar : parties.ap).map(n => <option key={n} value={n} />)}
-            </datalist>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="label">Week / Date *</label><input type="date" className="input" value={form.due_date || ''} onChange={e => setForm({ ...form, due_date: e.target.value })} required /></div>
@@ -355,13 +363,34 @@ export default function ArApTracker() {
         </form>
       </Modal>
 
-      {/* ── Bulk paste ─────────────────────────────────────────── */}
-      <Modal isOpen={bulkOpen} onClose={() => setBulkOpen(false)} title={`Bulk add ${kind} entries`}>
+      {/* ── Bulk add (row grid) ────────────────────────────────── */}
+      <Modal isOpen={bulkOpen} onClose={() => setBulkOpen(false)} title={`Bulk add ${kind} entries`} wide>
         <div className="space-y-3 text-sm">
-          <p className="text-gray-600">One entry per line — <b>party, date, amount</b>. Date as <b>DD-MM</b> (e.g. 17-06) or YYYY-MM-DD. Added as <b>{kind}</b>; start a line with <code>AR,</code> or <code>AP,</code> to override. Tab- or comma-separated both work (you can paste from Excel).</p>
-          <textarea className="input font-mono text-xs" rows="10" value={bulkText} onChange={e => setBulkText(e.target.value)}
-            placeholder={`SBJ, 17-06, 15\nsael, 24-06, 8.44\njmh PI, 17-06, 40`} />
-          <div className="flex gap-2">
+          <p className="text-gray-600">Pick the {kind === 'AR' ? 'Business Book client' : 'Vendor'}, the date, and the planned ₹L for each row. Empty rows are ignored.</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-xs text-gray-500 uppercase">
+                <th className="text-left px-2 py-1 w-10">#</th>
+                <th className="text-left px-2 py-1">{kind === 'AR' ? 'Client / Site' : 'Vendor / Party'}</th>
+                <th className="text-left px-2 py-1 w-40">Date</th>
+                <th className="text-left px-2 py-1 w-28">Planned (₹L)</th>
+                <th className="w-8"></th>
+              </tr></thead>
+              <tbody>
+                {bulkRows.map((r, i) => (
+                  <tr key={i}>
+                    <td className="px-2 py-1 text-gray-400">{i + 1}</td>
+                    <td className="px-2 py-1"><input className="input" list="arapPartyDL" value={r.party} onChange={e => setBulkCell(i, 'party', e.target.value)} placeholder={kind === 'AR' ? 'Search clients…' : 'Search vendors…'} /></td>
+                    <td className="px-2 py-1"><input className="input" type="date" value={r.due_date} onChange={e => setBulkCell(i, 'due_date', e.target.value)} /></td>
+                    <td className="px-2 py-1"><input className="input" type="number" step="0.01" value={r.planned} onChange={e => setBulkCell(i, 'planned', e.target.value)} /></td>
+                    <td className="px-2 py-1 text-center">{bulkRows.length > 1 && <button onClick={() => setBulkRows(rs => rs.filter((_, j) => j !== i))} className="text-red-500 hover:bg-red-50 rounded p-1"><FiTrash2 size={14} /></button>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button onClick={() => setBulkRows(rs => [...rs, blankBulkRow()])} className="text-xs text-blue-700 font-semibold flex items-center gap-1"><FiPlus size={13} /> Add row</button>
+          <div className="flex gap-2 pt-1">
             <button onClick={doBulk} disabled={bulkBusy} className="btn btn-primary flex-1">{bulkBusy ? 'Adding…' : `Add ${kind} rows`}</button>
             <button onClick={() => setBulkOpen(false)} className="btn border">Cancel</button>
           </div>
