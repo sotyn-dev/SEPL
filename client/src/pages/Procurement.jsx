@@ -1811,7 +1811,7 @@ export default function Procurement() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="sticky-toolbar">
         <div className="flex gap-2 flex-wrap items-center justify-between">
           <div className="flex gap-2 flex-wrap">{tabs.map(t => {
@@ -1822,7 +1822,7 @@ export default function Procurement() {
               ? (vendorPos || []).filter(po => !po.cancelled && po.payment_block_status === 'pending').length
               : 0;
             return (
-              <button key={t.id} onClick={() => setTab(t.id)} className={`btn relative ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>
+              <button key={t.id} onClick={() => setTab(t.id)} className={`btn relative !px-3 !py-1.5 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>
                 {t.label}
                 {urgentCount > 0 && (
                   <span className="ml-2 inline-flex items-center justify-center text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-600 text-white border border-red-700"
@@ -1896,7 +1896,7 @@ export default function Procurement() {
         return (
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
-            <h3 className="font-semibold">Raise Indent</h3>
+            <h3 className="text-sm font-semibold">Raise Indent</h3>
             {(() => {
               const raiseClosed = !!raiseWindow && !raiseWindow.allowed;
               return (
@@ -1985,10 +1985,10 @@ export default function Procurement() {
                 <button
                   type="button"
                   onClick={handle}
-                  className={`min-w-0 rounded-lg border ${color.border} ${color.bg} p-3 text-left transition hover:shadow-sm ${isActive ? 'ring-2 ring-offset-1 ' + color.ring : ''}`}>
-                  <div className={`text-[11px] font-semibold uppercase tracking-wide ${color.text} truncate`}>{label}</div>
-                  <div className="flex items-baseline justify-between mt-1 gap-1 flex-wrap">
-                    <div className={`text-2xl font-bold ${color.text}`}>{count}</div>
+                  className={`min-w-0 rounded-lg border ${color.border} ${color.bg} px-2.5 py-1.5 text-left transition hover:shadow-sm ${isActive ? 'ring-2 ring-offset-1 ' + color.ring : ''}`}>
+                  <div className={`text-[10px] font-semibold uppercase tracking-wide ${color.text} truncate`}>{label}</div>
+                  <div className="flex items-baseline justify-between mt-0.5 gap-1 flex-wrap">
+                    <div className={`text-lg font-bold leading-none ${color.text}`}>{count}</div>
                     <div className={`text-[11px] font-medium ${color.text} opacity-80 whitespace-nowrap`}>
                       {amount > 0 ? `₹${Math.round(amount).toLocaleString('en-IN')}` : '—'}
                     </div>
