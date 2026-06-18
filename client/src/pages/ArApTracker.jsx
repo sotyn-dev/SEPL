@@ -37,6 +37,20 @@ const fmtDay = (dateStr) => {
   if (!m) return String(dateStr || '');
   return `${DOW[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()]} ${m[3]}`;
 };
+// Collection-day model (mirrors the server): AR settles Mon & Thu, AP Tue & Fri.
+const COLLECT_DAYS = { AR: [1, 4], AP: [2, 5] };
+const NEXT_COLLECT = { AR: { 0: 1, 1: 3, 2: 2, 3: 1, 4: 4, 5: 3, 6: 2 }, AP: { 0: 2, 1: 1, 2: 3, 3: 2, 4: 1, 5: 4, 6: 3 } };
+const parseUTCDate = (s) => { const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null; };
+const isoUTC = (d) => d.toISOString().slice(0, 10);
+const addUTCDays = (d, n) => { const x = new Date(d.getTime()); x.setUTCDate(x.getUTCDate() + n); return x; };
+const mondayOfWeek = (s) => { const d = parseUTCDate(s) || new Date(); const dow = d.getUTCDay(); return addUTCDays(d, dow === 0 ? -6 : 1 - dow); };
+// The collection day an entry lands on: itself if already a collection day, else the next one.
+const collectionSlot = (s, kind) => {
+  const d = parseUTCDate(s); if (!d) return s;
+  const days = COLLECT_DAYS[kind] || COLLECT_DAYS.AR;
+  if (days.includes(d.getUTCDay())) return s;
+  return isoUTC(addUTCDays(d, (NEXT_COLLECT[kind] || NEXT_COLLECT.AR)[d.getUTCDay()]));
+};
 // "17-06" → "2026-06-17"; passes a YYYY-MM-DD through unchanged.
 const ddmmToISO = (s) => {
   const t = String(s || '').trim();
@@ -105,22 +119,31 @@ export default function ArApTracker() {
   }, [kind, parties]);
 
   // Pivot: party rows × date columns, cell = sum of effective amounts.
-  // Pivot: party rows × DATE columns, grouped under week headers. Each week
-  // shows its individual collection days (AR Mon/Thu, AP Tue/Fri) so you can
-  // see which day a payment lands on, not just a weekly lump.
+  // Pivot: a fixed 13-week rolling horizon. Weeks are consecutive Mon-start
+  // weeks beginning at the earliest entry's week; each week shows its 2
+  // collection-day columns (AR Mon/Thu, AP Tue/Fri). Entries land on the
+  // collection day they settle on. 13 weeks × 2 days = 26 day columns.
   const pivot = useMemo(() => {
-    const dates = [...new Set(rows.map(r => r.due_date))].sort();
     const parties = [...new Set(rows.map(r => r.party))].sort();
+    const istToday = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+    const allDates = rows.map(r => r.due_date).filter(Boolean).sort();
+    const base = mondayOfWeek(allDates.length ? allDates[0] : istToday);
+    const offs = kind === 'AP' ? [1, 4] : [0, 3];        // Tue/Fri vs Mon/Thu offset from Monday
+    const weekGroups = [], dates = [];
+    for (let i = 0; i < 13; i++) {
+      const ws = addUTCDays(base, i * 7);
+      const d1 = isoUTC(addUTCDays(ws, offs[0])), d2 = isoUTC(addUTCDays(ws, offs[1]));
+      weekGroups.push({ key: `W${i + 1}`, label: `${ws.getUTCDate()} ${MONTHS[ws.getUTCMonth()]}`, dates: [d1, d2] });
+      dates.push(d1, d2);
+    }
+    const daySet = new Set(dates);
     const cell = {};
-    for (const r of rows) cell[`${r.party}|${r.due_date}`] = (cell[`${r.party}|${r.due_date}`] || 0) + eff(r);
+    for (const r of rows) { const slot = collectionSlot(r.due_date, kind); if (daySet.has(slot)) cell[`${r.party}|${slot}`] = (cell[`${r.party}|${slot}`] || 0) + eff(r); }
     const colTot = Object.fromEntries(dates.map(d => [d, parties.reduce((s, p) => s + (cell[`${p}|${d}`] || 0), 0)]));
     const rowTot = Object.fromEntries(parties.map(p => [p, dates.reduce((s, d) => s + (cell[`${p}|${d}`] || 0), 0)]));
     const grand = dates.reduce((s, d) => s + colTot[d], 0);
-    // Group the date columns by week for the spanning top header row.
-    const weekGroups = [];
-    for (const d of dates) { const w = weekOf(d); const g = weekGroups.find(x => x.key === w.key); if (g) g.dates.push(d); else weekGroups.push({ key: w.key, label: w.label, dates: [d] }); }
     return { dates, parties, cell, colTot, rowTot, grand, weekGroups };
-  }, [rows]);
+  }, [rows, kind]);
 
   const openAdd = () => { setEditing(null); setForm({ kind, party: '', due_date: '', planned: '', actual: '', status: 'planned', note: '', remark: '' }); setModal(true); };
   const openEdit = (r) => { setEditing(r); setForm({ ...r, planned: r.planned ?? '', actual: r.actual ?? '', remark: '' }); setModal(true); };
