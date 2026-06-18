@@ -36,7 +36,7 @@ import {
   // Tasks children
   FiAward, FiPaperclip, FiLayers, FiCheckCircle,
   // Service Desk children
-  FiAlertTriangle, FiMessageCircle,
+  FiAlertTriangle, FiMessageCircle, FiMessageSquare,
   // Executive children
   FiCrosshair, FiMonitor, FiCompass,
   // Admin children + Settings children
@@ -109,6 +109,7 @@ const SIDEBAR_GROUPS = [
     { path: '/indent-labour-payment', label: 'Indent Labour Payment', icon: FiClipboard, module: 'indent_labour_payment' },
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
     { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
+    { path: '/site-chat',    label: 'Site Chat',        icon: FiMessageSquare, module: 'site_chat' },
     { path: '/fire-noc',     label: 'Fire NOC Renewal', icon: FiZap,         module: 'fire_noc' },
     { path: '/installation', label: 'Sales Billing',     icon: FiTool,        module: 'installation' },
   ]},

@@ -4930,6 +4930,9 @@ in your first week. If a process feels broken, raise a Help Ticket
     // (receivables vs payables by party × week) with a mandatory-remark
     // change log. Under the Finance sidebar group.
     'ar_ap_tracker',
+    // Mam (2026-06-18): Site Chat — internal WhatsApp-style message thread
+    // per site (team-only).
+    'site_chat',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

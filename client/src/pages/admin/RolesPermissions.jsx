@@ -21,6 +21,7 @@ const ALL_MODULES = [
   { key: 'attendance', label: 'Attendance' },
   { key: 'collections', label: 'Collection Engine' },
   { key: 'ar_ap_tracker', label: 'AR/AP Tracker' },
+  { key: 'site_chat', label: 'Site Chat' },
   { key: 'dpr', label: 'DPR' },
   { key: 'delegations', label: 'Delegations' },
   { key: 'pms_tasks', label: 'PMS Tasks' },
