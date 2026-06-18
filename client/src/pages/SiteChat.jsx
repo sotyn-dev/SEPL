@@ -2,11 +2,13 @@
 // 2026-06-18). Left: site list with last-message preview. Right: the thread
 // (own messages right/green, others left/white) + a composer with text and
 // photo/file attachments. Team-only; everything stored in the ERP.
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { fmtTime, fmtDateTime } from '../utils/datetime';
+import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
+
+const DAY_OPTS = { day: '2-digit', month: 'short', year: 'numeric' };
 import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiMessageSquare, FiFile } from 'react-icons/fi';
 
 const isImg = (u) => /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(u || ''));
@@ -69,6 +71,10 @@ export default function SiteChat() {
   };
 
   const shown = sites.filter(s => !q || `${s.name} ${s.client_name || ''}`.toLowerCase().includes(q.toLowerCase()));
+  // WhatsApp-style day separators in the thread.
+  const todayLbl = fmtDate(new Date(), DAY_OPTS);
+  const yestLbl = fmtDate(new Date(Date.now() - 864e5), DAY_OPTS);
+  const dayLabel = (ts) => { const l = fmtDate(ts, DAY_OPTS); return l === todayLbl ? 'Today' : l === yestLbl ? 'Yesterday' : l; };
 
   return (
     <div className="space-y-3">
@@ -125,10 +131,14 @@ export default function SiteChat() {
 
               <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5" style={{ background: '#efeae2' }}>
                 {msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say something about this site.</div>}
-                {msgs.map(m => {
+                {(() => { let prevDay = null; return msgs.map(m => {
                   const own = m.sender_id === user?.id;
+                  const day = fmtDate(m.created_at, DAY_OPTS);
+                  const sep = day !== prevDay; prevDay = day;
                   return (
-                    <div key={m.id} className={`flex ${own ? 'justify-end' : 'justify-start'}`}>
+                    <Fragment key={m.id}>
+                    {sep && <div className="flex justify-center my-1.5"><span className="text-[10px] font-medium bg-white/85 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(m.created_at)}</span></div>}
+                    <div className={`flex ${own ? 'justify-end' : 'justify-start'}`}>
                       <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
                         {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
                         {m.attachment_url && (isImg(m.attachment_url)
@@ -141,8 +151,9 @@ export default function SiteChat() {
                         </div>
                       </div>
                     </div>
+                    </Fragment>
                   );
-                })}
+                }); })()}
                 <div ref={endRef} />
               </div>
 
