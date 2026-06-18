@@ -240,9 +240,8 @@ export default function PaymentRequired() {
   };
 
   const handleApprove = async (id) => {
-    if (!approvalRemarks || approvalRemarks.trim().length < 5) {
-      return toast.error('Please enter approval reason (minimum 5 characters)');
-    }
+    // Remarks are OPTIONAL when approving (mam 2026-06-18) — only a
+    // rejection needs a reason. Don't block approval on an empty box.
     const original = +(viewData?.amount || 0);
     const n = approvalAmount === '' ? null : +approvalAmount;
     if (n !== null) {
@@ -1098,9 +1097,9 @@ export default function PaymentRequired() {
                 </div>
 
                 <div>
-                  <label className="label text-amber-700">Reason / Remarks (Required) *</label>
+                  <label className="label text-amber-700">Reason / Remarks <span className="font-normal normal-case text-gray-500">(optional to approve · required to reject)</span></label>
                   <textarea className="input" rows="3" value={approvalRemarks} onChange={e => setApprovalRemarks(e.target.value)}
-                    placeholder="Enter detailed reason for approval or rejection (minimum 5 characters)..." required />
+                    placeholder="Optional for approval. Required (min 5 chars) if rejecting…" />
                 </div>
                 <div className="flex gap-3">
                   <button onClick={() => handleApprove(viewData.id)} className="btn btn-success flex-1 py-3 text-base font-bold">Approve</button>

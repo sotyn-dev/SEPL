@@ -620,7 +620,8 @@ function advanceToNextStep(db, request, approvedBy) {
 // PUT approve
 router.put('/:id/approve', requirePermission('payment_required', 'approve'), (req, res) => {
   const { remarks, approved_amount } = req.body;
-  if (!remarks || remarks.trim().length < 5) return res.status(400).json({ error: 'Remarks required (min 5 chars)' });
+  // Remarks are OPTIONAL on approval (mam 2026-06-18). Only rejection
+  // demands a reason — see the /reject handler below.
   const db = getDb();
   const request = db.prepare('SELECT * FROM payment_requests WHERE id=?').get(req.params.id);
   if (!request) return res.status(404).json({ error: 'Not found' });
@@ -650,7 +651,7 @@ router.put('/:id/approve', requirePermission('payment_required', 'approve'), (re
   const workflow = WORKFLOW[request.category];
   const stepInfo = workflow.find(w => w.step === request.current_step);
   db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, step_amount, approved_by) VALUES (?,?,?,?,?,?,?)')
-    .run(request.id, request.current_step, stepInfo.name, 'approved', remarks, stepAmount, req.user.id);
+    .run(request.id, request.current_step, stepInfo.name, 'approved', remarks || null, stepAmount, req.user.id);
 
   // Persist the new approved amount on the request itself so the next
   // approver (and the final cash-flow entry) see the latest figure.
