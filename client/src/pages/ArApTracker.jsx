@@ -181,9 +181,14 @@ export default function ArApTracker() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-gray-50">
-                    <th className="text-left px-3 py-2 sticky left-0 bg-gray-50">Party</th>
-                    {pivot.dates.map(d => <th key={d} className="px-2 py-2 text-right whitespace-nowrap">{fmtCol(d)}</th>)}
-                    <th className="px-3 py-2 text-right font-bold">Total</th>
+                    <th className="text-left px-3 py-2 sticky left-0 bg-gray-50">Site / Party</th>
+                    {pivot.dates.map((d, i) => (
+                      <th key={d} className="px-2 py-2 text-right whitespace-nowrap align-bottom">
+                        <div className="text-[9px] font-bold text-blue-600 leading-none">W{i + 1}</div>
+                        <div className="leading-tight font-semibold">{fmtCol(d)}</div>
+                      </th>
+                    ))}
+                    <th className="px-3 py-2 text-right font-bold align-bottom">Total</th>
                   </tr>
                 </thead>
                 <tbody>
