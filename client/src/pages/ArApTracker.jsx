@@ -12,7 +12,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtDateTime } from '../utils/datetime';
 import { exportCsv } from '../utils/exportCsv';
-import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiTrendingUp, FiTrendingDown, FiBarChart2, FiClock } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiClipboard, FiTrendingUp, FiTrendingDown, FiBarChart2, FiClock } from 'react-icons/fi';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const fmtCol = (d) => { const m = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]} ${MONTHS[+m[2] - 1]}` : (d || ''); };
@@ -33,6 +33,9 @@ export default function ArApTracker() {
   const [importResult, setImportResult] = useState(null);
   const [importing, setImporting] = useState(false);
   const fileRef = useRef(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const load = useCallback(() => {
     api.get('/ar-ap-tracker').then(r => setEntries(r.data || [])).catch(() => {});
@@ -109,6 +112,19 @@ export default function ArApTracker() {
     finally { setImporting(false); if (fileRef.current) fileRef.current.value = ''; }
   };
 
+  // Bulk paste — send the textarea + active kind to the same matching/upsert.
+  const doBulk = async () => {
+    if (!bulkText.trim()) return toast.error('Paste some rows first');
+    setBulkBusy(true);
+    try {
+      const r = await api.post('/ar-ap-tracker/bulk', { kind, text: bulkText });
+      setBulkOpen(false); setBulkText(''); setImportResult(r.data);
+      toast.success(`Added ${r.data.imported} · updated ${r.data.updated}`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Bulk add failed'); }
+    finally { setBulkBusy(false); }
+  };
+
   const exportLog = () => exportCsv('arap-change-log',
     ['When (IST)', 'User', 'Kind', 'Party', 'Field', 'Old', 'New', 'Remark'],
     log.map(l => [fmtDateTime(l.changed_at), l.changed_by_name, l.kind, l.party, l.field, l.old_value, l.new_value, l.remark]));
@@ -135,6 +151,9 @@ export default function ArApTracker() {
                 <FiUpload /> {importing ? 'Importing…' : 'Import Excel'}
               </button>
             </>
+          )}
+          {(tab === 'ar' || tab === 'ap') && canCreate('ar_ap_tracker') && (
+            <button onClick={() => setBulkOpen(true)} className="btn btn-secondary flex items-center gap-2" title="Paste many rows at once"><FiClipboard /> Bulk {kind}</button>
           )}
           {(tab === 'ar' || tab === 'ap') && canCreate('ar_ap_tracker') && (
             <button onClick={openAdd} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add {kind}</button>
@@ -305,6 +324,19 @@ export default function ArApTracker() {
             <button type="button" onClick={() => setModal(false)} className="btn border">Cancel</button>
           </div>
         </form>
+      </Modal>
+
+      {/* ── Bulk paste ─────────────────────────────────────────── */}
+      <Modal isOpen={bulkOpen} onClose={() => setBulkOpen(false)} title={`Bulk add ${kind} entries`}>
+        <div className="space-y-3 text-sm">
+          <p className="text-gray-600">One entry per line — <b>party, date, amount</b>. Date as <b>DD-MM</b> (e.g. 17-06) or YYYY-MM-DD. Added as <b>{kind}</b>; start a line with <code>AR,</code> or <code>AP,</code> to override. Tab- or comma-separated both work (you can paste from Excel).</p>
+          <textarea className="input font-mono text-xs" rows="10" value={bulkText} onChange={e => setBulkText(e.target.value)}
+            placeholder={`SBJ, 17-06, 15\nsael, 24-06, 8.44\njmh PI, 17-06, 40`} />
+          <div className="flex gap-2">
+            <button onClick={doBulk} disabled={bulkBusy} className="btn btn-primary flex-1">{bulkBusy ? 'Adding…' : `Add ${kind} rows`}</button>
+            <button onClick={() => setBulkOpen(false)} className="btn border">Cancel</button>
+          </div>
+        </div>
       </Modal>
 
       {/* ── Import result ──────────────────────────────────────── */}

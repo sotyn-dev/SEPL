@@ -230,6 +230,49 @@ function buildMatcher(names) {
   };
 }
 
+// Shared core for both Excel import and bulk paste: match each party to a
+// master (AR→Business Book client, AP→Vendor) and upsert by kind+party+date.
+function importEntries(db, entries, user, sourceLabel, replace) {
+  const bb = db.prepare('SELECT client_name, company_name FROM business_book').all();
+  const matchAR = buildMatcher(bb.flatMap(r => [r.client_name, r.company_name]));
+  const matchAP = buildMatcher(db.prepare('SELECT name FROM vendors').all().map(r => r.name));
+  const upd = db.prepare('UPDATE arap_entries SET planned=?, updated_at=CURRENT_TIMESTAMP WHERE id=?');
+  const ins = db.prepare(`INSERT INTO arap_entries (kind, party, due_date, planned, status, note, created_by, created_by_name) VALUES (?,?,?,?,?,?,?,?)`);
+  const findExisting = db.prepare('SELECT id FROM arap_entries WHERE kind=? AND party=? AND due_date=?');
+  let imported = 0, updated = 0, matched = 0;
+  const unmatched = new Set();
+  const tx = db.transaction(() => {
+    if (replace) db.prepare('DELETE FROM arap_entries').run();
+    for (const e of entries) {
+      const canonical = e.kind === 'AR' ? matchAR(e.party) : matchAP(e.party);
+      const party = canonical || e.party;
+      if (canonical) matched++; else unmatched.add(`${e.kind}: ${e.party}`);
+      const note = canonical && canonical.toLowerCase() !== e.party.toLowerCase() ? `sheet: ${e.party}` : null;
+      const ex = findExisting.get(e.kind, party, e.due_date);
+      if (ex) { upd.run(e.planned, ex.id); updated++; }
+      else { ins.run(e.kind, party, e.due_date, e.planned, 'planned', note, user.id, user.name || ''); imported++; }
+    }
+    db.prepare(`INSERT INTO arap_changelog (entry_id, kind, party, field, old_value, new_value, remark, changed_by, changed_by_name) VALUES (NULL,?,?,?,?,?,?,?,?)`)
+      .run('AR/AP', '—', 'imported', '', `${imported} new · ${updated} updated`, `Bulk add — ${sourceLabel}`, user.id, user.name || '');
+  });
+  tx();
+  return {
+    imported, updated, matched, total: entries.length,
+    unmatched: [...unmatched].sort(),
+    byKind: { AR: entries.filter(e => e.kind === 'AR').length, AP: entries.filter(e => e.kind === 'AP').length },
+  };
+}
+
+// Parse a free-text date: "DD-MM" / "D-M" (year defaults to IMPORT_YEAR) or "YYYY-MM-DD".
+function normLineDate(s) {
+  const t = String(s == null ? '' : s).trim();
+  let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) return `${m[1]}-${String(+m[2]).padStart(2, '0')}-${String(+m[3]).padStart(2, '0')}`;
+  m = t.match(/^(\d{1,2})\s*[-/.]\s*(\d{1,2})$/);
+  if (m) { const day = +m[1], month = +m[2]; if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return `${IMPORT_YEAR}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`; }
+  return null;
+}
+
 router.post('/import', requirePermission('ar_ap_tracker', 'create'), uploadXlsx.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const db = getDb();
@@ -247,43 +290,37 @@ router.post('/import', requirePermission('ar_ap_tracker', 'create'), uploadXlsx.
     entries = entries.concat(parseSheet(wb.Sheets[sn], kind));
   }
   if (!entries.length) return res.status(400).json({ error: 'No AR/AP rows found. Expecting sheets named "AR…" and "AP…" with a party column and date columns.' });
+  const replace = !!(req.body && (req.body.replace === '1' || req.body.replace === 'true'));
+  res.json(importEntries(db, entries, req.user, req.file.originalname || 'Excel', replace));
+});
 
-  // Masters for name matching.
-  const bb = db.prepare('SELECT client_name, company_name FROM business_book').all();
-  const matchAR = buildMatcher(bb.flatMap(r => [r.client_name, r.company_name]));
-  const matchAP = buildMatcher(db.prepare('SELECT name FROM vendors').all().map(r => r.name));
-
-  if (req.body && (req.body.replace === '1' || req.body.replace === 'true')) {
-    db.prepare('DELETE FROM arap_entries').run();
+// Bulk paste — one entry per line: "party, date, amount" (or prefix a line
+// with "AR"/"AP" to override). Date is DD-MM (year defaults to the forecast
+// year) or YYYY-MM-DD. Same name-matching + upsert as the Excel import.
+router.post('/bulk', requirePermission('ar_ap_tracker', 'create'), (req, res) => {
+  const db = getDb();
+  const defKind = req.body && /^(AR|AP)$/i.test(req.body.kind || '') ? req.body.kind.toUpperCase() : null;
+  const text = req.body && req.body.text;
+  if (!text || !String(text).trim()) return res.status(400).json({ error: 'Paste at least one line: party, date, amount' });
+  const entries = [], skipped = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    let parts = t.split(/\t/);                       // tab-separated (Excel paste)
+    if (parts.length < 2) parts = t.split(/\s*[,;]\s*/);  // else comma / semicolon
+    parts = parts.map(s => s.trim()).filter(Boolean);
+    let kind = defKind, party, dateStr, amtStr;
+    if (/^(AR|AP)$/i.test(parts[0] || '')) { kind = parts[0].toUpperCase(); [, party, dateStr, amtStr] = parts; }
+    else { [party, dateStr, amtStr] = parts; }
+    const due = normLineDate(dateStr);
+    const amt = parseFloat(String(amtStr == null ? '' : amtStr).replace(/,/g, ''));
+    if (party && due && Number.isFinite(amt) && amt > 0 && (kind === 'AR' || kind === 'AP')) entries.push({ kind, party, due_date: due, planned: amt });
+    else skipped.push(t);
   }
-
-  const upd = db.prepare('UPDATE arap_entries SET planned=?, updated_at=CURRENT_TIMESTAMP WHERE id=?');
-  const ins = db.prepare(`INSERT INTO arap_entries (kind, party, due_date, planned, status, note, created_by, created_by_name) VALUES (?,?,?,?,?,?,?,?)`);
-  const findExisting = db.prepare('SELECT id FROM arap_entries WHERE kind=? AND party=? AND due_date=?');
-
-  let imported = 0, updated = 0, matched = 0;
-  const unmatched = new Set();
-  const tx = db.transaction(() => {
-    for (const e of entries) {
-      const canonical = e.kind === 'AR' ? matchAR(e.party) : matchAP(e.party);
-      const party = canonical || e.party;
-      if (canonical) matched++; else unmatched.add(`${e.kind}: ${e.party}`);
-      const note = canonical && canonical.toLowerCase() !== e.party.toLowerCase() ? `sheet: ${e.party}` : null;
-      const ex = findExisting.get(e.kind, party, e.due_date);
-      if (ex) { upd.run(e.planned, ex.id); updated++; }
-      else { ins.run(e.kind, party, e.due_date, e.planned, 'planned', note, req.user.id, req.user.name || ''); imported++; }
-    }
-    db.prepare(`INSERT INTO arap_changelog (entry_id, kind, party, field, old_value, new_value, remark, changed_by, changed_by_name)
-                VALUES (NULL,?,?,?,?,?,?,?,?)`)
-      .run('AR/AP', '—', 'imported', '', `${imported} new · ${updated} updated`, `Imported from ${req.file.originalname || 'Excel'}`, req.user.id, req.user.name || '');
-  });
-  tx();
-
-  res.json({
-    imported, updated, matched, total: entries.length,
-    unmatched: [...unmatched].sort(),
-    byKind: { AR: entries.filter(e => e.kind === 'AR').length, AP: entries.filter(e => e.kind === 'AP').length },
-  });
+  if (!entries.length) return res.status(400).json({ error: 'No valid rows. Each line needs: party, date (DD-MM), amount — pick the AR or AP tab first.' });
+  const report = importEntries(db, entries, req.user, 'pasted rows', false);
+  report.skipped = skipped.length;
+  res.json(report);
 });
 
 module.exports = router;
