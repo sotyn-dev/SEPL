@@ -633,7 +633,12 @@ function advanceToNextStep(db, request, approvedBy) {
 }
 
 // PUT approve
-router.put('/:id/approve', requirePermission('payment_required', 'approve'), (req, res) => {
+// Authorisation here is the STEP-APPROVER check below (canUserApproveStep:
+// admin / routing override / named approver / matching role / COO), NOT the
+// generic module 'approve' permission — that toggle was wrongly blocking the
+// designated approvers (e.g. L2 Nitin Jain) whose role didn't have it ticked
+// (mam 2026-06-18). authMiddleware still requires a logged-in user.
+router.put('/:id/approve', (req, res) => {
   const { remarks, approved_amount } = req.body;
   // Remarks are OPTIONAL on approval (mam 2026-06-18). Only rejection
   // demands a reason — see the /reject handler below.
@@ -690,7 +695,9 @@ router.put('/:id/approve', requirePermission('payment_required', 'approve'), (re
 });
 
 // PUT reject
-router.put('/:id/reject', requirePermission('payment_required', 'approve'), (req, res) => {
+// Same as /approve — gated by the step-approver check inside, not the
+// generic module permission (mam 2026-06-18).
+router.put('/:id/reject', (req, res) => {
   const { remarks } = req.body;
   if (!remarks || remarks.trim().length < 5) return res.status(400).json({ error: 'Remarks required' });
   const db = getDb();
