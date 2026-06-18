@@ -5160,7 +5160,6 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
 
     // Financial year (India, Apr–Mar) derived from the invoice date.
     const fyOf = (d) => { const m = String(d || '').match(/^(\d{4})-(\d{2})/); if (!m) return ''; const y = +m[1], mo = +m[2]; const s = mo >= 4 ? y : y - 1; return `${s}-${String(s + 1).slice(2)}`; };
-    const placeOfSupply = [esc(dn.place_of_supply || dn.client_state || ''), clientStateCode ? `(${esc(clientStateCode)})` : ''].filter(Boolean).join(' ');
 
     // Auto-round the grand total to the whole rupee (matches the supplied
     // PDF's "Round Off (–) 0.17 → 1,44,053.00").
@@ -5181,11 +5180,14 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
 
     // Item rows — no discount column (SL / DESC / HSN / QTY / UOM / RATE / AMOUNT).
     const sbRows = items.map((it, idx) => {
-      const rawDesc = [it.description, it.specification, it.size].filter(Boolean).join(' / ');
-      const desc = toSupplyDescription(rawDesc);
+      // v7 layout: description (SITC→Supply normalised) on the first line,
+      // the size / spec on its own muted sub-line beneath it
+      // (e.g. "Supply of cabling…" then "4C × 25 SQMM (CU)").
+      const desc = toSupplyDescription(it.description || '');
+      const specLine = [it.specification, it.size].filter(Boolean).join(' · ');
       const qty = +it.quantity || 0, rate = +it.rate || 0, discPct = +it.disc_pct || 0;
       const amount = +it.amount || (qty * rate * (1 - discPct / 100));
-      return `<tr><td class="c">${idx + 1}</td><td>${esc(desc)}</td><td class="c">${esc(it.gst_text || '')}</td><td class="r">${fmt(qty)}</td><td class="c">${esc(it.unit || '')}</td><td class="r">${fmt(rate)}</td><td class="r">${fmt(amount)}</td></tr>`;
+      return `<tr><td class="c">${idx + 1}</td><td>${esc(desc)}${specLine ? `<div class="spec">${esc(specLine)}</div>` : ''}</td><td class="c">${esc(it.gst_text || '')}</td><td class="r">${fmt(qty)}</td><td class="c">${esc(it.unit || '')}</td><td class="r">${fmt(rate)}</td><td class="r">${fmt(amount)}</td></tr>`;
     }).join('');
 
     const sbCss = `
@@ -5199,22 +5201,25 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       /* Brand badge — filled royal-blue "SE" mark recreated as vector
          CSS (mam 2026-06-16) so it prints razor-sharp in the html2canvas
          PDF with no external image / CORS dependency. */
-      .sb .mono { width:48px; height:48px; background:#13318C; color:#fff; font-weight:900; font-style:italic; font-size:23px; display:flex; align-items:center; justify-content:center; border-radius:11px; letter-spacing:-2px; box-shadow:0 1px 3px rgba(30,64,175,.35); }
+      .sb .mono { width:58px; height:40px; background:#fff; border:2px solid #13318C; color:#13318C; font-weight:900; font-style:italic; font-size:19px; display:flex; align-items:center; justify-content:center; border-radius:50%; letter-spacing:-1px; box-shadow:0 1px 3px rgba(30,64,175,.25); flex-shrink:0; }
       .sb .cn { font-size:18px; font-weight:800; color:#13318C; line-height:1.1; }
-      .sb .tag { font-size:8px; letter-spacing:1px; color:#5D6B85; text-transform:uppercase; margin-top:2px; }
-      .sb .orig { text-align:right; font-size:9px; color:#5D6B85; line-height:1.5; }
-      .sb .orig b { color:#13318C; }
-      .sb .invtitle { text-align:center; font-size:20px; font-weight:800; letter-spacing:3px; color:#13318C; margin:5px 0 2px; }
-      .sb .addr { text-align:center; font-size:8.5px; color:#5D6B85; }
+      .sb .tag { font-size:8px; letter-spacing:1.5px; color:#13318C; text-transform:uppercase; margin-top:2px; font-weight:600; }
+      .sb .haddr { font-size:8px; color:#5D6B85; line-height:1.6; margin-top:6px; }
+      .sb .hr { text-align:right; min-width:185px; padding-left:12px; }
+      .sb .origpill { display:inline-block; background:#eef3ff; color:#13318C; border:1px solid #c9d8f5; border-radius:11px; padding:2px 12px; font-size:8px; font-weight:700; letter-spacing:1px; text-transform:uppercase; }
+      .sb .invtitle { text-align:right; font-size:27px; font-weight:800; letter-spacing:2px; color:#13318C; margin:10px 0 3px; }
+      .sb .gp { font-size:9px; color:#5D6B85; }
+      .sb .gp b { color:#13318C; }
       .sb table { width:100%; border-collapse:collapse; }
-      .sb .meta td { border:1px solid #c9d8f5; padding:3px 6px; font-size:9.5px; vertical-align:top; }
-      .sb .meta .l { background:#eef3ff; color:#13318C; font-weight:700; text-transform:uppercase; font-size:8.5px; white-space:nowrap; }
+      .sb .meta td { border:1px solid #c9d8f5; padding:4px 8px; font-size:10px; vertical-align:top; width:33.33%; }
+      .sb .meta .lbl { display:block; font-size:7.5px; letter-spacing:1px; color:#8a93a6; text-transform:uppercase; font-weight:700; margin-bottom:1px; }
       .sb .parties td { border:1px solid #c9d8f5; padding:5px 8px; font-size:9.5px; vertical-align:top; width:50%; }
-      .sb .parties .h { background:#eef3ff; color:#13318C; font-weight:700; text-transform:uppercase; font-size:9px; padding:3px 8px; }
+      .sb .parties .h { background:#13318C; color:#fff; font-weight:700; text-transform:uppercase; font-size:9px; padding:4px 8px; letter-spacing:1px; }
       .sb .items { margin-top:5px; }
       .sb .items th { background:#13318C; color:#fff; font-size:9px; text-transform:uppercase; padding:5px; border:1px solid #13318C; }
       .sb .items td { border:1px solid #c9d8f5; padding:4px 5px; font-size:9.5px; vertical-align:top; }
       .sb .items td.c { text-align:center; } .sb .items td.r { text-align:right; }
+      .sb .items td .spec { font-size:8.5px; color:#5D6B85; margin-top:2px; }
       .sb .lower { display:flex; gap:8px; margin-top:5px; align-items:flex-start; }
       .sb .words { flex:1; border:1px solid #c9d8f5; padding:5px 8px; font-size:9.5px; }
       .sb .words .k { color:#13318C; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-top:4px; }
@@ -5234,7 +5239,9 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       .sb .sign .b .cap { position:absolute; bottom:5px; left:9px; right:9px; text-align:center; color:#5D6B85; }
       .sb .foot { text-align:center; font-size:8.5px; color:#5D6B85; border-top:1px dashed #ccc; margin-top:8px; padding-top:6px; }
       .sb .logo-img { height:54px; width:auto; display:block; }
-      .sb .promo { margin-top:5px; padding:4px 8px; background:#eef3ff; border:1px solid #c9d8f5; border-radius:4px; font-size:8.5px; color:#13318C; font-style:italic; text-align:center; }
+      .sb .promo2 { display:flex; gap:8px; margin-top:5px; }
+      .sb .promo2 .pb { flex:1; background:#eef3ff; border:1px solid #c9d8f5; border-radius:4px; padding:4px 10px; font-size:8.5px; color:#13318C; font-style:italic; }
+      .sb .words .wv { color:#13318C; font-weight:600; }
     `;
     // Brand block (mam 2026-06-17): prefer the real lockup logo
     // (client/public/sepl-logo.png — also copied to dist on build), embedded
@@ -5242,7 +5249,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     // lockup ALREADY contains the company name, so we don't repeat it — just
     // add the service tagline under it. Falls back to the CSS "SE" badge +
     // name + tagline if the file isn't present.
-    const TAGLINE = 'Electrical · HVAC · Fire Safety · Plumbing · Solar EPC';
+    const TAGLINE = 'Electrical · HVAC · Fire Safety · Plumbing · Solar · EPC';
     const brandInner = logoDataUri
       ? `<div><img class="logo-img" src="${logoDataUri}" alt="Secured Engineers Pvt. Ltd." /><div class="tag" style="margin-top:3px">${TAGLINE}</div></div>`
       : `<div class="mono">SE</div><div><div class="cn">Secured Engineers Pvt. Ltd.</div><div class="tag">${TAGLINE}</div></div>`;
@@ -5290,17 +5297,32 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       </script>
       <div class="sb">
         <div class="top">
-          <div class="brand">${brandInner}</div>
-          <div class="orig"><b>ORIGINAL FOR RECIPIENT</b><br>GSTIN: 03AASCS7836D2Z3<br>PAN: AASCS7836D</div>
+          <div class="hl">
+            <div class="brand">${brandInner}</div>
+            <div class="haddr">
+              <div>HO: 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, Ludhiana, Punjab – 141003</div>
+              <div>Noida: 91, Springboard, Sector 2, Noida (UP)</div>
+              <div>Pan-India: Ludhiana · Noida · Bangalore · Mumbai</div>
+            </div>
+          </div>
+          <div class="hr">
+            <div class="origpill">Original for Recipient</div>
+            <div class="invtitle">TAX INVOICE</div>
+            <div class="gp"><b>GSTIN:</b> 03AASCS7836D2Z3 &nbsp; <b>PAN:</b> AASCS7836D</div>
+          </div>
         </div>
-        <div class="invtitle">TAX INVOICE</div>
-        <div class="addr">HO: 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, Ludhiana, Punjab – 141003 &nbsp;|&nbsp; Noida: 91, Springboard, Sector 2, Noida (UP)</div>
-        <div class="addr" style="font-weight:700;color:#13318C;margin-top:1px">PAN-INDIA · LUDHIANA | NOIDA | BANGALORE | MUMBAI</div>
 
-        <table class="meta" style="margin-top:7px">
-          <tr><td class="l">Invoice No.</td><td>${esc(docNo)}</td><td class="l">Invoice Date</td><td>${dispDate(dn.delivery_date)}</td><td class="l">Sales Order</td><td>${fill(dn.bb_lead_no)}</td></tr>
-          <tr><td class="l">Financial Yr</td><td>${esc(fyOf(dn.delivery_date))}</td><td class="l">Place of Supply</td><td>${placeOfSupply || fill('')}</td><td class="l">Reverse Charge</td><td>${dn.reverse_charge ? 'Yes' : 'No'}</td></tr>
-          <tr><td class="l">Client PO No.</td><td>${fill(dn.client_po_no)}</td><td class="l">Supply Type</td><td>${interState ? 'Inter-State (IGST)' : 'Intra-State (CGST + SGST)'}</td><td class="l">E-Way Bill</td><td>${esc(dn.e_way_bill_no || 'As applicable')}</td></tr>
+        <table class="meta" style="margin-top:9px">
+          <tr>
+            <td><span class="lbl">Invoice No.</span><b>${esc(docNo)}</b></td>
+            <td><span class="lbl">Invoice Date</span><b>${dispDate(dn.delivery_date)}</b></td>
+            <td><span class="lbl">Sales Order</span><b>${fill(dn.bb_lead_no)}</b></td>
+          </tr>
+          <tr>
+            <td><span class="lbl">Financial Year</span><b>${esc(fyOf(dn.delivery_date))}</b></td>
+            <td><span class="lbl">Client PO No.</span>${fill(dn.client_po_no)}</td>
+            <td><span class="lbl">E-Way Bill</span>${esc(dn.e_way_bill_no || 'As applicable')}</td>
+          </tr>
         </table>
 
         <table class="parties" style="margin-top:7px">
@@ -5309,16 +5331,12 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
             <td>
               <div><b>M/s ${fill(billToName)}</b></div>
               <div style="margin-top:2px">${fill(billToAddr)}</div>
-              <div style="margin-top:2px"><b>GSTIN:</b> ${fill(dn.client_gstin)}</div>
-              <div><b>State:</b> ${fill(dn.client_state)} &nbsp; <b>Code:</b> ${fill(clientStateCode)}</div>
-              <div><b>Contact:</b> ${fill([dn.client_person_name, dn.client_phone].filter(Boolean).join(' · '))}</div>
+              <div style="margin-top:2px"><b>GSTIN:</b> ${fill(dn.client_gstin)} &nbsp; <b>State:</b> ${fill(dn.client_state)} · Code ${fill(clientStateCode)}</div>
             </td>
             <td>
               <div><b>${fill(stripMs(dn.site_name) || billToName)} (Site)</b></div>
               <div style="margin-top:2px">${fill(shipAddr)}</div>
-              <div style="margin-top:2px"><b>GSTIN:</b> ${fill(dn.client_gstin)}</div>
-              <div><b>State:</b> ${fill(dn.client_state)} &nbsp; <b>Code:</b> ${fill(dn.state_code || clientStateCode)}</div>
-              <div><b>Site Engineer:</b> ${fill(dn.client_phone)}</div>
+              <div style="margin-top:2px"><b>GSTIN:</b> ${fill(dn.client_gstin)} &nbsp; <b>State:</b> ${fill(dn.client_state)} · Code ${fill(dn.state_code || clientStateCode)}</div>
             </td>
           </tr>
         </table>
@@ -5328,15 +5346,18 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
           <tbody>${sbRows}</tbody>
         </table>
 
-        <div class="promo">＋ Our crews handle turnkey MEPF · Fire-Safety · Solar EPC · HVAC. Get a same-site quote. &nbsp; ★ Add an AMC in future &amp; save up to 15%.</div>
+        <div class="promo2">
+          <div class="pb">＋ Our crews handle turnkey MEPF · Fire-Safety · Solar EPC · HVAC. Get a same-site quote.</div>
+          <div class="pb">★ Add an AMC in future &amp; save up to 15%.</div>
+        </div>
 
         <div class="lower">
           <div class="words">
             <div class="k" style="margin-top:0">Amount Chargeable (in words)</div>
-            <div>${esc(rupeesWhole(grand))}</div>
+            <div class="wv">${esc(rupeesWhole(grand))}</div>
             <div class="k">${interState ? 'IGST' : 'CGST + SGST'} (in words)</div>
-            <div>${esc(rupeesPaise(taxTotal))}</div>
-            ${dpct ? `<div class="k">Payable on Delivery (in words)</div><div>${esc(rupeesPaise(payable))}</div><div class="pod"><b style="color:#13318C">Payable on Delivery</b><br>${dpct}% of basic value + 100% GST = ₹ ${fmt(payable)}</div>` : ''}
+            <div class="wv">${esc(rupeesPaise(taxTotal))}</div>
+            ${dpct ? `<div class="k">Payable on Delivery (in words)</div><div class="wv">${esc(rupeesPaise(payable))}</div><div class="pod"><b>Basis:</b> ${dpct}% of basic value + 100% GST = ₹ ${fmt(payable)} (≈ ₹ ${fmt(Math.round(payable))})</div>` : ''}
           </div>
           <table class="tot">
             <tr><td class="lab">Sub Total (Taxable Value)</td><td class="v">₹ ${fmt(subtotal)}</td></tr>
