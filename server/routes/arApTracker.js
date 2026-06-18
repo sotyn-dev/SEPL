@@ -242,11 +242,14 @@ function buildMatcher(names) {
 }
 
 // Shared core for both Excel import and bulk paste: match each party to a
-// master (AR→Business Book client, AP→Vendor) and upsert by kind+party+date.
+// master and upsert by kind+party+date. ONE combined matcher (Business Book
+// clients + Vendors) is used for BOTH AR and AP, so the same party (e.g.
+// "sael") resolves to the same canonical name on both sides — AP parties are
+// often clients, not vendors (mam 2026-06-18).
 function importEntries(db, entries, user, sourceLabel, replace) {
-  const bb = db.prepare('SELECT client_name, company_name FROM business_book').all();
-  const matchAR = buildMatcher(bb.flatMap(r => [r.client_name, r.company_name]));
-  const matchAP = buildMatcher(db.prepare('SELECT name FROM vendors').all().map(r => r.name));
+  const clients = db.prepare('SELECT client_name, company_name FROM business_book').all().flatMap(r => [r.client_name, r.company_name]);
+  const vendors = db.prepare('SELECT name FROM vendors').all().map(r => r.name);
+  const match = buildMatcher([...clients, ...vendors]);
   const upd = db.prepare('UPDATE arap_entries SET planned=?, updated_at=CURRENT_TIMESTAMP WHERE id=?');
   const ins = db.prepare(`INSERT INTO arap_entries (kind, party, due_date, planned, status, note, created_by, created_by_name) VALUES (?,?,?,?,?,?,?,?)`);
   const findExisting = db.prepare('SELECT id FROM arap_entries WHERE kind=? AND party=? AND due_date=?');
@@ -255,7 +258,7 @@ function importEntries(db, entries, user, sourceLabel, replace) {
   const tx = db.transaction(() => {
     if (replace) db.prepare('DELETE FROM arap_entries').run();
     for (const e of entries) {
-      const canonical = e.kind === 'AR' ? matchAR(e.party) : matchAP(e.party);
+      const canonical = match(e.party);
       const party = canonical || e.party;
       if (canonical) matched++; else unmatched.add(`${e.kind}: ${e.party}`);
       const note = canonical && canonical.toLowerCase() !== e.party.toLowerCase() ? `sheet: ${e.party}` : null;

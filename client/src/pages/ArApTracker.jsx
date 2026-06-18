@@ -90,6 +90,12 @@ export default function ArApTracker() {
 
   const kind = tab === 'ap' ? 'AP' : 'AR';
   const rows = useMemo(() => entries.filter(e => e.kind === kind), [entries, kind]);
+  // AR picks from clients; AP picks from BOTH vendors and clients (many AP
+  // parties are clients, not vendors) — one combined list (mam 2026-06-18).
+  const partyList = useMemo(() => {
+    const merged = kind === 'AR' ? (parties.ar || []) : [...(parties.ap || []), ...(parties.ar || [])];
+    return [...new Set(merged)].sort((a, b) => a.localeCompare(b));
+  }, [kind, parties]);
 
   // Pivot: party rows × date columns, cell = sum of effective amounts.
   // Pivot: party rows × WEEK columns (1–7 / 8–14 / …), cell = sum of that
@@ -185,10 +191,10 @@ export default function ArApTracker() {
 
   return (
     <div className="space-y-5">
-      {/* Shared party suggestions (Business Book clients for AR, Vendors for
-          AP) — top-level so both the Add and Bulk modals can use it. */}
+      {/* Shared party suggestions — top-level so both the Add and Bulk modals
+          can use it. AR = clients; AP = vendors + clients combined. */}
       <datalist id="arapPartyDL">
-        {(kind === 'AR' ? parties.ar : parties.ap).map(n => <option key={n} value={n} />)}
+        {partyList.map(n => <option key={n} value={n} />)}
       </datalist>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -363,7 +369,7 @@ export default function ArApTracker() {
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? `Edit ${kind} entry` : `Add ${kind} entry`}>
         <form onSubmit={save} className="space-y-3">
           <div>
-            <label className="label">{kind === 'AR' ? 'Client / Site' : 'Vendor / Party'} * <span className="text-gray-400 font-normal normal-case">(pick from {kind === 'AR' ? 'Business Book' : 'Vendors'}, or type)</span></label>
+            <label className="label">{kind === 'AR' ? 'Client / Site' : 'Vendor / Party'} * <span className="text-gray-400 font-normal normal-case">(pick from {kind === 'AR' ? 'Business Book' : 'Vendors or clients'}, or type)</span></label>
             <input className="input" list="arapPartyDL" value={form.party || ''} onChange={e => setForm({ ...form, party: e.target.value })}
               placeholder={kind === 'AR' ? 'Search Business Book clients…' : 'Search Vendors…'} required />
           </div>
