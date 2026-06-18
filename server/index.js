@@ -133,6 +133,15 @@ try {
   console.warn('[dpr-prompt] Scheduler not started:', e.message);
 }
 
+// AR collection-day auto-roll — daily 01:00 moves unpaid, overdue AR entries
+// to the next Mon/Thu (mam 2026-06-18). Skip via ERP_DISABLE_ARAP_ROLL=1.
+try {
+  const { scheduleArApRollCron } = require('./scripts/arApRollCron');
+  scheduleArApRollCron();
+} catch (e) {
+  console.warn('[arap-roll] Scheduler not started:', e.message);
+}
+
 // Cash fidelity cron — audit items A7 + A14.  Daily 00:00 rolls over
 // cash_flow_daily (so runway numbers don't drift on no-collection
 // days); daily 01:00 recomputes receivables ageing across the board
