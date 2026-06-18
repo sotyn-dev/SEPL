@@ -21,6 +21,7 @@ import {
   FiAlertTriangle, FiCheckCircle, FiClock,
 } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDateTime } from '../utils/datetime';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 
@@ -662,7 +663,7 @@ export default function FireNoc() {
                     <div className="space-y-2">
                       {[...drawerCycle.history].reverse().map(h => (
                         <div key={h.id} className="border-l-2 border-red-300 pl-3 py-1 text-xs">
-                          <div className="text-gray-500 text-[10px]">{new Date(h.entered_at).toLocaleString('en-IN')}</div>
+                          <div className="text-gray-500 text-[10px]">{fmtDateTime(h.entered_at)}</div>
                           <div className="font-medium">
                             {h.from_stage === h.to_stage
                               ? <span className="text-gray-600">{h.notes || `stayed at ${h.to_stage}`}</span>

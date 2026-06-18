@@ -25,6 +25,7 @@ import {
   PageHeader, SectionHead, KpiTile, Card, MiniStat, Pill,
   FunnelBar, TicksList, HBar, Row, ConstraintBanner, StageTabs, DataGap,
 } from '../components/cmdDashboardUi';
+import { fmtDateTime } from '../utils/datetime';
 
 const tooltipStyle = {
   contentStyle: { background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, color: C.ink, fontSize: 11 },
@@ -532,7 +533,7 @@ export default function DashboardCMD() {
           Sections ordered by money flow: Cycle → Sales (intake) → Execution (delivery) → Procurement (cost) → Cash (output) → People (capacity) → Customer (loyalty).
           <br /><br />
           <strong style={{ color: C.ink }}>RULE:</strong> If a tile turns RED 2 days running, a Cost-of-Inaction line is added at top — never "looks good." ·
-          Refresh source: <code>/api/dashboards/cmd-detail</code> · spec_version {data.spec_version} · generated {new Date(data.generated_at).toLocaleString('en-IN')}.
+          Refresh source: <code>/api/dashboards/cmd-detail</code> · spec_version {data.spec_version} · generated {fmtDateTime(data.generated_at)}.
         </div>
       </div>
     </div>

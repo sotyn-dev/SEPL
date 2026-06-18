@@ -12,6 +12,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDateTime as fmtIST } from '../utils/datetime';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
 
@@ -117,7 +118,7 @@ function PaymentBlockChip({ v }) {
   let label = 'No advance';
   if (cleared) {
     cls = 'bg-emerald-50 text-emerald-700 border-emerald-300';
-    const when = v.payment_cleared_at ? new Date(v.payment_cleared_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+    const when = v.payment_cleared_at ? fmtIST(v.payment_cleared_at, { day: '2-digit', month: 'short' }) : '';
     label = `✓ Cleared${when ? ' ' + when : ''}`;
   } else if (t === 'advance') {
     cls = 'bg-amber-50 text-amber-800 border-amber-300';
@@ -191,7 +192,7 @@ function MobileItemRow({ item, idx }) {
             <div className="text-emerald-700 font-semibold">
               🟢 Issued from Office Store
               {item.stock_issue_number && <span className="ml-1 font-mono">· {item.stock_issue_number}</span>}
-              {item.stock_issued_at && <span className="ml-1 text-gray-500 font-normal">({new Date(item.stock_issued_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })})</span>}
+              {item.stock_issued_at && <span className="ml-1 text-gray-500 font-normal">({fmtIST(item.stock_issued_at, { day: '2-digit', month: 'short' })})</span>}
             </div>
           ) : (
             <div className="text-blue-700 font-semibold">🛒 Fresh procurement</div>
@@ -2217,9 +2218,7 @@ export default function Procurement() {
                       <div className="text-lg font-bold text-gray-900 truncate">{i.indent_number}</div>
                       <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
                         <FiCalendar size={10} className="text-gray-400" />
-                        {i.created_at
-                          ? new Date(i.created_at).toLocaleString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                          : (i.indent_date || '—')}
+                        {i.created_at ? fmtIST(i.created_at) : (i.indent_date || '—')}
                       </div>
                     </div>
                     <StatusBadge status={i.status} />
@@ -2341,7 +2340,7 @@ export default function Procurement() {
                         {i.status === 'approved' && (
                           <div className="text-emerald-700 font-medium flex items-center gap-1">
                             <FiCheck size={11} /> {i.approved_by_name || 'approver'}
-                            {i.approved_at && <span className="text-[10px] text-gray-500 ml-1">{new Date(i.approved_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</span>}
+                            {i.approved_at && <span className="text-[10px] text-gray-500 ml-1">{fmtIST(i.approved_at, { day: '2-digit', month: 'short' })}</span>}
                           </div>
                         )}
                         {i.status === 'rejected' && (
@@ -2413,7 +2412,7 @@ export default function Procurement() {
                     )}
                   </td>
                   <td className="font-medium">{i.indent_number}</td>
-                  <td className="text-xs text-gray-600">{i.created_at ? new Date(i.created_at).toLocaleString() : (i.indent_date || '—')}</td>
+                  <td className="text-xs text-gray-600">{i.created_at ? fmtIST(i.created_at) : (i.indent_date || '—')}</td>
                   <td>{i.site_name || i.client_name || <span className="text-gray-400">—</span>}</td>
                   {/* Dedicated Category column (mam 2026-05-28). Coloured
                       pill mirrors the inline chip's palette so the table
@@ -2549,7 +2548,7 @@ export default function Procurement() {
                             </div>
                             {i.approved_at && (
                               <div className="text-[10px] text-gray-500">
-                                {new Date(i.approved_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                {fmtIST(i.approved_at, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                               </div>
                             )}
                           </div>

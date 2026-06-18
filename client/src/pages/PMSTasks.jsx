@@ -15,6 +15,7 @@ import { FiPlus, FiUpload, FiMic, FiMicOff, FiCheck, FiX, FiTrash2, FiExternalLi
 const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 import { exportCsv } from '../utils/exportCsv';
 import { compressImage } from '../utils/compressImage';
+import { fmtDate } from '../utils/datetime';
 
 export default function PMSTasks() {
   const { user, isAdmin, canCreate, canApprove } = useAuth();
@@ -408,7 +409,7 @@ export default function PMSTasks() {
                 return c === u || c.split(/\s+/)[0] === u.split(/\s+/)[0];
               })();
               const canActOnTask = isAssigner || isAdmin() || isCrmOwner || pmsApprover;
-              const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
+              const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
                   <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
@@ -509,7 +510,7 @@ export default function PMSTasks() {
         {tasks.map((t, idx) => {
           const isAssignee = t.assigned_to === user?.id;
           const isAssigner = t.assigned_by === user?.id;
-          const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
+          const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
           return (
             <div key={t.id} className={`card p-3 ${t.status === 'rejected' ? 'border-l-4 border-red-500' : t.status === 'submitted' ? 'border-l-4 border-blue-500' : ''}`}>
               <div className="flex justify-between items-start gap-2 mb-2">

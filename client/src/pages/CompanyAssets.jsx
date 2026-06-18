@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiMonitor, FiSmartphone, FiCpu, FiUserPlus, FiCornerUpLeft, FiTool, FiArchive, FiTrash2, FiEdit2, FiSearch, FiClock, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDateTime } from '../utils/datetime';
 
 const CATEGORIES = [
   'Laptop', 'Desktop', 'Mobile', 'Tablet', 'SIM Card',
@@ -436,7 +437,7 @@ export default function CompanyAssets() {
                     m.movement_type === 'maintenance' ? 'bg-amber-100 text-amber-700' :
                     'bg-red-100 text-red-700'
                   }`}>{m.movement_type}</span>
-                  <span className="text-gray-500">{m.performed_at ? new Date(m.performed_at).toLocaleString('en-IN') : '—'}</span>
+                  <span className="text-gray-500">{m.performed_at ? fmtDateTime(m.performed_at) : '—'}</span>
                 </div>
                 <div className="mt-1 text-gray-700">
                   {m.from_user_name && <span>From: <b>{m.from_user_name}</b> </span>}

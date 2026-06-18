@@ -14,6 +14,7 @@ import { FiHome, FiPlus, FiEdit2, FiTrash2, FiSearch, FiAlertCircle, FiUserCheck
 import { exportCsv } from '../utils/exportCsv';
 import { STATES } from '../data/indiaLocations';
 import { LuIndianRupee } from 'react-icons/lu';
+import { fmtDateTime } from '../utils/datetime';
 
 const STATUS_PILL = {
   active: 'bg-emerald-100 text-emerald-700',
@@ -971,7 +972,7 @@ function RaiseRentForm({ form, setForm, sites, users, onSubmit, onCancel }) {
             <div className="flex items-start gap-3">
               <img src={form.room_photo_url} alt="room" className="w-32 h-32 object-cover rounded border" />
               <div className="text-xs">
-                <div className="text-gray-700">📅 {form.photo_taken_at ? new Date(form.photo_taken_at).toLocaleString('en-IN') : '—'}</div>
+                <div className="text-gray-700">📅 {form.photo_taken_at ? fmtDateTime(form.photo_taken_at) : '—'}</div>
                 {form.photo_lat && <div className="text-gray-600">📍 {form.photo_lat.toFixed(5)}, {form.photo_lng.toFixed(5)}</div>}
                 <button type="button" onClick={() => setForm(f => ({ ...f, room_photo_url: '', photo_taken_at: null, photo_lat: null, photo_lng: null }))} className="text-red-500 text-xs mt-1">Remove</button>
               </div>

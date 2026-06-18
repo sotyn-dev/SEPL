@@ -6,6 +6,7 @@ import PipeWeightsModal from '../components/PipeWeightsModal';
 import { MAKES } from '../data/makes';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
+import { fmtDateTime } from '../utils/datetime';
 import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiDownload, FiUpload, FiPackage, FiFilter, FiX, FiClock, FiAlertTriangle, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
 
 const PAGE_SIZE = 100;
@@ -601,7 +602,7 @@ export default function ItemMaster() {
               <div><label className="label">Bill / PO Date *</label><input className="input" type="date" value={form.bill_po_date || ''} onChange={e => F('bill_po_date', e.target.value)} /></div>
               {modal === 'edit' && (
                 <div className="text-[11px] text-gray-500 italic flex flex-col justify-end pb-1">
-                  {form.priced_at && <div>Last captured: {String(form.priced_at).replace('T', ' ').slice(0, 16)}</div>}
+                  {form.priced_at && <div>Last captured: {fmtDateTime(form.priced_at)}</div>}
                   {form.priced_by_name && <div>By: {form.priced_by_name}</div>}
                 </div>
               )}
@@ -633,7 +634,7 @@ export default function ItemMaster() {
                   <tbody>
                     {historyModal.rows.map(h => (
                       <tr key={h.id} className="border-b">
-                        <td className="px-2 py-1 whitespace-nowrap">{(h.created_at || '').replace('T', ' ').slice(0, 16)}</td>
+                        <td className="px-2 py-1 whitespace-nowrap">{fmtDateTime(h.created_at)}</td>
                         <td className="px-2 py-1 text-right font-semibold">Rs {(+h.rate || 0).toLocaleString('en-IN')}</td>
                         <td className="px-2 py-1">{h.vendor_name || '—'}</td>
                         <td className="px-2 py-1">{h.source_type || h.source || '—'}</td>

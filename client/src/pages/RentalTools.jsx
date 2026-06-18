@@ -20,6 +20,7 @@ import {
   FiAlertTriangle, FiFileText, FiXCircle, FiSettings, FiEye,
 } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDateTime, fmtDate } from '../utils/datetime';
 
 // Hard-coded fallbacks — replaced at runtime by labels coming from
 // /api/rental-tools/dashboard (mam-editable via Settings).  Keeping
@@ -52,8 +53,8 @@ const STAGE_CHIP_BG = {
 const STAGE_ORDER = ['enquiry', 'rate_finalised', 'material_received', 'returned'];
 
 const fmt = (n) => `₹${(n || 0).toLocaleString('en-IN')}`;
-const fmtDt = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
-const fmtD  = (iso) => iso ? new Date(iso).toLocaleDateString('en-IN', { dateStyle: 'medium' }) : '—';
+const fmtDt = (iso) => iso ? fmtDateTime(iso, { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+const fmtD  = (iso) => iso ? fmtDate(iso, { dateStyle: 'medium' }) : '—';
 
 export default function RentalTools() {
   const { user, canCreate } = useAuth();
@@ -689,7 +690,7 @@ export default function RentalTools() {
                   <div className="space-y-2">
                     {[...drawerEnq.history].reverse().map(h => (
                       <div key={h.id} className="border-l-2 border-red-300 pl-3 py-1 text-xs">
-                        <div className="text-gray-500 text-[10px]">{new Date(h.entered_at).toLocaleString('en-IN')}</div>
+                        <div className="text-gray-500 text-[10px]">{fmtDateTime(h.entered_at)}</div>
                         <div className="font-medium">
                           {h.from_stage === h.to_stage ? <span className="text-gray-600">{h.notes}</span> :
                             <><span className="text-gray-400">{h.from_stage || 'new'} → </span><span className="text-red-700">{STAGE_LABEL[h.to_stage] || h.to_stage}</span></>

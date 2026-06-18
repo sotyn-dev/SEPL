@@ -8,6 +8,7 @@ import { FiSettings, FiDollarSign, FiEye, FiLock, FiUnlock, FiSave, FiDownload, 
 import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
 import TimePicker from '../components/TimePicker';
+import { fmtDate, fmtTime } from '../utils/datetime';
 
 const monthNow = () => {
   const d = new Date();
@@ -466,7 +467,7 @@ export default function Payroll() {
                     <td className="text-center">
                       {r.locked ? (
                         <label className={`inline-flex items-center gap-1 ${canMarkPaid ? 'cursor-pointer' : 'cursor-default'}`}
-                          title={r.paid ? `Paid${r.paid_at ? ' on ' + new Date(r.paid_at).toLocaleDateString('en-IN') : ''}` : 'Not paid yet'}>
+                          title={r.paid ? `Paid${r.paid_at ? ' on ' + fmtDate(r.paid_at) : ''}` : 'Not paid yet'}>
                           <input type="checkbox" checked={!!r.paid} disabled={!canMarkPaid}
                             onChange={e => savePaid(r.employee_id, e.target.checked)} />
                           <span className={`text-[11px] font-semibold ${r.paid ? 'text-emerald-600' : 'text-rose-500'}`}>{r.paid ? 'Paid' : 'Unpaid'}</span>
@@ -793,7 +794,7 @@ export default function Payroll() {
                         <td className="p-2">{d.date}</td>
                         <td className="p-2">{d.day}</td>
                         <td className="p-2"><span className={`text-[10px] px-1.5 py-0.5 rounded ${LABEL_PILL[d.label] || 'bg-gray-100'}`}>{d.label.replace(/_/g, ' ')}</span></td>
-                        <td className="p-2">{d.punch_in ? new Date(d.punch_in).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                        <td className="p-2">{d.punch_in ? fmtTime(d.punch_in, { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
                         <td className="p-2 text-right">{d.hours || '-'}</td>
                         <td className="p-2 text-right font-semibold">{d.pay}</td>
                       </tr>

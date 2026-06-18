@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiClock, FiCheck, FiAlertTriangle, FiPaperclip, FiEye, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDateTime } from '../utils/datetime';
 import { useUrlTab } from '../hooks/useUrlTab';
 
 // Cheque FMS — 3-stage cheque workflow.
@@ -403,7 +404,7 @@ export default function ChequeFMS() {
                 <tbody>
                   {history.map(h => (
                     <tr key={h.id} className="border-b">
-                      <td className="px-2 py-1 whitespace-nowrap">{h.action_at?.slice(0, 16).replace('T', ' ')}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{fmtDateTime(h.action_at)}</td>
                       <td className="px-2 py-1"><StatusBadge status={h.action === 're_issue' ? 'pending' : h.action} dueDate={h.next_date} /></td>
                       <td className="px-2 py-1">{h.remarks}</td>
                       <td className="px-2 py-1 text-gray-500">{h.action_by_name || '—'}</td>

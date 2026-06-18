@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiHelpCircle, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle, FiEdit2, FiTrash2, FiSearch, FiUser, FiTag, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDate } from '../utils/datetime';
 
 const STATUS_COLORS = {
   open: 'bg-red-100 text-red-700',
@@ -183,7 +184,7 @@ export default function HelpTickets() {
                   <td className="px-3 py-2 text-gray-600">{t.assigned_to_name || <span className="text-gray-300">—</span>}{isAssignee && <span className="text-[10px] text-red-600 ml-1">(you)</span>}</td>
                   <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-[10px] uppercase ${PRIORITY_COLORS[t.priority] || ''}`}>{t.priority}</span></td>
                   <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-[10px] uppercase ${STATUS_COLORS[t.status] || ''}`}>{t.status?.replace('_', ' ')}</span></td>
-                  <td className="px-3 py-2 text-[11px] text-gray-500 whitespace-nowrap">{new Date(t.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</td>
+                  <td className="px-3 py-2 text-[11px] text-gray-500 whitespace-nowrap">{fmtDate(t.created_at, { day: '2-digit', month: 'short' })}</td>
                   <td className="px-3 py-2 text-right" onClick={e => e.stopPropagation()}>
                     {/* Quick close button only for the raiser / admin */}
                     {canClose && t.status !== 'resolved' && t.status !== 'closed' && (

@@ -20,6 +20,7 @@ import {
 // FiPlayCircle is already imported above for the Hold/Unhold button
 // — reused here for the Training Library tab icon.
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDateTime, fmtDate, fmtTime } from '../utils/datetime';
 
 const candidateStatuses = ['lead','called','qualified','interview_scheduled','interview_done','offer_sent','accepted','onboarded','rejected'];
 const sources = ['facebook','naukri','linkedin','reference','other'];
@@ -473,7 +474,7 @@ export default function HR() {
     if (!s) return '';
     const d = new Date(s);
     if (isNaN(d.getTime())) return s;
-    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    return fmtDate(s, { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' + fmtTime(s, { hour: '2-digit', minute: '2-digit' });
   };
 
   return (
@@ -1151,7 +1152,7 @@ export default function HR() {
             <p className="text-[12px] text-gray-400 italic px-2 py-4 text-center">No events recorded yet.</p>
           )}
           {timelineEvents.map(ev => {
-            const dt = ev.created_at ? new Date(ev.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+            const dt = ev.created_at ? fmtDateTime(ev.created_at, { dateStyle: 'medium', timeStyle: 'short' }) : '';
             const typeColors = {
               created:             'bg-blue-100 text-blue-700 border-blue-300',
               interview_scheduled: 'bg-indigo-100 text-indigo-700 border-indigo-300',
@@ -1407,7 +1408,7 @@ export default function HR() {
                         </a>
                       )}
                       {doc.uploaded_at && !doc.file_url && (
-                        <div className="text-[10px] text-gray-400">Uploaded: {new Date(doc.uploaded_at).toLocaleDateString('en-IN')}</div>
+                        <div className="text-[10px] text-gray-400">Uploaded: {fmtDate(doc.uploaded_at)}</div>
                       )}
                     </div>
                     <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${statusColor}`}>
@@ -1478,7 +1479,7 @@ export default function HR() {
                       <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">{d.status?.replace(/_/g, ' ')}</span>
                     </td>
                     <td className="px-2 py-1.5 text-gray-500 text-[11px]">
-                      {d.created_at ? new Date(d.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : ''}
+                      {d.created_at ? fmtDate(d.created_at, { day: '2-digit', month: 'short', year: 'numeric' }) : ''}
                     </td>
                   </tr>
                 ))}
@@ -1606,7 +1607,7 @@ function ManpowerTab() {
     if (!s) return null;
     const d = new Date(s);
     if (isNaN(d.getTime())) return s;
-    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' });
+    return fmtDate(s, { day: '2-digit', month: 'short', year: '2-digit' });
   };
   // Compact "actual / target" cell for Site Eng & Jr. Site Eng — actual comes
   // from the project's PO site engineers (classified by Employee designation);

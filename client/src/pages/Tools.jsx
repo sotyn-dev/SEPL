@@ -11,6 +11,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiTool, FiTruck, FiArrowDownCircle, FiAlertCircle, FiEdit2, FiTrash2, FiSearch, FiCalendar, FiClipboard } from 'react-icons/fi';
+import { fmtDateTime } from '../utils/datetime';
 
 const CATEGORIES = ['Drilling', 'Cutting', 'Measurement', 'Safety', 'Power', 'Hand', 'Lifting', 'Electrical', 'Other'];
 const STATUSES = ['available', 'in_use', 'maintenance', 'lost', 'scrapped'];
@@ -451,7 +452,7 @@ function ToolHistory({ id }) {
           <div className="flex items-start justify-between gap-2">
             <div>
               <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${acts[m.action]?.color || 'bg-gray-100'}`}>{acts[m.action]?.icon} {m.action}</span>
-              <span className="text-[11px] text-gray-500 ml-2">by {m.created_by_name || 'unknown'} · {new Date(m.created_at).toLocaleString('en-IN')}</span>
+              <span className="text-[11px] text-gray-500 ml-2">by {m.created_by_name || 'unknown'} · {fmtDateTime(m.created_at)}</span>
             </div>
           </div>
           <div className="text-xs text-gray-700 mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1">

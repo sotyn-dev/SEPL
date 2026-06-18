@@ -17,6 +17,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPackage, FiPlus, FiTrash2, FiSearch, FiArrowDown, FiArrowUp, FiRefreshCw, FiEdit2, FiAlertTriangle, FiHome, FiMapPin, FiBarChart2, FiCheck, FiCamera, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import BarcodeScanner from '../components/BarcodeScanner';
+import { fmtDateTime } from '../utils/datetime';
 
 const fmtNum = (n) => (n == null ? '0' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 }));
 const fmtMoney = (n) => '₹ ' + fmtNum(n);
@@ -1538,7 +1539,7 @@ function MovementsTab({ movements, warehouses, filter, setFilter }) {
             {movements.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400 text-sm">No movements yet</td></tr>}
             {movements.map(m => (
               <tr key={m.id} className="border-t hover:bg-gray-50">
-                <td className="px-3 py-1.5 text-[11px] text-gray-500 font-mono whitespace-nowrap">{new Date(m.created_at).toLocaleString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
+                <td className="px-3 py-1.5 text-[11px] text-gray-500 font-mono whitespace-nowrap">{fmtDateTime(m.created_at, { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
                 <td className="px-3 py-1.5">
                   <span className={`px-2 py-0.5 text-[10px] rounded ${m.type === 'IN' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
                     {m.type}{m.reference_type === 'TRANSFER' ? ' · XFER' : ''}

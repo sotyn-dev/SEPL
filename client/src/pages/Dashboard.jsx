@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiTarget, FiShoppingCart, FiTool, FiAlertCircle, FiUsers, FiCheckSquare, FiUpload, FiClock, FiAlertTriangle, FiExternalLink, FiCalendar, FiHelpCircle } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 import ErpMantraBanner from '../components/ErpMantraBanner';
+import { fmtDate } from '../utils/datetime';
 
 export default function Dashboard() {
   const { isAdmin } = useAuth();
@@ -284,7 +285,7 @@ export default function Dashboard() {
                   <tr key={l.id}>
                     <td className="font-medium">{l.company_name}</td>
                     <td><StatusBadge status={l.status} /></td>
-                    <td className="text-gray-500">{new Date(l.created_at).toLocaleDateString()}</td>
+                    <td className="text-gray-500">{fmtDate(l.created_at)}</td>
                   </tr>
                 ))}
                 {stats.recentLeads.length === 0 && <tr><td colSpan="3" className="text-center text-gray-400 py-4">No leads yet</td></tr>}

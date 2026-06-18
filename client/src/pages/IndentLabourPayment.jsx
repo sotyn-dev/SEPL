@@ -16,6 +16,7 @@ import {
   FiDollarSign, FiTrendingUp, FiPlus, FiTrash2, FiEdit2, FiUpload,
   FiExternalLink,
 } from 'react-icons/fi';
+import { fmtDate } from '../utils/datetime';
 
 const fmtINR = (n) => {
   const v = Number(n || 0);
@@ -803,7 +804,7 @@ function DprLinksModal({ data, onClose }) {
                 {items.map(it => (
                   <tr key={it.id} className="border-t">
                     <td className="px-2 py-1.5 whitespace-nowrap">
-                      {it.report_date ? new Date(it.report_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—'}
+                      {it.report_date ? fmtDate(it.report_date, { day: '2-digit', month: 'short', year: '2-digit' }) : '—'}
                     </td>
                     <td className="px-2 py-1.5">{it.site_name || '—'}</td>
                     <td className="px-2 py-1.5">{it.description || '—'}</td>

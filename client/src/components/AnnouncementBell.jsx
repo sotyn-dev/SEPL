@@ -8,6 +8,7 @@ import {
 import api from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
+import { fmtDate, fmtTime } from '../utils/datetime';
 
 // HR notification type → icon + colour (used in the Notifications tab)
 const NOTIF_TYPE_ICON = {
@@ -178,7 +179,7 @@ export default function AnnouncementBell() {
     if (!s) return '';
     const d = new Date(s);
     if (isNaN(d.getTime())) return s;
-    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) + ' · ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    return fmtDate(s, { day: '2-digit', month: 'short' }) + ' · ' + fmtTime(s, { hour: '2-digit', minute: '2-digit' });
   };
 
   // Lazy-load the reader breakdown for one announcement when admin clicks
@@ -200,8 +201,9 @@ export default function AnnouncementBell() {
     <div ref={ref} className="relative">
       <button
         onClick={() => open ? setOpen(false) : onOpen()}
-        className="relative p-2 hover:bg-gray-100 rounded-lg flex-shrink-0"
+        className="relative p-2 hover:bg-gray-100 rounded-lg flex-shrink-0 text-gray-600"
         title="Notifications & Announcements"
+        aria-label={`Notifications and announcements${(unread + unreadNotif) > 0 ? ` — ${unread + unreadNotif} unread` : ''}`}
       >
         <FiBell size={20} />
         {(unread + unreadNotif) > 0 && (

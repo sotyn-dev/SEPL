@@ -10,6 +10,7 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
+import { fmtDateTime } from '../utils/datetime';
 import { useUrlTab } from '../hooks/useUrlTab';
 import {
   FiCalendar, FiRefreshCw, FiSettings, FiChevronDown, FiChevronRight,
@@ -505,7 +506,7 @@ function GanttView({ data, expanded, setExpanded, onPickBar }) {
         </span>
         {data.generated_at && (
           <span className="text-[10px] text-gray-400 ml-auto">
-            Last generated: {String(data.generated_at).replace('T', ' ').slice(0, 16)}
+            Last generated: {fmtDateTime(data.generated_at)}
           </span>
         )}
         <button onClick={() => window.print()} className="btn btn-secondary text-xs flex items-center gap-1 ml-2"
@@ -796,7 +797,7 @@ function RecordsTab({ projects, canDelete }) {
             <tbody>
               {list.map(r => (
                 <tr key={r.id} className="border-t border-gray-100 hover:bg-gray-50/60">
-                  <td className="p-2 font-mono text-xs">{String(r.generated_at).replace('T', ' ').slice(0, 16)}</td>
+                  <td className="p-2 font-mono text-xs">{fmtDateTime(r.generated_at)}</td>
                   <td className="p-2 text-xs">{r.generated_by_name || '—'}</td>
                   <td className="p-2 text-center font-semibold">{r.items_scheduled}</td>
                   <td className="p-2 text-center text-xs text-red-700">{fmtDate(r.earliest_indent_date)}</td>
@@ -818,7 +819,7 @@ function RecordsTab({ projects, canDelete }) {
       )}
 
       {/* Snapshot view modal — reuses GanttView for visual parity */}
-      <Modal isOpen={!!viewing} onClose={() => { setViewing(null); setViewData(null); }} title={viewing ? `Saved schedule · ${String(viewing.generated_at).slice(0,16).replace('T',' ')}` : 'Snapshot'} wide>
+      <Modal isOpen={!!viewing} onClose={() => { setViewing(null); setViewData(null); }} title={viewing ? `Saved schedule · ${fmtDateTime(viewing.generated_at)}` : 'Snapshot'} wide>
         {viewData && (
           <div className="space-y-2">
             <div className="text-xs text-gray-600">

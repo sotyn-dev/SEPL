@@ -13,6 +13,7 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
+import { fmtDateTime } from '../utils/datetime';
 import {
   FiPlus, FiTrash2, FiArrowLeft, FiUpload, FiDownload, FiPaperclip,
   FiUserPlus, FiCheckCircle, FiAlertTriangle, FiClock, FiAward, FiX,
@@ -469,7 +470,7 @@ function StepWizardPanel({ meta, step, hiringId, files, canEdit, onReload, onPre
         {step?.completed_by_name && step?.completed_at && (
           <p className="text-[11px] text-gray-500">
             <FiCheckCircle className="inline text-emerald-600 mr-1" size={11} />
-            Marked done by <b>{step.completed_by_name}</b> · {String(step.completed_at).replace('T', ' ').slice(0, 16)}
+            Marked done by <b>{step.completed_by_name}</b> · {fmtDateTime(step.completed_at)}
           </p>
         )}
 
