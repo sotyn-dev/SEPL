@@ -30,6 +30,13 @@ const weekOf = (dateStr) => {
 const fmtL = (n) => (n == null || n === '' ? '' : (+n).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 }));
 const STATUSES = ['planned', 'partial', 'done', 'cancelled'];
 const eff = (r) => (r.actual != null && r.actual !== '' ? +r.actual : +r.planned || 0);
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// "2026-06-24" → "Tue 24" — the collection day within a week column.
+const fmtDay = (dateStr) => {
+  const m = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return String(dateStr || '');
+  return `${DOW[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()]} ${m[3]}`;
+};
 // "17-06" → "2026-06-17"; passes a YYYY-MM-DD through unchanged.
 const ddmmToISO = (s) => {
   const t = String(s || '').trim();
@@ -98,19 +105,21 @@ export default function ArApTracker() {
   }, [kind, parties]);
 
   // Pivot: party rows × date columns, cell = sum of effective amounts.
-  // Pivot: party rows × WEEK columns (1–7 / 8–14 / …), cell = sum of that
-  // week's effective amounts. Several dates inside a week collapse into one column.
+  // Pivot: party rows × DATE columns, grouped under week headers. Each week
+  // shows its individual collection days (AR Mon/Thu, AP Tue/Fri) so you can
+  // see which day a payment lands on, not just a weekly lump.
   const pivot = useMemo(() => {
-    const weekMap = {};
-    for (const r of rows) { const w = weekOf(r.due_date); weekMap[w.key] = w; }
-    const weeks = Object.values(weekMap).sort((a, b) => a.sort.localeCompare(b.sort));
+    const dates = [...new Set(rows.map(r => r.due_date))].sort();
     const parties = [...new Set(rows.map(r => r.party))].sort();
     const cell = {};
-    for (const r of rows) { const k = weekOf(r.due_date).key; cell[`${r.party}|${k}`] = (cell[`${r.party}|${k}`] || 0) + eff(r); }
-    const colTot = Object.fromEntries(weeks.map(w => [w.key, parties.reduce((s, p) => s + (cell[`${p}|${w.key}`] || 0), 0)]));
-    const rowTot = Object.fromEntries(parties.map(p => [p, weeks.reduce((s, w) => s + (cell[`${p}|${w.key}`] || 0), 0)]));
-    const grand = weeks.reduce((s, w) => s + colTot[w.key], 0);
-    return { weeks, parties, cell, colTot, rowTot, grand };
+    for (const r of rows) cell[`${r.party}|${r.due_date}`] = (cell[`${r.party}|${r.due_date}`] || 0) + eff(r);
+    const colTot = Object.fromEntries(dates.map(d => [d, parties.reduce((s, p) => s + (cell[`${p}|${d}`] || 0), 0)]));
+    const rowTot = Object.fromEntries(parties.map(p => [p, dates.reduce((s, d) => s + (cell[`${p}|${d}`] || 0), 0)]));
+    const grand = dates.reduce((s, d) => s + colTot[d], 0);
+    // Group the date columns by week for the spanning top header row.
+    const weekGroups = [];
+    for (const d of dates) { const w = weekOf(d); const g = weekGroups.find(x => x.key === w.key); if (g) g.dates.push(d); else weekGroups.push({ key: w.key, label: w.label, dates: [d] }); }
+    return { dates, parties, cell, colTot, rowTot, grand, weekGroups };
   }, [rows]);
 
   const openAdd = () => { setEditing(null); setForm({ kind, party: '', due_date: '', planned: '', actual: '', status: 'planned', note: '', remark: '' }); setModal(true); };
@@ -251,27 +260,32 @@ export default function ArApTracker() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-gray-50">
-                    <th className="text-left px-3 py-2 sticky left-0 bg-gray-50">Site / Party</th>
-                    {pivot.weeks.map((w, i) => (
-                      <th key={w.key} className="px-2 py-2 text-right whitespace-nowrap align-bottom">
+                    <th rowSpan={2} className="text-left px-3 py-2 sticky left-0 bg-gray-50 align-bottom">Site / Party</th>
+                    {pivot.weekGroups.map((g, i) => (
+                      <th key={g.key} colSpan={g.dates.length} className="px-2 py-1 text-center border-l border-gray-200">
                         <div className="text-[9px] font-bold text-blue-600 leading-none">Week {i + 1}</div>
-                        <div className="leading-tight font-semibold">{w.label}</div>
+                        <div className="text-[10px] font-semibold">{g.label}</div>
                       </th>
                     ))}
-                    <th className="px-3 py-2 text-right font-bold align-bottom">Total</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right font-bold align-bottom">Total</th>
+                  </tr>
+                  <tr className="bg-gray-50">
+                    {pivot.dates.map((d, i) => (
+                      <th key={d} className={`px-2 py-1 text-right text-[10px] font-medium text-gray-500 whitespace-nowrap ${pivot.weekGroups.some(g => g.dates[0] === d) && i > 0 ? 'border-l border-gray-200' : ''}`}>{fmtDay(d)}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {pivot.parties.map(p => (
                     <tr key={p} className="border-t hover:bg-blue-50/40">
                       <td className="px-3 py-1.5 font-medium sticky left-0 bg-white">{p}</td>
-                      {pivot.weeks.map(w => <td key={w.key} className="px-2 py-1.5 text-right text-gray-700">{pivot.cell[`${p}|${w.key}`] ? fmtL(pivot.cell[`${p}|${w.key}`]) : <span className="text-gray-300">·</span>}</td>)}
+                      {pivot.dates.map((d, i) => <td key={d} className={`px-2 py-1.5 text-right text-gray-700 ${pivot.weekGroups.some(g => g.dates[0] === d) && i > 0 ? 'border-l border-gray-100' : ''}`}>{pivot.cell[`${p}|${d}`] ? fmtL(pivot.cell[`${p}|${d}`]) : <span className="text-gray-300">·</span>}</td>)}
                       <td className="px-3 py-1.5 text-right font-bold">{fmtL(pivot.rowTot[p])}</td>
                     </tr>
                   ))}
                   <tr className="border-t-2 bg-gray-50 font-bold">
                     <td className="px-3 py-2 sticky left-0 bg-gray-50">Total</td>
-                    {pivot.weeks.map(w => <td key={w.key} className="px-2 py-2 text-right">{fmtL(pivot.colTot[w.key])}</td>)}
+                    {pivot.dates.map((d, i) => <td key={d} className={`px-2 py-2 text-right ${pivot.weekGroups.some(g => g.dates[0] === d) && i > 0 ? 'border-l border-gray-200' : ''}`}>{fmtL(pivot.colTot[d])}</td>)}
                     <td className="px-3 py-2 text-right text-blue-700">{fmtL(pivot.grand)}</td>
                   </tr>
                 </tbody>
