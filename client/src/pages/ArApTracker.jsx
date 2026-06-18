@@ -16,6 +16,17 @@ import { FiPlus, FiEdit2, FiTrash2, FiDownload, FiUpload, FiClipboard, FiTrendin
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const fmtCol = (d) => { const m = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]} ${MONTHS[+m[2] - 1]}` : (d || ''); };
+// Group a date into its calendar week of the month — 1–7 / 8–14 / 15–21 /
+// 22–28 / 29–end — so the grid shows one column per week labelled "1–7 Jun".
+const weekOf = (dateStr) => {
+  const m = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return { key: String(dateStr || '?'), label: String(dateStr || ''), sort: 'zzz' };
+  const y = +m[1], mo = +m[2], d = +m[3];
+  const block = d <= 7 ? 1 : d <= 14 ? 2 : d <= 21 ? 3 : d <= 28 ? 4 : 5;
+  const start = (block - 1) * 7 + 1;
+  const end = block === 5 ? new Date(y, mo, 0).getDate() : block * 7;
+  return { key: `${y}-${String(mo).padStart(2, '0')}-W${block}`, label: `${start}–${end} ${MONTHS[mo - 1]}`, sort: `${y}${String(mo).padStart(2, '0')}${block}` };
+};
 const fmtL = (n) => (n == null || n === '' ? '' : (+n).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 }));
 const STATUSES = ['planned', 'partial', 'done', 'cancelled'];
 const eff = (r) => (r.actual != null && r.actual !== '' ? +r.actual : +r.planned || 0);
@@ -52,15 +63,19 @@ export default function ArApTracker() {
   const rows = useMemo(() => entries.filter(e => e.kind === kind), [entries, kind]);
 
   // Pivot: party rows × date columns, cell = sum of effective amounts.
+  // Pivot: party rows × WEEK columns (1–7 / 8–14 / …), cell = sum of that
+  // week's effective amounts. Several dates inside a week collapse into one column.
   const pivot = useMemo(() => {
-    const dates = [...new Set(rows.map(r => r.due_date))].sort();
+    const weekMap = {};
+    for (const r of rows) { const w = weekOf(r.due_date); weekMap[w.key] = w; }
+    const weeks = Object.values(weekMap).sort((a, b) => a.sort.localeCompare(b.sort));
     const parties = [...new Set(rows.map(r => r.party))].sort();
     const cell = {};
-    for (const r of rows) cell[`${r.party}|${r.due_date}`] = (cell[`${r.party}|${r.due_date}`] || 0) + eff(r);
-    const colTot = Object.fromEntries(dates.map(d => [d, parties.reduce((s, p) => s + (cell[`${p}|${d}`] || 0), 0)]));
-    const rowTot = Object.fromEntries(parties.map(p => [p, dates.reduce((s, d) => s + (cell[`${p}|${d}`] || 0), 0)]));
-    const grand = dates.reduce((s, d) => s + colTot[d], 0);
-    return { dates, parties, cell, colTot, rowTot, grand };
+    for (const r of rows) { const k = weekOf(r.due_date).key; cell[`${r.party}|${k}`] = (cell[`${r.party}|${k}`] || 0) + eff(r); }
+    const colTot = Object.fromEntries(weeks.map(w => [w.key, parties.reduce((s, p) => s + (cell[`${p}|${w.key}`] || 0), 0)]));
+    const rowTot = Object.fromEntries(parties.map(p => [p, weeks.reduce((s, w) => s + (cell[`${p}|${w.key}`] || 0), 0)]));
+    const grand = weeks.reduce((s, w) => s + colTot[w.key], 0);
+    return { weeks, parties, cell, colTot, rowTot, grand };
   }, [rows]);
 
   const openAdd = () => { setEditing(null); setForm({ kind, party: '', due_date: '', planned: '', actual: '', status: 'planned', note: '', remark: '' }); setModal(true); };
@@ -182,10 +197,10 @@ export default function ArApTracker() {
                 <thead>
                   <tr className="bg-gray-50">
                     <th className="text-left px-3 py-2 sticky left-0 bg-gray-50">Site / Party</th>
-                    {pivot.dates.map((d, i) => (
-                      <th key={d} className="px-2 py-2 text-right whitespace-nowrap align-bottom">
-                        <div className="text-[9px] font-bold text-blue-600 leading-none">W{i + 1}</div>
-                        <div className="leading-tight font-semibold">{fmtCol(d)}</div>
+                    {pivot.weeks.map((w, i) => (
+                      <th key={w.key} className="px-2 py-2 text-right whitespace-nowrap align-bottom">
+                        <div className="text-[9px] font-bold text-blue-600 leading-none">Week {i + 1}</div>
+                        <div className="leading-tight font-semibold">{w.label}</div>
                       </th>
                     ))}
                     <th className="px-3 py-2 text-right font-bold align-bottom">Total</th>
@@ -195,13 +210,13 @@ export default function ArApTracker() {
                   {pivot.parties.map(p => (
                     <tr key={p} className="border-t hover:bg-blue-50/40">
                       <td className="px-3 py-1.5 font-medium sticky left-0 bg-white">{p}</td>
-                      {pivot.dates.map(d => <td key={d} className="px-2 py-1.5 text-right text-gray-700">{pivot.cell[`${p}|${d}`] ? fmtL(pivot.cell[`${p}|${d}`]) : <span className="text-gray-300">·</span>}</td>)}
+                      {pivot.weeks.map(w => <td key={w.key} className="px-2 py-1.5 text-right text-gray-700">{pivot.cell[`${p}|${w.key}`] ? fmtL(pivot.cell[`${p}|${w.key}`]) : <span className="text-gray-300">·</span>}</td>)}
                       <td className="px-3 py-1.5 text-right font-bold">{fmtL(pivot.rowTot[p])}</td>
                     </tr>
                   ))}
                   <tr className="border-t-2 bg-gray-50 font-bold">
                     <td className="px-3 py-2 sticky left-0 bg-gray-50">Total</td>
-                    {pivot.dates.map(d => <td key={d} className="px-2 py-2 text-right">{fmtL(pivot.colTot[d])}</td>)}
+                    {pivot.weeks.map(w => <td key={w.key} className="px-2 py-2 text-right">{fmtL(pivot.colTot[w.key])}</td>)}
                     <td className="px-3 py-2 text-right text-blue-700">{fmtL(pivot.grand)}</td>
                   </tr>
                 </tbody>
