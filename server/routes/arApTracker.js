@@ -107,6 +107,17 @@ router.get('/changelog', requirePermission('ar_ap_tracker', 'view'), (req, res) 
   res.json(db.prepare(sql).all(...args));
 });
 
+// GET party suggestions — unique AR names from the Business Book (client +
+// company) and unique AP names from the Vendors master, for the Add/Edit
+// dropdowns (mam 2026-06-18).
+router.get('/parties', requirePermission('ar_ap_tracker', 'view'), (req, res) => {
+  const db = getDb();
+  const uniq = (arr) => [...new Set(arr.map(s => String(s || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const ar = uniq(db.prepare('SELECT client_name, company_name FROM business_book').all().flatMap(r => [r.client_name, r.company_name]));
+  const ap = uniq(db.prepare('SELECT name FROM vendors').all().map(r => r.name));
+  res.json({ ar, ap });
+});
+
 // POST create — no remark required for a brand-new entry. We still record a
 // "created" change-log row so the audit trail is complete.
 router.post('/', requirePermission('ar_ap_tracker', 'create'), (req, res) => {

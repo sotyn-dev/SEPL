@@ -47,10 +47,12 @@ export default function ArApTracker() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState('');
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [parties, setParties] = useState({ ar: [], ap: [] });
 
   const load = useCallback(() => {
     api.get('/ar-ap-tracker').then(r => setEntries(r.data || [])).catch(() => {});
     api.get('/ar-ap-tracker/summary').then(r => setSummary(r.data || { rows: [], totals: {} })).catch(() => {});
+    api.get('/ar-ap-tracker/parties').then(r => setParties(r.data || { ar: [], ap: [] })).catch(() => {});
   }, []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -325,7 +327,14 @@ export default function ArApTracker() {
       {/* ── Add / Edit modal ───────────────────────────────────── */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? `Edit ${kind} entry` : `Add ${kind} entry`}>
         <form onSubmit={save} className="space-y-3">
-          <div><label className="label">Party *</label><input className="input" value={form.party || ''} onChange={e => setForm({ ...form, party: e.target.value })} placeholder="e.g. SBJ, sael, Salaries…" required /></div>
+          <div>
+            <label className="label">{kind === 'AR' ? 'Client / Site' : 'Vendor / Party'} * <span className="text-gray-400 font-normal normal-case">(pick from {kind === 'AR' ? 'Business Book' : 'Vendors'}, or type)</span></label>
+            <input className="input" list="arapPartyDL" value={form.party || ''} onChange={e => setForm({ ...form, party: e.target.value })}
+              placeholder={kind === 'AR' ? 'Search Business Book clients…' : 'Search Vendors…'} required />
+            <datalist id="arapPartyDL">
+              {(kind === 'AR' ? parties.ar : parties.ap).map(n => <option key={n} value={n} />)}
+            </datalist>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="label">Week / Date *</label><input type="date" className="input" value={form.due_date || ''} onChange={e => setForm({ ...form, due_date: e.target.value })} required /></div>
             <div><label className="label">Status</label><select className="select" value={form.status || 'planned'} onChange={e => setForm({ ...form, status: e.target.value })}>{STATUSES.map(s => <option key={s}>{s}</option>)}</select></div>
