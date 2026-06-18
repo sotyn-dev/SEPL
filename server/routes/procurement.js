@@ -5183,8 +5183,19 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       // v7 layout: description (SITC→Supply normalised) on the first line,
       // the size / spec on its own muted sub-line beneath it
       // (e.g. "Supply of cabling…" then "4C × 25 SQMM (CU)").
-      const desc = toSupplyDescription(it.description || '');
-      const specLine = [it.specification, it.size].filter(Boolean).join(' · ');
+      let desc = toSupplyDescription(it.description || '');
+      const specParts = [];
+      // The ERP item often carries the cable size INSIDE the description
+      // text (e.g. "…control panels 4CX25 SQMM(CU)"). Lift it onto its own
+      // line — and likewise a trailing "(set of …)" note — to match the
+      // supplied template (mam 2026-06-18). Falls back to the dedicated
+      // specification/size fields when present.
+      const cm = desc.match(/[-–,]?\s*(\d+)\s*C\s*[×xX]\s*([\d.]+)\s*SQ\.?\s*MM\s*\(\s*CU\s*\)\.?\s*$/i);
+      if (cm) { specParts.push(`${cm[1]}C × ${cm[2]} SQMM (CU)`); desc = desc.slice(0, cm.index).replace(/[,;\s]+$/, '').trim(); }
+      const pm = desc.match(/\(\s*(set of [^)]+?)\s*\)\.?\s*$/i);
+      if (pm) { specParts.push(pm[1].charAt(0).toUpperCase() + pm[1].slice(1)); desc = desc.slice(0, pm.index).replace(/[,;\s]+$/, '').trim(); }
+      for (const s of [it.specification, it.size]) if (s) specParts.push(String(s));
+      const specLine = specParts.join(' · ');
       const qty = +it.quantity || 0, rate = +it.rate || 0, discPct = +it.disc_pct || 0;
       const amount = +it.amount || (qty * rate * (1 - discPct / 100));
       return `<tr><td class="c">${idx + 1}</td><td>${esc(desc)}${specLine ? `<div class="spec">${esc(specLine)}</div>` : ''}</td><td class="c">${esc(it.gst_text || '')}</td><td class="r">${fmt(qty)}</td><td class="c">${esc(it.unit || '')}</td><td class="r">${fmt(rate)}</td><td class="r">${fmt(amount)}</td></tr>`;
@@ -5196,7 +5207,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       .print-btn { background:#13318C; }
       /* Vertical spacing tightened (mam 2026-06-16: "set it best way") so
          a typical bill lands cleanly on one A4 page. */
-      .sb .top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #13318C; padding-bottom:6px; }
+      .sb .top { display:flex; justify-content:space-between; align-items:flex-start; padding-bottom:2px; }
       .sb .brand { display:flex; align-items:center; gap:10px; }
       /* Brand badge — filled royal-blue "SE" mark recreated as vector
          CSS (mam 2026-06-16) so it prints razor-sharp in the html2canvas
@@ -5204,10 +5215,10 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       .sb .mono { width:58px; height:40px; background:#fff; border:2px solid #13318C; color:#13318C; font-weight:900; font-style:italic; font-size:19px; display:flex; align-items:center; justify-content:center; border-radius:50%; letter-spacing:-1px; box-shadow:0 1px 3px rgba(30,64,175,.25); flex-shrink:0; }
       .sb .cn { font-size:18px; font-weight:800; color:#13318C; line-height:1.1; }
       .sb .tag { font-size:8px; letter-spacing:1.5px; color:#13318C; text-transform:uppercase; margin-top:2px; font-weight:600; }
-      .sb .haddr { font-size:8px; color:#5D6B85; line-height:1.6; margin-top:6px; }
+      .sb .haddr { font-size:8.5px; color:#5D6B85; line-height:1.6; text-align:center; margin:4px 0 0; padding-bottom:6px; border-bottom:2px solid #13318C; }
       .sb .hr { text-align:right; min-width:185px; padding-left:12px; }
       .sb .origpill { display:inline-block; background:#eef3ff; color:#13318C; border:1px solid #c9d8f5; border-radius:11px; padding:2px 12px; font-size:8px; font-weight:700; letter-spacing:1px; text-transform:uppercase; }
-      .sb .invtitle { text-align:right; font-size:27px; font-weight:800; letter-spacing:2px; color:#13318C; margin:10px 0 3px; }
+      .sb .invtitle { display:inline-block; font-size:27px; font-weight:800; letter-spacing:2px; color:#13318C; margin:8px 0 4px; border-bottom:3px solid #13318C; padding-bottom:3px; }
       .sb .gp { font-size:9px; color:#5D6B85; }
       .sb .gp b { color:#13318C; }
       .sb table { width:100%; border-collapse:collapse; }
@@ -5216,10 +5227,14 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       .sb .parties td { border:1px solid #c9d8f5; padding:5px 8px; font-size:9.5px; vertical-align:top; width:50%; }
       .sb .parties .h { background:#13318C; color:#fff; font-weight:700; text-transform:uppercase; font-size:9px; padding:4px 8px; letter-spacing:1px; }
       .sb .items { margin-top:5px; }
-      .sb .items th { background:#13318C; color:#fff; font-size:9px; text-transform:uppercase; padding:5px; border:1px solid #13318C; }
-      .sb .items td { border:1px solid #c9d8f5; padding:4px 5px; font-size:9.5px; vertical-align:top; }
+      /* Borderless line-items table (mam 2026-06-18: "their table has no
+         lines") — keep only the blue header bar and a faint row separator,
+         no cell grid, to match the supplied invoice format. */
+      .sb .items th { background:#13318C; color:#fff; font-size:9px; text-transform:uppercase; padding:5px; border:none; }
+      .sb .items td { border:none; border-bottom:1px solid #eaf0fb; padding:5px 6px; font-size:9.5px; vertical-align:top; }
+      .sb .items tbody tr:last-child td { border-bottom:none; }
       .sb .items td.c { text-align:center; } .sb .items td.r { text-align:right; }
-      .sb .items td .spec { font-size:8.5px; color:#5D6B85; margin-top:2px; }
+      .sb .items td .spec { font-size:8.5px; color:#13318C; font-weight:600; margin-top:2px; }
       .sb .lower { display:flex; gap:8px; margin-top:5px; align-items:flex-start; }
       .sb .words { flex:1; border:1px solid #c9d8f5; padding:5px 8px; font-size:9.5px; }
       .sb .words .k { color:#13318C; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-top:4px; }
@@ -5299,17 +5314,17 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         <div class="top">
           <div class="hl">
             <div class="brand">${brandInner}</div>
-            <div class="haddr">
-              <div>HO: 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, Ludhiana, Punjab – 141003</div>
-              <div>Noida: 91, Springboard, Sector 2, Noida (UP)</div>
-              <div>Pan-India: Ludhiana · Noida · Bangalore · Mumbai</div>
-            </div>
           </div>
           <div class="hr">
             <div class="origpill">Original for Recipient</div>
             <div class="invtitle">TAX INVOICE</div>
             <div class="gp"><b>GSTIN:</b> 03AASCS7836D2Z3 &nbsp; <b>PAN:</b> AASCS7836D</div>
           </div>
+        </div>
+        <div class="haddr">
+          <div>HO: 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, Ludhiana, Punjab – 141003</div>
+          <div>Noida: 91, Springboard, Sector 2, Noida (UP)</div>
+          <div>Pan-India: Ludhiana · Noida · Bangalore · Mumbai</div>
         </div>
 
         <table class="meta" style="margin-top:9px">
