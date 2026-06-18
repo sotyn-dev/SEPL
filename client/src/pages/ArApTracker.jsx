@@ -325,7 +325,35 @@ export default function ArApTracker() {
 
       {/* ── Summary : per-week AR / AP / net / running balance ──── */}
       {tab === 'summary' && (
-        <div className="card p-0 overflow-x-auto">
+        <div className="space-y-4">
+          {/* Cash-cycle alert — surfaces where the running balance dips below
+              zero (cash shortfall) so it's visible above the table. */}
+          {summary.rows.length > 0 && (() => {
+            const rows = summary.rows;
+            const neg = rows.filter(r => r.balance < 0);
+            const low = rows.reduce((m, r) => (m == null || r.balance < m.balance ? r : m), null);
+            const showBal = (b) => (b < 0 ? '(' + fmtL(-b) + ')' : fmtL(b));
+            return (
+              <div className={`card p-4 border-l-4 ${neg.length ? 'border-red-500 bg-red-50' : 'border-emerald-500 bg-emerald-50'}`}>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  {neg.length
+                    ? <div className="font-bold text-sm text-red-700">⚠ Running balance goes NEGATIVE on {neg.length} day{neg.length > 1 ? 's' : ''} — cash shortfall</div>
+                    : <div className="font-bold text-sm text-emerald-700">✓ Cash stays positive across the whole cycle</div>}
+                  {low && <div className="text-xs text-gray-600">Lowest point: <b className={low.balance < 0 ? 'text-red-700' : 'text-emerald-700'}>₹ {showBal(low.balance)} L</b> on <b>{fmtCol(low.date)}</b></div>}
+                </div>
+                {neg.length > 0 && (
+                  <div className="mt-2 flex gap-1.5 flex-wrap">
+                    {neg.map(r => (
+                      <span key={r.date} className="text-[11px] font-semibold px-2 py-0.5 rounded bg-white border border-red-200 text-red-700 whitespace-nowrap">
+                        {fmtCol(r.date)}: ₹ ({fmtL(-r.balance)}) L
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          <div className="card p-0 overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="bg-gray-50 text-xs text-gray-500 uppercase">
               <th className="text-left px-4 py-2">Week</th><th className="text-right px-4 py-2">AR (in)</th>
@@ -354,6 +382,7 @@ export default function ArApTracker() {
               )}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
