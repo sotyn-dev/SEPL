@@ -700,7 +700,11 @@ export default function PaymentRequired() {
                     if (st === 'Rejected') return <span className={cls + 'bg-red-100 text-red-700'}>Rejected</span>;
                     if (st === 'Approved') return <span className={cls + 'bg-green-600 text-white'}>Paid</span>;
                     if (st === 'Payment Release (Aanchal)') return <span className={cls + 'bg-emerald-100 text-emerald-700'}>Approved</span>;
-                    return <span className={cls + 'bg-amber-100 text-amber-700'}>Pending</span>;
+                    // Show WHICH level it's pending at (mam 2026-06-18: status was
+                    // a hotchpotch — everything just said "Pending"). Level read
+                    // from the current step name (HR / L1 / L2 / L3).
+                    const lvl = (r.current_step_name || '').match(/\b(HR|L1|L2|L3)\b/)?.[1] || '';
+                    return <span className={cls + 'bg-amber-100 text-amber-700'}>Pending{lvl ? ' · ' + lvl : ''}</span>;
                   })()}</td>
                   {/* Date column — mam (2026-05-22): "this is pick wrong
                       time according to indian" — SQLite stores UTC,
