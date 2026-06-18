@@ -20,7 +20,7 @@ import {
   FiTarget, FiFileText, FiShoppingBag, FiBriefcase, FiUsers, FiPackage,
   FiCheckSquare, FiPhoneCall, FiStar, FiShield, FiSettings,
   // CRM children
-  FiGlobe, FiTrendingUp, FiFilter, FiBook, FiUser,
+  FiGlobe, FiTrendingUp, FiTrendingDown, FiFilter, FiBook, FiUser,
   // Quotes & Orders children
   FiArchive, FiClipboard, FiTruck, FiShoppingCart,
   // Procurement children
@@ -118,6 +118,7 @@ const SIDEBAR_GROUPS = [
     { path: '/collections',      label: 'Collections', icon: FiSend,       module: 'collections' },
     { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing' },
     { path: '/cashflow',         label: 'Cash Flow',   icon: FiRefreshCw,  module: 'cashflow' },
+    { path: '/ar-ap-tracker',    label: 'AR/AP Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
     { path: '/expenses',         label: 'Expenses',    icon: FiPieChart,   module: 'expenses' },
   ]},
   // 'People' renamed → 'HRMS' (mam 2026-05-28). Sub-contractor Master
@@ -186,6 +187,10 @@ export default function Layout() {
   const [pwdModal, setPwdModal] = useState(false);
   const [pwdForm, setPwdForm] = useState({ current_password: '', new_password: '', confirm: '' });
   const [pwdSaving, setPwdSaving] = useState(false);
+  // Header user-avatar menu (mam 2026-06-17 header freeze): identity +
+  // Change Password + Logout reachable from the top bar even when the
+  // sidebar is collapsed — the footer copy stays as-is for the open state.
+  const [userMenu, setUserMenu] = useState(false);
   const location = useLocation();
   const { user, logout, canView, isAdmin, userRoles } = useAuth();
 
@@ -225,6 +230,7 @@ export default function Layout() {
   // Close sidebar on mobile when route changes
   useEffect(() => {
     if (isMobile) setSidebarOpen(false);
+    setUserMenu(false);   // also dismiss the header avatar menu on navigation
   }, [location.pathname, isMobile]);
 
   // GLOBAL LOCATION TRACKING — was Attendance-page-only before, but mam's
@@ -370,6 +376,26 @@ export default function Layout() {
   const isGroupOpen = (id) => navQuery ? true : openGroups.has(id);
   const dashboardMatches = itemMatches(SIDEBAR_DASHBOARD);
   const nothingMatches = navQuery && !dashboardMatches && visibleGroups.length === 0 && !showSettings;
+
+  // ─── Header breadcrumb (mam 2026-06-17 header freeze) ───────────────
+  // Resolve the current route to { group, label } so the top bar reads
+  // "Finance › Cash Flow" instead of a context-free "Cash Flow".
+  // Dashboard is standalone (no group); unknown routes fall back to the
+  // app name with no crumb.
+  const crumb = (() => {
+    if (SIDEBAR_DASHBOARD.path === location.pathname) return { group: null, label: SIDEBAR_DASHBOARD.label };
+    for (const g of SIDEBAR_GROUPS) {
+      const it = g.items.find(m => m.path === location.pathname);
+      if (it) return { group: g.label, label: it.label };
+    }
+    const s = SIDEBAR_SETTINGS.items.find(m => m.path === location.pathname);
+    if (s) return { group: SIDEBAR_SETTINGS.label, label: s.label };
+    return { group: null, label: 'SEPL ERP' };
+  })();
+
+  // Avatar initials from the user's name (fallback to username), max 2 chars.
+  const initials = (user?.name || user?.username || '?')
+    .split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase() || '?';
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -611,21 +637,45 @@ export default function Layout() {
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="p-2 hover:bg-gray-100 rounded-lg flex-shrink-0 text-gray-700"
             title={sidebarOpen ? 'Hide sidebar' : 'Expand sidebar'}
+            aria-label={sidebarOpen ? 'Hide sidebar' : 'Expand sidebar'}
           >
             {sidebarOpen ? <FiMenu size={20} /> : <FiChevronRight size={20} />}
           </button>
-          <h2 className="text-sm md:text-lg font-semibold text-gray-800 truncate flex-1">
-            {(() => {
-              // Header title — look up the current route across Dashboard +
-              // every group + Settings to find the matching label.
-              if (SIDEBAR_DASHBOARD.path === location.pathname) return SIDEBAR_DASHBOARD.label;
-              const allItems = [
-                ...SIDEBAR_GROUPS.flatMap(g => g.items),
-                ...SIDEBAR_SETTINGS.items,
-              ];
-              return allItems.find(m => m.path === location.pathname)?.label || 'SEPL ERP';
-            })()}
-          </h2>
+          {/* Brand mark — only when the sidebar is collapsed on desktop, so
+              the header never loses the SEPL logo (mam 2026-06-17). Mirrors
+              the sidebar logo, with the same broken-image fallback. */}
+          {!sidebarOpen && !isMobile && (
+            <div className="flex items-center gap-2 flex-shrink-0 pr-1">
+              <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center ring-1 ring-gray-200 overflow-hidden p-0.5">
+                <img
+                  src="/sepl-logo.webp"
+                  alt="SEPL"
+                  className="w-full h-full object-contain"
+                  onError={(e) => {
+                    if (!e.target.dataset.fallback) {
+                      e.target.dataset.fallback = '1';
+                      e.target.style.display = 'none';
+                      const txt = e.target.parentElement.querySelector('span');
+                      if (txt) txt.style.display = '';
+                    }
+                  }}
+                />
+                <span className="text-blue-700 font-extrabold text-xs" style={{ display: 'none' }}>SE</span>
+              </div>
+            </div>
+          )}
+          {/* Breadcrumb title — "Group › Page" so the current location has
+              context across the 64-item app (mam 2026-06-17). */}
+          <div className="flex-1 min-w-0">
+            {crumb.group && (
+              <div className="text-[11px] font-medium text-gray-400 leading-none truncate hidden sm:block">
+                {crumb.group}
+              </div>
+            )}
+            <h2 className="text-sm md:text-lg font-semibold text-gray-800 truncate leading-tight">
+              {crumb.label}
+            </h2>
+          </div>
           {/* Push notification toggle — phone / laptop / desktop each
               need to be enabled separately. Mam's MD requirement. */}
           <EnablePushButton />
@@ -635,21 +685,62 @@ export default function Layout() {
               tabs inside a single dropdown — replaces the previous
               "3 separate bells" layout that confused users. */}
           <AnnouncementBell />
-          {/* Build stamp (mam 2026-06-02) — tiny version chip so we can
-              verify the iPhone PWA has the freshest bundle without
-              guessing.  Defined at build time via Vite define(). */}
-          <span
-            className="hidden md:inline text-[9px] font-mono text-gray-400 ml-1 px-1.5 py-0.5 rounded bg-gray-50 border border-gray-200"
-            title="Build timestamp — confirms which deploy is loaded"
-          >
-            v{typeof __BUILD_STAMP__ !== 'undefined' ? __BUILD_STAMP__ : 'dev'}
-          </span>
-          <span
-            className="md:hidden text-[8px] font-mono text-gray-400 ml-0.5"
-            title="Build version"
-          >
-            v{typeof __BUILD_STAMP__ !== 'undefined' ? __BUILD_STAMP__ : 'dev'}
-          </span>
+          {/* User avatar menu (mam 2026-06-17 header freeze) — identity +
+              Change Password + Logout always reachable from the top bar,
+              even when the sidebar is collapsed. */}
+          <div className="relative flex-shrink-0">
+            <button
+              onClick={() => setUserMenu(o => !o)}
+              className="flex items-center gap-2 p-1 pr-1.5 md:pr-2 rounded-lg hover:bg-gray-100"
+              title={user?.name || 'Account'}
+              aria-label="Account menu"
+              aria-haspopup="true"
+              aria-expanded={userMenu}
+            >
+              <span className="w-8 h-8 rounded-full bg-blue-900 text-white text-xs font-bold flex items-center justify-center flex-shrink-0">
+                {initials}
+              </span>
+              <span className="hidden md:block max-w-[120px] truncate text-sm font-medium text-gray-700">{user?.name}</span>
+              <FiChevronDown size={14} className={`hidden md:block text-gray-400 transition-transform ${userMenu ? 'rotate-180' : ''}`} />
+            </button>
+            {userMenu && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setUserMenu(false)} />
+                <div className="absolute right-0 mt-1 w-60 bg-white border border-gray-200 rounded-lg shadow-lg z-40 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-gray-100">
+                    <div className="text-sm font-semibold text-gray-800 truncate">{user?.name}</div>
+                    {user?.username && <div className="text-[11px] text-gray-500 font-mono truncate">@{user.username}</div>}
+                    {user?.email && <div className="text-[11px] text-gray-400 truncate">{user.email}</div>}
+                    {userRoles.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {userRoles.map((r, i) => (
+                          <span key={i} className="text-[9px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">{r}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => { setUserMenu(false); setPwdModal(true); }}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    <FiKey size={15} /> Change Password
+                  </button>
+                  <button
+                    onClick={logout}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 border-t border-gray-100"
+                  >
+                    <FiLogOut size={15} /> Logout
+                  </button>
+                  {/* Build stamp moved here (mam 2026-06-17) — kept for PWA
+                      cache verification but no longer cluttering the header
+                      in front of management. */}
+                  <div className="px-4 py-1.5 text-[9px] font-mono text-gray-300 border-t border-gray-100 bg-gray-50">
+                    build v{typeof __BUILD_STAMP__ !== 'undefined' ? __BUILD_STAMP__ : 'dev'}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </header>
         {/* iOS home-indicator padding so content doesn't hide behind the
             bottom safe-area on iPhone X+ (mam 2026-06-02). */}
