@@ -445,12 +445,12 @@ export default function PaymentRequired() {
             const tile = ({ key, label, stage, color }) => {
               const rows = rowsOf(stage);
               const amt = rows.reduce((s, r) => s + (+r.amount || 0), 0);
-              const active = stage != null && stageFilter === stage;
+              const active = stage != null && stageFilter === stage && !approvedLevel;
               return (
                 <button
                   key={key}
                   type="button"
-                  onClick={() => setStageFilter(active ? '' : (stage || ''))}
+                  onClick={() => { setApprovedLevel(null); setStageFilter(active ? '' : (stage || '')); }}
                   disabled={stage == null}
                   className={`card px-2 py-1.5 border-l-4 text-left transition hover:shadow disabled:cursor-default disabled:hover:shadow-none ${color.border} ${active ? `${color.activeBg} ring-2 ${color.ring}` : ''}`}
                   title={`${label} · ${rows.length} ${rows.length === 1 ? 'request' : 'requests'} · Rs ${fmt(amt)}`}
@@ -470,12 +470,11 @@ export default function PaymentRequired() {
             );
           })()}
 
-          {/* Mini stage-tabs strip — single-row chips for fast filtering
-              between the workflow stages without going up to the tiles.
-              Mam 2026-05-29: 'show me mini tabs according to stage so
-              that approved pending show easily'. Each chip shows the
-              stage's count next to the label. Click to toggle the
-              filter; the active chip ringed in red. */}
+          {/* "Approved so far by L1/L2/L3" views (mam 2026-06-15): requests
+              each level has signed off + the amount it approved. The stage
+              filters all live in the clickable tiles above now — this row
+              used to duplicate them, which mam called "a mess" (2026-06-18),
+              so it shows ONLY these per-level approved views. */}
           {(() => {
             const source = tab === 'inbox' ? myInbox : requests;
             const visible = source.filter(r => {
@@ -484,46 +483,9 @@ export default function PaymentRequired() {
               if (tab === 'rejected') return r.status === 'rejected';
               return true;
             });
-            // Count by LIVE stage (current_step_name), same as the tiles.
-            const cnt = (stage) => stage === '' ? visible.length : visible.filter(r => stageOf(r) === stage).length;
-            const CHIP_PALETTE = [
-              'bg-amber-100 text-amber-700 border-amber-200',
-              'bg-orange-100 text-orange-700 border-orange-200',
-              'bg-purple-100 text-purple-700 border-purple-200',
-              'bg-indigo-100 text-indigo-700 border-indigo-200',
-              'bg-sky-100 text-sky-700 border-sky-200',
-            ];
-            const presentStages = STAGE_SEQ;
-            const chips = [
-              { id: 'all', stage: '', label: 'All', color: 'bg-blue-100 text-blue-700 border-blue-200' },
-              ...presentStages.map((st, i) => ({ id: st, stage: st, label: st, color: CHIP_PALETTE[i % CHIP_PALETTE.length] })),
-              { id: 'fin', stage: 'Approved', label: 'Approved', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
-              { id: 'rej', stage: 'Rejected', label: 'Rejected', color: 'bg-rose-100 text-rose-700 border-rose-200' },
-            ];
             return (
               <div className="flex gap-1.5 flex-wrap items-center">
-                <span className="text-[10px] uppercase font-semibold text-gray-500 mr-1">Filter:</span>
-                {chips.map(c => {
-                  const n = cnt(c.stage);
-                  const active = (stageFilter || '') === c.stage && c.stage !== '' && !approvedLevel;
-                  return (
-                    <button
-                      key={c.id}
-                      onClick={() => { setApprovedLevel(null); setStageFilter(active ? '' : c.stage); }}
-                      className={`text-xs font-semibold px-2.5 py-1 rounded-full border transition flex items-center gap-1.5 ${
-                        active
-                          ? `${c.color} ring-2 ring-offset-1 ring-red-400`
-                          : `${c.color} opacity-70 hover:opacity-100`
-                      }`}
-                    >
-                      {c.label}
-                      <span className={`text-[10px] font-bold rounded-full bg-white/70 px-1.5 ${n === 0 ? 'text-gray-400' : ''}`}>{n}</span>
-                    </button>
-                  );
-                })}
-                {/* Per-level "Approved by Lx" views (mam 2026-06-15): show
-                    requests that level has signed off + the amount it approved. */}
-                <span className="text-gray-300 mx-0.5">|</span>
+                <span className="text-[10px] uppercase font-semibold text-gray-500 mr-1">Approved so far:</span>
                 {APPROVED_LEVELS.map(lv => {
                   const lvRows = visible.filter(r => clearedAt(r, lv.step));
                   const n = lvRows.length;
