@@ -4,12 +4,13 @@
 // photo/file attachments. Team-only; everything stored in the ERP.
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import api from '../api';
+import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiMessageSquare, FiFile, FiUsers, FiX } from 'react-icons/fi';
 
 const DAY_OPTS = { day: '2-digit', month: 'short', year: 'numeric' };
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiMessageSquare, FiFile } from 'react-icons/fi';
 
 const isImg = (u) => /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(u || ''));
 const preview = (m) => (m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : '')) : '');
@@ -22,13 +23,26 @@ export default function SiteChat() {
   const [msgs, setMsgs] = useState([]);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [members, setMembers] = useState([]);
+  const [reads, setReads] = useState({});
+  const [allUsers, setAllUsers] = useState([]);
+  const [memOpen, setMemOpen] = useState(false);
+  const [memSearch, setMemSearch] = useState('');
   const fileRef = useRef(null);
   const endRef = useRef(null);
 
   const loadSites = useCallback(() => { api.get('/site-chat/sites').then(r => setSites(r.data || [])).catch(() => {}); }, []);
-  const loadMsgs = useCallback((id) => { if (id) api.get(`/site-chat/${id}`).then(r => setMsgs(r.data || [])).catch(() => {}); }, []);
+  const loadMsgs = useCallback((id) => {
+    if (!id) return;
+    api.get(`/site-chat/${id}`).then(r => {
+      setMsgs(r.data.messages || []);
+      setMembers(r.data.members || []);
+      setReads(r.data.reads || {});
+      loadSites();                                   // refresh unread badges
+    }).catch(() => {});
+  }, [loadSites]);
 
-  useEffect(() => { loadSites(); }, [loadSites]);
+  useEffect(() => { loadSites(); api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {}); }, [loadSites]);
   // Load + light polling for the open thread (refresh on window focus too).
   useEffect(() => {
     if (!sel) return;
@@ -70,6 +84,15 @@ export default function SiteChat() {
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  const addMember = async (uid) => {
+    try { await api.post(`/site-chat/${sel.id}/members`, { user_ids: [uid] }); loadMsgs(sel.id); }
+    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+  const removeMember = async (uid) => {
+    try { await api.delete(`/site-chat/${sel.id}/members/${uid}`); loadMsgs(sel.id); }
+    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
   const shown = sites.filter(s => !q || `${s.name} ${s.client_name || ''}`.toLowerCase().includes(q.toLowerCase()));
   // WhatsApp-style day separators in the thread.
   const todayLbl = fmtDate(new Date(), DAY_OPTS);
@@ -105,7 +128,10 @@ export default function SiteChat() {
                     <span className="font-semibold text-sm text-gray-800 truncate">{s.name}</span>
                     {s.last && <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtTime(s.last.created_at)}</span>}
                   </div>
-                  <div className="text-xs text-gray-500 truncate">{s.last ? preview(s.last) : <span className="italic text-gray-300">No messages yet</span>}</div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="text-xs text-gray-500 truncate flex-1">{s.last ? preview(s.last) : <span className="italic text-gray-300">No messages yet</span>}</div>
+                    {s.unread > 0 && <span className="text-[10px] font-bold text-white bg-emerald-500 rounded-full px-1.5 min-w-[18px] text-center flex-shrink-0">{s.unread}</span>}
+                  </div>
                 </div>
               </button>
             ))}
@@ -125,8 +151,11 @@ export default function SiteChat() {
                 <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">{String(sel.name || '?').slice(0, 2).toUpperCase()}</div>
                 <div className="min-w-0">
                   <div className="font-semibold text-sm text-gray-800 truncate">{sel.name}</div>
-                  <div className="text-[11px] text-gray-500 truncate">{sel.client_name || ''}{sel.status ? ` · ${sel.status}` : ''}</div>
+                  <div className="text-[11px] text-gray-500 truncate">{members.length ? members.map(m => m.name).filter(Boolean).slice(0, 4).join(', ') + (members.length > 4 ? `, +${members.length - 4}` : '') : 'No members yet'}</div>
                 </div>
+                <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="ml-auto flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded border bg-white hover:bg-gray-50 text-gray-700" title="Manage members">
+                  <FiUsers size={14} /> {members.length}
+                </button>
               </div>
 
               <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5" style={{ background: '#efeae2' }}>
@@ -148,6 +177,13 @@ export default function SiteChat() {
                         <div className="flex items-center justify-end gap-1.5 mt-0.5">
                           {(own || isAdmin()) && canDelete('site_chat') && <button onClick={() => del(m)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
                           <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
+                          {own && (() => {
+                            const others = members.filter(mm => mm.user_id !== user?.id);
+                            const readers = others.filter(o => (reads[o.user_id] || 0) >= m.id);
+                            const allRead = others.length > 0 && readers.length === others.length;
+                            const title = others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet';
+                            return <span title={title} className={`text-[11px] leading-none ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>;
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -171,6 +207,41 @@ export default function SiteChat() {
           )}
         </div>
       </div>
+
+      {/* ── Members (WhatsApp-group style) ─────────────────── */}
+      {sel && (
+        <Modal isOpen={memOpen} onClose={() => setMemOpen(false)} title={`Members · ${sel.name}`}>
+          <div className="space-y-3 text-sm">
+            <p className="text-xs text-gray-500">Only people added here can see and post in this site's chat.</p>
+            <div>
+              <div className="font-semibold text-gray-700 mb-1">In this chat ({members.length})</div>
+              {members.length === 0 && <div className="text-gray-400 text-xs mb-1">No members yet — add people below.</div>}
+              <div className="space-y-1 max-h-40 overflow-y-auto">
+                {members.map(m => (
+                  <div key={m.user_id} className="flex items-center justify-between bg-gray-50 rounded px-2 py-1">
+                    <span className="flex items-center gap-2"><span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold flex items-center justify-center">{String(m.name || '?').slice(0, 2).toUpperCase()}</span>{m.name}</span>
+                    {canCreate('site_chat') && <button onClick={() => removeMember(m.user_id)} className="text-gray-400 hover:text-red-600" title="Remove"><FiX size={14} /></button>}
+                  </div>
+                ))}
+              </div>
+            </div>
+            {canCreate('site_chat') && (
+              <div>
+                <div className="font-semibold text-gray-700 mb-1">Add member</div>
+                <input className="input mb-1" placeholder="Search people…" value={memSearch} onChange={e => setMemSearch(e.target.value)} />
+                <div className="space-y-0.5 max-h-44 overflow-y-auto">
+                  {allUsers.filter(u => !members.some(m => m.user_id === u.id) && (!memSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(memSearch.toLowerCase()))).map(u => (
+                    <div key={u.id} className="flex items-center justify-between px-2 py-1 border-b">
+                      <span>{u.name} <span className="text-[11px] text-gray-400">@{u.username}</span></span>
+                      <button onClick={() => addMember(u.id)} className="text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded px-2 py-0.5">+ Add</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
