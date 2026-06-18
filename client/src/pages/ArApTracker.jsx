@@ -182,7 +182,7 @@ export default function ArApTracker() {
   const doRollOverdue = async () => {
     try {
       const r = await api.post('/ar-ap-tracker/roll-forward');
-      toast.success(r.data.rolled ? `${r.data.rolled} overdue AR moved to the next Mon/Thu` : 'Nothing overdue to roll');
+      toast.success(r.data.rolled ? `${r.data.rolled} overdue entr${r.data.rolled === 1 ? 'y' : 'ies'} rolled to the next collection day` : 'Nothing overdue to roll');
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
@@ -219,8 +219,8 @@ export default function ArApTracker() {
               </button>
             </>
           )}
-          {tab === 'ar' && canEdit('ar_ap_tracker') && (
-            <button onClick={doRollOverdue} className="btn btn-secondary flex items-center gap-2" title="Move unpaid, overdue AR to the next collection day (Mon → Thu, Thu → next Mon)"><FiClock /> Roll overdue</button>
+          {(tab === 'ar' || tab === 'ap') && canEdit('ar_ap_tracker') && (
+            <button onClick={doRollOverdue} className="btn btn-secondary flex items-center gap-2" title="Move unsettled, overdue entries to the next collection day (AR: Mon→Thu/Thu→Mon · AP: Tue→Fri/Fri→Tue)"><FiClock /> Roll overdue</button>
           )}
           {(tab === 'ar' || tab === 'ap') && canCreate('ar_ap_tracker') && (
             <button onClick={openBulk} className="btn btn-secondary flex items-center gap-2" title="Add many rows at once"><FiClipboard /> Bulk {kind}</button>

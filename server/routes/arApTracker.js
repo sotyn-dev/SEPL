@@ -337,38 +337,43 @@ router.post('/bulk', requirePermission('ar_ap_tracker', 'create'), (req, res) =>
   res.json(report);
 });
 
-// ── AR collection-day auto-roll (mam 2026-06-18) ───────────────────────
-// Receivables are collected only on MONDAY and THURSDAY. If an AR entry isn't
-// received by its date, it rolls to the next collection day: Mon→Thu (+3),
-// Thu→next Mon (+4), any other day → the next Mon/Thu. Runs daily via cron
-// (arApRollCron) and on-demand via POST /roll-forward.
-// Days-to-add from each weekday (Sun=0 … Sat=6) to reach the next Mon/Thu.
-const NEXT_COLLECTION = { 0: 1, 1: 3, 2: 2, 3: 1, 4: 4, 5: 3, 6: 2 };
-function nextCollectionDay(dateStr) {
+// ── Collection-day auto-roll (mam 2026-06-18) ──────────────────────────
+// Money moves only on fixed days: AR (receivables) on MON & THU, AP
+// (payables) on TUE & FRI. If an entry isn't settled by its date it rolls to
+// the next collection day for its kind — e.g. AR Mon→Thu / Thu→next Mon, AP
+// Tue→Fri / Fri→next Tue. Runs daily via cron (arApRollCron) + POST /roll-forward.
+// Days-to-add from each weekday (Sun=0 … Sat=6) to reach the kind's next day.
+const COLLECT = {
+  AR: { 0: 1, 1: 3, 2: 2, 3: 1, 4: 4, 5: 3, 6: 2 },   // Mon & Thu
+  AP: { 0: 2, 1: 1, 2: 3, 3: 2, 4: 1, 5: 4, 6: 3 },   // Tue & Fri
+};
+const COLLECT_LABEL = { AR: 'Mon/Thu', AP: 'Tue/Fri' };
+function nextCollectionDay(dateStr, kind) {
+  const map = COLLECT[kind] || COLLECT.AR;
   const m = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return dateStr;
   const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
-  d.setUTCDate(d.getUTCDate() + NEXT_COLLECTION[d.getUTCDay()]);
+  d.setUTCDate(d.getUTCDate() + map[d.getUTCDay()]);
   return d.toISOString().slice(0, 10);
 }
 // Today's date on the India clock (entries store plain YYYY-MM-DD).
 function istToday() { return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10); }
 
-// Roll every still-'planned', not-yet-received AR entry whose date has passed
-// onto the next upcoming Mon/Thu. Each move is written to the change log.
+// Roll every still-'planned', not-yet-settled AR/AP entry whose date has
+// passed onto the next upcoming collection day for its kind. Each move logged.
 function rollOverdue(db, user) {
   const today = istToday();
-  const pend = db.prepare(`SELECT * FROM arap_entries WHERE kind='AR' AND status='planned' AND (actual IS NULL OR actual='') AND due_date < ?`).all(today);
+  const pend = db.prepare(`SELECT * FROM arap_entries WHERE status='planned' AND (actual IS NULL OR actual='') AND due_date < ?`).all(today);
   let rolled = 0;
   const tx = db.transaction(() => {
     for (const e of pend) {
-      let nd = nextCollectionDay(e.due_date), guard = 0;
-      while (nd < today && guard++ < 120) nd = nextCollectionDay(nd);
+      let nd = nextCollectionDay(e.due_date, e.kind), guard = 0;
+      while (nd < today && guard++ < 120) nd = nextCollectionDay(nd, e.kind);
       if (!nd || nd === e.due_date) continue;
       db.prepare('UPDATE arap_entries SET due_date=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(nd, e.id);
       db.prepare(`INSERT INTO arap_changelog (entry_id, kind, party, field, old_value, new_value, remark, changed_by, changed_by_name)
                   VALUES (?,?,?,?,?,?,?,?,?)`)
-        .run(e.id, 'AR', e.party, 'due_date (auto-roll)', e.due_date, nd, 'Not received by due date — rolled to next collection day (Mon/Thu rule)', user?.id || null, user?.name || 'System');
+        .run(e.id, e.kind, e.party, 'due_date (auto-roll)', e.due_date, nd, `Not settled by due date — rolled to next collection day (${COLLECT_LABEL[e.kind] || ''} rule)`, user?.id || null, user?.name || 'System');
       rolled++;
     }
   });
@@ -376,7 +381,7 @@ function rollOverdue(db, user) {
   return rolled;
 }
 
-// Manual trigger — roll overdue AR entries now.
+// Manual trigger — roll overdue AR + AP entries now.
 router.post('/roll-forward', requirePermission('ar_ap_tracker', 'edit'), (req, res) => {
   res.json({ rolled: rollOverdue(getDb(), req.user) });
 });

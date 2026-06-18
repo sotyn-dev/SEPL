@@ -1,11 +1,10 @@
-// AR collection-day auto-roll cron (mam 2026-06-18: "we only take payment
-// Monday and Thursday … if not received it goes to the next day").
+// AR/AP collection-day auto-roll cron (mam 2026-06-18).
 //
-// Receivables are collected only on Mon & Thu. This runs daily at 01:00 (and
-// 90 s after boot for catch-up) and moves every still-'planned', not-received
-// AR entry whose date has passed onto the next collection day — Mon→Thu,
-// Thu→next Mon. Each move is logged in the AR/AP change log, so it's auditable
-// and reversible. Skip via ERP_DISABLE_ARAP_ROLL=1.
+// Money moves on fixed days: AR (receivables) Mon & Thu, AP (payables) Tue &
+// Fri. This runs daily at 01:00 (and 90 s after boot for catch-up) and moves
+// every still-'planned', not-settled entry whose date has passed onto the next
+// collection day for its kind. Each move is logged in the AR/AP change log, so
+// it's auditable and reversible. Skip via ERP_DISABLE_ARAP_ROLL=1.
 const { getDb } = require('../db/schema');
 
 function runOnce() {
