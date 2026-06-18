@@ -30,6 +30,15 @@ const weekOf = (dateStr) => {
 const fmtL = (n) => (n == null || n === '' ? '' : (+n).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 }));
 const STATUSES = ['planned', 'partial', 'done', 'cancelled'];
 const eff = (r) => (r.actual != null && r.actual !== '' ? +r.actual : +r.planned || 0);
+// "17-06" → "2026-06-17"; passes a YYYY-MM-DD through unchanged.
+const ddmmToISO = (s) => {
+  const t = String(s || '').trim();
+  let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) return `${m[1]}-${String(+m[2]).padStart(2, '0')}-${String(+m[3]).padStart(2, '0')}`;
+  m = t.match(/^(\d{1,2})\s*[-/.]\s*(\d{1,2})$/);
+  if (m) return `2026-${String(+m[2]).padStart(2, '0')}-${String(+m[1]).padStart(2, '0')}`;
+  return '';
+};
 
 export default function ArApTracker() {
   const { canCreate, canEdit, canDelete } = useAuth();
@@ -48,9 +57,24 @@ export default function ArApTracker() {
   const [bulkRows, setBulkRows] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [parties, setParties] = useState({ ar: [], ap: [] });
+  const [bulkPaste, setBulkPaste] = useState('');
   const blankBulkRow = () => ({ party: '', due_date: '', planned: '' });
-  const openBulk = () => { setBulkRows(Array.from({ length: 6 }, blankBulkRow)); setBulkOpen(true); };
+  const openBulk = () => { setBulkRows(Array.from({ length: 6 }, blankBulkRow)); setBulkPaste(''); setBulkOpen(true); };
   const setBulkCell = (i, k, v) => setBulkRows(rs => rs.map((r, j) => j === i ? { ...r, [k]: v } : r));
+  // Paste a block of "party, date, amount" lines → fill the grid rows.
+  const loadPaste = () => {
+    const rows = [];
+    for (const line of bulkPaste.split(/\r?\n/)) {
+      const t = line.trim(); if (!t) continue;
+      const parts = t.split(/\t|\s*[,;]\s*/).map(s => s.trim()).filter(Boolean);
+      if (parts.length < 3) continue;
+      const due = ddmmToISO(parts[1]);
+      if (parts[0] && due) rows.push({ party: parts[0], due_date: due, planned: String(parts[2]).replace(/,/g, '') });
+    }
+    if (!rows.length) return toast.error('No valid lines (need: party, date, amount)');
+    setBulkRows(rows); setBulkPaste('');
+    toast.success(`${rows.length} rows loaded — review and Add`);
+  };
 
   const load = useCallback(() => {
     api.get('/ar-ap-tracker').then(r => setEntries(r.data || [])).catch(() => {});
@@ -367,6 +391,15 @@ export default function ArApTracker() {
       <Modal isOpen={bulkOpen} onClose={() => setBulkOpen(false)} title={`Bulk add ${kind} entries`} wide>
         <div className="space-y-3 text-sm">
           <p className="text-gray-600">Pick the {kind === 'AR' ? 'Business Book client' : 'Vendor'}, the date, and the planned ₹L for each row. Empty rows are ignored.</p>
+          {/* Quick paste — drop a block of "party, date, amount" lines and load them into the grid. */}
+          <details className="rounded border bg-gray-50">
+            <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-blue-700">⬇ Paste a list (party, date, amount per line)</summary>
+            <div className="p-3 space-y-2">
+              <textarea className="input font-mono text-xs" rows="5" value={bulkPaste} onChange={e => setBulkPaste(e.target.value)}
+                placeholder={`SBJ, 17-06, 15\nsael, 24-06, 8.44\njmh PI, 17-06, 40`} />
+              <button onClick={loadPaste} className="btn btn-secondary text-xs">Load into rows ↓</button>
+            </div>
+          </details>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead><tr className="text-xs text-gray-500 uppercase">
