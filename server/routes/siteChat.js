@@ -31,6 +31,8 @@ getDb().exec(`
   );
 `);
 
+// Strip stray wrapping quotes/spaces from a site name ("""M/s X """ → "M/s X").
+const cleanName = (n) => String(n || '').replace(/^[\s"'`]+/, '').replace(/[\s"'`]+$/, '').trim();
 const isAdmin = (req) => req.user.role === 'admin';
 const isMember = (db, s, u) => !!db.prepare('SELECT 1 FROM site_chat_members WHERE site_id=? AND user_id=?').get(s, u);
 const canAccess = (db, req, s) => isAdmin(req) || isMember(db, s, req.user.id);
@@ -45,11 +47,20 @@ const markRead = (db, s, uid) => {
 // last-message preview, member count and an unread count.
 router.get('/sites', requirePermission('site_chat', 'view'), (req, res) => {
   const db = getDb(); const uid = req.user.id;
-  const sites = isAdmin(req)
+  const raw = isAdmin(req)
     ? db.prepare('SELECT id,name,client_name,status FROM sites ORDER BY name').all()
     : db.prepare('SELECT s.id,s.name,s.client_name,s.status FROM sites s JOIN site_chat_members m ON m.site_id=s.id WHERE m.user_id=? ORDER BY s.name').all(uid);
   const lastBy = Object.fromEntries(db.prepare(`SELECT site_id,body,attachment_name,sender_name,created_at FROM site_messages WHERE id IN (SELECT MAX(id) FROM site_messages GROUP BY site_id)`).all().map(l => [l.site_id, l]));
   const countBy = Object.fromEntries(db.prepare('SELECT site_id,COUNT(*) c FROM site_messages GROUP BY site_id').all().map(c => [c.site_id, c.c]));
+  // One row per unique (cleaned, case-insensitive) site name — keep the
+  // duplicate that already has the most messages, else the lowest id.
+  const byName = {};
+  for (const s of raw) {
+    const k = cleanName(s.name).toLowerCase();
+    const cur = byName[k];
+    if (!cur || (countBy[s.id] || 0) > (countBy[cur.id] || 0) || ((countBy[s.id] || 0) === (countBy[cur.id] || 0) && s.id < cur.id)) byName[k] = s;
+  }
+  const sites = Object.values(byName).map(s => ({ ...s, name: cleanName(s.name) }));
   const memBy = Object.fromEntries(db.prepare('SELECT site_id,COUNT(*) c FROM site_chat_members GROUP BY site_id').all().map(c => [c.site_id, c.c]));
   const unreadBy = Object.fromEntries(db.prepare(`SELECT sm.site_id, COUNT(*) c FROM site_messages sm
       WHERE sm.sender_id <> ? AND sm.id > COALESCE((SELECT last_read_id FROM site_chat_reads r WHERE r.site_id=sm.site_id AND r.user_id=?), 0)
