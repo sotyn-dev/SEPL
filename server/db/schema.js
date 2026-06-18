@@ -4926,6 +4926,10 @@ in your first week. If a process feels broken, raise a Help Ticket
     // MB → Contractor RA → Client RA → Payment Received).  Coexists
     // with the simpler labour_payment above (open Q #2).
     'indent_labour_payment',
+    // Mam (2026-06-18): AR/AP Tracker — rolling weekly cash-flow forecast
+    // (receivables vs payables by party × week) with a mandatory-remark
+    // change log. Under the Finance sidebar group.
+    'ar_ap_tracker',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

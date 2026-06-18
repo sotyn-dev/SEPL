@@ -368,6 +368,8 @@ app.use('/api/hr-system', require('./routes/hrSystem'));
 // 4 Critical Systems
 app.use('/api/cashflow', require('./routes/cashflow'));
 app.use('/api/collections', require('./routes/collections'));
+// AR/AP Tracker — rolling weekly cash-flow forecast (mam 2026-06-18)
+app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 

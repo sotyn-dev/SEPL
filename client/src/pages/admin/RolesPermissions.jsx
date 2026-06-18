@@ -20,6 +20,7 @@ const ALL_MODULES = [
   { key: 'payment_required', label: 'Payment Required' },
   { key: 'attendance', label: 'Attendance' },
   { key: 'collections', label: 'Collection Engine' },
+  { key: 'ar_ap_tracker', label: 'AR/AP Tracker' },
   { key: 'dpr', label: 'DPR' },
   { key: 'delegations', label: 'Delegations' },
   { key: 'pms_tasks', label: 'PMS Tasks' },

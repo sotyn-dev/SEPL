@@ -35,6 +35,7 @@ import Expenses from './pages/Expenses';
 import Checklists from './pages/Checklists';
 import CashFlow from './pages/CashFlow';
 import Collections from './pages/Collections';
+import ArApTracker from './pages/ArApTracker';
 import IndentFMS from './pages/IndentFMS';
 import DPR from './pages/DPR';
 import IndentLabourPayment from './pages/IndentLabourPayment';
@@ -157,6 +158,7 @@ export default function App() {
         <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />
         <Route path="attendance" element={<ModuleRoute module="attendance"><Attendance /></ModuleRoute>} />
         <Route path="collections" element={<ModuleRoute module="collections"><Collections /></ModuleRoute>} />
+        <Route path="ar-ap-tracker" element={<ModuleRoute module="ar_ap_tracker"><ArApTracker /></ModuleRoute>} />
         <Route path="indent-fms" element={<ModuleRoute module="indent_fms"><IndentFMS /></ModuleRoute>} />
         <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
         {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}
