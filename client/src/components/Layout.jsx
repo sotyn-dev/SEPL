@@ -763,6 +763,11 @@ export default function Layout() {
           style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
         >
           <Outlet />
+          {/* SOTYN.AI credit — shown at the bottom of every page (mam 2026-06-19). */}
+          <div className="mt-6 pt-3 border-t border-slate-200 text-center select-none">
+            <p className="text-[9px] uppercase tracking-[0.3em] text-slate-400">Powered by</p>
+            <p className="text-sm font-extrabold tracking-wide bg-gradient-to-r from-blue-700 via-blue-500 to-blue-700 bg-clip-text text-transparent">SOTYN.AI</p>
+          </div>
         </main>
       </div>
       <HelpTicket />

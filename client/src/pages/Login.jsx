@@ -179,14 +179,9 @@ export default function Login() {
         <p className="text-[10px] uppercase tracking-[0.35em] text-zinc-500 mb-1">
           Crafted with <span className="text-red-500">&hearts;</span> by
         </p>
-        <p className="text-sm font-bold bg-gradient-to-r from-blue-700 via-blue-500 to-blue-700 bg-clip-text text-transparent">
-          Secured Engineers Pvt Ltd
+        <p className="text-base font-extrabold tracking-wide bg-gradient-to-r from-blue-700 via-blue-500 to-blue-700 bg-clip-text text-transparent">
+          SOTYN.AI
         </p>
-        <div className="mt-1 flex items-center justify-center gap-2">
-          <span className="h-px w-8 bg-gradient-to-r from-transparent via-zinc-400 to-transparent" />
-          <p className="text-[10px] font-semibold tracking-widest text-zinc-600 uppercase">Monika Devi</p>
-          <span className="h-px w-8 bg-gradient-to-r from-transparent via-zinc-400 to-transparent" />
-        </div>
         <p className="text-[9px] text-zinc-500 mt-0.5">&copy; {new Date().getFullYear()} · All rights reserved</p>
       </footer>
 
