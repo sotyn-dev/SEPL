@@ -1750,6 +1750,9 @@ export default function Procurement() {
           m.final_terms = r.final_terms;
           m.final_credit_days = r.final_credit_days;
         }
+        // Suggestion columns — keep first non-empty across the merged rows.
+        if (!m.pp_rate && r.pp_rate) m.pp_rate = r.pp_rate;
+        if (!m.marketing_rate && r.marketing_rate) m.marketing_rate = r.marketing_rate;
       }
     }
     return [...groups.values()];
@@ -1763,6 +1766,21 @@ export default function Procurement() {
     for (const iid of mergedRow.indent_item_ids) {
       await updateItemRate(iid, patch);
     }
+  };
+
+  // AI "marketing rate" — on-demand per row (mam 2026-06-19). Suggestion only;
+  // saved to marketing_rate, never the 3 vendor rates.
+  const [aiBusy, setAiBusy] = useState({});
+  const aiSuggestRate = async (mergedRow) => {
+    const iiId = mergedRow.indent_item_ids?.[0];
+    if (!iiId) return;
+    setAiBusy(b => ({ ...b, [iiId]: true }));
+    try {
+      const r = await api.post('/procurement/item-rates/ai-suggest', { indent_item_id: iiId });
+      toast.success(`AI market rate: Rs ${(+r.data.marketing_rate).toLocaleString('en-IN')}`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'AI suggest failed'); }
+    finally { setAiBusy(b => ({ ...b, [iiId]: false })); }
   };
 
   // Admin-only: clear ALL the vendor quotes on a merged rate row so the row
@@ -3038,6 +3056,8 @@ export default function Procurement() {
                   </th>
                   <th className="px-2 py-2 text-left" rowSpan="2" style={{ width: '260px', minWidth: '260px' }}>Sub-Item<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(Item Master)</span></th>
                   <th className="px-2 py-2" rowSpan="2">Qty</th>
+                  <th className="px-2 py-2" rowSpan="2" title="Purchase Price from the Order-to-Planning BOQ — suggestion only, doesn't change vendor rates">PP Rate<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(planning)</span></th>
+                  <th className="px-2 py-2" rowSpan="2" title="AI-estimated market rate — suggestion only, doesn't change vendor rates">Mktg Rate<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(AI suggest)</span></th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 1</th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 2</th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 3</th>
@@ -3084,6 +3104,21 @@ export default function Procurement() {
                         ) : (
                           <>{r.qty} {cleanUnit(r.uom || r.unit)}</>
                         )}
+                      </td>
+                      {/* PP Rate (purchase price from planning) — suggestion only */}
+                      <td className="px-2 py-2 text-center whitespace-nowrap text-[11px]">
+                        {+r.pp_rate > 0
+                          ? <span className="font-semibold text-indigo-700">Rs {(+r.pp_rate).toLocaleString('en-IN')}</span>
+                          : <span className="text-gray-300" title="No purchase price entered in Order-to-Planning for this item">—</span>}
+                      </td>
+                      {/* Marketing Rate (AI suggest) — suggestion only */}
+                      <td className="px-2 py-2 text-center whitespace-nowrap text-[11px]">
+                        {+r.marketing_rate > 0 && <div className="font-semibold text-fuchsia-700 mb-0.5">Rs {(+r.marketing_rate).toLocaleString('en-IN')}</div>}
+                        <button type="button" onClick={() => aiSuggestRate(r)} disabled={!!aiBusy[r.indent_item_ids[0]]}
+                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-fuchsia-100 text-fuchsia-700 border border-fuchsia-300 hover:bg-fuchsia-600 hover:text-white disabled:opacity-50"
+                          title="Ask AI to estimate this item's market rate">
+                          {aiBusy[r.indent_item_ids[0]] ? '…' : (+r.marketing_rate > 0 ? '↻ AI' : '⚡ AI')}
+                        </button>
                       </td>
                       {[1,2,3].map(n => (
                         <Fragment key={n}>

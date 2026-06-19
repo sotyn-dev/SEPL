@@ -5665,7 +5665,8 @@ router.get('/item-rates', (req, res) => {
             ii.item_type, ii.item_master_id, ii.po_item_id,
             COALESCE(ii.weight_per_meter, im.weight_per_meter) as weight_per_meter,
             im.item_code, im.item_name as master_name, im.specification, im.size, im.uom,
-            poi.description as boq_description, poi.quantity as boq_qty,
+            poi.description as boq_description, poi.quantity as boq_qty, poi.part_price as pp_rate,
+            r.marketing_rate,
             i.indent_number, i.id as indent_id,
             i.site_name, i.raised_by_name, i.status as indent_status,
             bb.lead_no,
@@ -5736,6 +5737,41 @@ router.post('/item-rates', needsApprove, (req, res) => {
       `INSERT INTO indent_item_rates (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`
     ).run(...vals);
     res.status(201).json({ id: r.lastInsertRowid, created: true });
+  }
+});
+
+// AI "marketing rate" suggestion (mam 2026-06-19) — on-demand per item. Asks
+// the configured AI model to estimate the current market PURCHASE rate for the
+// item. Suggestion ONLY: saved to indent_item_rates.marketing_rate, never the
+// 3 vendor rates. Gated to whoever can edit rates (procurement approve).
+router.post('/item-rates/ai-suggest', needsApprove, async (req, res) => {
+  const db = getDb();
+  const iiId = parseInt(req.body?.indent_item_id, 10);
+  if (!iiId) return res.status(400).json({ error: 'indent_item_id required' });
+  const item = db.prepare(`
+    SELECT ii.description, ii.make,
+           LOWER(COALESCE(NULLIF(TRIM(im.uom),''), NULLIF(TRIM(ii.unit),''), 'nos')) AS unit
+    FROM indent_items ii LEFT JOIN item_master im ON im.id = ii.item_master_id WHERE ii.id=?`).get(iiId);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  const apiKey = db.prepare('SELECT value FROM app_settings WHERE key=?').get('ai_api_key')?.value;
+  if (!apiKey) return res.status(400).json({ error: 'AI not configured — add an API key in Admin → AI Settings' });
+  const model = db.prepare('SELECT value FROM app_settings WHERE key=?').get('ai_model')?.value || 'claude-opus-4-7';
+  let Anthropic;
+  try { Anthropic = require('@anthropic-ai/sdk'); }
+  catch (e) { return res.status(500).json({ error: 'AI SDK not installed on the server (run npm install on the VPS)' }); }
+  try {
+    const client = new Anthropic.default({ apiKey, timeout: 45000 });
+    const prompt = `You estimate procurement market rates for an Indian electrical / fire-fighting / construction contractor. Give the typical CURRENT market PURCHASE rate in INR, per ${item.unit}, for the item below. Reply with ONLY a plain number in rupees — no currency symbol, no commas, no words.\n\nItem: ${item.description}${item.make ? `\nMake/Brand: ${item.make}` : ''}\nUnit: ${item.unit}`;
+    const resp = await client.messages.create({ model, max_tokens: 40, messages: [{ role: 'user', content: prompt }] });
+    const text = (resp?.content || []).map(c => c.text || '').join(' ');
+    const m = String(text).replace(/[,\s₹]/g, '').match(/\d+(\.\d+)?/);
+    const rate = m ? Math.round(parseFloat(m[0]) * 100) / 100 : 0;
+    if (!rate) return res.status(422).json({ error: 'AI could not estimate a rate for this item' });
+    db.prepare('INSERT OR IGNORE INTO indent_item_rates (indent_item_id, status) VALUES (?, ?)').run(iiId, 'pending');
+    db.prepare('UPDATE indent_item_rates SET marketing_rate=?, updated_at=CURRENT_TIMESTAMP WHERE indent_item_id=?').run(rate, iiId);
+    res.json({ marketing_rate: rate, model });
+  } catch (err) {
+    res.status(500).json({ error: 'AI request failed: ' + (err.message || 'error') });
   }
 });
 

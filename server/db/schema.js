@@ -2694,6 +2694,9 @@ function initializeDatabase() {
     // alongside the existing labour_rate column. Both manual or auto-filled
     // from the BOQ Excel (mam 2026-06-19: "Rate SITC, Amount, PP, Labour Rate").
     ['po_items', 'part_price REAL'],
+    // Suggestion-only AI "marketing rate" per indent item on the Vendor Rates
+    // table (mam 2026-06-19) — does NOT affect the 3 vendor rates.
+    ['indent_item_rates', 'marketing_rate REAL'],
     // Vendor PO 2-level approval (mam 2026-06-19: "after PO make 2 approval
     // need L1 Nitin Jain, L2 Ankur Kaplesh"). New POs start 'pending_l1';
     // existing POs default to 'approved' so they're grandfathered, not parked.
