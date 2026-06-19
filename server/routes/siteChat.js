@@ -12,7 +12,15 @@ router.use(authMiddleware);
 
 const isAdmin = (req) => req.user.role === 'admin';
 const isMember = (db, g, u) => !!db.prepare('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?').get(g, u);
-const canAccess = (db, req, g) => isAdmin(req) || isMember(db, g, req.user.id);
+// Access = membership; Admin additionally oversees GROUPS but NOT private DMs.
+// A 1-on-1 direct message is readable ONLY by its two participants — no admin /
+// COO override (mam 2026-06-19: "why coo can check sushila lovely chat").
+const canAccess = (db, req, g) => {
+  if (isMember(db, g, req.user.id)) return true;
+  if (!isAdmin(req)) return false;
+  const row = db.prepare('SELECT is_dm FROM chat_groups WHERE id=?').get(g);
+  return !!row && !row.is_dm;          // admin sees groups, never private DMs
+};
 const userName = (uid) => { try { return getDb().prepare('SELECT name FROM users WHERE id=?').get(uid)?.name || ''; } catch { return ''; } };
 const markRead = (db, g, uid) => {
   const max = db.prepare('SELECT MAX(id) m FROM chat_messages WHERE group_id=?').get(g).m || 0;
@@ -29,7 +37,9 @@ const markRead = (db, g, uid) => {
 router.get('/groups', (req, res) => {
   const db = getChatDb(); const uid = req.user.id;
   const groups = isAdmin(req)
-    ? db.prepare('SELECT id, name, is_dm FROM chat_groups ORDER BY name').all()
+    // Admin sees every GROUP, but only the DMs they're personally in — private
+    // 1-on-1 chats never appear in the admin list (mam 2026-06-19).
+    ? db.prepare('SELECT id, name, is_dm FROM chat_groups WHERE is_dm=0 OR id IN (SELECT group_id FROM chat_group_members WHERE user_id=?) ORDER BY name').all(uid)
     : db.prepare('SELECT g.id, g.name, g.is_dm FROM chat_groups g JOIN chat_group_members m ON m.group_id=g.id WHERE m.user_id=? ORDER BY g.name').all(uid);
   // For DMs, the title shown is the OTHER participant's name (per viewer).
   const dmIds = groups.filter(g => g.is_dm).map(g => g.id);

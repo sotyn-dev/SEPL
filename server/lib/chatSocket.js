@@ -11,8 +11,10 @@ let io = null;
 
 function roomsFor(uid, admin) {
   const db = getChatDb();
+  // Admin joins every GROUP room but only the DM rooms they're a member of —
+  // private DMs are never delivered to admin/COO (mam 2026-06-19).
   const rows = admin
-    ? db.prepare('SELECT id AS gid FROM chat_groups').all()
+    ? db.prepare('SELECT id AS gid FROM chat_groups WHERE is_dm=0 OR id IN (SELECT group_id FROM chat_group_members WHERE user_id=?)').all(uid)
     : db.prepare('SELECT group_id AS gid FROM chat_group_members WHERE user_id=?').all(uid);
   return rows.map(r => `g:${r.gid}`);
 }
@@ -33,11 +35,14 @@ function initChatSocket(httpServer) {
   io.on('connection', (socket) => {
     const uid = socket.user.id, admin = socket.user.role === 'admin';
     try { for (const r of roomsFor(uid, admin)) socket.join(r); } catch (_) {}
-    // Re-join when a client opens / is added to a group.
+    // Re-join when a client opens / is added to a group. Members always may;
+    // admin may join GROUP rooms but NOT a private DM they're not part of.
     socket.on('join', (gid) => {
       try {
-        const db = getChatDb();
-        if (admin || db.prepare('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?').get(+gid, uid)) socket.join(`g:${+gid}`);
+        const db = getChatDb(); const g = +gid;
+        const isMem = !!db.prepare('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?').get(g, uid);
+        if (isMem) return socket.join(`g:${g}`);
+        if (admin) { const row = db.prepare('SELECT is_dm FROM chat_groups WHERE id=?').get(g); if (row && !row.is_dm) socket.join(`g:${g}`); }
       } catch (_) {}
     });
   });
