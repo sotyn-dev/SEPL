@@ -39,6 +39,8 @@ export default function SiteChat() {
   const [recording, setRecording] = useState(false);
   const [recTime, setRecTime] = useState(0);
   const [dragOver, setDragOver] = useState(false);
+  const [mention, setMention] = useState(null);    // @-tag autocomplete: { query, start } or null
+  const taRef = useRef(null);
   const fileRef = useRef(null);
   const endRef = useRef(null);
   const socketRef = useRef(null);
@@ -87,7 +89,7 @@ export default function SiteChat() {
     const payload = { body: text, ...extra };
     if (!payload.body?.trim() && !payload.attachment_url) return;
     setBusy(true);
-    try { await api.post(`/site-chat/${sel.id}`, payload); setText(''); loadThread(sel.id); }
+    try { await api.post(`/site-chat/${sel.id}`, payload); setText(''); setMention(null); loadThread(sel.id); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed to send'); }
     finally { setBusy(false); }
   };
@@ -129,6 +131,43 @@ export default function SiteChat() {
     try { mr.stop(); } catch (_) {}
   };
   const onDrop = (e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer?.files?.[0]; if (f) attach(f); };
+
+  // ── @-mention / tag-by-name (mam 2026-06-19: "at the rate tag by name") ──
+  // On each keystroke, look back from the caret for an "@word" token (at the
+  // start or after a space) and open a member picker filtered by that word.
+  const onTextChange = (e) => {
+    const val = e.target.value; setText(val);
+    const pos = e.target.selectionStart ?? val.length;
+    const m = val.slice(0, pos).match(/(?:^|\s)@([^\s@]*)$/);
+    setMention(m ? { query: m[1], start: pos - m[1].length - 1 } : null);
+  };
+  const mentionList = mention
+    ? members.filter(m => m.user_id !== user?.id && m.name && m.name.toLowerCase().includes(mention.query.toLowerCase())).slice(0, 6)
+    : [];
+  const pickMention = (name) => {
+    const ta = taRef.current;
+    const pos = ta?.selectionStart ?? text.length;
+    const before = text.slice(0, mention?.start ?? pos);
+    const after = text.slice(pos);
+    const inserted = `@${name} `;
+    setText(before + inserted + after); setMention(null);
+    requestAnimationFrame(() => { if (ta) { const c = (before + inserted).length; ta.focus(); ta.setSelectionRange(c, c); } });
+  };
+  // Highlight @mentions of current members when rendering a message body.
+  const renderBody = (body) => {
+    const names = members.map(m => m.name).filter(Boolean).sort((a, b) => b.length - a.length);
+    if (!body || !names.length) return body;
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`@(${names.map(esc).join('|')})`, 'g');
+    const out = []; let last = 0; let mm;
+    while ((mm = re.exec(body))) {
+      if (mm.index > last) out.push(body.slice(last, mm.index));
+      out.push(<span key={mm.index} className="text-emerald-700 font-semibold">@{mm[1]}</span>);
+      last = mm.index + mm[0].length;
+    }
+    if (last < body.length) out.push(body.slice(last));
+    return out;
+  };
 
   const delMsg = async (m) => {
     if (!confirm('Delete this message?')) return;
@@ -242,7 +281,7 @@ export default function SiteChat() {
                               : isAudio(m.attachment_url)
                                 ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
                                 : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
-                          {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{m.body}</div>}
+                          {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
                           <div className="flex items-center justify-end gap-1.5 mt-0.5">
                             {(own || isAdmin()) && <button onClick={() => delMsg(m)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
                             <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
@@ -259,7 +298,20 @@ export default function SiteChat() {
               {/* min-w-0 on the textarea + flex-shrink-0 on the buttons so the
                   send / mic button never gets clipped off the right edge on a
                   narrow phone (mam 2026-06-19). */}
-              <div className="border-t p-2 flex items-end gap-2 bg-gray-50">
+              <div className="border-t p-2 flex items-end gap-2 bg-gray-50 relative">
+                {/* @-mention picker — floats above the composer */}
+                {mention && mentionList.length > 0 && (
+                  <div className="absolute bottom-full left-2 right-2 mb-1 bg-white border rounded-lg shadow-lg max-h-52 overflow-y-auto z-20">
+                    <div className="px-3 py-1 text-[10px] text-gray-400 uppercase font-semibold border-b">Tag someone</div>
+                    {mentionList.map(mu => (
+                      <button key={mu.user_id} type="button" onMouseDown={e => { e.preventDefault(); pickMention(mu.name); }}
+                        className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-emerald-50 text-sm">
+                        <span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold flex items-center justify-center flex-shrink-0">{initials(mu.name)}</span>
+                        <span className="truncate">{mu.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {recording ? (
                   <>
                     <button onClick={() => stopRec(false)} className="flex-shrink-0 p-2 text-red-500" title="Cancel"><FiTrash2 size={18} /></button>
@@ -270,9 +322,15 @@ export default function SiteChat() {
                   <>
                     <input ref={fileRef} type="file" className="hidden" onChange={e => attach(e.target.files?.[0])} />
                     <button onClick={() => fileRef.current?.click()} disabled={busy} className="flex-shrink-0 p-2 text-gray-500 hover:text-emerald-600" title="Attach photo / file"><FiPaperclip size={18} /></button>
-                    <textarea className="input flex-1 min-w-0 resize-none" rows="1" placeholder="Type a message…" value={text}
-                      onChange={e => setText(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
+                    <textarea ref={taRef} className="input flex-1 min-w-0 resize-none" rows="1" placeholder="Type a message… (@ to tag)" value={text}
+                      onChange={onTextChange}
+                      onKeyDown={e => {
+                        if (mention && mentionList.length) {
+                          if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionList[0].name); return; }
+                          if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
+                        }
+                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+                      }} />
                     {text.trim()
                       ? <button onClick={() => send()} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#25d366' }}><FiSend size={16} /></button>
                       : <button onClick={startRec} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#25d366' }} title="Record voice message"><FiMic size={16} /></button>}
