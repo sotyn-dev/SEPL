@@ -1,72 +1,75 @@
-// Site Chat — an internal, WhatsApp-style message thread per site (mam
-// 2026-06-18). Left: site list with last-message preview. Right: the thread
-// (own messages right/green, others left/white) + a composer with text and
-// photo/file attachments. Team-only; everything stored in the ERP.
+// "WhatsApp" — internal group chat, WhatsApp-styled (mam 2026-06-18). Create
+// named groups, add the people you want, chat (text + photo/file). Members-
+// gated, read receipts (✓✓ + who-read), unread badges, day separators.
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiMessageSquare, FiFile, FiUsers, FiX } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus } from 'react-icons/fi';
+import { FaWhatsapp } from 'react-icons/fa';
 
 const DAY_OPTS = { day: '2-digit', month: 'short', year: 'numeric' };
-
+const GREEN = '#075e54';                          // WhatsApp header green
 const isImg = (u) => /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(u || ''));
 const preview = (m) => (m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : '')) : '');
+const initials = (s) => String(s || '?').replace(/[^A-Za-z0-9 ]/g, '').trim().slice(0, 2).toUpperCase() || '#';
 
 export default function SiteChat() {
   const { canCreate, canDelete, isAdmin, user } = useAuth();
-  const [sites, setSites] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [q, setQ] = useState('');
-  const [sel, setSel] = useState(null);          // selected site {id, name, ...}
+  const [sel, setSel] = useState(null);            // selected group {id, name}
   const [msgs, setMsgs] = useState([]);
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
   const [members, setMembers] = useState([]);
   const [reads, setReads] = useState({});
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
   const [allUsers, setAllUsers] = useState([]);
   const [memOpen, setMemOpen] = useState(false);
   const [memSearch, setMemSearch] = useState('');
+  const [newOpen, setNewOpen] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newSel, setNewSel] = useState([]);
+  const [newSearch, setNewSearch] = useState('');
   const fileRef = useRef(null);
   const endRef = useRef(null);
 
-  const loadSites = useCallback(() => { api.get('/site-chat/sites').then(r => setSites(r.data || [])).catch(() => {}); }, []);
-  const loadMsgs = useCallback((id) => {
+  const loadGroups = useCallback(() => { api.get('/site-chat/groups').then(r => setGroups(r.data || [])).catch(() => {}); }, []);
+  const loadThread = useCallback((id) => {
     if (!id) return;
     api.get(`/site-chat/${id}`).then(r => {
-      setMsgs(r.data.messages || []);
-      setMembers(r.data.members || []);
-      setReads(r.data.reads || {});
-      loadSites();                                   // refresh unread badges
+      setMsgs(r.data.messages || []); setMembers(r.data.members || []); setReads(r.data.reads || {});
+      if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name } : s));
+      loadGroups();
     }).catch(() => {});
-  }, [loadSites]);
+  }, [loadGroups]);
 
-  useEffect(() => { loadSites(); api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {}); }, [loadSites]);
-  // Load + light polling for the open thread (refresh on window focus too).
+  useEffect(() => { loadGroups(); api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {}); }, [loadGroups]);
   useEffect(() => {
     if (!sel) return;
-    loadMsgs(sel.id);
-    const t = setInterval(() => loadMsgs(sel.id), 8000);
-    const onFocus = () => loadMsgs(sel.id);
+    loadThread(sel.id);
+    const t = setInterval(() => loadThread(sel.id), 8000);
+    const onFocus = () => loadThread(sel.id);
     window.addEventListener('focus', onFocus);
     return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
-  }, [sel, loadMsgs]);
+  }, [sel?.id, loadThread]);
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [msgs]);
+
+  const todayLbl = fmtDate(new Date(), DAY_OPTS);
+  const yestLbl = fmtDate(new Date(Date.now() - 864e5), DAY_OPTS);
+  const dayLabel = (ts) => { const l = fmtDate(ts, DAY_OPTS); return l === todayLbl ? 'Today' : l === yestLbl ? 'Yesterday' : l; };
 
   const send = async (extra = {}) => {
     if (!sel) return;
     const payload = { body: text, ...extra };
     if (!payload.body?.trim() && !payload.attachment_url) return;
     setBusy(true);
-    try {
-      await api.post(`/site-chat/${sel.id}`, payload);
-      setText('');
-      loadMsgs(sel.id); loadSites();
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed to send'); }
+    try { await api.post(`/site-chat/${sel.id}`, payload); setText(''); loadThread(sel.id); }
+    catch (err) { toast.error(err.response?.data?.error || 'Failed to send'); }
     finally { setBusy(false); }
   };
-
   const attach = async (file) => {
     if (!file || !sel) return;
     setBusy(true);
@@ -77,60 +80,64 @@ export default function SiteChat() {
     } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = ''; }
   };
-
-  const del = async (m) => {
+  const delMsg = async (m) => {
     if (!confirm('Delete this message?')) return;
-    try { await api.delete(`/site-chat/${m.id}`); loadMsgs(sel.id); loadSites(); }
+    try { await api.delete(`/site-chat/${sel.id}/messages/${m.id}`); loadThread(sel.id); }
+    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+  const addMember = async (uid) => { try { await api.post(`/site-chat/${sel.id}/members`, { user_ids: [uid] }); loadThread(sel.id); } catch (err) { toast.error(err.response?.data?.error || 'Failed'); } };
+  const removeMember = async (uid) => { try { await api.delete(`/site-chat/${sel.id}/members/${uid}`); loadThread(sel.id); } catch (err) { toast.error(err.response?.data?.error || 'Failed'); } };
+
+  const createGroup = async () => {
+    if (!newName.trim()) return toast.error('Give the group a name');
+    try {
+      const r = await api.post('/site-chat/groups', { name: newName.trim(), member_ids: newSel });
+      setNewOpen(false); setNewName(''); setNewSel([]); setNewSearch('');
+      loadGroups(); setSel({ id: r.data.id, name: r.data.name });
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed to create group'); }
+  };
+  const delGroup = async () => {
+    if (!sel || !confirm(`Delete the group "${sel.name}" and all its messages?`)) return;
+    try { await api.delete(`/site-chat/${sel.id}`); setSel(null); setMemOpen(false); loadGroups(); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
-  const addMember = async (uid) => {
-    try { await api.post(`/site-chat/${sel.id}/members`, { user_ids: [uid] }); loadMsgs(sel.id); }
-    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
-  const removeMember = async (uid) => {
-    try { await api.delete(`/site-chat/${sel.id}/members/${uid}`); loadMsgs(sel.id); }
-    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
-
-  const shown = sites.filter(s => !q || `${s.name} ${s.client_name || ''}`.toLowerCase().includes(q.toLowerCase()));
-  // WhatsApp-style day separators in the thread.
-  const todayLbl = fmtDate(new Date(), DAY_OPTS);
-  const yestLbl = fmtDate(new Date(Date.now() - 864e5), DAY_OPTS);
-  const dayLabel = (ts) => { const l = fmtDate(ts, DAY_OPTS); return l === todayLbl ? 'Today' : l === yestLbl ? 'Yesterday' : l; };
+  const shown = groups.filter(g => !q || String(g.name).toLowerCase().includes(q.toLowerCase()));
 
   return (
     <div className="space-y-3">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2"><FiMessageSquare className="text-emerald-600" /> Site Chat</h1>
-        <p className="text-sm text-gray-500">A message thread per site · team-only · text + photos/files</p>
+        <h1 className="text-2xl font-bold flex items-center gap-2"><FaWhatsapp className="text-[#25d366]" /> WhatsApp</h1>
+        <p className="text-sm text-gray-500">Internal group chat · create groups · add your people · text + photos/files</p>
       </div>
 
-      <div className="flex border rounded-xl overflow-hidden bg-white" style={{ height: 'calc(100vh - 210px)', minHeight: 420 }}>
-        {/* ── Chat list ─────────────────────────────────── */}
+      <div className="flex border rounded-xl overflow-hidden bg-white" style={{ height: 'calc(100vh - 210px)', minHeight: 440 }}>
+        {/* ── Group list ────────────────────────────────── */}
         <div className={`w-full sm:w-80 border-r flex flex-col ${sel ? 'hidden sm:flex' : 'flex'}`}>
+          <div className="flex items-center gap-2 px-3 py-2 text-white" style={{ background: GREEN }}>
+            <FaWhatsapp /> <span className="font-semibold text-sm flex-1">WhatsApp</span>
+            {canCreate('site_chat') && <button onClick={() => { setNewName(''); setNewSel([]); setNewSearch(''); setNewOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New group"><FiPlus size={18} /></button>}
+          </div>
           <div className="p-2 border-b">
             <div className="relative">
               <FiSearch className="absolute left-2.5 top-2.5 text-gray-400" size={14} />
-              <input className="input pl-8" placeholder="Search site…" value={q} onChange={e => setQ(e.target.value)} />
+              <input className="input pl-8" placeholder="Search group…" value={q} onChange={e => setQ(e.target.value)} />
             </div>
           </div>
           <div className="overflow-y-auto flex-1">
-            {shown.length === 0 && <div className="text-center text-gray-400 text-sm py-8">No sites.</div>}
-            {shown.map(s => (
-              <button key={s.id} onClick={() => setSel(s)}
-                className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${sel?.id === s.id ? 'bg-emerald-50' : ''}`}>
-                <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs flex-shrink-0">
-                  {String(s.name || '?').slice(0, 2).toUpperCase()}
-                </div>
+            {shown.length === 0 && <div className="text-center text-gray-400 text-sm py-8">No groups yet.{canCreate('site_chat') ? ' Tap + to create one.' : ''}</div>}
+            {shown.map(g => (
+              <button key={g.id} onClick={() => setSel({ id: g.id, name: g.name })}
+                className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${sel?.id === g.id ? 'bg-emerald-50' : ''}`}>
+                <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs flex-shrink-0">{initials(g.name)}</div>
                 <div className="min-w-0 flex-1">
                   <div className="flex justify-between items-baseline gap-2">
-                    <span className="font-semibold text-sm text-gray-800 truncate">{s.name}</span>
-                    {s.last && <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtTime(s.last.created_at)}</span>}
+                    <span className="font-semibold text-sm text-gray-800 truncate">{g.name}</span>
+                    {g.last && <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtTime(g.last.created_at)}</span>}
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <div className="text-xs text-gray-500 truncate flex-1">{s.last ? preview(s.last) : <span className="italic text-gray-300">No messages yet</span>}</div>
-                    {s.unread > 0 && <span className="text-[10px] font-bold text-white bg-emerald-500 rounded-full px-1.5 min-w-[18px] text-center flex-shrink-0">{s.unread}</span>}
+                    <div className="text-xs text-gray-500 truncate flex-1">{g.last ? `${g.last.sender_name ? g.last.sender_name.split(' ')[0] + ': ' : ''}${preview(g.last)}` : <span className="italic text-gray-300">{g.members} member{g.members === 1 ? '' : 's'}</span>}</div>
+                    {g.unread > 0 && <span className="text-[10px] font-bold text-white bg-[#25d366] rounded-full px-1.5 min-w-[18px] text-center flex-shrink-0">{g.unread}</span>}
                   </div>
                 </div>
               </button>
@@ -141,52 +148,47 @@ export default function SiteChat() {
         {/* ── Thread ────────────────────────────────────── */}
         <div className={`flex-1 flex-col ${sel ? 'flex' : 'hidden sm:flex'}`}>
           {!sel ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-2">
-              <FiMessageSquare size={40} /><span className="text-sm">Pick a site to open its chat</span>
+            <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-2" style={{ background: '#f7f5f2' }}>
+              <FaWhatsapp size={44} className="text-[#25d366]" /><span className="text-sm">Pick a group to start chatting</span>
             </div>
           ) : (
             <>
-              <div className="px-4 py-2.5 border-b flex items-center gap-2 bg-gray-50">
-                <button onClick={() => setSel(null)} className="sm:hidden text-gray-500 mr-1">←</button>
-                <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">{String(sel.name || '?').slice(0, 2).toUpperCase()}</div>
-                <div className="min-w-0">
-                  <div className="font-semibold text-sm text-gray-800 truncate">{sel.name}</div>
-                  <div className="text-[11px] text-gray-500 truncate">{members.length ? members.map(m => m.name).filter(Boolean).slice(0, 4).join(', ') + (members.length > 4 ? `, +${members.length - 4}` : '') : 'No members yet'}</div>
-                </div>
-                <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="ml-auto flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded border bg-white hover:bg-gray-50 text-gray-700" title="Manage members">
-                  <FiUsers size={14} /> {members.length}
+              <div className="px-3 py-2 flex items-center gap-2 text-white" style={{ background: GREEN }}>
+                <button onClick={() => setSel(null)} className="sm:hidden mr-1">←</button>
+                <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center font-bold text-xs">{initials(sel.name)}</div>
+                <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="min-w-0 text-left flex-1">
+                  <div className="font-semibold text-sm truncate">{sel.name}</div>
+                  <div className="text-[11px] text-white/80 truncate">{members.length ? members.map(m => m.name).filter(Boolean).slice(0, 5).join(', ') : 'tap to add members'}</div>
                 </button>
+                <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="Members"><FiUsers size={18} /></button>
               </div>
 
               <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5" style={{ background: '#efeae2' }}>
-                {msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say something about this site.</div>}
+                {msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say hello 👋</div>}
                 {(() => { let prevDay = null; return msgs.map(m => {
                   const own = m.sender_id === user?.id;
                   const day = fmtDate(m.created_at, DAY_OPTS);
                   const sep = day !== prevDay; prevDay = day;
+                  const others = members.filter(mm => mm.user_id !== user?.id);
+                  const readers = others.filter(o => (reads[o.user_id] || 0) >= m.id);
+                  const allRead = others.length > 0 && readers.length === others.length;
                   return (
                     <Fragment key={m.id}>
-                    {sep && <div className="flex justify-center my-1.5"><span className="text-[10px] font-medium bg-white/85 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(m.created_at)}</span></div>}
-                    <div className={`flex ${own ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
-                        {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
-                        {m.attachment_url && (isImg(m.attachment_url)
-                          ? <a href={m.attachment_url} target="_blank" rel="noreferrer"><img src={m.attachment_url} alt={m.attachment_name || ''} className="rounded mb-1 max-h-52 object-cover" /></a>
-                          : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
-                        {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{m.body}</div>}
-                        <div className="flex items-center justify-end gap-1.5 mt-0.5">
-                          {(own || isAdmin()) && canDelete('site_chat') && <button onClick={() => del(m)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
-                          <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
-                          {own && (() => {
-                            const others = members.filter(mm => mm.user_id !== user?.id);
-                            const readers = others.filter(o => (reads[o.user_id] || 0) >= m.id);
-                            const allRead = others.length > 0 && readers.length === others.length;
-                            const title = others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet';
-                            return <span title={title} className={`text-[11px] leading-none ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>;
-                          })()}
+                      {sep && <div className="flex justify-center my-1.5"><span className="text-[10px] font-medium bg-white/85 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(m.created_at)}</span></div>}
+                      <div className={`flex ${own ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
+                          {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
+                          {m.attachment_url && (isImg(m.attachment_url)
+                            ? <a href={m.attachment_url} target="_blank" rel="noreferrer"><img src={m.attachment_url} alt={m.attachment_name || ''} className="rounded mb-1 max-h-52 object-cover" /></a>
+                            : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
+                          {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{m.body}</div>}
+                          <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                            {(own || isAdmin()) && canDelete('site_chat') && <button onClick={() => delMsg(m)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
+                            <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
+                            {own && <span title={others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet'} className={`text-[11px] leading-none ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>}
+                          </div>
                         </div>
                       </div>
-                    </div>
                     </Fragment>
                   );
                 }); })()}
@@ -200,7 +202,7 @@ export default function SiteChat() {
                   <textarea className="input flex-1 resize-none" rows="1" placeholder="Type a message…" value={text}
                     onChange={e => setText(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
-                  <button onClick={() => send()} disabled={busy || !text.trim()} className="p-2.5 rounded-full bg-emerald-600 text-white disabled:opacity-40"><FiSend size={16} /></button>
+                  <button onClick={() => send()} disabled={busy || !text.trim()} className="p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#25d366' }}><FiSend size={16} /></button>
                 </div>
               )}
             </>
@@ -208,19 +210,44 @@ export default function SiteChat() {
         </div>
       </div>
 
-      {/* ── Members (WhatsApp-group style) ─────────────────── */}
+      {/* ── New group ─────────────────────────────────────── */}
+      <Modal isOpen={newOpen} onClose={() => setNewOpen(false)} title="New group">
+        <div className="space-y-3 text-sm">
+          <div><label className="label">Group name *</label><input className="input" value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Hero Homes Site, Accounts Team…" autoFocus /></div>
+          <div>
+            <label className="label">Add members <span className="text-gray-400 font-normal normal-case">({newSel.length} selected · you're added automatically)</span></label>
+            <input className="input mb-1" placeholder="Search people…" value={newSearch} onChange={e => setNewSearch(e.target.value)} />
+            <div className="space-y-0.5 max-h-52 overflow-y-auto border rounded p-1">
+              {allUsers.filter(u => u.id !== user?.id && (!newSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(newSearch.toLowerCase()))).map(u => {
+                const on = newSel.includes(u.id);
+                return (
+                  <label key={u.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">
+                    <input type="checkbox" checked={on} onChange={() => setNewSel(s => on ? s.filter(x => x !== u.id) : [...s, u.id])} />
+                    <span>{u.name} <span className="text-[11px] text-gray-400">@{u.username}</span></span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button onClick={createGroup} className="btn btn-primary flex-1">Create group</button>
+            <button onClick={() => setNewOpen(false)} className="btn border">Cancel</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── Members ───────────────────────────────────────── */}
       {sel && (
         <Modal isOpen={memOpen} onClose={() => setMemOpen(false)} title={`Members · ${sel.name}`}>
           <div className="space-y-3 text-sm">
-            <p className="text-xs text-gray-500">Only people added here can see and post in this site's chat.</p>
+            <p className="text-xs text-gray-500">Only people added here can see and post in this group.</p>
             <div>
-              <div className="font-semibold text-gray-700 mb-1">In this chat ({members.length})</div>
-              {members.length === 0 && <div className="text-gray-400 text-xs mb-1">No members yet — add people below.</div>}
+              <div className="font-semibold text-gray-700 mb-1">In this group ({members.length})</div>
               <div className="space-y-1 max-h-40 overflow-y-auto">
                 {members.map(m => (
                   <div key={m.user_id} className="flex items-center justify-between bg-gray-50 rounded px-2 py-1">
-                    <span className="flex items-center gap-2"><span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold flex items-center justify-center">{String(m.name || '?').slice(0, 2).toUpperCase()}</span>{m.name}</span>
-                    {canCreate('site_chat') && <button onClick={() => removeMember(m.user_id)} className="text-gray-400 hover:text-red-600" title="Remove"><FiX size={14} /></button>}
+                    <span className="flex items-center gap-2"><span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold flex items-center justify-center">{initials(m.name)}</span>{m.name}</span>
+                    {canCreate('site_chat') && m.user_id !== user?.id && <button onClick={() => removeMember(m.user_id)} className="text-gray-400 hover:text-red-600" title="Remove"><FiX size={14} /></button>}
                   </div>
                 ))}
               </div>
@@ -229,7 +256,7 @@ export default function SiteChat() {
               <div>
                 <div className="font-semibold text-gray-700 mb-1">Add member</div>
                 <input className="input mb-1" placeholder="Search people…" value={memSearch} onChange={e => setMemSearch(e.target.value)} />
-                <div className="space-y-0.5 max-h-44 overflow-y-auto">
+                <div className="space-y-0.5 max-h-40 overflow-y-auto">
                   {allUsers.filter(u => !members.some(m => m.user_id === u.id) && (!memSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(memSearch.toLowerCase()))).map(u => (
                     <div key={u.id} className="flex items-center justify-between px-2 py-1 border-b">
                       <span>{u.name} <span className="text-[11px] text-gray-400">@{u.username}</span></span>
@@ -239,6 +266,7 @@ export default function SiteChat() {
                 </div>
               </div>
             )}
+            {canDelete('site_chat') && <button onClick={delGroup} className="text-xs text-red-600 font-semibold flex items-center gap-1.5 pt-1"><FiTrash2 size={13} /> Delete group</button>}
           </div>
         </Modal>
       )}
