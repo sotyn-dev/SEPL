@@ -155,7 +155,7 @@ router.post('/po', requirePermission('orders', 'create'), (req, res) => {
   // items. business_book_id is still recorded for cross-PO indent /
   // DPR pooling.
   if (items && items.length > 0) {
-    const insertItem = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?)');
+    const insertItem = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, sr_no, part_price, labour_rate) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
     items.forEach((item, idx) => {
       if (item.description && item.description.trim()) {
         insertItem.run(
@@ -169,6 +169,8 @@ router.post('/po', requirePermission('orders', 'create'), (req, res) => {
           +item.amount || 0,
           item.hsn_code || '',
           +item.sr_no || idx + 1,
+          +item.part_price || 0,        // PP (Part Price)
+          +item.labour_rate || 0,        // Labour Rate
         );
       }
     });
@@ -557,7 +559,7 @@ router.post('/po/:id/items', requirePermission('orders', 'edit'), (req, res) => 
   // references without individual queries per row.
   const validMasterIds = new Set(db.prepare('SELECT id FROM item_master').all().map(r => r.id));
 
-  const insert = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?)');
+  const insert = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, sr_no, part_price, labour_rate) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
   let count = 0;
   const errors = [];
   // Coerce numerics safely — empty strings, null, NaN all become 0 so a
@@ -590,7 +592,9 @@ router.post('/po/:id/items', requirePermission('orders', 'edit'), (req, res) => 
             num(item.rate),
             num(item.amount),
             item.hsn_code || '',
-            num(item.sr_no) || idx + 1
+            num(item.sr_no) || idx + 1,
+            num(item.part_price),        // PP (Part Price)
+            num(item.labour_rate),        // Labour Rate
           );
           count++;
         } catch (rowErr) {

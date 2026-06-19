@@ -2690,6 +2690,9 @@ function initializeDatabase() {
     // Profile photo (WhatsApp-style avatar) per user — shown in chat bubbles,
     // member lists, etc. Stores an /uploads URL (mam 2026-06-19).
     ['users', 'avatar_url TEXT'],
+    // Client PO BOQ: Part Price (PP) per item, alongside the existing
+    // labour_rate column (mam 2026-06-19: "Rate SITC, Amount, PP, Labour Rate").
+    ['po_items', 'part_price REAL'],
     // Vendor PO 2-level approval (mam 2026-06-19: "after PO make 2 approval
     // need L1 Nitin Jain, L2 Ankur Kaplesh"). New POs start 'pending_l1';
     // existing POs default to 'approved' so they're grandfathered, not parked.

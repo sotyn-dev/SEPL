@@ -33,7 +33,7 @@ export default function Orders() {
   const [bbEntries, setBbEntries] = useState([]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
-  const [poItems, setPoItems] = useState([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
+  const [poItems, setPoItems] = useState([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]);
   // Mam: "i upload jeewan mala order yesterday till ok but i check half
   // data delete". The bug: PO Edit ALWAYS re-saved po_items on Update,
   // even when she only changed CRM or status — and the server's save
@@ -74,7 +74,7 @@ export default function Orders() {
     }).catch(() => {});
   }, []);
 
-  const addItem = () => { setPoItems([...poItems, { item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]); setPoItemsDirty(true); };
+  const addItem = () => { setPoItems([...poItems, { item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]); setPoItemsDirty(true); };
   const removeItem = (i) => { setPoItems(poItems.filter((_, idx) => idx !== i)); setPoItemsDirty(true); };
   const updateItem = (i, key, val) => {
     const items = [...poItems];
@@ -118,8 +118,8 @@ export default function Orders() {
     // one (or uploads a new BOQ).
     setPoItemsDirty(false);
     api.get(`/orders/po/${po.id}/items`).then(r => {
-      setPoItems(r.data.length > 0 ? r.data.map(i => ({ ...i, item_master_id: i.item_master_id || '' })) : [{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
-    }).catch(() => setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]));
+      setPoItems(r.data.length > 0 ? r.data.map(i => ({ ...i, item_master_id: i.item_master_id || '' })) : [{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]);
+    }).catch(() => setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]));
     setModal('po');
   };
 
@@ -150,7 +150,7 @@ export default function Orders() {
         toast.success('PO created');
       }
       setModal(false); setEditingPO(null);
-      setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
+      setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]);
       load();
     } catch (err) {
       // Show the real server response right in the modal so mam can read /
@@ -217,7 +217,7 @@ export default function Orders() {
             <button onClick={() => {
               setEditingPO(null);
               setForm({ business_book_id: '', po_number: '', po_date: '', total_amount: 0, advance_amount: 0, po_copy_link: '', boq_file_link: '', pt_advance: '', pt_delivery: '', pt_installation: '', pt_commissioning: '', pt_retention: '', site_engineer_ids: [], crm_name: '', jr_site_engineer_ids: [], supervisor_ids: [], welder_ids: [], helper_ids: [] });
-              setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
+              setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]);
               setModal('po');
             }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add PO</button>
           </div>
@@ -485,7 +485,7 @@ export default function Orders() {
                   let Planning own the labour workflow. */}
               {/* Desktop header — hidden on mobile where each row is a stacked card */}
               <div className="hidden md:grid grid-cols-12 gap-2 text-xs font-semibold text-gray-500 px-1">
-                <div>SN</div><div className="col-span-3">Description</div><div>Qty</div><div>Unit</div><div className="col-span-2">Rate (SITC)</div><div className="col-span-2">Amount</div><div></div>
+                <div>SN</div><div className="col-span-3">Description</div><div>Qty</div><div>Unit</div><div>Rate (SITC)</div><div>PP</div><div>Labour</div><div className="col-span-2">Amount</div><div></div>
               </div>
               {poItems.map((item, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2 items-center mb-3 md:mb-0 p-2 md:p-0 border md:border-0 border-gray-100 rounded">
@@ -521,15 +521,25 @@ export default function Orders() {
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Qty</div>
                     <input className="input text-sm" type="number" value={item.quantity} onChange={e => updateItem(i, 'quantity', +e.target.value)} />
                   </div>
-                  <div className="col-span-3 md:col-span-1">
+                  <div className="col-span-4 md:col-span-1">
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Unit</div>
                     <select className="select text-sm" value={item.unit} onChange={e => updateItem(i, 'unit', e.target.value)}>
                       <option>Nos</option><option>nos</option><option>mtr</option><option>kg</option><option>sqm</option><option>rft</option><option>set</option><option>lot</option><option>pair</option><option>pc</option><option>pcs</option><option>No</option>
                     </select>
                   </div>
-                  <div className="col-span-5 md:col-span-2">
+                  <div className="col-span-4 md:col-span-1">
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Rate (SITC)</div>
                     <input className="input text-sm" type="number" value={item.rate} onChange={e => updateItem(i, 'rate', +e.target.value)} />
+                  </div>
+                  {/* PP (Part Price) — manual, mam 2026-06-19 */}
+                  <div className="col-span-6 md:col-span-1">
+                    <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">PP (Part Price)</div>
+                    <input className="input text-sm" type="number" value={item.part_price ?? 0} onChange={e => updateItem(i, 'part_price', +e.target.value)} />
+                  </div>
+                  {/* Labour Rate — manual */}
+                  <div className="col-span-6 md:col-span-1">
+                    <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Labour Rate</div>
+                    <input className="input text-sm" type="number" value={item.labour_rate ?? 0} onChange={e => updateItem(i, 'labour_rate', +e.target.value)} />
                   </div>
                   <div className="col-span-10 md:col-span-2">
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Amount</div>
