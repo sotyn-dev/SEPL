@@ -29,14 +29,27 @@ const markRead = (db, g, uid) => {
 router.get('/groups', (req, res) => {
   const db = getChatDb(); const uid = req.user.id;
   const groups = isAdmin(req)
-    ? db.prepare('SELECT id, name FROM chat_groups ORDER BY name').all()
-    : db.prepare('SELECT g.id, g.name FROM chat_groups g JOIN chat_group_members m ON m.group_id=g.id WHERE m.user_id=? ORDER BY g.name').all(uid);
+    ? db.prepare('SELECT id, name, is_dm FROM chat_groups ORDER BY name').all()
+    : db.prepare('SELECT g.id, g.name, g.is_dm FROM chat_groups g JOIN chat_group_members m ON m.group_id=g.id WHERE m.user_id=? ORDER BY g.name').all(uid);
+  // For DMs, the title shown is the OTHER participant's name (per viewer).
+  const dmIds = groups.filter(g => g.is_dm).map(g => g.id);
+  const dmTitle = {};
+  if (dmIds.length) {
+    const ph = dmIds.map(() => '?').join(',');
+    const byG = {};
+    for (const r of db.prepare(`SELECT group_id, user_id, user_name FROM chat_group_members WHERE group_id IN (${ph})`).all(...dmIds)) (byG[r.group_id] ||= []).push(r);
+    for (const id of dmIds) {
+      const mem = byG[id] || [];
+      const others = mem.filter(m => m.user_id !== uid);
+      dmTitle[id] = (others.length ? others : mem).map(o => o.user_name).filter(Boolean).join(', ') || 'Direct message';
+    }
+  }
   const lastBy = Object.fromEntries(db.prepare(`SELECT group_id,body,attachment_name,sender_name,created_at FROM chat_messages WHERE id IN (SELECT MAX(id) FROM chat_messages GROUP BY group_id)`).all().map(l => [l.group_id, l]));
   const memBy = Object.fromEntries(db.prepare('SELECT group_id,COUNT(*) c FROM chat_group_members GROUP BY group_id').all().map(c => [c.group_id, c.c]));
   const unreadBy = Object.fromEntries(db.prepare(`SELECT cm.group_id, COUNT(*) c FROM chat_messages cm
       WHERE cm.sender_id<>? AND cm.id > COALESCE((SELECT last_read_id FROM chat_reads r WHERE r.group_id=cm.group_id AND r.user_id=?),0)
       GROUP BY cm.group_id`).all(uid, uid).map(c => [c.group_id, c.c]));
-  const out = groups.map(g => ({ ...g, last: lastBy[g.id] || null, members: memBy[g.id] || 0, unread: unreadBy[g.id] || 0 }));
+  const out = groups.map(g => ({ ...g, name: g.is_dm ? (dmTitle[g.id] || g.name) : g.name, last: lastBy[g.id] || null, members: memBy[g.id] || 0, unread: unreadBy[g.id] || 0 }));
   out.sort((a, b) => { const ta = a.last?.created_at || '', tb = b.last?.created_at || ''; if (ta && tb) return tb.localeCompare(ta); if (ta) return -1; if (tb) return 1; return String(a.name).localeCompare(String(b.name)); });
   res.json(out);
 });
@@ -51,6 +64,30 @@ router.post('/groups', requirePermission('site_chat', 'create'), (req, res) => {
   db.transaction(() => { ins.run(gid, req.user.id, req.user.name || '', req.user.id); for (const u of ids) ins.run(gid, u, userName(u), req.user.id); })();
   emitChat(gid, 'changed', { groupId: gid });
   res.json(db.prepare('SELECT id, name FROM chat_groups WHERE id=?').get(gid));
+});
+
+// Direct message — open (or create) a 1-on-1 chat with another user. Open to
+// EVERY signed-in user (no create permission needed): personal connect like
+// WhatsApp (mam 2026-06-19 "if monika wants send to sushila she can direct").
+router.post('/dm', (req, res) => {
+  const db = getChatDb();
+  const me = req.user.id, other = +req.body?.user_id;
+  if (!other || other === me) return res.status(400).json({ error: 'Pick a different person to message' });
+  // Reuse an existing DM between exactly these two people, if any.
+  const existing = db.prepare(`
+    SELECT g.id FROM chat_groups g
+    WHERE g.is_dm=1
+      AND (SELECT COUNT(*) FROM chat_group_members m WHERE m.group_id=g.id)=2
+      AND EXISTS (SELECT 1 FROM chat_group_members m WHERE m.group_id=g.id AND m.user_id=?)
+      AND EXISTS (SELECT 1 FROM chat_group_members m WHERE m.group_id=g.id AND m.user_id=?)
+    LIMIT 1`).get(me, other);
+  if (existing) return res.json({ id: existing.id, name: userName(other) });
+  const otherName = userName(other), myName = req.user.name || '';
+  const gid = db.prepare('INSERT INTO chat_groups (name, is_dm, created_by, created_by_name) VALUES (?,1,?,?)').run(otherName || 'Direct message', me, myName).lastInsertRowid;
+  const ins = db.prepare('INSERT OR IGNORE INTO chat_group_members (group_id, user_id, user_name, added_by) VALUES (?,?,?,?)');
+  db.transaction(() => { ins.run(gid, me, myName, me); ins.run(gid, other, otherName, me); })();
+  emitChat(gid, 'changed', { groupId: gid });
+  res.json({ id: gid, name: otherName });
 });
 
 router.put('/:groupId', requirePermission('site_chat', 'edit'), (req, res) => {
@@ -81,10 +118,12 @@ router.delete('/:groupId', requirePermission('site_chat', 'delete'), (req, res) 
 router.get('/:groupId', (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
-  const group = db.prepare('SELECT id, name FROM chat_groups WHERE id=?').get(g);
+  const group = db.prepare('SELECT id, name, is_dm FROM chat_groups WHERE id=?').get(g);
   if (!group) return res.status(404).json({ error: 'Group not found' });
   const messages = db.prepare('SELECT * FROM chat_messages WHERE group_id=? ORDER BY created_at, id').all(g);
   const members = db.prepare('SELECT user_id, user_name AS name FROM chat_group_members WHERE group_id=? ORDER BY user_name').all(g);
+  // DM header = the OTHER participant's name (per viewer), not the stored name.
+  if (group.is_dm) group.name = members.filter(m => m.user_id !== req.user.id).map(m => m.name).filter(Boolean).join(', ') || group.name;
   const reads = Object.fromEntries(db.prepare('SELECT user_id,last_read_id FROM chat_reads WHERE group_id=?').all(g).map(r => [r.user_id, r.last_read_id]));
   markRead(db, g, req.user.id);
   emitChat(g, 'changed', { groupId: g });                 // others see updated read state

@@ -8,7 +8,7 @@ import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 
 const DAY_OPTS = { day: '2-digit', month: 'short', year: 'numeric' };
@@ -32,6 +32,8 @@ export default function SiteChat() {
   const [allUsers, setAllUsers] = useState([]);
   const [memOpen, setMemOpen] = useState(false);
   const [memSearch, setMemSearch] = useState('');
+  const [dmOpen, setDmOpen] = useState(false);     // "new direct message" picker
+  const [dmSearch, setDmSearch] = useState('');
   const [newOpen, setNewOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newSel, setNewSel] = useState([]);
@@ -53,7 +55,7 @@ export default function SiteChat() {
     if (!id) return;
     api.get(`/site-chat/${id}`).then(r => {
       setMsgs(r.data.messages || []); setMembers(r.data.members || []); setReads(r.data.reads || {});
-      if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name } : s));
+      if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name, is_dm: r.data.group.is_dm } : s));
       loadGroups();
     }).catch(() => {});
   }, [loadGroups]);
@@ -177,6 +179,15 @@ export default function SiteChat() {
   const addMember = async (uid) => { try { await api.post(`/site-chat/${sel.id}/members`, { user_ids: [uid] }); loadThread(sel.id); } catch (err) { toast.error(err.response?.data?.error || 'Failed'); } };
   const removeMember = async (uid) => { try { await api.delete(`/site-chat/${sel.id}/members/${uid}`); loadThread(sel.id); } catch (err) { toast.error(err.response?.data?.error || 'Failed'); } };
 
+  // Open (or create) a 1-on-1 direct message with a person — anyone can.
+  const startDm = async (uid, name) => {
+    try {
+      const r = await api.post('/site-chat/dm', { user_id: uid });
+      setDmOpen(false); setDmSearch(''); loadGroups();
+      setSel({ id: r.data.id, name: r.data.name || name, is_dm: 1 });
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed to start chat'); }
+  };
+
   const createGroup = async () => {
     if (!newName.trim()) return toast.error('Give the group a name');
     try {
@@ -209,6 +220,7 @@ export default function SiteChat() {
         <div className={`w-full sm:w-80 border-r flex flex-col ${sel ? 'hidden sm:flex' : 'flex'}`}>
           <div className="flex items-center gap-2 px-3 py-2 text-white" style={{ background: GREEN }}>
             <FaWhatsapp /> <span className="font-semibold text-sm flex-1">WhatsApp</span>
+            <button onClick={() => { setDmSearch(''); setDmOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New direct message"><FiUserPlus size={18} /></button>
             {canCreate('site_chat') && <button onClick={() => { setNewName(''); setNewSel([]); setNewSearch(''); setNewOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New group"><FiPlus size={18} /></button>}
           </div>
           <div className="p-2 border-b">
@@ -249,11 +261,20 @@ export default function SiteChat() {
               <div className="px-3 py-2 flex items-center gap-2 text-white" style={{ background: GREEN }}>
                 <button onClick={() => setSel(null)} className="sm:hidden mr-1">←</button>
                 <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center font-bold text-xs">{initials(sel.name)}</div>
-                <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="min-w-0 text-left flex-1">
-                  <div className="font-semibold text-sm truncate">{sel.name}</div>
-                  <div className="text-[11px] text-white/80 truncate">{members.length ? members.map(m => m.name).filter(Boolean).slice(0, 5).join(', ') : 'tap to add members'}</div>
-                </button>
-                <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="Members"><FiUsers size={18} /></button>
+                {sel.is_dm ? (
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold text-sm truncate">{sel.name}</div>
+                    <div className="text-[11px] text-white/80 truncate">Direct message</div>
+                  </div>
+                ) : (
+                  <>
+                    <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="min-w-0 text-left flex-1">
+                      <div className="font-semibold text-sm truncate">{sel.name}</div>
+                      <div className="text-[11px] text-white/80 truncate">{members.length ? members.map(m => m.name).filter(Boolean).slice(0, 5).join(', ') : 'tap to add members'}</div>
+                    </button>
+                    <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="Members"><FiUsers size={18} /></button>
+                  </>
+                )}
               </div>
 
               <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 relative" style={{ background: '#efeae2' }}
@@ -364,6 +385,23 @@ export default function SiteChat() {
           <div className="flex gap-2 pt-1">
             <button onClick={createGroup} className="btn btn-primary flex-1">Create group</button>
             <button onClick={() => setNewOpen(false)} className="btn border">Cancel</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── New direct message ────────────────────────────── */}
+      <Modal isOpen={dmOpen} onClose={() => setDmOpen(false)} title="New direct message">
+        <div className="space-y-2 text-sm">
+          <p className="text-xs text-gray-500">Pick a person to message directly — a private 1-on-1 chat.</p>
+          <input className="input" placeholder="Search people…" value={dmSearch} onChange={e => setDmSearch(e.target.value)} autoFocus />
+          <div className="space-y-0.5 max-h-72 overflow-y-auto border rounded p-1">
+            {allUsers.filter(u => u.id !== user?.id && (!dmSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(dmSearch.toLowerCase()))).map(u => (
+              <button key={u.id} onClick={() => startDm(u.id, u.name)} className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-emerald-50">
+                <span className="w-7 h-7 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold flex items-center justify-center flex-shrink-0">{initials(u.name)}</span>
+                <span className="truncate">{u.name} <span className="text-[11px] text-gray-400">@{u.username}</span></span>
+              </button>
+            ))}
+            {allUsers.filter(u => u.id !== user?.id).length === 0 && <div className="text-center text-gray-400 text-xs py-4">No other users found</div>}
           </div>
         </div>
       </Modal>

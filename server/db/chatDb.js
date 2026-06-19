@@ -37,6 +37,12 @@ function getChatDb() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (group_id, user_id)
     );
   `);
+  // is_dm marks a 1-on-1 direct message (mam 2026-06-19) — same tables as a
+  // group, but exactly 2 members and shown as the other person's name.
+  try {
+    const cols = chatDb.prepare("PRAGMA table_info(chat_groups)").all().map(c => c.name);
+    if (!cols.includes('is_dm')) chatDb.exec("ALTER TABLE chat_groups ADD COLUMN is_dm INTEGER DEFAULT 0");
+  } catch (e) { /* ignore */ }
   return chatDb;
 }
 
