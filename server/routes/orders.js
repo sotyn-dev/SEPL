@@ -697,6 +697,22 @@ router.get('/po-template', (req, res) => {
 // Upload PO Excel / BOQ and auto-import items
 // Supports: SEPL BOQ format (SN, Item Name, QTY, UNIT, Supply Rate, Installation Rate, SITC Rate, Total Cost)
 // Also supports: simple template (Item Name, Specification, Size, Qty, Unit, Rate, Amount, HSN)
+// Blank BOQ template (mam 2026-06-19: "give BOQ blank format so data fills in
+// the same format and parses correctly"). Headers are chosen to match the
+// upload parser exactly (SITC Rate / Purchase Price / Labour Rate etc.).
+router.get('/po-boq-template', requirePermission('orders', 'view'), (req, res) => {
+  const headers = ['SN', 'Description', 'Specification', 'Size', 'Qty', 'Unit', 'SITC Rate', 'Purchase Price', 'Labour Rate', 'Amount', 'HSN'];
+  const sample = [1, 'PVC FLEXIBLE CABLE 3 PHASE 2 CORE', '1.5 SQMM', '1.5sqmm', 100, 'mtr', 45, 38, 5, 4500, ''];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
+  ws['!cols'] = headers.map(h => ({ wch: Math.max(12, h.length + 3) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'BOQ');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="BOQ-template.xlsx"');
+  res.send(buf);
+});
+
 router.post('/po-upload-excel', requirePermission('orders', 'create'), upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {

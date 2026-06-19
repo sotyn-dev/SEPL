@@ -76,6 +76,16 @@ export default function Orders() {
 
   const addItem = () => { setPoItems([...poItems, { item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]); setPoItemsDirty(true); };
   const removeItem = (i) => { setPoItems(poItems.filter((_, idx) => idx !== i)); setPoItemsDirty(true); };
+  // Download the blank BOQ template so users fill data in the exact format the
+  // upload parser expects (mam 2026-06-19).
+  const downloadBoqTemplate = async () => {
+    try {
+      const r = await api.get('/orders/po-boq-template', { responseType: 'blob' });
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement('a'); a.href = url; a.download = 'BOQ-template.xlsx'; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { toast.error('Could not download template'); }
+  };
   const updateItem = (i, key, val) => {
     const items = [...poItems];
     items[i][key] = val;
@@ -428,7 +438,13 @@ export default function Orders() {
           {/* 3. Upload BOQ → Auto-fetch items (Excel) or just attach (PDF/image) */}
           <div className="border-2 border-dashed border-red-400 rounded-lg p-4 bg-red-50 text-center">
             <h4 className="font-bold text-red-800 mb-2">Upload BOQ File</h4>
-            <p className="text-xs text-red-600 mb-3">Upload Excel (.xlsx/.xls) to auto-fill items below. PDF/Image/Word also accepted — will just attach the file.</p>
+            <p className="text-xs text-red-600 mb-2">Upload Excel (.xlsx/.xls) to auto-fill items below. PDF/Image/Word also accepted — will just attach the file.</p>
+            <div className="mb-3">
+              <button type="button" onClick={downloadBoqTemplate} className="text-xs text-blue-700 underline hover:text-blue-900 inline-flex items-center gap-1">
+                <FiDownload size={12} /> Download blank BOQ format
+              </button>
+              <span className="text-[10px] text-gray-500 ml-1">— fill your data in this template so it imports correctly</span>
+            </div>
             <label className={`btn btn-primary inline-flex items-center gap-2 cursor-pointer text-base px-6 py-3 ${uploading ? 'opacity-60 pointer-events-none' : ''}`}>
               <FiUpload size={18} /> {uploading ? 'Uploading...' : 'Upload BOQ & Fetch Items'}
               <input type="file" accept=".xlsx,.xls,.pdf,.doc,.docx,.jpg,.jpeg,.png" className="hidden" disabled={uploading} onChange={async (e) => {
