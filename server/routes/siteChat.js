@@ -127,10 +127,12 @@ router.get('/:groupId', (req, res) => {
   const members = db.prepare('SELECT user_id, user_name AS name FROM chat_group_members WHERE group_id=? ORDER BY user_name').all(g);
   // DM header = the OTHER participant's name (per viewer), not the stored name.
   if (group.is_dm) group.name = members.filter(m => m.user_id !== req.user.id).map(m => m.name).filter(Boolean).join(', ') || group.name;
-  const reads = Object.fromEntries(db.prepare('SELECT user_id,last_read_id FROM chat_reads WHERE group_id=?').all(g).map(r => [r.user_id, r.last_read_id]));
+  const readRows = db.prepare('SELECT user_id,last_read_id,updated_at FROM chat_reads WHERE group_id=?').all(g);
+  const reads = Object.fromEntries(readRows.map(r => [r.user_id, r.last_read_id]));
+  const readsAt = Object.fromEntries(readRows.map(r => [r.user_id, r.updated_at]));  // for Message Info read-time
   markRead(db, g, req.user.id);
   emitChat(g, 'changed', { groupId: g });                 // others see updated read state
-  res.json({ group, messages, members, reads });
+  res.json({ group, messages, members, reads, readsAt });
 });
 
 // Any MEMBER can post — gated by group membership ONLY, not any site_chat

@@ -8,7 +8,7 @@ import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 
 const DAY_OPTS = { day: '2-digit', month: 'short', year: 'numeric' };
@@ -27,6 +27,8 @@ export default function SiteChat() {
   const [msgs, setMsgs] = useState([]);
   const [members, setMembers] = useState([]);
   const [reads, setReads] = useState({});
+  const [readsAt, setReadsAt] = useState({});      // user_id -> last-read timestamp (for Message Info)
+  const [infoMsg, setInfoMsg] = useState(null);    // message whose "info" panel is open
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [allUsers, setAllUsers] = useState([]);
@@ -55,7 +57,7 @@ export default function SiteChat() {
   const loadThread = useCallback((id) => {
     if (!id) return;
     api.get(`/site-chat/${id}`).then(r => {
-      setMsgs(r.data.messages || []); setMembers(r.data.members || []); setReads(r.data.reads || {});
+      setMsgs(r.data.messages || []); setMembers(r.data.members || []); setReads(r.data.reads || {}); setReadsAt(r.data.readsAt || {});
       if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name, is_dm: r.data.group.is_dm } : s));
       loadGroups();
     }).catch(() => {});
@@ -313,6 +315,7 @@ export default function SiteChat() {
                                 : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
                           {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
                           <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                            <button onClick={() => setInfoMsg(m)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Message info"><FiInfo size={11} /></button>
                             {(own || isAdmin()) && <button onClick={() => delMsg(m)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
                             <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
                             {own && <span title={others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet'} className={`text-[11px] leading-none ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>}
@@ -459,6 +462,41 @@ export default function SiteChat() {
           </div>
         </Modal>
       )}
+
+      {/* ── Message info (read / delivered) ────────────────── */}
+      {infoMsg && (() => {
+        const m = infoMsg;
+        const others = members.filter(mm => mm.user_id !== m.sender_id);
+        const readBy = others.filter(o => (reads[o.user_id] || 0) >= m.id);
+        const delivered = others.filter(o => (reads[o.user_id] || 0) < m.id);
+        const Row = ({ o, time, tone }) => (
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-2"><span className={`w-6 h-6 rounded-full text-[10px] font-bold flex items-center justify-center ${tone}`}>{initials(o.name)}</span>{o.name}</span>
+            {time && <span className="text-[11px] text-gray-400">{fmtDateTime(time)}</span>}
+          </div>
+        );
+        return (
+          <Modal isOpen={!!infoMsg} onClose={() => setInfoMsg(null)} title="Message info">
+            <div className="space-y-3 text-sm">
+              <div className="rounded-lg bg-[#d9fdd3] px-3 py-2">
+                {m.attachment_name && <div className="text-xs text-gray-600 mb-0.5">📎 {m.attachment_name}</div>}
+                {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{m.body}</div>}
+                <div className="text-[10px] text-gray-500 mt-1">{m.sender_name} · {fmtDateTime(m.created_at)}</div>
+              </div>
+              <div>
+                <div className="font-semibold text-sky-600 mb-1">✓✓ Read by ({readBy.length})</div>
+                {readBy.length === 0 ? <div className="text-xs text-gray-400">No one yet</div>
+                  : <div className="space-y-1">{readBy.map(o => <Row key={o.user_id} o={o} time={readsAt[o.user_id]} tone="bg-sky-100 text-sky-700" />)}</div>}
+              </div>
+              <div>
+                <div className="font-semibold text-gray-500 mb-1">✓✓ Delivered to ({delivered.length})</div>
+                {delivered.length === 0 ? <div className="text-xs text-gray-400">—</div>
+                  : <div className="space-y-1">{delivered.map(o => <Row key={o.user_id} o={o} tone="bg-gray-100 text-gray-600" />)}</div>}
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
     </div>
   );
 }
