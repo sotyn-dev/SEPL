@@ -19,6 +19,17 @@ const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 const preview = (m) => (m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : '')) : '');
 const initials = (s) => String(s || '?').replace(/[^A-Za-z0-9 ]/g, '').trim().slice(0, 2).toUpperCase() || '#';
 
+// Stable, module-level avatar (photo or initials). MUST live outside the page
+// component — an inline component is a new type each render, which remounts &
+// reloads every photo on every keystroke and freezes the chat (mam 2026-06-19
+// "add group is hang").
+function Avatar({ url, name, size = 36, className = '' }) {
+  const st = { width: size, height: size };
+  return url
+    ? <img src={url} alt={name || ''} className={`rounded-full object-cover flex-shrink-0 ${className}`} style={st} />
+    : <span className={`rounded-full bg-emerald-100 text-emerald-700 font-bold flex items-center justify-center flex-shrink-0 ${className}`} style={{ ...st, fontSize: Math.round(size * 0.34) }}>{initials(name)}</span>;
+}
+
 export default function SiteChat() {
   const { canCreate, canDelete, isAdmin, user } = useAuth();
   const [groups, setGroups] = useState([]);
@@ -142,13 +153,6 @@ export default function SiteChat() {
 
   // ── Profile photos (mam 2026-06-19 "like whatsapp use profile photo") ──
   const userAvatars = useMemo(() => { const m = {}; for (const u of allUsers) m[u.id] = u.avatar_url; return m; }, [allUsers]);
-  const Avatar = ({ uid, name, size = 36, className = '' }) => {
-    const url = uid != null ? userAvatars[uid] : null;
-    const st = { width: size, height: size };
-    return url
-      ? <img src={url} alt={name || ''} className={`rounded-full object-cover flex-shrink-0 ${className}`} style={st} />
-      : <span className={`rounded-full bg-emerald-100 text-emerald-700 font-bold flex items-center justify-center flex-shrink-0 ${className}`} style={{ ...st, fontSize: Math.round(size * 0.34) }}>{initials(name)}</span>;
-  };
   const onAvatarFile = async (file) => {
     if (!file) return;
     setBusy(true);
@@ -229,11 +233,14 @@ export default function SiteChat() {
 
   const createGroup = async () => {
     if (!newName.trim()) return toast.error('Give the group a name');
+    if (busy) return;                                   // guard against double-submit
+    setBusy(true);
     try {
       const r = await api.post('/site-chat/groups', { name: newName.trim(), member_ids: newSel });
       setNewOpen(false); setNewName(''); setNewSel([]); setNewSearch('');
       loadGroups(); setSel({ id: r.data.id, name: r.data.name });
     } catch (err) { toast.error(err.response?.data?.error || 'Failed to create group'); }
+    finally { setBusy(false); }
   };
   const delGroup = async () => {
     if (!sel || !confirm(`Delete the group "${sel.name}" and all its messages?`)) return;
@@ -255,7 +262,7 @@ export default function SiteChat() {
         <div className="flex items-center gap-2 flex-shrink-0">
           <input ref={avatarRef} type="file" accept="image/*" className="hidden" onChange={e => onAvatarFile(e.target.files?.[0])} />
           <button onClick={() => avatarRef.current?.click()} disabled={busy} className="relative" title="Change your photo">
-            <Avatar uid={user?.id} name={user?.name} size={42} />
+            <Avatar url={userAvatars[user?.id]} name={user?.name} size={42} />
             <span className="absolute -bottom-0.5 -right-0.5 bg-emerald-600 text-white rounded-full w-4 h-4 flex items-center justify-center text-[9px] ring-2 ring-white">✎</span>
           </button>
           {userAvatars[user?.id] && <button onClick={removeAvatar} className="text-[11px] text-gray-400 hover:text-red-600">Remove</button>}
@@ -284,7 +291,7 @@ export default function SiteChat() {
             {shown.map(g => (
               <button key={g.id} onClick={() => setSel({ id: g.id, name: g.name })}
                 className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${sel?.id === g.id ? 'bg-emerald-50' : ''}`}>
-                <Avatar uid={g.is_dm ? g.dm_uid : null} name={g.name} size={36} />
+                <Avatar url={g.is_dm ? userAvatars[g.dm_uid] : null} name={g.name} size={36} />
                 <div className="min-w-0 flex-1">
                   <div className="flex justify-between items-baseline gap-2">
                     <span className="font-semibold text-sm text-gray-800 truncate">{g.name}</span>
@@ -310,7 +317,7 @@ export default function SiteChat() {
             <>
               <div className="px-3 py-2 flex items-center gap-2 text-white" style={{ background: GREEN }}>
                 <button onClick={() => setSel(null)} className="sm:hidden mr-1">←</button>
-                <Avatar uid={sel.is_dm ? members.find(m => m.user_id !== user?.id)?.user_id : null} name={sel.name} size={36} />
+                <Avatar url={sel.is_dm ? userAvatars[members.find(m => m.user_id !== user?.id)?.user_id] : null} name={sel.name} size={36} />
                 {sel.is_dm ? (
                   <div className="min-w-0 flex-1">
                     <div className="font-semibold text-sm truncate">{sel.name}</div>
@@ -344,7 +351,7 @@ export default function SiteChat() {
                     <Fragment key={m.id}>
                       {sep && <div className="flex justify-center my-1.5"><span className="text-[10px] font-medium bg-white/85 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(m.created_at)}</span></div>}
                       <div className={`flex items-end gap-1.5 ${own ? 'justify-end' : 'justify-start'}`}>
-                        {!own && !sel.is_dm && <Avatar uid={m.sender_id} name={m.sender_name} size={26} />}
+                        {!own && !sel.is_dm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
                         <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
                           {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
                           {m.attachment_url && (
@@ -435,7 +442,7 @@ export default function SiteChat() {
             </div>
           </div>
           <div className="flex gap-2 pt-1">
-            <button onClick={createGroup} className="btn btn-primary flex-1">Create group</button>
+            <button onClick={createGroup} disabled={busy} className="btn btn-primary flex-1 disabled:opacity-50">{busy ? 'Creating…' : 'Create group'}</button>
             <button onClick={() => setNewOpen(false)} className="btn border">Cancel</button>
           </div>
         </div>
@@ -449,7 +456,7 @@ export default function SiteChat() {
           <div className="space-y-0.5 max-h-72 overflow-y-auto border rounded p-1">
             {allUsers.filter(u => u.id !== user?.id && (!dmSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(dmSearch.toLowerCase()))).map(u => (
               <button key={u.id} onClick={() => startDm(u.id, u.name)} className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-emerald-50">
-                <Avatar uid={u.id} name={u.name} size={28} />
+                <Avatar url={userAvatars[u.id]} name={u.name} size={28} />
                 <span className="truncate">{u.name} <span className="text-[11px] text-gray-400">@{u.username}</span></span>
               </button>
             ))}
@@ -478,7 +485,7 @@ export default function SiteChat() {
               <div className="space-y-1 max-h-40 overflow-y-auto">
                 {members.map(m => (
                   <div key={m.user_id} className="flex items-center justify-between bg-gray-50 rounded px-2 py-1">
-                    <span className="flex items-center gap-2"><Avatar uid={m.user_id} name={m.name} size={24} />{m.name}</span>
+                    <span className="flex items-center gap-2"><Avatar url={userAvatars[m.user_id]} name={m.name} size={24} />{m.name}</span>
                     {canCreate('site_chat') && m.user_id !== user?.id && <button onClick={() => removeMember(m.user_id)} className="text-gray-400 hover:text-red-600" title="Remove"><FiX size={14} /></button>}
                   </div>
                 ))}
