@@ -485,7 +485,7 @@ export default function Orders() {
                   let Planning own the labour workflow. */}
               {/* Desktop header — hidden on mobile where each row is a stacked card */}
               <div className="hidden md:grid grid-cols-12 gap-2 text-xs font-semibold text-gray-500 px-1">
-                <div>SN</div><div className="col-span-3">Description</div><div>Qty</div><div>Unit</div><div>Rate (SITC)</div><div>PP</div><div>Labour</div><div className="col-span-2">Amount</div><div></div>
+                <div>SN</div><div className="col-span-3">Description</div><div>Qty</div><div>Unit</div><div>Rate (SITC)</div><div title="Purchase Price">PP</div><div>Labour</div><div className="col-span-2">Amount</div><div></div>
               </div>
               {poItems.map((item, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2 items-center mb-3 md:mb-0 p-2 md:p-0 border md:border-0 border-gray-100 rounded">
@@ -531,9 +531,9 @@ export default function Orders() {
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Rate (SITC)</div>
                     <input className="input text-sm" type="number" value={item.rate} onChange={e => updateItem(i, 'rate', +e.target.value)} />
                   </div>
-                  {/* PP (Part Price) — manual, mam 2026-06-19 */}
+                  {/* PP = Purchase Price — manual or auto-filled from BOQ Excel (mam 2026-06-19) */}
                   <div className="col-span-6 md:col-span-1">
-                    <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">PP (Part Price)</div>
+                    <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">PP (Purchase Price)</div>
                     <input className="input text-sm" type="number" value={item.part_price ?? 0} onChange={e => updateItem(i, 'part_price', +e.target.value)} />
                   </div>
                   {/* Labour Rate — manual */}

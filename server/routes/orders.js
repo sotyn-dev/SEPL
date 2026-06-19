@@ -717,7 +717,7 @@ router.post('/po-upload-excel', requirePermission('orders', 'create'), upload.si
       const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
       // Find header row — scan first 20 rows for any known column keyword
-      const HEADER_KEYWORDS = ['item name', 'description', 'particulars', 'work', 'item', 'qty', 'qnty', 'quantity', 'sitc', 'rate', 'amount', 's/n', 's.no'];
+      const HEADER_KEYWORDS = ['item name', 'description', 'particulars', 'work', 'item', 'qty', 'qnty', 'quantity', 'sitc', 'rate', 'amount', 's/n', 's.no', 'purchase', 'labour', 'labor'];
       let headerIdx = -1;
       for (let i = 0; i < Math.min(20, data.length); i++) {
         const row = (data[i] || []).map(c => String(c || '').toLowerCase().trim());
@@ -741,7 +741,10 @@ router.post('/po-upload-excel', requirePermission('orders', 'create'), upload.si
         if (h.includes('installation')) colMap.installRate = i;
         if (h.includes('total cost')) colMap.totalCost = i;
         if (!colMap.rate && (h.includes('rate') && !h.includes('supply') && !h.includes('sitc') && !h.includes('install'))) colMap.rate = i;
-        if (h.includes('amount') && !h.includes('total')) colMap.amount = i;
+        if (h.includes('amount') && !h.includes('total') && !h.includes('labour') && !h.includes('labor')) colMap.amount = i;
+        // PP = Purchase Price (mam 2026-06-19), and per-item Labour Rate.
+        if (colMap.purchasePrice === undefined && (h === 'pp' || h === 'pp rate' || h.includes('purchase price') || h.includes('purchase rate') || h.includes('buying') || (h.includes('purchase') && !h.includes('order')))) colMap.purchasePrice = i;
+        if (colMap.labourRate === undefined && (h.includes('labour rate') || h.includes('labor rate') || h === 'labour' || h === 'labor')) colMap.labourRate = i;
         if (h.includes('hsn')) colMap.hsn = i;
         if (h === 'sn' || h === 's/n' || h === 'sr no' || h === 'sr' || h === 's.no' || h === 's. no' || h === 's.no.' || h === 'sl no' || h === 'sl.no') colMap.sn = i;
       });
@@ -789,6 +792,8 @@ router.post('/po-upload-excel', requirePermission('orders', 'create'), upload.si
         const size = colMap.size !== undefined ? String(row[colMap.size] || '').trim() : '';
         const description = [name, spec, size].filter(Boolean).join(' / ');
         const unit = colMap.unit !== undefined ? String(row[colMap.unit] || 'Nos').trim() : 'Nos';
+        const part_price = colMap.purchasePrice !== undefined ? parseNum(row[colMap.purchasePrice]) : 0;
+        const labour_rate = colMap.labourRate !== undefined ? parseNum(row[colMap.labourRate]) : 0;
 
         items.push({
           sr_no: serial++,
@@ -800,6 +805,8 @@ router.post('/po-upload-excel', requirePermission('orders', 'create'), upload.si
           unit: unit || 'Nos',
           rate: Math.round(rate * 100) / 100,
           amount: Math.round(amount * 100) / 100,
+          part_price: Math.round(part_price * 100) / 100,    // PP (Purchase Price)
+          labour_rate: Math.round(labour_rate * 100) / 100,
           hsn_code: colMap.hsn !== undefined ? String(row[colMap.hsn] || '').trim() : '',
         });
       }
