@@ -4,3 +4,4 @@ node_modules/
 client/dist/
 client/node_modules/
 .claude/worktrees/
+.claude/settings.local.json
