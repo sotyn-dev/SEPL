@@ -33,7 +33,7 @@ router.get('/groups', (req, res) => {
     : db.prepare('SELECT g.id, g.name, g.is_dm FROM chat_groups g JOIN chat_group_members m ON m.group_id=g.id WHERE m.user_id=? ORDER BY g.name').all(uid);
   // For DMs, the title shown is the OTHER participant's name (per viewer).
   const dmIds = groups.filter(g => g.is_dm).map(g => g.id);
-  const dmTitle = {};
+  const dmTitle = {}, dmUid = {};
   if (dmIds.length) {
     const ph = dmIds.map(() => '?').join(',');
     const byG = {};
@@ -42,6 +42,7 @@ router.get('/groups', (req, res) => {
       const mem = byG[id] || [];
       const others = mem.filter(m => m.user_id !== uid);
       dmTitle[id] = (others.length ? others : mem).map(o => o.user_name).filter(Boolean).join(', ') || 'Direct message';
+      dmUid[id] = (others[0] || mem[0])?.user_id || null;     // other person's id → their avatar
     }
   }
   const lastBy = Object.fromEntries(db.prepare(`SELECT group_id,body,attachment_name,sender_name,created_at FROM chat_messages WHERE id IN (SELECT MAX(id) FROM chat_messages GROUP BY group_id)`).all().map(l => [l.group_id, l]));
@@ -49,7 +50,7 @@ router.get('/groups', (req, res) => {
   const unreadBy = Object.fromEntries(db.prepare(`SELECT cm.group_id, COUNT(*) c FROM chat_messages cm
       WHERE cm.sender_id<>? AND cm.id > COALESCE((SELECT last_read_id FROM chat_reads r WHERE r.group_id=cm.group_id AND r.user_id=?),0)
       GROUP BY cm.group_id`).all(uid, uid).map(c => [c.group_id, c.c]));
-  const out = groups.map(g => ({ ...g, name: g.is_dm ? (dmTitle[g.id] || g.name) : g.name, last: lastBy[g.id] || null, members: memBy[g.id] || 0, unread: unreadBy[g.id] || 0 }));
+  const out = groups.map(g => ({ ...g, name: g.is_dm ? (dmTitle[g.id] || g.name) : g.name, dm_uid: g.is_dm ? (dmUid[g.id] || null) : null, last: lastBy[g.id] || null, members: memBy[g.id] || 0, unread: unreadBy[g.id] || 0 }));
   out.sort((a, b) => { const ta = a.last?.created_at || '', tb = b.last?.created_at || ''; if (ta && tb) return tb.localeCompare(ta); if (ta) return -1; if (tb) return 1; return String(a.name).localeCompare(String(b.name)); });
   res.json(out);
 });

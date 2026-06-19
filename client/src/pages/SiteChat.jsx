@@ -1,7 +1,7 @@
 // "WhatsApp" — internal group chat, WhatsApp-styled (mam 2026-06-18). Create
 // named groups, add the people you want, chat (text + photo/file). Members-
 // gated, read receipts (✓✓ + who-read), unread badges, day separators.
-import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
 import { io } from 'socket.io-client';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -47,6 +47,7 @@ export default function SiteChat() {
   const [mention, setMention] = useState(null);    // @-tag autocomplete: { query, start } or null
   const taRef = useRef(null);
   const fileRef = useRef(null);
+  const avatarRef = useRef(null);
   const endRef = useRef(null);
   const socketRef = useRef(null);
   const mediaRef = useRef(null);
@@ -54,6 +55,7 @@ export default function SiteChat() {
   const recTimerRef = useRef(null);
 
   const loadGroups = useCallback(() => { api.get('/site-chat/groups').then(r => setGroups(r.data || [])).catch(() => {}); }, []);
+  const reloadUsers = useCallback(() => api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {}), []);
   const loadThread = useCallback((id) => {
     if (!id) return;
     api.get(`/site-chat/${id}`).then(r => {
@@ -63,7 +65,7 @@ export default function SiteChat() {
     }).catch(() => {});
   }, [loadGroups]);
 
-  useEffect(() => { loadGroups(); api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {}); }, [loadGroups]);
+  useEffect(() => { loadGroups(); reloadUsers(); }, [loadGroups, reloadUsers]);
   // Real-time: one Socket.IO connection; the server pushes a 'changed' event
   // to each group's room on any message/read/member change. Polling stays as
   // a fallback if the socket can't connect.
@@ -137,6 +139,32 @@ export default function SiteChat() {
     try { mr.stop(); } catch (_) {}
   };
   const onDrop = (e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer?.files?.[0]; if (f) attach(f); };
+
+  // ── Profile photos (mam 2026-06-19 "like whatsapp use profile photo") ──
+  const userAvatars = useMemo(() => { const m = {}; for (const u of allUsers) m[u.id] = u.avatar_url; return m; }, [allUsers]);
+  const Avatar = ({ uid, name, size = 36, className = '' }) => {
+    const url = uid != null ? userAvatars[uid] : null;
+    const st = { width: size, height: size };
+    return url
+      ? <img src={url} alt={name || ''} className={`rounded-full object-cover flex-shrink-0 ${className}`} style={st} />
+      : <span className={`rounded-full bg-emerald-100 text-emerald-700 font-bold flex items-center justify-center flex-shrink-0 ${className}`} style={{ ...st, fontSize: Math.round(size * 0.34) }}>{initials(name)}</span>;
+  };
+  const onAvatarFile = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      await api.post('/auth/avatar', { avatar_url: r.data.url });
+      reloadUsers(); if (sel) loadThread(sel.id);
+      toast.success('Profile photo updated');
+    } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
+    finally { setBusy(false); if (avatarRef.current) avatarRef.current.value = ''; }
+  };
+  const removeAvatar = async () => {
+    try { await api.post('/auth/avatar', { avatar_url: null }); reloadUsers(); toast.success('Photo removed'); }
+    catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
 
   // ── @-mention / tag-by-name (mam 2026-06-19: "at the rate tag by name") ──
   // On each keystroke, look back from the caret for an "@word" token (at the
@@ -217,10 +245,21 @@ export default function SiteChat() {
 
   return (
     <div className="space-y-3">
-      <div>
-        <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><FaWhatsapp className="text-[#25d366]" /> WhatsApp</h1>
-        {/* Subtitle hidden on mobile to give the chat more vertical room. */}
-        <p className="hidden sm:block text-sm text-gray-500">Internal group chat · create groups · add your people · text + photos/files</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><FaWhatsapp className="text-[#25d366]" /> WhatsApp</h1>
+          {/* Subtitle hidden on mobile to give the chat more vertical room. */}
+          <p className="hidden sm:block text-sm text-gray-500">Internal group chat · create groups · add your people · text + photos/files</p>
+        </div>
+        {/* Your profile photo — tap to upload (mam 2026-06-19). */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <input ref={avatarRef} type="file" accept="image/*" className="hidden" onChange={e => onAvatarFile(e.target.files?.[0])} />
+          <button onClick={() => avatarRef.current?.click()} disabled={busy} className="relative" title="Change your photo">
+            <Avatar uid={user?.id} name={user?.name} size={42} />
+            <span className="absolute -bottom-0.5 -right-0.5 bg-emerald-600 text-white rounded-full w-4 h-4 flex items-center justify-center text-[9px] ring-2 ring-white">✎</span>
+          </button>
+          {userAvatars[user?.id] && <button onClick={removeAvatar} className="text-[11px] text-gray-400 hover:text-red-600">Remove</button>}
+        </div>
       </div>
 
       {/* 100dvh (dynamic viewport height) — NOT 100vh — so the composer / mic
@@ -245,7 +284,7 @@ export default function SiteChat() {
             {shown.map(g => (
               <button key={g.id} onClick={() => setSel({ id: g.id, name: g.name })}
                 className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${sel?.id === g.id ? 'bg-emerald-50' : ''}`}>
-                <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs flex-shrink-0">{initials(g.name)}</div>
+                <Avatar uid={g.is_dm ? g.dm_uid : null} name={g.name} size={36} />
                 <div className="min-w-0 flex-1">
                   <div className="flex justify-between items-baseline gap-2">
                     <span className="font-semibold text-sm text-gray-800 truncate">{g.name}</span>
@@ -271,7 +310,7 @@ export default function SiteChat() {
             <>
               <div className="px-3 py-2 flex items-center gap-2 text-white" style={{ background: GREEN }}>
                 <button onClick={() => setSel(null)} className="sm:hidden mr-1">←</button>
-                <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center font-bold text-xs">{initials(sel.name)}</div>
+                <Avatar uid={sel.is_dm ? members.find(m => m.user_id !== user?.id)?.user_id : null} name={sel.name} size={36} />
                 {sel.is_dm ? (
                   <div className="min-w-0 flex-1">
                     <div className="font-semibold text-sm truncate">{sel.name}</div>
@@ -304,7 +343,8 @@ export default function SiteChat() {
                   return (
                     <Fragment key={m.id}>
                       {sep && <div className="flex justify-center my-1.5"><span className="text-[10px] font-medium bg-white/85 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(m.created_at)}</span></div>}
-                      <div className={`flex ${own ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`flex items-end gap-1.5 ${own ? 'justify-end' : 'justify-start'}`}>
+                        {!own && !sel.is_dm && <Avatar uid={m.sender_id} name={m.sender_name} size={26} />}
                         <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
                           {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
                           {m.attachment_url && (
@@ -409,7 +449,7 @@ export default function SiteChat() {
           <div className="space-y-0.5 max-h-72 overflow-y-auto border rounded p-1">
             {allUsers.filter(u => u.id !== user?.id && (!dmSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(dmSearch.toLowerCase()))).map(u => (
               <button key={u.id} onClick={() => startDm(u.id, u.name)} className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-emerald-50">
-                <span className="w-7 h-7 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold flex items-center justify-center flex-shrink-0">{initials(u.name)}</span>
+                <Avatar uid={u.id} name={u.name} size={28} />
                 <span className="truncate">{u.name} <span className="text-[11px] text-gray-400">@{u.username}</span></span>
               </button>
             ))}
@@ -438,7 +478,7 @@ export default function SiteChat() {
               <div className="space-y-1 max-h-40 overflow-y-auto">
                 {members.map(m => (
                   <div key={m.user_id} className="flex items-center justify-between bg-gray-50 rounded px-2 py-1">
-                    <span className="flex items-center gap-2"><span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold flex items-center justify-center">{initials(m.name)}</span>{m.name}</span>
+                    <span className="flex items-center gap-2"><Avatar uid={m.user_id} name={m.name} size={24} />{m.name}</span>
                     {canCreate('site_chat') && m.user_id !== user?.id && <button onClick={() => removeMember(m.user_id)} className="text-gray-400 hover:text-red-600" title="Remove"><FiX size={14} /></button>}
                   </div>
                 ))}
