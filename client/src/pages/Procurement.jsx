@@ -265,6 +265,15 @@ export default function Procurement() {
   const [purchaseBills, setPurchaseBills] = useState([]);
   const [deliveryNotes, setDeliveryNotes] = useState([]);
   const [vendors, setVendors] = useState([]);
+  // Vendor-picker options (mam 2026-06-19: "use vendor firm name"). Show
+  // "Vendor Name — Firm Name" so a vendor is findable by EITHER, and the
+  // SearchableSelect (which searches its display label) matches the firm
+  // name too. valueKey stays `name` so the rate still stores vendor.name —
+  // downstream finalize / Vendor PO code is untouched.
+  const vendorOptions = useMemo(() => vendors.map(v => ({
+    ...v,
+    label: v.firm_name && v.firm_name !== v.name ? `${v.name} — ${v.firm_name}` : v.name,
+  })), [vendors]);
   // Debit Notes (mam 2026-06-04 post-PO chart, stage 7)
   const [debitNotes, setDebitNotes] = useState([]);
   const [dnModal, setDnModal] = useState(false);
@@ -2952,9 +2961,9 @@ export default function Procurement() {
             <div className="min-w-[200px]">
               <label className="label text-[10px] mb-0.5">Vendor</label>
               <SearchableSelect
-                options={vendors}
+                options={vendorOptions}
                 value={bulkVendorName || null}
-                valueKey="name" displayKey="name"
+                valueKey="name" displayKey="label"
                 placeholder="Pick vendor"
                 buttonClassName="text-[11px] px-2 py-1 w-full border border-gray-200 rounded-md bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-400 text-left flex items-center justify-between gap-1 cursor-pointer"
                 onChange={(v) => setBulkVendorName(v?.name || '')}
@@ -3062,9 +3071,9 @@ export default function Procurement() {
                                 row so downstream code (finalize / Vendor PO)
                                 keeps working with the existing name column. */}
                             <SearchableSelect
-                              options={vendors}
+                              options={vendorOptions}
                               value={r[`vendor${n}_name`] || null}
-                              valueKey="name" displayKey="name"
+                              valueKey="name" displayKey="label"
                               placeholder="Pick vendor"
                               buttonClassName="text-[11px] px-2 py-1 w-full border border-gray-200 rounded-md bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-red-400 text-left flex items-center justify-between gap-1 cursor-pointer"
                               onChange={(v) => editRate(r, { [`vendor${n}_name`]: v?.name || '' })}
@@ -3166,9 +3175,9 @@ export default function Procurement() {
                           below. */}
                       <div className="mb-2">
                         <SearchableSelect
-                          options={vendors}
+                          options={vendorOptions}
                           value={r[`vendor${n}_name`] || null}
-                          valueKey="name" displayKey="name"
+                          valueKey="name" displayKey="label"
                           placeholder="Pick vendor from master"
                           buttonClassName="input text-xs w-full text-left flex items-center justify-between gap-1 cursor-pointer"
                           onChange={(v) => editRate(r, { [`vendor${n}_name`]: v?.name || '' })}
@@ -6183,9 +6192,9 @@ export default function Procurement() {
           <div>
             <label className="label">Vendor *</label>
             <SearchableSelect
-              options={vendors}
+              options={vendorOptions}
               value={form.vendor_id || null}
-              valueKey="id" displayKey="name"
+              valueKey="id" displayKey="label"
               placeholder="Search vendor…"
               onChange={(v) => setForm({ ...form, vendor_id: v?.id || '' })}
             />
