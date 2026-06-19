@@ -171,7 +171,8 @@ export default function ItemMaster() {
     if (!String(form.source_type || '').trim()) missing.push('Source Type');
     if (!String(form.bill_po_number || '').trim()) missing.push('Bill/PO Number');
     if (!String(form.bill_po_date || '').trim()) missing.push('Bill/PO Date');
-    if (missing.length) { toast.error(`Required: ${missing.join(', ')}`); return; }
+    // Admin bypasses mandatory fields (mam 2026-06-19) — can update partial.
+    if (missing.length && !isAdmin()) { toast.error(`Required: ${missing.join(', ')}`); return; }
     try {
       const payload = {
         ...form,
