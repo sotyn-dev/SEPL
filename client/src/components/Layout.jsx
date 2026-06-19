@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { io } from 'socket.io-client';
-import HelpTicket from './HelpTicket';
 import AnnouncementBell from './AnnouncementBell';
 // Mam (2026-05-22): standalone NotificationsBell removed — its
 // functionality is now merged into AnnouncementBell as a second tab,
@@ -835,7 +834,8 @@ export default function Layout() {
           </div>
         </main>
       </div>
-      <HelpTicket />
+      {/* Floating "?" help-ticket bubble removed (mam 2026-06-19) — Help
+          Tickets is still reachable from the sidebar page. */}
       <AIAgentChat />
     </div>
   );
