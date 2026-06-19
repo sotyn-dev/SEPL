@@ -59,6 +59,7 @@ export default function SiteChat() {
   const taRef = useRef(null);
   const fileRef = useRef(null);
   const avatarRef = useRef(null);
+  const sendingRef = useRef(false);   // synchronous guard against double-send
   const endRef = useRef(null);
   const socketRef = useRef(null);
   const mediaRef = useRef(null);
@@ -83,6 +84,9 @@ export default function SiteChat() {
   useEffect(() => {
     const socket = io({ path: '/socket.io', auth: { token: localStorage.getItem('token') }, transports: ['websocket', 'polling'] });
     socketRef.current = socket;
+    // On (re)connect, re-join the open group's room and catch up on anything
+    // missed while disconnected — fixes "always need to refresh" after a drop.
+    socket.on('connect', () => { loadGroups(); setSel(s => { if (s) { socket.emit('join', s.id); loadThread(s.id); } return s; }); });
     socket.on('changed', ({ groupId }) => { setSel(s => { if (s && s.id === groupId) loadThread(s.id); return s; }); loadGroups(); });
     socket.on('group_deleted', ({ groupId }) => { loadGroups(); setSel(s => (s && s.id === groupId ? null : s)); });
     return () => { socket.disconnect(); socketRef.current = null; };
@@ -91,7 +95,7 @@ export default function SiteChat() {
     if (!sel) return;
     socketRef.current?.emit('join', sel.id);
     loadThread(sel.id);
-    const t = setInterval(() => loadThread(sel.id), 15000);   // fallback poll
+    const t = setInterval(() => loadThread(sel.id), 6000);    // fallback poll (safe: GET no longer self-emits)
     const onFocus = () => loadThread(sel.id);
     window.addEventListener('focus', onFocus);
     return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
@@ -104,13 +108,13 @@ export default function SiteChat() {
   const dayLabel = (ts) => { const l = fmtDate(ts, DAY_OPTS); return l === todayLbl ? 'Today' : l === yestLbl ? 'Yesterday' : l; };
 
   const send = async (extra = {}) => {
-    if (!sel) return;
+    if (!sel || sendingRef.current) return;          // ref guard = no duplicate sends
     const payload = { body: text, ...extra };
     if (!payload.body?.trim() && !payload.attachment_url) return;
-    setBusy(true);
+    sendingRef.current = true; setBusy(true);
     try { await api.post(`/site-chat/${sel.id}`, payload); setText(''); setMention(null); loadThread(sel.id); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed to send'); }
-    finally { setBusy(false); }
+    finally { sendingRef.current = false; setBusy(false); }
   };
   const attach = async (file) => {
     if (!file || !sel) return;

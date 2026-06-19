@@ -132,7 +132,12 @@ router.get('/:groupId', (req, res) => {
   const reads = Object.fromEntries(readRows.map(r => [r.user_id, r.last_read_id]));
   const readsAt = Object.fromEntries(readRows.map(r => [r.user_id, r.updated_at]));  // for Message Info read-time
   markRead(db, g, req.user.id);
-  emitChat(g, 'changed', { groupId: g });                 // others see updated read state
+  // NOTE: deliberately do NOT emitChat('changed') here. Loading a thread used
+  // to broadcast 'changed' to the room, but the client reloads the thread on
+  // 'changed' → which re-GETs → which re-emits: an infinite self-reinforcing
+  // loop that hammered the server and caused intermittent chat errors
+  // (mam 2026-06-19). New messages still emit from POST; read receipts refresh
+  // via the other members' poll / next message.
   res.json({ group, messages, members, reads, readsAt });
 });
 
