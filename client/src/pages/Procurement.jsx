@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, Fragment } from 'react';
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -1783,6 +1783,26 @@ export default function Procurement() {
     finally { setAiBusy(b => ({ ...b, [iiId]: false })); }
   };
 
+  // Auto-fill the AI market rate for every item missing one (mam 2026-06-19:
+  // "don't need to click, automatically rate here"). Runs in the background in
+  // batches of 25 while the Vendor Rates tab is open; each batch = one AI call.
+  // Persisted, so an item already done is never recomputed.
+  const aiAutoRef = useRef(new Set());
+  const aiAutoErrRef = useRef(false);
+  useEffect(() => {
+    if (tab !== 'rates') return;
+    const missing = mergedRates
+      .filter(r => !(+r.marketing_rate > 0))
+      .map(r => r.indent_item_ids?.[0])
+      .filter(id => id && !aiAutoRef.current.has(id));
+    if (!missing.length) return;
+    const batch = missing.slice(0, 25);
+    batch.forEach(id => aiAutoRef.current.add(id));
+    api.post('/procurement/item-rates/ai-suggest-bulk', { indent_item_ids: batch })
+      .then(() => load())
+      .catch((err) => { if (!aiAutoErrRef.current) { aiAutoErrRef.current = true; toast.error(err.response?.data?.error || 'AI auto-rate failed'); } });
+  }, [tab, mergedRates]);
+
   // Admin-only: clear ALL the vendor quotes on a merged rate row so the row
   // returns to "Pending" status. Useful when mam wants to re-quote from
   // scratch (wrong rates entered, vendor list changed, etc.). Loops over
@@ -3057,7 +3077,7 @@ export default function Procurement() {
                   <th className="px-2 py-2 text-left" rowSpan="2" style={{ width: '260px', minWidth: '260px' }}>Sub-Item<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(Item Master)</span></th>
                   <th className="px-2 py-2" rowSpan="2">Qty</th>
                   <th className="px-2 py-2" rowSpan="2" title="Purchase Price from the Order-to-Planning BOQ — suggestion only, doesn't change vendor rates">PP Rate<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(planning)</span></th>
-                  <th className="px-2 py-2" rowSpan="2" title="AI-estimated market rate — suggestion only, doesn't change vendor rates">Mktg Rate<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(AI suggest)</span></th>
+                  <th className="px-2 py-2" rowSpan="2" title="AI-estimated MINIMUM market rate, auto-filled — suggestion only, doesn't change vendor rates">Mktg Rate<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(AI · min mkt)</span></th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 1</th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 2</th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 3</th>
@@ -3111,14 +3131,18 @@ export default function Procurement() {
                           ? <span className="font-semibold text-indigo-700">Rs {(+r.pp_rate).toLocaleString('en-IN')}</span>
                           : <span className="text-gray-300" title="No purchase price entered in Order-to-Planning for this item">—</span>}
                       </td>
-                      {/* Marketing Rate (AI suggest) — suggestion only */}
+                      {/* Marketing Rate (AI, auto-filled min market rate) — suggestion only */}
                       <td className="px-2 py-2 text-center whitespace-nowrap text-[11px]">
-                        {+r.marketing_rate > 0 && <div className="font-semibold text-fuchsia-700 mb-0.5">Rs {(+r.marketing_rate).toLocaleString('en-IN')}</div>}
-                        <button type="button" onClick={() => aiSuggestRate(r)} disabled={!!aiBusy[r.indent_item_ids[0]]}
-                          className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-fuchsia-100 text-fuchsia-700 border border-fuchsia-300 hover:bg-fuchsia-600 hover:text-white disabled:opacity-50"
-                          title="Ask AI to estimate this item's market rate">
-                          {aiBusy[r.indent_item_ids[0]] ? '…' : (+r.marketing_rate > 0 ? '↻ AI' : '⚡ AI')}
-                        </button>
+                        {+r.marketing_rate > 0 ? (
+                          <>
+                            <div className="font-semibold text-fuchsia-700 mb-0.5">Rs {(+r.marketing_rate).toLocaleString('en-IN')}</div>
+                            <button type="button" onClick={() => aiSuggestRate(r)} disabled={!!aiBusy[r.indent_item_ids[0]]}
+                              className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-fuchsia-100 text-fuchsia-700 border border-fuchsia-300 hover:bg-fuchsia-600 hover:text-white disabled:opacity-50"
+                              title="Re-estimate the minimum market rate with AI">{aiBusy[r.indent_item_ids[0]] ? '…' : '↻'}</button>
+                          </>
+                        ) : (
+                          <span className="text-fuchsia-400 text-[10px] animate-pulse" title="AI is estimating the minimum market rate…">AI…</span>
+                        )}
                       </td>
                       {[1,2,3].map(n => (
                         <Fragment key={n}>

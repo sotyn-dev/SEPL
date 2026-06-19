@@ -5761,7 +5761,7 @@ router.post('/item-rates/ai-suggest', needsApprove, async (req, res) => {
   catch (e) { return res.status(500).json({ error: 'AI SDK not installed on the server (run npm install on the VPS)' }); }
   try {
     const client = new Anthropic.default({ apiKey, timeout: 45000 });
-    const prompt = `You estimate procurement market rates for an Indian electrical / fire-fighting / construction contractor. Give the typical CURRENT market PURCHASE rate in INR, per ${item.unit}, for the item below. Reply with ONLY a plain number in rupees — no currency symbol, no commas, no words.\n\nItem: ${item.description}${item.make ? `\nMake/Brand: ${item.make}` : ''}\nUnit: ${item.unit}`;
+    const prompt = `You estimate procurement market rates for an Indian electrical / fire-fighting / construction contractor. Give the LOWEST (minimum) current market PURCHASE rate in INR, per ${item.unit}, for the item below — the cheapest realistic price a buyer could get in the open market. Reply with ONLY a plain number in rupees — no currency symbol, no commas, no words.\n\nItem: ${item.description}${item.make ? `\nMake/Brand: ${item.make}` : ''}\nUnit: ${item.unit}`;
     const resp = await client.messages.create({ model, max_tokens: 40, messages: [{ role: 'user', content: prompt }] });
     const text = (resp?.content || []).map(c => c.text || '').join(' ');
     const m = String(text).replace(/[,\s₹]/g, '').match(/\d+(\.\d+)?/);
@@ -5770,6 +5770,53 @@ router.post('/item-rates/ai-suggest', needsApprove, async (req, res) => {
     db.prepare('INSERT OR IGNORE INTO indent_item_rates (indent_item_id, status) VALUES (?, ?)').run(iiId, 'pending');
     db.prepare('UPDATE indent_item_rates SET marketing_rate=?, updated_at=CURRENT_TIMESTAMP WHERE indent_item_id=?').run(rate, iiId);
     res.json({ marketing_rate: rate, model });
+  } catch (err) {
+    res.status(500).json({ error: 'AI request failed: ' + (err.message || 'error') });
+  }
+});
+
+// AI "marketing rate" — BULK auto-suggest (mam 2026-06-19 "don't need to click,
+// automatically rate here"). Estimates many items in ONE AI call. Only the ids
+// passed are processed; the frontend sends just the ones still missing a rate,
+// so it converges and never recomputes. Suggestion ONLY.
+router.post('/item-rates/ai-suggest-bulk', needsApprove, async (req, res) => {
+  const db = getDb();
+  const ids = Array.isArray(req.body?.indent_item_ids)
+    ? req.body.indent_item_ids.map(n => parseInt(n, 10)).filter(Boolean).slice(0, 40) : [];
+  if (!ids.length) return res.json({ results: [] });
+  const apiKey = db.prepare('SELECT value FROM app_settings WHERE key=?').get('ai_api_key')?.value;
+  if (!apiKey) return res.status(400).json({ error: 'AI not configured — add an API key in Admin → AI Settings' });
+  const model = db.prepare('SELECT value FROM app_settings WHERE key=?').get('ai_model')?.value || 'claude-opus-4-7';
+  const ph = ids.map(() => '?').join(',');
+  const items = db.prepare(`
+    SELECT ii.id, ii.description, ii.make,
+           LOWER(COALESCE(NULLIF(TRIM(im.uom),''), NULLIF(TRIM(ii.unit),''), 'nos')) AS unit
+    FROM indent_items ii LEFT JOIN item_master im ON im.id = ii.item_master_id WHERE ii.id IN (${ph})`).all(...ids);
+  if (!items.length) return res.json({ results: [] });
+  let Anthropic;
+  try { Anthropic = require('@anthropic-ai/sdk'); }
+  catch (e) { return res.status(500).json({ error: 'AI SDK not installed on the server (run npm install on the VPS)' }); }
+  try {
+    const client = new Anthropic.default({ apiKey, timeout: 90000 });
+    const list = items.map(it => `${it.id}|${it.description}${it.make ? ` (Make: ${it.make})` : ''}|per ${it.unit}`).join('\n');
+    const prompt = `You estimate procurement market rates for an Indian electrical / fire-fighting / construction contractor. For EACH item below, give the LOWEST (minimum) current market PURCHASE rate in INR per its unit — the cheapest realistic open-market price a buyer could get. Each line is "id|description|unit". Reply with ONLY a JSON array of objects like [{"id":123,"rate":450}] — one per item, rate a plain number, no commas, no other text.\n\n${list}`;
+    const resp = await client.messages.create({ model, max_tokens: 2000, messages: [{ role: 'user', content: prompt }] });
+    const text = (resp?.content || []).map(c => c.text || '').join(' ');
+    const jm = text.match(/\[[\s\S]*\]/);
+    let arr = [];
+    try { arr = JSON.parse(jm ? jm[0] : text); } catch (_) { arr = []; }
+    const ins = db.prepare('INSERT OR IGNORE INTO indent_item_rates (indent_item_id, status) VALUES (?, ?)');
+    const upd = db.prepare('UPDATE indent_item_rates SET marketing_rate=?, updated_at=CURRENT_TIMESTAMP WHERE indent_item_id=?');
+    const idSet = new Set(ids);
+    const results = [];
+    db.transaction(() => {
+      for (const o of (Array.isArray(arr) ? arr : [])) {
+        const id = parseInt(o?.id, 10);
+        const rate = Math.round((+o?.rate || 0) * 100) / 100;
+        if (id && rate > 0 && idSet.has(id)) { ins.run(id, 'pending'); upd.run(rate, id); results.push({ id, rate }); }
+      }
+    })();
+    res.json({ results });
   } catch (err) {
     res.status(500).json({ error: 'AI request failed: ' + (err.message || 'error') });
   }
