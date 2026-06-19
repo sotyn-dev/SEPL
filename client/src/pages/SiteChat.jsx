@@ -8,12 +8,14 @@ import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 
 const DAY_OPTS = { day: '2-digit', month: 'short', year: 'numeric' };
 const GREEN = '#075e54';                          // WhatsApp header green
 const isImg = (u) => /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(u || ''));
+const isAudio = (u) => /\.(webm|ogg|mp3|m4a|wav|aac|opus)$/i.test(String(u || ''));
+const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 const preview = (m) => (m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : '')) : '');
 const initials = (s) => String(s || '?').replace(/[^A-Za-z0-9 ]/g, '').trim().slice(0, 2).toUpperCase() || '#';
 
@@ -34,9 +36,15 @@ export default function SiteChat() {
   const [newName, setNewName] = useState('');
   const [newSel, setNewSel] = useState([]);
   const [newSearch, setNewSearch] = useState('');
+  const [recording, setRecording] = useState(false);
+  const [recTime, setRecTime] = useState(0);
+  const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef(null);
   const endRef = useRef(null);
   const socketRef = useRef(null);
+  const mediaRef = useRef(null);
+  const chunksRef = useRef([]);
+  const recTimerRef = useRef(null);
 
   const loadGroups = useCallback(() => { api.get('/site-chat/groups').then(r => setGroups(r.data || [])).catch(() => {}); }, []);
   const loadThread = useCallback((id) => {
@@ -93,6 +101,35 @@ export default function SiteChat() {
     } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = ''; }
   };
+  // Voice messages — record with MediaRecorder, then upload + send like any
+  // attachment. Tap mic to start; tick to send, bin to cancel.
+  const startRec = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) return toast.error('Mic not supported here');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      chunksRef.current = [];
+      mr.ondataavailable = e => { if (e.data.size) chunksRef.current.push(e.data); };
+      mr.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType || 'audio/webm' });
+        if (mr._send && blob.size > 0) {
+          const ext = (mr.mimeType || '').includes('ogg') ? 'ogg' : 'webm';
+          attach(new File([blob], `voice-${Date.now()}.${ext}`, { type: blob.type }));
+        }
+      };
+      mediaRef.current = mr; mr.start();
+      setRecording(true); setRecTime(0);
+      recTimerRef.current = setInterval(() => setRecTime(t => t + 1), 1000);
+    } catch (e) { toast.error('Microphone blocked — allow access'); }
+  };
+  const stopRec = (sendIt) => {
+    const mr = mediaRef.current; if (!mr) return;
+    mr._send = !!sendIt; clearInterval(recTimerRef.current); setRecording(false);
+    try { mr.stop(); } catch (_) {}
+  };
+  const onDrop = (e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer?.files?.[0]; if (f) attach(f); };
+
   const delMsg = async (m) => {
     if (!confirm('Delete this message?')) return;
     try { await api.delete(`/site-chat/${sel.id}/messages/${m.id}`); loadThread(sel.id); }
@@ -176,7 +213,11 @@ export default function SiteChat() {
                 <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="Members"><FiUsers size={18} /></button>
               </div>
 
-              <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5" style={{ background: '#efeae2' }}>
+              <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 relative" style={{ background: '#efeae2' }}
+                onDragOver={e => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
+                onDragLeave={e => { if (e.currentTarget === e.target) setDragOver(false); }}
+                onDrop={onDrop}>
+                {dragOver && <div className="absolute inset-0 z-10 m-2 rounded-lg border-2 border-dashed border-emerald-500 bg-emerald-500/10 flex items-center justify-center text-emerald-700 font-semibold pointer-events-none">Drop file to send</div>}
                 {msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say hello 👋</div>}
                 {(() => { let prevDay = null; return msgs.map(m => {
                   const own = m.sender_id === user?.id;
@@ -191,9 +232,12 @@ export default function SiteChat() {
                       <div className={`flex ${own ? 'justify-end' : 'justify-start'}`}>
                         <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
                           {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
-                          {m.attachment_url && (isImg(m.attachment_url)
-                            ? <a href={m.attachment_url} target="_blank" rel="noreferrer"><img src={m.attachment_url} alt={m.attachment_name || ''} className="rounded mb-1 max-h-52 object-cover" /></a>
-                            : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
+                          {m.attachment_url && (
+                            isImg(m.attachment_url)
+                              ? <a href={m.attachment_url} target="_blank" rel="noreferrer"><img src={m.attachment_url} alt={m.attachment_name || ''} className="rounded mb-1 max-h-52 object-cover" /></a>
+                              : isAudio(m.attachment_url)
+                                ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
+                                : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
                           {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{m.body}</div>}
                           <div className="flex items-center justify-end gap-1.5 mt-0.5">
                             {(own || isAdmin()) && canDelete('site_chat') && <button onClick={() => delMsg(m)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
@@ -208,16 +252,26 @@ export default function SiteChat() {
                 <div ref={endRef} />
               </div>
 
-              {canCreate('site_chat') && (
-                <div className="border-t p-2 flex items-end gap-2 bg-gray-50">
-                  <input ref={fileRef} type="file" className="hidden" onChange={e => attach(e.target.files?.[0])} />
-                  <button onClick={() => fileRef.current?.click()} disabled={busy} className="p-2 text-gray-500 hover:text-emerald-600" title="Attach photo / file"><FiPaperclip size={18} /></button>
-                  <textarea className="input flex-1 resize-none" rows="1" placeholder="Type a message…" value={text}
-                    onChange={e => setText(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
-                  <button onClick={() => send()} disabled={busy || !text.trim()} className="p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#25d366' }}><FiSend size={16} /></button>
-                </div>
-              )}
+              <div className="border-t p-2 flex items-end gap-2 bg-gray-50">
+                {recording ? (
+                  <>
+                    <button onClick={() => stopRec(false)} className="p-2 text-red-500" title="Cancel"><FiTrash2 size={18} /></button>
+                    <div className="flex-1 flex items-center gap-2 text-red-500 text-sm px-2"><span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" /> Recording… {mmss(recTime)}</div>
+                    <button onClick={() => stopRec(true)} className="p-2.5 rounded-full text-white" style={{ background: '#25d366' }} title="Send voice"><FiSend size={16} /></button>
+                  </>
+                ) : (
+                  <>
+                    <input ref={fileRef} type="file" className="hidden" onChange={e => attach(e.target.files?.[0])} />
+                    <button onClick={() => fileRef.current?.click()} disabled={busy} className="p-2 text-gray-500 hover:text-emerald-600" title="Attach photo / file"><FiPaperclip size={18} /></button>
+                    <textarea className="input flex-1 resize-none" rows="1" placeholder="Type a message…" value={text}
+                      onChange={e => setText(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
+                    {text.trim()
+                      ? <button onClick={() => send()} disabled={busy} className="p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#25d366' }}><FiSend size={16} /></button>
+                      : <button onClick={startRec} disabled={busy} className="p-2.5 rounded-full text-white" style={{ background: '#25d366' }} title="Record voice message"><FiMic size={16} /></button>}
+                  </>
+                )}
+              </div>
             </>
           )}
         </div>

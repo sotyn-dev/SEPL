@@ -86,7 +86,9 @@ router.get('/:groupId', requirePermission('site_chat', 'view'), (req, res) => {
   res.json({ group, messages, members, reads });
 });
 
-router.post('/:groupId', requirePermission('site_chat', 'create'), (req, res) => {
+// Any MEMBER can post (gated by membership, not the generic 'create'
+// permission) — added people can message by default (mam 2026-06-18).
+router.post('/:groupId', requirePermission('site_chat', 'view'), (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
   const { body, attachment_url, attachment_name } = req.body;
