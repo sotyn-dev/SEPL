@@ -21,7 +21,12 @@ const markRead = (db, g, uid) => {
   return max;
 };
 
-router.get('/groups', requirePermission('site_chat', 'view'), (req, res) => {
+// Membership-driven (mam 2026-06-19: "user add monika she is not able to
+// reply"). WhatsApp is open to every signed-in user — you simply see the
+// groups you've been added to (admin sees all). NO site_chat module
+// permission is needed to view or chat; being a group member IS the access
+// control. Only group creation + member management stay privileged below.
+router.get('/groups', (req, res) => {
   const db = getChatDb(); const uid = req.user.id;
   const groups = isAdmin(req)
     ? db.prepare('SELECT id, name FROM chat_groups ORDER BY name').all()
@@ -73,7 +78,7 @@ router.delete('/:groupId', requirePermission('site_chat', 'delete'), (req, res) 
   res.json({ ok: true });
 });
 
-router.get('/:groupId', requirePermission('site_chat', 'view'), (req, res) => {
+router.get('/:groupId', (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
   const group = db.prepare('SELECT id, name FROM chat_groups WHERE id=?').get(g);
@@ -86,9 +91,10 @@ router.get('/:groupId', requirePermission('site_chat', 'view'), (req, res) => {
   res.json({ group, messages, members, reads });
 });
 
-// Any MEMBER can post (gated by membership, not the generic 'create'
-// permission) — added people can message by default (mam 2026-06-18).
-router.post('/:groupId', requirePermission('site_chat', 'view'), (req, res) => {
+// Any MEMBER can post — gated by group membership ONLY, not any site_chat
+// module permission, so anyone added to a group can reply by default
+// (mam 2026-06-19: "user add monika she is not able to reply").
+router.post('/:groupId', (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
   const { body, attachment_url, attachment_name } = req.body;
@@ -100,7 +106,7 @@ router.post('/:groupId', requirePermission('site_chat', 'view'), (req, res) => {
   res.json(db.prepare('SELECT * FROM chat_messages WHERE id=?').get(info.lastInsertRowid));
 });
 
-router.post('/:groupId/read', requirePermission('site_chat', 'view'), (req, res) => {
+router.post('/:groupId/read', (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Not a member' });
   const last = markRead(db, g, req.user.id);
@@ -108,7 +114,7 @@ router.post('/:groupId/read', requirePermission('site_chat', 'view'), (req, res)
   res.json({ last_read_id: last });
 });
 
-router.get('/:groupId/members', requirePermission('site_chat', 'view'), (req, res) => {
+router.get('/:groupId/members', (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Not a member' });
   res.json(db.prepare('SELECT user_id, user_name AS name FROM chat_group_members WHERE group_id=? ORDER BY user_name').all(g));
@@ -130,8 +136,9 @@ router.delete('/:groupId/members/:userId', requirePermission('site_chat', 'creat
   res.json({ ok: true });
 });
 
-router.delete('/:groupId/messages/:msgId', requirePermission('site_chat', 'delete'), (req, res) => {
+router.delete('/:groupId/messages/:msgId', (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
+  if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
   const msg = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.msgId);
   if (!msg) return res.status(404).json({ error: 'Not found' });
   if (msg.sender_id !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'You can only delete your own messages' });

@@ -568,17 +568,16 @@ export default function Layout() {
           })()}
         </nav>
         {/* WhatsApp — pinned just above the user footer / Change Password
-            (mam 2026-06-19: "show above where is change password"). Always
-            visible (not inside the scrolling nav) so it's one tap away. */}
-        {canView('site_chat') && (
-          <div className="px-3 pt-2 border-t border-white/10">
-            <Link to="/site-chat"
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
-              <FaWhatsapp size={17} className="text-green-400" />
-              <span className="truncate">WhatsApp</span>
-            </Link>
-          </div>
-        )}
+            (mam 2026-06-19: "show above where is change password"). Shown to
+            EVERY signed-in user (no site_chat permission needed) — access is
+            by group membership, so added people can chat by default. */}
+        <div className="px-3 pt-2 border-t border-white/10">
+          <Link to="/site-chat"
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
+            <FaWhatsapp size={17} className="text-green-400" />
+            <span className="truncate">WhatsApp</span>
+          </Link>
+        </div>
         <div className="p-3 border-t border-white/10">
           <div className="text-sm text-red-50">{user?.name}</div>
           {user?.username && <div className="text-[10px] text-red-200 font-mono">@{user.username}</div>}

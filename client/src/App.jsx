@@ -160,7 +160,9 @@ export default function App() {
         <Route path="attendance" element={<ModuleRoute module="attendance"><Attendance /></ModuleRoute>} />
         <Route path="collections" element={<ModuleRoute module="collections"><Collections /></ModuleRoute>} />
         <Route path="ar-ap-tracker" element={<ModuleRoute module="ar_ap_tracker"><ArApTracker /></ModuleRoute>} />
-        <Route path="site-chat" element={<ModuleRoute module="site_chat"><SiteChat /></ModuleRoute>} />
+        {/* WhatsApp is open to all signed-in users — access is by group
+            membership, not the site_chat module permission (mam 2026-06-19). */}
+        <Route path="site-chat" element={<SiteChat />} />
         <Route path="indent-fms" element={<ModuleRoute module="indent_fms"><IndentFMS /></ModuleRoute>} />
         <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
         {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}
