@@ -174,7 +174,7 @@ export default function App() {
         <Route path="quotations" element={<ModuleRoute module="quotations"><Quotations /></ModuleRoute>} />
         <Route path="estimator" element={<ModuleRoute module="quotations"><Estimator /></ModuleRoute>} />
         <Route path="po-foc-stripped" element={<ModuleRoute module="quotations"><PoFocStripped /></ModuleRoute>} />
-        <Route path="labour-rate" element={<ModuleRoute module="quotations"><LabourRate /></ModuleRoute>} />
+        <Route path="labour-rate" element={<ModuleRoute module="labour_rates"><LabourRate /></ModuleRoute>} />
         <Route path="business-book" element={<ModuleRoute module="business_book"><BusinessBook /></ModuleRoute>} />
         <Route path="item-master" element={<ModuleRoute module="item_master"><ItemMaster /></ModuleRoute>} />
         <Route path="orders" element={<ModuleRoute module="orders"><Orders /></ModuleRoute>} />

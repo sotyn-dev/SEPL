@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import HelpTicket from './HelpTicket';
 import AnnouncementBell from './AnnouncementBell';
 // Mam (2026-05-22): standalone NotificationsBell removed — its
@@ -87,7 +88,7 @@ const SIDEBAR_GROUPS = [
     { path: '/quotations',  label: 'Quotations',        icon: FiClipboard,    module: 'quotations' },
     { path: '/estimator',   label: 'AI Auto-Quotation', icon: FiClipboard,    module: 'quotations' },
     { path: '/po-foc-stripped', label: 'PO/FOC Stripped', icon: FiClipboard,  module: 'quotations' },
-    { path: '/labour-rate',     label: 'Labour Rate',     icon: FiClipboard,  module: 'quotations' },
+    { path: '/labour-rate',     label: 'Labour Rate',     icon: FiClipboard,  module: 'labour_rates' },
   ]},
   // Procurement (mam 2026-05-27 follow-up): Dispatch + Order to Planning
   // moved here from Quotes & Orders — they're procurement workflow steps,
@@ -196,6 +197,51 @@ export default function Layout() {
   const [userMenu, setUserMenu] = useState(false);
   const location = useLocation();
   const { user, logout, canView, isAdmin, userRoles } = useAuth();
+
+  // ── WhatsApp background notifications (mam 2026-06-19) ─────────────────
+  // App-wide: a new message in ANY group the user belongs to pops a toast +
+  // browser notification and shows an unread badge on the sidebar WhatsApp
+  // link — even when not on the chat page. Driven by the chat Socket.IO with
+  // a 25 s poll fallback. `unread` already excludes the user's own messages.
+  const [waUnread, setWaUnread] = useState(0);
+  const waPrev = useRef(null);                 // Map<groupId, unread> from the last fetch
+  const pathRef = useRef(location.pathname);
+  pathRef.current = location.pathname;
+
+  const refreshWa = useCallback(async () => {
+    try {
+      const { data } = await api.get('/site-chat/groups');
+      const groups = data || [];
+      setWaUnread(groups.reduce((s, g) => s + (g.unread || 0), 0));
+      const prev = waPrev.current;
+      if (prev && pathRef.current !== '/site-chat') {       // don't alert for the page you're on
+        for (const g of groups) {
+          if ((g.unread || 0) > (prev.get(g.id) || 0)) {
+            const last = g.last || {};
+            const body = last.body || (last.attachment_name ? `📎 ${last.attachment_name}` : 'New message');
+            const line = `${last.sender_name ? last.sender_name.split(' ')[0] + ': ' : ''}${body}`;
+            toast(`💬 ${g.name}\n${line}`, { duration: 5000 });
+            if ('Notification' in window && Notification.permission === 'granted') {
+              try { new Notification(`WhatsApp · ${g.name}`, { body: line, icon: '/icon.svg', tag: `wa-${g.id}` }); } catch { /* ignore */ }
+            }
+            break;                                          // one alert per refresh is enough
+          }
+        }
+      }
+      waPrev.current = new Map(groups.map(g => [g.id, g.unread || 0]));
+    } catch { /* not logged in / not a member yet — ignore */ }
+  }, []);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    if ('Notification' in window && Notification.permission === 'default') { try { Notification.requestPermission(); } catch { /* ignore */ } }
+    refreshWa();
+    const socket = io({ path: '/socket.io', auth: { token: localStorage.getItem('token') }, transports: ['websocket', 'polling'] });
+    socket.on('changed', refreshWa);
+    socket.on('group_deleted', refreshWa);
+    const poll = setInterval(refreshWa, 25000);             // fallback for groups joined after connect
+    return () => { socket.disconnect(); clearInterval(poll); };
+  }, [user?.id, refreshWa]);
 
   const changePassword = async (e) => {
     e.preventDefault();
@@ -575,7 +621,8 @@ export default function Layout() {
           <Link to="/site-chat"
             className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
             <FaWhatsapp size={17} className="text-green-400" />
-            <span className="truncate">WhatsApp</span>
+            <span className="truncate flex-1">WhatsApp</span>
+            {waUnread > 0 && <span className="text-[10px] font-bold text-white bg-[#25d366] rounded-full px-1.5 min-w-[18px] text-center">{waUnread > 99 ? '99+' : waUnread}</span>}
           </Link>
         </div>
         <div className="p-3 border-t border-white/10">

@@ -4938,6 +4938,10 @@ in your first week. If a process feels broken, raise a Help Ticket
     // Mam (2026-06-18): Site Chat — internal WhatsApp-style message thread
     // per site (team-only).
     'site_chat',
+    // Mam (2026-06-19): Labour Rate Sheet — was sharing the `quotations`
+    // permission so it never showed separately in Roles & Permissions.
+    // Now its own module so access can be granted/revoked on its own.
+    'labour_rates',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');
