@@ -198,6 +198,25 @@ export default function Layout() {
   const navigate = useNavigate();
   const { user, logout, canView, isAdmin, userRoles } = useAuth();
 
+  // Admin bypasses mandatory fields everywhere (mam 2026-06-19: "admin can
+  // update anywhere, if a thing is mandatory it's not for him"). We disable
+  // the browser's native required-field blocking on every <form> — including
+  // modals mounted later — so admin can save partial records app-wide.
+  // Non-admins are untouched and keep full validation.
+  const adminBypass = isAdmin();
+  useEffect(() => {
+    if (!adminBypass) return;
+    const relax = (root) => {
+      if (!root || root.nodeType !== 1) return;
+      if (root.tagName === 'FORM') { root.noValidate = true; return; }
+      root.querySelectorAll?.('form').forEach(f => { f.noValidate = true; });
+    };
+    relax(document.body);
+    const obs = new MutationObserver(muts => { for (const m of muts) for (const n of m.addedNodes) relax(n); });
+    obs.observe(document.body, { childList: true, subtree: true });
+    return () => obs.disconnect();
+  }, [adminBypass]);
+
   // ── WhatsApp background notifications (mam 2026-06-19) ─────────────────
   // App-wide: a new message in ANY group the user belongs to pops a toast +
   // browser notification and shows an unread badge on the sidebar WhatsApp

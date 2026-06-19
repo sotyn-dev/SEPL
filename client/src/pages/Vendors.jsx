@@ -44,7 +44,7 @@ const parseGstin = (gstin) => {
 };
 
 export default function Vendors() {
-  const { canCreate, canEdit, canDelete } = useAuth();
+  const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
   const [vendors, setVendors] = useState([]);
   const [rates, setRates] = useState([]);
   const [tab, setTab] = useUrlTab('vendors');
@@ -90,7 +90,8 @@ export default function Vendors() {
     else if (!parseGstin(form.gst_number).valid) missing.push('GST Number (invalid format)');
     if (!form.payment_terms) missing.push('Payment Terms');
     if (!form.address || !String(form.address).trim()) missing.push('Address');
-    if (missing.length) {
+    // Admin bypasses mandatory fields (mam 2026-06-19) — can save partial.
+    if (missing.length && !isAdmin()) {
       toast.error(`Required: ${missing.join(', ')}`);
       return;
     }
