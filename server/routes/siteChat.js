@@ -90,9 +90,12 @@ router.post('/dm', (req, res) => {
   res.json({ id: gid, name: otherName });
 });
 
-router.put('/:groupId', requirePermission('site_chat', 'edit'), (req, res) => {
+// Rename a group — same privilege as managing members (create). DMs can't be
+// renamed (their title is always the other person's name).
+router.put('/:groupId', requirePermission('site_chat', 'create'), (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Not a member' });
+  if (db.prepare('SELECT is_dm FROM chat_groups WHERE id=?').get(g)?.is_dm) return res.status(400).json({ error: 'A direct message cannot be renamed' });
   const name = String(req.body?.name || '').trim();
   if (!name) return res.status(400).json({ error: 'Name required' });
   db.prepare('UPDATE chat_groups SET name=? WHERE id=?').run(name, g);

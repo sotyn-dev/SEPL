@@ -32,6 +32,7 @@ export default function SiteChat() {
   const [allUsers, setAllUsers] = useState([]);
   const [memOpen, setMemOpen] = useState(false);
   const [memSearch, setMemSearch] = useState('');
+  const [renameVal, setRenameVal] = useState('');
   const [dmOpen, setDmOpen] = useState(false);     // "new direct message" picker
   const [dmSearch, setDmSearch] = useState('');
   const [newOpen, setNewOpen] = useState(false);
@@ -81,6 +82,7 @@ export default function SiteChat() {
     return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
   }, [sel?.id, loadThread]);
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [msgs]);
+  useEffect(() => { if (memOpen && sel) setRenameVal(sel.name || ''); }, [memOpen, sel?.id]);
 
   const todayLbl = fmtDate(new Date(), DAY_OPTS);
   const yestLbl = fmtDate(new Date(Date.now() - 864e5), DAY_OPTS);
@@ -175,6 +177,13 @@ export default function SiteChat() {
     if (!confirm('Delete this message?')) return;
     try { await api.delete(`/site-chat/${sel.id}/messages/${m.id}`); loadThread(sel.id); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+  const saveRename = async () => {
+    const name = renameVal.trim();
+    if (!name) return toast.error('Group name is required');
+    if (name === sel.name) return;
+    try { await api.put(`/site-chat/${sel.id}`, { name }); setSel(s => ({ ...s, name })); loadGroups(); loadThread(sel.id); toast.success('Group renamed'); }
+    catch (err) { toast.error(err.response?.data?.error || 'Failed to rename'); }
   };
   const addMember = async (uid) => { try { await api.post(`/site-chat/${sel.id}/members`, { user_ids: [uid] }); loadThread(sel.id); } catch (err) { toast.error(err.response?.data?.error || 'Failed'); } };
   const removeMember = async (uid) => { try { await api.delete(`/site-chat/${sel.id}/members/${uid}`); loadThread(sel.id); } catch (err) { toast.error(err.response?.data?.error || 'Failed'); } };
@@ -410,6 +419,16 @@ export default function SiteChat() {
       {sel && (
         <Modal isOpen={memOpen} onClose={() => setMemOpen(false)} title={`Members · ${sel.name}`}>
           <div className="space-y-3 text-sm">
+            {!sel.is_dm && canCreate('site_chat') && (
+              <div>
+                <label className="label">Group name</label>
+                <div className="flex gap-2">
+                  <input className="input flex-1" value={renameVal} onChange={e => setRenameVal(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveRename(); } }} placeholder="Group name" />
+                  <button onClick={saveRename} disabled={!renameVal.trim() || renameVal.trim() === sel.name} className="btn btn-primary disabled:opacity-40">Rename</button>
+                </div>
+              </div>
+            )}
             <p className="text-xs text-gray-500">Only people added here can see and post in this group.</p>
             <div>
               <div className="font-semibold text-gray-700 mb-1">In this group ({members.length})</div>
