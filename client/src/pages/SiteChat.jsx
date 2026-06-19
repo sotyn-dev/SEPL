@@ -157,11 +157,15 @@ export default function SiteChat() {
   return (
     <div className="space-y-3">
       <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2"><FaWhatsapp className="text-[#25d366]" /> WhatsApp</h1>
-        <p className="text-sm text-gray-500">Internal group chat · create groups · add your people · text + photos/files</p>
+        <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><FaWhatsapp className="text-[#25d366]" /> WhatsApp</h1>
+        {/* Subtitle hidden on mobile to give the chat more vertical room. */}
+        <p className="hidden sm:block text-sm text-gray-500">Internal group chat · create groups · add your people · text + photos/files</p>
       </div>
 
-      <div className="flex border rounded-xl overflow-hidden bg-white" style={{ height: 'calc(100vh - 210px)', minHeight: 440 }}>
+      {/* 100dvh (dynamic viewport height) — NOT 100vh — so the composer / mic
+          button stays visible above the phone browser's bottom toolbar
+          (mam 2026-06-19: "below button not show" on mobile). */}
+      <div className="flex border rounded-xl overflow-hidden bg-white" style={{ height: 'calc(100dvh - 185px)', minHeight: 360 }}>
         {/* ── Group list ────────────────────────────────── */}
         <div className={`w-full sm:w-80 border-r flex flex-col ${sel ? 'hidden sm:flex' : 'flex'}`}>
           <div className="flex items-center gap-2 px-3 py-2 text-white" style={{ background: GREEN }}>
