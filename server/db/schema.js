@@ -2682,6 +2682,11 @@ function initializeDatabase() {
     // score" on the Add Vendor form). Optional 0–10 score the team sets
     // when onboarding / reviewing a vendor.
     ['vendors', 'rating REAL'],
+    // Last-edited timestamp (mam 2026-06-19: show each vendor's last update
+    // date/time in the list so master enrichment is visible at a glance).
+    // Stamped on every PUT / bulk-update; the list falls back to created_at
+    // for vendors never edited since this column was added.
+    ['vendors', 'updated_at DATETIME'],
     // Per-rule dynamic From address for email triggers (mam 2026-06-03:
     // "from mail which id also dynamic"). Optional; supports {{vars}}.
     ['email_rules', 'from_addr TEXT'],

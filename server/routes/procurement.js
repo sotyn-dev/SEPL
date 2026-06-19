@@ -371,6 +371,7 @@ router.post('/vendors/bulk', (req, res) => {
           if (Array.isArray(b.makes) ? b.makes.length : filled(b.makes)) { sets.push('makes=?'); vals.push(normaliseMakes(b.makes)); }
           if (filled(b.rating)) { sets.push('rating=?'); vals.push(clampRating(b.rating)); }
           if (!sets.length) { skipped.push(`Row ${rowNo}: ${b.name} — nothing to update (all cells blank)`); continue; }
+          sets.push('updated_at=CURRENT_TIMESTAMP');   // stamp last-edited on bulk update too
           db.prepare(`UPDATE vendors SET ${sets.join(',')} WHERE id=?`).run(...vals, existingId);
           updated++;
           // Keep maps fresh so later rows can match newly-set phone/GST.
@@ -404,7 +405,7 @@ router.put('/vendors/:id', (req, res) => {
   const rating = (b.rating === '' || b.rating === null || b.rating === undefined)
     ? null
     : Math.max(0, Math.min(10, Number(b.rating) || 0));
-  getDb().prepare('UPDATE vendors SET vendor_code=?,name=?,firm_name=?,contact_person=?,phone=?,email=?,district=?,state=?,address=?,category=?,deals_in=?,authorized_dealer=?,type=?,turnover=?,team_size=?,payment_terms=?,credit_days=?,gst_number=?,source=?,sub_category=?,rating=?,makes=?,active=? WHERE id=?')
+  getDb().prepare('UPDATE vendors SET vendor_code=?,name=?,firm_name=?,contact_person=?,phone=?,email=?,district=?,state=?,address=?,category=?,deals_in=?,authorized_dealer=?,type=?,turnover=?,team_size=?,payment_terms=?,credit_days=?,gst_number=?,source=?,sub_category=?,rating=?,makes=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
     .run(b.vendor_code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state, b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size, b.payment_terms, b.credit_days, b.gst_number, b.source, b.sub_category, rating, normaliseMakes(b.makes), b.active !== undefined ? (b.active ? 1 : 0) : 1, req.params.id);
   res.json({ message: 'Updated' });
 });

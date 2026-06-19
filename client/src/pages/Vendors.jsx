@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiSearch, FiEye, FiTrash2, FiTruck, FiDownload, FiUpload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDateTime } from '../utils/datetime';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 
 const PAGE_SIZE = 50;  // vendors per page — keeps the list short instead of one 654-row scroll
@@ -277,7 +278,7 @@ export default function Vendors() {
             <thead><tr className="bg-gray-50">
               <th className="px-2 py-2">Code</th><th className="px-2 py-2 text-left">Vendor / Firm Name</th><th className="px-2 py-2">Category</th>
               <th className="px-2 py-2 text-left">Deals In</th><th className="px-2 py-2">Type</th><th className="px-2 py-2 text-left">District</th>
-              <th className="px-2 py-2">Phone</th><th className="px-2 py-2">Payment</th><th className="px-2 py-2">Credit</th><th className="px-2 py-2">Actions</th>
+              <th className="px-2 py-2">Phone</th><th className="px-2 py-2">Payment</th><th className="px-2 py-2">Credit</th><th className="px-2 py-2">Last Updated</th><th className="px-2 py-2">Actions</th>
             </tr></thead>
             <tbody>{paged.map(v => (
               <tr key={v.id} className="border-b hover:bg-red-50/30">
@@ -296,6 +297,9 @@ export default function Vendors() {
                 <td className="px-2 py-2 text-[11px]">{v.phone || '-'}</td>
                 <td className="px-2 py-2 text-[10px]">{v.payment_terms || '-'}</td>
                 <td className="px-2 py-2 text-[10px]">{v.credit_days || '-'}</td>
+                {/* Last edited — falls back to created_at for vendors not yet
+                    re-saved since the updated_at column was added (mam 2026-06-19). */}
+                <td className="px-2 py-2 text-[10px] text-gray-500 whitespace-nowrap">{fmtDateTime(v.updated_at || v.created_at) || '-'}</td>
                 <td className="px-2 py-2">
                   <div className="flex gap-1">
                     <button onClick={() => { setViewData(v); setModal('view'); }} className="p-1 text-gray-400 hover:text-red-600"><FiEye size={14} /></button>
@@ -308,7 +312,7 @@ export default function Vendors() {
                   </div>
                 </td>
               </tr>
-            ))}{filtered.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No vendors found</td></tr>}</tbody>
+            ))}{filtered.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No vendors found</td></tr>}</tbody>
           </table></div>
 
           {/* Paginator — only when there's more than one page */}
