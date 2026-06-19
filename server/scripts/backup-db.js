@@ -60,6 +60,18 @@ async function runBackup({ silent = false } = {}) {
     try { fs.unlinkSync(path.join(BACKUP_DIR, f)); } catch (e) {}
   }
 
+  // Also back up the SEPARATE chat database (mam 2026-06-18: chat.db is its
+  // own file). Same backup API + same 30-file retention, prefixed chat-.
+  const CHAT_DB = path.join(__dirname, '..', '..', 'data', 'chat.db');
+  if (fs.existsSync(CHAT_DB)) {
+    try {
+      const cs = new Database(CHAT_DB, { readonly: true, fileMustExist: true });
+      try { await cs.backup(path.join(BACKUP_DIR, `chat-${tsNow()}.db`)); } finally { cs.close(); }
+      const chats = fs.readdirSync(BACKUP_DIR).filter(f => f.startsWith('chat-') && f.endsWith('.db')).sort();
+      for (const f of chats.slice(0, Math.max(0, chats.length - KEEP_COUNT))) { try { fs.unlinkSync(path.join(BACKUP_DIR, f)); } catch (e) {} }
+    } catch (e) { if (!silent) console.warn('[backup] chat.db backup failed:', e.message); }
+  }
+
   if (!silent) console.log(`[backup] Wrote ${outName} (${(size / 1024 / 1024).toFixed(2)} MB) — kept ${Math.min(existing.length, KEEP_COUNT)} total`);
   return { ok: true, filename: outName, size, backup_dir: BACKUP_DIR };
 }

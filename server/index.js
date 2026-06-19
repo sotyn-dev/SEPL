@@ -476,7 +476,13 @@ app.use((err, req, res, next) => {
 });
 
 const serverPort = process.env.PORT || 5000;
-app.listen(serverPort, '0.0.0.0', () => {
+// Wrap Express in an HTTP server so Socket.IO (real-time chat) can attach to
+// it — the chat uses its own DB + this socket, separate from the rest (mam
+// 2026-06-18). Falls back gracefully if the socket layer fails to start.
+const httpServer = require('http').createServer(app);
+try { require('./lib/chatSocket').initChatSocket(httpServer); console.log('[chat] Socket.IO ready'); }
+catch (e) { console.warn('[chat] Socket.IO not started:', e.message); }
+httpServer.listen(serverPort, '0.0.0.0', () => {
   console.log(`\n======================================`);
   console.log(`  Business ERP Server`);
   console.log(`  Running on port ${serverPort}`);

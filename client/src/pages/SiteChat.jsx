@@ -2,6 +2,7 @@
 // named groups, add the people you want, chat (text + photo/file). Members-
 // gated, read receipts (✓✓ + who-read), unread badges, day separators.
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
+import { io } from 'socket.io-client';
 import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
@@ -35,6 +36,7 @@ export default function SiteChat() {
   const [newSearch, setNewSearch] = useState('');
   const fileRef = useRef(null);
   const endRef = useRef(null);
+  const socketRef = useRef(null);
 
   const loadGroups = useCallback(() => { api.get('/site-chat/groups').then(r => setGroups(r.data || [])).catch(() => {}); }, []);
   const loadThread = useCallback((id) => {
@@ -47,10 +49,21 @@ export default function SiteChat() {
   }, [loadGroups]);
 
   useEffect(() => { loadGroups(); api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {}); }, [loadGroups]);
+  // Real-time: one Socket.IO connection; the server pushes a 'changed' event
+  // to each group's room on any message/read/member change. Polling stays as
+  // a fallback if the socket can't connect.
+  useEffect(() => {
+    const socket = io({ path: '/socket.io', auth: { token: localStorage.getItem('token') }, transports: ['websocket', 'polling'] });
+    socketRef.current = socket;
+    socket.on('changed', ({ groupId }) => { setSel(s => { if (s && s.id === groupId) loadThread(s.id); return s; }); loadGroups(); });
+    socket.on('group_deleted', ({ groupId }) => { loadGroups(); setSel(s => (s && s.id === groupId ? null : s)); });
+    return () => { socket.disconnect(); socketRef.current = null; };
+  }, [loadThread, loadGroups]);
   useEffect(() => {
     if (!sel) return;
+    socketRef.current?.emit('join', sel.id);
     loadThread(sel.id);
-    const t = setInterval(() => loadThread(sel.id), 8000);
+    const t = setInterval(() => loadThread(sel.id), 15000);   // fallback poll
     const onFocus = () => loadThread(sel.id);
     window.addEventListener('focus', onFocus);
     return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
