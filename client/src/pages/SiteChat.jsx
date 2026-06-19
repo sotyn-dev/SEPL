@@ -256,23 +256,26 @@ export default function SiteChat() {
                 <div ref={endRef} />
               </div>
 
+              {/* min-w-0 on the textarea + flex-shrink-0 on the buttons so the
+                  send / mic button never gets clipped off the right edge on a
+                  narrow phone (mam 2026-06-19). */}
               <div className="border-t p-2 flex items-end gap-2 bg-gray-50">
                 {recording ? (
                   <>
-                    <button onClick={() => stopRec(false)} className="p-2 text-red-500" title="Cancel"><FiTrash2 size={18} /></button>
-                    <div className="flex-1 flex items-center gap-2 text-red-500 text-sm px-2"><span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" /> Recording… {mmss(recTime)}</div>
-                    <button onClick={() => stopRec(true)} className="p-2.5 rounded-full text-white" style={{ background: '#25d366' }} title="Send voice"><FiSend size={16} /></button>
+                    <button onClick={() => stopRec(false)} className="flex-shrink-0 p-2 text-red-500" title="Cancel"><FiTrash2 size={18} /></button>
+                    <div className="flex-1 min-w-0 flex items-center gap-2 text-red-500 text-sm px-2"><span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" /> Recording… {mmss(recTime)}</div>
+                    <button onClick={() => stopRec(true)} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#25d366' }} title="Send voice"><FiSend size={16} /></button>
                   </>
                 ) : (
                   <>
                     <input ref={fileRef} type="file" className="hidden" onChange={e => attach(e.target.files?.[0])} />
-                    <button onClick={() => fileRef.current?.click()} disabled={busy} className="p-2 text-gray-500 hover:text-emerald-600" title="Attach photo / file"><FiPaperclip size={18} /></button>
-                    <textarea className="input flex-1 resize-none" rows="1" placeholder="Type a message…" value={text}
+                    <button onClick={() => fileRef.current?.click()} disabled={busy} className="flex-shrink-0 p-2 text-gray-500 hover:text-emerald-600" title="Attach photo / file"><FiPaperclip size={18} /></button>
+                    <textarea className="input flex-1 min-w-0 resize-none" rows="1" placeholder="Type a message…" value={text}
                       onChange={e => setText(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
                     {text.trim()
-                      ? <button onClick={() => send()} disabled={busy} className="p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#25d366' }}><FiSend size={16} /></button>
-                      : <button onClick={startRec} disabled={busy} className="p-2.5 rounded-full text-white" style={{ background: '#25d366' }} title="Record voice message"><FiMic size={16} /></button>}
+                      ? <button onClick={() => send()} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#25d366' }}><FiSend size={16} /></button>
+                      : <button onClick={startRec} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#25d366' }} title="Record voice message"><FiMic size={16} /></button>}
                   </>
                 )}
               </div>
