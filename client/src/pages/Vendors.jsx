@@ -192,7 +192,13 @@ export default function Vendors() {
 
   const filtered = vendors.filter(v => {
     if (filterCat && v.category !== filterCat) return false;
-    if (search && !(v.name || '').toLowerCase().includes(search.toLowerCase()) && !(v.deals_in || '').toLowerCase().includes(search.toLowerCase()) && !(v.vendor_code || '').toLowerCase().includes(search.toLowerCase()) && !(v.district || '').toLowerCase().includes(search.toLowerCase())) return false;
+    if (search) {
+      // Search vendor name AND firm name (mam 2026-06-19: "can also search by
+      // vendor firm name"), plus deals-in / code / district / phone.
+      const q = search.toLowerCase();
+      const hit = (f) => (v[f] || '').toString().toLowerCase().includes(q);
+      if (!hit('name') && !hit('firm_name') && !hit('deals_in') && !hit('vendor_code') && !hit('district') && !hit('phone') && !hit('contact_person')) return false;
+    }
     return true;
   });
 
@@ -239,7 +245,7 @@ export default function Vendors() {
           </div>
 
           <div className="flex gap-3">
-            <div className="relative flex-1"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input className="input pl-10" placeholder="Search vendor name, deals in, code, district..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+            <div className="relative flex-1"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /><input className="input pl-10" placeholder="Search vendor name, firm name, deals in, code, district, phone..." value={search} onChange={e => setSearch(e.target.value)} /></div>
             <button onClick={() => exportCsv('vendors',
               ['Code','Name','Firm','Category','Deals In','Type','Phone','Email','District','State','Authorized Dealer','Turnover'],
               filtered.map(v => [v.vendor_code, v.name, v.firm_name, v.category, v.deals_in, v.type, v.phone, v.email, v.district, v.state, v.authorized_dealer, v.turnover]))}
@@ -269,14 +275,20 @@ export default function Vendors() {
 
           <div className="card p-0 overflow-x-auto"><table className="min-w-[1000px] text-xs freeze-head">
             <thead><tr className="bg-gray-50">
-              <th className="px-2 py-2">Code</th><th className="px-2 py-2 text-left">Vendor Name</th><th className="px-2 py-2">Category</th>
+              <th className="px-2 py-2">Code</th><th className="px-2 py-2 text-left">Vendor / Firm Name</th><th className="px-2 py-2">Category</th>
               <th className="px-2 py-2 text-left">Deals In</th><th className="px-2 py-2">Type</th><th className="px-2 py-2 text-left">District</th>
               <th className="px-2 py-2">Phone</th><th className="px-2 py-2">Payment</th><th className="px-2 py-2">Credit</th><th className="px-2 py-2">Actions</th>
             </tr></thead>
             <tbody>{paged.map(v => (
               <tr key={v.id} className="border-b hover:bg-red-50/30">
                 <td className="px-2 py-2 font-mono text-[10px] text-red-600">{v.vendor_code || '-'}</td>
-                <td className="px-2 py-2"><div className="font-semibold">{v.name}</div>{v.authorized_dealer && <div className="text-[10px] text-gray-400">{v.authorized_dealer}</div>}</td>
+                <td className="px-2 py-2">
+                  <div className="font-semibold">{v.name}</div>
+                  {/* Firm name shown right under the vendor name (mam 2026-06-19)
+                      so master edits are visible without reopening the vendor. */}
+                  {v.firm_name && <div className="text-[10px] text-gray-500 font-medium">{v.firm_name}</div>}
+                  {v.authorized_dealer && v.authorized_dealer !== v.firm_name && <div className="text-[10px] text-gray-400">{v.authorized_dealer}</div>}
+                </td>
                 <td className="px-2 py-2"><span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${CAT_COLORS[v.category] || 'bg-gray-100'}`}>{v.category || '-'}</span></td>
                 <td className="px-2 py-2 text-[11px]">{v.deals_in || '-'}</td>
                 <td className="px-2 py-2 text-[10px]">{v.type || '-'}</td>
