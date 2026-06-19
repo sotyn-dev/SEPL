@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Link, useLocation, Outlet } from 'react-router-dom';
+import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import HelpTicket from './HelpTicket';
 import AnnouncementBell from './AnnouncementBell';
@@ -196,6 +196,7 @@ export default function Layout() {
   // sidebar is collapsed — the footer copy stays as-is for the open state.
   const [userMenu, setUserMenu] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
   const { user, logout, canView, isAdmin, userRoles } = useAuth();
 
   // ── WhatsApp background notifications (mam 2026-06-19) ─────────────────
@@ -220,9 +221,26 @@ export default function Layout() {
             const last = g.last || {};
             const body = last.body || (last.attachment_name ? `📎 ${last.attachment_name}` : 'New message');
             const line = `${last.sender_name ? last.sender_name.split(' ')[0] + ': ' : ''}${body}`;
-            toast(`💬 ${g.name}\n${line}`, { duration: 5000 });
+            const gid = g.id, gname = g.name;
+            // Prominent, clickable green banner pinned to the TOP-CENTER so the
+            // alert is unmistakably "on top" (mam 2026-06-19).
+            toast.custom((t) => (
+              <div onClick={() => { toast.dismiss(t.id); navigate('/site-chat'); }}
+                className="cursor-pointer flex items-start gap-2 w-[320px] max-w-[88vw] rounded-xl shadow-2xl px-3 py-2.5 text-white"
+                style={{ background: '#075e54' }}>
+                <FaWhatsapp className="mt-0.5 text-[#25d366] flex-shrink-0" size={20} />
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold text-sm truncate">{gname}</div>
+                  <div className="text-xs text-white/90 truncate">{line}</div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); toast.dismiss(t.id); }} className="text-white/70 hover:text-white flex-shrink-0">✕</button>
+              </div>
+            ), { position: 'top-center', duration: 6000, id: `wa-${gid}` });
             if ('Notification' in window && Notification.permission === 'granted') {
-              try { new Notification(`WhatsApp · ${g.name}`, { body: line, icon: '/icon.svg', tag: `wa-${g.id}` }); } catch { /* ignore */ }
+              try {
+                const n = new Notification(`WhatsApp · ${gname}`, { body: line, icon: '/icon.svg', tag: `wa-${gid}` });
+                n.onclick = () => { window.focus(); navigate('/site-chat'); n.close(); };
+              } catch { /* ignore */ }
             }
             break;                                          // one alert per refresh is enough
           }
