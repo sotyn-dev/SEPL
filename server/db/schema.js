@@ -2690,6 +2690,17 @@ function initializeDatabase() {
     // Profile photo (WhatsApp-style avatar) per user — shown in chat bubbles,
     // member lists, etc. Stores an /uploads URL (mam 2026-06-19).
     ['users', 'avatar_url TEXT'],
+    // Vendor PO 2-level approval (mam 2026-06-19: "after PO make 2 approval
+    // need L1 Nitin Jain, L2 Ankur Kaplesh"). New POs start 'pending_l1';
+    // existing POs default to 'approved' so they're grandfathered, not parked.
+    ['vendor_pos', "po_approval TEXT DEFAULT 'approved'"],
+    ['vendor_pos', 'po_l1_by INTEGER'],
+    ['vendor_pos', 'po_l1_at DATETIME'],
+    ['vendor_pos', 'po_l2_by INTEGER'],
+    ['vendor_pos', 'po_l2_at DATETIME'],
+    ['vendor_pos', 'po_reject_by INTEGER'],
+    ['vendor_pos', 'po_reject_at DATETIME'],
+    ['vendor_pos', 'po_reject_reason TEXT'],
     // Per-rule dynamic From address for email triggers (mam 2026-06-03:
     // "from mail which id also dynamic"). Optional; supports {{vars}}.
     ['email_rules', 'from_addr TEXT'],

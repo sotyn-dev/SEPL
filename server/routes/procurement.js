@@ -2665,6 +2665,7 @@ router.get('/vendor-po', (req, res) => {
     SELECT vp.*, v.name as vendor_name,
            ind.indent_number, ind.site_name as indent_site_name,
            pcu.name as payment_cleared_by_name,
+           l1u.name as po_l1_by_name, l2u.name as po_l2_by_name, rju.name as po_reject_by_name,
            COALESCE((
              SELECT ROUND(SUM(vpi.amount) * 1.18, 2)
              FROM vendor_po_items vpi
@@ -2674,8 +2675,14 @@ router.get('/vendor-po', (req, res) => {
     LEFT JOIN vendors v ON vp.vendor_id = v.id
     LEFT JOIN indents ind ON vp.indent_id = ind.id
     LEFT JOIN users pcu ON vp.payment_cleared_by = pcu.id
+    LEFT JOIN users l1u ON vp.po_l1_by = l1u.id
+    LEFT JOIN users l2u ON vp.po_l2_by = l2u.id
+    LEFT JOIN users rju ON vp.po_reject_by = rju.id
     ORDER BY vp.created_at DESC
   `).all();
+  // Who the PO is waiting on right now (for the list badge / approve gating).
+  const PO_NEXT = { pending_l1: 'Nitin Jain', pending_l2: 'Ankur Kaplesh' };
+  for (const r of rows) r.po_pending_approver = PO_NEXT[r.po_approval] || null;
   // Surface drift so the frontend can show a small warning chip if
   // the stored header total disagrees with the items sum.
   for (const r of rows) {
@@ -3090,8 +3097,8 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
         `INSERT INTO vendor_pos
            (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks, expected_receipt_date,
             payment_block_type, payment_block_amount, payment_block_notes, payment_block_status,
-            payment_terms, credit_days, freight_terms, freight_amount)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            payment_terms, credit_days, freight_terms, freight_amount, po_approval)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_l1')`
       ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks, expected_receipt_date,
             pmtType, pmtAmount, pmtNotes, pmtStatus,
             payment_terms, credit_days, freight_terms, freight_amount);
@@ -3124,6 +3131,59 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
     }
     res.status(500).json({ error: err.message });
   }
+});
+
+// ── Vendor PO 2-level approval (mam 2026-06-19) ──────────────────────────
+// A new PO must be signed off L1 → L2 before it's live. L1 = Nitin Jain,
+// L2 = Ankur Kaplesh (resolved by name so it survives across local/prod DBs).
+// Admin and the COO (coo@… login) can stand in for either level.
+const PO_APPROVERS = { 1: 'Nitin Jain', 2: 'Ankur Kaplesh' };
+function resolvePoUserByName(db, name) {
+  if (!name) return null;
+  try {
+    return db.prepare('SELECT id, name FROM users WHERE active=1 AND LOWER(TRIM(name))=LOWER(TRIM(?)) LIMIT 1').get(name)
+      || db.prepare('SELECT id, name FROM users WHERE active=1 AND LOWER(name) LIKE LOWER(?) ORDER BY id LIMIT 1').get('%' + name + '%');
+  } catch (_) { return null; }
+}
+function canApprovePoLevel(db, userId, level) {
+  const u = db.prepare('SELECT role, email, username FROM users WHERE id=?').get(userId);
+  if (u?.role === 'admin') return true;
+  const isCoo = (v) => String(v || '').trim().toLowerCase().startsWith('coo@');
+  if (isCoo(u?.email) || isCoo(u?.username)) return true;          // COO can stand in
+  const approver = resolvePoUserByName(db, PO_APPROVERS[level]);
+  return !!approver && approver.id === userId;
+}
+const poLevelOf = (s) => (s === 'pending_l1' ? 1 : s === 'pending_l2' ? 2 : null);
+
+// Approve the current pending level (L1 → L2 → approved).
+router.post('/vendor-po/:id/po-approve', (req, res) => {
+  const db = getDb(); const id = +req.params.id;
+  const po = db.prepare('SELECT id, po_approval FROM vendor_pos WHERE id=?').get(id);
+  if (!po) return res.status(404).json({ error: 'PO not found' });
+  const level = poLevelOf(po.po_approval);
+  if (!level) return res.status(400).json({ error: 'This PO is not pending approval' });
+  if (!canApprovePoLevel(db, req.user.id, level)) {
+    return res.status(403).json({ error: `Only ${PO_APPROVERS[level]} (L${level}) or admin can approve this step` });
+  }
+  if (level === 1) db.prepare("UPDATE vendor_pos SET po_approval='pending_l2', po_l1_by=?, po_l1_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
+  else             db.prepare("UPDATE vendor_pos SET po_approval='approved',  po_l2_by=?, po_l2_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
+  res.json({ ok: true, po_approval: level === 1 ? 'pending_l2' : 'approved' });
+});
+
+// Reject at the current pending level (reason required).
+router.post('/vendor-po/:id/po-reject', (req, res) => {
+  const db = getDb(); const id = +req.params.id;
+  const po = db.prepare('SELECT id, po_approval FROM vendor_pos WHERE id=?').get(id);
+  if (!po) return res.status(404).json({ error: 'PO not found' });
+  const level = poLevelOf(po.po_approval);
+  if (!level) return res.status(400).json({ error: 'This PO is not pending approval' });
+  if (!canApprovePoLevel(db, req.user.id, level)) {
+    return res.status(403).json({ error: `Only ${PO_APPROVERS[level]} (L${level}) or admin can reject this step` });
+  }
+  const reason = String(req.body?.reason || '').trim();
+  if (reason.length < 3) return res.status(400).json({ error: 'A rejection reason is required' });
+  db.prepare("UPDATE vendor_pos SET po_approval='rejected', po_reject_by=?, po_reject_at=CURRENT_TIMESTAMP, po_reject_reason=? WHERE id=?").run(req.user.id, reason, id);
+  res.json({ ok: true });
 });
 
 // PUT /vendor-po/:id  —  status / advance OR full header edit.

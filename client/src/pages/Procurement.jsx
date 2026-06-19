@@ -1453,6 +1453,28 @@ export default function Procurement() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  // ── Vendor PO 2-level approval (mam 2026-06-19: L1 Nitin Jain, L2 Ankur
+  // Kaplesh). Show the Approve/Reject buttons to the pending-level approver,
+  // admin, or the COO. The backend enforces the same rule.
+  const canApprovePo = (v) => {
+    if (v.po_approval !== 'pending_l1' && v.po_approval !== 'pending_l2') return false;
+    if (isAdmin()) return true;
+    const email = String(user?.email || '').toLowerCase(), uname = String(user?.username || '').toLowerCase();
+    if (email.startsWith('coo@') || uname.startsWith('coo@')) return true;
+    return String(user?.name || '').trim().toLowerCase() === String(v.po_pending_approver || '').trim().toLowerCase();
+  };
+  const approvePo = async (v) => {
+    try { await api.post(`/procurement/vendor-po/${v.id}/po-approve`); toast.success('PO approved'); load(); }
+    catch (err) { toast.error(err.response?.data?.error || 'Approve failed'); }
+  };
+  const rejectPo = async (v) => {
+    const reason = prompt(`Reject Vendor PO "${v.po_number}"?\n\nReason (required):`);
+    if (reason === null) return;
+    if (!reason.trim() || reason.trim().length < 3) return toast.error('A rejection reason is required');
+    try { await api.post(`/procurement/vendor-po/${v.id}/po-reject`, { reason: reason.trim() }); toast.success('PO rejected'); load(); }
+    catch (err) { toast.error(err.response?.data?.error || 'Reject failed'); }
+  };
+
   const savePurchaseBill = async (e) => {
     e.preventDefault();
     if (!form.bill_file) return toast.error('Bill file is required — upload the vendor bill');
@@ -3490,13 +3512,26 @@ export default function Procurement() {
                   <td>
                     {v.cancelled
                       ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-gray-200 text-gray-600 border border-gray-300" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
-                      : <StatusBadge status={v.status} />}
+                      : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
+                        ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'} · {v.po_pending_approver}</span>
+                        : v.po_approval === 'rejected'
+                          ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300" title={v.po_reject_reason || 'Rejected'}>Rejected</span>
+                          : <StatusBadge status={v.status} />}
                   </td>
                   <td>
                     {/* Three actions: Cancel (soft-delete, reverses), Restore
                         (only when already cancelled), Delete (hard, only when
                         no bills / delivery notes block it). */}
                     <div className="flex items-center gap-1">
+                      {/* PO approval (mam 2026-06-19): L1 Nitin Jain → L2 Ankur
+                          Kaplesh. Approve/Reject show only to the pending-level
+                          approver (or admin / COO). */}
+                      {!v.cancelled && canApprovePo(v) && (
+                        <>
+                          <button onClick={() => approvePo(v)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700" title={`Approve ${v.po_approval === 'pending_l1' ? 'L1' : 'L2'}`}>✓ Approve</button>
+                          <button onClick={() => rejectPo(v)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 hover:bg-red-600 hover:text-white" title="Reject PO">✕</button>
+                        </>
+                      )}
                       {/* Mark Payment Cleared (mam 2026-05-27) — internal
                           one-click unblock when the advance / old payment
                           has been settled. Only shows when a block is
@@ -3569,7 +3604,11 @@ export default function Procurement() {
                   </div>
                   {v.cancelled
                     ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border border-gray-300 text-gray-600 bg-gray-50" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
-                    : <StatusBadge status={v.status} />}
+                    : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
+                      ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</span>
+                      : v.po_approval === 'rejected'
+                        ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-300" title={v.po_reject_reason || 'Rejected'}>Rejected</span>
+                        : <StatusBadge status={v.status} />}
                 </div>
                 {/* Site */}
                 {v.indent_site_name && (
@@ -3606,6 +3645,13 @@ export default function Procurement() {
                   </a>
                   {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-semibold">📎 PDF</a>}
                 </div>
+                {/* PO approval (mam 2026-06-19): L1 Nitin Jain → L2 Ankur Kaplesh */}
+                {!v.cancelled && canApprovePo(v) && (
+                  <div className="flex gap-2 mt-1">
+                    <button onClick={() => approvePo(v)} className="btn btn-success text-sm py-2 px-3 flex-1">✓ Approve {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</button>
+                    <button onClick={() => rejectPo(v)} className="text-sm py-2 px-3 rounded bg-red-100 text-red-700 border border-red-300 font-semibold">Reject</button>
+                  </div>
+                )}
                 {/* Primary action — Mark Cleared (when payment pending) */}
                 {!v.cancelled && v.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
                   <button onClick={() => markPaymentCleared(v.id)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">
