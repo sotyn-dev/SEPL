@@ -1784,24 +1784,46 @@ export default function Procurement() {
   };
 
   // Auto-fill the AI market rate for every item missing one (mam 2026-06-19:
-  // "don't need to click, automatically rate here"). Runs in the background in
-  // batches of 25 while the Vendor Rates tab is open; each batch = one AI call.
-  // Persisted, so an item already done is never recomputed.
-  const aiAutoRef = useRef(new Set());
+  // "don't need to click, automatically rate here"). THROTTLED: one small batch
+  // every ~30s (with 429 back-off) so it stays well under the org's 10k input-
+  // tokens/min limit and leaves room for the Ask ERP chat. Persisted → an item
+  // already done is never recomputed. Self-paced scheduler, set up once per
+  // visit to the Vendor Rates tab; reads fresh data via a ref.
+  const aiAutoRef = useRef(new Set());     // ids already requested this session
   const aiAutoErrRef = useRef(false);
+  const aiAutoTimer = useRef(null);
+  const mergedRatesRef = useRef(mergedRates);
+  mergedRatesRef.current = mergedRates;
   useEffect(() => {
     if (tab !== 'rates') return;
-    const missing = mergedRates
-      .filter(r => !(+r.marketing_rate > 0))
-      .map(r => r.indent_item_ids?.[0])
-      .filter(id => id && !aiAutoRef.current.has(id));
-    if (!missing.length) return;
-    const batch = missing.slice(0, 25);
-    batch.forEach(id => aiAutoRef.current.add(id));
-    api.post('/procurement/item-rates/ai-suggest-bulk', { indent_item_ids: batch })
-      .then(() => load())
-      .catch((err) => { if (!aiAutoErrRef.current) { aiAutoErrRef.current = true; toast.error(err.response?.data?.error || 'AI auto-rate failed'); } });
-  }, [tab, mergedRates]);
+    let cancelled = false;
+    const refreshRates = () => api.get('/procurement/item-rates').then(r => setItemRates(r.data || [])).catch(() => {});
+    const runBatch = async () => {
+      if (cancelled) return;
+      const missing = mergedRatesRef.current
+        .filter(r => !(+r.marketing_rate > 0))
+        .map(r => r.indent_item_ids?.[0])
+        .filter(id => id && !aiAutoRef.current.has(id));
+      if (!missing.length) { aiAutoTimer.current = null; return; }   // all done → stop
+      const batch = missing.slice(0, 15);
+      batch.forEach(id => aiAutoRef.current.add(id));
+      let wait = 30000;                                              // ~2 batches/min — gentle on the token limit
+      try {
+        await api.post('/procurement/item-rates/ai-suggest-bulk', { indent_item_ids: batch });
+        if (!cancelled) await refreshRates();
+      } catch (err) {
+        if (err?.response?.status === 429) {
+          batch.forEach(id => aiAutoRef.current.delete(id));         // not done — retry later
+          wait = 60000;                                             // back off on rate limit
+        } else if (!aiAutoErrRef.current) {
+          aiAutoErrRef.current = true; toast.error(err.response?.data?.error || 'AI auto-rate failed');
+        }
+      }
+      if (!cancelled) aiAutoTimer.current = setTimeout(runBatch, wait);
+    };
+    aiAutoTimer.current = setTimeout(runBatch, 2000);                // start a moment after the tab opens
+    return () => { cancelled = true; if (aiAutoTimer.current) { clearTimeout(aiAutoTimer.current); aiAutoTimer.current = null; } };
+  }, [tab]);
 
   // Admin-only: clear ALL the vendor quotes on a merged rate row so the row
   // returns to "Pending" status. Useful when mam wants to re-quote from
