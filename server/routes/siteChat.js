@@ -34,6 +34,24 @@ const markRead = (db, g, uid) => {
 // groups you've been added to (admin sees all). NO site_chat module
 // permission is needed to view or chat; being a group member IS the access
 // control. Only group creation + member management stay privileged below.
+// ICE servers for WebRTC calls (mam 2026-06-19). Public STUN works for most
+// same-network / simple cases; a TURN server (set turn_url/turn_username/
+// turn_password in app_settings, e.g. self-hosted coturn) is needed for calls
+// across different networks/NATs.
+router.get('/ice', (req, res) => {
+  const ice = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:global.stun.twilio.com:3478' },
+  ];
+  try {
+    const db = getDb();
+    const get = (k) => db.prepare('SELECT value FROM app_settings WHERE key=?').get(k)?.value;
+    const url = get('turn_url'), u = get('turn_username'), p = get('turn_password');
+    if (url) ice.push({ urls: url, username: u || '', credential: p || '' });
+  } catch (_) { /* app_settings may not exist yet */ }
+  res.json({ iceServers: ice });
+});
+
 router.get('/groups', (req, res) => {
   const db = getChatDb(); const uid = req.user.id;
   const groups = isAdmin(req)

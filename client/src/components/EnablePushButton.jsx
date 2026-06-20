@@ -62,10 +62,11 @@ export default function EnablePushButton() {
     <div className="relative">
       <button
         onClick={() => setOpen(o => !o)}
-        className={`p-2 rounded-full hover:bg-gray-100 ${state === 'on' ? 'text-emerald-600' : 'text-gray-500'}`}
+        className={`p-2 rounded-lg hover:bg-gray-100 flex-shrink-0 ${state === 'on' ? 'text-emerald-600' : 'text-gray-500'}`}
         title={state === 'on' ? 'Push ON for this device' : 'Push OFF — click to enable'}
+        aria-label={state === 'on' ? 'Push notifications on — manage' : 'Push notifications off — enable'}
       >
-        {state === 'on' ? <FiBell size={18} /> : <FiBellOff size={18} />}
+        {state === 'on' ? <FiBell size={20} /> : <FiBellOff size={20} />}
       </button>
       {open && (
         <>

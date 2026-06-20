@@ -7,7 +7,7 @@ import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiDownload, FiCopy } from 'react-i
 // Labour Rate sheet (mam 2026-06-10) — item-wise labour / sub-contractor
 // rates by UOM and category. Seeded from her uploaded sheet; add/edit here.
 const UOMS = ['Kg', 'PCS', 'Nos', 'Each', 'Per Ltr', 'mtrs', 'RMT', 'RFT', 'R mtr', 'Per Point'];
-const CATEGORIES = ['Low Voltage', 'ELECTRICAL', 'Fire Fighting'];
+const CATEGORIES = ['Low Voltage', 'ELECTRICAL', 'Fire Fighting','Mechanical','HVAC','Plumbing','SOLAR'];
 const RENDER_CAP = 200;
 const fmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const blank = () => ({ id: null, item_name: '', specification: '', size: '', rate: '', uom: 'PCS', category: 'Low Voltage' });

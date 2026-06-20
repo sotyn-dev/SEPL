@@ -35,6 +35,18 @@ function initChatSocket(httpServer) {
   io.on('connection', (socket) => {
     const uid = socket.user.id, admin = socket.user.role === 'admin';
     try { for (const r of roomsFor(uid, admin)) socket.join(r); } catch (_) {}
+    try { socket.join('u:' + uid); } catch (_) {}     // personal room for 1-on-1 call signalling
+
+    // WebRTC call signalling (mam 2026-06-19) — relay offer/answer/ICE/end to
+    // the target user's personal room. Stateless pass-through; the media goes
+    // peer-to-peer (WebRTC), only these tiny control messages go via the socket.
+    for (const ev of ['call:offer', 'call:answer', 'call:ice', 'call:reject', 'call:end', 'call:cancel']) {
+      socket.on(ev, (d = {}) => {
+        const to = parseInt(d.to, 10);
+        if (to) io.to('u:' + to).emit(ev, { ...d, to: undefined, from: uid, fromName: socket.user.name || '' });
+      });
+    }
+
     // Re-join when a client opens / is added to a group. Members always may;
     // admin may join GROUP rooms but NOT a private DM they're not part of.
     socket.on('join', (gid) => {

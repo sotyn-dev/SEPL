@@ -8,8 +8,9 @@ import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
+import { useCall } from '../context/CallContext';
 
 const DAY_OPTS = { day: '2-digit', month: 'short', year: 'numeric' };
 const GREEN = '#075e54';                          // WhatsApp header green
@@ -32,6 +33,7 @@ function Avatar({ url, name, size = 36, className = '' }) {
 
 export default function SiteChat() {
   const { canCreate, canDelete, isAdmin, user } = useAuth();
+  const { startCall } = useCall();
   const [groups, setGroups] = useState([]);
   const [q, setQ] = useState('');
   const [sel, setSel] = useState(null);            // selected group {id, name}
@@ -323,10 +325,18 @@ export default function SiteChat() {
                 <button onClick={() => setSel(null)} className="sm:hidden mr-1">←</button>
                 <Avatar url={sel.is_dm ? userAvatars[members.find(m => m.user_id !== user?.id)?.user_id] : null} name={sel.name} size={36} />
                 {sel.is_dm ? (
-                  <div className="min-w-0 flex-1">
-                    <div className="font-semibold text-sm truncate">{sel.name}</div>
-                    <div className="text-[11px] text-white/80 truncate">Direct message</div>
-                  </div>
+                  <>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-sm truncate">{sel.name}</div>
+                      <div className="text-[11px] text-white/80 truncate">Direct message</div>
+                    </div>
+                    {(() => { const oid = members.find(m => m.user_id !== user?.id)?.user_id; return oid ? (
+                      <>
+                        <button onClick={() => startCall(oid, sel.name, false)} className="p-1.5 rounded hover:bg-white/15" title="Voice call"><FiPhone size={18} /></button>
+                        <button onClick={() => startCall(oid, sel.name, true)} className="p-1.5 rounded hover:bg-white/15" title="Video call"><FiVideo size={18} /></button>
+                      </>
+                    ) : null; })()}
+                  </>
                 ) : (
                   <>
                     <button onClick={() => { setMemSearch(''); setMemOpen(true); }} className="min-w-0 text-left flex-1">

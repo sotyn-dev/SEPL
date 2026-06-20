@@ -7,6 +7,7 @@ import AnnouncementBell from './AnnouncementBell';
 // so there's a single bell icon in the header (was confusing with 3).
 import EnablePushButton from './EnablePushButton';
 import AIAgentChat from './AIAgentChat';
+import { CallProvider } from '../context/CallContext';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
 import api from '../api';
@@ -483,6 +484,7 @@ export default function Layout() {
     .split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase() || '?';
 
   return (
+    <CallProvider>
     <div className="flex h-screen overflow-hidden">
       {/* Mobile overlay */}
       {sidebarOpen && isMobile && (
@@ -857,5 +859,6 @@ export default function Layout() {
           Tickets is still reachable from the sidebar page. */}
       <AIAgentChat />
     </div>
+    </CallProvider>
   );
 }
