@@ -16,40 +16,39 @@ try { ensureSolarSchema(getDb()); } catch (e) { console.warn('[solar] ensureSche
 
 const n = (v) => (v === undefined ? null : v);
 
-// ── Rate book: the single payload the engine loads. Solar equipment rates come
-//    from the shared item_master (department='SOLAR'); labour from labour_rates
-//    (category='SOLAR'); only engineering factors + settings are solar-only.
+// ── Rate book: the single payload the engine loads, from the Solar module's own
+//    Material Master (solar_materials) + Labour Master (solar_labour) + config.
 router.get('/rate-book', requirePermission('solar_quotation', 'view'), (req, res) => {
   const db = getDb();
-  const items = db.prepare("SELECT type, make, item_name, specification, size, current_price FROM item_master WHERE type LIKE 'solar-%'").all();
+  const mats = db.prepare('SELECT category, make, grade, item_name, size, rate FROM solar_materials WHERE active=1').all();
   const ui = { panel: {}, inverter: {}, structure: {}, cable: {} };
   const bos = {};
   const invSizes = new Set();
   const counts = { panels: 0, inverters: 0, structure: 0, cables: 0, bos: 0 };
-  for (const r of items) {
-    const p = +r.current_price || 0;
-    switch (r.type) {
-      case 'solar-panel':
+  for (const r of mats) {
+    const p = +r.rate || 0;
+    switch (r.category) {
+      case 'panel':
         ui.panel[r.make] = ui.panel[r.make] || [null, null];
-        ui.panel[r.make][r.specification === 'DCR' ? 1 : 0] = p; counts.panels++; break;
-      case 'solar-inverter': {
+        ui.panel[r.make][r.grade === 'DCR' ? 1 : 0] = p; counts.panels++; break;
+      case 'inverter': {
         ui.inverter[r.make] = p; const kw = parseFloat(r.size); if (kw) invSizes.add(kw); counts.inverters++; break;
       }
-      case 'solar-structure':
+      case 'structure':
         ui.structure[r.make] = p; counts.structure++; break;
-      case 'solar-cable': {
+      case 'cable': {
         ui.cable[r.make] = ui.cable[r.make] || [null, null];
         const sz = parseFloat(r.size);
-        if (r.specification === 'DC String' && sz === 4) ui.cable[r.make][0] = p;
-        if (r.specification === 'AC LT') ui.cable[r.make][1] = p;
+        if (r.grade === 'DC String' && sz === 4) ui.cable[r.make][0] = p;
+        if (r.grade === 'AC LT') ui.cable[r.make][1] = p;
         counts.cables++; break;
       }
-      case 'solar-bos':
+      case 'bos':
         bos[r.item_name] = p; counts.bos++; break;
     }
   }
   const labour = {};
-  for (const r of db.prepare("SELECT item_name, rate FROM labour_rates WHERE category='SOLAR'").all()) labour[r.item_name] = +r.rate || 0;
+  for (const r of db.prepare('SELECT activity, rate FROM solar_labour WHERE active=1').all()) labour[r.activity] = +r.rate || 0;
 
   const mount = {}, array = {}, state = {};
   for (const f of db.prepare('SELECT * FROM solar_factors').all()) {
@@ -310,5 +309,34 @@ router.get('/funnel/analytics', requirePermission('solar_quotation', 'view'), (r
     stuck,
   });
 });
+
+// ── Solar Material Master + Labour Master CRUD (owned by the Solar module) ──
+const MAT_COLS = ['category', 'make', 'grade', 'item_name', 'size', 'unit', 'rate', 'gst', 'active'];
+const LAB_COLS = ['activity', 'unit', 'rate', 'gst', 'active'];
+function crud(basePath, table, cols, order) {
+  router.get(basePath, requirePermission('solar_quotation', 'view'), (req, res) => {
+    let where = '', params = [];
+    if (req.query.category && cols.includes('category')) { where = 'WHERE category=?'; params = [req.query.category]; }
+    res.json(getDb().prepare(`SELECT * FROM ${table} ${where} ORDER BY ${order}`).all(...params));
+  });
+  router.post(basePath, requirePermission('solar_quotation', 'create'), (req, res) => {
+    const c = cols.filter((k) => k in (req.body || {}));
+    if (!c.length) return res.status(400).json({ error: 'No fields' });
+    const r = getDb().prepare(`INSERT INTO ${table} (${c.join(',')}) VALUES (${c.map(() => '?').join(',')})`).run(...c.map((k) => n(req.body[k])));
+    res.json({ id: r.lastInsertRowid, message: 'Added' });
+  });
+  router.put(`${basePath}/:id`, requirePermission('solar_quotation', 'edit'), (req, res) => {
+    const c = cols.filter((k) => k in (req.body || {}));
+    if (!c.length) return res.json({ message: 'No change' });
+    getDb().prepare(`UPDATE ${table} SET ${c.map((k) => `${k}=?`).join(',')}, updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(...c.map((k) => n(req.body[k])), req.params.id);
+    res.json({ message: 'Updated' });
+  });
+  router.delete(`${basePath}/:id`, requirePermission('solar_quotation', 'delete'), (req, res) => {
+    getDb().prepare(`DELETE FROM ${table} WHERE id=?`).run(req.params.id);
+    res.json({ message: 'Deleted' });
+  });
+}
+crud('/materials', 'solar_materials', MAT_COLS, 'category, make, grade');
+crud('/labour', 'solar_labour', LAB_COLS, 'activity');
 
 module.exports = router;

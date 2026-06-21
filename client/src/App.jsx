@@ -9,6 +9,8 @@ import Estimator from './pages/Estimator';
 import SolarQuotation from './pages/SolarQuotation';
 import SolarRateMaster from './pages/SolarRateMaster';
 import SolarFunnel from './pages/SolarFunnel';
+import SolarMaterialMaster from './pages/SolarMaterialMaster';
+import SolarLabourMaster from './pages/SolarLabourMaster';
 import PoFocStripped from './pages/PoFocStripped';
 import PoFocPrint from './pages/PoFocPrint';
 import LabourRate from './pages/LabourRate';
@@ -178,6 +180,8 @@ export default function App() {
         <Route path="estimator" element={<ModuleRoute module="quotations"><Estimator /></ModuleRoute>} />
         <Route path="solar-funnel" element={<ModuleRoute module="solar_quotation"><SolarFunnel /></ModuleRoute>} />
         <Route path="solar-quotation" element={<ModuleRoute module="solar_quotation"><SolarQuotation /></ModuleRoute>} />
+        <Route path="solar-material-master" element={<ModuleRoute module="solar_quotation"><SolarMaterialMaster /></ModuleRoute>} />
+        <Route path="solar-labour-master" element={<ModuleRoute module="solar_quotation"><SolarLabourMaster /></ModuleRoute>} />
         <Route path="solar-rate-master" element={<ModuleRoute module="solar_quotation"><SolarRateMaster /></ModuleRoute>} />
         <Route path="po-foc-stripped" element={<ModuleRoute module="quotations"><PoFocStripped /></ModuleRoute>} />
         <Route path="labour-rate" element={<ModuleRoute module="labour_rates"><LabourRate /></ModuleRoute>} />

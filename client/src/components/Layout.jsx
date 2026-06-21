@@ -85,9 +85,11 @@ const SIDEBAR_GROUPS = [
     { path: '/crm-kitting',   label: 'Full Kitting',      icon: FiArchive,    module: 'crm_kitting' },
   ]},
   { id: 'solar_sales', label: 'Solar Sales', icon: FiSun, items: [
-    { path: '/solar-funnel',      label: 'Solar Sales Funnel', icon: FiTrendingUp, module: 'solar_quotation' },
-    { path: '/solar-quotation',   label: 'Solar Quotation',    icon: FiClipboard,  module: 'solar_quotation' },
-    { path: '/solar-rate-master', label: 'Solar Settings',     icon: FiSliders,    module: 'solar_quotation' },
+    { path: '/solar-funnel',          label: 'Solar Sales Funnel',   icon: FiTrendingUp, module: 'solar_quotation' },
+    { path: '/solar-quotation',       label: 'Solar Quotation',      icon: FiClipboard,  module: 'solar_quotation' },
+    { path: '/solar-material-master', label: 'Solar Material Master', icon: FiPackage,   module: 'solar_quotation' },
+    { path: '/solar-labour-master',   label: 'Solar Labour Master',  icon: FiTool,       module: 'solar_quotation' },
+    { path: '/solar-rate-master',     label: 'Solar Settings',       icon: FiSliders,    module: 'solar_quotation' },
   ]},
   { id: 'quotes_orders', label: 'Quotes & Orders', icon: FiFileText, items: [
     { path: '/quotations',  label: 'Quotations',        icon: FiClipboard,    module: 'quotations' },

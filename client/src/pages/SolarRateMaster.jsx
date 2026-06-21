@@ -62,9 +62,12 @@ export default function SolarRateMaster() {
         <h1 className="text-2xl font-bold flex items-center gap-2"><FiSun className="text-amber-500" /> Solar Settings</h1>
         <p className="text-xs text-gray-500">Engineering factors &amp; global settings that drive the solar engine. Equipment rates live in the shared Item Master.</p>
       </div>
-      <div className="card p-3 bg-blue-50/40 border-l-4 border-blue-300 text-xs flex items-center justify-between">
-        <span>Solar panel / inverter / structure / cable / BOS rates are managed in the <b>Item Master</b> (department = SOLAR). Solar labour is in the <b>Labour Rate</b> master.</span>
-        <Link to="/item-master" className="btn btn-secondary text-xs flex items-center gap-1 whitespace-nowrap"><FiExternalLink size={13} /> Open Item Master</Link>
+      <div className="card p-3 bg-blue-50/40 border-l-4 border-blue-300 text-xs flex items-center justify-between gap-2 flex-wrap">
+        <span>Equipment rates live in the <b>Solar Material Master</b>; labour in the <b>Solar Labour Master</b>. This page is only the engine config.</span>
+        <div className="flex gap-2">
+          <Link to="/solar-material-master" className="btn btn-secondary text-xs flex items-center gap-1 whitespace-nowrap"><FiExternalLink size={13} /> Material Master</Link>
+          <Link to="/solar-labour-master" className="btn btn-secondary text-xs flex items-center gap-1 whitespace-nowrap"><FiExternalLink size={13} /> Labour Master</Link>
+        </div>
       </div>
       <div className="flex gap-2">
         {[['factors', 'Engineering Factors'], ['settings', 'Global Settings']].map(([k, l]) => (
