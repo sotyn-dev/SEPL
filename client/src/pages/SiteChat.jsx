@@ -8,7 +8,7 @@ import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import { useCall } from '../context/CallContext';
 
@@ -256,17 +256,27 @@ export default function SiteChat() {
 
   const shown = groups.filter(g => !q || String(g.name).toLowerCase().includes(q.toLowerCase()));
 
+  // Hidden file input for the profile photo — kept at the top level so BOTH the
+  // desktop header button and the mobile (chat-list) avatar button can trigger
+  // it. `hidden` keeps the element mounted, so the ref stays valid on mobile.
+  const avatarInput = <input ref={avatarRef} type="file" accept="image/*" className="hidden" onChange={e => onAvatarFile(e.target.files?.[0])} />;
+
   return (
-    <div className="space-y-3">
-      <div className="flex items-start justify-between gap-3">
+    // Full-height flex column. The chat card flex-fills the remaining space, so
+    // no fragile magic-number height. dvh (NOT vh) keeps the composer above the
+    // phone browser's bottom toolbar (mam 2026-06-19: "below button not show").
+    // Mobile subtracts only the app bar + page padding; desktop also the header.
+    <div className="flex flex-col h-[calc(100dvh-64px)] md:h-[calc(100dvh-104px)]">
+      {avatarInput}
+      {/* Page header — desktop only. On mobile the chat takes the full screen
+          (like real WhatsApp); the profile photo moves into the list header. */}
+      <div className="hidden sm:flex items-start justify-between gap-3 mb-3 flex-shrink-0">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><FaWhatsapp className="text-[#25d366]" /> WhatsApp</h1>
-          {/* Subtitle hidden on mobile to give the chat more vertical room. */}
-          <p className="hidden sm:block text-sm text-gray-500">Internal group chat · create groups · add your people · text + photos/files</p>
+          <p className="text-sm text-gray-500">Internal group chat · create groups · add your people · text + photos/files</p>
         </div>
         {/* Your profile photo — tap to upload (mam 2026-06-19). */}
         <div className="flex items-center gap-2 flex-shrink-0">
-          <input ref={avatarRef} type="file" accept="image/*" className="hidden" onChange={e => onAvatarFile(e.target.files?.[0])} />
           <button onClick={() => avatarRef.current?.click()} disabled={busy} className="relative" title="Change your photo">
             <Avatar url={userAvatars[user?.id]} name={user?.name} size={42} />
             <span className="absolute -bottom-0.5 -right-0.5 bg-emerald-600 text-white rounded-full w-4 h-4 flex items-center justify-center text-[9px] ring-2 ring-white">✎</span>
@@ -275,14 +285,16 @@ export default function SiteChat() {
         </div>
       </div>
 
-      {/* 100dvh (dynamic viewport height) — NOT 100vh — so the composer / mic
-          button stays visible above the phone browser's bottom toolbar
-          (mam 2026-06-19: "below button not show" on mobile). */}
-      <div className="flex border rounded-xl overflow-hidden bg-white" style={{ height: 'calc(100dvh - 185px)', minHeight: 360 }}>
+      <div className="flex flex-1 min-h-0 border rounded-xl overflow-hidden bg-white">
         {/* ── Group list ────────────────────────────────── */}
         <div className={`w-full sm:w-80 border-r flex flex-col ${sel ? 'hidden sm:flex' : 'flex'}`}>
           <div className="flex items-center gap-2 px-3 py-2 text-white" style={{ background: GREEN }}>
-            <FaWhatsapp /> <span className="font-semibold text-sm flex-1">WhatsApp</span>
+            {/* Profile photo — mobile only (desktop has it in the page header). */}
+            <button onClick={() => avatarRef.current?.click()} disabled={busy} className="sm:hidden relative flex-shrink-0" title="Change your photo">
+              <Avatar url={userAvatars[user?.id]} name={user?.name} size={28} />
+              <span className="absolute -bottom-0.5 -right-0.5 bg-emerald-600 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[8px] ring-2 ring-[#075e54]">✎</span>
+            </button>
+            <FaWhatsapp className="hidden sm:block" /> <span className="font-semibold text-sm flex-1">WhatsApp</span>
             <button onClick={() => { setDmSearch(''); setDmOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New direct message"><FiUserPlus size={18} /></button>
             {canCreate('site_chat') && <button onClick={() => { setNewName(''); setNewSel([]); setNewSearch(''); setNewOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New group"><FiPlus size={18} /></button>}
           </div>
@@ -322,7 +334,7 @@ export default function SiteChat() {
           ) : (
             <>
               <div className="px-3 py-2 flex items-center gap-2 text-white" style={{ background: GREEN }}>
-                <button onClick={() => setSel(null)} className="sm:hidden mr-1">←</button>
+                <button onClick={() => setSel(null)} className="sm:hidden -ml-1 p-1 rounded hover:bg-white/15" title="Back" aria-label="Back to chats"><FiArrowLeft size={22} /></button>
                 <Avatar url={sel.is_dm ? userAvatars[members.find(m => m.user_id !== user?.id)?.user_id] : null} name={sel.name} size={36} />
                 {sel.is_dm ? (
                   <>
