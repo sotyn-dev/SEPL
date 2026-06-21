@@ -86,9 +86,12 @@ router.put('/settings/:key', requirePermission('solar_quotation', 'edit'), (req,
 
 // ── Saved solar quotations ────────────────────────────────────────
 router.get('/quotations', requirePermission('solar_quotation', 'view'), (req, res) => {
-  res.json(getDb().prepare(`SELECT id, quote_no, client_name, project_type, capacity_kw,
+  const { deal_id } = req.query;
+  const where = deal_id ? 'WHERE deal_id=?' : '';
+  const params = deal_id ? [deal_id] : [];
+  res.json(getDb().prepare(`SELECT id, quote_no, variant_label, deal_id, client_name, project_type, capacity_kw,
     cost, margin_pct, sell, sell_per_w, grand_total, status, updated_at, created_at
-    FROM solar_quotations ORDER BY updated_at DESC`).all());
+    FROM solar_quotations ${where} ORDER BY updated_at DESC`).all(...params));
 });
 router.get('/quotations/:id', requirePermission('solar_quotation', 'view'), (req, res) => {
   const r = getDb().prepare('SELECT * FROM solar_quotations WHERE id=?').get(req.params.id);
@@ -97,19 +100,18 @@ router.get('/quotations/:id', requirePermission('solar_quotation', 'view'), (req
     inputs: JSON.parse(r.inputs_json || '{}'), boq: JSON.parse(r.boq_json || '[]'),
     engineering: JSON.parse(r.engineering_json || '{}'), roi: JSON.parse(r.roi_json || '{}') });
 });
+const QUOTE_COLS = 'quote_no,lead_id,deal_id,variant_label,client_name,address,project_type,capacity_kw,dc_ac_ratio,panel_make,inverter_make,inputs_json,boq_json,engineering_json,roi_json,cost,margin_pct,sell,sell_per_w,gst_amt,grand_total,status';
 function quoteParams(b) {
-  return [n(b.quote_no), n(b.lead_id), n(b.client_name), n(b.address), n(b.project_type),
+  return [n(b.quote_no), n(b.lead_id), n(b.deal_id), n(b.variant_label), n(b.client_name), n(b.address), n(b.project_type),
     Number(b.capacity_kw) || 0, Number(b.dc_ac_ratio) || 0, n(b.panel_make), n(b.inverter_make),
     JSON.stringify(b.inputs || {}), JSON.stringify(b.boq || []), JSON.stringify(b.engineering || {}),
     JSON.stringify(b.roi || {}), Number(b.cost) || 0, Number(b.margin_pct) || 0, Number(b.sell) || 0,
     Number(b.sell_per_w) || 0, Number(b.gst_amt) || 0, Number(b.grand_total) || 0, b.status || 'draft'];
 }
+const QUOTE_PH = QUOTE_COLS.split(',').map(() => '?').join(',');
 router.post('/quotations', requirePermission('solar_quotation', 'create'), (req, res) => {
   const db = getDb();
-  const r = db.prepare(`INSERT INTO solar_quotations
-    (quote_no,lead_id,client_name,address,project_type,capacity_kw,dc_ac_ratio,panel_make,inverter_make,
-     inputs_json,boq_json,engineering_json,roi_json,cost,margin_pct,sell,sell_per_w,gst_amt,grand_total,status,created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(...quoteParams(req.body || {}), req.user.id);
+  const r = db.prepare(`INSERT INTO solar_quotations (${QUOTE_COLS},created_by) VALUES (${QUOTE_PH},?)`).run(...quoteParams(req.body || {}), req.user.id);
   // Funnel auto-advance: a quote created from a deal pushes it to the Quotation stage.
   if (req.body?.deal_id) { try { advanceDealOnQuote(db, req.body.deal_id, r.lastInsertRowid, req.user); } catch (e) { console.warn('[solar] deal advance:', e.message); } }
   res.json({ id: r.lastInsertRowid, message: 'Saved' });
@@ -117,9 +119,7 @@ router.post('/quotations', requirePermission('solar_quotation', 'create'), (req,
 router.put('/quotations/:id', requirePermission('solar_quotation', 'edit'), (req, res) => {
   const ex = getDb().prepare('SELECT id FROM solar_quotations WHERE id=?').get(req.params.id);
   if (!ex) return res.status(404).json({ error: 'Not found' });
-  getDb().prepare(`UPDATE solar_quotations SET quote_no=?,lead_id=?,client_name=?,address=?,project_type=?,
-    capacity_kw=?,dc_ac_ratio=?,panel_make=?,inverter_make=?,inputs_json=?,boq_json=?,engineering_json=?,roi_json=?,
-    cost=?,margin_pct=?,sell=?,sell_per_w=?,gst_amt=?,grand_total=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+  getDb().prepare(`UPDATE solar_quotations SET ${QUOTE_COLS.split(',').map((c) => `${c}=?`).join(',')},updated_at=CURRENT_TIMESTAMP WHERE id=?`)
     .run(...quoteParams(req.body || {}), req.params.id);
   res.json({ message: 'Updated' });
 });
@@ -213,6 +213,8 @@ router.get('/deals/:id', requirePermission('solar_quotation', 'view'), (req, res
   const d = getDb().prepare('SELECT * FROM solar_deals WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Not found' });
   d.events = getDb().prepare('SELECT * FROM solar_deal_events WHERE deal_id=? ORDER BY created_at DESC').all(d.id);
+  d.qualification = JSON.parse(d.qualification_json || '{}');
+  d.quotes = getDb().prepare('SELECT id, quote_no, variant_label, capacity_kw, sell, sell_per_w, margin_pct, grand_total, created_at FROM solar_quotations WHERE deal_id=? ORDER BY created_at').all(d.id);
   res.json(d);
 });
 
@@ -221,9 +223,9 @@ router.post('/deals', requirePermission('solar_quotation', 'create'), (req, res)
   const stage = STAGE_IDX[b.stage] != null ? b.stage : 'inquiry';
   const db = getDb();
   const r = db.prepare(`INSERT INTO solar_deals
-    (lead_id,client_name,company,phone,location,state,capacity_kw,project_type,value,source,stage,owner_id,owner_name,next_action,next_action_due,created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    n(b.lead_id), n(b.client_name), n(b.company), n(b.phone), n(b.location), n(b.state),
+    (lead_id,client_name,company,phone,location,state,district,pincode,lat,lng,capacity_kw,project_type,value,source,stage,owner_id,owner_name,next_action,next_action_due,created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    n(b.lead_id), n(b.client_name), n(b.company), n(b.phone), n(b.location), n(b.state), n(b.district), n(b.pincode), n(b.lat), n(b.lng),
     Number(b.capacity_kw) || 0, n(b.project_type), Number(b.value) || 0, n(b.source), stage,
     n(b.owner_id), n(b.owner_name), b.next_action || stageMeta(stage)?.action, n(b.next_action_due), req.user.id);
   const id = r.lastInsertRowid;
@@ -236,7 +238,8 @@ router.post('/deals', requirePermission('solar_quotation', 'create'), (req, res)
 
 router.put('/deals/:id', requirePermission('solar_quotation', 'edit'), (req, res) => {
   const b = req.body || {};
-  const cols = ['client_name', 'company', 'phone', 'location', 'state', 'capacity_kw', 'project_type', 'value', 'source', 'owner_id', 'owner_name', 'next_action', 'next_action_due', 'lead_id'];
+  if ('qualification' in b) { b.qualification_json = JSON.stringify(b.qualification); }
+  const cols = ['client_name', 'company', 'phone', 'location', 'state', 'district', 'pincode', 'lat', 'lng', 'capacity_kw', 'project_type', 'value', 'source', 'owner_id', 'owner_name', 'next_action', 'next_action_due', 'lead_id', 'qualification_json'];
   const set = cols.filter((c) => c in b);
   if (!set.length) return res.json({ message: 'No change' });
   getDb().prepare(`UPDATE solar_deals SET ${set.map((c) => `${c}=?`).join(',')}, updated_at=CURRENT_TIMESTAMP WHERE id=?`)

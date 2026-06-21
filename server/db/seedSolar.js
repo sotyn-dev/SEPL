@@ -13,6 +13,9 @@ const SEED_JSON = path.join(__dirname, 'seed', 'solar-item-master.json');
 const n = (v) => (v === undefined ? null : v);
 
 function ensureSolarSchema(db) {
+  // Additive columns (idempotent) for qualification answers, geo coords (Google
+  // Earth) and the deal↔quote link (multiple quote options per client).
+  const addCol = (sql) => { try { db.exec(sql); } catch (_) { /* exists */ } };
   db.exec(`
     -- Solar Material Master: rate per make/grade.  category = panel|inverter|structure|cable|bos
     CREATE TABLE IF NOT EXISTS solar_materials (
@@ -84,6 +87,13 @@ function ensureSolarSchema(db) {
       by_user INTEGER, by_name TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+  addCol(`ALTER TABLE solar_deals ADD COLUMN qualification_json TEXT`);
+  addCol(`ALTER TABLE solar_deals ADD COLUMN district TEXT`);
+  addCol(`ALTER TABLE solar_deals ADD COLUMN pincode TEXT`);
+  addCol(`ALTER TABLE solar_deals ADD COLUMN lat REAL`);
+  addCol(`ALTER TABLE solar_deals ADD COLUMN lng REAL`);
+  addCol(`ALTER TABLE solar_quotations ADD COLUMN deal_id INTEGER`);
+  addCol(`ALTER TABLE solar_quotations ADD COLUMN variant_label TEXT`);
 }
 
 function seedSolarRates(db) {

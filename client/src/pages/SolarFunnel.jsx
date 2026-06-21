@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2 } from 'react-icons/fi';
+import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2, FiPhoneCall, FiMapPin } from 'react-icons/fi';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import SearchableSelect from '../components/SearchableSelect';
 import { num as fmt, inr } from '../lib/solar/format';
 import { PROJECT_TYPES } from '../lib/solar/engine';
+import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
+import QualificationChat from './QualificationChat';
 
 const cr = (v) => `₹${fmt((v || 0) / 1e7, 2)} Cr`;
 
@@ -151,12 +153,14 @@ export default function SolarFunnel() {
 
 function DealModal({ deal, stages, leads, user, onClose, onSaved, nav }) {
   const [d, setD] = useState({ ...deal });
+  const [showQual, setShowQual] = useState(false);
   const isNew = !deal.id;
   const set = (k, v) => setD((p) => ({ ...p, [k]: v }));
   const F = (k, label, props = {}) => (
     <label className="block"><span className="label">{label}</span>
       <input className="input-compact w-full" value={d[k] ?? ''} onChange={(e) => set(k, e.target.value)} {...props} /></label>);
 
+  const refresh = async () => { try { const r = await api.get(`/solar/deals/${d.id}`); setD(r.data); } catch { /* */ } };
   const save = async () => {
     if (!d.client_name) return toast.error('Client name required');
     try {
@@ -168,36 +172,104 @@ function DealModal({ deal, stages, leads, user, onClose, onSaved, nav }) {
   const move = async (stage) => { try { await api.post(`/solar/deals/${d.id}/move`, { stage }); toast.success('Moved'); onSaved(); } catch { toast.error('Move failed'); } };
   const lose = async () => { const reason = prompt('Reason for losing this deal?'); if (reason === null) return; try { await api.post(`/solar/deals/${d.id}/lose`, { reason }); toast.success('Marked lost'); onSaved(); } catch { toast.error('Failed'); } };
   const del = async () => { if (!confirm('Delete this deal?')) return; try { await api.delete(`/solar/deals/${d.id}`); onSaved(); } catch { toast.error('Failed'); } };
-  const toQuote = () => nav(`/solar-quotation?deal=${d.id}&client=${encodeURIComponent(d.client_name || '')}&kw=${d.capacity_kw || ''}&conn=${d.project_type || 'ongrid'}`);
+  const toQuote = (variant) => nav(`/solar-quotation?deal=${d.id}&client=${encodeURIComponent(d.client_name || '')}&kw=${d.capacity_kw || ''}&conn=${d.project_type || 'ongrid'}&state=${encodeURIComponent(d.state || '')}&variant=${encodeURIComponent(variant || '')}`);
+
+  // Save qualification → store answers, set recommended system, advance to Qualified.
+  const onQualDone = async (ans, rec) => {
+    setShowQual(false);
+    try {
+      await api.put(`/solar/deals/${d.id}`, { qualification: ans, capacity_kw: rec.kw, project_type: rec.conn, phone: ans.phone || d.phone });
+      await api.post(`/solar/deals/${d.id}/move`, { stage: 'qualification', note: `Qualified on call → ${rec.kw} kW ${rec.conn}` });
+      toast.success(`Qualified — ${rec.kw} kW ${rec.conn}`);
+      await refresh(); onSaved && onSaved.silent !== true;
+    } catch (e) { toast.error('Could not save qualification'); }
+  };
+
+  const districts = DISTRICTS_BY_STATE[d.state] || [];
+  const mapQ = (d.lat && d.lng) ? `${d.lat},${d.lng}` : [d.location, d.district, d.state, d.pincode].filter(Boolean).join(', ') || d.client_name;
+  const qual = d.qualification && Object.keys(d.qualification).length ? d.qualification : null;
+  const quotes = d.quotes || [];
 
   return (
+    <>
     <div className="fixed inset-0 bg-black/40 z-50 flex items-start justify-center overflow-y-auto p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl my-8">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl my-8">
         <div className="px-5 py-3 border-b flex items-center justify-between">
-          <h3 className="font-bold">{isNew ? 'New Solar Deal' : `${deal.deal_no} · ${deal.client_name}`}</h3>
+          <h3 className="font-bold">{isNew ? 'New Solar Lead' : `${deal.deal_no} · ${deal.client_name}`}</h3>
           <button onClick={onClose}><FiX /></button>
         </div>
         <div className="p-5 space-y-3">
           {isNew && (
             <label className="block"><span className="label">From Lead (optional)</span>
               <SearchableSelect options={leads} value={d.lead_id || ''} displayKey="company_name" valueKey="id" placeholder="Pick a lead…"
-                onChange={(o) => o && setD((p) => ({ ...p, lead_id: o.id, client_name: o.company_name || o.client_name || p.client_name, company: o.company_name || p.company, phone: o.phone || p.phone, location: o.district || o.location || p.location, state: o.state || p.state }))} /></label>)}
-          <div className="grid grid-cols-2 gap-2">
-            {F('client_name', 'Client name')}{F('company', 'Company')}
-            {F('phone', 'Phone')}{F('location', 'Location')}
-            {F('state', 'State')}{F('capacity_kw', 'Capacity (kW)', { type: 'number' })}
+                onChange={(o) => o && setD((p) => ({ ...p, lead_id: o.id, client_name: o.company_name || o.client_name || p.client_name, company: o.company_name || p.company, phone: o.phone || p.phone, location: o.district || o.location || p.location, state: o.state || p.state, district: o.district || p.district }))} /></label>)}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {F('client_name', 'Client name')}{F('company', 'Company')}{F('phone', 'Phone')}
+            <label className="block"><span className="label">State</span>
+              <select className="input-compact w-full" value={d.state || ''} onChange={(e) => set('state', e.target.value)}>
+                <option value="">— state —</option>{STATES.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
+            <label className="block"><span className="label">District</span>
+              <select className="input-compact w-full" value={d.district || ''} onChange={(e) => set('district', e.target.value)}>
+                <option value="">— district —</option>{districts.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
+            {F('pincode', 'Pincode')}
+            {F('location', 'Site / area')}{F('capacity_kw', 'Capacity (kW)', { type: 'number' })}
             <label className="block"><span className="label">Project type</span>
               <select className="input-compact w-full" value={d.project_type || 'ongrid'} onChange={(e) => set('project_type', e.target.value)}>
                 {PROJECT_TYPES.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}</select></label>
-            {F('value', 'Deal value ₹', { type: 'number' })}
-            {F('owner_name', 'Owner')}{F('source', 'Source')}
-            {F('next_action', 'Next action')}{F('next_action_due', 'Next action due', { type: 'date' })}
+            {F('value', 'Deal value ₹', { type: 'number' })}{F('owner_name', 'Owner')}{F('source', 'Source')}
+          </div>
+
+          {/* Google Earth / site location */}
+          <div className="border rounded-lg p-2 bg-gray-50">
+            <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+              <span className="text-xs font-semibold flex items-center gap-1"><FiMapPin size={13} /> Site on Google Earth</span>
+              <div className="flex gap-2 items-center">
+                <input className="input-compact w-24" placeholder="lat" value={d.lat ?? ''} onChange={(e) => set('lat', e.target.value)} />
+                <input className="input-compact w-24" placeholder="lng" value={d.lng ?? ''} onChange={(e) => set('lng', e.target.value)} />
+                <a href={`https://earth.google.com/web/search/${encodeURIComponent(mapQ)}`} target="_blank" rel="noreferrer" className="btn btn-secondary text-xs">🌍 Google Earth</a>
+                <a href={`https://www.google.com/maps?q=${encodeURIComponent(mapQ)}`} target="_blank" rel="noreferrer" className="btn btn-secondary text-xs">Maps</a>
+              </div>
+            </div>
+            {mapQ && <iframe title="site-map" className="w-full h-48 rounded border" src={`https://maps.google.com/maps?q=${encodeURIComponent(mapQ)}&z=18&t=k&output=embed`} />}
           </div>
 
           {!isNew && (
             <div className="flex flex-wrap items-center gap-2 pt-1">
-              <span className="label">Move to:</span>
+              <button onClick={() => setShowQual(true)} className="btn btn-primary text-sm flex items-center gap-1"><FiPhoneCall size={14} /> {qual ? 'Re-qualify on call' : 'Qualify on call'}</button>
+              <span className="label ml-2">Stage:</span>
               {stages.map((s) => <button key={s.key} onClick={() => move(s.key)} className={`text-[11px] px-2 py-1 rounded border ${s.key === d.stage ? 'bg-blue-800 text-white border-blue-800' : 'bg-white border-gray-200'}`}>{s.label}</button>)}
+            </div>)}
+
+          {qual && (
+            <div className="border rounded-lg p-3 bg-emerald-50/60 text-xs">
+              <p className="font-bold text-emerald-800 mb-1">✓ Qualified — {fmt(d.capacity_kw)} kW {d.project_type}</p>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-0.5 text-gray-700">
+                {qual.monthly_units && <div>Units/mo: <b>{qual.monthly_units}</b></div>}
+                {qual.monthly_bill && <div>Bill: <b>₹{qual.monthly_bill}</b></div>}
+                {qual.connection && <div>Conn: <b>{qual.connection}</b></div>}
+                {qual.roof_type && <div>Roof: <b>{qual.roof_type}</b></div>}
+                {qual.net_metering && <div>Metering: <b>{qual.net_metering}</b></div>}
+                {qual.timeline && <div>Timeline: <b>{qual.timeline}</b></div>}
+              </div>
+            </div>)}
+
+          {/* Quotation options (multiple specs/makes per client) */}
+          {!isNew && (
+            <div className="border rounded-lg p-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-semibold">Quotation options ({quotes.length})</span>
+                <button onClick={() => toQuote(`Option ${String.fromCharCode(65 + quotes.length)}`)} className="btn btn-secondary text-xs flex items-center gap-1"><FiPlus size={12} /> New option</button>
+              </div>
+              {quotes.length === 0 ? <p className="text-[11px] text-gray-400">No quotes yet — give this client a few options (different specs / makes).</p> : (
+                <table className="w-full text-xs"><tbody>
+                  {quotes.map((q) => (
+                    <tr key={q.id} className="border-t">
+                      <td className="p-1 font-medium">{q.variant_label || q.quote_no}</td>
+                      <td className="p-1">{fmt(q.capacity_kw)} kW</td>
+                      <td className="p-1 text-right">{inr(q.sell)} <span className="text-gray-400">(₹{fmt(q.sell_per_w, 2)}/W)</span></td>
+                      <td className="p-1 text-right text-emerald-600">{fmt(q.margin_pct, 1)}%</td>
+                    </tr>))}
+                </tbody></table>)}
             </div>)}
 
           {!isNew && deal.events?.length > 0 && (
@@ -208,15 +280,16 @@ function DealModal({ deal, stages, leads, user, onClose, onSaved, nav }) {
         </div>
         <div className="px-5 py-3 border-t flex items-center justify-between">
           <div className="flex gap-2">
-            {!isNew && <button onClick={toQuote} className="btn btn-secondary text-sm flex items-center gap-1"><FiFileText size={14} /> Create Quotation</button>}
             {!isNew && <button onClick={lose} className="text-sm text-rose-600">Mark Lost</button>}
             {!isNew && <button onClick={del} className="text-sm text-gray-400"><FiTrash2 size={14} /></button>}
           </div>
           <div className="flex gap-2">
-            <button onClick={onClose} className="btn btn-secondary text-sm">Cancel</button>
+            <button onClick={onClose} className="btn btn-secondary text-sm">Close</button>
             <button onClick={save} className="btn btn-primary text-sm">Save</button>
           </div>
         </div>
       </div>
-    </div>);
+    </div>
+    {showQual && <QualificationChat deal={d} onClose={() => setShowQual(false)} onDone={onQualDone} />}
+    </>);
 }

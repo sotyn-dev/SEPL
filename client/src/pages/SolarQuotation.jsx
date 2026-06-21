@@ -9,6 +9,7 @@ import {
   DEFAULTS, compute, buildBOQ, summarize, computeROI,
   PROJECT_TYPES, MOUNTS, ARRAY_TYPES, typeLabel,
 } from '../lib/solar/engine';
+import { STATES } from '../data/indiaLocations';
 
 const EMPTY_RB = { ui: { panel: {}, inverter: {}, structure: {}, cable: {} }, factors: { mount: {}, array: {}, state: {} }, settings: {}, inverterSizes: [], bos: {}, labour: {} };
 
@@ -23,6 +24,7 @@ export default function SolarQuotation() {
   const [currentId, setCurrentId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [dealId, setDealId] = useState(null);
+  const [variant, setVariant] = useState('');
   const [params] = useSearchParams();
   const set = (k, val) => setInp((p) => ({ ...p, [k]: val }));
 
@@ -35,10 +37,12 @@ export default function SolarQuotation() {
   // quote links back and auto-advances the deal to the Quotation stage.
   useEffect(() => {
     if (params.get('deal')) setDealId(params.get('deal'));
+    if (params.get('variant')) setVariant(params.get('variant'));
     const u = {};
     if (params.get('client')) u.client = params.get('client');
     if (params.get('kw')) u.kw = params.get('kw');
     if (params.get('conn')) u.conn = params.get('conn');
+    if (params.get('state')) u.state = params.get('state');
     if (Object.keys(u).length) setInp((p) => ({ ...p, ...u }));
   }, []); // eslint-disable-line
 
@@ -91,7 +95,7 @@ export default function SolarQuotation() {
     inputs: inp, boq: lines, engineering: c, roi,
     cost: tot.totTPA, margin_pct: tot.marginPct, sell: tot.totSP, sell_per_w: tot.wpRate,
     gst_amt: gstAmt, grand_total: grand,
-    capacity_dc_kwp: c.realKWp, deal_id: dealId || null,
+    capacity_dc_kwp: c.realKWp, deal_id: dealId || null, variant_label: variant || null,
   });
 
   const save = async () => {
@@ -219,7 +223,7 @@ export default function SolarQuotation() {
             <div className="grid grid-cols-2 gap-2">
               {Tx('client', 'Client name')}
               {Tx('addr', 'Address')}
-              {Se('state', 'State', stateNames.length ? stateNames : [inp.state])}
+              {Se('state', 'State', STATES)}
               {Se('conn', 'Connection', PROJECT_TYPES)}
               {Se('mount', 'Mounting', MOUNTS)}
               {Nu('area', 'Shadow-free area (m²)')}

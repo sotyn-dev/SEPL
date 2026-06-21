@@ -84,7 +84,7 @@ const SIDEBAR_GROUPS = [
     // Full Kitting moved here (mam 2026-05-27): "full kitting is under CRM"
     { path: '/crm-kitting',   label: 'Full Kitting',      icon: FiArchive,    module: 'crm_kitting' },
   ]},
-  { id: 'solar_sales', label: 'Solar Sales', icon: FiSun, items: [
+  { id: 'solar_sales', label: 'Solar Division', icon: FiSun, items: [
     { path: '/solar-funnel',          label: 'Solar Sales Funnel',   icon: FiTrendingUp, module: 'solar_quotation' },
     { path: '/solar-quotation',       label: 'Solar Quotation',      icon: FiClipboard,  module: 'solar_quotation' },
     { path: '/solar-projects',        label: 'Solar Projects',       icon: FiActivity,   module: 'solar_quotation' },
