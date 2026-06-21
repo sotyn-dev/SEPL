@@ -49,7 +49,9 @@ export default function SolarQuotation() {
   const invMakes = Object.keys(rb.ui.inverter);
   const structMakes = Object.keys(rb.ui.structure);
   const cableMakes = Object.keys(rb.ui.cable);
+  const battMakes = Object.keys(rb.ui.battery || {});
   const stateNames = Object.keys(rb.factors.state);
+  const isBatt = inp.conn === 'offgrid' || inp.conn === 'hybrid';
 
   const c = useMemo(() => compute(inp, rb), [inp, rb]);
   const lines = useMemo(() => buildBOQ(c, inp, rb), [c, inp, rb]);
@@ -163,6 +165,7 @@ export default function SolarQuotation() {
     ['Spec. yield', `${fmt(c.yieldKwh)} kWh/kWp · PR 0.80`],
   ];
   if (isZE) eng.push(['Export control', 'Zero-export limiter + grid CTs']);
+  if (c.isBatt) eng.push(['Battery bank', `${fmt(c.bankKWh)} kWh (usable ${fmt(c.usableKWh)})`]);
 
   return (
     <div className="space-y-4">
@@ -256,6 +259,18 @@ export default function SolarQuotation() {
             </div>
             <div className="grid grid-cols-2 gap-1">{Ck('dg', 'DG synchronization')}{Ck('rms', 'RMS monitoring')}{Ck('clean', 'Cleaning system')}{Ck('net', 'Net metering')}</div>
           </div>
+
+          {isBatt && (
+            <div className="card p-4 space-y-3 ring-1 ring-amber-200">
+              <p className="font-bold text-[11px] uppercase tracking-wide text-amber-700">🔋 Battery sizing ({inp.conn === 'offgrid' ? 'off-grid' : 'hybrid'})</p>
+              <div className="grid grid-cols-2 gap-2">
+                {Nu('backupkw', 'Backup load (kW)')}{Nu('backuphrs', 'Backup hours')}
+                {Nu('dod', 'Depth of discharge %')}
+                {inp.conn === 'offgrid' && Nu('autonomy', 'Autonomy (days)')}
+                {Se('batterytype', 'Battery type', battMakes.length ? battMakes : ['Li-ion LFP', 'Lead-acid Tubular'])}
+              </div>
+            </div>
+          )}
 
           <div className="card p-4 space-y-3">
             <p className="font-bold text-[11px] uppercase tracking-wide text-gray-700">4 · Commercials &amp; throughput margin</p>

@@ -21,10 +21,10 @@ const n = (v) => (v === undefined ? null : v);
 router.get('/rate-book', requirePermission('solar_quotation', 'view'), (req, res) => {
   const db = getDb();
   const mats = db.prepare('SELECT category, make, grade, item_name, size, rate FROM solar_materials WHERE active=1').all();
-  const ui = { panel: {}, inverter: {}, structure: {}, cable: {} };
+  const ui = { panel: {}, inverter: {}, structure: {}, cable: {}, battery: {} };
   const bos = {};
   const invSizes = new Set();
-  const counts = { panels: 0, inverters: 0, structure: 0, cables: 0, bos: 0 };
+  const counts = { panels: 0, inverters: 0, structure: 0, cables: 0, bos: 0, battery: 0 };
   for (const r of mats) {
     const p = +r.rate || 0;
     switch (r.category) {
@@ -45,6 +45,8 @@ router.get('/rate-book', requirePermission('solar_quotation', 'view'), (req, res
       }
       case 'bos':
         bos[r.item_name] = p; counts.bos++; break;
+      case 'battery':
+        ui.battery[r.make] = p; counts.battery++; break;
     }
   }
   const labour = {};
@@ -253,6 +255,8 @@ router.post('/deals/:id/move', requirePermission('solar_quotation', 'edit'), (re
      next_action=?, next_action_due=date('now','+'||?||' days'), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
     .run(to, to === 'won' ? 'won' : 'open', m.action, m.sla || 3, req.params.id);
   logDealEvent(db, d.id, 'stage', d.stage, to, req.body?.note || null, req.user);
+  // Goldratt hand-off: a Won deal immediately becomes an execution project.
+  if (to === 'won') { try { ensureProjectFromDeal(db, d.id, req.user); } catch (e) { console.warn('[solar] project create:', e.message); } }
   res.json({ message: 'Moved' });
 });
 
@@ -307,6 +311,156 @@ router.get('/funnel/analytics', requirePermission('solar_quotation', 'view'), (r
       overall_conversion: reached[0] ? Math.round(won.length / reached[0] * 100) : 0,
     },
     stuck,
+  });
+});
+
+// ════════════════ Solar Project Execution (Won → Handover → AMC) ════════════════
+const PROJECT_STAGES = [
+  { key: 'order', label: 'Order Confirmed', sla: 3, action: 'Collect advance + sign agreement' },
+  { key: 'design', label: 'Design & Approvals', sla: 10, action: 'Final SLD/structural + DISCOM net-meter + CEIG/subsidy' },
+  { key: 'procurement', label: 'Procurement', sla: 15, action: 'Order & receive panels / inverter / BOS' },
+  { key: 'installation', label: 'Installation', sla: 12, action: 'Civil, structure, module mounting, DC/AC wiring' },
+  { key: 'commissioning', label: 'Commissioning', sla: 7, action: 'DISCOM inspection, meter, grid sync, testing' },
+  { key: 'handover', label: 'Handover', sla: 3, action: 'Commissioning cert + generation report + client sign-off' },
+  { key: 'amc', label: 'AMC / O&M', sla: 0, action: 'Periodic cleaning, monitoring & preventive maintenance' },
+];
+const PJ_IDX = Object.fromEntries(PROJECT_STAGES.map((s, i) => [s.key, i]));
+const pjMeta = (k) => PROJECT_STAGES[PJ_IDX[k]] || null;
+
+function defaultMilestones(value) {
+  const v = Number(value) || 0;
+  return [
+    { label: 'Advance', pct: 25 }, { label: 'Before structure delivery', pct: 25 },
+    { label: 'Before panel delivery', pct: 25 }, { label: 'After installation', pct: 20 },
+    { label: 'After handover', pct: 5 },
+  ].map((m) => ({ ...m, amount: Math.round(v * m.pct / 100), status: 'pending', collected_on: null }));
+}
+function defaultChecklist() {
+  const C = {
+    design: ['Final SLD & structural drawings', 'DISCOM net-metering application', 'CEIG / electrical approval (if HT)', 'Subsidy registration (if applicable)'],
+    procurement: ['Panels ordered & received', 'Inverter ordered & received', 'Structure & BOS received'],
+    installation: ['Civil & foundation', 'Structure erected', 'Modules mounted & wired', 'Earthing & lightning arrestor'],
+    commissioning: ['DISCOM inspection passed', 'Net-meter installed', 'Grid sync & testing'],
+    handover: ['Commissioning certificate', 'Generation report & O&M manual', 'Client sign-off'],
+  };
+  return Object.entries(C).flatMap(([stage, items]) => items.map((item) => ({ stage, item, done: false })));
+}
+function logProjectEvent(db, id, type, from, to, note, user) {
+  db.prepare(`INSERT INTO solar_project_events (project_id,type,from_stage,to_stage,note,by_user,by_name) VALUES (?,?,?,?,?,?,?)`)
+    .run(id, type, from || null, to || null, note || null, user?.id || null, user?.name || null);
+}
+function createProject(db, p, user) {
+  const r = db.prepare(`INSERT INTO solar_projects
+    (deal_id,quotation_id,client_name,company,location,state,capacity_kw,project_type,value,stage,owner_id,owner_name,
+     next_action,next_action_due,start_date,milestones_json,checklist_json,amc_annual_fee,amc_free_until,amc_status,created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,date('now','+'||?||' days'),date('now'),?,?,?,date('now','+10 years'),'pending',?)`).run(
+    n(p.deal_id), n(p.quotation_id), n(p.client_name), n(p.company), n(p.location), n(p.state),
+    Number(p.capacity_kw) || 0, n(p.project_type), Number(p.value) || 0, 'order', n(p.owner_id), n(p.owner_name),
+    pjMeta('order').action, pjMeta('order').sla, JSON.stringify(defaultMilestones(p.value)), JSON.stringify(defaultChecklist()),
+    200000, user?.id || null);
+  const id = r.lastInsertRowid;
+  db.prepare('UPDATE solar_projects SET project_no=? WHERE id=?').run(`SP-${String(id).padStart(4, '0')}`, id);
+  logProjectEvent(db, id, 'created', null, 'order', 'Project created from won deal', user);
+  return id;
+}
+// Called when a deal is marked Won — spin up its execution project once.
+function ensureProjectFromDeal(db, dealId, user) {
+  const exists = db.prepare('SELECT id FROM solar_projects WHERE deal_id=?').get(dealId);
+  if (exists) return exists.id;
+  const d = db.prepare('SELECT * FROM solar_deals WHERE id=?').get(dealId);
+  if (!d) return null;
+  return createProject(db, { deal_id: d.id, quotation_id: d.quotation_id, client_name: d.client_name, company: d.company,
+    location: d.location, state: d.state, capacity_kw: d.capacity_kw, project_type: d.project_type, value: d.value,
+    owner_id: d.owner_id, owner_name: d.owner_name }, user);
+}
+
+router.get('/projects/config', requirePermission('solar_quotation', 'view'), (req, res) => res.json({ stages: PROJECT_STAGES }));
+
+router.get('/projects', requirePermission('solar_quotation', 'view'), (req, res) => {
+  const { stage, status } = req.query;
+  const cl = [], p = [];
+  if (stage) { cl.push('stage=?'); p.push(stage); }
+  if (status) { cl.push('status=?'); p.push(status); }
+  const where = cl.length ? 'WHERE ' + cl.join(' AND ') : '';
+  const rows = getDb().prepare(`SELECT *, CAST(julianday('now')-julianday(stage_updated_at) AS INTEGER) AS days_in_stage FROM solar_projects ${where} ORDER BY stage_updated_at DESC`).all(...p);
+  res.json(rows.map((r) => {
+    const ms = JSON.parse(r.milestones_json || '[]');
+    const collected = ms.filter((m) => m.status === 'collected').reduce((a, m) => a + (m.amount || 0), 0);
+    return { ...r, collected, pending: (r.value || 0) - collected, stuck: r.status === 'active' && r.days_in_stage > (pjMeta(r.stage)?.sla ?? 99) };
+  }));
+});
+
+router.get('/projects/:id', requirePermission('solar_quotation', 'view'), (req, res) => {
+  const r = getDb().prepare('SELECT * FROM solar_projects WHERE id=?').get(req.params.id);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  r.milestones = JSON.parse(r.milestones_json || '[]');
+  r.checklist = JSON.parse(r.checklist_json || '[]');
+  r.events = getDb().prepare('SELECT * FROM solar_project_events WHERE project_id=? ORDER BY created_at DESC').all(r.id);
+  res.json(r);
+});
+
+router.post('/projects', requirePermission('solar_quotation', 'create'), (req, res) => {
+  const id = createProject(getDb(), req.body || {}, req.user);
+  res.json({ id, project_no: `SP-${String(id).padStart(4, '0')}`, message: 'Created' });
+});
+router.post('/projects/from-deal/:dealId', requirePermission('solar_quotation', 'create'), (req, res) => {
+  const id = ensureProjectFromDeal(getDb(), req.params.dealId, req.user);
+  if (!id) return res.status(404).json({ error: 'Deal not found' });
+  res.json({ id, message: 'Project ready' });
+});
+
+router.put('/projects/:id', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  const b = req.body || {};
+  const cols = ['client_name', 'company', 'location', 'state', 'capacity_kw', 'project_type', 'value', 'owner_id', 'owner_name', 'next_action', 'next_action_due', 'target_handover', 'handover_date', 'amc_annual_fee', 'amc_free_until', 'amc_next_due', 'amc_status', 'status'];
+  const set = cols.filter((c) => c in b);
+  if ('milestones' in b) { set.push('milestones_json'); b.milestones_json = JSON.stringify(b.milestones); }
+  if ('checklist' in b) { set.push('checklist_json'); b.checklist_json = JSON.stringify(b.checklist); }
+  if (!set.length) return res.json({ message: 'No change' });
+  getDb().prepare(`UPDATE solar_projects SET ${set.map((c) => `${c}=?`).join(',')}, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(...set.map((c) => n(b[c])), req.params.id);
+  res.json({ message: 'Updated' });
+});
+
+router.post('/projects/:id/move', requirePermission('solar_quotation', 'edit'), (req, res) => {
+  const db = getDb();
+  const d = db.prepare('SELECT * FROM solar_projects WHERE id=?').get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  const to = req.body?.stage;
+  if (PJ_IDX[to] == null) return res.status(400).json({ error: 'Bad stage' });
+  const m = pjMeta(to);
+  db.prepare(`UPDATE solar_projects SET stage=?, stage_updated_at=CURRENT_TIMESTAMP,
+     next_action=?, next_action_due=date('now','+'||?||' days'), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(to, m.action, m.sla || 3, req.params.id);
+  if (to === 'handover') db.prepare("UPDATE solar_projects SET handover_date=date('now') WHERE id=?").run(req.params.id);
+  if (to === 'amc') db.prepare("UPDATE solar_projects SET amc_status='active', amc_next_due=date('now','+1 year') WHERE id=?").run(req.params.id);
+  logProjectEvent(db, d.id, 'stage', d.stage, to, req.body?.note || null, req.user);
+  res.json({ message: 'Moved' });
+});
+
+router.delete('/projects/:id', requirePermission('solar_quotation', 'delete'), (req, res) => {
+  getDb().prepare('DELETE FROM solar_project_events WHERE project_id=?').run(req.params.id);
+  getDb().prepare('DELETE FROM solar_projects WHERE id=?').run(req.params.id);
+  res.json({ message: 'Deleted' });
+});
+
+router.get('/projects/stats/analytics', requirePermission('solar_quotation', 'view'), (req, res) => {
+  const db = getDb();
+  const rows = db.prepare("SELECT stage, status, value, milestones_json, CAST(julianday('now')-julianday(stage_updated_at) AS INTEGER) AS days_in_stage, amc_next_due FROM solar_projects").all();
+  const byStage = PROJECT_STAGES.map((s) => ({ key: s.key, label: s.label, count: 0, value: 0 }));
+  let collected = 0, pending = 0, stuck = [];
+  for (const r of rows) {
+    const i = PJ_IDX[r.stage]; if (i != null) { byStage[i].count++; byStage[i].value += r.value || 0; }
+    const ms = JSON.parse(r.milestones_json || '[]');
+    const c = ms.filter((m) => m.status === 'collected').reduce((a, m) => a + (m.amount || 0), 0);
+    collected += c; pending += (r.value || 0) - c;
+    if (r.status === 'active' && r.days_in_stage > (pjMeta(r.stage)?.sla ?? 99)) stuck.push(r.stage);
+  }
+  const amcDue = db.prepare("SELECT id, project_no, client_name, amc_next_due FROM solar_projects WHERE amc_status='active' AND amc_next_due IS NOT NULL AND amc_next_due <= date('now','+30 days')").all();
+  res.json({
+    stages: PROJECT_STAGES,
+    byStage: byStage.map((s) => ({ ...s, value: Math.round(s.value) })),
+    totals: { active: rows.filter((r) => r.status === 'active').length, value: Math.round(rows.reduce((a, r) => a + (r.value || 0), 0)), collected: Math.round(collected), pending: Math.round(pending), stuck: stuck.length },
+    amcDue,
   });
 });
 

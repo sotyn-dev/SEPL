@@ -62,6 +62,27 @@ function ensureSolarSchema(db) {
       deal_id INTEGER, type TEXT, from_stage TEXT, to_stage TEXT, note TEXT,
       by_user INTEGER, by_name TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    -- Solar Project Execution: a Won deal becomes a project that runs Order →
+    -- Design/Approvals → Procurement → Installation → Commissioning → Handover → AMC.
+    -- milestones_json holds the payment schedule (cash/throughput); amc_* the O&M.
+    CREATE TABLE IF NOT EXISTS solar_projects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_no TEXT, deal_id INTEGER, quotation_id INTEGER,
+      client_name TEXT, company TEXT, location TEXT, state TEXT,
+      capacity_kw REAL, project_type TEXT, value REAL DEFAULT 0,
+      stage TEXT DEFAULT 'order', stage_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      owner_id INTEGER, owner_name TEXT, next_action TEXT, next_action_due DATE,
+      start_date DATE, target_handover DATE, handover_date DATE,
+      milestones_json TEXT, checklist_json TEXT,
+      amc_free_until DATE, amc_annual_fee REAL DEFAULT 0, amc_next_due DATE, amc_status TEXT DEFAULT 'pending',
+      status TEXT DEFAULT 'active', created_by INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS solar_project_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER, type TEXT, from_stage TEXT, to_stage TEXT, note TEXT,
+      by_user INTEGER, by_name TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 }
 
@@ -80,6 +101,13 @@ function seedSolarRates(db) {
       for (const p of d.cables) { ins.run('cable', p.brand, p.application, `${p.brand} ${p.application} ${p.size_sqmm}mm²`, `${p.size_sqmm}`, 'Mtr', p['purchase_rate_₹/m'], n(p['gst_%'])); seeded++; }
       for (const p of d.bos) { ins.run('bos', p.brand, null, p.category, null, p.unit, p['purchase_rate_₹/unit'], n(p['gst_%'])); seeded++; }
     })();
+  }
+
+  // Battery bank rates (off-grid / hybrid) — own guard so they seed even when the
+  // material master already had rows from an earlier boot.
+  if (db.prepare("SELECT COUNT(*) AS n FROM solar_materials WHERE category='battery'").get().n === 0) {
+    const ins = db.prepare(`INSERT INTO solar_materials (category,make,grade,item_name,size,unit,rate,gst) VALUES (?,?,?,?,?,?,?,?)`);
+    db.transaction(() => { for (const [make, rate] of [['Li-ion LFP', 22000], ['Lead-acid Tubular', 12000]]) { ins.run('battery', make, null, `${make} battery bank`, null, 'kWh', rate, 18); seeded++; } })();
   }
 
   // ── Solar Labour Master ──

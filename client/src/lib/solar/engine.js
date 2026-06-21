@@ -12,6 +12,8 @@ export const DEFAULTS = {
   dg: true, rms: true, clean: true, net: true,
   margin: 22, floor: 15, gst: 13.8, netchg: 500000, cont: 1.5, tariff: 8, valid: 10, amcfree: 10, amcfee: 200000,
   transport: true, escal: true, subsidy: false, scope: true,
+  // Off-grid / hybrid battery sizing
+  backupkw: 25, backuphrs: 4, dod: 80, autonomy: 1, batterytype: 'Li-ion LFP',
 };
 
 const FALLBACK_INV_SIZES = [300, 125, 110, 100, 75, 50, 40, 30, 25, 20, 15, 10, 5];
@@ -69,7 +71,16 @@ export function compute(inp, rb) {
   const trkYield = (rb.factors?.array?.[inp.tracker]?.yield_mult) ?? ({ fixed: 1.0, seasonal: 1.05, tracker: 1.18 }[inp.tracker] || 1);
   const annual = realKWp * yieldKwh * PR * trkYield / 1000; // MWh
 
-  return { kwAC, dcac, wp, kWpDC, nPanels, realKWp, vocCold, vmpHot, maxSeries, minSeries, perString, nStrings, stringV, invSel, dcSize, dcVD, totalDC, iAC, acRuns, totalAC, nPits, earthCable, footprint, nLA, nMC4, annual, yieldKwh };
+  // ── Off-grid / hybrid battery sizing ──
+  const isBatt = inp.conn === 'offgrid' || inp.conn === 'hybrid';
+  let usableKWh = 0, bankKWh = 0;
+  if (isBatt) {
+    const backupKw = v('backupkw'), backupHrs = v('backuphrs'), dod = (v('dod') || 80) / 100, autonomy = v('autonomy') || 1;
+    usableKWh = backupKw * backupHrs * (inp.conn === 'offgrid' ? autonomy : 1);
+    bankKWh = dod > 0 ? usableKWh / dod : 0;
+  }
+
+  return { kwAC, dcac, wp, kWpDC, nPanels, realKWp, vocCold, vmpHot, maxSeries, minSeries, perString, nStrings, stringV, invSel, dcSize, dcVD, totalDC, iAC, acRuns, totalAC, nPits, earthCable, footprint, nLA, nMC4, annual, yieldKwh, isBatt, usableKWh, bankKWh };
 }
 
 // Effective purchase rates from the rate book, driven by the selected makes.
@@ -109,7 +120,13 @@ export function buildBOQ(c, inp, rb) {
     lines.push({ desc, unit, make, qty, ppUnit, pp, tpa, sp, rate: qty ? sp / qty : sp });
   };
   add(`${c.wp} Wp ${inp.ptype}${isDCR ? ' DCR' : ''} Solar Panel`, 'Nos', inp.panelmake, c.nPanels, c.wp * r.panel, c.wp * r.lab);
-  Object.entries(c.invSel).forEach(([kw, nn]) => add(`${kw} kW String Inverter (MPPT, grid-tie)`, 'Nos', inp.invmake, Number(nn), kw * 1000 * r.inv));
+  Object.entries(c.invSel).forEach(([kw, nn]) => add(`${kw} kW ${c.isBatt ? 'Hybrid' : 'String'} Inverter (MPPT${c.isBatt ? ', battery-ready' : ', grid-tie'})`, 'Nos', inp.invmake, Number(nn), kw * 1000 * r.inv * (c.isBatt ? 1.35 : 1)));
+  // Battery bank (off-grid / hybrid)
+  if (c.isBatt && c.bankKWh > 0) {
+    const battRate = (rb.ui?.battery?.[inp.batterytype]) ?? 22000;
+    add(`Battery Bank — ${inp.batterytype} (${Math.round(c.bankKWh)} kWh usable ${Math.round(c.usableKWh)} kWh)`, 'kWh', inp.batterytype, Math.round(c.bankKWh), battRate);
+    add('Battery rack, BMS & DC cabling', 'Set', 'Standard', 1, Math.round(c.bankKWh * battRate * 0.08));
+  }
   add(`Module Mounting Structure — ${inp.structmake}${inp.tracker === 'tracker' ? ' (single-axis tracker)' : ''} (${surfLbl}, civil incl.)`, 'kWp', inp.structmake, Math.round(c.realKWp), r.struct * 1000 * structMult);
   const nInv = Object.values(c.invSel).reduce((a, b) => a + b, 0);
   add('AC & DC Distribution Box (with SPD & protections)', 'Set', 'Standard', nInv, r.db);
