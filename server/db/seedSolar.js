@@ -88,6 +88,7 @@ function ensureSolarSchema(db) {
     );
   `);
   addCol(`ALTER TABLE solar_deals ADD COLUMN qualification_json TEXT`);
+  addCol(`ALTER TABLE solar_deals ADD COLUMN stage_data_json TEXT`);
   addCol(`ALTER TABLE solar_deals ADD COLUMN district TEXT`);
   addCol(`ALTER TABLE solar_deals ADD COLUMN pincode TEXT`);
   addCol(`ALTER TABLE solar_deals ADD COLUMN lat REAL`);

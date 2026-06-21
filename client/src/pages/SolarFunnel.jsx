@@ -12,6 +12,30 @@ import QualificationChat from './QualificationChat';
 
 const cr = (v) => `₹${fmt((v || 0) / 1e7, 2)} Cr`;
 
+// The concrete action that gates each funnel stage — you can't advance without it.
+const STAGE_ACTIONS = {
+  inquiry: { kind: 'qualify', label: 'Qualify the lead on the call', gate: (sd, d) => Object.keys(d.qualification || {}).length > 0 },
+  qualification: { kind: 'form', group: 'survey', label: 'Schedule the site survey',
+    fields: [{ k: 'scheduled_date', label: 'Survey date', type: 'date' }, { k: 'surveyor', label: 'Surveyor / engineer' }],
+    gate: (sd) => !!sd.survey?.scheduled_date },
+  survey: { kind: 'form', group: 'survey', doneFlag: 'completed', label: 'Complete the site-survey report',
+    fields: [{ k: 'area_sqft', label: 'Shadow-free area (sq ft)', type: 'number' }, { k: 'roof_type', label: 'Roof / surface' }, { k: 'shadow', label: 'Shading observed' }, { k: 'notes', label: 'Survey notes' }],
+    gate: (sd) => !!(sd.survey?.completed && sd.survey?.area_sqft) },
+  design: { kind: 'form', group: 'design', doneFlag: 'confirmed', label: 'Finalize design & BOQ',
+    fields: [{ k: 'note', label: 'Design note (layout / inverter / structure)' }],
+    extra: (d) => (d.capacity_kw > 0 ? null : 'Set the system capacity (kW) on the lead first.'),
+    gate: (sd, d) => !!(d.capacity_kw > 0 && sd.design?.confirmed) },
+  quotation: { kind: 'quote', group: 'quotation', doneFlag: 'sent', label: 'Create & send the quotation',
+    gate: (sd, d, quotes) => !!(quotes.length > 0 && sd.quotation?.sent) },
+  negotiation: { kind: 'form', group: 'negotiation', label: 'Log the client response',
+    fields: [{ k: 'note', label: 'Client response / negotiation' }, { k: 'preferred_option', label: 'Preferred quote option' }],
+    gate: (sd) => !!sd.negotiation?.note },
+  approval: { kind: 'form', group: 'approval', doneFlag: 'confirmed', label: 'Confirm the order',
+    fields: [{ k: 'po_number', label: 'PO number / reference' }, { k: 'advance_amount', label: 'Advance received ₹', type: 'number' }],
+    gate: (sd) => !!sd.approval?.confirmed },
+  won: { kind: 'done', label: 'Order won — execution project created' },
+};
+
 export default function SolarFunnel() {
   const { user } = useAuth();
   const nav = useNavigate();
@@ -111,10 +135,7 @@ export default function SolarFunnel() {
                         {d.next_action && <p className="text-[10px] text-gray-600 mt-1 truncate">→ {d.next_action}</p>}
                         <div className="flex items-center justify-between mt-1">
                           <span className="text-[9px] text-gray-400">{d.owner_name || ''}</span>
-                          <select onClick={(e) => e.stopPropagation()} onChange={(e) => move(d, e.target.value)} value={d.stage}
-                            className="text-[9px] border rounded px-1 py-0.5 bg-white">
-                            {stages.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
-                          </select>
+                          <span className="text-[9px] text-blue-600 font-semibold">open to act ›</span>
                         </div>
                       </div>))}
                     {!list.length && <p className="text-[10px] text-gray-300 text-center py-4">—</p>}
@@ -154,6 +175,7 @@ export default function SolarFunnel() {
 function DealModal({ deal, stages, leads, user, onClose, onSaved, nav }) {
   const [d, setD] = useState({ ...deal });
   const [showQual, setShowQual] = useState(false);
+  const [aForm, setAForm] = useState({});
   const isNew = !deal.id;
   const set = (k, v) => setD((p) => ({ ...p, [k]: v }));
   const F = (k, label, props = {}) => (
@@ -189,6 +211,28 @@ function DealModal({ deal, stages, leads, user, onClose, onSaved, nav }) {
   const mapQ = (d.lat && d.lng) ? `${d.lat},${d.lng}` : [d.location, d.district, d.state, d.pincode].filter(Boolean).join(', ') || d.client_name;
   const qual = d.qualification && Object.keys(d.qualification).length ? d.qualification : null;
   const quotes = d.quotes || [];
+
+  // ── Gated stage flow: each stage has a required action to advance ──
+  const curIdx = stages.findIndex((s) => s.key === d.stage);
+  const action = STAGE_ACTIONS[d.stage] || {};
+  const sd = d.stage_data || {};
+  const nextStage = stages[curIdx + 1];
+  const prevStage = stages[curIdx - 1];
+  const gateMet = action.gate ? action.gate(sd, d, quotes) : true;
+  useEffect(() => { setAForm({ ...((d.stage_data || {})[action.group] || {}) }); }, [d.stage, d.id]); // eslint-disable-line
+  const saveStageAction = async () => {
+    const patch = { ...aForm };
+    if (action.doneFlag) patch[action.doneFlag] = true;
+    try { await api.put(`/solar/deals/${d.id}`, { stage_data: { [action.group]: patch } }); toast.success('Action saved'); await refresh(); }
+    catch { toast.error('Save failed'); }
+  };
+  const advance = async () => {
+    if (!nextStage) return;
+    try { await api.post(`/solar/deals/${d.id}/move`, { stage: nextStage.key }); toast.success(`Moved to ${nextStage.label}`); await refresh(); }
+    catch (e) { toast.error(e.response?.data?.requirement || e.response?.data?.error || 'Cannot advance'); }
+  };
+  const moveBack = async () => { if (!prevStage) return; try { await api.post(`/solar/deals/${d.id}/move`, { stage: prevStage.key, force: true }); await refresh(); } catch { toast.error('Failed'); } };
+  const markSent = async () => { try { await api.put(`/solar/deals/${d.id}`, { stage_data: { quotation: { sent: true, sent_on: new Date().toISOString().slice(0, 10) } } }); toast.success('Quotation marked sent'); await refresh(); } catch { toast.error('Failed'); } };
 
   return (
     <>
@@ -234,10 +278,47 @@ function DealModal({ deal, stages, leads, user, onClose, onSaved, nav }) {
           </div>
 
           {!isNew && (
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <button onClick={() => setShowQual(true)} className="btn btn-primary text-sm flex items-center gap-1"><FiPhoneCall size={14} /> {qual ? 'Re-qualify on call' : 'Qualify on call'}</button>
-              <span className="label ml-2">Stage:</span>
-              {stages.map((s) => <button key={s.key} onClick={() => move(s.key)} className={`text-[11px] px-2 py-1 rounded border ${s.key === d.stage ? 'bg-blue-800 text-white border-blue-800' : 'bg-white border-gray-200'}`}>{s.label}</button>)}
+            <div className="border-2 border-blue-200 rounded-lg p-3 bg-blue-50/40">
+              {/* stage progress */}
+              <div className="flex items-center gap-1 mb-2 overflow-x-auto">
+                {stages.map((s, i) => (
+                  <span key={s.key} className={`text-[9px] px-2 py-1 rounded-full whitespace-nowrap ${i < curIdx ? 'bg-emerald-100 text-emerald-700' : i === curIdx ? 'bg-blue-700 text-white font-semibold' : 'bg-gray-100 text-gray-400'}`}>{i < curIdx ? '✓ ' : ''}{s.label}</span>))}
+              </div>
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-blue-900">Step {curIdx + 1}: {action.label}</p>
+                {prevStage && <button onClick={moveBack} className="text-xs text-gray-500">← back to {prevStage.label}</button>}
+              </div>
+
+              <div className="mt-2">
+                {action.kind === 'qualify' && (
+                  <button onClick={() => setShowQual(true)} className="btn btn-primary text-sm flex items-center gap-1"><FiPhoneCall size={14} /> {qual ? 'Re-qualify on call' : 'Qualify on call'}</button>)}
+
+                {action.kind === 'form' && (
+                  <div className="space-y-2">
+                    {action.extra && action.extra(d) && <p className="text-[11px] text-amber-700">⚠ {action.extra(d)}</p>}
+                    <div className="grid grid-cols-2 gap-2">
+                      {action.fields.map((f) => (
+                        <label key={f.k} className="block"><span className="label">{f.label}</span>
+                          <input className="input-compact w-full" type={f.type || 'text'} value={aForm[f.k] ?? ''} onChange={(e) => setAForm((p) => ({ ...p, [f.k]: e.target.value }))} /></label>))}
+                    </div>
+                    <button onClick={saveStageAction} className="btn btn-secondary text-sm">{action.doneFlag ? 'Mark step complete' : 'Save'}</button>
+                  </div>)}
+
+                {action.kind === 'quote' && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button onClick={() => toQuote(`Option ${String.fromCharCode(65 + quotes.length)}`)} className="btn btn-secondary text-sm flex items-center gap-1"><FiFileText size={14} /> Create quote option</button>
+                    {quotes.length > 0 && !sd.quotation?.sent && <button onClick={markSent} className="btn btn-secondary text-sm">✓ Mark quotation sent</button>}
+                    {sd.quotation?.sent && <span className="text-xs text-emerald-600">✓ Quotation sent to client</span>}
+                  </div>)}
+
+                {action.kind === 'done' && <p className="text-sm text-emerald-700">✓ {action.label}</p>}
+              </div>
+
+              {nextStage && (
+                <div className="mt-3 flex items-center gap-2 border-t pt-2">
+                  <button onClick={advance} disabled={!gateMet} className={`btn text-sm ${gateMet ? 'btn-primary' : 'btn-secondary opacity-50 cursor-not-allowed'}`}>Advance to {nextStage.label} →</button>
+                  {gateMet ? <span className="text-[11px] text-emerald-600">✓ Action done — ready to advance</span> : <span className="text-[11px] text-rose-600">🔒 Complete the action above to unlock</span>}
+                </div>)}
             </div>)}
 
           {qual && (

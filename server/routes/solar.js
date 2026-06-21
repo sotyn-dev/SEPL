@@ -178,6 +178,35 @@ const STAGES = [
 const STAGE_IDX = Object.fromEntries(STAGES.map((s, i) => [s.key, i]));
 const stageMeta = (k) => STAGES[STAGE_IDX[k]] || null;
 
+// Exit gate per stage: the concrete action that must be done before advancing.
+const STAGE_GATE_LABEL = {
+  inquiry: 'Complete the qualification call (Qualify on call)',
+  qualification: 'Schedule the site survey (set a date + surveyor)',
+  survey: 'Complete the site-survey report (shadow-free area + roof type)',
+  design: 'Finalize design & BOQ (confirm system size + type)',
+  quotation: 'Create & send at least one quotation to the client',
+  negotiation: 'Log the client response / negotiation note',
+  approval: 'Confirm the order (PO number or advance received)',
+  won: '',
+};
+function dealGate(db, d) {
+  const sd = JSON.parse(d.stage_data_json || '{}');
+  const qual = JSON.parse(d.qualification_json || '{}');
+  const quoteCount = db.prepare('SELECT COUNT(*) AS n FROM solar_quotations WHERE deal_id=?').get(d.id).n;
+  let met = true;
+  switch (d.stage) {
+    case 'inquiry': met = Object.keys(qual).length > 0; break;
+    case 'qualification': met = !!sd.survey?.scheduled_date; break;
+    case 'survey': met = !!(sd.survey?.completed && sd.survey?.area_sqft); break;
+    case 'design': met = !!(d.capacity_kw > 0 && sd.design?.confirmed); break;
+    case 'quotation': met = !!(quoteCount > 0 && sd.quotation?.sent); break;
+    case 'negotiation': met = !!sd.negotiation?.note; break;
+    case 'approval': met = !!sd.approval?.confirmed; break;
+    default: met = true;
+  }
+  return { met, requirement: STAGE_GATE_LABEL[d.stage] || '', quoteCount };
+}
+
 function logDealEvent(db, dealId, type, fromStage, toStage, note, user) {
   db.prepare(`INSERT INTO solar_deal_events (deal_id,type,from_stage,to_stage,note,by_user,by_name) VALUES (?,?,?,?,?,?,?)`)
     .run(dealId, type, fromStage || null, toStage || null, note || null, user?.id || null, user?.name || null);
@@ -214,7 +243,9 @@ router.get('/deals/:id', requirePermission('solar_quotation', 'view'), (req, res
   if (!d) return res.status(404).json({ error: 'Not found' });
   d.events = getDb().prepare('SELECT * FROM solar_deal_events WHERE deal_id=? ORDER BY created_at DESC').all(d.id);
   d.qualification = JSON.parse(d.qualification_json || '{}');
+  d.stage_data = JSON.parse(d.stage_data_json || '{}');
   d.quotes = getDb().prepare('SELECT id, quote_no, variant_label, capacity_kw, sell, sell_per_w, margin_pct, grand_total, created_at FROM solar_quotations WHERE deal_id=? ORDER BY created_at').all(d.id);
+  d.gate = dealGate(getDb(), d);
   res.json(d);
 });
 
@@ -239,7 +270,13 @@ router.post('/deals', requirePermission('solar_quotation', 'create'), (req, res)
 router.put('/deals/:id', requirePermission('solar_quotation', 'edit'), (req, res) => {
   const b = req.body || {};
   if ('qualification' in b) { b.qualification_json = JSON.stringify(b.qualification); }
-  const cols = ['client_name', 'company', 'phone', 'location', 'state', 'district', 'pincode', 'lat', 'lng', 'capacity_kw', 'project_type', 'value', 'source', 'owner_id', 'owner_name', 'next_action', 'next_action_due', 'lead_id', 'qualification_json'];
+  // Merge partial stage-action data (one level deep) into stage_data_json.
+  if ('stage_data' in b) {
+    const cur = JSON.parse((getDb().prepare('SELECT stage_data_json FROM solar_deals WHERE id=?').get(req.params.id) || {}).stage_data_json || '{}');
+    for (const k of Object.keys(b.stage_data)) cur[k] = { ...(cur[k] || {}), ...b.stage_data[k] };
+    b.stage_data_json = JSON.stringify(cur);
+  }
+  const cols = ['client_name', 'company', 'phone', 'location', 'state', 'district', 'pincode', 'lat', 'lng', 'capacity_kw', 'project_type', 'value', 'source', 'owner_id', 'owner_name', 'next_action', 'next_action_due', 'lead_id', 'qualification_json', 'stage_data_json'];
   const set = cols.filter((c) => c in b);
   if (!set.length) return res.json({ message: 'No change' });
   getDb().prepare(`UPDATE solar_deals SET ${set.map((c) => `${c}=?`).join(',')}, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
@@ -253,6 +290,13 @@ router.post('/deals/:id/move', requirePermission('solar_quotation', 'edit'), (re
   if (!d) return res.status(404).json({ error: 'Not found' });
   const to = req.body?.stage;
   if (STAGE_IDX[to] == null) return res.status(400).json({ error: 'Bad stage' });
+  // ── Stage gating: forward moves need the current step's action done, one step at a time ──
+  const fromIdx = STAGE_IDX[d.stage], toIdx = STAGE_IDX[to];
+  if (toIdx > fromIdx && !req.body?.force) {
+    const g = dealGate(db, d);
+    if (!g.met) return res.status(422).json({ error: 'Action required before advancing', requirement: g.requirement, stage: d.stage });
+    if (toIdx !== fromIdx + 1) return res.status(422).json({ error: 'Finish one stage at a time.', next: STAGES[fromIdx + 1]?.label });
+  }
   const m = stageMeta(to);
   db.prepare(`UPDATE solar_deals SET stage=?, stage_updated_at=CURRENT_TIMESTAMP, status=?,
      next_action=?, next_action_due=date('now','+'||?||' days'), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
