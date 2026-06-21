@@ -79,6 +79,20 @@ try {
   console.warn('[seed] scoring failed:', e.message);
 }
 
+// Solar Quotation module — create tables + seed the rate book on first boot
+// (mam 2026-06-21). Idempotent: tables use IF NOT EXISTS, rows only seed when
+// each table is empty. Skip via ERP_DISABLE_SOLAR_SEED=1.
+if (!process.env.ERP_DISABLE_SOLAR_SEED) {
+  try {
+    const { initSolar } = require('./db/seedSolar');
+    const { getDb } = require('./db/schema');
+    const r = initSolar(getDb());
+    if (r.seeded > 0) console.log(`[seed] solar: seeded ${r.seeded} rate rows`);
+  } catch (e) {
+    console.warn('[seed] solar failed:', e.message);
+  }
+}
+
 // One-time cleanup: strip CSV-import quote artifacts ("""M/s X""") and
 // extra whitespace from business_book text columns. Idempotent — only
 // updates rows where the cleaned value differs.
@@ -313,6 +327,7 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/sales-funnel', require('./routes/salesfunnel'));
 app.use('/api/quotations', require('./routes/quotations'));
+app.use('/api/solar', require('./routes/solar'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/business-book', require('./routes/businessbook'));
 app.use('/api/payment-required', require('./routes/paymentrequired'));

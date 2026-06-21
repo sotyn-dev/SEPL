@@ -23,7 +23,7 @@ import {
   // CRM children
   FiGlobe, FiTrendingUp, FiTrendingDown, FiFilter, FiBook, FiUser,
   // Quotes & Orders children
-  FiArchive, FiClipboard, FiTruck, FiShoppingCart,
+  FiArchive, FiClipboard, FiTruck, FiShoppingCart, FiSun,
   // Procurement children
   FiGrid, FiHexagon, FiInbox, FiTag,
   // Projects children
@@ -84,11 +84,19 @@ const SIDEBAR_GROUPS = [
     // Full Kitting moved here (mam 2026-05-27): "full kitting is under CRM"
     { path: '/crm-kitting',   label: 'Full Kitting',      icon: FiArchive,    module: 'crm_kitting' },
   ]},
+  { id: 'solar_sales', label: 'Solar Division', icon: FiSun, items: [
+    { path: '/solar-funnel',          label: 'Solar Sales Funnel',   icon: FiTrendingUp, module: 'solar_quotation' },
+    { path: '/solar-quotation',       label: 'Solar Quotation',      icon: FiClipboard,  module: 'solar_quotation' },
+    { path: '/solar-projects',        label: 'Solar Projects',       icon: FiActivity,   module: 'solar_quotation' },
+    { path: '/solar-material-master', label: 'Solar Material Master', icon: FiPackage,   module: 'solar_quotation' },
+    { path: '/solar-labour-master',   label: 'Solar Labour Master',  icon: FiTool,       module: 'solar_quotation' },
+    { path: '/solar-rate-master',     label: 'Solar Settings',       icon: FiSliders,    module: 'solar_quotation' },
+  ]},
   { id: 'quotes_orders', label: 'Quotes & Orders', icon: FiFileText, items: [
     { path: '/quotations',  label: 'Quotations',        icon: FiClipboard,    module: 'quotations' },
-    { path: '/estimator',   label: 'AI Auto-Quotation', icon: FiClipboard,    module: 'quotations' },
-    { path: '/po-foc-stripped', label: 'PO/FOC Stripped', icon: FiClipboard,  module: 'quotations' },
-    { path: '/labour-rate',     label: 'Labour Rate',     icon: FiClipboard,  module: 'labour_rates' },
+    { path: '/estimator',   label: 'AI Auto-Quotation', icon: FiArchive,      module: 'quotations' },
+    { path: '/po-foc-stripped', label: 'PO/FOC Stripped', icon: FiShoppingCart, module: 'quotations' },
+    { path: '/labour-rate',     label: 'Labour Rate',     icon: FiTruck,      module: 'labour_rates' },
   ]},
   // Procurement (mam 2026-05-27 follow-up): Dispatch + Order to Planning
   // moved here from Quotes & Orders — they're procurement workflow steps,

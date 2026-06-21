@@ -6,6 +6,12 @@ import Dashboard from './pages/Dashboard';
 import Leads from './pages/Leads';
 import Quotations from './pages/Quotations';
 import Estimator from './pages/Estimator';
+import SolarQuotation from './pages/SolarQuotation';
+import SolarRateMaster from './pages/SolarRateMaster';
+import SolarFunnel from './pages/SolarFunnel';
+import SolarMaterialMaster from './pages/SolarMaterialMaster';
+import SolarLabourMaster from './pages/SolarLabourMaster';
+import SolarProjects from './pages/SolarProjects';
 import PoFocStripped from './pages/PoFocStripped';
 import PoFocPrint from './pages/PoFocPrint';
 import LabourRate from './pages/LabourRate';
@@ -173,6 +179,12 @@ export default function App() {
         <Route path="leads" element={<ModuleRoute module="leads"><Leads /></ModuleRoute>} />
         <Route path="quotations" element={<ModuleRoute module="quotations"><Quotations /></ModuleRoute>} />
         <Route path="estimator" element={<ModuleRoute module="quotations"><Estimator /></ModuleRoute>} />
+        <Route path="solar-funnel" element={<ModuleRoute module="solar_quotation"><SolarFunnel /></ModuleRoute>} />
+        <Route path="solar-quotation" element={<ModuleRoute module="solar_quotation"><SolarQuotation /></ModuleRoute>} />
+        <Route path="solar-projects" element={<ModuleRoute module="solar_quotation"><SolarProjects /></ModuleRoute>} />
+        <Route path="solar-material-master" element={<ModuleRoute module="solar_quotation"><SolarMaterialMaster /></ModuleRoute>} />
+        <Route path="solar-labour-master" element={<ModuleRoute module="solar_quotation"><SolarLabourMaster /></ModuleRoute>} />
+        <Route path="solar-rate-master" element={<ModuleRoute module="solar_quotation"><SolarRateMaster /></ModuleRoute>} />
         <Route path="po-foc-stripped" element={<ModuleRoute module="quotations"><PoFocStripped /></ModuleRoute>} />
         <Route path="labour-rate" element={<ModuleRoute module="labour_rates"><LabourRate /></ModuleRoute>} />
         <Route path="business-book" element={<ModuleRoute module="business_book"><BusinessBook /></ModuleRoute>} />
