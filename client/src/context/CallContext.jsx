@@ -195,15 +195,15 @@ export function CallProvider({ children }) {
     <CallContext.Provider value={{ startCall, inCall: !!call }}>
       {children}
       {call && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 text-white select-none">
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 text-white select-none" style={{ height: '100dvh' }}>
           {/* hidden remote audio so voice calls have sound even with no video element shown */}
           <audio ref={remoteAudRef} autoPlay playsInline className="hidden" />
 
           {call.phase === 'active' && call.video ? (
             <div className="relative w-full h-full">
               <video ref={remoteVidRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
-              <video ref={localVidRef} autoPlay playsInline muted className="absolute bottom-24 right-4 w-32 h-44 object-cover rounded-lg border-2 border-white/40 bg-black" />
-              <div className="absolute top-4 left-0 right-0 text-center text-lg font-semibold drop-shadow">{call.peerName}</div>
+              <video ref={localVidRef} autoPlay playsInline muted className="absolute right-3 w-24 h-32 sm:w-32 sm:h-44 object-cover rounded-lg border-2 border-white/40 bg-black" style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 6rem)' }} />
+              <div className="absolute left-0 right-0 text-center text-lg font-semibold drop-shadow" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}>{call.peerName}</div>
             </div>
           ) : (
             <div className="flex flex-col items-center gap-4">
@@ -218,7 +218,7 @@ export function CallProvider({ children }) {
           )}
 
           {/* controls */}
-          <div className="absolute bottom-8 left-0 right-0 flex items-center justify-center gap-4">
+          <div className="absolute left-0 right-0 flex items-center justify-center gap-4" style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 2rem)' }}>
             {call.phase === 'incoming' ? (
               <>
                 <button onClick={rejectCall} className="w-16 h-16 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center" title="Decline"><FiPhoneOff size={26} /></button>
