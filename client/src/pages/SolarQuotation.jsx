@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { FiSun, FiSave, FiDownload, FiPrinter, FiZap, FiList, FiTrash2 } from 'react-icons/fi';
 import api from '../api';
@@ -21,12 +22,25 @@ export default function SolarQuotation() {
   const [saved, setSaved] = useState([]);
   const [currentId, setCurrentId] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [dealId, setDealId] = useState(null);
+  const [params] = useSearchParams();
   const set = (k, val) => setInp((p) => ({ ...p, [k]: val }));
 
   useEffect(() => {
     api.get('/solar/rate-book').then((r) => setRb({ ...EMPTY_RB, ...r.data })).catch(() => toast.error('Could not load solar rate book'));
     api.get('/leads').then((r) => setLeads(r.data || [])).catch(() => {});
   }, []);
+
+  // Prefill when opened from a funnel deal ("Create Quotation") so the saved
+  // quote links back and auto-advances the deal to the Quotation stage.
+  useEffect(() => {
+    if (params.get('deal')) setDealId(params.get('deal'));
+    const u = {};
+    if (params.get('client')) u.client = params.get('client');
+    if (params.get('kw')) u.kw = params.get('kw');
+    if (params.get('conn')) u.conn = params.get('conn');
+    if (Object.keys(u).length) setInp((p) => ({ ...p, ...u }));
+  }, []); // eslint-disable-line
 
   // zero-export → net metering not applicable
   useEffect(() => { if (inp.conn === 'zeroexport' && inp.net) set('net', false); }, [inp.conn]); // eslint-disable-line
@@ -75,7 +89,7 @@ export default function SolarQuotation() {
     inputs: inp, boq: lines, engineering: c, roi,
     cost: tot.totTPA, margin_pct: tot.marginPct, sell: tot.totSP, sell_per_w: tot.wpRate,
     gst_amt: gstAmt, grand_total: grand,
-    capacity_dc_kwp: c.realKWp,
+    capacity_dc_kwp: c.realKWp, deal_id: dealId || null,
   });
 
   const save = async () => {

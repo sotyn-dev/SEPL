@@ -87,6 +87,22 @@ function ensureSolarSchema(db) {
       status TEXT DEFAULT 'draft', created_by INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    -- Solar Sales Funnel: one row per solar opportunity moving through the pipeline.
+    CREATE TABLE IF NOT EXISTS solar_deals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deal_no TEXT, lead_id INTEGER, client_name TEXT, company TEXT, phone TEXT, location TEXT, state TEXT,
+      capacity_kw REAL, project_type TEXT, value REAL DEFAULT 0, source TEXT,
+      stage TEXT DEFAULT 'inquiry', stage_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      owner_id INTEGER, owner_name TEXT, next_action TEXT, next_action_due DATE,
+      quotation_id INTEGER, status TEXT DEFAULT 'open', lost_reason TEXT,
+      created_by INTEGER, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    -- Stage-change / activity log — powers conversion %, time-in-stage, drop-off.
+    CREATE TABLE IF NOT EXISTS solar_deal_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      deal_id INTEGER, type TEXT, from_stage TEXT, to_stage TEXT, note TEXT,
+      by_user INTEGER, by_name TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 }
 
