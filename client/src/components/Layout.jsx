@@ -84,11 +84,13 @@ const SIDEBAR_GROUPS = [
     // Full Kitting moved here (mam 2026-05-27): "full kitting is under CRM"
     { path: '/crm-kitting',   label: 'Full Kitting',      icon: FiArchive,    module: 'crm_kitting' },
   ]},
-  { id: 'quotes_orders', label: 'Solar Sales', icon: FiSun, items: [
+  { id: 'solar_sales', label: 'Solar Sales', icon: FiSun, items: [
     { path: '/solar-funnel',      label: 'Solar Sales Funnel', icon: FiTrendingUp, module: 'solar_quotation' },
     { path: '/solar-quotation',   label: 'Solar Quotation',    icon: FiClipboard,  module: 'solar_quotation' },
-    { path: '/solar-rate-master', label: 'Solar Rate Master',  icon: FiSliders,    module: 'solar_quotation' },
-    { path: '/quotations',  label: 'Quotations',        icon: FiFileText,     module: 'quotations' },
+    { path: '/solar-rate-master', label: 'Solar Settings',     icon: FiSliders,    module: 'solar_quotation' },
+  ]},
+  { id: 'quotes_orders', label: 'Quotes & Orders', icon: FiFileText, items: [
+    { path: '/quotations',  label: 'Quotations',        icon: FiClipboard,    module: 'quotations' },
     { path: '/estimator',   label: 'AI Auto-Quotation', icon: FiArchive,      module: 'quotations' },
     { path: '/po-foc-stripped', label: 'PO/FOC Stripped', icon: FiShoppingCart, module: 'quotations' },
     { path: '/labour-rate',     label: 'Labour Rate',     icon: FiTruck,      module: 'labour_rates' },
