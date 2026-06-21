@@ -23,7 +23,7 @@ import {
   // CRM children
   FiGlobe, FiTrendingUp, FiTrendingDown, FiFilter, FiBook, FiUser,
   // Quotes & Orders children
-  FiArchive, FiClipboard, FiTruck, FiShoppingCart,
+  FiArchive, FiClipboard, FiTruck, FiShoppingCart, FiSun,
   // Procurement children
   FiGrid, FiHexagon, FiInbox, FiTag,
   // Projects children
@@ -87,6 +87,8 @@ const SIDEBAR_GROUPS = [
   { id: 'quotes_orders', label: 'Quotes & Orders', icon: FiFileText, items: [
     { path: '/quotations',  label: 'Quotations',        icon: FiClipboard,    module: 'quotations' },
     { path: '/estimator',   label: 'AI Auto-Quotation', icon: FiClipboard,    module: 'quotations' },
+    { path: '/solar-quotation',  label: 'Solar Quotation',  icon: FiSun,        module: 'solar_quotation' },
+    { path: '/solar-rate-master', label: 'Solar Rate Master', icon: FiSliders,  module: 'solar_quotation' },
     { path: '/po-foc-stripped', label: 'PO/FOC Stripped', icon: FiClipboard,  module: 'quotations' },
     { path: '/labour-rate',     label: 'Labour Rate',     icon: FiClipboard,  module: 'labour_rates' },
   ]},
