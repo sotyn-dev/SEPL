@@ -177,23 +177,29 @@ export default function Estimator() {
   // Auto-load the selected client's BOQ from the Sales Funnel — no manual upload
   // (mam 2026-06-22). 404 = this client has no funnel BOQ → stay silent.
   const [loadingClientBoq, setLoadingClientBoq] = useState(false);
+  const [clientBoqMsg, setClientBoqMsg] = useState('');   // result of the auto-fetch
   const onPickClient = async (id) => {
-    setLeadId(id);
+    setLeadId(id); setClientBoqMsg('');
     if (!id) return;
     // Don't silently wipe a quotation already in progress.
     const hasWork = rows.some(r => r.description || r.item_id);
     if (hasWork && !window.confirm("Load this client's BOQ from the Sales Funnel? This replaces the current items.")) return;
     setLoadingClientBoq(true);
     try {
-      const { data } = await api.get('/quotations/client-boq', { params: { lead_id: id } });
+      const { data } = await api.get('/quotations/client-boq', { params: { funnel_id: id } });
       const mapped = mapBoqRows(data);
       if (mapped.length) {
         setRows(mapped);
         const unsure = mapped.filter(m => m.confidence === 'low' || m.confidence === 'none').length;
-        toast.success(`Loaded ${mapped.length} item(s) from the client's funnel BOQ — ${unsure} need a quick review`);
+        setClientBoqMsg(`✅ Loaded ${mapped.length} item(s) from this client's funnel BOQ${unsure ? ` — ${unsure} need a quick review` : ''}.`);
+        toast.success(`Loaded ${mapped.length} item(s) from the client's funnel BOQ`);
+      } else {
+        setClientBoqMsg('The funnel BOQ had no readable items — you can upload it below.');
       }
     } catch (err) {
-      if (err.response?.status !== 404) toast.error(err.response?.data?.error || 'Could not load client BOQ');
+      // 404 = no BOQ uploaded in the funnel for this client → tell them why.
+      if (err.response?.status === 404) setClientBoqMsg('ℹ️ No BOQ is uploaded in the Sales Funnel for this client — upload it below, or add it in the funnel.');
+      else { setClientBoqMsg(''); toast.error(err.response?.data?.error || 'Could not load client BOQ'); }
     } finally { setLoadingClientBoq(false); }
   };
 
@@ -370,7 +376,9 @@ export default function Estimator() {
           </select>
           {loadingClientBoq
             ? <div className="text-[11px] text-indigo-600 mt-1">⏳ Loading this client's BOQ from the Sales Funnel…</div>
-            : <div className="text-[11px] text-gray-400 mt-1">Picking a client auto-loads their Sales-Funnel BOQ (if any).</div>}
+            : clientBoqMsg
+              ? <div className="text-[11px] text-gray-600 mt-1">{clientBoqMsg}</div>
+              : <div className="text-[11px] text-gray-400 mt-1">Picking a client auto-loads their Sales-Funnel BOQ (no upload needed if it's in the funnel).</div>}
         </div>
         <div>
           <label className="label">Quotation Title</label>
