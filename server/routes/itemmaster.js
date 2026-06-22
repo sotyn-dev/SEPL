@@ -230,7 +230,7 @@ router.get('/dropdown', (req, res) => {
   // `type` may be a single value or a comma list (e.g. 'PO,POC').
   const types = type ? String(type).split(',').map(s => s.trim()).filter(Boolean) : [];
   const where = types.length ? `WHERE type IN (${types.map(() => '?').join(',')})` : '';
-  const sql = `SELECT MIN(id) AS id, item_code, department, item_name, specification, size, uom, gst, type, current_price,
+  const sql = `SELECT MIN(id) AS id, item_code, department, item_name, specification, size, uom, gst, type, make, current_price,
                       COALESCE(approval_status, 'approved') AS approval_status
                  FROM item_master ${where}
                 GROUP BY LOWER(TRIM(item_name)), LOWER(TRIM(COALESCE(specification, ''))), LOWER(TRIM(COALESCE(size, '')))

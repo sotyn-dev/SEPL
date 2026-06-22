@@ -187,7 +187,7 @@ async function matchBoqFile(filePath, originalName) {
 
     // Match the client BOQ against OUR PO items only (the ones quoted, with
     // PO/FOC kits) — mam 2026-06-10. FOC/consumables aren't quoted as lines.
-    const items = getDb().prepare(`SELECT id, item_code, department, item_name, specification, size, uom, current_price FROM item_master WHERE type='PO'`).all();
+    const items = getDb().prepare(`SELECT id, item_code, department, item_name, specification, size, uom, make, current_price FROM item_master WHERE type='PO'`).all();
     const itemById = new Map(items.map(it => [it.id, it]));
     const itemTok = items.map(it => ({ it, toks: tokens([it.item_name, it.specification, it.size].filter(Boolean).join(' ')) }));
 
@@ -205,7 +205,7 @@ async function matchBoqFile(filePath, originalName) {
         item_id: it.id, code: it.item_code,
         name: [it.item_name, it.specification, it.size].filter(Boolean).join(' / '),
         department: it.department || 'General', rate: it.current_price || 0,
-        uom: it.uom || '', score: Math.round(score || 0),
+        uom: it.uom || '', make: it.make || '', score: Math.round(score || 0),
       };
       if (k) { base.kit_pp = k.po_rate || 0; base.kit_labour = k.labour || 0; base.kit_focs = JSON.parse(k.focs_json || '[]'); }
       return base;

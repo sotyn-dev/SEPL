@@ -13,7 +13,7 @@ import { exportCsv } from '../utils/exportCsv';
 // Mirrors mam's own quotation sheet columns (PP/ACC/LAB/TP/TPA/Margin/SP).
 
 const blankRow = () => ({
-  item_id: null, code: '', description: '', boq_text: '', category: '', unit: 'nos',
+  item_id: null, code: '', description: '', boq_text: '', category: '', make: '', unit: 'nos',
   qty: 1, pp: 0, lab: 0, suggestion: null,
   confidence: '', matchedName: '', matchScore: 0, alternatives: [],
   subs: [], // accessory / FOC items bundled under this line
@@ -104,6 +104,7 @@ export default function Estimator() {
       code: opt.item_code || '',
       description: r.description || opt.display_name || opt.item_name || '',
       category: opt.department || 'General',
+      make: opt.make || '',
       unit: (r.unit && r.unit !== 'nos') ? r.unit : (opt.uom || 'nos'),
       pp: opt.current_price || 0,
       lab: 0, subs: [], fromKit: false,
@@ -125,7 +126,7 @@ export default function Estimator() {
   const matchToRow = (m) => {
     const hasKit = m.kit_pp !== undefined || Array.isArray(m.kit_focs);
     return {
-      item_id: m.item_id, code: m.code, category: m.department,
+      item_id: m.item_id, code: m.code, category: m.department, make: m.make || '',
       pp: hasKit ? (m.kit_pp || m.rate || 0) : (m.rate || 0),
       lab: hasKit ? (m.kit_labour || 0) : 0,
       subs: hasKit ? (m.kit_focs || []).map(f => ({ item_id: f.item_id || null, name: f.name || '', qty: f.qty || 1, rate: f.rate || 0, foc: false })) : [],
@@ -278,7 +279,7 @@ export default function Estimator() {
   const exportXlsx = async () => {
     const data = rows.filter(r => r.description).map((row, idx) => {
       const c = calc(row);
-      return { s_no: idx + 1, description: row.description, make: '', unit: row.unit, qty: Number(row.qty) || 0, rate: c.rate, sp: c.sp, pp: Number(row.pp) || 0, acc: c.acc, lab: Number(row.lab) || 0, tp: c.tp, tpa: c.tpa, margin: c.mPct, category: row.category || 'General' };
+      return { s_no: idx + 1, description: row.description, make: row.make || '', unit: row.unit, qty: Number(row.qty) || 0, rate: c.rate, sp: c.sp, pp: Number(row.pp) || 0, acc: c.acc, lab: Number(row.lab) || 0, tp: c.tp, tpa: c.tpa, margin: c.mPct, category: row.category || 'General' };
     });
     if (!data.length) { toast.error('Add at least one item'); return; }
     const _cl = leads.find(l => String(l.id) === String(leadId));
@@ -498,8 +499,23 @@ export default function Estimator() {
                         ))}
                       </div>
                     )}
-                    {/* Accessory / FOC sub-items */}
+                    {/* Accessory / FOC sub-items. When pulled from a Price Breakup
+                        kit (fromKit) they are PERMANENT — shown read-only, no edit
+                        / add / remove (mam 2026-06-22). */}
                     <div className="mt-1.5 pl-2 border-l-2 border-indigo-100 space-y-1">
+                      {row.fromKit ? (
+                        <>
+                          <div className="text-[9px] text-indigo-500 font-semibold uppercase">FOC — from Price Breakup (locked)</div>
+                          {(row.subs || []).map((s, si) => (
+                            <div key={si} className="flex items-center gap-1.5 text-[10px] text-gray-600">
+                              <span className="flex-1 truncate">{s.name || 'item'}</span>
+                              <span className="text-gray-400">×{s.qty || 1}</span>
+                              <span className={s.foc ? 'text-emerald-600 font-semibold' : 'text-gray-500'}>{s.foc ? 'FOC' : `₹${fmt(s.rate)}`}</span>
+                            </div>
+                          ))}
+                          {(row.subs || []).length === 0 && <div className="text-[10px] text-gray-300 italic">No FOC in this kit.</div>}
+                        </>
+                      ) : (<>
                       {(row.subs || []).map((s, si) => (
                         <div key={si} className="flex items-center gap-1 flex-wrap">
                           <div className="w-40">
@@ -523,9 +539,13 @@ export default function Estimator() {
                       ))}
                       <button type="button" className="text-[10px] text-indigo-600 hover:underline"
                         onClick={() => addSub(i)}>+ Accessory / FOC</button>
+                      </>)}
                     </div>
                   </td>
-                  <td className="p-1.5 text-xs text-gray-600 break-words">{row.category || '—'}</td>
+                  <td className="p-1.5 text-xs text-gray-600 break-words">
+                    {row.category || '—'}
+                    {row.make && <div className="text-[10px] text-gray-400 mt-0.5">Make: {row.make}</div>}
+                  </td>
                   <td className="p-1.5">
                     <input className="input w-full text-center py-1 px-1 text-xs [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" type="number" min="0" value={row.qty || ''}
                       onChange={e => patchRow(i, { qty: e.target.value })} />
