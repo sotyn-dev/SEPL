@@ -27,12 +27,17 @@ const STATUS_BADGE = {
   approved: 'bg-emerald-100 text-emerald-700',
   re_approved: 'bg-blue-100 text-blue-700',
 };
-const blankForm = () => ({ id: null, status: 'non_approved', po_item_id: null, po_name: '', po_rate: 0, qty: 1, labour: 0, labour_item_id: null, labour_name: '', labour_margin: 50, margin: 30, focs: [] });
+const blankForm = () => ({ id: null, status: 'non_approved', po_item_id: null, po_name: '', po_rate: 0, qty: 1, labour: 0, labour_item_id: null, labour_name: '', labour_margin: 50, margin: 30, focs: [], foc_pct: '' });
 const blankFoc = () => ({ item_id: null, name: '', qty: 1, rate: 0 });
 
 const calc = (f) => {
   const poAmt = r2((Number(f.po_rate) || 0) * (Number(f.qty) || 0));
-  const focAmt = r2((f.focs || []).reduce((t, x) => t + (Number(x.rate) || 0) * (Number(x.qty) || 0), 0));
+  // FOC can be entered as a % of PO (mam 2026-06-22) — either/or with the item
+  // rows: a % > 0 means FOC = PO × % and the rows are ignored.
+  const focPct = Number(f.foc_pct) || 0;
+  const focAmt = focPct > 0
+    ? r2(poAmt * focPct / 100)
+    : r2((f.focs || []).reduce((t, x) => t + (Number(x.rate) || 0) * (Number(x.qty) || 0), 0));
   const labourAmt = r2((Number(f.labour) || 0) * (Number(f.qty) || 0)); // labour RATE × PO qty
   const cost = r2(poAmt + focAmt + labourAmt);
   const margin = Number(f.margin) || 0;
@@ -82,11 +87,18 @@ export default function PoFocStripped() {
   const openNew = () => { setForm(blankForm()); setModal(true); loadMasters(); };
   // Re-pull masters + the live entry so the modal shows the CURRENT Item Master
   // rate/UOM, not the value snapshotted when the kit was first saved.
+  // A FOC % is stored as a single synthetic FOC line (is_pct); on load we lift
+  // it back into the foc_pct field and hide the synthetic row.
+  const fromStored = (data) => {
+    const focs = (data.focs || []).map(f => ({ ...f }));
+    const pctLine = focs.find(f => f.is_pct);
+    return { ...data, foc_pct: pctLine ? pctLine.foc_pct : '', focs: pctLine ? [] : focs };
+  };
   const openEdit = (e) => {
-    setForm({ ...e, focs: (e.focs || []).map(f => ({ ...f })) });
+    setForm(fromStored(e));
     setModal(true);
     loadMasters();
-    api.get(`/quotations/po-foc/${e.id}`).then(r => setForm({ ...r.data, focs: (r.data.focs || []).map(f => ({ ...f })) })).catch(() => {});
+    api.get(`/quotations/po-foc/${e.id}`).then(r => setForm(fromStored(r.data))).catch(() => {});
   };
 
   // form helpers
@@ -117,7 +129,14 @@ export default function PoFocStripped() {
   const save = async (approveAfter) => {
     if (!form.po_name) { toast.error('Pick a PO item'); return; }
     try {
-      const payload = { po_item_id: form.po_item_id, po_name: form.po_name, po_rate: form.po_rate, qty: form.qty, labour: form.labour, labour_item_id: form.labour_item_id, labour_name: form.labour_name, labour_margin: form.labour_margin, margin: form.margin, focs: form.focs };
+      // FOC % → store one effective FOC line (so every consumer that reads
+      // `focs` keeps the right amount, no downstream change needed).
+      const pct = Number(form.foc_pct) || 0;
+      const poAmt = (Number(form.po_rate) || 0) * (Number(form.qty) || 0);
+      const focsOut = pct > 0
+        ? [{ name: `FOC ${pct}% of PO`, qty: 1, rate: r2(poAmt * pct / 100), is_pct: true, foc_pct: pct }]
+        : form.focs;
+      const payload = { po_item_id: form.po_item_id, po_name: form.po_name, po_rate: form.po_rate, qty: form.qty, labour: form.labour, labour_item_id: form.labour_item_id, labour_name: form.labour_name, labour_margin: form.labour_margin, margin: form.margin, focs: focsOut };
       let id = form.id;
       if (id) { await api.put(`/quotations/po-foc/${id}`, payload); }
       else { const r = await api.post('/quotations/po-foc', payload); id = r.data.id; }
@@ -338,12 +357,24 @@ export default function PoFocStripped() {
           </div>
 
           <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
               <span className="text-xs font-semibold text-gray-600">FOC Items <span className="text-gray-400">({(form.focs || []).length}/{MAX_FOC})</span></span>
-              <button type="button" disabled={(form.focs || []).length >= MAX_FOC} onClick={addFoc}
-                className={`text-xs flex items-center gap-1 px-2 py-1 rounded ${(form.focs || []).length >= MAX_FOC ? 'text-gray-300' : 'text-indigo-600 hover:bg-indigo-100'}`}><FiPlus size={13} /> Add FOC</button>
+              <div className="flex items-center gap-2">
+                {/* Either/or: enter FOC % of PO instead of item rows (mam 2026-06-22) */}
+                <label className="text-[11px] text-gray-500">or FOC % of PO</label>
+                <input className="input w-16 text-right py-1 text-xs" type="number" min="0" step="1" value={form.foc_pct}
+                  onChange={e => setForm(f => ({ ...f, foc_pct: e.target.value }))} placeholder="0" />
+                <button type="button" disabled={(form.focs || []).length >= MAX_FOC || Number(form.foc_pct) > 0} onClick={addFoc}
+                  className={`text-xs flex items-center gap-1 px-2 py-1 rounded ${((form.focs || []).length >= MAX_FOC || Number(form.foc_pct) > 0) ? 'text-gray-300' : 'text-indigo-600 hover:bg-indigo-100'}`}><FiPlus size={13} /> Add FOC</button>
+              </div>
             </div>
-            {(form.focs || []).length === 0 && <div className="text-[11px] text-gray-400 italic">No FOC items. Add up to {MAX_FOC}.</div>}
+            {Number(form.foc_pct) > 0 ? (
+              <div className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded px-2 py-1.5">
+                FOC = PO × {form.foc_pct}% = <b>₹{fmt(r2((Number(form.po_rate) || 0) * (Number(form.qty) || 0) * (Number(form.foc_pct) || 0) / 100))}</b>
+                <span className="text-gray-400"> — FOC item rows are ignored while a % is set. Clear the % to use item rows.</span>
+              </div>
+            ) : (<>
+            {(form.focs || []).length === 0 && <div className="text-[11px] text-gray-400 italic">No FOC items. Add up to {MAX_FOC}, or enter a FOC % above.</div>}
             <div className="space-y-2">
               {(form.focs || []).map((f, fi) => (
                 <div key={fi} className="flex items-center gap-2">
@@ -357,6 +388,7 @@ export default function PoFocStripped() {
                 </div>
               ))}
             </div>
+            </>)}
           </div>
 
           <div className="flex items-center justify-between bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
