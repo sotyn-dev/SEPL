@@ -429,7 +429,7 @@ export default function Estimator() {
           <thead className="sticky top-0 z-10 bg-gray-50">
             <tr className="bg-gray-50 text-left text-[11px] uppercase text-gray-500">
               <th className="p-1.5 w-7">#</th>
-              <th className="p-1.5">Item (from Item Master)</th>
+              <th className="p-1.5">BOQ item → Matched item</th>
               <th className="p-1.5 w-20">Category</th>
               <th className="p-1.5 text-center w-12">Qty</th>
               <th className="p-1.5 text-right w-16" title="Material price (auto from Item Master)">PP ₹</th>
@@ -450,6 +450,14 @@ export default function Estimator() {
                 <tr key={i} className={`border-t border-gray-100 align-top ${(row.confidence === 'low' || row.confidence === 'none') ? 'bg-red-50/40' : ''}`}>
                   <td className="p-2 text-gray-400">{i + 1}</td>
                   <td className="p-2">
+                    {/* Read top-down: BOQ item (client's original line) FIRST,
+                        then the matched Item Master item below it (mam 2026-06-22:
+                        "after serial no boq item and after items so easily read"). */}
+                    {row.boq_text && (
+                      <div className="text-[11px] text-gray-700 mb-1.5 bg-amber-50 border border-amber-200 rounded px-2 py-1 break-words">
+                        <span className="font-semibold text-amber-700">BOQ item:</span> {row.boq_text}
+                      </div>
+                    )}
                     <SearchableSelect
                       options={itemOptions}
                       value={row.item_id}
@@ -461,13 +469,6 @@ export default function Estimator() {
                     <input className="input mt-1 text-xs" value={row.description}
                       onChange={e => patchRow(i, { description: e.target.value })}
                       placeholder="Description (auto-filled)" />
-                    {/* Client's original BOQ wording — kept visible even after you
-                        match it to a different Item Master item (mam 2026-06-22). */}
-                    {row.boq_text && (
-                      <div className="text-[10px] text-gray-600 mt-1 bg-amber-50 border border-amber-100 rounded px-1.5 py-0.5 break-words">
-                        <span className="font-semibold text-amber-700">Client BOQ:</span> {row.boq_text}
-                      </div>
-                    )}
                     {row.suggestion && (row.suggestion.last_for_client || row.suggestion.last_overall) && (
                       <div className="text-[10px] text-indigo-600 mt-1">
                         🤖 last quoted: ₹{fmt(row.suggestion.last_for_client?.rate || row.suggestion.last_overall?.rate)}
