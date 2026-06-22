@@ -13,7 +13,7 @@ import { exportCsv } from '../utils/exportCsv';
 // Mirrors mam's own quotation sheet columns (PP/ACC/LAB/TP/TPA/Margin/SP).
 
 const blankRow = () => ({
-  item_id: null, code: '', description: '', category: '', unit: 'nos',
+  item_id: null, code: '', description: '', boq_text: '', category: '', unit: 'nos',
   qty: 1, pp: 0, lab: 0, suggestion: null,
   confidence: '', matchedName: '', matchScore: 0, alternatives: [],
   subs: [], // accessory / FOC items bundled under this line
@@ -34,13 +34,18 @@ export default function Estimator() {
   const [matching, setMatching] = useState(false);
   const [kitByPoId, setKitByPoId] = useState({}); // po_item_id → PO/FOC kit (labour, focs, po_rate)
   // Manpower / additional cost block for the SUMMARY sheet (saizar format).
+  // Months default to 1 so the Amount isn't 0 out of the gate (mam 2026-06-22);
+  // every row is still editable. Documentation is a standard ₹5,000 line.
   const [manpower, setManpower] = useState([
-    { name: 'Site Engineer', qty: 1, monthly_cost: 40000, months: 0 },
-    { name: 'Junior Engineer', qty: 1, monthly_cost: 25000, months: 0 },
-    { name: 'Room rent, Food etc', qty: 1, monthly_cost: 10000, months: 0 },
-    { name: 'Hydra', qty: 1, monthly_cost: 75000, months: 0 },
-    { name: 'Scaffolding', qty: 1, monthly_cost: 40000, months: 0 },
+    { name: 'Site Engineer', qty: 1, monthly_cost: 40000, months: 1 },
+    { name: 'Junior Engineer', qty: 1, monthly_cost: 25000, months: 1 },
+    { name: 'Room rent, Food etc', qty: 1, monthly_cost: 10000, months: 1 },
+    { name: 'Hydra', qty: 1, monthly_cost: 75000, months: 1 },
+    { name: 'Scaffolding', qty: 1, monthly_cost: 40000, months: 1 },
+    { name: 'Documentation', qty: 1, monthly_cost: 5000, months: 1 },
   ]);
+  // Overhead = % of project cost (before margin) — mam 2026-06-22, default 2%.
+  const [overheadPct, setOverheadPct] = useState(2);
   const [view, setView] = useState('build');     // 'build' | 'saved'
   const [savedList, setSavedList] = useState([]);
   const [currentId, setCurrentId] = useState(null);
@@ -129,6 +134,22 @@ export default function Estimator() {
   // Swap a row to one of the AI's alternative matches (one-click review).
   const applyMatch = (i, m) => patchRow(i, matchToRow(m));
 
+  // Map the matcher's response rows → estimator rows (shared by file upload and
+  // the funnel auto-load). Keeps the client's original BOQ wording in boq_text.
+  const mapBoqRows = (data) => (data.rows || []).map(r => {
+    const base = {
+      ...blankRow(),
+      description: r.description,
+      boq_text: r.description,   // keep the client's original BOQ wording (mam 2026-06-22)
+      unit: r.unit || r.match?.uom || 'nos',
+      qty: r.qty || 1,
+      confidence: r.confidence,
+      alternatives: r.alternatives || [],
+    };
+    // Apply the matched item + pull PP + labour + FOC from its PO/FOC kit.
+    return r.match ? { ...base, ...matchToRow(r.match) } : base;
+  });
+
   // Upload the CLIENT's BOQ Excel → AI matches every line to Item Master.
   const uploadBoq = async (e) => {
     const file = e.target.files?.[0];
@@ -138,18 +159,7 @@ export default function Estimator() {
       const fd = new FormData();
       fd.append('file', file);
       const { data } = await api.post('/quotations/auto-match-boq', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      const mapped = (data.rows || []).map(r => {
-        const base = {
-          ...blankRow(),
-          description: r.description,
-          unit: r.unit || r.match?.uom || 'nos',
-          qty: r.qty || 1,
-          confidence: r.confidence,
-          alternatives: r.alternatives || [],
-        };
-        // Apply the matched item + pull PP + labour + FOC from its PO/FOC kit.
-        return r.match ? { ...base, ...matchToRow(r.match) } : base;
-      });
+      const mapped = mapBoqRows(data);
       if (!mapped.length) { toast.error('No items found in that BOQ'); return; }
       setRows(mapped);
       const unsure = mapped.filter(m => m.confidence === 'low' || m.confidence === 'none').length;
@@ -160,6 +170,29 @@ export default function Estimator() {
       setMatching(false);
       if (fileRef.current) fileRef.current.value = '';
     }
+  };
+
+  // Auto-load the selected client's BOQ from the Sales Funnel — no manual upload
+  // (mam 2026-06-22). 404 = this client has no funnel BOQ → stay silent.
+  const [loadingClientBoq, setLoadingClientBoq] = useState(false);
+  const onPickClient = async (id) => {
+    setLeadId(id);
+    if (!id) return;
+    // Don't silently wipe a quotation already in progress.
+    const hasWork = rows.some(r => r.description || r.item_id);
+    if (hasWork && !window.confirm("Load this client's BOQ from the Sales Funnel? This replaces the current items.")) return;
+    setLoadingClientBoq(true);
+    try {
+      const { data } = await api.get('/quotations/client-boq', { params: { lead_id: id } });
+      const mapped = mapBoqRows(data);
+      if (mapped.length) {
+        setRows(mapped);
+        const unsure = mapped.filter(m => m.confidence === 'low' || m.confidence === 'none').length;
+        toast.success(`Loaded ${mapped.length} item(s) from the client's funnel BOQ — ${unsure} need a quick review`);
+      }
+    } catch (err) {
+      if (err.response?.status !== 404) toast.error(err.response?.data?.error || 'Could not load client BOQ');
+    } finally { setLoadingClientBoq(false); }
   };
 
   // Accessory / FOC sub-items under a line. FOC = free (₹0, just listed);
@@ -206,6 +239,8 @@ export default function Estimator() {
     return t;
   }, { cost: 0, sp: 0 }), [rows, accPct, margins]);
   const marginAmt = r2(totals.sp - totals.cost);
+  // Overhead = % of project cost (items cost, before margin).
+  const overheadAmt = r2((Number(totals.cost) || 0) * (Number(overheadPct) || 0) / 100);
 
   const exportSheet = () => {
     const headers = ['S.NO', 'ITEM DESCRIPTION', 'UNIT', 'QTY', 'RATE', 'AMOUNT',
@@ -225,7 +260,7 @@ export default function Estimator() {
   };
 
   const patchMp = (i, patch) => setManpower(m => m.map((r, idx) => idx === i ? { ...r, ...patch } : r));
-  const addMp = () => setManpower(m => [...m, { name: '', qty: 1, monthly_cost: 0, months: 0 }]);
+  const addMp = () => setManpower(m => [...m, { name: '', qty: 1, monthly_cost: 0, months: 1 }]);
   const removeMp = (i) => setManpower(m => m.filter((_, idx) => idx !== i));
   const mpAmt = (m) => (Number(m.qty) || 0) * (Number(m.monthly_cost) || 0) * (Number(m.months) || 0);
 
@@ -237,8 +272,11 @@ export default function Estimator() {
     });
     if (!data.length) { toast.error('Add at least one item'); return; }
     const clientName = leads.find(l => String(l.id) === String(leadId))?.company_name || '';
+    // Append the computed Overhead line so it shows in the Summary sheet.
+    const mpExport = [...manpower];
+    if (overheadAmt > 0) mpExport.push({ name: `Overhead (${overheadPct}% of project cost)`, qty: 1, monthly_cost: overheadAmt, months: 1 });
     try {
-      const resp = await api.post('/quotations/estimate-export', { title, client_name: clientName, manpower, rows: data }, { responseType: 'blob' });
+      const resp = await api.post('/quotations/estimate-export', { title, client_name: clientName, manpower: mpExport, rows: data }, { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([resp.data]));
       const a = document.createElement('a'); a.href = url; a.download = `quotation-${(title || 'estimate').replace(/[^a-z0-9]/gi, '_')}.xlsx`;
       document.body.appendChild(a); a.click(); a.remove();
@@ -320,10 +358,13 @@ export default function Estimator() {
       <div className="card p-4 grid grid-cols-1 sm:grid-cols-4 gap-4">
         <div>
           <label className="label">Client / Lead</label>
-          <select className="select" value={leadId} onChange={e => setLeadId(e.target.value)}>
+          <select className="select" value={leadId} onChange={e => onPickClient(e.target.value)}>
             <option value="">Select</option>
             {leads.map(l => <option key={l.id} value={l.id}>{l.company_name}</option>)}
           </select>
+          {loadingClientBoq
+            ? <div className="text-[11px] text-indigo-600 mt-1">⏳ Loading this client's BOQ from the Sales Funnel…</div>
+            : <div className="text-[11px] text-gray-400 mt-1">Picking a client auto-loads their Sales-Funnel BOQ (if any).</div>}
         </div>
         <div>
           <label className="label">Quotation Title</label>
@@ -366,24 +407,25 @@ export default function Estimator() {
         </div>
       )}
 
-      {/* Items table */}
-      <div className="card p-0 overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead>
+      {/* Items table — frozen header (sticky) + fits the width (no horizontal
+          drag): table is w-full so columns compress to the container. */}
+      <div className="card p-0 overflow-auto max-h-[60vh]">
+        <table className="w-full text-sm table-fixed">
+          <thead className="sticky top-0 z-10 bg-gray-50">
             <tr className="bg-gray-50 text-left text-[11px] uppercase text-gray-500">
-              <th className="p-2">#</th>
-              <th className="p-2 min-w-[240px]">Item (from Item Master)</th>
-              <th className="p-2">Category</th>
-              <th className="p-2 text-center">Qty</th>
-              <th className="p-2 text-right" title="Material price (auto from Item Master)">PP ₹</th>
-              <th className="p-2 text-right" title="Accessories = PP × Acc%">ACC ₹</th>
-              <th className="p-2 text-right" title="Labour (enter manually / from labour sheet)">LAB ₹</th>
-              <th className="p-2 text-right" title="TP = PP + ACC + LAB">TP ₹</th>
-              <th className="p-2 text-right" title="TPA = TP × Qty (total cost)">TPA ₹</th>
-              <th className="p-2 text-right">Margin</th>
-              <th className="p-2 text-right" title="SP = TPA × (1 + margin%)">SP ₹</th>
-              <th className="p-2 text-right" title="Sale rate per unit = SP ÷ Qty">Rate ₹</th>
-              <th className="p-2"></th>
+              <th className="p-1.5 w-7">#</th>
+              <th className="p-1.5">Item (from Item Master)</th>
+              <th className="p-1.5 w-20">Category</th>
+              <th className="p-1.5 text-center w-12">Qty</th>
+              <th className="p-1.5 text-right w-16" title="Material price (auto from Item Master)">PP ₹</th>
+              <th className="p-1.5 text-right w-14" title="Accessories = PP × Acc%">ACC ₹</th>
+              <th className="p-1.5 text-right w-16" title="Labour (enter manually / from labour sheet)">LAB ₹</th>
+              <th className="p-1.5 text-right w-14" title="TP = PP + ACC + LAB">TP ₹</th>
+              <th className="p-1.5 text-right w-16" title="TPA = TP × Qty (total cost)">TPA ₹</th>
+              <th className="p-1.5 text-right w-12">Margin</th>
+              <th className="p-1.5 text-right w-16" title="SP = TPA × (1 + margin%)">SP ₹</th>
+              <th className="p-1.5 text-right w-14" title="Sale rate per unit = SP ÷ Qty">Rate ₹</th>
+              <th className="p-1.5 w-8"></th>
             </tr>
           </thead>
           <tbody>
@@ -404,6 +446,13 @@ export default function Estimator() {
                     <input className="input mt-1 text-xs" value={row.description}
                       onChange={e => patchRow(i, { description: e.target.value })}
                       placeholder="Description (auto-filled)" />
+                    {/* Client's original BOQ wording — kept visible even after you
+                        match it to a different Item Master item (mam 2026-06-22). */}
+                    {row.boq_text && (
+                      <div className="text-[10px] text-gray-600 mt-1 bg-amber-50 border border-amber-100 rounded px-1.5 py-0.5 break-words">
+                        <span className="font-semibold text-amber-700">Client BOQ:</span> {row.boq_text}
+                      </div>
+                    )}
                     {row.suggestion && (row.suggestion.last_for_client || row.suggestion.last_overall) && (
                       <div className="text-[10px] text-indigo-600 mt-1">
                         🤖 last quoted: ₹{fmt(row.suggestion.last_for_client?.rate || row.suggestion.last_overall?.rate)}
@@ -457,30 +506,30 @@ export default function Estimator() {
                         onClick={() => addSub(i)}>+ Accessory / FOC</button>
                     </div>
                   </td>
-                  <td className="p-2 text-xs text-gray-600">{row.category || '—'}</td>
-                  <td className="p-2 w-16">
-                    <input className="input text-center py-1" type="number" min="0" value={row.qty || ''}
+                  <td className="p-1.5 text-xs text-gray-600 break-words">{row.category || '—'}</td>
+                  <td className="p-1.5">
+                    <input className="input w-full text-center py-1 px-1 text-xs" type="number" min="0" value={row.qty || ''}
                       onChange={e => patchRow(i, { qty: e.target.value })} />
                   </td>
-                  <td className="p-2 w-24">
-                    <input className="input text-right py-1" type="number" min="0" value={row.pp || ''}
+                  <td className="p-1.5">
+                    <input className="input w-full text-right py-1 px-1 text-xs" type="number" min="0" value={row.pp || ''}
                       onChange={e => patchRow(i, { pp: e.target.value })} />
                   </td>
-                  <td className="p-2 text-right text-gray-600">{fmt(c.acc)}</td>
-                  <td className="p-2 w-24">
-                    <input className="input text-right py-1" type="number" min="0" value={row.lab || ''}
+                  <td className="p-1.5 text-right text-xs text-gray-600">{fmt(c.acc)}</td>
+                  <td className="p-1.5">
+                    <input className="input w-full text-right py-1 px-1 text-xs" type="number" min="0" value={row.lab || ''}
                       onChange={e => patchRow(i, { lab: e.target.value })} placeholder="0" />
-                    {row.fromKit && <div className="text-[9px] text-indigo-500 mt-0.5 text-right" title="Labour + FOC from the PO/FOC module">🔗 PO/FOC</div>}
+                    {row.fromKit && <div className="text-[9px] text-indigo-500 mt-0.5 text-right" title="Labour + FOC from the PO/FOC module">🔗</div>}
                   </td>
-                  <td className="p-2 text-right text-gray-700">{fmt(c.tp)}</td>
-                  <td className="p-2 text-right text-gray-700">{fmt(c.tpa)}</td>
-                  <td className="p-2 text-right text-gray-500">{c.mPct}%</td>
-                  <td className="p-2 text-right font-bold text-emerald-700">{fmt(c.sp)}</td>
-                  <td className="p-2 text-right">{fmt(c.rate)}</td>
-                  <td className="p-2">
+                  <td className="p-1.5 text-right text-xs text-gray-700">{fmt(c.tp)}</td>
+                  <td className="p-1.5 text-right text-xs text-gray-700">{fmt(c.tpa)}</td>
+                  <td className="p-1.5 text-right text-xs text-gray-500">{c.mPct}%</td>
+                  <td className="p-1.5 text-right text-xs font-bold text-emerald-700">{fmt(c.sp)}</td>
+                  <td className="p-1.5 text-right text-xs">{fmt(c.rate)}</td>
+                  <td className="p-1.5 text-center">
                     <button type="button" className="text-red-400 hover:text-red-600"
                       onClick={() => setRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs)}>
-                      <FiTrash2 size={15} />
+                      <FiTrash2 size={14} />
                     </button>
                   </td>
                 </tr>
@@ -524,6 +573,14 @@ export default function Estimator() {
             </tbody>
             <tfoot><tr className="border-t-2 border-gray-200 font-semibold"><td className="p-1" colSpan={4}>Manpower Total</td><td className="p-1 text-right text-indigo-700">₹{fmt(manpower.reduce((t, m) => t + mpAmt(m), 0))}</td><td></td></tr></tfoot>
           </table>
+        </div>
+        {/* Overhead = % of project cost (before margin) — mam 2026-06-22 */}
+        <div className="flex flex-wrap items-center justify-end gap-2 mt-3 pt-3 border-t border-gray-200 text-sm">
+          <span className="font-semibold text-gray-700">Overhead</span>
+          <input className="input w-16 text-right py-1" type="number" min="0" step="0.5"
+            value={overheadPct} onChange={e => setOverheadPct(e.target.value)} />
+          <span className="text-gray-400">% of project cost (before margin)</span>
+          <span className="font-semibold text-indigo-700 ml-2">₹{fmt(overheadAmt)}</span>
         </div>
       </div>
 

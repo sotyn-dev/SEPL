@@ -128,22 +128,22 @@ ${String(text).slice(0, 14000)}`;
 
 // POST a CLIENT BOQ (Excel / PDF / Word) → auto-match each line to Item
 // Master and return a suggested item + rate + confidence per line.
-router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  try {
-    const ext = String(req.file.originalname || '').toLowerCase().split('.').pop();
+// Core BOQ parse + match — shared by the upload route and the funnel auto-load.
+// Throws Error (with optional .status) on failure; the caller handles cleanup.
+async function matchBoqFile(filePath, originalName) {
+    const ext = String(originalName || '').toLowerCase().split('.').pop();
     let lines = [];
     if (ext === 'pdf') {
       const pdfParse = require('pdf-parse');
-      const data = await pdfParse(fs.readFileSync(req.file.path));
+      const data = await pdfParse(fs.readFileSync(filePath));
       lines = (await llmExtractItems(data.text).catch(() => null)) || textToLines(data.text);
     } else if (ext === 'docx' || ext === 'doc') {
       const mammoth = require('mammoth');
-      const r = await mammoth.extractRawText({ path: req.file.path });
+      const r = await mammoth.extractRawText({ path: filePath });
       lines = (await llmExtractItems(r.value).catch(() => null)) || textToLines(r.value);
     } else {
       // Excel / CSV — find the header row, then read Description/Qty/Unit cols.
-      const wb = XLSX.readFile(req.file.path);
+      const wb = XLSX.readFile(filePath);
       const parseNum = (v) => {
         if (v == null || v === '') return 0;
         if (typeof v === 'number') return v;
@@ -183,7 +183,7 @@ router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
       };
       for (const name of wb.SheetNames) { const r = parseSheet(name); if (r.length > lines.length) lines = r; }
     }
-    if (!lines.length) return res.status(400).json({ error: 'Could not read any items. For Excel: ensure a Description/Qty header row. For PDF/Word: the items must be text (not a scanned image).' });
+    if (!lines.length) { const e = new Error('Could not read any items. For Excel: ensure a Description/Qty header row. For PDF/Word: the items must be text (not a scanned image).'); e.status = 400; throw e; }
 
     // Match the client BOQ against OUR PO items only (the ones quoted, with
     // PO/FOC kits) — mam 2026-06-10. FOC/consumables aren't quoted as lines.
@@ -256,11 +256,59 @@ router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
         alternatives: alts.slice(1, 4),
       };
     });
-    res.json({ count: rows.length, rows, matched_by: llm ? 'ai' : 'keyword' });
+    return { count: rows.length, rows, matched_by: llm ? 'ai' : 'keyword' };
+}
+
+// Upload a BOQ file → match (the original route).
+router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    res.json(await matchBoqFile(req.file.path, req.file.originalname));
   } catch (err) {
-    res.status(500).json({ error: 'Failed to parse BOQ: ' + err.message });
+    res.status(err.status || 500).json({ error: err.status ? err.message : ('Failed to parse BOQ: ' + err.message) });
   } finally {
-    try { if (req.file) fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+    try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+  }
+});
+
+// Auto-load a client's BOQ from the Sales Funnel and match it (mam 2026-06-22).
+// No manual upload: find the funnel BOQ file for the selected lead's company
+// and run the same matcher. lead_id comes from the /leads dropdown.
+router.get('/client-boq', async (req, res) => {
+  try {
+    const db = getDb();
+    const leadId = req.query.lead_id;
+    if (!leadId) return res.status(400).json({ error: 'lead_id required' });
+    const lead = db.prepare('SELECT id, company_name FROM leads WHERE id=?').get(leadId);
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    const name = (lead.company_name || '').trim();
+    if (!name) return res.status(404).json({ error: 'This client has no company name to match in the Sales Funnel' });
+    // Most recent funnel row for this company that has a BOQ file. Prefer the
+    // revised BOQ, then the original; check sales_funnel, then crm_funnel.
+    let link = null, src = null;
+    const sf = db.prepare(`SELECT COALESCE(NULLIF(revised_boq_file_link,''), NULLIF(boq_file_link,'')) AS link
+                     FROM sales_funnel WHERE (company_name=? OR client_name=?)
+                       AND (COALESCE(revised_boq_file_link,'')<>'' OR COALESCE(boq_file_link,'')<>'')
+                     ORDER BY id DESC LIMIT 1`).get(name, name);
+    if (sf?.link) { link = sf.link; src = 'sales_funnel'; }
+    if (!link) {
+      const cf = db.prepare(`SELECT COALESCE(NULLIF(cust_boq_link,''), NULLIF(boq_file_link,'')) AS link
+                       FROM crm_funnel WHERE (company_name=? OR client_name=?)
+                         AND (COALESCE(cust_boq_link,'')<>'' OR COALESCE(boq_file_link,'')<>'')
+                       ORDER BY id DESC LIMIT 1`).get(name, name);
+      if (cf?.link) { link = cf.link; src = 'crm_funnel'; }
+    }
+    if (!link) return res.status(404).json({ error: `No BOQ found in the Sales Funnel for "${name}". Upload it in the funnel, or use Upload Client BOQ.` });
+    // Resolve the stored link (e.g. '/uploads/xxx') to a local file path.
+    const rel = String(link).replace(/^https?:\/\/[^/]+/i, '').replace(/^\/+/, '');
+    const filePath = path.join(__dirname, '..', '..', rel);
+    if (!rel.startsWith('uploads') || !fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'The funnel BOQ file is not on this server — re-upload it in the funnel.' });
+    }
+    const out = await matchBoqFile(filePath, path.basename(filePath));
+    res.json({ ...out, source: src, client_name: name });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.status ? err.message : ('Failed to load client BOQ: ' + err.message) });
   }
 });
 
