@@ -63,6 +63,9 @@ export default function SiteChat() {
   const avatarRef = useRef(null);
   const sendingRef = useRef(false);   // synchronous guard against double-send
   const endRef = useRef(null);
+  const scrollRef = useRef(null);       // the messages scroll container
+  const atBottomRef = useRef(true);     // is the user currently pinned to the bottom?
+  const lastGroupRef = useRef(null);    // detect a thread switch (always jump to bottom then)
   const socketRef = useRef(null);
   const mediaRef = useRef(null);
   const chunksRef = useRef([]);
@@ -102,7 +105,23 @@ export default function SiteChat() {
     window.addEventListener('focus', onFocus);
     return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
   }, [sel?.id, loadThread]);
-  useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }); }, [msgs]);
+  // Auto-scroll, WhatsApp-style: jump to the bottom only when opening a thread
+  // or when a new message arrives AND the user is already near the bottom. If
+  // they've scrolled up to read history, the 6 s poll must NOT yank them back
+  // down (mam 2026-06-22: "if i read old message it automatically comes to latest").
+  useEffect(() => {
+    if (sel?.id !== lastGroupRef.current) {     // thread just opened/switched
+      lastGroupRef.current = sel?.id;
+      atBottomRef.current = true;
+      requestAnimationFrame(() => endRef.current?.scrollIntoView({ block: 'end' }));
+      return;
+    }
+    if (atBottomRef.current) endRef.current?.scrollIntoView({ block: 'end' });
+  }, [msgs, sel?.id]);
+  const onMsgScroll = () => {
+    const el = scrollRef.current; if (!el) return;
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  };
   useEffect(() => { if (memOpen && sel) setRenameVal(sel.name || ''); }, [memOpen, sel?.id]);
 
   const todayLbl = fmtDate(new Date(), DAY_OPTS);
@@ -114,6 +133,7 @@ export default function SiteChat() {
     const payload = { body: text, ...extra };
     if (!payload.body?.trim() && !payload.attachment_url) return;
     sendingRef.current = true; setBusy(true);
+    atBottomRef.current = true;                       // sending my own message always jumps to bottom
     try { await api.post(`/site-chat/${sel.id}`, payload); setText(''); setMention(null); loadThread(sel.id); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed to send'); }
     finally { sendingRef.current = false; setBusy(false); }
@@ -360,7 +380,7 @@ export default function SiteChat() {
                 )}
               </div>
 
-              <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 relative" style={{ background: '#efeae2' }}
+              <div ref={scrollRef} onScroll={onMsgScroll} className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 relative" style={{ background: '#efeae2' }}
                 onDragOver={e => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
                 onDragLeave={e => { if (e.currentTarget === e.target) setDragOver(false); }}
                 onDrop={onDrop}>
