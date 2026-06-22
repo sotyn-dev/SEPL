@@ -54,10 +54,11 @@ router.post('/contractor-attendance', (req, res) => {
 router.post('/contractor-attendance/count-photo', async (req, res) => {
   const { photo_url } = req.body;
   if (!photo_url) return res.status(400).json({ error: 'photo_url required' });
-  // Resolve to the on-disk file (uploads live at <repo>/uploads, served at /uploads).
-  const rel = String(photo_url).replace(/^\/+/, '');
-  const filePath = path.join(__dirname, '..', '..', rel);
-  if (!filePath.includes('uploads') || !fs.existsSync(filePath)) {
+  // Resolve to the on-disk file. Uploads live at <repo>/data/uploads (see
+  // server/index.js), served at /uploads. basename guards path traversal.
+  const filename = path.basename(String(photo_url).split('?')[0]);
+  const filePath = path.join(__dirname, '..', '..', 'data', 'uploads', filename);
+  if (!filename || !fs.existsSync(filePath)) {
     return res.status(404).json({ error: 'Photo not found on server' });
   }
   const ext = (path.extname(filePath).toLowerCase().replace('.', '') || 'jpeg');

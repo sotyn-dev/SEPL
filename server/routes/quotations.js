@@ -315,10 +315,12 @@ router.get('/client-boq', async (req, res) => {
       }
     }
     if (!link) return res.status(404).json({ error: `No BOQ found in the Sales Funnel for "${name || 'this client'}". Upload it in the funnel, or use Upload Client BOQ.` });
-    // Resolve the stored link (e.g. '/uploads/xxx') to a local file path.
-    const rel = String(link).replace(/^https?:\/\/[^/]+/i, '').replace(/^\/+/, '');
-    const filePath = path.join(__dirname, '..', '..', rel);
-    if (!rel.startsWith('uploads') || !fs.existsSync(filePath)) {
+    // Resolve the stored link (e.g. '/uploads/xxx') to the real uploads dir,
+    // which is <repo>/data/uploads (see server/index.js). basename guards
+    // against path traversal and handles full-URL links.
+    const filename = path.basename(String(link).split('?')[0]);
+    const filePath = path.join(__dirname, '..', '..', 'data', 'uploads', filename);
+    if (!filename || !fs.existsSync(filePath)) {
       return res.status(404).json({ error: 'The funnel BOQ file is not on this server — re-upload it in the funnel.' });
     }
     const out = await matchBoqFile(filePath, path.basename(filePath));
