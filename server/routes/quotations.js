@@ -286,6 +286,14 @@ router.get('/client-boq', async (req, res) => {
     if (sfRow) {
       name = (sfRow.company_name || sfRow.client_name || '').trim();
       link = sfRow.revised_boq_file_link || sfRow.boq_file_link || null;
+      // The denormalized column can be stale/null while the funnel's BOQ history
+      // (the "BOQs (N)" list) holds the actual file — check that too.
+      if (!link) {
+        const b = db.prepare(`SELECT boq_file_link FROM sales_funnel_boqs
+                              WHERE funnel_id=? AND COALESCE(boq_file_link,'')<>''
+                              ORDER BY created_at DESC, id DESC LIMIT 1`).get(id);
+        if (b?.boq_file_link) link = b.boq_file_link;
+      }
     } else {
       // Legacy fallback: a leads-table id → match the funnel by company name.
       const lead = db.prepare('SELECT company_name FROM leads WHERE id=?').get(id);

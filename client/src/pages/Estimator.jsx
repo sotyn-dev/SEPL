@@ -197,8 +197,9 @@ export default function Estimator() {
         setClientBoqMsg('The funnel BOQ had no readable items — you can upload it below.');
       }
     } catch (err) {
-      // 404 = no BOQ uploaded in the funnel for this client → tell them why.
-      if (err.response?.status === 404) setClientBoqMsg('ℹ️ No BOQ is uploaded in the Sales Funnel for this client — upload it below, or add it in the funnel.');
+      // Show the server's specific reason (no BOQ in funnel vs file missing vs
+      // not a server file) so it's clear why nothing loaded.
+      if (err.response?.status === 404) setClientBoqMsg('ℹ️ ' + (err.response?.data?.error || 'No BOQ found in the Sales Funnel for this client — upload it below.'));
       else { setClientBoqMsg(''); toast.error(err.response?.data?.error || 'Could not load client BOQ'); }
     } finally { setLoadingClientBoq(false); }
   };
