@@ -5700,10 +5700,13 @@ router.get('/item-rates', (req, res) => {
        -- (2026-06-04): a 1000 line approved as 10-store + 990-procure
        -- must show 990 in Vendor Rates, not 1000.
        AND (ii.source IS NULL OR ii.source <> 'store')
-       -- RGP (Returnable Gate Pass) is SEPL's own returnable material — it
-       -- goes to site and comes back, never purchased. mam (2026-06-06: "if
-       -- approve from store then why 3 rate") — keep it out of Vendor Rates.
-       AND UPPER(COALESCE(ii.item_type, '')) <> 'RGP'
+       -- RGP from SEPL's own returnable stock (source='rgp') goes to site and
+       -- comes back — never purchased — so it stays out of Vendor Rates. BUT
+       -- RGP marked source='procure' is NOT in stock and must be bought/rented,
+       -- so it DOES need 3-vendor rates (mam 2026-06-22: "not go to 3 vendor
+       -- even it is not in stock"). Only keep the returnable-stock RGP out.
+       AND NOT (UPPER(COALESCE(ii.item_type, '')) = 'RGP'
+                AND LOWER(COALESCE(ii.source, '')) <> 'procure')
        -- Lines the approver zeroed out (approved qty 0) aren't procured.
        AND COALESCE(ii.quantity, 0) > 0
      ORDER BY i.created_at DESC, ii.id`
