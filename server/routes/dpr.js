@@ -1,7 +1,13 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
+
+// Read an app setting (AI provider/key/model live in app_settings, set in
+// Admin → AI Settings). Used by the contractor-attendance photo head-count.
+const getSetting = (k) => getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(k)?.value ?? null;
 router.use(authMiddleware);
 
 // ── Contractor Manpower Attendance — morning punch (mam 2026-06-22) ──────
@@ -15,7 +21,7 @@ router.get('/contractor-attendance', (req, res) => {
   if (!site_id || !date) return res.status(400).json({ error: 'site_id and date required' });
   const db = getDb();
   const rows = db.prepare(
-    `SELECT id, site_id, attendance_date, subcontractor_id, contractor_name, contractor_type, manpower, marked_by
+    `SELECT id, site_id, attendance_date, subcontractor_id, contractor_name, contractor_type, manpower, photo_url, marked_by
        FROM contractor_attendance WHERE site_id=? AND attendance_date=? ORDER BY id`
   ).all(site_id, date);
   res.json(rows);
@@ -30,15 +36,64 @@ router.post('/contractor-attendance', (req, res) => {
   const save = db.transaction(() => {
     db.prepare('DELETE FROM contractor_attendance WHERE site_id=? AND attendance_date=?').run(site_id, date);
     const ins = db.prepare(`INSERT OR REPLACE INTO contractor_attendance
-      (site_id, attendance_date, subcontractor_id, contractor_name, contractor_type, manpower, marked_by)
-      VALUES (?,?,?,?,?,?,?)`);
+      (site_id, attendance_date, subcontractor_id, contractor_name, contractor_type, manpower, photo_url, marked_by)
+      VALUES (?,?,?,?,?,?,?,?)`);
     for (const r of clean) {
       ins.run(site_id, date, r.subcontractor_id || null, String(r.contractor_name).trim(),
-        r.contractor_type || null, parseInt(r.manpower, 10) || 0, req.user.id);
+        r.contractor_type || null, parseInt(r.manpower, 10) || 0, r.photo_url || null, req.user.id);
     }
   });
   try { save(); res.json({ ok: true, count: clean.length }); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Auto-count manpower from a site photo (mam 2026-06-22). The engineer uploads
+// a photo of the contractor's gang; Claude vision counts the people and returns
+// the head-count, which pre-fills the manpower field. Image is already on disk
+// (uploaded via /upload); we pass its path in as photo_url.
+router.post('/contractor-attendance/count-photo', async (req, res) => {
+  const { photo_url } = req.body;
+  if (!photo_url) return res.status(400).json({ error: 'photo_url required' });
+  // Resolve to the on-disk file (uploads live at <repo>/uploads, served at /uploads).
+  const rel = String(photo_url).replace(/^\/+/, '');
+  const filePath = path.join(__dirname, '..', '..', rel);
+  if (!filePath.includes('uploads') || !fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Photo not found on server' });
+  }
+  const ext = (path.extname(filePath).toLowerCase().replace('.', '') || 'jpeg');
+  const mediaMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' };
+  const media_type = mediaMap[ext];
+  if (!media_type) return res.status(400).json({ error: 'Unsupported image type — use JPG / PNG / WEBP' });
+
+  const apiKey = getSetting('ai_api_key');
+  if (!apiKey) return res.status(400).json({ error: 'AI key not set — add it in Admin → AI Settings to use photo head-count' });
+  let Anthropic;
+  try { Anthropic = require('@anthropic-ai/sdk'); }
+  catch { return res.status(500).json({ error: '@anthropic-ai/sdk not installed on the server' }); }
+
+  try {
+    const data = fs.readFileSync(filePath).toString('base64');
+    const client = new Anthropic.default({ apiKey, timeout: 60000 });
+    // Vision works across the 4.x family; default to a fast model for counting.
+    const model = getSetting('ai_model') || 'claude-opus-4-7';
+    const msg = await client.messages.create({
+      model, max_tokens: 50,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type, data } },
+          { type: 'text', text: 'This is a site attendance photo of construction/MEPF labourers. Count how many distinct people (workers) are visible. Reply with ONLY a single integer — no words, no punctuation.' },
+        ],
+      }],
+    });
+    const txt = (msg.content || []).map(b => b.text || '').join(' ');
+    const m = txt.match(/\d+/);
+    const count = m ? parseInt(m[0], 10) : null;
+    if (count == null) return res.status(422).json({ error: 'Could not read a count from the photo — enter manpower manually' });
+    res.json({ count });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Photo head-count failed' });
+  }
 });
 
 // Bypass the site-engineer scope filter when the user's role has

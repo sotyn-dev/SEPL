@@ -1361,6 +1361,7 @@ function initializeDatabase() {
       contractor_name TEXT NOT NULL,
       contractor_type TEXT,
       manpower INTEGER DEFAULT 0,
+      photo_url TEXT,
       marked_by INTEGER REFERENCES users(id),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -4154,6 +4155,10 @@ function initializeDatabase() {
     // Mam (2026-06-13): also plan Site Engineers / Jr. Site Engineers per
     // project — required comes from a value slab, but allow an admin override
     // of each, same as required manpower.
+    // Contractor attendance photo (mam 2026-06-22): per-contractor site photo,
+    // people auto-counted by AI to fill the manpower count. Guarded for DBs
+    // whose contractor_attendance table was created before this column existed.
+    try { db.exec(`ALTER TABLE contractor_attendance ADD COLUMN photo_url TEXT`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN jr_site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN foreman_override INTEGER`); } catch (_) {}

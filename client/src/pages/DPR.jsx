@@ -6,7 +6,7 @@ import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar, FiUsers } from 'react-icons/fi';
+import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar, FiUsers, FiCamera } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import EngineerPerformance from '../components/EngineerPerformance';
 
@@ -321,7 +321,7 @@ export default function DPR() {
       .then(r => {
         const rows = r.data || [];
         setMmRows(rows.length
-          ? rows.map(x => ({ name: x.contractor_name, manpower: x.manpower, subcontractor_id: x.subcontractor_id, contractor_type: x.contractor_type }))
+          ? rows.map(x => ({ name: x.contractor_name, manpower: x.manpower, subcontractor_id: x.subcontractor_id, contractor_type: x.contractor_type, photo_url: x.photo_url }))
           : [{ name: '', manpower: 0 }]);
       }).catch(() => setMmRows([{ name: '', manpower: 0 }]));
   };
@@ -333,6 +333,24 @@ export default function DPR() {
     loadMorningManpower(site, filterDate);
     setMmModal(true);
   };
+  // Upload a contractor's gang photo and let AI count the people → manpower.
+  const countFromPhoto = async (i, file) => {
+    if (!file) return;
+    const setRow = (patch) => setMmRows(rows => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+    setRow({ counting: true });
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const up = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const photo_url = up.data.url;
+      setRow({ photo_url });
+      const r = await api.post('/dpr/contractor-attendance/count-photo', { photo_url });
+      setRow({ manpower: r.data.count, counting: false });
+      toast.success(`AI counted ${r.data.count} people from the photo`);
+    } catch (e) {
+      setRow({ counting: false });
+      toast.error(e.response?.data?.error || 'Photo head-count failed');
+    }
+  };
   const saveMorningManpower = async () => {
     if (!mmSite) return toast.error('Pick a site');
     if (!mmDate) return toast.error('Pick a date');
@@ -340,7 +358,7 @@ export default function DPR() {
     try {
       const rows = mmRows
         .filter(r => r.name && r.name.trim())
-        .map(r => ({ contractor_name: r.name.trim(), manpower: +r.manpower || 0, subcontractor_id: r.subcontractor_id || null, contractor_type: r.contractor_type || null }));
+        .map(r => ({ contractor_name: r.name.trim(), manpower: +r.manpower || 0, subcontractor_id: r.subcontractor_id || null, contractor_type: r.contractor_type || null, photo_url: r.photo_url || null }));
       await api.post('/dpr/contractor-attendance', { site_id: mmSite, date: mmDate, rows });
       const total = rows.reduce((s, r) => s + (+r.manpower || 0), 0);
       toast.success(`Morning manpower saved — ${rows.length} contractor(s), ${total} manpower`);
@@ -527,6 +545,13 @@ export default function DPR() {
                 : 'Loss Reasons'}
             </button>
           ))}
+          {/* Always-visible morning contractor-attendance punch (mam 2026-06-22:
+              "where is attendance of contractor" — was hidden on the Reports tab). */}
+          <button onClick={openMorningManpower}
+            className="btn btn-secondary flex items-center gap-2 ml-auto"
+            title="Record contractor manpower attendance (morning punch)">
+            <FiUsers /> Contractor Attendance
+          </button>
         </div>
       </div>
 
@@ -1459,27 +1484,42 @@ export default function DPR() {
             </div>
             <div className="space-y-1.5">
               {mmRows.map((c, i) => (
-                <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                  <div className="col-span-7">
-                    <SearchableSelect
-                      options={[
-                        ...(c.name && !subcons.find(s => s.name === c.name) ? [{ name: c.name, label: `${c.name} (manual)` }] : []),
-                        ...subcons.map(s => ({ ...s, label: s.contractor_type ? `${s.name} — ${s.contractor_type}` : s.name })),
-                      ]}
-                      value={c.name || ''}
-                      valueKey="name"
-                      displayKey="label"
-                      placeholder={`Contractor ${i + 1}…`}
-                      onChange={(s) => { const n = [...mmRows]; n[i] = { ...n[i], name: s?.name || '', subcontractor_id: s?.id || null, contractor_type: s?.contractor_type || null }; setMmRows(n); }}
-                    />
+                <div key={i} className="space-y-1">
+                  <div className="grid grid-cols-12 gap-2 items-center">
+                    <div className="col-span-6">
+                      <SearchableSelect
+                        options={[
+                          ...(c.name && !subcons.find(s => s.name === c.name) ? [{ name: c.name, label: `${c.name} (manual)` }] : []),
+                          ...subcons.map(s => ({ ...s, label: s.contractor_type ? `${s.name} — ${s.contractor_type}` : s.name })),
+                        ]}
+                        value={c.name || ''}
+                        valueKey="name"
+                        displayKey="label"
+                        placeholder={`Contractor ${i + 1}…`}
+                        onChange={(s) => { const n = [...mmRows]; n[i] = { ...n[i], name: s?.name || '', subcontractor_id: s?.id || null, contractor_type: s?.contractor_type || null }; setMmRows(n); }}
+                      />
+                    </div>
+                    <input className="input col-span-3" type="number" min="0" placeholder="Manpower"
+                      value={c.manpower || ''}
+                      onChange={e => { const n = [...mmRows]; n[i] = { ...n[i], manpower: +e.target.value || 0 }; setMmRows(n); }} />
+                    {/* Photo → AI auto-counts the people into Manpower (mam 2026-06-22) */}
+                    <label className={`col-span-2 btn btn-secondary !py-2 text-[11px] flex items-center justify-center gap-1 cursor-pointer ${c.counting ? 'opacity-60 pointer-events-none' : ''}`}
+                      title="Upload a photo of the gang — AI counts the people">
+                      <FiCamera size={13} /> {c.counting ? '…' : 'Photo'}
+                      <input type="file" accept="image/*" className="hidden" disabled={c.counting}
+                        onChange={e => { countFromPhoto(i, e.target.files?.[0]); e.target.value = ''; }} />
+                    </label>
+                    {mmRows.length > 1 ? (
+                      <button type="button" onClick={() => setMmRows(mmRows.filter((_, idx) => idx !== i))}
+                        className="col-span-1 text-gray-400 hover:text-red-600 text-lg leading-none">×</button>
+                    ) : <div className="col-span-1" />}
                   </div>
-                  <input className="input col-span-4" type="number" min="0" placeholder="Manpower"
-                    value={c.manpower || ''}
-                    onChange={e => { const n = [...mmRows]; n[i] = { ...n[i], manpower: +e.target.value || 0 }; setMmRows(n); }} />
-                  {mmRows.length > 1 ? (
-                    <button type="button" onClick={() => setMmRows(mmRows.filter((_, idx) => idx !== i))}
-                      className="col-span-1 text-gray-400 hover:text-red-600 text-lg leading-none">×</button>
-                  ) : <div className="col-span-1" />}
+                  {(c.photo_url || c.counting) && (
+                    <div className="flex items-center gap-2 pl-1">
+                      {c.photo_url && <img src={c.photo_url} alt="" className="w-9 h-9 object-cover rounded border" />}
+                      <span className="text-[11px] text-gray-500">{c.counting ? 'Counting people in the photo…' : 'Manpower auto-counted from photo — edit if needed'}</span>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
