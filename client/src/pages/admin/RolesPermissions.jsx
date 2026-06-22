@@ -37,6 +37,7 @@ const ALL_MODULES = [
   { key: 'influencers', label: 'Influencers' },
   { key: 'crm_kitting', label: 'CRM Full Kitting' },
   { key: 'quotations', label: 'BOQ & Quotations' },
+  { key: 'ai_quotation', label: 'AI Auto-Quotation' },
   { key: 'labour_rates', label: 'Labour Rate Sheet' },
   { key: 'business_book', label: 'Business Book' },
 

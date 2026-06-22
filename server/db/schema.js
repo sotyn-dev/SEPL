@@ -4963,6 +4963,10 @@ in your first week. If a process feels broken, raise a Help Ticket
     // permission so it never showed separately in Roles & Permissions.
     // Now its own module so access can be granted/revoked on its own.
     'labour_rates',
+    // AI Auto-Quotation (the /estimator page) — was sharing the `quotations`
+    // permission so it never showed separately in Roles & Permissions. Now its
+    // own module so access can be granted/revoked independently of BOQ quotes.
+    'ai_quotation',
     // Solar Division (PR #2) — Solar Sales Funnel / Quotation / Projects /
     // Material+Labour Master all gate on this one key in server/routes/solar.js
     // and the sidebar, but it was never added here, so no role got a

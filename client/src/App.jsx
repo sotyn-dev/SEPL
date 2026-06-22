@@ -178,7 +178,7 @@ export default function App() {
         {/* Other Modules */}
         <Route path="leads" element={<ModuleRoute module="leads"><Leads /></ModuleRoute>} />
         <Route path="quotations" element={<ModuleRoute module="quotations"><Quotations /></ModuleRoute>} />
-        <Route path="estimator" element={<ModuleRoute module="quotations"><Estimator /></ModuleRoute>} />
+        <Route path="estimator" element={<ModuleRoute module="ai_quotation"><Estimator /></ModuleRoute>} />
         <Route path="solar-funnel" element={<ModuleRoute module="solar_quotation"><SolarFunnel /></ModuleRoute>} />
         <Route path="solar-quotation" element={<ModuleRoute module="solar_quotation"><SolarQuotation /></ModuleRoute>} />
         <Route path="solar-projects" element={<ModuleRoute module="solar_quotation"><SolarProjects /></ModuleRoute>} />

@@ -94,7 +94,7 @@ const SIDEBAR_GROUPS = [
   ]},
   { id: 'quotes_orders', label: 'Quotes & Orders', icon: FiFileText, items: [
     { path: '/quotations',  label: 'Quotations',        icon: FiClipboard,    module: 'quotations' },
-    { path: '/estimator',   label: 'AI Auto-Quotation', icon: FiArchive,      module: 'quotations' },
+    { path: '/estimator',   label: 'AI Auto-Quotation', icon: FiArchive,      module: 'ai_quotation' },
     { path: '/po-foc-stripped', label: 'PO/FOC Stripped', icon: FiShoppingCart, module: 'quotations' },
     { path: '/labour-rate',     label: 'Labour Rate',     icon: FiTruck,      module: 'labour_rates' },
   ]},
