@@ -53,9 +53,10 @@ export default function Estimator() {
 
   useEffect(() => {
     api.get('/item-master/dropdown').then(r => setItemOptions(r.data)).catch(() => {});
-    // Client dropdown = the Sales Funnel (real clients with uploaded BOQs),
-    // not the legacy /leads table (mam 2026-06-22 — only showed one entry).
-    api.get('/sales-funnel').then(r => setLeads(r.data || [])).catch(() => {});
+    // Client dropdown = Sales-Funnel clients at the BOQ + Vendor Costing stage
+    // only (mam 2026-06-22) — those are the ones with a BOQ ready to quote,
+    // not every funnel lead.
+    api.get('/sales-funnel?stage=boq_costing').then(r => setLeads(r.data || [])).catch(() => {});
     // PO/FOC kits — so picking an item pulls its labour rate + FOC + material
     // rate from the PO/FOC module. Approved kits win over drafts.
     api.get('/quotations/po-foc').then(r => {
