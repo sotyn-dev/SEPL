@@ -429,7 +429,8 @@ export default function Estimator() {
           <thead className="sticky top-0 z-10 bg-gray-50">
             <tr className="bg-gray-50 text-left text-[11px] uppercase text-gray-500">
               <th className="p-1.5 w-7">#</th>
-              <th className="p-1.5">BOQ item → Matched item</th>
+              <th className="p-1.5">BOQ item</th>
+              <th className="p-1.5">Match item (PO → FOC)</th>
               <th className="p-1.5 w-20">Category</th>
               <th className="p-1.5 text-center w-12">Qty</th>
               <th className="p-1.5 text-right w-16" title="Material price (auto from Item Master)">PP ₹</th>
@@ -448,16 +449,17 @@ export default function Estimator() {
               const c = calc(row);
               return (
                 <tr key={i} className={`border-t border-gray-100 align-top ${(row.confidence === 'low' || row.confidence === 'none') ? 'bg-red-50/40' : ''}`}>
-                  <td className="p-2 text-gray-400">{i + 1}</td>
-                  <td className="p-2">
-                    {/* Read top-down: BOQ item (client's original line) FIRST,
-                        then the matched Item Master item below it (mam 2026-06-22:
-                        "after serial no boq item and after items so easily read"). */}
-                    {row.boq_text && (
-                      <div className="text-[11px] text-gray-700 mb-1.5 bg-amber-50 border border-amber-200 rounded px-2 py-1 break-words">
-                        <span className="font-semibold text-amber-700">BOQ item:</span> {row.boq_text}
-                      </div>
-                    )}
+                  <td className="p-2 text-gray-400 align-top">{i + 1}</td>
+                  {/* Column 2 — BOQ item (client's original line). mam 2026-06-22:
+                      "table: s.no | BOQ item | match item". */}
+                  <td className="p-2 align-top">
+                    {row.boq_text
+                      ? <div className="text-[11px] text-gray-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 break-words">{row.boq_text}</div>
+                      : <span className="text-gray-300 text-xs">—</span>}
+                  </td>
+                  {/* Column 3 — Match item (the matched Item Master / PO item,
+                      with its FOC accessories listed underneath). */}
+                  <td className="p-2 align-top">
                     <SearchableSelect
                       options={itemOptions}
                       value={row.item_id}
@@ -554,7 +556,7 @@ export default function Estimator() {
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold">
-              <td className="p-2" colSpan={8}></td>
+              <td className="p-2" colSpan={9}></td>
               <td className="p-2 text-right" title="Total cost">{fmt(totals.cost)}</td>
               <td className="p-2 text-right text-emerald-700" title="Margin amount">+{fmt(marginAmt)}</td>
               <td className="p-2 text-right text-emerald-700 text-base">{fmt(totals.sp)}</td>
