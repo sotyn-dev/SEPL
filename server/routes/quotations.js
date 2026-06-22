@@ -705,10 +705,100 @@ router.delete('/estimates/:id', (req, res) => {
 
 // Build the multi-sheet quotation Excel (mam's saizar format): one sheet per
 // category + a SUMMARY with letterhead, category totals and a manpower block.
-router.post('/estimate-export', (req, res) => {
+// ── Styled quotation workbook (ExcelJS) — logo, navy headers, borders,
+// wrapped descriptions, currency number formats. Falls back to the plain
+// SheetJS export below if exceljs isn't installed on the server.
+async function buildStyledQuotation(ExcelJS, d) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Secured Engineers Pvt Ltd';
+  const NAVY = 'FF1E3A8A', LIGHT = 'FFE8EEF7', GREY = 'FFF4F6FA', MONEY = '#,##0.00';
+  const thin = { style: 'thin', color: { argb: 'FFD0D7E2' } };
+  const border = { top: thin, left: thin, bottom: thin, right: thin };
+  const QH = ['S.NO.', 'DESCRIPTION', 'MAKE', 'UNIT', 'QTY', 'RATE', 'AMOUNT', 'PP', 'ACCESS', 'LAB', 'TP', 'TPA', 'MARGIN', 'SP'];
+  const styleHeader = (ws, rowIdx, n) => {
+    const r = ws.getRow(rowIdx); r.height = 26;
+    for (let c = 1; c <= n; c++) { const cell = r.getCell(c); cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } }; cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 }; cell.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' }; cell.border = border; }
+  };
+
+  // ── SUMMARY ──
+  const sum = wb.addWorksheet('SUMMARY');
+  sum.columns = [{ width: 34 }, { width: 18 }, { width: 16 }, { width: 16 }, { width: 18 }];
+  const logoPath = path.join(__dirname, '..', '..', 'client', 'public', 'sepl-logo.png');
+  if (fs.existsSync(logoPath)) {
+    const imgId = wb.addImage({ filename: logoPath, extension: 'png' });
+    sum.addImage(imgId, { tl: { col: 0, row: 0 }, ext: { width: 175, height: 56 } });
+    sum.getRow(1).height = 46;
+  }
+  const co = [['B1', 'SECURED ENGINEERS PVT. LTD', { bold: true, size: 14, color: { argb: NAVY } }],
+    ['B2', 'H.O: 2480/1, B.K. Towers, Janta Nagar, Gill Road, Ludhiana', { size: 9, color: { argb: 'FF555555' } }],
+    ['B3', 'C.O: 58/A/1, First Floor, Kalu Sarai, New Delhi - 110016', { size: 9, color: { argb: 'FF555555' } }],
+    ['B4', 'Website: www.securedengineers.com', { size: 9, color: { argb: 'FF555555' } }]];
+  co.forEach(([a, v, f], i) => { sum.mergeCells(`${a}:E${i + 1}`); sum.getCell(a).value = v; sum.getCell(a).font = f; });
+  sum.mergeCells('A6:E6'); const tb = sum.getCell('A6'); tb.value = `QUOTATION FOR ${d.title || 'WORK'}`; tb.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } }; tb.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } }; tb.alignment = { horizontal: 'center', vertical: 'middle' }; sum.getRow(6).height = 24;
+  const info = [['NAME', d.client_name, 'Date', new Date().toISOString().slice(0, 10)], ['ADDRESS', d.client_address, 'Quotation No', d.quotation_no], ['PREP BY', d.prep_by, 'Revision No', 'R0']];
+  let rr = 8;
+  info.forEach(([k, v, k2, v2]) => { sum.getCell(`A${rr}`).value = k; sum.getCell(`A${rr}`).font = { bold: true }; sum.getCell(`B${rr}`).value = v; sum.getCell(`B${rr}`).alignment = { wrapText: true }; sum.getCell(`D${rr}`).value = k2; sum.getCell(`D${rr}`).font = { bold: true }; sum.getCell(`E${rr}`).value = v2; rr++; });
+  rr++;
+  sum.getCell(`A${rr}`).value = 'S.No.'; sum.getCell(`B${rr}`).value = 'Description'; sum.getCell(`C${rr}`).value = 'SP Amount (Rs)'; styleHeader(sum, rr, 3); rr++;
+  let grand = 0, ci = 1;
+  for (const [cat, items] of Object.entries(d.byCat)) { const sp = items.reduce((t, it) => t + (Number(it.sp) || 0), 0); grand += sp; sum.getCell(`A${rr}`).value = ci++; sum.getCell(`B${rr}`).value = cat; const cc = sum.getCell(`C${rr}`); cc.value = Math.round(sp * 100) / 100; cc.numFmt = MONEY; [`A${rr}`, `B${rr}`, `C${rr}`].forEach(a => sum.getCell(a).border = border); rr++; }
+  sum.getCell(`B${rr}`).value = 'SUB TOTAL'; sum.getCell(`B${rr}`).font = { bold: true }; const stc = sum.getCell(`C${rr}`); stc.value = Math.round(grand * 100) / 100; stc.numFmt = MONEY; stc.font = { bold: true }; rr += 2;
+  ['Additional / Manpower Cost', 'Qty', 'Monthly Cost', 'Months', 'Amount'].forEach((h, k) => sum.getCell(rr, k + 1).value = h); styleHeader(sum, rr, 5); rr++;
+  let mTotal = 0;
+  d.manpower.filter(m => m && m.name).forEach(m => { const amt = (Number(m.qty) || 0) * (Number(m.monthly_cost) || 0) * (Number(m.months) || 0); mTotal += amt; sum.getCell(rr, 1).value = m.name; sum.getCell(rr, 2).value = Number(m.qty) || 0; const mc = sum.getCell(rr, 3); mc.value = Number(m.monthly_cost) || 0; mc.numFmt = MONEY; sum.getCell(rr, 4).value = Number(m.months) || 0; const ac = sum.getCell(rr, 5); ac.value = Math.round(amt * 100) / 100; ac.numFmt = MONEY; for (let c = 1; c <= 5; c++) sum.getCell(rr, c).border = border; rr++; });
+  sum.getCell(rr, 4).value = 'Manpower Total'; sum.getCell(rr, 4).font = { bold: true }; const mtc = sum.getCell(rr, 5); mtc.value = Math.round(mTotal * 100) / 100; mtc.numFmt = MONEY; mtc.font = { bold: true }; rr++;
+  sum.getCell(rr, 4).value = 'GRAND TOTAL'; sum.getCell(rr, 4).font = { bold: true, size: 12 }; const gtc = sum.getCell(rr, 5); gtc.value = Math.round((grand + mTotal) * 100) / 100; gtc.numFmt = MONEY; gtc.font = { bold: true, size: 12, color: { argb: NAVY } }; for (let c = 1; c <= 5; c++) sum.getCell(rr, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+
+  // ── per-category sheets ──
+  const safeSheet = (s) => String(s || 'General').replace(/[\\/?*[\]:]/g, ' ').slice(0, 28).trim() || 'Sheet';
+  for (const [cat, items] of Object.entries(d.byCat)) {
+    const ws = wb.addWorksheet(safeSheet(cat));
+    ws.columns = [{ width: 6 }, { width: 52 }, { width: 12 }, { width: 7 }, { width: 7 }, { width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 13 }, { width: 9 }, { width: 13 }];
+    QH.forEach((h, k) => ws.getCell(1, k + 1).value = h); styleHeader(ws, 1, QH.length);
+    let sp = 0, ri = 2;
+    items.forEach((it, idx) => {
+      const vals = [idx + 1, it.description || '', it.make || '', it.unit || '', Number(it.qty) || 0, Number(it.rate) || 0, Number(it.sp) || 0, Number(it.pp) || 0, Number(it.acc) || 0, Number(it.lab) || 0, Number(it.tp) || 0, Number(it.tpa) || 0, (Number(it.margin) || 0) + '%', Number(it.sp) || 0];
+      vals.forEach((v, k) => {
+        const cell = ws.getCell(ri, k + 1); cell.value = v; cell.border = border;
+        cell.alignment = { vertical: 'top', wrapText: k === 1, horizontal: k === 0 ? 'center' : (k >= 4 ? 'right' : 'left') };
+        if (k === 4) cell.numFmt = '0';
+        else if ([5, 6, 7, 8, 9, 10, 11, 13].includes(k)) cell.numFmt = MONEY;
+        if (idx % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREY } };
+      });
+      sp += Number(it.sp) || 0; ri++;
+    });
+    ws.getCell(ri, 1).value = 'TOTAL'; ws.getCell(ri, 1).font = { bold: true };
+    const t7 = ws.getCell(ri, 7); t7.value = Math.round(sp * 100) / 100; t7.numFmt = MONEY; t7.font = { bold: true };
+    const t14 = ws.getCell(ri, 14); t14.value = Math.round(sp * 100) / 100; t14.numFmt = MONEY; t14.font = { bold: true };
+    for (let c = 1; c <= QH.length; c++) { ws.getCell(ri, c).border = border; ws.getCell(ri, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } }; }
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+  }
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+router.post('/estimate-export', async (req, res) => {
+  const { title = '', client_name = '', client_address = '', quotation_no = '', prep_by = '',
+    rows = [], manpower = [] } = req.body || {};
+  const sendBuf = (buf) => {
+    res.setHeader('Content-Disposition', `attachment; filename="quotation-${String(title || 'estimate').replace(/[^a-z0-9]/gi, '_')}.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
+  };
+  // Group by category once (shared by both export paths).
+  const byCatShared = {};
+  for (const r of rows) { const c = r.category || 'General'; (byCatShared[c] = byCatShared[c] || []).push(r); }
+
+  // Preferred: styled ExcelJS workbook. If exceljs isn't installed (or styling
+  // throws), fall through to the plain SheetJS export — never 500 on this.
+  let ExcelJS = null; try { ExcelJS = require('exceljs'); } catch { ExcelJS = null; }
+  if (ExcelJS) {
+    try {
+      const buf = await buildStyledQuotation(ExcelJS, { title, client_name, client_address, quotation_no, prep_by, byCat: byCatShared, manpower });
+      return sendBuf(buf);
+    } catch (e) { /* fall through to plain */ }
+  }
+
   try {
-    const { title = '', client_name = '', client_address = '', quotation_no = '', prep_by = '',
-      rows = [], manpower = [] } = req.body || {};
     const wb = XLSX.utils.book_new();
     const safeSheet = (s) => String(s || 'General').replace(/[\\/?*[\]:]/g, ' ').slice(0, 28).trim() || 'Sheet';
     const byCat = {};
