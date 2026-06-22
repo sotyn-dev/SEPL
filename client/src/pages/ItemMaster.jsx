@@ -29,7 +29,7 @@ const DEPT_LABELS = { FF: 'Fire Fighting', LV: 'Low Voltage', ELE: 'Electrical',
 // RENTAL = rented from vendor for short-term use (mam 2026-05-27).
 //          Picked from this list in the Rental indent flow, validated
 //          against current_price so renting can't cost ≥ buying outright.
-const TYPES = ['PO', 'FOC', 'RGP', 'RENTAL'];
+const TYPES = ['PO', 'POC', 'FOC', 'RGP', 'RENTAL'];
 const UOMS = ['PCS', 'MTR', 'KG', 'SQMM', 'PACKET', 'SET', 'LOT', 'PAIR', 'RFT', 'LTR', 'BOX', 'COIL'];
 const SOURCE_TYPES = ['PO', 'Quote', 'Manual', 'Online', 'Bill'];
 
@@ -277,6 +277,14 @@ export default function ItemMaster() {
   };
 
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  // Auto-code prefix follows the department: changing FF→ELE re-prefixes an
+  // auto-generated code (FF0001 → ELE0001). Custom/hand-typed codes are left
+  // alone; an empty code stays empty (backend generates on save). mam 2026-06-22.
+  const deptPrefix = (d) => String(d || 'GEN').toUpperCase().substring(0, 3);
+  const changeDept = (d) => setForm(f => {
+    const m = String(f.item_code || '').match(/^([A-Za-z]{1,4})(\d{2,})$/);
+    return { ...f, department: d, item_code: m ? deptPrefix(d) + m[2] : (f.item_code || '') };
+  });
 
   // MD's brief specified exactly 4 filter buttons (plus All to clear).
   // Per-item rate age has only 3 stages (green 0-30 / yellow 31-60 /
@@ -534,7 +542,7 @@ export default function ItemMaster() {
         <form onSubmit={handleSave} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             <div><label className="label">Item Code</label><input className="input font-mono" value={form.item_code || ''} onChange={e => F('item_code', e.target.value)} placeholder="Auto-generated if empty" /></div>
-            <div><label className="label">Department *</label><select className="select" value={form.department} onChange={e => F('department', e.target.value)}>{DEPARTMENTS.map(d => <option key={d} value={d}>{d} - {DEPT_LABELS[d] || d}</option>)}</select></div>
+            <div><label className="label">Department *</label><select className="select" value={form.department} onChange={e => changeDept(e.target.value)}>{DEPARTMENTS.map(d => <option key={d} value={d}>{d} - {DEPT_LABELS[d] || d}</option>)}</select></div>
             <div><label className="label">Type *</label><select className="select" value={form.type} onChange={e => F('type', e.target.value)}>{TYPES.map(t => <option key={t}>{t}</option>)}</select></div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
