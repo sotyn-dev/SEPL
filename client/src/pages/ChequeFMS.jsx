@@ -47,6 +47,8 @@ export default function ChequeFMS() {
   const [cheques, setCheques] = useState([]);
   const [stats, setStats] = useState({ by_status: [], action_due_count: 0 });
   const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');   // cheque-date range filter (from)
+  const [dateTo, setDateTo] = useState('');       // cheque-date range filter (to)
 
   const [modal, setModal] = useState(null); // 'issue' | 'edit' | 'action' | 'view'
   const [form, setForm] = useState({});
@@ -155,6 +157,18 @@ export default function ChequeFMS() {
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  // Client-side cheque-date range filter. cheque_date is an ISO 'YYYY-MM-DD'
+  // string, so a plain string compare gives a correct date range.
+  const visible = useMemo(() => {
+    if (!dateFrom && !dateTo) return cheques;
+    return cheques.filter(c => {
+      const d = c.cheque_date || '';
+      if (dateFrom && d < dateFrom) return false;
+      if (dateTo && d > dateTo) return false;
+      return true;
+    });
+  }, [cheques, dateFrom, dateTo]);
+
   const counts = useMemo(() => {
     const m = { pending: 0, clear: 0, hold: 0, bounce: 0, stopped: 0, cancel: 0 };
     // Parallel amount-sum map so the Total Value tile can switch
@@ -205,7 +219,7 @@ export default function ChequeFMS() {
           <div className="flex gap-2">
             <button onClick={() => exportCsv('cheques',
               ['Cheque #','Payee','Bank','Date','Amount','Status','Hold Until','Raised By'],
-              cheques.map(c => [c.cheque_number, c.payee_to, c.bank_name || c.bank_other, c.cheque_date, c.amount, c.current_status, c.hold_until, c.raised_by_name]))}
+              visible.map(c => [c.cheque_number, c.payee_to, c.bank_name || c.bank_other, c.cheque_date, c.amount, c.current_status, c.hold_until, c.raised_by_name]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
             {canCreate('cheques') && (
               <button onClick={openIssue} className="btn btn-primary flex items-center gap-2 justify-center">
@@ -229,13 +243,23 @@ export default function ChequeFMS() {
           ))}
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <input
             className="input text-sm flex-1 min-w-[200px]"
             placeholder="Search cheque no, payee, bank…"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
+          {/* Cheque-date range filter (mam 2026-06-22: "need date filter from to") */}
+          <div className="flex items-center gap-1.5">
+            <label className="text-[11px] font-semibold text-gray-500 uppercase">From</label>
+            <input type="date" className="input text-sm w-[150px]" value={dateFrom} max={dateTo || undefined} onChange={e => setDateFrom(e.target.value)} />
+            <label className="text-[11px] font-semibold text-gray-500 uppercase">To</label>
+            <input type="date" className="input text-sm w-[150px]" value={dateTo} min={dateFrom || undefined} onChange={e => setDateTo(e.target.value)} />
+            {(dateFrom || dateTo) && (
+              <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Clear</button>
+            )}
+          </div>
         </div>
 
         {/* Stats cards */}
@@ -270,8 +294,8 @@ export default function ChequeFMS() {
             </tr>
           </thead>
           <tbody>
-            {cheques.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No cheques in this tab</td></tr>}
-            {cheques.map(c => {
+            {visible.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">{(dateFrom || dateTo) ? 'No cheques in this date range' : 'No cheques in this tab'}</td></tr>}
+            {visible.map(c => {
               const due = c.action_due === 1;
               return (
                 <tr key={c.id} className={`border-b ${due ? 'bg-red-50/40' : ''}`}>
