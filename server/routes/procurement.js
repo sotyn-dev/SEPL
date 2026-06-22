@@ -5621,27 +5621,31 @@ router.delete('/sales-bills/:id', (req, res) => {
 const APPROVED_FOR_RATES = "('approved','po_sent')";
 function assertIndentApprovedByItem(db, indentItemId) {
   const row = db.prepare(
-    `SELECT i.indent_number, i.status
+    `SELECT i.indent_number, i.status, i.l1_status, i.l2_status
        FROM indent_items ii
        JOIN indents i ON i.id = ii.indent_id
       WHERE ii.id = ?`
   ).get(indentItemId);
   if (!row) return { status: 404, error: 'Indent item not found' };
-  if (row.status !== 'approved' && row.status !== 'po_sent') {
+  const fullyApproved = row.status === 'approved' || row.status === 'po_sent'
+    || (row.l1_status === 'approved' && row.l2_status === 'approved');
+  if (!fullyApproved) {
     return { status: 403, error: `Indent ${row.indent_number} is not fully approved yet (current: ${row.status}). Vendor rates can only be entered after L1 + L2 approval.` };
   }
   return null;
 }
 function assertIndentApprovedByRate(db, rateId) {
   const row = db.prepare(
-    `SELECT i.indent_number, i.status
+    `SELECT i.indent_number, i.status, i.l1_status, i.l2_status
        FROM indent_item_rates r
        JOIN indent_items ii ON ii.id = r.indent_item_id
        JOIN indents i ON i.id = ii.indent_id
       WHERE r.id = ?`
   ).get(rateId);
   if (!row) return { status: 404, error: 'Rate row not found' };
-  if (row.status !== 'approved' && row.status !== 'po_sent') {
+  const fullyApproved = row.status === 'approved' || row.status === 'po_sent'
+    || (row.l1_status === 'approved' && row.l2_status === 'approved');
+  if (!fullyApproved) {
     return { status: 403, error: `Indent ${row.indent_number} is not fully approved yet (current: ${row.status}). Cannot finalize until L1 + L2 approve.` };
   }
   return null;
@@ -5684,7 +5688,13 @@ router.get('/item-rates', (req, res) => {
      LEFT JOIN users fu ON fu.id = r.finalized_by
      LEFT JOIN order_planning op ON op.id = i.planning_id
      LEFT JOIN business_book bb ON bb.id = op.business_book_id
-     WHERE i.status IN ${APPROVED_FOR_RATES}
+     -- Show fully-approved indents. Besides status IN ('approved','po_sent'),
+     -- also accept any indent whose L1 AND L2 are both signed off — some rows
+     -- get "stuck" at status='l1_approved' even though l2_status='approved'
+     -- (mam 2026-06-22: "after approval all indent not show"). Both signatures
+     -- present = ready for rates, regardless of the status column.
+     WHERE (i.status IN ${APPROVED_FOR_RATES}
+            OR (i.l1_status='approved' AND i.l2_status='approved'))
        -- From-store lines are fulfilled from stock — they don't need a
        -- vendor rate / PO, so only the PROCURE portion shows here.  mam
        -- (2026-06-04): a 1000 line approved as 10-store + 990-procure
