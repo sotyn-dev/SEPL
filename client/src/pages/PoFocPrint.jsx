@@ -87,7 +87,7 @@ export default function PoFocPrint() {
           </tfoot>
         </table>
 
-        <div style={{ fontSize: 11, color: '#888', marginTop: 10 }}>FOC supply amount: ₹{fmt(focAmt)} · Generated from PO/FOC Stripped.</div>
+        <div style={{ fontSize: 11, color: '#888', marginTop: 10 }}>FOC supply amount: ₹{fmt(focAmt)} · Generated from Price Breakup Master.</div>
 
         <div className="no-print" style={{ marginTop: 20, textAlign: 'center' }}>
           <button onClick={() => window.print()} style={{ background: '#1e3a8a', color: '#fff', border: 'none', padding: '8px 22px', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}>🖨 Print / Save as PDF</button>

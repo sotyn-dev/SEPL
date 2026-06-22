@@ -95,7 +95,7 @@ const SIDEBAR_GROUPS = [
   { id: 'quotes_orders', label: 'Quotes & Orders', icon: FiFileText, items: [
     { path: '/quotations',  label: 'Quotations',        icon: FiClipboard,    module: 'quotations' },
     { path: '/estimator',   label: 'AI Auto-Quotation', icon: FiArchive,      module: 'ai_quotation' },
-    { path: '/po-foc-stripped', label: 'PO/FOC Stripped', icon: FiShoppingCart, module: 'quotations' },
+    { path: '/po-foc-stripped', label: 'Price Breakup Master', icon: FiShoppingCart, module: 'quotations' },
     { path: '/labour-rate',     label: 'Labour Rate',     icon: FiTruck,      module: 'labour_rates' },
   ]},
   // Procurement (mam 2026-05-27 follow-up): Dispatch + Order to Planning

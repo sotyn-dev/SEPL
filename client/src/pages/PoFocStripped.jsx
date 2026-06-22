@@ -236,7 +236,7 @@ export default function PoFocStripped() {
     <div className="space-y-4 pb-24">
       <div className="flex items-end justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">📦 PO/FOC Stripped</h1>
+          <h1 className="text-2xl font-bold flex items-center gap-2">📦 Price Breakup Master</h1>
           <p className="text-sm text-gray-500">Build a PO item with its FOC items, labour and margin, then approve it. Approved items print as a PDF.</p>
         </div>
         <button onClick={openNew} className="btn btn-primary flex items-center gap-1"><FiPlus size={15} /> New PO/FOC</button>
