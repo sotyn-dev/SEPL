@@ -4,6 +4,43 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
+// ── Contractor Manpower Attendance — morning punch (mam 2026-06-22) ──────
+// The site engineer records each morning which sub-contractors are on a site
+// and how many manpower each brought. Stored per site + date and used to
+// pre-fill the DPR "Contractors on Site". Registered before the param routes
+// below so the literal path isn't captured by '/:id'. No extra permission
+// gate (matches POST '/' DPR submit) — the DPR page is already module-gated.
+router.get('/contractor-attendance', (req, res) => {
+  const { site_id, date } = req.query;
+  if (!site_id || !date) return res.status(400).json({ error: 'site_id and date required' });
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT id, site_id, attendance_date, subcontractor_id, contractor_name, contractor_type, manpower, marked_by
+       FROM contractor_attendance WHERE site_id=? AND attendance_date=? ORDER BY id`
+  ).all(site_id, date);
+  res.json(rows);
+});
+
+router.post('/contractor-attendance', (req, res) => {
+  const { site_id, date, rows } = req.body;
+  if (!site_id || !date) return res.status(400).json({ error: 'site_id and date required' });
+  const db = getDb();
+  // Keep only rows with a contractor name (the unique key); manpower can be 0.
+  const clean = (rows || []).filter(r => r && r.contractor_name && String(r.contractor_name).trim());
+  const save = db.transaction(() => {
+    db.prepare('DELETE FROM contractor_attendance WHERE site_id=? AND attendance_date=?').run(site_id, date);
+    const ins = db.prepare(`INSERT OR REPLACE INTO contractor_attendance
+      (site_id, attendance_date, subcontractor_id, contractor_name, contractor_type, manpower, marked_by)
+      VALUES (?,?,?,?,?,?,?)`);
+    for (const r of clean) {
+      ins.run(site_id, date, r.subcontractor_id || null, String(r.contractor_name).trim(),
+        r.contractor_type || null, parseInt(r.manpower, 10) || 0, req.user.id);
+    }
+  });
+  try { save(); res.json({ ok: true, count: clean.length }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Bypass the site-engineer scope filter when the user's role has
 // can_approve OR can_see_all on the 'dpr' module — that's the
 // explicit "See All" toggle in Roles & Permissions. Mam ticks

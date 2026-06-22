@@ -6,7 +6,7 @@ import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar } from 'react-icons/fi';
+import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar, FiUsers } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import EngineerPerformance from '../components/EngineerPerformance';
 
@@ -181,6 +181,13 @@ export default function DPR() {
   // appends more, "×" removes (only when more than 5). Empty rows are
   // dropped server-side so we never save junk.
   const [contractors, setContractors] = useState(() => [{ name: '', manpower: 0 }]);
+  // Morning Manpower punch (mam 2026-06-22): site engineer records contractor
+  // attendance in the morning; it pre-fills the DPR "Contractors on Site".
+  const [mmModal, setMmModal] = useState(false);
+  const [mmSite, setMmSite] = useState('');
+  const [mmDate, setMmDate] = useState(new Date().toISOString().split('T')[0]);
+  const [mmRows, setMmRows] = useState([{ name: '', manpower: 0, subcontractor_id: null, contractor_type: '' }]);
+  const [mmBusy, setMmBusy] = useState(false);
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const [poItemsForSite, setPoItemsForSite] = useState([]);
   // Server-side diagnostic when po_items can't be fetched (no BB, no
@@ -293,7 +300,53 @@ export default function DPR() {
           ? { ...c, qty: 1, rate: total_amount, amount: total_amount, auto: total_amount > 0, ta_da_count: count }
           : c));
       }).catch(() => {});
+      // Pre-fill "Contractors on Site" from the morning manpower punch for this
+      // site + date (mam 2026-06-22). Only fills when the engineer hasn't already
+      // typed contractors, so it never clobbers in-progress edits.
+      api.get('/dpr/contractor-attendance', { params: { site_id: siteId, date: form.report_date || filterDate } })
+        .then(r => {
+          const rows = r.data || [];
+          if (!rows.length) return;
+          setContractors(prev => (prev.some(c => c.name && c.name.trim())
+            ? prev
+            : rows.map(x => ({ name: x.contractor_name, manpower: x.manpower }))));
+        }).catch(() => {});
     } else { setPoItemsForSite([]); setPoItemsDiag(null); }
+  };
+
+  // ── Morning Manpower (contractor attendance) handlers ──────────────────
+  const loadMorningManpower = (siteId, date) => {
+    if (!siteId || !date) { setMmRows([{ name: '', manpower: 0 }]); return; }
+    api.get('/dpr/contractor-attendance', { params: { site_id: siteId, date } })
+      .then(r => {
+        const rows = r.data || [];
+        setMmRows(rows.length
+          ? rows.map(x => ({ name: x.contractor_name, manpower: x.manpower, subcontractor_id: x.subcontractor_id, contractor_type: x.contractor_type }))
+          : [{ name: '', manpower: 0 }]);
+      }).catch(() => setMmRows([{ name: '', manpower: 0 }]));
+  };
+  const openMorningManpower = () => {
+    const site = form.site_id || '';
+    setMmSite(site);
+    setMmDate(filterDate);
+    if (subcons.length === 0) api.get('/sub-contractors/lookup').then(r => setSubcons(r.data || [])).catch(() => {});
+    loadMorningManpower(site, filterDate);
+    setMmModal(true);
+  };
+  const saveMorningManpower = async () => {
+    if (!mmSite) return toast.error('Pick a site');
+    if (!mmDate) return toast.error('Pick a date');
+    setMmBusy(true);
+    try {
+      const rows = mmRows
+        .filter(r => r.name && r.name.trim())
+        .map(r => ({ contractor_name: r.name.trim(), manpower: +r.manpower || 0, subcontractor_id: r.subcontractor_id || null, contractor_type: r.contractor_type || null }));
+      await api.post('/dpr/contractor-attendance', { site_id: mmSite, date: mmDate, rows });
+      const total = rows.reduce((s, r) => s + (+r.manpower || 0), 0);
+      toast.success(`Morning manpower saved — ${rows.length} contractor(s), ${total} manpower`);
+      setMmModal(false);
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed to save'); }
+    finally { setMmBusy(false); }
   };
 
   const addWorkItem = () => setWorkItems([...workItems, { po_item_id: '', description: '', qty: 0, location: '', rate: 0, amount: 0 }]);
@@ -633,6 +686,9 @@ export default function DPR() {
                   one in flight. */}
               <button onClick={() => openPlanWeek(form.site_id || '', planWeekStart)}
                 className="btn btn-secondary flex items-center gap-2"><FiCalendar /> Plan Week</button>
+              {/* Morning Manpower — contractor attendance punch (mam 2026-06-22) */}
+              <button onClick={openMorningManpower}
+                className="btn btn-secondary flex items-center gap-2"><FiUsers /> Morning Manpower</button>
               <button onClick={() => {
                 setForm({ site_id: '', report_date: filterDate, weather: 'clear', overall_status: 'on_track', system_type: '', shift: 'day', contractor_name: '', contractor_manpower: 0, mb_sheet_no: '', safety_toolbox_talk: false, safety_ppe_compliance: false, safety_incidents: '', next_day_plan: '', hindrances: '', hindrance_category: '', remarks: '' });
                 setWorkItems([]); setPoItemsForSite([]);
@@ -1376,6 +1432,66 @@ export default function DPR() {
           work / manpower / cost in one go.  Saves create or update
           the matching dpr rows (one per day) with planned fields
           populated and actuals left blank. */}
+      {/* ── Morning Manpower — contractor attendance punch (mam 2026-06-22) ── */}
+      <Modal isOpen={mmModal} onClose={() => setMmModal(false)} title="Morning Manpower — Contractor Attendance">
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500">Record which contractors are on site this morning and how many manpower each brought. This pre-fills the DPR’s “Contractors on Site” when you submit it.</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Site *</label>
+              <select className="select" value={mmSite}
+                onChange={e => { setMmSite(e.target.value); loadMorningManpower(e.target.value, mmDate); }}>
+                <option value="">Select Site</option>
+                {sites.filter(s => s.status === 'active').map(s => <option key={s.id} value={s.id}>{s.lead_no ? `[${s.lead_no}] ` : ''}{s.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Date *</label>
+              <input className="input" type="date" value={mmDate}
+                onChange={e => { setMmDate(e.target.value); loadMorningManpower(mmSite, e.target.value); }} />
+            </div>
+          </div>
+          <div>
+            <div className="flex items-baseline justify-between mb-1">
+              <label className="label mb-0">Contractors present</label>
+              <button type="button" onClick={() => setMmRows([...mmRows, { name: '', manpower: 0 }])}
+                className="text-xs text-red-600 hover:underline">+ Add Contractor</button>
+            </div>
+            <div className="space-y-1.5">
+              {mmRows.map((c, i) => (
+                <div key={i} className="grid grid-cols-12 gap-2 items-center">
+                  <div className="col-span-7">
+                    <SearchableSelect
+                      options={[
+                        ...(c.name && !subcons.find(s => s.name === c.name) ? [{ name: c.name, label: `${c.name} (manual)` }] : []),
+                        ...subcons.map(s => ({ ...s, label: s.contractor_type ? `${s.name} — ${s.contractor_type}` : s.name })),
+                      ]}
+                      value={c.name || ''}
+                      valueKey="name"
+                      displayKey="label"
+                      placeholder={`Contractor ${i + 1}…`}
+                      onChange={(s) => { const n = [...mmRows]; n[i] = { ...n[i], name: s?.name || '', subcontractor_id: s?.id || null, contractor_type: s?.contractor_type || null }; setMmRows(n); }}
+                    />
+                  </div>
+                  <input className="input col-span-4" type="number" min="0" placeholder="Manpower"
+                    value={c.manpower || ''}
+                    onChange={e => { const n = [...mmRows]; n[i] = { ...n[i], manpower: +e.target.value || 0 }; setMmRows(n); }} />
+                  {mmRows.length > 1 ? (
+                    <button type="button" onClick={() => setMmRows(mmRows.filter((_, idx) => idx !== i))}
+                      className="col-span-1 text-gray-400 hover:text-red-600 text-lg leading-none">×</button>
+                  ) : <div className="col-span-1" />}
+                </div>
+              ))}
+            </div>
+            <div className="text-xs text-gray-500 mt-2">Total manpower: <b>{mmRows.reduce((s, r) => s + (+r.manpower || 0), 0)}</b> across {mmRows.filter(r => r.name && r.name.trim()).length} contractor(s)</div>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={() => setMmModal(false)} className="btn btn-secondary">Cancel</button>
+            <button type="button" onClick={saveMorningManpower} disabled={mmBusy} className="btn btn-primary disabled:opacity-50">{mmBusy ? 'Saving…' : 'Save Morning Manpower'}</button>
+          </div>
+        </div>
+      </Modal>
+
       <Modal isOpen={planModal} onClose={() => setPlanModal(false)} title="Plan This Week — 7-Day DPR Plan" wide>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">

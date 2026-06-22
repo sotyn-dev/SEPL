@@ -1349,6 +1349,24 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Contractor manpower attendance (mam 2026-06-22): the site engineer's
+    -- MORNING punch of which sub-contractors are present on a site and how many
+    -- manpower each brought. Separate from team (user) attendance; pre-fills the
+    -- DPR "Contractors on Site". One row per site + date + contractor (upsert).
+    CREATE TABLE IF NOT EXISTS contractor_attendance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      site_id INTEGER REFERENCES sites(id) ON DELETE CASCADE,
+      attendance_date TEXT NOT NULL,
+      subcontractor_id INTEGER,
+      contractor_name TEXT NOT NULL,
+      contractor_type TEXT,
+      manpower INTEGER DEFAULT 0,
+      marked_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(site_id, attendance_date, contractor_name)
+    );
+
     -- Work items from PO (item name, qty, rate, amount + floor/zone + planned/actual)
     CREATE TABLE IF NOT EXISTS dpr_work_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
