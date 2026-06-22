@@ -432,7 +432,7 @@ export default function Estimator() {
               <th className="p-1.5">BOQ item</th>
               <th className="p-1.5">Match item (PO → FOC)</th>
               <th className="p-1.5 w-20">Category</th>
-              <th className="p-1.5 text-center w-12">Qty</th>
+              <th className="p-1.5 text-center w-16">Qty</th>
               <th className="p-1.5 text-right w-16" title="Material price (auto from Item Master)">PP ₹</th>
               <th className="p-1.5 text-right w-14" title="Accessories = PP × Acc%">ACC ₹</th>
               <th className="p-1.5 text-right w-16" title="Labour (enter manually / from labour sheet)">LAB ₹</th>
@@ -526,7 +526,7 @@ export default function Estimator() {
                   </td>
                   <td className="p-1.5 text-xs text-gray-600 break-words">{row.category || '—'}</td>
                   <td className="p-1.5">
-                    <input className="input w-full text-center py-1 px-1 text-xs" type="number" min="0" value={row.qty || ''}
+                    <input className="input w-full text-center py-1 px-1 text-xs [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" type="number" min="0" value={row.qty || ''}
                       onChange={e => patchRow(i, { qty: e.target.value })} />
                   </td>
                   <td className="p-1.5">
