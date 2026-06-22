@@ -35,17 +35,21 @@ export default function Estimator() {
   const [kitByPoId, setKitByPoId] = useState({}); // po_item_id → PO/FOC kit (labour, focs, po_rate)
   // Manpower / additional cost block for the SUMMARY sheet (saizar format).
   // Months default to 1 so the Amount isn't 0 out of the gate (mam 2026-06-22);
-  // every row is still editable. Documentation is a standard ₹5,000 line.
+  // every row is still editable. Project Start→End dates auto-fill the months.
   const [manpower, setManpower] = useState([
     { name: 'Site Engineer', qty: 1, monthly_cost: 40000, months: 1 },
     { name: 'Junior Engineer', qty: 1, monthly_cost: 25000, months: 1 },
     { name: 'Room rent, Food etc', qty: 1, monthly_cost: 10000, months: 1 },
     { name: 'Hydra', qty: 1, monthly_cost: 75000, months: 1 },
     { name: 'Scaffolding', qty: 1, monthly_cost: 40000, months: 1 },
-    { name: 'Documentation', qty: 1, monthly_cost: 5000, months: 1 },
   ]);
-  // Overhead = % of project cost (before margin) — mam 2026-06-22, default 2%.
+  // Project duration → drives the months on every manpower row (mam 2026-06-22).
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  // Overhead + Documentation = % of project cost (before margin), shown as lines
+  // below the manpower table (mam 2026-06-22). Documentation was a flat ₹5,000.
   const [overheadPct, setOverheadPct] = useState(2);
+  const [docPct, setDocPct] = useState(1);
   const [view, setView] = useState('build');     // 'build' | 'saved'
   const [savedList, setSavedList] = useState([]);
   const [currentId, setCurrentId] = useState(null);
@@ -250,8 +254,20 @@ export default function Estimator() {
     return t;
   }, { cost: 0, sp: 0 }), [rows, accPct, margins]);
   const marginAmt = r2(totals.sp - totals.cost);
-  // Overhead = % of project cost (items cost, before margin).
+  // Overhead + Documentation = % of project cost (items cost, before margin).
   const overheadAmt = r2((Number(totals.cost) || 0) * (Number(overheadPct) || 0) / 100);
+  const docAmt = r2((Number(totals.cost) || 0) * (Number(docPct) || 0) / 100);
+  // Project duration (Start→End) in months → auto-fills the manpower months.
+  const projMonths = useMemo(() => {
+    if (!startDate || !endDate) return 0;
+    const a = new Date(startDate), b = new Date(endDate);
+    if (isNaN(+a) || isNaN(+b) || b < a) return 0;
+    return Math.max(1, Math.ceil(((b - a) / 86400000 + 1) / 30));
+  }, [startDate, endDate]);
+  // When the date range changes, set every manpower row's months to it.
+  useEffect(() => {
+    if (projMonths > 0) setManpower(m => m.map(r => ({ ...r, months: projMonths })));
+  }, [projMonths]);
 
   const exportSheet = () => {
     const headers = ['S.NO', 'ITEM DESCRIPTION', 'UNIT', 'QTY', 'RATE', 'AMOUNT',
@@ -284,9 +300,10 @@ export default function Estimator() {
     if (!data.length) { toast.error('Add at least one item'); return; }
     const _cl = leads.find(l => String(l.id) === String(leadId));
     const clientName = (_cl?.company_name || _cl?.client_name || '');
-    // Append the computed Overhead line so it shows in the Summary sheet.
+    // Append the computed Overhead + Documentation lines to the Summary sheet.
     const mpExport = [...manpower];
     if (overheadAmt > 0) mpExport.push({ name: `Overhead (${overheadPct}% of project cost)`, qty: 1, monthly_cost: overheadAmt, months: 1 });
+    if (docAmt > 0) mpExport.push({ name: `Documentation (${docPct}% of project cost)`, qty: 1, monthly_cost: docAmt, months: 1 });
     try {
       const resp = await api.post('/quotations/estimate-export', { title, client_name: clientName, manpower: mpExport, rows: data }, { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([resp.data]));
@@ -593,6 +610,17 @@ export default function Estimator() {
           <span className="text-sm font-semibold text-gray-700">Manpower / Additional Cost (for the Summary sheet)</span>
           <button type="button" onClick={addMp} className="text-xs text-indigo-600 hover:underline flex items-center gap-1"><FiPlus size={12} /> Add row</button>
         </div>
+        {/* Project duration → auto-fills the Months on every row (mam 2026-06-22) */}
+        <div className="flex flex-wrap items-center gap-2 mb-3 text-sm bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+          <span className="font-semibold text-gray-600">Project duration</span>
+          <label className="text-[11px] text-gray-500">Start</label>
+          <input type="date" className="input w-[150px] py-1 text-sm" value={startDate} max={endDate || undefined} onChange={e => setStartDate(e.target.value)} />
+          <label className="text-[11px] text-gray-500">End</label>
+          <input type="date" className="input w-[150px] py-1 text-sm" value={endDate} min={startDate || undefined} onChange={e => setEndDate(e.target.value)} />
+          {projMonths > 0
+            ? <span className="text-emerald-700 font-semibold">= {projMonths} month(s) — applied to all rows below</span>
+            : <span className="text-[11px] text-gray-400">pick dates to auto-set the months</span>}
+        </div>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead><tr className="text-[10px] uppercase text-gray-400 text-left">
@@ -620,6 +648,14 @@ export default function Estimator() {
             value={overheadPct} onChange={e => setOverheadPct(e.target.value)} />
           <span className="text-gray-400">% of project cost (before margin)</span>
           <span className="font-semibold text-indigo-700 ml-2">₹{fmt(overheadAmt)}</span>
+        </div>
+        {/* Documentation = % of project cost — below Overhead (mam 2026-06-22) */}
+        <div className="flex flex-wrap items-center justify-end gap-2 mt-2 text-sm">
+          <span className="font-semibold text-gray-700">Documentation</span>
+          <input className="input w-16 text-right py-1" type="number" min="0" step="0.5"
+            value={docPct} onChange={e => setDocPct(e.target.value)} />
+          <span className="text-gray-400">% of project cost (before margin)</span>
+          <span className="font-semibold text-indigo-700 ml-2">₹{fmt(docAmt)}</span>
         </div>
       </div>
 
