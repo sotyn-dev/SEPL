@@ -277,28 +277,36 @@ router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
 router.get('/client-boq', async (req, res) => {
   try {
     const db = getDb();
-    const leadId = req.query.lead_id;
-    if (!leadId) return res.status(400).json({ error: 'lead_id required' });
-    const lead = db.prepare('SELECT id, company_name FROM leads WHERE id=?').get(leadId);
-    if (!lead) return res.status(404).json({ error: 'Lead not found' });
-    const name = (lead.company_name || '').trim();
-    if (!name) return res.status(404).json({ error: 'This client has no company name to match in the Sales Funnel' });
-    // Most recent funnel row for this company that has a BOQ file. Prefer the
-    // revised BOQ, then the original; check sales_funnel, then crm_funnel.
-    let link = null, src = null;
-    const sf = db.prepare(`SELECT COALESCE(NULLIF(revised_boq_file_link,''), NULLIF(boq_file_link,'')) AS link
-                     FROM sales_funnel WHERE (company_name=? OR client_name=?)
-                       AND (COALESCE(revised_boq_file_link,'')<>'' OR COALESCE(boq_file_link,'')<>'')
-                     ORDER BY id DESC LIMIT 1`).get(name, name);
-    if (sf?.link) { link = sf.link; src = 'sales_funnel'; }
-    if (!link) {
-      const cf = db.prepare(`SELECT COALESCE(NULLIF(cust_boq_link,''), NULLIF(boq_file_link,'')) AS link
-                       FROM crm_funnel WHERE (company_name=? OR client_name=?)
-                         AND (COALESCE(cust_boq_link,'')<>'' OR COALESCE(boq_file_link,'')<>'')
-                       ORDER BY id DESC LIMIT 1`).get(name, name);
-      if (cf?.link) { link = cf.link; src = 'crm_funnel'; }
+    const id = req.query.funnel_id || req.query.lead_id;
+    if (!id) return res.status(400).json({ error: 'client id required' });
+    // The Estimator's Client dropdown IS the Sales Funnel, so look the row up
+    // directly by id and take its BOQ file (revised first, then original).
+    let name = '', link = null;
+    const sfRow = db.prepare('SELECT client_name, company_name, revised_boq_file_link, boq_file_link FROM sales_funnel WHERE id=?').get(id);
+    if (sfRow) {
+      name = (sfRow.company_name || sfRow.client_name || '').trim();
+      link = sfRow.revised_boq_file_link || sfRow.boq_file_link || null;
+    } else {
+      // Legacy fallback: a leads-table id → match the funnel by company name.
+      const lead = db.prepare('SELECT company_name FROM leads WHERE id=?').get(id);
+      name = (lead?.company_name || '').trim();
     }
-    if (!link) return res.status(404).json({ error: `No BOQ found in the Sales Funnel for "${name}". Upload it in the funnel, or use Upload Client BOQ.` });
+    // Still no link? Try matching sales_funnel / crm_funnel by the company name.
+    if (!link && name) {
+      const sf = db.prepare(`SELECT COALESCE(NULLIF(revised_boq_file_link,''), NULLIF(boq_file_link,'')) AS link
+                       FROM sales_funnel WHERE (company_name=? OR client_name=?)
+                         AND (COALESCE(revised_boq_file_link,'')<>'' OR COALESCE(boq_file_link,'')<>'')
+                       ORDER BY id DESC LIMIT 1`).get(name, name);
+      if (sf?.link) link = sf.link;
+      if (!link) {
+        const cf = db.prepare(`SELECT COALESCE(NULLIF(cust_boq_link,''), NULLIF(boq_file_link,'')) AS link
+                         FROM crm_funnel WHERE (company_name=? OR client_name=?)
+                           AND (COALESCE(cust_boq_link,'')<>'' OR COALESCE(boq_file_link,'')<>'')
+                         ORDER BY id DESC LIMIT 1`).get(name, name);
+        if (cf?.link) link = cf.link;
+      }
+    }
+    if (!link) return res.status(404).json({ error: `No BOQ found in the Sales Funnel for "${name || 'this client'}". Upload it in the funnel, or use Upload Client BOQ.` });
     // Resolve the stored link (e.g. '/uploads/xxx') to a local file path.
     const rel = String(link).replace(/^https?:\/\/[^/]+/i, '').replace(/^\/+/, '');
     const filePath = path.join(__dirname, '..', '..', rel);
@@ -306,7 +314,7 @@ router.get('/client-boq', async (req, res) => {
       return res.status(404).json({ error: 'The funnel BOQ file is not on this server — re-upload it in the funnel.' });
     }
     const out = await matchBoqFile(filePath, path.basename(filePath));
-    res.json({ ...out, source: src, client_name: name });
+    res.json({ ...out, client_name: name });
   } catch (err) {
     res.status(err.status || 500).json({ error: err.status ? err.message : ('Failed to load client BOQ: ' + err.message) });
   }

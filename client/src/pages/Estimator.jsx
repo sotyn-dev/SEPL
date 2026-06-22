@@ -53,7 +53,9 @@ export default function Estimator() {
 
   useEffect(() => {
     api.get('/item-master/dropdown').then(r => setItemOptions(r.data)).catch(() => {});
-    api.get('/leads').then(r => setLeads(r.data)).catch(() => {});
+    // Client dropdown = the Sales Funnel (real clients with uploaded BOQs),
+    // not the legacy /leads table (mam 2026-06-22 — only showed one entry).
+    api.get('/sales-funnel').then(r => setLeads(r.data || [])).catch(() => {});
     // PO/FOC kits — so picking an item pulls its labour rate + FOC + material
     // rate from the PO/FOC module. Approved kits win over drafts.
     api.get('/quotations/po-foc').then(r => {
@@ -271,7 +273,8 @@ export default function Estimator() {
       return { s_no: idx + 1, description: row.description, make: '', unit: row.unit, qty: Number(row.qty) || 0, rate: c.rate, sp: c.sp, pp: Number(row.pp) || 0, acc: c.acc, lab: Number(row.lab) || 0, tp: c.tp, tpa: c.tpa, margin: c.mPct, category: row.category || 'General' };
     });
     if (!data.length) { toast.error('Add at least one item'); return; }
-    const clientName = leads.find(l => String(l.id) === String(leadId))?.company_name || '';
+    const _cl = leads.find(l => String(l.id) === String(leadId));
+    const clientName = (_cl?.company_name || _cl?.client_name || '');
     // Append the computed Overhead line so it shows in the Summary sheet.
     const mpExport = [...manpower];
     if (overheadAmt > 0) mpExport.push({ name: `Overhead (${overheadPct}% of project cost)`, qty: 1, monthly_cost: overheadAmt, months: 1 });
@@ -291,7 +294,8 @@ export default function Estimator() {
 
   const saveEstimate = async () => {
     if (!rows.some(r => r.description)) { toast.error('Add at least one item'); return; }
-    const clientName = leads.find(l => String(l.id) === String(leadId))?.company_name || '';
+    const _cl = leads.find(l => String(l.id) === String(leadId));
+    const clientName = (_cl?.company_name || _cl?.client_name || '');
     const payload = { title, lead_id: leadId || null, client_name: clientName, acc_pct: accPct, margins, rows, manpower, cost: totals.cost, sp: totals.sp };
     try {
       if (currentId) { await api.put(`/quotations/estimates/${currentId}`, payload); }
@@ -360,7 +364,9 @@ export default function Estimator() {
           <label className="label">Client / Lead</label>
           <select className="select" value={leadId} onChange={e => onPickClient(e.target.value)}>
             <option value="">Select</option>
-            {leads.map(l => <option key={l.id} value={l.id}>{l.company_name}</option>)}
+            {leads.map(l => <option key={l.id} value={l.id}>
+              {[l.lead_no, l.company_name || l.client_name].filter(Boolean).join(' · ')}{l.company_name && l.client_name ? ` (${l.client_name})` : ''}
+            </option>)}
           </select>
           {loadingClientBoq
             ? <div className="text-[11px] text-indigo-600 mt-1">⏳ Loading this client's BOQ from the Sales Funnel…</div>
