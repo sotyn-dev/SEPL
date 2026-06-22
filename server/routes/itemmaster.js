@@ -227,14 +227,16 @@ router.get('/dropdown', (req, res) => {
   // current_price etc. from the SAME row as that min id — with two
   // aggregates the bare columns came from indeterminate rows, so the shown
   // code/unit didn't match the item (mam 2026-06-10).
-  const where = type ? 'WHERE type = ?' : '';
+  // `type` may be a single value or a comma list (e.g. 'PO,POC').
+  const types = type ? String(type).split(',').map(s => s.trim()).filter(Boolean) : [];
+  const where = types.length ? `WHERE type IN (${types.map(() => '?').join(',')})` : '';
   const sql = `SELECT MIN(id) AS id, item_code, department, item_name, specification, size, uom, gst, type, current_price,
                       COALESCE(approval_status, 'approved') AS approval_status
                  FROM item_master ${where}
                 GROUP BY LOWER(TRIM(item_name)), LOWER(TRIM(COALESCE(specification, ''))), LOWER(TRIM(COALESCE(size, '')))
                 ORDER BY department, item_name`;
   const stmt = getDb().prepare(sql);
-  const items = type ? stmt.all(type) : stmt.all();
+  const items = types.length ? stmt.all(...types) : stmt.all();
   res.json(items.map(i => {
     const base = [i.item_name, i.specification, i.size].filter(Boolean).join(' / ');
     // Pending items stay selectable but are flagged so pickers can show

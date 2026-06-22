@@ -28,16 +28,18 @@ const STATUS_BADGE = {
   re_approved: 'bg-blue-100 text-blue-700',
 };
 const blankForm = () => ({ id: null, status: 'non_approved', po_item_id: null, po_name: '', po_rate: 0, qty: 1, labour: 0, labour_item_id: null, labour_name: '', labour_margin: 50, margin: 30, focs: [], foc_pct: '' });
-const blankFoc = () => ({ item_id: null, name: '', qty: 1, rate: 0 });
+const blankFoc = () => ({ item_id: null, name: '', qty: 1, rate: 0, foc: false });
 
 const calc = (f) => {
   const poAmt = r2((Number(f.po_rate) || 0) * (Number(f.qty) || 0));
   // FOC can be entered as a % of PO (mam 2026-06-22) — either/or with the item
   // rows: a % > 0 means FOC = PO × % and the rows are ignored.
   const focPct = Number(f.foc_pct) || 0;
+  // FOC rows flagged foc=true are FREE (not charged) — used for POC items where
+  // a row can be PO (charged) or FOC (free). Default (foc falsy) = charged.
   const focAmt = focPct > 0
     ? r2(poAmt * focPct / 100)
-    : r2((f.focs || []).reduce((t, x) => t + (Number(x.rate) || 0) * (Number(x.qty) || 0), 0));
+    : r2((f.focs || []).reduce((t, x) => t + (x.foc ? 0 : (Number(x.rate) || 0) * (Number(x.qty) || 0)), 0));
   const labourAmt = r2((Number(f.labour) || 0) * (Number(f.qty) || 0)); // labour RATE × PO qty
   const cost = r2(poAmt + focAmt + labourAmt);
   const margin = Number(f.margin) || 0;
@@ -67,7 +69,7 @@ export default function PoFocStripped() {
   // (mam 2026-06-11). Show item CODE + UOM in the dropdown label (mam 2026-06-10).
   const loadMasters = useCallback(() => {
     const withCode = x => ({ ...x, display_name: `${x.item_code ? '[' + x.item_code + '] ' : ''}${[x.item_name, x.specification, x.size].filter(Boolean).join(' / ')}${x.uom ? ' · ' + x.uom : ''}` });
-    api.get('/item-master/dropdown?type=PO').then(r => setPoItems((r.data || []).map(withCode))).catch(() => {});
+    api.get('/item-master/dropdown?type=PO,POC').then(r => setPoItems((r.data || []).map(withCode))).catch(() => {});
     api.get('/item-master/dropdown?type=FOC').then(r => setFocItems((r.data || []).map(withCode))).catch(() => {});
     api.get('/quotations/labour-rates').then(r => setLabourItems((r.data || []).map(x => ({
       id: x.id, item_name: x.item_name, rate: x.rate, uom: x.uom,
@@ -111,6 +113,9 @@ export default function PoFocStripped() {
   const pickFoc = (fi, opt) => patchFoc(fi, opt ? { item_id: opt.id, name: opt.display_name || opt.item_name, rate: opt.current_price || 0 } : { item_id: null, name: '', rate: 0 });
 
   const formCalc = useMemo(() => calc(form), [form]);
+  // Type of the picked PO item — POC items let each FOC row be PO (charged) or
+  // FOC (free) (mam 2026-06-22). Derived from the loaded master list.
+  const poType = useMemo(() => (poItems.find(p => p.id === form.po_item_id)?.type) || 'PO', [poItems, form.po_item_id]);
 
   // Open the Item Master page (new tab) pre-searched to this item so you can
   // edit it; re-pick it here afterwards to pull the updated rate.
@@ -384,6 +389,14 @@ export default function PoFocStripped() {
                   <select className="select text-xs py-1.5 w-14" value={f.qty} onChange={e => patchFoc(fi, { qty: +e.target.value })}>{Array.from({ length: 10 }, (_, n) => <option key={n + 1} value={n + 1}>{n + 1}</option>)}</select>
                   <span className="text-[10px] text-indigo-500 font-semibold w-10 text-center truncate" title={uomOf(focItems, f.item_id)}>{uomOf(focItems, f.item_id) || '—'}</span>
                   <input className="input text-right text-xs py-1.5 w-20" type="number" min="0" value={f.rate || ''} onChange={e => patchFoc(fi, { rate: e.target.value })} placeholder="rate" />
+                  {/* POC items: each row is PO (charged) or FOC (free) — toggle (mam 2026-06-22) */}
+                  {poType === 'POC' && (
+                    <button type="button" onClick={() => patchFoc(fi, { foc: !f.foc })}
+                      title={f.foc ? 'FOC (free) — click to charge as PO' : 'PO (charged) — click to make FOC'}
+                      className={`text-[10px] font-bold px-1.5 py-1 rounded shrink-0 ${f.foc ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                      {f.foc ? 'FOC' : 'PO'}
+                    </button>
+                  )}
                   <button type="button" className="text-red-300 hover:text-red-500" onClick={() => removeFoc(fi)}><FiTrash2 size={13} /></button>
                 </div>
               ))}
