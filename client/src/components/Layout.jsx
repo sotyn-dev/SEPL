@@ -265,7 +265,7 @@ export default function Layout() {
             ), { position: 'top-center', duration: 6000, id: `wa-${gid}` });
             if ('Notification' in window && Notification.permission === 'granted') {
               try {
-                const n = new Notification(`WhatsApp · ${gname}`, { body: line, icon: '/icon.svg', tag: `wa-${gid}` });
+                const n = new Notification(`SOTYN Chat · ${gname}`, { body: line, icon: '/icon.svg', tag: `wa-${gid}` });
                 n.onclick = () => { window.focus(); navigate('/site-chat'); n.close(); };
               } catch { /* ignore */ }
             }
@@ -667,7 +667,7 @@ export default function Layout() {
           <Link to="/site-chat"
             className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
             <FaWhatsapp size={17} className="text-green-400" />
-            <span className="truncate flex-1">WhatsApp</span>
+            <span className="truncate flex-1">SOTYN Chat</span>
             {waUnread > 0 && <span className="text-[10px] font-bold text-white bg-[#25d366] rounded-full px-1.5 min-w-[18px] text-center">{waUnread > 99 ? '99+' : waUnread}</span>}
           </Link>
         </div>

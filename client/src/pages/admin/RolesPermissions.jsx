@@ -21,7 +21,7 @@ const ALL_MODULES = [
   { key: 'attendance', label: 'Attendance' },
   { key: 'collections', label: 'Collection Engine' },
   { key: 'ar_ap_tracker', label: 'AR/AP Tracker' },
-  { key: 'site_chat', label: 'WhatsApp — create/manage groups (chatting is open to all)' },
+  { key: 'site_chat', label: 'SOTYN Chat — create/manage groups (chatting is open to all)' },
   { key: 'dpr', label: 'DPR' },
   { key: 'indent_labour_payment', label: 'Indent Labour Payment' },
   { key: 'labour_payment', label: 'Labour Payment Indents' },

@@ -292,7 +292,7 @@ export default function SiteChat() {
           (like real WhatsApp); the profile photo moves into the list header. */}
       <div className="hidden sm:flex items-start justify-between gap-3 mb-3 flex-shrink-0">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><FaWhatsapp className="text-[#25d366]" /> WhatsApp</h1>
+          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><FaWhatsapp className="text-[#25d366]" /> SOTYN Chat</h1>
           <p className="text-sm text-gray-500">Internal group chat · create groups · add your people · text + photos/files</p>
         </div>
         {/* Your profile photo — tap to upload (mam 2026-06-19). */}
@@ -314,7 +314,7 @@ export default function SiteChat() {
               <Avatar url={userAvatars[user?.id]} name={user?.name} size={28} />
               <span className="absolute -bottom-0.5 -right-0.5 bg-emerald-600 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[8px] ring-2 ring-[#075e54]">✎</span>
             </button>
-            <FaWhatsapp className="hidden sm:block" /> <span className="font-semibold text-sm flex-1">WhatsApp</span>
+            <FaWhatsapp className="hidden sm:block" /> <span className="font-semibold text-sm flex-1">SOTYN Chat</span>
             <button onClick={() => { setDmSearch(''); setDmOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New direct message"><FiUserPlus size={18} /></button>
             {canCreate('site_chat') && <button onClick={() => { setNewName(''); setNewSel([]); setNewSearch(''); setNewOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New group"><FiPlus size={18} /></button>}
           </div>
