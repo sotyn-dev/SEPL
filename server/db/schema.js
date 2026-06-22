@@ -4963,6 +4963,11 @@ in your first week. If a process feels broken, raise a Help Ticket
     // permission so it never showed separately in Roles & Permissions.
     // Now its own module so access can be granted/revoked on its own.
     'labour_rates',
+    // Solar Division (PR #2) — Solar Sales Funnel / Quotation / Projects /
+    // Material+Labour Master all gate on this one key in server/routes/solar.js
+    // and the sidebar, but it was never added here, so no role got a
+    // role_permissions row and it never showed in Roles & Permissions.
+    'solar_quotation',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

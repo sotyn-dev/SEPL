@@ -40,6 +40,9 @@ const ALL_MODULES = [
   { key: 'labour_rates', label: 'Labour Rate Sheet' },
   { key: 'business_book', label: 'Business Book' },
 
+  // — Solar Division (PR #2: Funnel / Quotation / Projects / Masters)
+  { key: 'solar_quotation', label: 'Solar Division (Funnel / Quotation / Projects / Masters)' },
+
   // — Materials, Vendors, Procurement
   { key: 'item_master', label: 'Item Master' },
   { key: 'orders', label: 'Orders & Planning' },
