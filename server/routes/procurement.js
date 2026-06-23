@@ -815,7 +815,18 @@ router.get('/indents', (req, res) => {
                 ORDER BY iph.created_at DESC
                 LIMIT 1),
               0
-            ) * COALESCE(ii.quantity, 0) as line_budget
+            ) * COALESCE(ii.quantity, 0) as line_budget,
+            -- PO coverage (mam 2026-06-23): how much of this indent line is
+            -- already on a (non-cancelled) Vendor PO. The UI shows the
+            -- still-pending qty = indent qty − po_qty (e.g. 100 indent, 70
+            -- on a PO → 30 pending).
+            COALESCE((
+              SELECT SUM(vpi.quantity)
+                FROM vendor_po_items vpi
+                JOIN vendor_pos vp ON vp.id = vpi.vendor_po_id
+               WHERE vpi.indent_item_id = ii.id
+                 AND COALESCE(vp.cancelled, 0) = 0
+            ), 0) as po_qty
      FROM indent_items ii
      LEFT JOIN item_master im ON ii.item_master_id = im.id
      LEFT JOIN stock_issue_notes sin ON sin.id = ii.stock_issue_note_id
@@ -2991,9 +3002,21 @@ router.get('/indents/:id/items-for-po', (req, res) => {
             r.final_rate, r.final_vendor_name, r.final_terms, r.final_credit_days, r.status as rate_status,
             (SELECT COUNT(*) FROM vendor_po_items vpi
               JOIN vendor_pos vp_check ON vp_check.id = vpi.vendor_po_id
-              WHERE vpi.indent_item_id = ii.id AND COALESCE(vp_check.cancelled, 0) = 0) as in_po_count
+              WHERE vpi.indent_item_id = ii.id AND COALESCE(vp_check.cancelled, 0) = 0) as in_po_count,
+            -- Quantity already placed on (non-cancelled) Vendor POs, so the
+            -- modal can default to the PENDING qty (mam 2026-06-23).
+            (SELECT COALESCE(SUM(vpi2.quantity), 0) FROM vendor_po_items vpi2
+              JOIN vendor_pos vp_q ON vp_q.id = vpi2.vendor_po_id
+              WHERE vpi2.indent_item_id = ii.id AND COALESCE(vp_q.cancelled, 0) = 0) as ordered_qty
      FROM indent_items ii
-     LEFT JOIN indent_item_rates r ON r.indent_item_id = ii.id
+     -- Join only ONE rate row per item — the finalised (highest non-zero rate)
+     -- one, else the latest — so a duplicate rate record can't double the line
+     -- (mam 2026-06-23: "why this duplically").
+     LEFT JOIN indent_item_rates r ON r.id = (
+       SELECT r2.id FROM indent_item_rates r2
+        WHERE r2.indent_item_id = ii.id
+        ORDER BY COALESCE(r2.final_rate, 0) DESC, r2.id DESC LIMIT 1
+     )
      LEFT JOIN item_master im ON im.id = ii.item_master_id
      WHERE ii.indent_id = ?
        -- Exclude from-store lines — they're fulfilled from stock, not a PO.

@@ -242,7 +242,9 @@ export default function Estimator() {
     const acc = r2(subsCharged + pp * qty * (Number(accPct) || 0) / 100);
     const tp = r2(pp + lab);                 // per-unit base (material + labour)
     const tpa = r2(tp * qty + acc);          // line total = base × qty + accessories
-    const mPct = marginFor(row.category);
+    // Per-line margin overrides the category margin when set (mam 2026-06-23:
+    // "margin percentage is not editable"). Blank → fall back to the category.
+    const mPct = (row.margin === '' || row.margin == null) ? marginFor(row.category) : Number(row.margin) || 0;
     const sp = r2(tpa * (1 + mPct / 100));
     const rate = qty ? r2(sp / qty) : 0;
     return { acc, tp, tpa, mPct, sp, rate, cost: tpa, subsCharged };
@@ -579,7 +581,12 @@ export default function Estimator() {
                   </td>
                   <td className="p-1.5 text-right text-xs text-gray-700">{fmt(c.tp)}</td>
                   <td className="p-1.5 text-right text-xs text-gray-700">{fmt(c.tpa)}</td>
-                  <td className="p-1.5 text-right text-xs text-gray-500">{c.mPct}%</td>
+                  <td className="p-1.5 text-right text-xs">
+                    <input className="input text-right text-xs py-1 w-14" type="number" min="0"
+                      value={row.margin ?? ''} placeholder={`${marginFor(row.category)}`}
+                      onChange={e => patchRow(i, { margin: e.target.value })}
+                      title="Per-line margin % — overrides the category margin. Blank = use the category margin." />
+                  </td>
                   <td className="p-1.5 text-right text-xs font-bold text-emerald-700">{fmt(c.sp)}</td>
                   <td className="p-1.5 text-right text-xs">{fmt(c.rate)}</td>
                   <td className="p-1.5 text-center">

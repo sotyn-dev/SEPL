@@ -1375,9 +1375,12 @@ export default function Procurement() {
       setIndentItemsForPo(items);
       const sel = {};
       for (const it of items) {
+        // Default to the PENDING qty = approved − already on (non-cancelled)
+        // POs, so we don't re-order what's already covered (mam 2026-06-23).
+        const pending = Math.max(0, (+it.quantity || 0) - (+it.ordered_qty || 0));
         sel[it.indent_item_id] = {
-          checked: it.rate_status === 'finalized' && it.in_po_count === 0,
-          quantity: it.quantity || 0,
+          checked: it.rate_status === 'finalized' && pending > 0,
+          quantity: pending,
           rate: it.final_rate || 0,
         };
       }
@@ -1386,10 +1389,11 @@ export default function Procurement() {
       // credit days live on the Tally PO now, so no need to pre-fill them.
       const vendorNames = [...new Set(items.filter(i => i.final_vendor_name).map(i => i.final_vendor_name))];
       const finalisedSum = items
-        .filter(i => i.rate_status === 'finalized' && i.in_po_count === 0)
+        .filter(i => i.rate_status === 'finalized' && ((+i.quantity || 0) - (+i.ordered_qty || 0)) > 0)
         .reduce((s, i) => {
+          const pending = Math.max(0, (+i.quantity || 0) - (+i.ordered_qty || 0));
           const wpm = +i.weight_per_meter || 0;
-          const qty = wpm > 0 ? (+i.quantity || 0) * wpm : (+i.quantity || 0);  // kg for pipes
+          const qty = wpm > 0 ? pending * wpm : pending;  // kg for pipes
           return s + (qty * (+i.final_rate || 0));
         }, 0);
       setForm(f => {
@@ -2882,6 +2886,7 @@ export default function Procurement() {
                             <th className="text-left py-1 pr-3 w-16">Type</th>
                             <th className="text-right py-1 pr-3 w-24">Rate</th>
                             <th className="text-right py-1 pr-3 w-28">Line Budget</th>
+                            <th className="text-right py-1 pr-3 w-24">PO Pending</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -2944,6 +2949,25 @@ export default function Procurement() {
                               </td>
                               <td className="py-1 pr-3 text-right">
                                 {+it.line_budget > 0 ? <span className="font-medium">₹{Math.round(+it.line_budget).toLocaleString('en-IN')}</span> : <span className="text-gray-300">—</span>}
+                              </td>
+                              {/* PO Pending (mam 2026-06-23): indent qty − qty already on a
+                                  Vendor PO. Store lines and FOC/RGP don't go on a PO. */}
+                              <td className="py-1 pr-3 text-right">
+                                {(() => {
+                                  if (it.source === 'store' || it.item_type === 'FOC' || it.item_type === 'RGP')
+                                    return <span className="text-gray-300" title="Not procured via Vendor PO">—</span>;
+                                  const qty = +it.quantity || 0;
+                                  const poQty = +it.po_qty || 0;
+                                  const pending = Math.max(0, qty - poQty);
+                                  if (qty > 0 && pending <= 0)
+                                    return <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300" title={`Full qty (${qty}${it.unit ? ' ' + it.unit : ''}) on PO`}>✓ PO done</span>;
+                                  return (
+                                    <span className="font-semibold text-amber-700"
+                                      title={poQty > 0 ? `${poQty} of ${qty}${it.unit ? ' ' + it.unit : ''} already on a PO` : 'Nothing on a Vendor PO yet'}>
+                                      {pending}{it.unit ? ` ${it.unit}` : ''}
+                                    </span>
+                                  );
+                                })()}
                               </td>
                             </tr>
                           ))}
@@ -6171,31 +6195,40 @@ export default function Procurement() {
                     <tbody>
                       {indentItemsForPo.map(it => {
                         const s = poItemSelection[it.indent_item_id] || {};
-                        const inPo = it.in_po_count > 0;
+                        // Pending = approved − already on (non-cancelled) POs.
+                        // Disable only when FULLY ordered, so a partly-ordered
+                        // line can still PO its pending qty (mam 2026-06-23).
+                        const orderedQty = +it.ordered_qty || 0;
+                        const pending = Math.max(0, (+it.quantity || 0) - orderedQty);
+                        const fullyOrdered = pending <= 0;
                         const wpm = +it.weight_per_meter || 0;
                         const isPipe = wpm > 0;
                         const kg = isPipe ? Math.round((+s.quantity || 0) * wpm * 100) / 100 : 0;
                         const amount = (s.checked ? (isPipe ? kg : (+s.quantity || 0)) * (+s.rate || 0) : 0);
                         const unit = it.unit || it.uom || '';
                         return (
-                          <tr key={it.indent_item_id} className={`border-b ${inPo ? 'bg-gray-100 text-gray-400' : (s.checked ? 'bg-red-50/40' : '')}`}>
+                          <tr key={it.indent_item_id} className={`border-b ${fullyOrdered ? 'bg-gray-100 text-gray-400' : (s.checked ? 'bg-red-50/40' : '')}`}>
                             <td className="px-2 py-1.5 text-center">
-                              <input type="checkbox" disabled={inPo} checked={!!s.checked} onChange={e => togglePoItem(it.indent_item_id, { checked: e.target.checked })} />
+                              <input type="checkbox" disabled={fullyOrdered} checked={!!s.checked} onChange={e => togglePoItem(it.indent_item_id, { checked: e.target.checked })} />
                             </td>
                             <td className="px-2 py-1.5 max-w-[320px]">
                               {it.item_code && <div className="text-[10px] font-mono text-gray-500">[{it.item_code}]</div>}
                               <div className="whitespace-normal leading-snug font-medium">{[it.master_name || it.description, it.specification, it.size].filter(Boolean).join(' / ')}</div>
                               {it.make && <div className="text-[10px] text-gray-400">Make: {it.make}</div>}
                               {isPipe && <div className="text-[10px] text-blue-700 font-semibold">🪈 Pipe · {wpm} kg/m — PO in KG</div>}
-                              {inPo && <div className="text-[10px] text-gray-500 italic">Already in a Vendor PO</div>}
+                              {orderedQty > 0 && (
+                                <div className={`text-[10px] font-semibold ${fullyOrdered ? 'text-gray-500 italic' : 'text-amber-600'}`}>
+                                  {fullyOrdered ? `Fully ordered (${orderedQty} of ${it.quantity})` : `Ordered ${orderedQty} of ${it.quantity} · pending ${pending}`}
+                                </div>
+                              )}
                             </td>
                             <td className="px-1 py-1">
-                              <NumInput className="input text-[11px] px-1 py-0.5 w-16 text-right" min="0" emitZeroOnEmpty disabled={inPo} value={s.quantity ?? it.quantity ?? 0} onChange={v => togglePoItem(it.indent_item_id, { quantity: v })} />
+                              <NumInput className="input text-[11px] px-1 py-0.5 w-16 text-right" min="0" emitZeroOnEmpty disabled={fullyOrdered} value={s.quantity ?? pending ?? 0} onChange={v => togglePoItem(it.indent_item_id, { quantity: v })} />
                               {isPipe && <div className="text-[10px] text-blue-700 text-right mt-0.5">= {kg.toLocaleString('en-IN')} kg</div>}
                             </td>
                             <td className="px-2 py-1.5 text-center text-gray-600">{isPipe ? <span className="text-blue-700 font-semibold">MTR → KG</span> : (unit || <span className="text-gray-300">—</span>)}</td>
                             <td className="px-1 py-1">
-                              <NumInput className="input text-[11px] px-1 py-0.5 w-20 text-right" min="0" emitZeroOnEmpty disabled={inPo} value={s.rate ?? 0} onChange={v => togglePoItem(it.indent_item_id, { rate: v })} />
+                              <NumInput className="input text-[11px] px-1 py-0.5 w-20 text-right" min="0" emitZeroOnEmpty disabled={fullyOrdered} value={s.rate ?? 0} onChange={v => togglePoItem(it.indent_item_id, { rate: v })} />
                             </td>
                             <td className="px-2 py-1.5 text-right font-semibold">{amount ? `Rs ${amount.toLocaleString()}` : <span className="text-gray-300">—</span>}</td>
                           </tr>
