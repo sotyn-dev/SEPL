@@ -259,10 +259,23 @@ export default function Rentals() {
                       <div className="text-[10px] text-gray-500">Due by {payByDay}{payByDay === 1 ? 'st' : payByDay === 2 ? 'nd' : payByDay === 3 ? 'rd' : 'th'}</div>
                       {isOverdue && <span className="text-[9px] px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-bold">⚠ OVERDUE</span>}
                     </td>
-                    <td className="text-xs">{r.site_name || r.site_name_live || '—'}</td>
+                    <td className="text-xs">
+                      <div>{r.site_name || r.site_name_live || '—'}</div>
+                      {r.pincode && (
+                        <div className="text-[10px] mt-0.5 flex items-center gap-1">
+                          <span className="text-gray-500">📍 {r.pincode}</span>
+                          {r.metro_type && (
+                            <span className={`px-1 py-0.5 rounded font-bold ${r.metro_type === 'Metro' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>{r.metro_type}</span>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td>
                       <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${r.arrange_for === 'SEPL' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>{r.arrange_for}</span>
-                      {r.contractor_name && <div className="text-[10px] text-gray-500 mt-0.5">{r.contractor_name}</div>}
+                      {/* SEPL shows the room occupant (employee); Contractor shows the contractor name (mam 2026-06-23) */}
+                      {(r.arrange_for === 'SEPL' ? r.employee_name : r.contractor_name) && (
+                        <div className="text-[10px] text-gray-500 mt-0.5">{r.arrange_for === 'SEPL' ? r.employee_name : r.contractor_name}</div>
+                      )}
                     </td>
                     <td className="text-xs"><div className="font-medium">{r.owner_name}</div>{r.owner_phone && <div className="text-[10px] text-gray-500">{r.owner_phone}</div>}</td>
                     <td>{r.owner_aadhar_url ? <a href={r.owner_aadhar_url} target="_blank" rel="noreferrer" className="text-blue-600 underline text-xs">📎 view</a> : <span className="text-gray-300 text-xs">—</span>}</td>
@@ -316,6 +329,9 @@ export default function Rentals() {
                       {r.reject_reason && <div className="text-[9px] text-red-600 mt-0.5" title={r.reject_reason}>↳ {r.reject_reason.slice(0, 40)}...</div>}
                     </td>
                     <td className="whitespace-nowrap">
+                      {canEdit('rentals') && (
+                        <button onClick={() => { setRequestForm({ ...r }); setRequestModal(true); }} className="text-[10px] text-blue-600 font-bold hover:underline mr-1" title="Edit this rent request"><FiEdit2 size={11} className="inline" /> Edit</button>
+                      )}
                       {r.status === 'pending' && isAdmin() && (
                         <div className="flex gap-1">
                           <button onClick={async () => {
@@ -798,7 +814,7 @@ export default function Rentals() {
       </Modal>
 
       {/* RAISE RENT MODAL — mam's exact field list */}
-      <Modal isOpen={requestModal} onClose={() => { setRequestModal(false); setRequestForm({}); }} title="Raise Rent Request" wide>
+      <Modal isOpen={requestModal} onClose={() => { setRequestModal(false); setRequestForm({}); }} title={requestForm.id ? `Edit Rent Request ${requestForm.request_no || ''}` : 'Raise Rent Request'} wide>
         <RaiseRentForm
           form={requestForm}
           setForm={setRequestForm}
@@ -810,8 +826,13 @@ export default function Rentals() {
               return toast.error('Owner name, rent month, and arrange-for are required');
             }
             try {
-              const r = await api.post('/rentals/rent-requests', requestForm);
-              toast.success(`Raised ${r.data.request_no}`);
+              if (requestForm.id) {
+                await api.put(`/rentals/rent-requests/${requestForm.id}`, requestForm);
+                toast.success(`Updated ${requestForm.request_no || ''}`);
+              } else {
+                const r = await api.post('/rentals/rent-requests', requestForm);
+                toast.success(`Raised ${r.data.request_no}`);
+              }
               setRequestModal(false); setRequestForm({});
               loadRequests();
             } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
@@ -881,6 +902,22 @@ export default function Rentals() {
 // ---------- Raise Rent Form ----------
 function RaiseRentForm({ form, setForm, sites, users, onSubmit, onCancel }) {
   const [uploading, setUploading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+
+  // Verify the room's PIN code (India Post) and auto-pick Metro / Non-Metro.
+  const verifyPincode = async () => {
+    const pin = String(form.pincode || '').trim();
+    if (!/^\d{6}$/.test(pin)) return toast.error('Enter a 6-digit PIN code first');
+    setVerifying(true);
+    try {
+      const { data } = await api.get(`/rentals/pincode/${pin}`);
+      const place = data.city || data.district || '';
+      setForm(f => ({ ...f, pincode_city: place, metro_type: data.metro_type || '' }));
+      toast.success(`${data.metro_type}${place ? ' — ' + place : ''}${data.verified ? '' : ' (by PIN prefix)'}`);
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'PIN verification failed');
+    } finally { setVerifying(false); }
+  };
 
   const upload = async (file) => {
     if (!file) return null;
@@ -950,6 +987,25 @@ function RaiseRentForm({ form, setForm, sites, users, onSubmit, onCancel }) {
             placeholder="Search employee…"
             onChange={(u) => setForm(f => ({ ...f, employee_user_id: u?.id || '', employee_name: u?.name || '' }))}
           />
+        </div>
+        <div className="col-span-2 grid grid-cols-3 gap-3 items-end">
+          <div>
+            <label className="label">Room PIN Code</label>
+            <input className="input" inputMode="numeric" maxLength={6} placeholder="6-digit PIN"
+              value={form.pincode || ''}
+              onChange={e => setForm(f => ({ ...f, pincode: e.target.value.replace(/\D/g, '').slice(0, 6), metro_type: '', pincode_city: '' }))} />
+          </div>
+          <div>
+            <button type="button" onClick={verifyPincode} disabled={verifying} className="btn btn-secondary w-full">{verifying ? 'Verifying…' : 'Verify PIN'}</button>
+          </div>
+          <div>
+            {form.metro_type ? (
+              <div className="text-xs">
+                <span className={`px-2 py-1 rounded font-bold ${form.metro_type === 'Metro' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>{form.metro_type}</span>
+                {form.pincode_city && <div className="text-[10px] text-gray-500 mt-0.5">{form.pincode_city}</div>}
+              </div>
+            ) : <span className="text-[10px] text-gray-400">Verify to auto-pick Metro / Non-Metro</span>}
+          </div>
         </div>
         <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Room Owner</h5></div>
         <div><label className="label">Owner Name *</label><input className="input" required value={form.owner_name || ''} onChange={e => setForm(f => ({ ...f, owner_name: e.target.value }))} /></div>

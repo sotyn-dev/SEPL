@@ -3543,6 +3543,12 @@ function initializeDatabase() {
     // bill (mam 2026-06-13: "only give option sent to client").
     ['sales_bills', 'sent_to_client INTEGER DEFAULT 0'],
     ['sales_bills', 'sent_at DATETIME'],
+    // Room Rentals — PIN code of the rented room + auto metro/non-metro
+    // classification (mam 2026-06-23). metro_type IN ('Metro','Non-Metro');
+    // pincode_city is the India-Post-resolved district/city for reference.
+    ['rent_requests', 'pincode TEXT'],
+    ['rent_requests', 'pincode_city TEXT'],
+    ['rent_requests', 'metro_type TEXT'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}

@@ -10,6 +10,48 @@ const { authMiddleware, requirePermission, adminOnly } = require('../middleware/
 
 router.use(authMiddleware);
 
+// ---------- PIN CODE → METRO / NON-METRO ----------
+// Metro = the 8 major cities (mam 2026-06-23). A PIN is "verified" via the
+// free India Post API (no key); if that's unreachable we fall back to the
+// PIN's region prefix so classification still works offline.
+const METRO_CITY_WORDS = [
+  'delhi', 'new delhi', 'mumbai', 'navi mumbai', 'kolkata', 'calcutta',
+  'chennai', 'bengaluru', 'bangalore', 'hyderabad', 'pune', 'ahmedabad',
+];
+// First-3-digit PIN prefixes of those 8 metros (offline fallback).
+const METRO_PIN_PREFIXES = ['110', '400', '700', '600', '560', '500', '411', '380'];
+
+function classifyByName(...parts) {
+  const hay = parts.filter(Boolean).join(' ').toLowerCase();
+  return METRO_CITY_WORDS.some(w => hay.includes(w)) ? 'Metro' : 'Non-Metro';
+}
+function classifyByPrefix(pin) {
+  return METRO_PIN_PREFIXES.includes(String(pin).slice(0, 3)) ? 'Metro' : 'Non-Metro';
+}
+
+// GET /rentals/pincode/:pin — verify a PIN and return city + metro/non-metro.
+router.get('/pincode/:pin', requirePermission('rentals', 'view'), async (req, res) => {
+  const pin = String(req.params.pin || '').trim();
+  if (!/^\d{6}$/.test(pin)) return res.status(400).json({ error: 'PIN code must be 6 digits' });
+  let city = null, district = null, state = null, metro_type = null, verified = false;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const resp = await fetch(`https://api.postalpincode.in/pincode/${pin}`, { signal: ctrl.signal });
+    clearTimeout(t);
+    const data = await resp.json();
+    const po = data && data[0] && data[0].Status === 'Success' && data[0].PostOffice && data[0].PostOffice[0];
+    if (po) {
+      district = po.District || null; state = po.State || null;
+      city = po.Block && po.Block !== 'NA' ? po.Block : (po.District || null);
+      metro_type = classifyByName(po.Name, po.Block, po.District, po.State);
+      verified = true;
+    }
+  } catch (_) { /* fall back to prefix below */ }
+  if (!metro_type) metro_type = classifyByPrefix(pin);
+  res.json({ pin, verified, city, district, state, metro_type });
+});
+
 // ---------- DASHBOARD STATS ----------
 router.get('/stats', requirePermission('rentals', 'view'), (req, res) => {
   try {
@@ -401,8 +443,9 @@ router.post('/rent-requests', requirePermission('rentals', 'create'), (req, res)
         owner_name, owner_phone, owner_aadhar_url,
         room_photo_url, photo_taken_at, photo_lat, photo_lng,
         payment_mode, bank_account, ifsc_code, upi_id, scanner_url,
+        pincode, pincode_city, metro_type,
         rent_month, rent_amount, pay_by_day, notes, created_by
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       requestNo, b.site_id || null, b.site_name || null,
       b.arrange_for, b.contractor_name || null,
@@ -410,6 +453,8 @@ router.post('/rent-requests', requirePermission('rentals', 'create'), (req, res)
       b.owner_name, b.owner_phone || null, b.owner_aadhar_url || null,
       b.room_photo_url || null, b.photo_taken_at || null, b.photo_lat || null, b.photo_lng || null,
       mode, bankAcc, ifsc, upiId, scannerUrl,
+      b.pincode || null, b.pincode_city || null,
+      (b.metro_type === 'Metro' || b.metro_type === 'Non-Metro') ? b.metro_type : null,
       b.rent_month, b.rent_amount || 0, b.pay_by_day || 10, b.notes || null, req.user.id
     );
     // Notify approvers (admins + anyone with rentals.approve)
@@ -443,6 +488,7 @@ router.put('/rent-requests/:id', requirePermission('rentals', 'edit'), (req, res
       'owner_name','owner_phone','owner_aadhar_url',
       'room_photo_url','photo_taken_at','photo_lat','photo_lng',
       'payment_mode','bank_account','ifsc_code','upi_id','scanner_url',
+      'pincode','pincode_city','metro_type',
       'rent_month','rent_amount','pay_by_day','notes'
     ];
     const sets = []; const vals = [];
