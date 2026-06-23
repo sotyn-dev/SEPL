@@ -4864,7 +4864,14 @@ router.get('/delivery-notes/:id/print', (req, res) => {
   //      order (GRA showed 40% but SEPL20175 is 60%).
   //   2) failing that, match the order by client / site NAME (Emerald bill
   //      had no BOQ-linked items, so address/order came up blank).
-  if (dn.document_type === 'sales_bill') {
+  // Also run for STORE / RGP challans (mam 2026-06-23: store challan showed
+  // blank CLIENT address + GSTIN). They have no vendor PO and EXTRA indents
+  // have no order_planning link, so the join can't reach the business book —
+  // fall back to matching it by client/site name below. Vendor challans
+  // (source NULL) keep their join-resolved values untouched.
+  const needsBbFallback = dn.document_type === 'sales_bill'
+    || (dn.document_type === 'challan' && (dn.source === 'store' || dn.source === 'rgp'));
+  if (needsBbFallback) {
     let bb = null;
     if (dn.vendor_po_id) {
       try {
