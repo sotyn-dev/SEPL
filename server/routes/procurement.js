@@ -430,9 +430,10 @@ router.get('/vendor-rates', (req, res) => {
   let sql = `SELECT vr.*, v1.name as vendor1_name, v2.name as vendor2_name, v3.name as vendor3_name, sv.name as selected_vendor_name
     FROM vendor_rates vr LEFT JOIN vendors v1 ON vr.vendor1_id=v1.id LEFT JOIN vendors v2 ON vr.vendor2_id=v2.id
     LEFT JOIN vendors v3 ON vr.vendor3_id=v3.id LEFT JOIN vendors sv ON vr.selected_vendor_id=sv.id`;
-  if (planning_id) sql += ` WHERE vr.planning_id=${planning_id}`;
+  const params = [];
+  if (planning_id) { sql += ' WHERE vr.planning_id=?'; params.push(+planning_id || 0); }
   sql += ' ORDER BY vr.created_at DESC';
-  res.json(getDb().prepare(sql).all());
+  res.json(getDb().prepare(sql).all(...params));
 });
 
 router.post('/vendor-rates', (req, res) => {
@@ -1955,6 +1956,7 @@ router.put('/indents/:id', (req, res) => {
       try {
         let issueNoteId = null;
         let issueNoteNumber = null;
+        let storeChallanId = null;   // auto delivery_notes challan for store issue
         let totalStoreQty = 0;
         let totalStoreValue = 0;
 
@@ -2133,6 +2135,10 @@ router.put('/indents/:id', (req, res) => {
                VALUES (NULL, ?, ?, 'store', ?, 'challan', ?, 'pending', ?, ?, ?)`
             ).run(id, issueNoteId, today, issueNoteNumber, billable ? 1 : 0,
                   JSON.stringify(storeItems), 'Material issued from store');
+            // Remember the challan id so the approval response can hand it
+            // back and the approver can print the Store Issue Challan straight
+            // from the approval step (mam 2026-06-23).
+            storeChallanId = chRes.lastInsertRowid;
 
             // NOTE (mam 2026-06-06): we DON'T auto-cut the Sales Bill here
             // anymore.  For billable (PO) store items the challan is left
@@ -2236,6 +2242,7 @@ router.put('/indents/:id', (req, res) => {
           qty_changes: valid.length,
           stock_issued: storePlans.length,
           stock_issue_note: issueNoteNumber,
+          store_challan_id: storeChallanId,
           stock_qty: totalStoreQty,
         });
       } catch (err) {
@@ -5107,7 +5114,14 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     @media print { .print-btn { display: none; } }
   `;
 
-  const docTitle = isSalesBill ? 'TAX INVOICE / SALES BILL' : 'DELIVERY NOTE';
+  // Store-issued material and RGP gate-passes get their own heading so the
+  // printed challan is visibly different from a vendor Delivery Note
+  // (mam 2026-06-23: "store different challan show").
+  const docTitle = isSalesBill
+    ? 'TAX INVOICE / SALES BILL'
+    : dn.source === 'store' ? 'STORE ISSUE CHALLAN'
+    : dn.source === 'rgp' ? 'RGP GATE PASS — DELIVERY CHALLAN'
+    : 'DELIVERY NOTE';
   // Use the stored document_number (auto-generated INV/YYYY/#### or
   // DC/YYYY/####); only fall back to id-based if somehow blank.
   const docNo = dn.document_number || (isSalesBill ? `GST/26-26/${dn.id}` : `DN/${new Date().getFullYear()}/${dn.id}`);

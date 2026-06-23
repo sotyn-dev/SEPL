@@ -10,7 +10,7 @@ import Pagination, { usePagination } from '../components/Pagination';
 import InfoTooltip from '../components/InfoTooltip';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo } from 'react-icons/fi';
+import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo, FiRefreshCw } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateTime as fmtIST } from '../utils/datetime';
 
@@ -1185,6 +1185,21 @@ export default function Procurement() {
     setRejectTarget(indent);
   };
 
+  // Open the auto-generated Store Issue Challan (HTML print) for material
+  // issued from store at approval (mam 2026-06-23: "store different challan
+  // show ... from the approval step"). The print endpoint is auth-protected
+  // and returns HTML, so we fetch it as a blob and open that.
+  const openStoreChallan = async (challanId) => {
+    if (!challanId) return;
+    try {
+      const printRes = await api.get(`/procurement/delivery-notes/${challanId}/print`, { responseType: 'arraybuffer' });
+      const blob = new Blob([printRes.data], { type: 'text/html;charset=utf-8' });
+      window.open(URL.createObjectURL(blob), '_blank');
+    } catch {
+      toast.error('Could not open the Store Issue Challan');
+    }
+  };
+
   const submitApprove = async () => {
     if (!approveTarget) return;
     // Only send overrides that actually CHANGED, so unchanged lines aren't
@@ -1244,6 +1259,21 @@ export default function Procurement() {
         (Object.keys(changed).length ? `Approved with ${Object.keys(changed).length} qty change(s)` : 'Approved')
         + (storeLineCount > 0 ? `${noteSuffix}` : '')
       );
+      // Items issued from store → surface the Store Issue Challan right here
+      // so the approver can print/hand it over immediately (mam 2026-06-23).
+      if (storeLineCount > 0 && res.data?.store_challan_id) {
+        const challanId = res.data.store_challan_id;
+        openStoreChallan(challanId);   // best-effort auto-open (may be popup-blocked)
+        toast((t) => (
+          <span className="flex items-center gap-3">
+            <span>🧾 Store Issue Challan <b>{res.data.stock_issue_note}</b> ready</span>
+            <button
+              type="button"
+              onClick={() => { openStoreChallan(challanId); toast.dismiss(t.id); }}
+              className="btn btn-primary btn-xs whitespace-nowrap">Print</button>
+          </span>
+        ), { duration: 10000 });
+      }
       // ─── Optimistic update (mam 2026-05-28) ─────────────────────────
       // Server's response tells us which stage just completed:
       //   stage='l1_done' → status becomes 'l1_approved'
