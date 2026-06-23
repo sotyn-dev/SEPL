@@ -7586,11 +7586,17 @@ export default function Procurement() {
                               link or no office stock. */}
                           {(() => {
                             const office = +it.office_stock || 0;
-                            const canIssue = !!it.item_master_id && office > 0;
+                            // Inventory pending correction (mam 2026-06-23):
+                            // allow issuing from store on EVERY Item-Master line,
+                            // even when recorded office stock is 0 — the physical
+                            // store has material the system isn't corrected for.
+                            const canIssue = !!it.item_master_id;
                             const fs = +approveFromStore[it.id] || 0;
-                            const maxFs = Math.min(office, usedQty);
+                            const maxFs = usedQty;                  // cap only at the approved qty
+                            const suggest = Math.min(office, usedQty);
                             const toProc = Math.max(0, usedQty - fs);
-                            const overshoot = fs > maxFs + 0.0001;
+                            const overshoot = fs > maxFs + 0.0001;  // can't exceed approved qty
+                            const overStock = fs > office + 0.0001; // more than recorded → balance goes negative
                             return (
                               <>
                                 <td className="px-2 py-1 text-right bg-emerald-50/40">
@@ -7600,26 +7606,37 @@ export default function Procurement() {
                                         value={approveFromStore[it.id] ?? 0}
                                         onChange={(v) => setApproveFromStore(prev => ({ ...prev, [it.id]: v }))}
                                         className={`border rounded px-2 py-1 w-20 text-right text-xs focus:ring-1 focus:ring-emerald-500 ${overshoot ? 'border-red-400 bg-red-50' : 'border-gray-300 focus:border-emerald-500'}`} />
-                                      {/* Quick-pick chip — only show when
-                                          the input is below the available
-                                          max, so it disappears after the
-                                          approver has already taken stock. */}
-                                      {fs < maxFs && (
+                                      {/* Recorded-stock quick-pick (only when system shows stock) */}
+                                      {office > 0 && fs < suggest && (
                                         <button
                                           type="button"
-                                          onClick={() => setApproveFromStore(prev => ({ ...prev, [it.id]: maxFs }))}
+                                          onClick={() => setApproveFromStore(prev => ({ ...prev, [it.id]: suggest }))}
                                           className="mt-0.5 inline-flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-300 hover:bg-emerald-200"
-                                          title={`Use ${maxFs} from office store (${office} available)`}
+                                          title={`Use ${suggest} from office store (${office} recorded)`}
                                         >
-                                          📦 {office} avail · use {maxFs}
+                                          📦 {office} avail · use {suggest}
                                         </button>
                                       )}
-                                      {fs >= maxFs && (
-                                        <div className="text-[9px] text-emerald-600 mt-0.5">using max</div>
+                                      {/* Issue the full approved qty from store */}
+                                      {fs < usedQty && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setApproveFromStore(prev => ({ ...prev, [it.id]: usedQty }))}
+                                          className="mt-0.5 ml-0.5 inline-flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-indigo-100 text-indigo-700 border border-indigo-300 hover:bg-indigo-200"
+                                          title={`Issue the full approved qty (${usedQty}) from store`}
+                                        >
+                                          all {usedQty}
+                                        </button>
+                                      )}
+                                      {overStock && !overshoot && (
+                                        <div className="text-[9px] text-amber-600 mt-0.5" title="More than recorded stock — office balance will go negative until inventory is corrected">over recorded stock</div>
+                                      )}
+                                      {overshoot && (
+                                        <div className="text-[9px] text-red-600 mt-0.5">max {usedQty}</div>
                                       )}
                                     </div>
                                   ) : (
-                                    <span className="text-gray-300" title={it.item_master_id ? 'No office stock available' : 'Manual entry — cannot issue from store'}>—</span>
+                                    <span className="text-gray-300" title="Manual entry (no Item Master link) — cannot issue from store">—</span>
                                   )}
                                 </td>
                                 <td className="px-2 py-1 text-right bg-blue-50/40 font-medium text-blue-700">

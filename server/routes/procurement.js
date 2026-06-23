@@ -1937,18 +1937,13 @@ router.put('/indents/:id', (req, res) => {
             error: `From-store qty (${fromStore}) exceeds approved qty (${finalQty}) for "${row.description}".`,
           });
         }
-        // Check available office stock — SUM across all office warehouses.
-        const avail = db.prepare(
-          `SELECT COALESCE(SUM(sb.quantity), 0) as qty
-             FROM stock_balance sb
-             JOIN warehouses w ON w.id = sb.warehouse_id AND COALESCE(w.active, 1) = 1
-            WHERE sb.item_master_id = ? AND w.type='office'`
-        ).get(row.item_master_id);
-        if (fromStore > +avail.qty) {
-          return res.status(400).json({
-            error: `Only ${+avail.qty} pcs of "${row.description}" available in office store — cannot issue ${fromStore}.`,
-          });
-        }
+        // NOTE (mam 2026-06-23: "store option give to all because our
+        // inventory is pending to correct"): we no longer BLOCK a store issue
+        // when recorded office stock is short. The physical store often has
+        // material the system hasn't been corrected for yet. We issue anyway
+        // and let the office balance go negative (handled in the decrement
+        // loop) so the item is flagged for inventory reconciliation. The only
+        // remaining guards: must be Item-Master-linked, and from_store ≤ approved.
         storePlans.push({ itemId, fromStore, finalQty, masterId: row.item_master_id, rate: +row.rate || 0,
           description: row.description, unit: row.unit, item_type: row.item_type });
       }
@@ -2060,6 +2055,15 @@ router.put('/indents/:id', (req, res) => {
               item_master: db.prepare('SELECT 1 FROM item_master WHERE id=?'),
             };
             const safeFk = (val, table) => (val != null && fkCheck[table].get(val)) ? val : null;
+            // Default office warehouse to absorb any shortfall when recorded
+            // stock is less than what's physically issued (mam 2026-06-23 —
+            // inventory pending correction). Its balance is allowed to go
+            // negative so the gap is visible for later reconciliation.
+            const defaultOfficeWh = db.prepare(
+              "SELECT id FROM warehouses WHERE type='office' AND COALESCE(active,1)=1 ORDER BY id ASC LIMIT 1"
+            ).get()?.id || null;
+            const getBalByWh = db.prepare('SELECT id FROM stock_balance WHERE item_master_id=? AND warehouse_id=?');
+            const insertBalNeg = db.prepare('INSERT INTO stock_balance (warehouse_id, item_master_id, quantity, avg_rate) VALUES (?,?,?,?)');
             let lastWarehouseId = null;
             for (const plan of storePlans) {
               const bal = balRows.all(plan.masterId);
@@ -2081,10 +2085,28 @@ router.put('/indents/:id', (req, res) => {
                 remaining -= take;
                 lastWarehouseId = b.warehouse_id;
               }
-              // Should be zero — guard validated availability up front; if
-              // it isn't, abort the transaction.
+              // Shortfall — recorded stock didn't cover the issued qty.
+              // Issue it anyway against the default office store: record the
+              // OUT movement and let that balance go negative so the item is
+              // flagged to reconcile (mam 2026-06-23). Only abort if there is
+              // no office warehouse at all to attach the movement to.
               if (remaining > 0.0001) {
-                throw new Error(`Stock dropped during transaction for item #${plan.itemId} — aborted.`);
+                if (!defaultOfficeWh) {
+                  throw new Error(`No office warehouse exists to issue "${plan.description}" from — create one in Inventory → Warehouses first.`);
+                }
+                const rate = plan.rate || 0;
+                const existing = getBalByWh.get(plan.masterId, defaultOfficeWh);
+                if (existing) decBal.run(remaining, existing.id);
+                else insertBalNeg.run(defaultOfficeWh, plan.masterId, -remaining, rate);
+                insertMv.run(
+                  defaultOfficeWh, plan.masterId, remaining, rate, remaining * rate,
+                  issueNoteNumber, indentSite.site_id || null,
+                  `Issued for indent #${id} (${issueNoteNumber}) — over recorded stock; reconcile inventory`,
+                  req.user.id,
+                );
+                valueOut += remaining * rate;
+                lastWarehouseId = lastWarehouseId || defaultOfficeWh;
+                remaining = 0;
               }
               totalStoreQty += plan.fromStore;
               totalStoreValue += valueOut;
