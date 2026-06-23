@@ -60,6 +60,8 @@ export default function BusinessBook() {
   const [showFilters, setShowFilters] = useState(false);
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'dashboard'
   const [expanded, setExpanded] = useState({});      // dashboard: which client+site groups are open
+  const [groupList, setGroupList] = useState(true);  // List view: merge leads by project name
+  const [listExpanded, setListExpanded] = useState({}); // List view: which project groups are open
 
   const loadEntries = useCallback(() => {
     const params = new URLSearchParams();
@@ -222,6 +224,68 @@ export default function BusinessBook() {
   const mergedCount = groups.filter(g => g.orders.length > 1).length;
   const toggleGroup = (key) => setExpanded(p => ({ ...p, [key]: !p[key] }));
 
+  // List view (mam): MERGE leads by PROJECT NAME. All leads sharing the same
+  // project show as one collapsible row; clicking expands to every lead under
+  // that project in the table. Project name falls back to Company when blank,
+  // matching the "Project / Location" column. Leads with neither stay on their
+  // own row (unique key) so unrelated blanks never merge together. Group order
+  // follows the first lead seen — entries arrive newest-first, so newest
+  // projects stay on top.
+  const projectLabel = (e) => cleanText(e.project_name) || cleanText(e.company_name) || '(no project)';
+  const listGroups = useMemo(() => {
+    const map = new Map();
+    for (const e of entries) {
+      const pk = norm(cleanText(e.project_name) || cleanText(e.company_name));
+      const key = pk || `__none__:${e.id}`;
+      if (!map.has(key)) {
+        map.set(key, { key, label: projectLabel(e), leads: [], sale: 0, advance: 0, balance: 0,
+          clients: new Set(), statuses: new Set() });
+      }
+      const g = map.get(key);
+      g.leads.push(e);
+      g.sale += e.sale_amount_without_gst || 0;
+      g.advance += e.advance_received || 0;
+      g.balance += e.balance_amount || 0;
+      if (e.client_name) g.clients.add(cleanText(e.client_name));
+      if (e.status) g.statuses.add(e.status);
+    }
+    return Array.from(map.values());
+  }, [entries]);
+  const listMergedCount = listGroups.filter(g => g.leads.length > 1).length;
+  const toggleListGroup = (key) => setListExpanded(p => ({ ...p, [key]: !p[key] }));
+
+  // One Business Book lead as a table row — reused by the flat list, the
+  // grouped-list children, so the columns never drift between modes.
+  const renderLeadRow = (b, child = false) => (
+    <tr key={b.id} className={`transition-colors ${child ? 'bg-gray-50/60 hover:bg-gray-100' : 'hover:bg-red-50/30'}`}>
+      <td className={`px-3 py-3 ${child ? 'pl-8' : ''}`}><span className="font-bold text-red-600 cursor-pointer hover:underline" onClick={() => handleView(b)}>{b.lead_no}</span></td>
+      <td className="px-3 py-3"><span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${b.lead_type === 'Government' ? 'bg-purple-100 text-purple-700' : 'bg-red-100 text-red-700'}`}>{b.lead_type}</span></td>
+      <td className="px-3 py-3"><div className="font-medium text-sm">{cleanText(b.client_name)}</div><div className="text-[10px] text-gray-400 uppercase tracking-wide">Client</div></td>
+      <td className="px-3 py-3">
+        <div className="font-medium text-sm text-gray-800">{cleanText(b.project_name) || cleanText(b.company_name) || '-'}</div>
+        {b.district && <div className="text-xs text-gray-500">{[cleanText(b.district), cleanText(b.state)].filter(Boolean).join(', ')}</div>}
+      </td>
+      <td className="px-3 py-3 text-sm">{b.category || '-'}</td>
+      <td className="px-3 py-3"><span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{b.order_type}</span></td>
+      <td className="px-3 py-3 text-sm font-medium">{b.po_number || '-'}</td>
+      <td className="px-3 py-3 text-right font-semibold text-sm">{fmt(b.sale_amount_without_gst)}</td>
+      <td className="px-3 py-3 text-right text-sm text-emerald-600 font-medium">{fmt(b.advance_received)}</td>
+      <td className="px-3 py-3 text-right text-sm text-red-600 font-bold">{fmt(b.balance_amount)}</td>
+      <td className="px-3 py-3 text-sm">{b.employee_assigned || '-'}</td>
+      <td className="px-3 py-3"><StatusBadge status={b.status} /></td>
+      <td className="px-3 py-3">
+        <div className="flex items-center justify-center gap-1">
+          <button onClick={() => handleView(b)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="View"><FiEye size={15} /></button>
+          {b.working_sheet_link && (
+            <a href={b.working_sheet_link} target="_blank" rel="noreferrer" className="p-1.5 text-blue-600 hover:bg-blue-50 rounded" title="Working Sheet">📎</a>
+          )}
+          {canEdit('business_book') && <button onClick={() => handleEdit(b)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded" title="Edit"><FiEdit2 size={15} /></button>}
+          {canDelete('business_book') && <button onClick={() => handleDelete(b.id, b.lead_no)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete"><FiTrash2 size={15} /></button>}
+        </div>
+      </td>
+    </tr>
+  );
+
   // Dashboard analytics — KPI roll-ups + chart series, all derived from the
   // currently-filtered entries so the dashboard moves with the filters.
   const PALETTE = ['#E5484D', '#0EA5E9', '#46A758', '#FFB224', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316', '#64748B', '#A32D2D'];
@@ -334,11 +398,22 @@ export default function BusinessBook() {
 
       {/* Count */}
       <div className="flex justify-between items-center text-sm text-gray-500">
-        <span>
-          {viewMode === 'dashboard'
-            ? `${groups.length} client + site groups (${entries.length} entries${mergedCount > 0 ? `, ${mergedCount} merged` : ''})`
-            : `Showing ${entries.length} entries`}
-        </span>
+        <div className="flex items-center gap-3">
+          <span>
+            {viewMode === 'dashboard'
+              ? `${groups.length} client + site groups (${entries.length} entries${mergedCount > 0 ? `, ${mergedCount} merged` : ''})`
+              : groupList
+                ? `${listGroups.length} projects (${entries.length} leads${listMergedCount > 0 ? `, ${listMergedCount} merged` : ''})`
+                : `Showing ${entries.length} entries`}
+          </span>
+          {viewMode === 'list' && (
+            <button onClick={() => setGroupList(v => !v)}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${groupList ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white text-gray-500 border-gray-200 hover:border-amber-300'}`}
+              title="Merge leads that share the same project name">
+              <FiGrid size={12} /> {groupList ? 'Grouped by Project' : 'Group by Project'}
+            </button>
+          )}
+        </div>
         {entries.length > 0 && (
           <span className="font-medium">
             {/* Sum the SAME field the SALE AMT column displays per row
@@ -372,35 +447,41 @@ export default function BusinessBook() {
               <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Actions</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-100">
-              {entries.map(b => (
-                <tr key={b.id} className="hover:bg-red-50/30 transition-colors">
-                  <td className="px-3 py-3"><span className="font-bold text-red-600 cursor-pointer hover:underline" onClick={() => handleView(b)}>{b.lead_no}</span></td>
-                  <td className="px-3 py-3"><span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${b.lead_type === 'Government' ? 'bg-purple-100 text-purple-700' : 'bg-red-100 text-red-700'}`}>{b.lead_type}</span></td>
-                  <td className="px-3 py-3"><div className="font-medium text-sm">{cleanText(b.client_name)}</div><div className="text-[10px] text-gray-400 uppercase tracking-wide">Client</div></td>
-                  <td className="px-3 py-3">
-                    <div className="font-medium text-sm text-gray-800">{cleanText(b.project_name) || cleanText(b.company_name) || '-'}</div>
-                    {b.district && <div className="text-xs text-gray-500">{[cleanText(b.district), cleanText(b.state)].filter(Boolean).join(', ')}</div>}
-                  </td>
-                  <td className="px-3 py-3 text-sm">{b.category || '-'}</td>
-                  <td className="px-3 py-3"><span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{b.order_type}</span></td>
-                  <td className="px-3 py-3 text-sm font-medium">{b.po_number || '-'}</td>
-                  <td className="px-3 py-3 text-right font-semibold text-sm">{fmt(b.sale_amount_without_gst)}</td>
-                  <td className="px-3 py-3 text-right text-sm text-emerald-600 font-medium">{fmt(b.advance_received)}</td>
-                  <td className="px-3 py-3 text-right text-sm text-red-600 font-bold">{fmt(b.balance_amount)}</td>
-                  <td className="px-3 py-3 text-sm">{b.employee_assigned || '-'}</td>
-                  <td className="px-3 py-3"><StatusBadge status={b.status} /></td>
-                  <td className="px-3 py-3">
-                    <div className="flex items-center justify-center gap-1">
-                      <button onClick={() => handleView(b)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="View"><FiEye size={15} /></button>
-                      {b.working_sheet_link && (
-                        <a href={b.working_sheet_link} target="_blank" rel="noreferrer" className="p-1.5 text-blue-600 hover:bg-blue-50 rounded" title="Working Sheet">📎</a>
-                      )}
-                      {canEdit('business_book') && <button onClick={() => handleEdit(b)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded" title="Edit"><FiEdit2 size={15} /></button>}
-                      {canDelete('business_book') && <button onClick={() => handleDelete(b.id, b.lead_no)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete"><FiTrash2 size={15} /></button>}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {/* Flat list, or merged-by-project when grouping is on. */}
+              {!groupList && entries.map(b => renderLeadRow(b))}
+              {groupList && listGroups.map(g => {
+                // Single-lead projects render as an ordinary row — nothing to merge.
+                if (g.leads.length === 1) return renderLeadRow(g.leads[0]);
+                const open = !!listExpanded[g.key];
+                return (
+                  <Fragment key={g.key}>
+                    <tr className="bg-amber-50/40 hover:bg-amber-50 cursor-pointer transition-colors" onClick={() => toggleListGroup(g.key)}>
+                      <td className="px-3 py-3">
+                        <div className="flex items-center gap-1.5 text-gray-500">
+                          {open ? <FiChevronDown size={15} /> : <FiChevronRight size={15} />}
+                          <span className="bg-amber-200 text-amber-800 text-xs font-bold px-2 py-0.5 rounded-full">{g.leads.length}</span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-3" />
+                      <td className="px-3 py-3 text-sm">{g.clients.size === 1 ? [...g.clients][0] : `Multiple (${g.clients.size})`}</td>
+                      <td className="px-3 py-3">
+                        <div className="font-semibold text-sm text-gray-900 flex items-center gap-1.5"><FiMapPin size={13} className="text-gray-400" /> {g.label}</div>
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide ml-5">{g.leads.length} leads merged · click to expand</div>
+                      </td>
+                      <td className="px-3 py-3" />
+                      <td className="px-3 py-3" />
+                      <td className="px-3 py-3" />
+                      <td className="px-3 py-3 text-right font-semibold text-sm">{fmt(g.sale)}</td>
+                      <td className="px-3 py-3 text-right text-sm text-emerald-600 font-medium">{fmt(g.advance)}</td>
+                      <td className="px-3 py-3 text-right text-sm text-red-600 font-bold">{fmt(g.balance)}</td>
+                      <td className="px-3 py-3" />
+                      <td className="px-3 py-3"><div className="flex flex-wrap gap-1">{[...g.statuses].map(s => <StatusBadge key={s} status={s} />)}</div></td>
+                      <td className="px-3 py-3" />
+                    </tr>
+                    {open && g.leads.map(b => renderLeadRow(b, true))}
+                  </Fragment>
+                );
+              })}
               {entries.length === 0 && <tr><td colSpan="13" className="text-center py-12 text-gray-400"><FiBook size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">No entries found</p></td></tr>}
             </tbody>
           </table>
