@@ -1923,6 +1923,9 @@ router.put('/indents/:id', (req, res) => {
           `SELECT ii.id, ii.indent_id, ii.item_master_id, ii.quantity, ii.unit, ii.rate,
                   COALESCE(NULLIF(TRIM(ii.description), ''), NULLIF(TRIM(im.item_name), ''),
                            NULLIF(TRIM(im.specification), '')) AS description,
+                  im.specification AS specification, im.size AS size,
+                  COALESCE(NULLIF(TRIM(ii.make), ''), NULLIF(TRIM(im.make), '')) AS make,
+                  im.item_code AS item_code,
                   ii.item_type
              FROM indent_items ii
              LEFT JOIN item_master im ON im.id = ii.item_master_id
@@ -1949,7 +1952,8 @@ router.put('/indents/:id', (req, res) => {
         // loop) so the item is flagged for inventory reconciliation. The only
         // remaining guards: must be Item-Master-linked, and from_store ≤ approved.
         storePlans.push({ itemId, fromStore, finalQty, masterId: row.item_master_id, rate: +row.rate || 0,
-          description: row.description, unit: row.unit, item_type: row.item_type });
+          description: row.description, specification: row.specification, size: row.size,
+          make: row.make, item_code: row.item_code, unit: row.unit, item_type: row.item_type });
       }
 
       try {
@@ -2148,7 +2152,9 @@ router.put('/indents/:id', (req, res) => {
             // & Receiving for printing + (billable items) a Sales Bill.
             // sales_bill_pending=1 when any line is a billable PO item.
             const storeItems = storePlans.map(p => ({
-              description: p.description, qty: p.fromStore, unit: p.unit || '',
+              description: p.description, specification: p.specification || '', size: p.size || '',
+              make: p.make || '', item_code: p.item_code || '',
+              qty: p.fromStore, unit: p.unit || '',
               rate: +p.rate || 0, amount: p.fromStore * (+p.rate || 0),
               item_type: p.item_type || '',
             }));
