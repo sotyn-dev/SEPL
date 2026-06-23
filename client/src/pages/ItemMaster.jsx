@@ -7,7 +7,7 @@ import { MAKES } from '../data/makes';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtDateTime } from '../utils/datetime';
-import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiDownload, FiUpload, FiPackage, FiFilter, FiX, FiClock, FiAlertTriangle, FiChevronLeft, FiChevronRight } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiDownload, FiUpload, FiPackage, FiFilter, FiX, FiClock, FiAlertTriangle, FiChevronLeft, FiChevronRight, FiImage } from 'react-icons/fi';
 
 const PAGE_SIZE = 100;
 
@@ -39,6 +39,7 @@ const emptyForm = {
   current_price: '',
   vendor_id: '', source_type: 'Manual', bill_po_number: '', bill_po_date: '',
   weight_per_meter: '',
+  photo_link: '',
 };
 
 // Pretty age badge — colours match MD's spec.
@@ -79,6 +80,7 @@ export default function ItemMaster() {
   const [bulkPreview, setBulkPreview] = useState([]);
   const [pipeModal, setPipeModal] = useState(false);
   const [pipeWeights, setPipeWeights] = useState([]);  // lookup for the item form dropdown
+  const [lightbox, setLightbox] = useState(null);      // photo URL shown full-size on click
 
   const load = useCallback(() => {
     const params = new URLSearchParams();
@@ -429,6 +431,7 @@ export default function ItemMaster() {
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Code</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Dept</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Item / Spec / Size</th>
+            <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Photo</th>
             <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Make</th>
             {/* UOM column added per mam, 2026-05-16: "SHOW HERE UOM".
                 Surfaces the cleanup script's normalised unit (MTR /
@@ -455,6 +458,15 @@ export default function ItemMaster() {
                   <td className="px-3 py-2">
                     <div className="font-medium text-sm">{i.item_name}</div>
                     <div className="text-xs text-gray-500">{[i.specification, i.size].filter(Boolean).join(' | ')}</div>
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    {i.photo_link ? (
+                      <img src={i.photo_link} alt={i.item_name} loading="lazy"
+                        onClick={() => setLightbox(i.photo_link)}
+                        className="w-10 h-10 object-cover rounded border border-gray-200 cursor-zoom-in hover:ring-2 hover:ring-red-300 inline-block align-middle" />
+                    ) : (
+                      <span className="text-[10px] text-gray-300">—</span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-sm">
                     {missingMake ? <span className="text-[10px] text-purple-700 italic">— blank —</span> : i.make}
@@ -511,7 +523,7 @@ export default function ItemMaster() {
                 </tr>
               );
             })}
-            {items.length === 0 && <tr><td colSpan="11" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>{loading ? 'Loading…' : 'No items found'}</p></td></tr>}
+            {items.length === 0 && <tr><td colSpan="12" className="text-center py-12 text-gray-400"><FiPackage size={40} className="mx-auto mb-3 opacity-30" /><p>{loading ? 'Loading…' : 'No items found'}</p></td></tr>}
           </tbody>
         </table>
         {/* Paginator — keeps the page snappy even on 2,000+ item masters. */}
@@ -561,6 +573,33 @@ export default function ItemMaster() {
             </div>
             <div><label className="label">Make *</label><input className="input" list="itemMakesDL" value={form.make || ''} onChange={e => F('make', e.target.value)} placeholder="Pick brand or type" /><datalist id="itemMakesDL">{MAKES.map(m => <option key={m} value={m} />)}</datalist></div>
             <div><label className="label">Model #</label><input className="input" value={form.model_number || ''} onChange={e => F('model_number', e.target.value)} /></div>
+          </div>
+
+          {/* Item photo (mam): upload an image — shows as a thumbnail in the
+              list, click to view full-size. Uses the shared /upload endpoint. */}
+          <div className="border border-gray-200 bg-gray-50/60 rounded-lg p-3">
+            <label className="label flex items-center gap-2"><FiImage size={14} /> Item Photo <span className="text-xs text-gray-400 font-normal">— shown as a thumbnail in the list; click to enlarge</span></label>
+            {form.photo_link ? (
+              <div className="flex items-center gap-3">
+                <img src={form.photo_link} alt="item" onClick={() => setLightbox(form.photo_link)}
+                  className="w-16 h-16 object-cover rounded border border-gray-200 cursor-zoom-in hover:ring-2 hover:ring-red-300" />
+                <a href={form.photo_link} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline truncate flex-1">{form.photo_link.split('/').pop()}</a>
+                <button type="button" onClick={() => F('photo_link', '')} className="text-red-500 text-xs hover:underline">Remove</button>
+              </div>
+            ) : (
+              <input type="file" accept="image/*"
+                onChange={async (e) => {
+                  const file = e.target.files[0]; if (!file) return;
+                  try {
+                    const fd = new FormData(); fd.append('file', file);
+                    const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                    F('photo_link', res.data.url);
+                    toast.success('Photo uploaded');
+                  } catch { toast.error('Upload failed'); }
+                  e.target.value = '';
+                }}
+                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-red-50 file:text-red-700 hover:file:bg-red-100" />
+            )}
           </div>
 
           {/* Pipe MTR → KG conversion (mam 2026-06-06). Optional — only for
@@ -683,6 +722,14 @@ export default function ItemMaster() {
 
       {/* Pipe Weight master (MTR → KG) */}
       <PipeWeightsModal isOpen={pipeModal} onClose={() => { setPipeModal(false); loadPipeWeights(); }} />
+
+      {/* Photo lightbox — click a thumbnail (table or form) to view full-size. */}
+      {lightbox && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setLightbox(null)}>
+          <img src={lightbox} alt="item" className="max-w-full max-h-full rounded shadow-2xl" onClick={e => e.stopPropagation()} />
+          <button onClick={() => setLightbox(null)} className="absolute top-4 right-4 text-white/90 hover:text-white" aria-label="Close"><FiX size={28} /></button>
+        </div>
+      )}
     </div>
   );
 }
