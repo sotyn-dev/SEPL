@@ -425,13 +425,20 @@ function computePoFoc(body) {
   const labourMargin = (body.labour_margin === '' || body.labour_margin == null) ? 50 : Number(body.labour_margin) || 0;
   const focs = Array.isArray(body.focs) ? body.focs.filter(f => f && (f.item_id || f.name)).map(f => ({
     item_id: f.item_id || null, name: f.name || '', qty: Number(f.qty) || 1, rate: Number(f.rate) || 0,
+    // Per-FOC margin (mam 2026-06-23). null → inherits the PO margin so legacy
+    // rows + the FOC-% line recompute exactly as before.
+    margin: (f.margin === '' || f.margin == null) ? null : (Number(f.margin) || 0),
+    ...(f.foc ? { foc: true } : {}),
+    ...(f.is_pct ? { is_pct: true, foc_pct: f.foc_pct } : {}),
   })) : [];
   const poAmt = poRate * qty;
   const focAmt = focs.reduce((t, f) => t + f.rate * f.qty, 0);
+  // Each FOC carries its OWN margin; null falls back to the PO margin.
+  const focSale = focs.reduce((t, f) => t + f.rate * f.qty * (1 + ((f.margin == null ? margin : f.margin) / 100)), 0);
   const labourAmt = labour * qty;                          // labour RATE × PO qty
   const cost = Math.round((poAmt + focAmt + labourAmt) * 100) / 100;
-  // PO + FOC carry the item margin; labour carries its own labour margin.
-  const tpa = Math.round(((poAmt + focAmt) * (1 + margin / 100) + labourAmt * (1 + labourMargin / 100)) * 100) / 100;
+  // PO carries the item margin, each FOC its own margin, labour its own.
+  const tpa = Math.round((poAmt * (1 + margin / 100) + focSale + labourAmt * (1 + labourMargin / 100)) * 100) / 100;
   return { qty, poRate, labour, margin, labourMargin, focs, cost, tpa };
 }
 

@@ -28,7 +28,7 @@ const STATUS_BADGE = {
   re_approved: 'bg-blue-100 text-blue-700',
 };
 const blankForm = () => ({ id: null, status: 'non_approved', po_item_id: null, po_name: '', po_rate: 0, qty: 1, labour: 0, labour_item_id: null, labour_name: '', labour_margin: 50, margin: 30, focs: [], foc_pct: '' });
-const blankFoc = () => ({ item_id: null, name: '', qty: 1, rate: 0, foc: false });
+const blankFoc = (margin = 30) => ({ item_id: null, name: '', qty: 1, rate: 0, foc: false, margin });
 
 const calc = (f) => {
   const poAmt = r2((Number(f.po_rate) || 0) * (Number(f.qty) || 0));
@@ -37,15 +37,25 @@ const calc = (f) => {
   const focPct = Number(f.foc_pct) || 0;
   // FOC rows flagged foc=true are FREE (not charged) — used for POC items where
   // a row can be PO (charged) or FOC (free). Default (foc falsy) = charged.
+  const margin = Number(f.margin) || 0;
   const focAmt = focPct > 0
     ? r2(poAmt * focPct / 100)
     : r2((f.focs || []).reduce((t, x) => t + (x.foc ? 0 : (Number(x.rate) || 0) * (Number(x.qty) || 0)), 0));
+  // Sale value of FOC: % mode rides the PO margin; item rows each carry their
+  // OWN margin (mam 2026-06-23), null → inherit the PO margin.
+  const focSale = focPct > 0
+    ? r2(focAmt * (1 + margin / 100))
+    : r2((f.focs || []).reduce((t, x) => {
+        if (x.foc) return t;
+        const amt = (Number(x.rate) || 0) * (Number(x.qty) || 0);
+        const m = (x.margin === '' || x.margin == null) ? margin : Number(x.margin) || 0;
+        return t + amt * (1 + m / 100);
+      }, 0));
   const labourAmt = r2((Number(f.labour) || 0) * (Number(f.qty) || 0)); // labour RATE × PO qty
   const cost = r2(poAmt + focAmt + labourAmt);
-  const margin = Number(f.margin) || 0;
   const lMargin = (f.labour_margin === '' || f.labour_margin == null) ? 50 : Number(f.labour_margin) || 0;
-  // PO + FOC carry the item margin; labour carries its own labour margin.
-  const tpa = r2((poAmt + focAmt) * (1 + margin / 100) + labourAmt * (1 + lMargin / 100));
+  // PO carries the item margin, each FOC its own, labour its own.
+  const tpa = r2(poAmt * (1 + margin / 100) + focSale + labourAmt * (1 + lMargin / 100));
   return { cost, tpa };
 };
 
@@ -107,7 +117,7 @@ export default function PoFocStripped() {
   const setF = (patch) => setForm(f => ({ ...f, ...patch }));
   const pickPo = (opt) => setF(opt ? { po_item_id: opt.id, po_name: opt.display_name || opt.item_name, po_rate: opt.current_price || 0 } : { po_item_id: null, po_name: '', po_rate: 0 });
   const pickLabour = (opt) => setF(opt ? { labour_item_id: opt.id, labour_name: opt.item_name, labour: opt.rate || 0 } : { labour_item_id: null, labour_name: '', labour: 0 });
-  const addFoc = () => setForm(f => (f.focs || []).length >= MAX_FOC ? (toast.error(`Max ${MAX_FOC} FOC`), f) : { ...f, focs: [...(f.focs || []), blankFoc()] });
+  const addFoc = () => setForm(f => (f.focs || []).length >= MAX_FOC ? (toast.error(`Max ${MAX_FOC} FOC`), f) : { ...f, focs: [...(f.focs || []), blankFoc(Number(f.margin) || 30)] });
   const patchFoc = (fi, patch) => setForm(f => ({ ...f, focs: f.focs.map((x, j) => j === fi ? { ...x, ...patch } : x) }));
   const removeFoc = (fi) => setForm(f => ({ ...f, focs: f.focs.filter((_, j) => j !== fi) }));
   const pickFoc = (fi, opt) => patchFoc(fi, opt ? { item_id: opt.id, name: opt.display_name || opt.item_name, rate: opt.current_price || 0 } : { item_id: null, name: '', rate: 0 });
@@ -389,6 +399,15 @@ export default function PoFocStripped() {
                   <select className="select text-xs py-1.5 w-14" value={f.qty} onChange={e => patchFoc(fi, { qty: +e.target.value })}>{Array.from({ length: 10 }, (_, n) => <option key={n + 1} value={n + 1}>{n + 1}</option>)}</select>
                   <span className="text-[10px] text-indigo-500 font-semibold w-10 text-center truncate" title={uomOf(focItems, f.item_id)}>{uomOf(focItems, f.item_id) || '—'}</span>
                   <input className="input text-right text-xs py-1.5 w-20" type="number" min="0" value={f.rate || ''} onChange={e => patchFoc(fi, { rate: e.target.value })} placeholder="rate" />
+                  {/* Per-FOC margin — compulsory when picking FOC item-wise
+                      (mam 2026-06-23). Defaults to the PO margin; greyed out
+                      for free (FOC) rows since they add nothing. */}
+                  <select className="select text-xs py-1.5 w-16 shrink-0" disabled={f.foc}
+                    value={(f.margin === '' || f.margin == null) ? (Number(form.margin) || 30) : f.margin}
+                    onChange={e => patchFoc(fi, { margin: +e.target.value })}
+                    title="Margin % for this FOC item">
+                    {MARGINS.map(m => <option key={m} value={m}>{m}%</option>)}
+                  </select>
                   {/* POC items: each row is PO (charged) or FOC (free) — toggle (mam 2026-06-22) */}
                   {poType === 'POC' && (
                     <button type="button" onClick={() => patchFoc(fi, { foc: !f.foc })}
@@ -417,7 +436,7 @@ export default function PoFocStripped() {
         </div>
       </Modal>
 
-      <p className="text-xs text-gray-400">TPA = (PO Rate × Qty + Σ FOC Rate × FOC Qty) × (1 + Margin%) + (Labour Rate × Qty) × (1 + Labour Margin%). Labour is picked from the Labour Rate sheet and carries its own margin (default 50%). Editing an Approved item moves it to Re-Approved until you approve it again.</p>
+      <p className="text-xs text-gray-400">TPA = (PO Rate × Qty) × (1 + Margin%) + Σ (FOC Rate × FOC Qty × (1 + that FOC's Margin%)) + (Labour Rate × Qty) × (1 + Labour Margin%). Each FOC item now carries its own margin (defaults to the PO margin). Labour carries its own margin (default 50%). Editing an Approved item moves it to Re-Approved until you approve it again.</p>
     </div>
   );
 }
