@@ -1132,6 +1132,16 @@ export default function Procurement() {
   // quantities and the From-Store split can be re-entered cleanly — this
   // fixes a wrong store qty (e.g. 10 entered when 1000 was meant).
   const reapproveIndent = async (i) => {
+    // PO-sent indents already have a vendor PO out for the full qty. Issuing
+    // from store now splits the line but does NOT cancel that PO — warn the
+    // admin so they reduce/cancel the vendor PO for the store-issued qty.
+    if (i.status === 'po_sent' && !window.confirm(
+      `A vendor PO was already SENT for ${i.indent_number || 'this indent'}.\n\n` +
+      `Issuing from store now will reopen approval and split the qty, but it will NOT ` +
+      `change the vendor PO. After issuing from store, reduce or cancel the vendor PO ` +
+      `for that quantity so you don't buy + issue the same material.\n\nContinue?`)) {
+      return;
+    }
     try {
       const r = await api.post(`/procurement/indents/${i.id}/reset-store-issue`);
       if (r.data?.reversed > 0) {
@@ -2324,6 +2334,12 @@ export default function Procurement() {
                     <button onClick={() => openRejectModal(i)} className="btn btn-danger text-xs py-1 px-2 flex-1">Re-reject</button>
                   </>
                 );
+                // PO already sent, but admin/MD still wants to issue some qty
+                // from store (mam 2026-06-23). Reopen the approve modal so the
+                // From-Store split can be entered + a Store Issue Challan cut.
+                if (i.status === 'po_sent' && (isAdmin() || user?.approval_role === 'l2')) return (
+                  <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2 flex-1" title="Re-open to issue items from store">Issue from Store</button>
+                );
                 if (i.status === 'rejected' && (isAdmin() || user?.approval_role === 'l2')) return (
                   <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2 flex-1" title="Revoke rejection and approve">Re-approve</button>
                 );
@@ -2816,12 +2832,14 @@ export default function Procurement() {
                         </button>
                       )}
                       {/* Re-approve — on a REJECTED indent it revokes the
-                          rejection; on an APPROVED one it re-confirms the
-                          approval. Admin or the L2 approver / MD (mam
-                          2026-06-04). */}
-                      {(i.status === 'rejected' || i.status === 'approved') && (isAdmin() || user?.approval_role === 'l2') && (
-                        <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2" title={i.status === 'rejected' ? 'Revoke rejection and approve' : 'Re-confirm this approval'}>
-                          Re-approve
+                          rejection; on an APPROVED/PO-SENT one it reopens the
+                          approve modal so the From-Store split can be (re)entered
+                          and a Store Issue Challan cut. Admin or the L2 approver
+                          / MD (mam 2026-06-04, 2026-06-23: "issue items from
+                          store now" on a PO-sent indent). */}
+                      {(i.status === 'rejected' || i.status === 'approved' || i.status === 'po_sent') && (isAdmin() || user?.approval_role === 'l2') && (
+                        <button onClick={() => reapproveIndent(i)} className="btn btn-success text-xs py-1 px-2" title={i.status === 'rejected' ? 'Revoke rejection and approve' : 'Re-open to edit qty / issue from store'}>
+                          {i.status === 'po_sent' ? 'Issue from Store' : 'Re-approve'}
                         </button>
                       )}
                       {/* If creator is viewing their own pending indent, show
