@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import api from '../api';
+import { getToken, setToken as persistToken, clearToken } from '../lib/tokenStore';
 
 const AuthContext = createContext();
 
@@ -7,7 +8,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [permissions, setPermissions] = useState({});
   const [userRoles, setUserRoles] = useState([]);
-  const [token, setToken] = useState(localStorage.getItem('token'));
+  const [token, setToken] = useState(getToken());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -24,7 +25,10 @@ export function AuthProvider({ children }) {
           setPermissions(r.data.permissions || {});
           setUserRoles(r.data.userRoles || []);
         })
-        .catch(() => logout())
+        // Only log out when the server actually rejects the token (401).
+        // A 500 / network blip must NOT nuke a valid session — that was
+        // turning a transient error into an instant logout (mam 2026-06-23).
+        .catch((e) => { if (e?.response?.status === 401) logout(); })
         .finally(() => setLoading(false));
     } else {
       setLoading(false);
@@ -62,7 +66,7 @@ export function AuthProvider({ children }) {
   const login = async (identifier, password) => {
     // Accept username or email — backend matches either.
     const { data } = await api.post('/auth/login', { username: identifier, email: identifier, password });
-    localStorage.setItem('token', data.token);
+    persistToken(data.token);   // localStorage + in-memory fallback
     api.defaults.headers.common['Authorization'] = `Bearer ${data.token}`;
     setToken(data.token);
     setUser(data.user);
@@ -83,7 +87,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
-    localStorage.removeItem('token');
+    clearToken();
     delete api.defaults.headers.common['Authorization'];
     setToken(null);
     setUser(null);

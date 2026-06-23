@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { isStorageBlocked } from '../lib/tokenStore';
 import toast from 'react-hot-toast';
 import { FiUser, FiLock, FiEye, FiEyeOff, FiArrowRight } from 'react-icons/fi';
 
@@ -34,10 +35,15 @@ export default function Login() {
     e.preventDefault();
     try {
       const data = await login(form.identifier, form.password);
-      if (remember) {
-        localStorage.setItem('sepl_remember_identifier', form.identifier);
-      } else {
-        localStorage.removeItem('sepl_remember_identifier');
+      try {
+        if (remember) localStorage.setItem('sepl_remember_identifier', form.identifier);
+        else localStorage.removeItem('sepl_remember_identifier');
+      } catch { /* storage blocked — non-critical, skip remember-me */ }
+      // If the browser is blocking site data, the session will only last
+      // this page view and they'll be logged out on the next reload. Tell
+      // them plainly instead of letting it look like a random logout.
+      if (isStorageBlocked()) {
+        toast('Your browser is blocking site data, so you may get logged out. Please open securederp.in in Chrome/Safari directly (not inside another app) and turn off Private/Incognito mode.', { duration: 9000, icon: '⚠️' });
       }
       toast.success(`Welcome back, ${data.user.name}!`);
     } catch (err) {
