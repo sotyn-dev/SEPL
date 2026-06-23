@@ -62,6 +62,24 @@ try {
   }
 } catch (e) { console.error('[inventory] condition backfill failed:', e.message); }
 
+// ---------- INVENTORY OPENING DATE ----------
+// The baseline date from which automated stock movements count (mam
+// 2026-06-23: "select opening date so automation starts after that").
+// Opening stock is set manually as of this date; documents dated before it
+// should not drive automation. Stored as a single app_setting.
+router.get('/opening-date', requirePermission('inventory', 'view'), (req, res) => {
+  const row = getDb().prepare("SELECT value FROM app_settings WHERE key='inventory_opening_date'").get();
+  res.json({ opening_date: row && row.value ? row.value : null });
+});
+router.post('/opening-date', requirePermission('inventory', 'edit'), (req, res) => {
+  const d = String(req.body?.opening_date || '').trim();
+  if (d && !/^\d{4}-\d{2}-\d{2}$/.test(d)) return res.status(400).json({ error: 'Date must be YYYY-MM-DD' });
+  getDb().prepare(
+    "INSERT INTO app_settings (key, value) VALUES ('inventory_opening_date', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+  ).run(d || null);
+  res.json({ opening_date: d || null });
+});
+
 // ---------- WAREHOUSES ----------
 
 router.get('/warehouses', requirePermission('inventory', 'view'), (req, res) => {

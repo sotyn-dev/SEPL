@@ -31,6 +31,8 @@ export default function Inventory() {
   const [stock, setStock] = useState([]);
   const [summary, setSummary] = useState([]);
   const [movements, setMovements] = useState([]);
+  const [openingDate, setOpeningDate] = useState('');     // inventory automation baseline
+  const [savingOpenDate, setSavingOpenDate] = useState(false);
 
   // Filters
   const [stockFilter, setStockFilter] = useState({ warehouse_id: '', search: '', low_only: false });
@@ -54,7 +56,18 @@ export default function Inventory() {
         label: [i.item_code, i.item_name, i.specification, i.size, i.department && '·' + i.department]
           .filter(Boolean).join(' '),
       })));
+      api.get('/inventory/opening-date').then(r => setOpeningDate(r.data?.opening_date || '')).catch(() => {});
     } catch (err) { /* keep silent */ }
+  };
+
+  const saveOpeningDate = async (d) => {
+    setSavingOpenDate(true);
+    try {
+      await api.post('/inventory/opening-date', { opening_date: d || '' });
+      setOpeningDate(d || '');
+      toast.success(d ? `Inventory opening date set to ${d}` : 'Opening date cleared');
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed to save'); }
+    finally { setSavingOpenDate(false); }
   };
 
   const loadSummary = async () => {
@@ -137,6 +150,27 @@ export default function Inventory() {
           <div className="text-[10px] text-gray-400">items need restocking</div>
         </div>
       </div>
+
+      {/* Inventory Opening Date — automation baseline (mam 2026-06-23) */}
+      {(canEdit('inventory') || isAdmin()) && (
+        <div className="card p-3 flex flex-wrap items-center gap-3 border-l-4 border-indigo-400 bg-indigo-50/40">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">📅</span>
+            <div>
+              <div className="text-sm font-semibold text-gray-800">Inventory Opening Date</div>
+              <div className="text-[11px] text-gray-500">Set the day-1 baseline. Enter opening stock as of this date; automated movements count from here on.</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 ml-auto">
+            <input type="date" className="input w-44" value={openingDate || ''} disabled={savingOpenDate}
+              onChange={e => saveOpeningDate(e.target.value)} />
+            {openingDate && (
+              <button type="button" onClick={() => saveOpeningDate('')} className="text-xs text-red-500 hover:underline">Clear</button>
+            )}
+            {savingOpenDate && <span className="text-xs text-gray-400">saving…</span>}
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-2 flex-wrap">
