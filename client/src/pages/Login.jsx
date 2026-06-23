@@ -91,6 +91,12 @@ export default function Login() {
                     className="w-full bg-white border border-zinc-300 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 text-zinc-900 placeholder-zinc-400 rounded-xl pl-10 pr-4 py-3 outline-none transition-colors"
                     type="text"
                     autoComplete="username"
+                    // Mobile keyboards (Android especially) capitalize the first
+                    // letter and auto-correct by default — that silently mangles
+                    // usernames/emails and causes "Invalid credentials" on phones.
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     value={form.identifier}
                     onChange={e => setForm({ ...form, identifier: e.target.value })}
                     required
@@ -106,6 +112,13 @@ export default function Login() {
                   <input
                     className="w-full bg-white border border-zinc-300 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 text-zinc-900 placeholder-zinc-400 rounded-xl pl-10 pr-10 py-3 outline-none transition-colors"
                     type={showPassword ? 'text' : 'password'}
+                    autoComplete="current-password"
+                    // Critical for the 👁 show-password toggle: once type flips to
+                    // "text", Android re-enables auto-capitalize/auto-correct and
+                    // corrupts the typed password → "Invalid credentials".
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     value={form.password}
                     onChange={e => setForm({ ...form, password: e.target.value })}
                     required
