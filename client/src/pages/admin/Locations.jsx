@@ -13,9 +13,10 @@ import { useUrlTab } from '../../hooks/useUrlTab';
 import toast from 'react-hot-toast';
 import { FiMapPin, FiRefreshCw, FiUser, FiCalendar, FiClock, FiNavigation, FiExternalLink, FiAlertCircle } from 'react-icons/fi';
 import RouteMap from '../../components/RouteMap';
+import { fmtTime as fmtTimeIST } from '../../utils/datetime';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
-const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—';
+const fmtTime = (iso) => iso ? fmtTimeIST(iso, { hour: '2-digit', minute: '2-digit' }) : '—';
 const fmtDist = (m) => m == null ? '—' : (m < 1000 ? `${m} m` : `${(m / 1000).toFixed(2)} km`);
 const mapsUrl = (lat, lng) => `https://www.google.com/maps?q=${lat},${lng}`;
 
@@ -165,7 +166,7 @@ export default function Locations() {
             <div className="flex items-center gap-3">
               {live && (
                 <span className="text-xs text-gray-500">
-                  As of {new Date(live.as_of).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · auto-refresh every 60s
+                  As of {fmtTimeIST(live.as_of, { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · auto-refresh every 60s
                 </span>
               )}
               <button onClick={loadLive} disabled={liveLoading} className="btn btn-secondary flex items-center gap-2">

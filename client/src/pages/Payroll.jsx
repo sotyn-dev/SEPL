@@ -8,6 +8,7 @@ import { FiSettings, FiDollarSign, FiEye, FiLock, FiUnlock, FiSave, FiDownload, 
 import { exportCsv } from '../utils/exportCsv';
 import { LuIndianRupee } from 'react-icons/lu';
 import TimePicker from '../components/TimePicker';
+import { fmtDate, fmtTime } from '../utils/datetime';
 
 const monthNow = () => {
   const d = new Date();
@@ -90,7 +91,7 @@ const LABEL_PILL = {
 };
 
 export default function Payroll() {
-  const { user, canApprove } = useAuth();
+  const { user, canApprove, canEdit } = useAuth();
   const isAdmin = user?.role === 'admin';
   const [tab, setTab] = useUrlTab('monthly');
   const [month, setMonth] = useState(monthNow());
@@ -100,6 +101,9 @@ export default function Payroll() {
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState(null);
   const [advanceEdits, setAdvanceEdits] = useState({}); // employee_id -> draft advance amount
+  const [foodEdits, setFoodEdits] = useState({});       // employee_id -> draft food amount (added to net)
+  const [ovEdits, setOvEdits] = useState({});           // `${employee_id}:${field}` -> draft override (paid_days|cl|late_penalty)
+  const [excludedNoSalary, setExcludedNoSalary] = useState([]); // active employees with no salary → not in payroll
   // CL Leave Balances tab
   const [leaveYear, setLeaveYear] = useState(new Date().getFullYear());
   const [leaveRows, setLeaveRows] = useState([]);
@@ -113,7 +117,7 @@ export default function Payroll() {
   const loadMonth = useCallback(() => {
     setLoading(true);
     api.get(`/payroll/calculate?month=${month}`)
-      .then(r => setList(r.data.employees || []))
+      .then(r => { setList(r.data.employees || []); setExcludedNoSalary(r.data.excluded_no_salary || []); })
       .catch(err => toast.error(err.response?.data?.error || 'Failed'))
       .finally(() => setLoading(false));
   }, [month]);
@@ -177,6 +181,63 @@ export default function Payroll() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  // Save an employee's food allowance for the open month; net pay recomputes.
+  const saveFood = async (employeeId, value) => {
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || amount < 0) { toast.error('Enter a valid amount'); return; }
+    try {
+      await api.put(`/payroll/food/${employeeId}`, { month, amount });
+      setFoodEdits(s => { const n = { ...s }; delete n[employeeId]; return n; });
+      loadMonth();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  // Save a manual override (paid_days | cl | late_penalty) for the open month;
+  // a blank value resets to the auto-calculated number. Net pay recomputes.
+  const saveOverride = async (employeeId, field, value) => {
+    const blank = value === '' || value === null || value === undefined;
+    if (!blank) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 0) { toast.error('Enter a valid number'); return; }
+    }
+    try {
+      await api.put(`/payroll/override/${employeeId}`, { month, field, value: blank ? '' : value });
+      setOvEdits(s => { const n = { ...s }; delete n[`${employeeId}:${field}`]; return n; });
+      loadMonth();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  // Compact editable input for a monthly override. savedVal = the value
+  // currently shown (auto or already-overridden); an amber ring flags an
+  // active override; clearing the box resets to auto.
+  const ovInput = (r, field, savedVal, overridden, opts = {}) => {
+    const k = `${r.employee_id}:${field}`;
+    const draft = ovEdits[k];
+    const display = draft !== undefined ? draft : (savedVal ?? '');
+    return (
+      <input type="number" min="0" step={opts.step || '0.5'}
+        className={`input text-right ${opts.w || 'w-16'} inline-block ${overridden ? 'ring-1 ring-amber-400 bg-amber-50' : ''}`}
+        value={display}
+        onChange={e => setOvEdits(s => ({ ...s, [k]: e.target.value }))}
+        onBlur={e => {
+          const v = e.target.value;
+          if (Number(v || 0) !== Number(savedVal || 0) || (v === '' && overridden)) saveOverride(r.employee_id, field, v);
+        }}
+        title={opts.title} />
+    );
+  };
+
+  // Breakdown split for the Paid Days cell. A worked Sunday is folded into
+  // present_days (att); pull it back out so "att" = weekday attendance and
+  // "sun" shows ALL Sundays credited (weekly-off + worked). Pay is unchanged;
+  // the green "+Nd Sun worked" line still shows the extra bonus on top.
+  const dayBreakdown = (r) => {
+    const worked = +r.sunday_worked_pay || 0;
+    const att = Math.round(((+r.present_days || 0) - worked) * 100) / 100;
+    const sun = Math.round(((+r.sunday_count || 0) + worked) * 100) / 100;
+    return { att, sun };
+  };
+
   const rolloverYear = async () => {
     if (!confirm(`Roll ${leaveYear}'s leftover CL into each person's opening balance? Do this once ${leaveYear} is complete — it overwrites the current carry-forward.`)) return;
     try {
@@ -224,6 +285,17 @@ export default function Payroll() {
   const fmt = (n) => `Rs ${(Math.round(n || 0)).toLocaleString('en-IN')}`;
 
   const total = list.reduce((s, r) => s + (r.net_pay || 0), 0);
+  // Disbursement tracking — only meaningful once the month is finalised.
+  const isFinalised = list.some(r => r.locked);
+  const canMarkPaid = isAdmin || (canEdit && canEdit('payroll'));
+  const paidCount = list.filter(r => r.paid).length;
+  const unpaidCount = list.filter(r => r.locked && !r.paid).length;
+  const savePaid = async (employeeId, paid) => {
+    try {
+      await api.put(`/payroll/paid/${employeeId}`, { month, paid });
+      loadMonth();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
 
   return (
     <div className="space-y-6">
@@ -271,6 +343,12 @@ export default function Payroll() {
                 Future month — nothing to calculate yet.
               </div>
             )}
+            {excludedNoSalary.length > 0 && (
+              <div className="bg-rose-50 border border-rose-200 px-3 py-2 rounded text-xs text-rose-800 w-full">
+                ⚠ <strong>{excludedNoSalary.length} active {excludedNoSalary.length === 1 ? 'employee is' : 'employees are'} NOT in payroll</strong> because their monthly salary isn't set (attendance doesn't matter — salary does):{' '}
+                <strong>{excludedNoSalary.map(e => e.name).join(', ')}</strong>. Set their salary in <strong>HR → Employees</strong> and they'll appear here.
+              </div>
+            )}
             <div className="flex-1" />
             <button onClick={() => exportCsv(`payroll-${month}`,
               ['Employee','Dept','Base','Paid Days','Gross','Deductions','Net'],
@@ -279,6 +357,12 @@ export default function Payroll() {
             <div className="text-right">
               <p className="text-xs text-gray-500">Total Net Payout</p>
               <p className="text-2xl font-bold text-emerald-600">{fmt(total)}</p>
+              {isFinalised && (
+                <p className="text-[11px] font-semibold mt-0.5">
+                  <span className="text-emerald-600">{paidCount} paid</span>
+                  {unpaidCount > 0 && <span className="text-rose-500"> · {unpaidCount} unpaid</span>}
+                </p>
+              )}
             </div>
             {canApprove && canApprove('payroll') && (
               <button onClick={finaliseMonth} className="btn btn-success text-sm flex items-center gap-1">
@@ -308,13 +392,15 @@ export default function Payroll() {
                   <th className="text-right" title="Overtime for hours worked beyond 9/day, paid at salary ÷ days ÷ 9 per hour">OT (&gt;9h)</th>
                   <th className="text-right" title="Salary before overtime is added">Before OT</th>
                   <th className="text-right" title="Advance salary taken this month — deducted from net pay">Advance</th>
-                  <th className="text-right" title="Final salary including overtime, after advance">Net Pay</th>
+                  <th className="text-right" title="Food allowance — added to net pay">Food</th>
+                  <th className="text-right" title="Final salary including overtime, after advance + food">Net Pay</th>
+                  <th className="text-center" title="Accounts marks each person Paid after the month is finalised">Paid</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan="14" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
-                {!loading && list.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
+                {loading && <tr><td colSpan="16" className="text-center py-8 text-gray-400">Calculating…</td></tr>}
+                {!loading && list.length === 0 && <tr><td colSpan="16" className="text-center py-8 text-gray-400">No active employees with salary set. Open HR → Employees and set monthly salary.</td></tr>}
                 {!loading && list.map(r => (
                   <tr key={r.employee_id} className={r.locked ? 'bg-emerald-50/30' : (r.user_linked === false ? 'bg-amber-50/40' : '')}>
                     <td className="font-medium">
@@ -325,10 +411,18 @@ export default function Payroll() {
                     <td className="text-xs text-gray-500">{r.department || '-'}</td>
                     <td className="text-right">{fmt(r.base_salary)}</td>
                     <td className="text-right font-semibold">
-                      {r.paid_days}
-                      <div className="text-[9px] font-normal text-gray-400" title="attendance days + Sundays + paid CL">
-                        att {r.present_days ?? 0} · sun {r.sunday_count ?? 0}{r.paid_leaves ? ` · CL ${r.paid_leaves}` : ''}
+                      {isAdmin && !r.locked
+                        ? ovInput(r, 'paid_days', r.paid_days, r.paid_days_overridden, { w: 'w-16', step: '0.5', title: 'Paid days used for salary — type to override, clear to reset to auto' })
+                        : r.paid_days}
+                      <div className="text-[9px] font-normal text-gray-400" title="weekday attendance + Sundays (incl. worked) + paid CL">
+                        att {dayBreakdown(r).att} · sun {dayBreakdown(r).sun}{r.paid_leaves ? ` · CL ${r.paid_leaves}` : ''}
                       </div>
+                      {isAdmin && !r.locked && (
+                        <div className="text-[9px] font-normal text-gray-500 flex items-center justify-end gap-1 mt-0.5">
+                          <span>CL</span>
+                          {ovInput(r, 'cl', r.paid_leaves, r.cl_overridden, { w: 'w-12', step: '0.5', title: 'Casual / paid leave days for the month — type to override' })}
+                        </div>
+                      )}
                       {r.sunday_worked > 0 && (
                         <div className="text-[9px] font-normal text-emerald-600" title="Extra full-day pay for working on Sunday(s)">
                           +{r.sunday_worked_pay}d for {r.sunday_worked} Sun worked
@@ -338,7 +432,11 @@ export default function Payroll() {
                     <td className="text-center">{r.half_days || 0}</td>
                     <td className="text-center text-red-600">{r.absent_days || 0}</td>
                     <td className="text-center text-amber-600" title="Late count only — does not reduce pay. See Late ₹ for the deduction.">{r.late_marks || 0}{r.lates_converted_absent ? ` (-${r.lates_converted_absent})` : ''}</td>
-                    <td className="text-right text-amber-700">{r.late_penalty ? fmt(r.late_penalty) : '-'}</td>
+                    <td className="text-right text-amber-700">
+                      {isAdmin && !r.locked
+                        ? ovInput(r, 'late_penalty', r.late_penalty, r.late_penalty_overridden, { w: 'w-16', step: '10', title: 'Late deduction ₹ — type to override, clear to reset to auto' })
+                        : (r.late_penalty ? fmt(r.late_penalty) : '-')}
+                    </td>
                     <td className="text-center text-purple-600">{(r.paid_leaves || 0) + (r.unpaid_leaves || 0)}</td>
                     <td className="text-right text-blue-600" title={r.ot_per_hour_rate ? `Rs ${r.ot_per_hour_rate}/hr = ${fmt(r.base_salary)} ÷ ${r.total_days_in_month} days ÷ ${r.ot_threshold || 9}h` : 'No overtime'}>
                       {r.ot_hours || 0}h{r.ot_pay ? ` (+${fmt(r.ot_pay)})` : ''}
@@ -355,7 +453,27 @@ export default function Payroll() {
                           title="Advance salary taken this month — deducted from net pay" />
                       ) : (r.advance ? <span className="text-rose-600">-{fmt(r.advance)}</span> : '-')}
                     </td>
-                    <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}{r.sunday_worked_pay ? <span className="block text-[9px] font-normal text-emerald-600">incl. +{r.sunday_worked_pay}d Sun work</span> : null}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}{r.advance ? <span className="block text-[9px] font-normal text-rose-500">less ₹{fmt(r.advance)} advance</span> : null}</td>
+                    <td className="text-right">
+                      {isAdmin && !r.locked ? (
+                        <input type="number" min="0" step="100"
+                          className="input text-right w-24 inline-block"
+                          value={foodEdits[r.employee_id] !== undefined ? foodEdits[r.employee_id] : (r.food || 0)}
+                          onChange={e => setFoodEdits(s => ({ ...s, [r.employee_id]: e.target.value }))}
+                          onBlur={e => { if (Number(e.target.value) !== Number(r.food || 0)) saveFood(r.employee_id, e.target.value); }}
+                          title="Food allowance — added to net pay" />
+                      ) : (r.food ? <span className="text-emerald-600">+{fmt(r.food)}</span> : '-')}
+                    </td>
+                    <td className="text-right font-bold text-emerald-700">{fmt(r.net_pay)}{r.sunday_worked_pay ? <span className="block text-[9px] font-normal text-emerald-600">incl. +{r.sunday_worked_pay}d Sun work</span> : null}{r.ot_pay ? <span className="block text-[9px] font-normal text-blue-500">incl. +{fmt(r.ot_pay)} OT</span> : null}{r.food ? <span className="block text-[9px] font-normal text-emerald-600">incl. +₹{fmt(r.food)} food</span> : null}{r.advance ? <span className="block text-[9px] font-normal text-rose-500">less ₹{fmt(r.advance)} advance</span> : null}</td>
+                    <td className="text-center">
+                      {r.locked ? (
+                        <label className={`inline-flex items-center gap-1 ${canMarkPaid ? 'cursor-pointer' : 'cursor-default'}`}
+                          title={r.paid ? `Paid${r.paid_at ? ' on ' + fmtDate(r.paid_at) : ''}` : 'Not paid yet'}>
+                          <input type="checkbox" checked={!!r.paid} disabled={!canMarkPaid}
+                            onChange={e => savePaid(r.employee_id, e.target.checked)} />
+                          <span className={`text-[11px] font-semibold ${r.paid ? 'text-emerald-600' : 'text-rose-500'}`}>{r.paid ? 'Paid' : 'Unpaid'}</span>
+                        </label>
+                      ) : <span className="text-[10px] text-gray-300" title="Finalise the month to mark salary paid">—</span>}
+                    </td>
                     <td className="space-x-1 whitespace-nowrap">
                       <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs">Detail</button>
                       <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer" className="btn btn-primary text-xs">SEPL Slip</a>
@@ -444,6 +562,18 @@ export default function Payroll() {
                     Advance: -{fmt(r.advance)}
                   </div>
                 ))}
+                {isAdmin && !r.locked ? (
+                  <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
+                    <span className="text-[11px] text-gray-500 font-semibold whitespace-nowrap">Food ₹</span>
+                    <input type="number" min="0" step="100" className="input text-right text-xs py-1 flex-1"
+                      defaultValue={r.food || 0}
+                      onBlur={e => { if (Number(e.target.value) !== Number(r.food || 0)) saveFood(r.employee_id, e.target.value); }} />
+                  </div>
+                ) : (r.food > 0 && (
+                  <div className="text-[11px] text-emerald-700 font-semibold pt-1 border-t border-gray-100">
+                    Food: +{fmt(r.food)}
+                  </div>
+                ))}
                 <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
                   <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs py-1.5 px-3 flex-1">Detail</button>
                   <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer"
@@ -511,7 +641,13 @@ export default function Payroll() {
             <div className="bg-purple-50 border border-purple-200 px-3 py-2 rounded text-xs text-purple-800 max-w-xl">
               <strong>Remaining = Carry-Forward + Accrued − Used.</strong> Everyone accrues the same monthly CL
               ({leaveRows[0]?.cl_per_month ?? '—'}/month); whatever is left at year-end can be carried into next year.
+              Accrued counts only the months that have <em>already passed</em> in the selected year.
             </div>
+            {leaveYear > new Date().getFullYear() && (
+              <div className="bg-amber-50 border border-amber-200 px-3 py-2 rounded text-xs text-amber-800 max-w-xl">
+                ⚠ <strong>{leaveYear} is a future year</strong> — 0 months have accrued yet, so <strong>Accrued = 0</strong> and Remaining is just the carry-forward. Select <strong>{new Date().getFullYear()}</strong> to see this year's monthly accrual.
+              </div>
+            )}
             <div className="flex-1" />
             <button onClick={() => exportCsv(`cl-balances-${leaveYear}`,
               ['Employee', 'Dept', 'Carry-Forward', 'Accrued', 'Used', 'Remaining'],
@@ -658,7 +794,7 @@ export default function Payroll() {
                         <td className="p-2">{d.date}</td>
                         <td className="p-2">{d.day}</td>
                         <td className="p-2"><span className={`text-[10px] px-1.5 py-0.5 rounded ${LABEL_PILL[d.label] || 'bg-gray-100'}`}>{d.label.replace(/_/g, ' ')}</span></td>
-                        <td className="p-2">{d.punch_in ? new Date(d.punch_in).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
+                        <td className="p-2">{d.punch_in ? fmtTime(d.punch_in, { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
                         <td className="p-2 text-right">{d.hours || '-'}</td>
                         <td className="p-2 text-right font-semibold">{d.pay}</td>
                       </tr>

@@ -109,19 +109,25 @@ export default function VendorPOPrint() {
     return s + (+r * +it.quantity || +it.amount || 0);
   }, 0);
 
+  // Freight (mam 2026-06-12). Added to the taxable value so GST is charged
+  // on (goods + freight), matching how vendors bill freight. freight_terms
+  // ('Ex-Works' / 'FOR') prints in the Terms block below.
+  const freightAmount = +po.freight_amount || 0;
+  const taxable = subtotal + freightAmount;
+
   // GST split. Same-state vendor → CGST 9% + SGST 9% (intra). Different
   // state → IGST 18%. Defaults to intra-state when state is missing,
   // matching mam's sample (Punjab buyer, Punjab vendor).
   const sameState = !po.state || String(po.state).trim().toLowerCase() === COMPANY.state.toLowerCase();
   const gstRate = 0.18;
-  const cgst = sameState ? subtotal * (gstRate / 2) : 0;
-  const sgst = sameState ? subtotal * (gstRate / 2) : 0;
-  const igst = sameState ? 0 : subtotal * gstRate;
+  const cgst = sameState ? taxable * (gstRate / 2) : 0;
+  const sgst = sameState ? taxable * (gstRate / 2) : 0;
+  const igst = sameState ? 0 : taxable * gstRate;
 
   // Round to nearest rupee — the difference between the rupee total and
   // the paise-precision running total goes on the ROUND OFF line. So the
   // grand total is always clean rupees.
-  const beforeRound = subtotal + cgst + sgst + igst;
+  const beforeRound = taxable + cgst + sgst + igst;
   const grandTotal = Math.round(beforeRound);
   const roundOff = +(grandTotal - beforeRound).toFixed(2);
 
@@ -419,6 +425,18 @@ export default function VendorPOPrint() {
               <td className="border-r border-gray-800 print:border-black px-2 py-1.5 text-right tabular-nums font-bold">{fmtMoney(subtotal)}</td>
             </tr>
 
+            {/* Freight — shown only when a charge is entered. Added to the
+                taxable value, so the GST lines below are on (goods + freight). */}
+            {freightAmount > 0 && (
+              <tr className="text-gray-700">
+                <td className="border-r border-gray-800 print:border-black px-1 py-1"></td>
+                <td colSpan="6" className="border-r border-gray-800 print:border-black px-2 py-1 text-right">
+                  Freight{po.freight_terms ? ` (${po.freight_terms})` : ''}
+                </td>
+                <td className="border-r border-gray-800 print:border-black px-2 py-1 text-right tabular-nums">{fmtMoney(freightAmount)}</td>
+              </tr>
+            )}
+
             {/* GST + Round off — muted */}
             {sameState ? (
               <>
@@ -466,6 +484,9 @@ export default function VendorPOPrint() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
             <div className="text-[11px]"><span className="text-gray-500">Payment Terms&nbsp;&nbsp;:</span> <span className="font-semibold">{payTermsText || '—'}{payCreditDays ? ` (${payCreditDays} days)` : ''}</span></div>
             <div className="text-[11px]"><span className="text-gray-500">Terms for Delivery&nbsp;&nbsp;:</span> <span className="font-semibold">{po.expected_receipt_date ? `Delivery by ${fmtDate(po.expected_receipt_date)}` : '—'}</span></div>
+            {po.freight_terms && (
+              <div className="text-[11px]"><span className="text-gray-500">Freight Terms&nbsp;&nbsp;:</span> <span className="font-semibold">{po.freight_terms}{freightAmount > 0 ? ` — ₹ ${fmtMoney(freightAmount)}` : ''}</span></div>
+            )}
           </div>
           <ol className="mt-1 space-y-1 text-[10px] leading-snug list-decimal list-outside ml-4 text-gray-700">
             {TERMS.map(([title, body], i) => {

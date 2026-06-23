@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { isStorageBlocked } from '../lib/tokenStore';
 import toast from 'react-hot-toast';
 import { FiUser, FiLock, FiEye, FiEyeOff, FiArrowRight } from 'react-icons/fi';
 
@@ -34,10 +35,15 @@ export default function Login() {
     e.preventDefault();
     try {
       const data = await login(form.identifier, form.password);
-      if (remember) {
-        localStorage.setItem('sepl_remember_identifier', form.identifier);
-      } else {
-        localStorage.removeItem('sepl_remember_identifier');
+      try {
+        if (remember) localStorage.setItem('sepl_remember_identifier', form.identifier);
+        else localStorage.removeItem('sepl_remember_identifier');
+      } catch { /* storage blocked — non-critical, skip remember-me */ }
+      // If the browser is blocking site data, the session will only last
+      // this page view and they'll be logged out on the next reload. Tell
+      // them plainly instead of letting it look like a random logout.
+      if (isStorageBlocked()) {
+        toast('Your browser is blocking site data, so you may get logged out. Please open securederp.in in Chrome/Safari directly (not inside another app) and turn off Private/Incognito mode.', { duration: 9000, icon: '⚠️' });
       }
       toast.success(`Welcome back, ${data.user.name}!`);
     } catch (err) {
@@ -85,6 +91,12 @@ export default function Login() {
                     className="w-full bg-white border border-zinc-300 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 text-zinc-900 placeholder-zinc-400 rounded-xl pl-10 pr-4 py-3 outline-none transition-colors"
                     type="text"
                     autoComplete="username"
+                    // Mobile keyboards (Android especially) capitalize the first
+                    // letter and auto-correct by default — that silently mangles
+                    // usernames/emails and causes "Invalid credentials" on phones.
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     value={form.identifier}
                     onChange={e => setForm({ ...form, identifier: e.target.value })}
                     required
@@ -100,6 +112,13 @@ export default function Login() {
                   <input
                     className="w-full bg-white border border-zinc-300 focus:border-red-500 focus:ring-2 focus:ring-red-500/30 text-zinc-900 placeholder-zinc-400 rounded-xl pl-10 pr-10 py-3 outline-none transition-colors"
                     type={showPassword ? 'text' : 'password'}
+                    autoComplete="current-password"
+                    // Critical for the 👁 show-password toggle: once type flips to
+                    // "text", Android re-enables auto-capitalize/auto-correct and
+                    // corrupts the typed password → "Invalid credentials".
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                     value={form.password}
                     onChange={e => setForm({ ...form, password: e.target.value })}
                     required
@@ -179,14 +198,9 @@ export default function Login() {
         <p className="text-[10px] uppercase tracking-[0.35em] text-zinc-500 mb-1">
           Crafted with <span className="text-red-500">&hearts;</span> by
         </p>
-        <p className="text-sm font-bold bg-gradient-to-r from-blue-700 via-blue-500 to-blue-700 bg-clip-text text-transparent">
-          Secured Engineers Pvt Ltd
+        <p className="text-base font-extrabold tracking-wide bg-gradient-to-r from-blue-700 via-blue-500 to-blue-700 bg-clip-text text-transparent">
+          SOTYN.AI
         </p>
-        <div className="mt-1 flex items-center justify-center gap-2">
-          <span className="h-px w-8 bg-gradient-to-r from-transparent via-zinc-400 to-transparent" />
-          <p className="text-[10px] font-semibold tracking-widest text-zinc-600 uppercase">Monika Devi</p>
-          <span className="h-px w-8 bg-gradient-to-r from-transparent via-zinc-400 to-transparent" />
-        </div>
         <p className="text-[9px] text-zinc-500 mt-0.5">&copy; {new Date().getFullYear()} · All rights reserved</p>
       </footer>
 

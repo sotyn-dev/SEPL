@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo, Fragment } from 'react';
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
+import { STATES, gstStateCode, SEPL_HOME_STATE } from '../data/indiaLocations';
 import StatusBadge from '../components/StatusBadge';
 import NumInput from '../components/NumInput';
 import Pagination, { usePagination } from '../components/Pagination';
@@ -11,6 +12,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiCheck, FiX, FiTrash2, FiEdit2, FiExternalLink, FiChevronDown, FiChevronRight, FiPrinter, FiMessageCircle, FiDownload, FiMapPin, FiCalendar, FiUser, FiInfo } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDateTime as fmtIST } from '../utils/datetime';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
 
@@ -116,7 +118,7 @@ function PaymentBlockChip({ v }) {
   let label = 'No advance';
   if (cleared) {
     cls = 'bg-emerald-50 text-emerald-700 border-emerald-300';
-    const when = v.payment_cleared_at ? new Date(v.payment_cleared_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '';
+    const when = v.payment_cleared_at ? fmtIST(v.payment_cleared_at, { day: '2-digit', month: 'short' }) : '';
     label = `✓ Cleared${when ? ' ' + when : ''}`;
   } else if (t === 'advance') {
     cls = 'bg-amber-50 text-amber-800 border-amber-300';
@@ -190,7 +192,7 @@ function MobileItemRow({ item, idx }) {
             <div className="text-emerald-700 font-semibold">
               🟢 Issued from Office Store
               {item.stock_issue_number && <span className="ml-1 font-mono">· {item.stock_issue_number}</span>}
-              {item.stock_issued_at && <span className="ml-1 text-gray-500 font-normal">({new Date(item.stock_issued_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })})</span>}
+              {item.stock_issued_at && <span className="ml-1 text-gray-500 font-normal">({fmtIST(item.stock_issued_at, { day: '2-digit', month: 'short' })})</span>}
             </div>
           ) : (
             <div className="text-blue-700 font-semibold">🛒 Fresh procurement</div>
@@ -257,9 +259,21 @@ export default function Procurement() {
   };
   const [indents, setIndents] = useState([]);
   const [vendorPos, setVendorPos] = useState([]);
+  // Indent raising window (mam 2026-06-16): { isSaturday, emergencyActive,
+  // allowed }. Saturday-only raising with an admin one-day emergency override.
+  const [raiseWindow, setRaiseWindow] = useState(null);
   const [purchaseBills, setPurchaseBills] = useState([]);
   const [deliveryNotes, setDeliveryNotes] = useState([]);
   const [vendors, setVendors] = useState([]);
+  // Vendor-picker options (mam 2026-06-19: "use vendor firm name"). Show
+  // "Vendor Name — Firm Name" so a vendor is findable by EITHER, and the
+  // SearchableSelect (which searches its display label) matches the firm
+  // name too. valueKey stays `name` so the rate still stores vendor.name —
+  // downstream finalize / Vendor PO code is untouched.
+  const vendorOptions = useMemo(() => vendors.map(v => ({
+    ...v,
+    label: v.firm_name && v.firm_name !== v.name ? `${v.name} — ${v.firm_name}` : v.name,
+  })), [vendors]);
   // Debit Notes (mam 2026-06-04 post-PO chart, stage 7)
   const [debitNotes, setDebitNotes] = useState([]);
   const [dnModal, setDnModal] = useState(false);
@@ -304,6 +318,15 @@ export default function Procurement() {
   const [indentItemsForPo, setIndentItemsForPo] = useState([]); // items of the currently picked indent (for the Create Vendor PO modal)
   const [poItemSelection, setPoItemSelection] = useState({}); // { indent_item_id: { checked, quantity, rate, terms, credit_days } }
   const [ratesFilter, setRatesFilter] = useState('all'); // all | pending | quoted | finalized
+  // Bulk-fill vendor + terms across ticked Vendor-Rate rows (mam 2026-06-12:
+  // "one one item vendor name again again select lots of time").  Tick rows,
+  // pick a vendor + terms once, apply to all at once for Vendor 1/2/3.
+  const [rateSel, setRateSel] = useState({});          // { [rowKey]: true }
+  const [bulkSlot, setBulkSlot] = useState(1);         // which vendor column (1|2|3)
+  const [bulkVendorName, setBulkVendorName] = useState('');
+  const [bulkTerms, setBulkTerms] = useState('');
+  const [bulkCreditDays, setBulkCreditDays] = useState('');
+  const [bulkApplying, setBulkApplying] = useState(false);
   const [finalModal, setFinalModal] = useState(null); // { row } being finalized
   const [finalForm, setFinalForm] = useState({});
   const [masterItems, setMasterItems] = useState([]); // Item Master dropdown source
@@ -372,6 +395,9 @@ export default function Procurement() {
       payment_block_type: v.payment_block_type || '',
       payment_block_amount: v.payment_block_amount || '',
       payment_block_notes: v.payment_block_notes || '',
+      // Freight terms + charge (mam 2026-06-12).
+      freight_terms: v.freight_terms || '',
+      freight_amount: v.freight_amount || '',
     });
     setEditPoItems([]);
     setEditPoLocked(false);
@@ -445,13 +471,17 @@ export default function Procurement() {
   // Generate (not upload) a Sales Bill from a challan, then open its
   // printable invoice — mam (2026-06-04): "sales bill generate, not upload".
   const generateSalesBill = async (d) => {
+    // Park the print tab synchronously (popup blockers eat window.open
+    // after an await) — navigate it once the bill is ready.
+    const printWin = window.open('', '_blank');
     try {
       const r = await api.post(`/procurement/delivery-notes/${d.id}/generate-sales-bill`);
       toast.success(`Sales Bill ${r.data.document_number} ${r.data.existing ? 'already exists' : 'generated'}${r.data.is_draft ? ' · DRAFT — fill client GSTIN / rates' : ''}`, { duration: 6000 });
       load();
       const res = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'arraybuffer' });
-      window.open(URL.createObjectURL(new Blob([res.data], { type: 'text/html' })), '_blank');
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed to generate Sales Bill'); }
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/html;charset=utf-8' }));
+      if (printWin) printWin.location = url; else window.open(url, '_blank');
+    } catch (err) { if (printWin) printWin.close(); toast.error(err.response?.data?.error || 'Failed to generate Sales Bill'); }
   };
   const submitSalesBill = async () => {
     if (!sbTarget) return;
@@ -629,6 +659,11 @@ export default function Procurement() {
   const TAB_FETCHERS = {
     indents: () => Promise.all([
       api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
+      // Also pull Vendor POs so the Raise-Indent KPI strip can show the
+      // real "PO Generate" count + "Payment Required" total (mam 2026-06-12).
+      api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
+      // Is raising open today? (Saturday-only + admin emergency override.)
+      api.get('/procurement/indent-raise-window').then(r => setRaiseWindow(r.data)).catch(() => setRaiseWindow(null)),
     ]),
     rates: () => Promise.all([
       api.get('/procurement/indents').then(r => setIndents(r.data)).catch(() => setIndents([])),
@@ -642,11 +677,20 @@ export default function Procurement() {
       api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
       api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
     ]),
-    delivery: () => Promise.all([
+    // Mam (2026-06-15) "auto generated, no Dispatch click": opening this tab
+    // first sweeps every Ready-to-Dispatch PO and auto-creates its client
+    // Sales Bill server-side (idempotent; skips unrated POs), THEN loads — so
+    // bills appear on their own with the PDF viewable, no button press.
+    delivery: () => api.post('/procurement/auto-sales-bills/sweep')
+      .then(r => {
+        const n = r.data?.generated_count || 0;
+        if (n > 0) toast.success(`${n} Sales Bill${n > 1 ? 's' : ''} auto-generated`, { duration: 5000 });
+      })
+      .catch(() => {}).then(() => Promise.all([
       api.get('/procurement/vendor-po').then(r => setVendorPos(r.data)).catch(() => setVendorPos([])),
       api.get('/procurement/purchase-bills').then(r => setPurchaseBills(r.data)).catch(() => setPurchaseBills([])),
       api.get('/procurement/delivery-notes').then(r => setDeliveryNotes(r.data)).catch(() => setDeliveryNotes([])),
-    ]),
+    ])),
   };
 
   // Fetch a tab's data, honouring cache.  Pass force=true after a CRUD
@@ -690,8 +734,31 @@ export default function Procurement() {
   }, []);
 
   // Tab switch → lazy fetch the new tab's data (cached if already loaded).
+  // Raise-Indent is a live dashboard — its UNIT / RATE / LINE BUDGET pull
+  // the CURRENT Item Master UOM + price — so always refetch it fresh
+  // (mam 2026-06-12: "i edit in uom but not change here live"); other
+  // tabs keep using the cache.
   useEffect(() => {
-    loadTab(tab);
+    loadTab(tab, { force: tab === 'indents' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // Returning to this browser tab after editing an item's UOM / price on
+  // the Item Master page in another tab should show the live value here.
+  // Refetch the Raise-Indent data on focus; skipped for inline-edit tabs
+  // (e.g. Vendor Rates) so in-progress typing isn't clobbered.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'visible' && tab === 'indents') {
+        loadTab('indents', { force: true });
+      }
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
@@ -896,6 +963,17 @@ export default function Procurement() {
       }
       setModal(false); setEditingIndentId(null); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  // Admin-only: open / close emergency indent raising for today (mam
+  // 2026-06-16). Server stores today's IST date so it auto-expires tomorrow.
+  const toggleIndentEmergency = async () => {
+    try {
+      const enable = !(raiseWindow && raiseWindow.emergencyActive);
+      const r = await api.put('/procurement/indent-raise-window', { enable });
+      setRaiseWindow(r.data);
+      toast.success(r.data.emergencyActive ? 'Emergency raising opened for today' : 'Emergency raising turned off');
+    } catch (err) { toast.error(err.response?.data?.error || 'Could not update'); }
   };
 
   // Pre-fill the Raise Indent modal with an existing indent's data so a
@@ -1340,6 +1418,9 @@ export default function Procurement() {
     if (form.indent_id) fd.append('indent_id', form.indent_id);
     if (form.total_amount) fd.append('total_amount', form.total_amount);
     if (form.remarks) fd.append('remarks', form.remarks);
+    // Freight terms + charge (mam 2026-06-12) — printed on the PDF PO.
+    if (form.freight_terms) fd.append('freight_terms', form.freight_terms);
+    if (+form.freight_amount > 0) fd.append('freight_amount', form.freight_amount);
     if (items.length) fd.append('items', JSON.stringify(items));
     if (form.po_file) fd.append('file', form.po_file);
     // Internal payment-block fields (mam 2026-05-27). Never printed on PO.
@@ -1370,6 +1451,28 @@ export default function Procurement() {
       toast.success(r.data?.already ? 'Already cleared' : 'Payment marked cleared');
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  // ── Vendor PO 2-level approval (mam 2026-06-19: L1 Nitin Jain, L2 Ankur
+  // Kaplesh). Show the Approve/Reject buttons to the pending-level approver,
+  // admin, or the COO. The backend enforces the same rule.
+  const canApprovePo = (v) => {
+    if (v.po_approval !== 'pending_l1' && v.po_approval !== 'pending_l2') return false;
+    if (isAdmin()) return true;
+    const email = String(user?.email || '').toLowerCase(), uname = String(user?.username || '').toLowerCase();
+    if (email.startsWith('coo@') || uname.startsWith('coo@')) return true;
+    return String(user?.name || '').trim().toLowerCase() === String(v.po_pending_approver || '').trim().toLowerCase();
+  };
+  const approvePo = async (v) => {
+    try { await api.post(`/procurement/vendor-po/${v.id}/po-approve`); toast.success('PO approved'); load(); }
+    catch (err) { toast.error(err.response?.data?.error || 'Approve failed'); }
+  };
+  const rejectPo = async (v) => {
+    const reason = prompt(`Reject Vendor PO "${v.po_number}"?\n\nReason (required):`);
+    if (reason === null) return;
+    if (!reason.trim() || reason.trim().length < 3) return toast.error('A rejection reason is required');
+    try { await api.post(`/procurement/vendor-po/${v.id}/po-reject`, { reason: reason.trim() }); toast.success('PO rejected'); load(); }
+    catch (err) { toast.error(err.response?.data?.error || 'Reject failed'); }
   };
 
   const savePurchaseBill = async (e) => {
@@ -1471,6 +1574,13 @@ export default function Procurement() {
       fd.append('grand_total_amount', grandTotal.toFixed(2));
     }
     if (form.dispatch_file) fd.append('file', form.dispatch_file);
+    // Open the print tab NOW, synchronously, while we're still inside the
+    // click gesture. If we wait until after the awaits below, the popup
+    // blocker silently eats window.open and nothing appears — that was
+    // mam's "not showing pdf sales bill". We park a blank tab here and
+    // navigate it to the bill once it's generated; the bill's own page
+    // auto-fires the print → Save-as-PDF dialog.
+    const printWin = window.open('', '_blank');
     try {
       const r = await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const which = form.document_type === 'challan' ? 'Delivery Challan' : 'Sales Bill';
@@ -1479,7 +1589,7 @@ export default function Procurement() {
       const generatedNo = r.data?.document_number;
       toast.success(generatedNo ? `${which} ${generatedNo} created` : `${which} created`);
       setModal(false); load();
-      // Auto-open the generated document in a new tab so mam can print
+      // Auto-open the generated document in the parked tab so mam can print
       // immediately, matching the "create like a PO" feel she asked for.
       if (r.data?.id) {
         try {
@@ -1487,10 +1597,11 @@ export default function Procurement() {
           // don't render as mojibake when opened via blob: URL.
           const printRes = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'arraybuffer' });
           const blob = new Blob([printRes.data], { type: 'text/html;charset=utf-8' });
-          window.open(URL.createObjectURL(blob), '_blank', 'noopener');
-        } catch (_) { /* user can still click 🖨 Print in the list */ }
-      }
-    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+          const url = URL.createObjectURL(blob);
+          if (printWin) printWin.location = url; else window.open(url, '_blank');
+        } catch (_) { if (printWin) printWin.close(); /* user can still click 🖨 Print in the list */ }
+      } else if (printWin) { printWin.close(); }
+    } catch (err) { if (printWin) printWin.close(); toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   // Mark a dispatch row as "Received by <name> on <date>" + attach the
@@ -1639,6 +1750,9 @@ export default function Procurement() {
           m.final_terms = r.final_terms;
           m.final_credit_days = r.final_credit_days;
         }
+        // Suggestion columns — keep first non-empty across the merged rows.
+        if (!m.pp_rate && r.pp_rate) m.pp_rate = r.pp_rate;
+        if (!m.marketing_rate && r.marketing_rate) m.marketing_rate = r.marketing_rate;
       }
     }
     return [...groups.values()];
@@ -1653,6 +1767,63 @@ export default function Procurement() {
       await updateItemRate(iid, patch);
     }
   };
+
+  // AI "marketing rate" — on-demand per row (mam 2026-06-19). Suggestion only;
+  // saved to marketing_rate, never the 3 vendor rates.
+  const [aiBusy, setAiBusy] = useState({});
+  const aiSuggestRate = async (mergedRow) => {
+    const iiId = mergedRow.indent_item_ids?.[0];
+    if (!iiId) return;
+    setAiBusy(b => ({ ...b, [iiId]: true }));
+    try {
+      const r = await api.post('/procurement/item-rates/ai-suggest', { indent_item_id: iiId });
+      toast.success(`AI market rate: Rs ${(+r.data.marketing_rate).toLocaleString('en-IN')}`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'AI suggest failed'); }
+    finally { setAiBusy(b => ({ ...b, [iiId]: false })); }
+  };
+
+  // Auto-fill the AI market rate for every item missing one (mam 2026-06-19:
+  // "don't need to click, automatically rate here"). THROTTLED: one small batch
+  // every ~30s (with 429 back-off) so it stays well under the org's 10k input-
+  // tokens/min limit and leaves room for the Ask ERP chat. Persisted → an item
+  // already done is never recomputed. Self-paced scheduler, set up once per
+  // visit to the Vendor Rates tab; reads fresh data via a ref.
+  const aiAutoRef = useRef(new Set());     // ids already requested this session
+  const aiAutoErrRef = useRef(false);
+  const aiAutoTimer = useRef(null);
+  const mergedRatesRef = useRef(mergedRates);
+  mergedRatesRef.current = mergedRates;
+  useEffect(() => {
+    if (tab !== 'rates') return;
+    let cancelled = false;
+    const refreshRates = () => api.get('/procurement/item-rates').then(r => setItemRates(r.data || [])).catch(() => {});
+    const runBatch = async () => {
+      if (cancelled) return;
+      const missing = mergedRatesRef.current
+        .filter(r => !(+r.marketing_rate > 0))
+        .map(r => r.indent_item_ids?.[0])
+        .filter(id => id && !aiAutoRef.current.has(id));
+      if (!missing.length) { aiAutoTimer.current = null; return; }   // all done → stop
+      const batch = missing.slice(0, 15);
+      batch.forEach(id => aiAutoRef.current.add(id));
+      let wait = 30000;                                              // ~2 batches/min — gentle on the token limit
+      try {
+        await api.post('/procurement/item-rates/ai-suggest-bulk', { indent_item_ids: batch });
+        if (!cancelled) await refreshRates();
+      } catch (err) {
+        if (err?.response?.status === 429) {
+          batch.forEach(id => aiAutoRef.current.delete(id));         // not done — retry later
+          wait = 60000;                                             // back off on rate limit
+        } else if (!aiAutoErrRef.current) {
+          aiAutoErrRef.current = true; toast.error(err.response?.data?.error || 'AI auto-rate failed');
+        }
+      }
+      if (!cancelled) aiAutoTimer.current = setTimeout(runBatch, wait);
+    };
+    aiAutoTimer.current = setTimeout(runBatch, 2000);                // start a moment after the tab opens
+    return () => { cancelled = true; if (aiAutoTimer.current) { clearTimeout(aiAutoTimer.current); aiAutoTimer.current = null; } };
+  }, [tab]);
 
   // Admin-only: clear ALL the vendor quotes on a merged rate row so the row
   // returns to "Pending" status. Useful when mam wants to re-quote from
@@ -1731,7 +1902,7 @@ export default function Procurement() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="sticky-toolbar">
         <div className="flex gap-2 flex-wrap items-center justify-between">
           <div className="flex gap-2 flex-wrap">{tabs.map(t => {
@@ -1742,7 +1913,7 @@ export default function Procurement() {
               ? (vendorPos || []).filter(po => !po.cancelled && po.payment_block_status === 'pending').length
               : 0;
             return (
-              <button key={t.id} onClick={() => setTab(t.id)} className={`btn relative ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>
+              <button key={t.id} onClick={() => setTab(t.id)} className={`btn relative !px-3 !py-1.5 ${tab === t.id ? 'btn-primary' : 'btn-secondary'}`}>
                 {t.label}
                 {urgentCount > 0 && (
                   <span className="ml-2 inline-flex items-center justify-center text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-600 text-white border border-red-700"
@@ -1755,7 +1926,7 @@ export default function Procurement() {
           })}</div>
           {/* One Export button — exports current tab's data */}
           <button onClick={() => {
-            if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length]));
+            if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items','Budget','Billable','Delivery Bill','Delivery %'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.billable_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
             if (tab === 'pos')        exportCsv('vendor-pos',      ['PO Number','PO Date','Vendor','Amount','Status'], vendorPos.map(v => [v.po_number, v.po_date, v.vendor_name, v.total_amount, v.status]));
             if (tab === 'bills')      exportCsv('purchase-bills',  ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], purchaseBills.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
             if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.doc_type, d.doc_number, d.po_number, d.delivery_date, d.received_by_name, d.received_on, d.status]));
@@ -1816,9 +1987,48 @@ export default function Procurement() {
         return (
         <>
           <div className="flex justify-between items-center flex-wrap gap-2">
-            <h3 className="font-semibold">Raise Indent</h3>
-            <button onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Raise Indent</button>
+            <h3 className="text-sm font-semibold">Raise Indent</h3>
+            {(() => {
+              const raiseClosed = !!raiseWindow && !raiseWindow.allowed;
+              return (
+                <button
+                  onClick={() => { setEditingIndentId(null); setForm({ notes: '', site_name: '', raised_by_name: user?.name || '', indent_category: 'material' }); setIndentItems([{ ...EMPTY_ITEM }]); setBoqItems([]); setModal('indent'); }}
+                  disabled={raiseClosed}
+                  title={raiseClosed ? 'Indents can be raised only on Saturday.' : ''}
+                  className={`btn flex items-center gap-2 ${raiseClosed ? 'opacity-50 cursor-not-allowed bg-gray-300 text-gray-600' : 'btn-primary'}`}>
+                  <FiPlus /> Raise Indent
+                </button>
+              );
+            })()}
           </div>
+
+          {/* Raise window banner (mam 2026-06-16): indents only on Saturday;
+              admin can open an emergency one-day window for everyone. */}
+          {raiseWindow && (
+            raiseWindow.allowed ? (
+              <div className="text-[12px] rounded border px-3 py-2 flex items-center justify-between gap-2 bg-emerald-50 border-emerald-200 text-emerald-800">
+                <span>
+                  {raiseWindow.isSaturday
+                    ? '✅ Saturday — indent raising is open for everyone.'
+                    : '⚡ Emergency raising is OPEN for today (enabled by admin).'}
+                </span>
+                {isAdmin() && !raiseWindow.isSaturday && (
+                  <button onClick={toggleIndentEmergency} className="text-[11px] font-semibold px-2 py-1 rounded border border-emerald-300 hover:bg-emerald-100 whitespace-nowrap">
+                    Turn off emergency
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="text-[12px] rounded border px-3 py-2 flex items-center justify-between gap-2 bg-amber-50 border-amber-200 text-amber-800">
+                <span>🔒 Indents can be raised only on <b>Saturday</b>.{isAdmin() ? ' For a weekday emergency, open today below.' : ''}</span>
+                {isAdmin() && (
+                  <button onClick={toggleIndentEmergency} className="text-[11px] font-semibold px-2 py-1 rounded border border-amber-400 bg-amber-100 hover:bg-amber-200 whitespace-nowrap">
+                    ⚡ Enable emergency raising for today
+                  </button>
+                )}
+              </div>
+            )
+          )}
 
           {/* KPI strip — mam (2026-05-25): "show also dashbaord total indent .
               approved indent count with amount , reject count with amount".
@@ -1838,20 +2048,39 @@ export default function Procurement() {
             const rejected    = byStatus('rejected');
             const poSent      = byStatus('po_sent');
             const filterActive = !!(indFilterFrom || indFilterTo || indSearch.trim());
+            // Billable booked once an indent clears approval (mam 2026-06-16):
+            // total BOQ sale value of every indent that has PASSED approval —
+            // approved or anything beyond it (PO sent / dispatched / received).
+            // Sums the same billable_amount shown in the list's Billable column.
+            const billableSum = (arr) => arr.reduce((s, i) => s + (+i.billable_amount || 0), 0);
+            const postApproval = kpiScope.filter(i => ['approved', 'po_sent', 'dispatched', 'received'].includes(i.status));
+            // PO Generate + Payment Required (mam 2026-06-12) — sourced from
+            // the Vendor PO list, not the indents, so the count matches the
+            // "View by PO" tab exactly.  Payment Required = POs still pending
+            // an advance / old-dues clearance (same filter as the Payment tab).
+            const poGenCount  = (vendorPos || []).length;
+            const poGenAmount = (vendorPos || []).reduce((s, p) => s + (+p.total_amount || 0), 0);
+            const urgentPos   = (vendorPos || []).filter(p => !p.cancelled && p.payment_block_status === 'pending');
+            const payReqCount = urgentPos.length;
+            const payReqAmount = urgentPos.reduce((s, p) => s + (+p.payment_block_amount || 0), 0);
             // Clicking a tile sets the status filter to that bucket so mam
             // can drill from the dashboard view into the matching rows
             // without typing in the toolbar.
-            const tile = (label, count, amount, color, statusKey) => {
-              const isActive = indFilterStatus === statusKey;
+            // statusKey drives the indent-status filter on click; pass an
+            // onClick override instead (e.g. for tiles that jump to another
+            // tab like PO Generate / Payment Required).
+            const tile = (label, count, amount, color, statusKey, onClick) => {
+              const isActive = !!statusKey && indFilterStatus === statusKey;
+              const handle = onClick || (() => { setIndFilterStatus(statusKey); setIndPage(1); });
               return (
                 <button
                   type="button"
-                  onClick={() => { setIndFilterStatus(statusKey); setIndPage(1); }}
-                  className={`flex-1 min-w-[150px] rounded-lg border ${color.border} ${color.bg} p-3 text-left transition hover:shadow-sm ${isActive ? 'ring-2 ring-offset-1 ' + color.ring : ''}`}>
-                  <div className={`text-[11px] font-semibold uppercase tracking-wide ${color.text}`}>{label}</div>
-                  <div className="flex items-baseline justify-between mt-1 gap-2">
-                    <div className={`text-2xl font-bold ${color.text}`}>{count}</div>
-                    <div className={`text-xs font-medium ${color.text} opacity-80`}>
+                  onClick={handle}
+                  className={`min-w-0 rounded-lg border ${color.border} ${color.bg} px-2.5 py-1.5 text-left transition hover:shadow-sm ${isActive ? 'ring-2 ring-offset-1 ' + color.ring : ''}`}>
+                  <div className={`text-[10px] font-semibold uppercase tracking-wide ${color.text} truncate`}>{label}</div>
+                  <div className="flex items-baseline justify-between mt-0.5 gap-1 flex-wrap">
+                    <div className={`text-lg font-bold leading-none ${color.text}`}>{count}</div>
+                    <div className={`text-[11px] font-medium ${color.text} opacity-80 whitespace-nowrap`}>
                       {amount > 0 ? `₹${Math.round(amount).toLocaleString('en-IN')}` : '—'}
                     </div>
                   </div>
@@ -1865,13 +2094,22 @@ export default function Procurement() {
                     📊 Showing totals for the current filter ({kpiScope.length} of {indents.length} indents).
                   </div>
                 )}
-                <div className="flex flex-wrap gap-2">
+                {/* 7 KPI tiles auto-fit one row on large screens (mam
+                    2026-06-12): 2-up on phones, 4-up on tablets, 7-up on
+                    desktop.  PO Generate + Payment Required jump to their
+                    own tabs on click instead of filtering the indent list. */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
                   {tile('Total Indents',     kpiScope.length,   sum(kpiScope),   { border: 'border-gray-300',    bg: 'bg-gray-50',     text: 'text-gray-700',    ring: 'ring-gray-400'    }, 'all')}
                   {tile('Pending L1',        submitted.length,  sum(submitted),  { border: 'border-amber-300',   bg: 'bg-amber-50',    text: 'text-amber-700',   ring: 'ring-amber-400'   }, 'submitted')}
                   {tile('Pending L2',        l1Approved.length, sum(l1Approved), { border: 'border-purple-300',  bg: 'bg-purple-50',   text: 'text-purple-700',  ring: 'ring-purple-400'  }, 'l1_approved')}
                   {tile('Approved',          approved.length,   sum(approved),   { border: 'border-emerald-300', bg: 'bg-emerald-50',  text: 'text-emerald-700', ring: 'ring-emerald-400' }, 'approved')}
+                  {/* Billable · Approved (mam 2026-06-16): BOQ sale value booked
+                      once indents clear approval. Clicking jumps to the Approved
+                      bucket — closest single-status filter to "post-approval". */}
+                  {tile('Billable · Approved', postApproval.length, billableSum(postApproval), { border: 'border-indigo-300', bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'ring-indigo-400' }, 'approved')}
                   {tile('Rejected',          rejected.length,   sum(rejected),   { border: 'border-red-300',     bg: 'bg-red-50',      text: 'text-red-700',     ring: 'ring-red-400'     }, 'rejected')}
-                  {tile('PO Sent',           poSent.length,     sum(poSent),     { border: 'border-blue-300',    bg: 'bg-blue-50',     text: 'text-blue-700',    ring: 'ring-blue-400'    }, 'po_sent')}
+                  {tile('PO Generate',       poGenCount,        poGenAmount,     { border: 'border-blue-300',    bg: 'bg-blue-50',     text: 'text-blue-700',    ring: 'ring-blue-400'    }, null, () => { setTab('vendorpo'); setVpoSubTab('list'); })}
+                  {tile('Payment Required',  payReqCount,       payReqAmount,    { border: 'border-rose-300',    bg: 'bg-rose-50',     text: 'text-rose-700',    ring: 'ring-rose-400'    }, null, () => setTab('payment'))}
                 </div>
               </>
             );
@@ -2071,9 +2309,7 @@ export default function Procurement() {
                       <div className="text-lg font-bold text-gray-900 truncate">{i.indent_number}</div>
                       <div className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
                         <FiCalendar size={10} className="text-gray-400" />
-                        {i.created_at
-                          ? new Date(i.created_at).toLocaleString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                          : (i.indent_date || '—')}
+                        {i.created_at ? fmtIST(i.created_at) : (i.indent_date || '—')}
                       </div>
                     </div>
                     <StatusBadge status={i.status} />
@@ -2112,6 +2348,22 @@ export default function Procurement() {
                       <div className="text-[9px] uppercase text-gray-400">Budget</div>
                       <div className="font-semibold text-gray-800">
                         {i.budget_amount > 0 ? `₹${Math.round(i.budget_amount).toLocaleString('en-IN')}` : '—'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Billable (BOQ sale value) · Delivery Bill (× against-delivery %) */}
+                  <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
+                    <div>
+                      <div className="text-[9px] uppercase text-gray-400">Billable <span className="normal-case">(BOQ × qty)</span></div>
+                      <div className="font-semibold text-blue-800">
+                        {i.billable_amount > 0 ? `₹${Math.round(i.billable_amount).toLocaleString('en-IN')}` : '—'}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[9px] uppercase text-gray-400">Delivery Bill{i.delivery_pct ? ` @ ${i.delivery_pct}%` : ''}</div>
+                      <div className="font-semibold text-emerald-700">
+                        {i.delivery_bill_amount > 0 ? `₹${Math.round(i.delivery_bill_amount).toLocaleString('en-IN')}` : '—'}
                       </div>
                     </div>
                   </div>
@@ -2179,7 +2431,7 @@ export default function Procurement() {
                         {i.status === 'approved' && (
                           <div className="text-emerald-700 font-medium flex items-center gap-1">
                             <FiCheck size={11} /> {i.approved_by_name || 'approver'}
-                            {i.approved_at && <span className="text-[10px] text-gray-500 ml-1">{new Date(i.approved_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</span>}
+                            {i.approved_at && <span className="text-[10px] text-gray-500 ml-1">{fmtIST(i.approved_at, { day: '2-digit', month: 'short' })}</span>}
                           </div>
                         )}
                         {i.status === 'rejected' && (
@@ -2234,8 +2486,8 @@ export default function Procurement() {
               to see Approval / Actions (mam 2026-05-25 — was "time wasting"
               to scroll-end-then-back to read row labels).  Hidden on phones
               in favour of the card list above. */}
-          <div className="hidden md:block card p-0 overflow-auto max-h-[70vh]"><table className="freeze-head freeze-col">
-            <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Category</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
+          <div className="hidden md:block card p-0 overflow-auto max-h-[70vh]"><table className="freeze-head freeze-col dense-cols">
+            <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Category</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th className="text-right">Billable<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(BOQ rate × qty)</span></th><th className="text-right">Delivery Bill<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(billable × del. %)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
             <tbody>
               {indPg.rows.map(i => {
                 const items = i.items || [];
@@ -2251,7 +2503,7 @@ export default function Procurement() {
                     )}
                   </td>
                   <td className="font-medium">{i.indent_number}</td>
-                  <td className="text-xs text-gray-600">{i.created_at ? new Date(i.created_at).toLocaleString() : (i.indent_date || '—')}</td>
+                  <td className="text-xs text-gray-600">{i.created_at ? fmtIST(i.created_at) : (i.indent_date || '—')}</td>
                   <td>{i.site_name || i.client_name || <span className="text-gray-400">—</span>}</td>
                   {/* Dedicated Category column (mam 2026-05-28). Coloured
                       pill mirrors the inline chip's palette so the table
@@ -2314,6 +2566,31 @@ export default function Procurement() {
                       <span className="text-gray-300 text-xs" title="No item-master rate on any line">—</span>
                     )}
                   </td>
+                  {/* Billable = Σ (priced-BOQ sale rate × indent qty). Client
+                      sale value, not the internal Budget (master cost). '—'
+                      when no priced BOQ rate is linked to the lines. */}
+                  <td className="text-right whitespace-nowrap">
+                    {i.billable_amount > 0 ? (
+                      <span className="font-semibold text-blue-800">
+                        ₹{Math.round(i.billable_amount).toLocaleString('en-IN')}
+                      </span>
+                    ) : (
+                      <span className="text-gray-300 text-xs" title="No priced-BOQ rate on the linked lines">—</span>
+                    )}
+                  </td>
+                  {/* Delivery Bill = Billable × the order's Against-Delivery %
+                      — the slice invoiceable on delivery (same basis as the
+                      Sales Bill). '—' when billable is 0 or no delivery term. */}
+                  <td className="text-right whitespace-nowrap">
+                    {i.delivery_bill_amount > 0 ? (
+                      <span className="font-semibold text-emerald-700" title={i.delivery_pct ? `${i.delivery_pct}% against delivery` : ''}>
+                        ₹{Math.round(i.delivery_bill_amount).toLocaleString('en-IN')}
+                        {i.delivery_pct ? <span className="block text-[9px] font-normal text-gray-400">@ {i.delivery_pct}%</span> : null}
+                      </span>
+                    ) : (
+                      <span className="text-gray-300 text-xs" title="No against-delivery % or no billable value">—</span>
+                    )}
+                  </td>
                   <td><StatusBadge status={i.status} /></td>
                   {/* Approval cell — shows "approved by X · DD MMM" once
                       approved, or "rejected by X · reason" if rejected.
@@ -2362,7 +2639,7 @@ export default function Procurement() {
                             </div>
                             {i.approved_at && (
                               <div className="text-[10px] text-gray-500">
-                                {new Date(i.approved_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                {fmtIST(i.approved_at, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                               </div>
                             )}
                           </div>
@@ -2542,7 +2819,7 @@ export default function Procurement() {
                 {expanded && items.length > 0 && (
                   <tr className="bg-gray-50">
                     <td></td>
-                    <td colSpan="11" className="p-3">
+                    <td colSpan="13" className="p-3">
                       <div className="text-xs font-semibold text-gray-600 mb-2">BoQ items raised in {i.indent_number}</div>
                       <table className="text-xs w-full">
                         <thead>
@@ -2630,8 +2907,8 @@ export default function Procurement() {
                 </Fragment>
               );
               })}
-              {indents.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No indents yet</td></tr>}
-              {indents.length > 0 && filteredIndents.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No indents match the current filters — try Reset</td></tr>}
+              {indents.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No indents yet</td></tr>}
+              {indents.length > 0 && filteredIndents.length === 0 && <tr><td colSpan="14" className="text-center py-8 text-gray-400">No indents match the current filters — try Reset</td></tr>}
             </tbody>
           </table>
           <Pagination pg={indPg} setPerPage={setIndPerPage} className="border-t border-gray-100" />
@@ -2652,6 +2929,61 @@ export default function Procurement() {
             return hay.includes(rq);
           });
         const ratesPg = usePagination(filteredRates, ratesPerPage, ratesPage, setRatesPage);
+        // ── Bulk-fill helpers (mam 2026-06-12) ──────────────────────────
+        const rowKey = r => r.indent_item_ids.join('-');
+        const selectedRows = filteredRates.filter(r => rateSel[rowKey(r)]);
+        const pageAllSelected = ratesPg.rows.length > 0 && ratesPg.rows.every(r => rateSel[rowKey(r)]);
+        const toggleRow = r => setRateSel(prev => {
+          const k = rowKey(r); const next = { ...prev };
+          if (next[k]) delete next[k]; else next[k] = true;
+          return next;
+        });
+        const togglePage = () => setRateSel(prev => {
+          const next = { ...prev };
+          if (pageAllSelected) ratesPg.rows.forEach(r => { delete next[rowKey(r)]; });
+          else ratesPg.rows.forEach(r => { next[rowKey(r)] = true; });
+          return next;
+        });
+        const applyBulkVendor = async () => {
+          if (!selectedRows.length) return toast.error('Tick some item rows first');
+          if (!bulkVendorName && !bulkTerms) return toast.error('Pick a vendor and/or terms to apply');
+          const n = bulkSlot;
+          const patch = {};
+          if (bulkVendorName) patch[`vendor${n}_name`] = bulkVendorName;
+          if (bulkTerms) {
+            patch[`vendor${n}_terms`] = bulkTerms;
+            patch[`vendor${n}_credit_days`] = bulkTerms === 'Credit' ? (+bulkCreditDays || 0) : 0;
+          }
+          setBulkApplying(true);
+          try {
+            const count = selectedRows.length;
+            for (const row of selectedRows) await updateMergedRate(row, patch);
+            // Clear the tick selection + reset the bar so it's obvious the
+            // apply finished (mam 2026-06-12: "after apply it, its is not clear").
+            setRateSel({});
+            setBulkVendorName('');
+            setBulkTerms('');
+            setBulkCreditDays('');
+            toast.success(`Applied Vendor ${n} to ${count} item(s)`);
+          } catch (e) {
+            toast.error('Some rows failed to save — please check');
+          } finally { setBulkApplying(false); }
+        };
+        // Edit one row; if that row is TICKED, copy the vendor NAME / TERMS
+        // pick to every other ticked row too — so changing one ticked row
+        // fills all of them (mam 2026-06-12: "i selected but not impact
+        // anothers").  Rate is never copied (each item is priced on its own).
+        const editRate = (r, patch) => {
+          updateMergedRate(r, patch);
+          const k = rowKey(r);
+          if (!rateSel[k]) return;                         // edited row not ticked → single edit
+          const field = Object.keys(patch)[0] || '';
+          if (!/_(name|terms)$/.test(field)) return;       // only propagate name/terms, not rate
+          const others = selectedRows.filter(o => rowKey(o) !== k);
+          if (!others.length) return;
+          for (const o of others) updateMergedRate(o, patch);
+          toast.success(`Also applied to ${others.length} other ticked row(s)`);
+        };
         return (
         <>
           {/* Vendor Name uses SearchableSelect component now, sourced from
@@ -2689,6 +3021,62 @@ export default function Procurement() {
             </div>
           </div>
 
+          {/* Bulk-fill bar (mam 2026-06-12) — tick rows, pick ONE vendor +
+              terms, apply to all ticked at once for Vendor 1 / 2 / 3.  Rate
+              stays per-item (each item priced individually). */}
+          <div className="card p-3 flex flex-wrap items-end gap-2 text-xs border border-blue-200 bg-blue-50/40">
+            <div className="text-[11px] font-semibold text-blue-800 mr-1 leading-tight">
+              Bulk fill
+              <div className="font-normal text-gray-500 text-[10px]">tick rows → pick vendor + terms → Apply</div>
+            </div>
+            <div>
+              <label className="label text-[10px] mb-0.5">Apply to</label>
+              <div className="flex gap-1">
+                {[1,2,3].map(n => (
+                  <button key={n} type="button" onClick={() => setBulkSlot(n)}
+                    className={`px-2 py-1 rounded border text-[11px] font-semibold ${bulkSlot === n ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
+                    Vendor {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="min-w-[200px]">
+              <label className="label text-[10px] mb-0.5">Vendor</label>
+              <SearchableSelect
+                options={vendorOptions}
+                value={bulkVendorName || null}
+                valueKey="name" displayKey="label"
+                placeholder="Pick vendor"
+                buttonClassName="text-[11px] px-2 py-1 w-full border border-gray-200 rounded-md bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-400 text-left flex items-center justify-between gap-1 cursor-pointer"
+                onChange={(v) => setBulkVendorName(v?.name || '')}
+              />
+            </div>
+            <div>
+              <label className="label text-[10px] mb-0.5">Terms</label>
+              <select className="select text-xs" style={{ width: '100px' }} value={bulkTerms} onChange={e => setBulkTerms(e.target.value)}>
+                <option value="">—</option>
+                <option value="Advance">Advance</option>
+                <option value="Credit">Credit</option>
+              </select>
+            </div>
+            {bulkTerms === 'Credit' && (
+              <div>
+                <label className="label text-[10px] mb-0.5">Credit days</label>
+                <input type="number" min="0" className="input text-xs text-right" style={{ width: '80px' }} placeholder="days"
+                  value={bulkCreditDays} onChange={e => setBulkCreditDays(e.target.value)} />
+              </div>
+            )}
+            <button type="button" disabled={bulkApplying || !selectedRows.length} onClick={applyBulkVendor}
+              className="btn btn-primary text-xs py-1 px-3 disabled:opacity-40">
+              {bulkApplying ? 'Applying…' : `Apply to ${selectedRows.length} ticked`}
+            </button>
+            {selectedRows.length > 0 && (
+              <button type="button" className="btn btn-secondary text-xs py-1 px-2" onClick={() => setRateSel({})}>
+                Clear ({selectedRows.length})
+              </button>
+            )}
+          </div>
+
           {/* Desktop table — BOQ Item column intentionally removed:
               mam's spec is purchase team enters a vendor rate ONCE per
               (indent · sub-item), regardless of which BOQ line that
@@ -2702,9 +3090,16 @@ export default function Procurement() {
                 <tr className="bg-gray-50">
                   {/* width matches --freeze-col-1-w so the 2nd sticky column
                       sits flush against this one with no gap or overlap. */}
-                  <th className="px-2 py-2 text-left" rowSpan="2" style={{ width: '150px', minWidth: '150px' }}>Indent</th>
+                  <th className="px-2 py-2 text-left" rowSpan="2" style={{ width: '150px', minWidth: '150px' }}>
+                    <div className="flex items-center gap-1.5">
+                      <input type="checkbox" checked={pageAllSelected} onChange={togglePage} title="Select all rows on this page" />
+                      <span>Indent</span>
+                    </div>
+                  </th>
                   <th className="px-2 py-2 text-left" rowSpan="2" style={{ width: '260px', minWidth: '260px' }}>Sub-Item<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(Item Master)</span></th>
                   <th className="px-2 py-2" rowSpan="2">Qty</th>
+                  <th className="px-2 py-2" rowSpan="2" title="Purchase Price from the Order-to-Planning BOQ — suggestion only, doesn't change vendor rates">PP Rate<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(planning)</span></th>
+                  <th className="px-2 py-2" rowSpan="2" title="AI-estimated MINIMUM market rate, auto-filled — suggestion only, doesn't change vendor rates">Mktg Rate<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(AI · min mkt)</span></th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 1</th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 2</th>
                   <th className="px-2 py-2 text-center" colSpan="3">Vendor 3</th>
@@ -2722,8 +3117,16 @@ export default function Procurement() {
                   const stat = r.rate_status || 'pending';
                   const statColor = stat === 'finalized' ? 'bg-emerald-100 text-emerald-700' : stat === 'quoted' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700';
                   return (
-                    <tr key={r.indent_item_ids.join('-')} className="border-b hover:bg-red-50/30">
-                      <td className="px-2 py-2 whitespace-nowrap"><div className="font-medium text-red-700">{r.indent_number}</div><div className="text-[10px] text-gray-400">{r.site_name}</div></td>
+                    <tr key={r.indent_item_ids.join('-')} className={`border-b hover:bg-red-50/30 ${rateSel[rowKey(r)] ? 'bg-blue-50/60' : ''}`}>
+                      <td className="px-2 py-2 whitespace-nowrap">
+                        <div className="flex items-start gap-1.5">
+                          <input type="checkbox" className="mt-0.5" checked={!!rateSel[rowKey(r)]} onChange={() => toggleRow(r)} />
+                          <div>
+                            <div className="font-medium text-red-700">{r.indent_number}</div>
+                            <div className="text-[10px] text-gray-400">{r.site_name}</div>
+                          </div>
+                        </div>
+                      </td>
                       <td className="px-2 py-2 align-top" style={{ width: '260px', minWidth: '260px', maxWidth: '260px' }}>
                         {r.item_code && <div className="text-[10px] font-mono text-gray-500">[{r.item_code}]</div>}
                         <div className="text-[11px] leading-snug font-medium">
@@ -2744,6 +3147,25 @@ export default function Procurement() {
                           <>{r.qty} {cleanUnit(r.uom || r.unit)}</>
                         )}
                       </td>
+                      {/* PP Rate (purchase price from planning) — suggestion only */}
+                      <td className="px-2 py-2 text-center whitespace-nowrap text-[11px]">
+                        {+r.pp_rate > 0
+                          ? <span className="font-semibold text-indigo-700">Rs {(+r.pp_rate).toLocaleString('en-IN')}</span>
+                          : <span className="text-gray-300" title="No purchase price entered in Order-to-Planning for this item">—</span>}
+                      </td>
+                      {/* Marketing Rate (AI, auto-filled min market rate) — suggestion only */}
+                      <td className="px-2 py-2 text-center whitespace-nowrap text-[11px]">
+                        {+r.marketing_rate > 0 ? (
+                          <>
+                            <div className="font-semibold text-fuchsia-700 mb-0.5">Rs {(+r.marketing_rate).toLocaleString('en-IN')}</div>
+                            <button type="button" onClick={() => aiSuggestRate(r)} disabled={!!aiBusy[r.indent_item_ids[0]]}
+                              className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-fuchsia-100 text-fuchsia-700 border border-fuchsia-300 hover:bg-fuchsia-600 hover:text-white disabled:opacity-50"
+                              title="Re-estimate the minimum market rate with AI">{aiBusy[r.indent_item_ids[0]] ? '…' : '↻'}</button>
+                          </>
+                        ) : (
+                          <span className="text-fuchsia-400 text-[10px] animate-pulse" title="AI is estimating the minimum market rate…">AI…</span>
+                        )}
+                      </td>
                       {[1,2,3].map(n => (
                         <Fragment key={n}>
                           <td className="px-1 py-1" style={{ minWidth: '200px', width: '200px' }}>
@@ -2752,12 +3174,12 @@ export default function Procurement() {
                                 row so downstream code (finalize / Vendor PO)
                                 keeps working with the existing name column. */}
                             <SearchableSelect
-                              options={vendors}
+                              options={vendorOptions}
                               value={r[`vendor${n}_name`] || null}
-                              valueKey="name" displayKey="name"
+                              valueKey="name" displayKey="label"
                               placeholder="Pick vendor"
                               buttonClassName="text-[11px] px-2 py-1 w-full border border-gray-200 rounded-md bg-white hover:border-gray-300 focus:outline-none focus:ring-1 focus:ring-red-400 text-left flex items-center justify-between gap-1 cursor-pointer"
-                              onChange={(v) => updateMergedRate(r, { [`vendor${n}_name`]: v?.name || '' })}
+                              onChange={(v) => editRate(r, { [`vendor${n}_name`]: v?.name || '' })}
                             />
                           </td>
                           <td className="px-1 py-1" style={{ minWidth: '120px' }}>
@@ -2776,7 +3198,7 @@ export default function Procurement() {
                                 className="select text-[11px] px-2 py-1"
                                 style={{ width: '90px', minWidth: '90px' }}
                                 value={r[`vendor${n}_terms`] || ''}
-                                onChange={e => updateMergedRate(r, { [`vendor${n}_terms`]: e.target.value })}
+                                onChange={e => editRate(r, { [`vendor${n}_terms`]: e.target.value })}
                               >
                                 <option value="">—</option>
                                 <option value="Advance">Advance</option>
@@ -2832,9 +3254,11 @@ export default function Procurement() {
             {ratesPg.rows.map(r => {
               const stat = r.rate_status || 'pending';
               return (
-                <div key={r.indent_item_ids.join('-')} className="card p-3 space-y-2">
-                  <div className="flex justify-between items-start">
-                    <div>
+                <div key={r.indent_item_ids.join('-')} className={`card p-3 space-y-2 ${rateSel[rowKey(r)] ? 'ring-1 ring-blue-300 bg-blue-50/40' : ''}`}>
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="flex items-start gap-2">
+                      <input type="checkbox" className="mt-1" checked={!!rateSel[rowKey(r)]} onChange={() => toggleRow(r)} title="Tick for bulk fill" />
+                      <div>
                       <div className="font-medium text-red-700 text-xs">{r.indent_number}</div>
                       {r.item_code && <div className="text-[10px] font-mono text-gray-500">[{r.item_code}]</div>}
                       <div className="text-sm font-medium line-clamp-2">{[r.master_name || r.description, r.specification, r.size].filter(Boolean).join(' / ')}</div>
@@ -2842,6 +3266,7 @@ export default function Procurement() {
                       {r.indent_item_ids.length > 1 && (
                         <div className="text-[9px] text-gray-400 italic mt-0.5">merged from {r.indent_item_ids.length} BOQ rows</div>
                       )}
+                      </div>
                     </div>
                     <span className={`badge ${stat === 'finalized' ? 'badge-green' : stat === 'quoted' ? 'badge-blue' : 'badge-yellow'}`}>{stat}</span>
                   </div>
@@ -2853,17 +3278,17 @@ export default function Procurement() {
                           below. */}
                       <div className="mb-2">
                         <SearchableSelect
-                          options={vendors}
+                          options={vendorOptions}
                           value={r[`vendor${n}_name`] || null}
-                          valueKey="name" displayKey="name"
+                          valueKey="name" displayKey="label"
                           placeholder="Pick vendor from master"
                           buttonClassName="input text-xs w-full text-left flex items-center justify-between gap-1 cursor-pointer"
-                          onChange={(v) => updateMergedRate(r, { [`vendor${n}_name`]: v?.name || '' })}
+                          onChange={(v) => editRate(r, { [`vendor${n}_name`]: v?.name || '' })}
                         />
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <input className="input text-xs" type="number" placeholder="Rate" value={r[`vendor${n}_rate`] || ''} onChange={e => updateMergedRate(r, { [`vendor${n}_rate`]: +e.target.value })} />
-                        <select className="select text-xs" value={r[`vendor${n}_terms`] || ''} onChange={e => updateMergedRate(r, { [`vendor${n}_terms`]: e.target.value })}>
+                        <select className="select text-xs" value={r[`vendor${n}_terms`] || ''} onChange={e => editRate(r, { [`vendor${n}_terms`]: e.target.value })}>
                           <option value="">— Terms —</option>
                           <option value="Advance">Advance</option>
                           <option value="Credit">Credit</option>
@@ -3168,13 +3593,26 @@ export default function Procurement() {
                   <td>
                     {v.cancelled
                       ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-gray-200 text-gray-600 border border-gray-300" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
-                      : <StatusBadge status={v.status} />}
+                      : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
+                        ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'} · {v.po_pending_approver}</span>
+                        : v.po_approval === 'rejected'
+                          ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300" title={v.po_reject_reason || 'Rejected'}>Rejected</span>
+                          : <StatusBadge status={v.status} />}
                   </td>
                   <td>
                     {/* Three actions: Cancel (soft-delete, reverses), Restore
                         (only when already cancelled), Delete (hard, only when
                         no bills / delivery notes block it). */}
                     <div className="flex items-center gap-1">
+                      {/* PO approval (mam 2026-06-19): L1 Nitin Jain → L2 Ankur
+                          Kaplesh. Approve/Reject show only to the pending-level
+                          approver (or admin / COO). */}
+                      {!v.cancelled && canApprovePo(v) && (
+                        <>
+                          <button onClick={() => approvePo(v)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-600 text-white hover:bg-emerald-700" title={`Approve ${v.po_approval === 'pending_l1' ? 'L1' : 'L2'}`}>✓ Approve</button>
+                          <button onClick={() => rejectPo(v)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-300 hover:bg-red-600 hover:text-white" title="Reject PO">✕</button>
+                        </>
+                      )}
                       {/* Mark Payment Cleared (mam 2026-05-27) — internal
                           one-click unblock when the advance / old payment
                           has been settled. Only shows when a block is
@@ -3247,7 +3685,11 @@ export default function Procurement() {
                   </div>
                   {v.cancelled
                     ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border border-gray-300 text-gray-600 bg-gray-50" title={v.cancel_reason || 'Cancelled'}>Cancelled</span>
-                    : <StatusBadge status={v.status} />}
+                    : (v.po_approval === 'pending_l1' || v.po_approval === 'pending_l2')
+                      ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300" title={`Awaiting ${v.po_pending_approver}`}>Pending {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</span>
+                      : v.po_approval === 'rejected'
+                        ? <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-300" title={v.po_reject_reason || 'Rejected'}>Rejected</span>
+                        : <StatusBadge status={v.status} />}
                 </div>
                 {/* Site */}
                 {v.indent_site_name && (
@@ -3284,6 +3726,13 @@ export default function Procurement() {
                   </a>
                   {v.file_path && <a href={v.file_path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-semibold">📎 PDF</a>}
                 </div>
+                {/* PO approval (mam 2026-06-19): L1 Nitin Jain → L2 Ankur Kaplesh */}
+                {!v.cancelled && canApprovePo(v) && (
+                  <div className="flex gap-2 mt-1">
+                    <button onClick={() => approvePo(v)} className="btn btn-success text-sm py-2 px-3 flex-1">✓ Approve {v.po_approval === 'pending_l1' ? 'L1' : 'L2'}</button>
+                    <button onClick={() => rejectPo(v)} className="text-sm py-2 px-3 rounded bg-red-100 text-red-700 border border-red-300 font-semibold">Reject</button>
+                  </div>
+                )}
                 {/* Primary action — Mark Cleared (when payment pending) */}
                 {!v.cancelled && v.payment_block_status === 'pending' && (canApprove('procurement') || isAdmin()) && (
                   <button onClick={() => markPaymentCleared(v.id)} className="btn btn-success text-sm py-2 px-3 w-full mt-1">
@@ -3349,10 +3798,24 @@ export default function Procurement() {
         // status live in Purchase Bills > Follow-up directly.
         const activePos = (vendorPos || []).filter(po => !po.cancelled);
 
-        // Bucket each PO by payment status
+        // Collapse duplicate POs for the SAME indent + vendor + amount (mam
+        // 2026-06-15: "indent one against one vendor → only one need to show").
+        // Keeps the first (newest) PO; a genuinely different-amount PO to the
+        // same vendor still shows, so a real second PO is never hidden.
+        const dedupPos = (list) => {
+          const seen = new Set();
+          return list.filter(po => {
+            const total = Math.round(+po.display_total || +po.total_amount || 0);
+            const key = `${(po.indent_number || '').toLowerCase()}|${(po.vendor_name || '').toLowerCase()}|${total}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        };
+        // Bucket each PO by payment status (deduped)
         const buckets = {
-          urgent:  activePos.filter(po => po.payment_block_status === 'pending'),
-          cleared: activePos.filter(po => po.payment_block_status === 'cleared'),
+          urgent:  dedupPos(activePos.filter(po => po.payment_block_status === 'pending')),
+          cleared: dedupPos(activePos.filter(po => po.payment_block_status === 'cleared')),
         };
         const sumUrgent  = buckets.urgent.reduce((s, p) => s + (+p.payment_block_amount || 0), 0);
         const sumCleared = buckets.cleared.reduce((s, p) => s + (+p.payment_block_amount || 0), 0);
@@ -3493,6 +3956,19 @@ export default function Procurement() {
                             title="Edit PO — change payment type / amount / notes"
                           >
                             edit
+                          </button>
+                        )}
+                        {canDelete('procurement') && (
+                          <button
+                            onClick={async () => {
+                              if (!confirm(`Permanently delete vendor PO "${po.po_number}"?`)) return;
+                              try { await api.delete(`/procurement/vendor-po/${po.id}`); toast.success('Deleted'); load(); }
+                              catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                            }}
+                            className="ml-1 text-[10px] text-red-600 hover:underline"
+                            title="Delete this PO (blocked if any bill / delivery note references it — use Cancel instead)"
+                          >
+                            delete
                           </button>
                         )}
                       </td>
@@ -4138,6 +4614,85 @@ export default function Procurement() {
             }).finally(() => setDispatchItemsLoading(false));
           }
         };
+        // Mam (2026-06-15) "fully auto on Dispatch": clicking Dispatch on a
+        // Ready-to-Dispatch PO instantly generates the SALES BILL — items +
+        // BOQ×delivery% rates from the PO, GST defaulted from the client
+        // state (Punjab → CGST/SGST 9% each, else IGST 18%) — and opens its
+        // PDF, with NO modal / no fields to fill. Falls back to the manual
+        // modal only when the PO has no billable items.
+        const autoDispatchSalesBill = async (po) => {
+          if (!po?.id) return;
+          // Park the PDF tab synchronously so the popup blocker can't eat it.
+          const printWin = window.open('', '_blank');
+          const closeWin = () => { try { if (printWin) printWin.close(); } catch (_) {} };
+          try {
+            const [itemsRes, billRes] = await Promise.all([
+              api.get(`/procurement/vendor-pos/${po.id}/client-po-items`, { params: { doc_type: 'sales_bill' } }).catch(() => ({ data: { items: [], source: 'empty' } })),
+              api.get(`/procurement/vendor-pos/${po.id}/bill-to`).catch(() => ({ data: null })),
+            ]);
+            const rows = (itemsRes.data?.items || []).map(it => {
+              const qty = +it.quantity || 0;
+              const rate = +it.rate || 0;
+              return {
+                description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
+                hsn: it.hsn_code || '',
+                unit: it.unit || '',
+                quantity: qty,
+                rate,
+                disc_pct: 0,
+                amount: +(qty * rate).toFixed(2),
+                item_code: it.item_code || '',
+                specification: it.specification || '',
+                size: it.size || '',
+                item_name: it.item_name || '',
+              };
+            }).filter(r => (r.description && r.description.trim()) || r.quantity > 0 || r.rate > 0);
+            if (!rows.length) {
+              closeWin();
+              toast.error('No PO items to bill — opening manual entry');
+              openAddDispatch(po);
+              return;
+            }
+            // Mirror the server's safety rule: never auto-bill a line with no
+            // rate. If any line is unrated, open the manual modal so mam can
+            // fill the selling rate instead of billing zero.
+            if (rows.some(r => !(+r.rate > 0))) {
+              closeWin();
+              toast('Some items have no rate — fill rates to bill', { icon: '✏️' });
+              openAddDispatch(po);
+              return;
+            }
+            const sameState = (billRes.data?.client_state || '').toLowerCase() === 'punjab';
+            const cgst_pct = sameState ? 9 : 0;
+            const sgst_pct = sameState ? 9 : 0;
+            const igst_pct = sameState ? 0 : 18;
+            const subtotal = rows.reduce((s, it) => s + (it.amount || 0), 0);
+            const grandTotal = subtotal + subtotal * (cgst_pct + sgst_pct + igst_pct) / 100;
+            const fd = new FormData();
+            fd.append('vendor_po_id', po.id);
+            fd.append('document_type', 'sales_bill');
+            fd.append('delivery_date', new Date().toISOString().slice(0, 10));
+            if (billRes.data?.client_state) fd.append('place_of_supply', billRes.data.client_state);
+            if (billRes.data?.client_state_code) fd.append('state_code', billRes.data.client_state_code);
+            fd.append('cgst_pct', cgst_pct);
+            fd.append('sgst_pct', sgst_pct);
+            fd.append('igst_pct', igst_pct);
+            fd.append('items', JSON.stringify(rows));
+            fd.append('subtotal_amount', subtotal.toFixed(2));
+            fd.append('grand_total_amount', grandTotal.toFixed(2));
+            const r = await api.post('/procurement/delivery-notes', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+            toast.success(`Sales Bill ${r.data?.document_number || ''} generated`);
+            load();
+            if (r.data?.id) {
+              const printRes = await api.get(`/procurement/delivery-notes/${r.data.id}/print`, { responseType: 'arraybuffer' });
+              const url = URL.createObjectURL(new Blob([printRes.data], { type: 'text/html;charset=utf-8' }));
+              if (printWin) printWin.location = url; else window.open(url, '_blank');
+            } else { closeWin(); }
+          } catch (err) {
+            closeWin();
+            toast.error(err.response?.data?.error || 'Failed to generate Sales Bill');
+          }
+        };
         // Helper — fetch the items on the linked vendor PO so mam can
         // adjust received qty per line in the modal (mam 2026-06-02:
         // "delivery note item of qty 10 but when erec its 9" +
@@ -4361,7 +4916,7 @@ export default function Procurement() {
                           )}
                         </td>
                         <td className="px-2 py-1.5">
-                          <button onClick={() => openAddDispatch(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap" title="Create the Delivery Note / Sales Bill — the PO then moves to Dispatch & Receiving for the site engineer to upload the signed receipt.">Dispatch</button>
+                          <button onClick={() => autoDispatchSalesBill(po)} className="btn btn-primary text-[10px] px-2 py-1 whitespace-nowrap" title="Auto-generate the Sales Bill PDF (BOQ×delivery% rates + client GST) and open it — no form to fill. The PO then moves to Dispatch & Receiving for the site engineer to upload the signed receipt.">Dispatch</button>
                         </td>
                       </tr>
                     ))}
@@ -4410,7 +4965,7 @@ export default function Procurement() {
                         🚚 Delivery Note
                       </a>
                     </div>
-                    <button onClick={() => openAddDispatch(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">Dispatch</button>
+                    <button onClick={() => autoDispatchSalesBill(po)} className="btn btn-primary text-sm py-2 px-3 w-full mt-1">Dispatch</button>
                   </div>
                 ))}
                 {filteredReady.length === 0 && (
@@ -5522,6 +6077,22 @@ export default function Procurement() {
               <label className="label">Remarks <span className="text-gray-400 font-normal">(optional)</span></label>
               <input className="input" placeholder="Any note about this PO" value={form.remarks || ''} onChange={e => setForm({...form, remarks: e.target.value})} />
             </div>
+            {/* Freight terms + charge (mam 2026-06-12) — printed on the PDF PO.
+                Ex-Works = buyer arranges freight; FOR = vendor delivers to site.
+                Freight amount is added to the PO total. */}
+            <div>
+              <label className="label">Freight Terms <span className="text-gray-400 font-normal">(optional)</span></label>
+              <select className="select" value={form.freight_terms || ''} onChange={e => setForm({...form, freight_terms: e.target.value})}>
+                <option value="">— None —</option>
+                <option value="Ex-Works">Ex-Works (buyer arranges freight)</option>
+                <option value="FOR">FOR (vendor delivers to site)</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Freight Amount (₹) <span className="text-gray-400 font-normal">(optional)</span></label>
+              <input className="input text-right" type="number" step="0.01" min="0" placeholder="0" value={form.freight_amount || ''} onChange={e => setForm({...form, freight_amount: e.target.value})} />
+              <p className="text-[10px] text-gray-400 mt-0.5">Added to the PO total &amp; shown on the PDF.</p>
+            </div>
           </div>
 
           {/* Optional item linking — when an indent is picked, the uploader
@@ -5584,8 +6155,12 @@ export default function Procurement() {
                       })}
                     </tbody>
                     <tfoot className="bg-gray-50">
+                      {+form.freight_amount > 0 && (
+                        <tr><td colSpan="5" className="px-2 py-1 text-right text-gray-600">Freight{form.freight_terms ? ` (${form.freight_terms})` : ''}:</td>
+                            <td className="px-2 py-1 text-right text-gray-700">Rs {(+form.freight_amount).toLocaleString()}</td></tr>
+                      )}
                       <tr><td colSpan="5" className="px-2 py-2 text-right font-bold">PO Total:</td>
-                          <td className="px-2 py-2 text-right font-bold text-red-700">Rs {poTotal.toLocaleString()}</td></tr>
+                          <td className="px-2 py-2 text-right font-bold text-red-700">Rs {(poTotal + (+form.freight_amount || 0)).toLocaleString()}</td></tr>
                     </tfoot>
                   </table>
                 </div>
@@ -5744,9 +6319,9 @@ export default function Procurement() {
           <div>
             <label className="label">Vendor *</label>
             <SearchableSelect
-              options={vendors}
+              options={vendorOptions}
               value={form.vendor_id || null}
-              valueKey="id" displayKey="name"
+              valueKey="id" displayKey="label"
               placeholder="Search vendor…"
               onChange={(v) => setForm({ ...form, vendor_id: v?.id || '' })}
             />
@@ -5916,7 +6491,7 @@ export default function Procurement() {
                 <span className="font-mono font-semibold">
                   {form.document_type === 'challan'
                     ? `DC/${new Date().getFullYear()}/####`
-                    : `INV/${new Date().getFullYear()}/####`}
+                    : `GST/26-26/##`}
                 </span>
                 <span className="text-emerald-600">— auto-generated on save</span>
               </div>
@@ -5926,7 +6501,7 @@ export default function Procurement() {
                   className="input mt-1"
                   value={form.document_number || ''}
                   onChange={e => setForm({...form, document_number: e.target.value})}
-                  placeholder={form.document_type === 'challan' ? 'e.g. DC/2026/0042' : 'e.g. INV/2026/0042'}
+                  placeholder={form.document_type === 'challan' ? 'e.g. DC/2026/0042' : 'e.g. GST/26-26/61'}
                 />
               </details>
             </div>
@@ -6128,8 +6703,21 @@ export default function Procurement() {
             <div className="border border-emerald-200 bg-emerald-50/40 rounded p-3 space-y-3">
               <div className="text-[10px] font-bold uppercase text-emerald-700">Tax Invoice Details</div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div><label className="label">Place of Supply</label><input className="input" value={form.place_of_supply || ''} onChange={e => setForm({ ...form, place_of_supply: e.target.value })} placeholder="e.g. Punjab" /></div>
-                <div><label className="label">State Code</label><input className="input" value={form.state_code || ''} onChange={e => setForm({ ...form, state_code: e.target.value })} placeholder="e.g. 03" /></div>
+                <div><label className="label">Place of Supply</label>
+                  <select className="select" value={form.place_of_supply || ''} onChange={e => {
+                    // Pick the client's state → auto-fill State Code + the
+                    // intra/inter-state GST split (Punjab=home → CGST+SGST,
+                    // else IGST). All stay editable for the odd exception.
+                    const st = e.target.value;
+                    const home = st.trim().toLowerCase() === SEPL_HOME_STATE;
+                    setForm({ ...form, place_of_supply: st, state_code: gstStateCode(st),
+                      cgst_pct: home ? 9 : 0, sgst_pct: home ? 9 : 0, igst_pct: home ? 0 : 18 });
+                  }}>
+                    <option value="">Select state</option>
+                    {STATES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div><label className="label">State Code <span className="text-gray-400 text-[10px]">(auto)</span></label><input className="input" value={form.state_code || ''} onChange={e => setForm({ ...form, state_code: e.target.value })} placeholder="auto from state" /></div>
                 <div><label className="label">E-Way Bill No.</label><input className="input" value={form.e_way_bill_no || ''} onChange={e => setForm({ ...form, e_way_bill_no: e.target.value })} /></div>
                 <div className="flex items-center gap-2"><input type="checkbox" id="rev_charge" checked={!!form.reverse_charge} onChange={e => setForm({ ...form, reverse_charge: e.target.checked })} className="w-4 h-4" /><label htmlFor="rev_charge" className="text-sm">Reverse Charge</label></div>
                 <div><label className="label">Vehicle No.</label><input className="input" value={form.vehicle_no || ''} onChange={e => setForm({ ...form, vehicle_no: e.target.value })} /></div>
@@ -6183,7 +6771,7 @@ export default function Procurement() {
             </div>
             <div>
               <label className="label">Sales Bill Number <span className="text-red-600">*</span></label>
-              <input className="input" placeholder="e.g. INV/2026/0042"
+              <input className="input" placeholder="e.g. GST/26-26/61"
                 value={sbForm.sales_bill_number}
                 onChange={(e) => setSbForm(f => ({ ...f, sales_bill_number: e.target.value }))} />
             </div>
@@ -6598,6 +7186,26 @@ export default function Procurement() {
                         value={editPoForm.remarks || ''}
                         onChange={e => setEditPoForm({ ...editPoForm, remarks: e.target.value })}
                         placeholder="Any notes about this PO — change reason, supplier follow-up, etc." />
+            </div>
+
+            {/* Freight terms + charge (mam 2026-06-12) — printed on the PDF PO. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label">Freight Terms</label>
+                <select className="select" value={editPoForm.freight_terms || ''}
+                        onChange={e => setEditPoForm({ ...editPoForm, freight_terms: e.target.value })}>
+                  <option value="">— None —</option>
+                  <option value="Ex-Works">Ex-Works (buyer arranges freight)</option>
+                  <option value="FOR">FOR (vendor delivers to site)</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Freight Amount (₹)</label>
+                <input className="input text-right" type="number" step="0.01" min="0" placeholder="0"
+                       value={editPoForm.freight_amount ?? ''}
+                       onChange={e => setEditPoForm({ ...editPoForm, freight_amount: e.target.value })} />
+                <p className="text-[10px] text-gray-400 mt-0.5">Added to the PO total &amp; shown on the PDF.</p>
+              </div>
             </div>
 
             {/* Payment-before-material (INTERNAL — mam 2026-05-27).

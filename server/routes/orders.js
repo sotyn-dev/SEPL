@@ -3,7 +3,7 @@ const path = require('path');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { validatePoNumber } = require('../utils/validate');
 const router = express.Router();
 router.use(authMiddleware);
@@ -104,13 +104,31 @@ router.get('/po', (req, res) => {
       r.site_engineer_ids_list = [];
       r.site_engineer_names = '';
     }
+    // Extra project roles (mam 2026-06-17): jr site eng / supervisor /
+    // welder / helper — same CSV-of-user-ids shape as site engineers.
+    for (const f of ['jr_site_engineer', 'supervisor', 'welder', 'helper']) {
+      const ids = String(r[`${f}_ids`] || '').split(',').map(x => parseInt(x, 10)).filter(Boolean);
+      r[`${f}_ids_list`] = ids;
+      if (ids.length) {
+        const ph = ids.map(() => '?').join(',');
+        const us = db.prepare(`SELECT id, name FROM users WHERE id IN (${ph})`).all(...ids);
+        const byId = new Map(us.map(u => [u.id, u.name]));
+        r[`${f}_names`] = ids.map(id => byId.get(id)).filter(Boolean).join(', ');
+      } else {
+        r[`${f}_names`] = '';
+      }
+    }
   }
   res.json(rows);
 });
 
-router.post('/po', (req, res) => {
-  const { business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, crm_name, items } = req.body;
+router.post('/po', requirePermission('orders', 'create'), (req, res) => {
+  const { business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, crm_name, items, jr_site_engineer_ids, supervisor_ids, welder_ids, helper_ids } = req.body;
   const db = getDb();
+  // Extra-role CSVs (jr site eng / supervisor / welder / helper). Accept an
+  // array of user ids (preferred) or a CSV string; store as a clean CSV.
+  const csvIds = (v) => Array.isArray(v) ? v.map(x => parseInt(x, 10)).filter(Boolean).join(',') : (v == null ? '' : String(v));
+  const jrCsv = csvIds(jr_site_engineer_ids), supCsv = csvIds(supervisor_ids), weldCsv = csvIds(welder_ids), helpCsv = csvIds(helper_ids);
 
   // PO number regex / junk-blocklist guard per TOC v3 P0 #1 — stops
   // historical junk like "5252525", "141414", "1111111111", "00".
@@ -128,8 +146,8 @@ router.post('/po', (req, res) => {
   const engCsv = engIds.join(',');
 
   const r = db.prepare(
-    'INSERT INTO purchase_orders (business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, crm_name, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-  ).run(business_book_id || null, lead_id || null, quotation_id || null, po_number, po_date, total_amount, advance_amount || 0, po_copy_link || null, boq_file_link || null, pt_advance || 0, pt_delivery || 0, pt_installation || 0, pt_commissioning || 0, pt_retention || 0, primaryEng, engCsv, crm_name, req.user.id);
+    'INSERT INTO purchase_orders (business_book_id, lead_id, quotation_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, site_engineer_id, site_engineer_ids, jr_site_engineer_ids, supervisor_ids, welder_ids, helper_ids, crm_name, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+  ).run(business_book_id || null, lead_id || null, quotation_id || null, po_number, po_date, total_amount, advance_amount || 0, po_copy_link || null, boq_file_link || null, pt_advance || 0, pt_delivery || 0, pt_installation || 0, pt_commissioning || 0, pt_retention || 0, primaryEng, engCsv, jrCsv, supCsv, weldCsv, helpCsv, crm_name, req.user.id);
   const poId = r.lastInsertRowid;
 
   // Insert PO items — scoped to THIS PO (po_id = poId) so a later edit
@@ -137,7 +155,7 @@ router.post('/po', (req, res) => {
   // items. business_book_id is still recorded for cross-PO indent /
   // DPR pooling.
   if (items && items.length > 0) {
-    const insertItem = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?)');
+    const insertItem = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, sr_no, part_price, labour_rate) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
     items.forEach((item, idx) => {
       if (item.description && item.description.trim()) {
         insertItem.run(
@@ -151,6 +169,8 @@ router.post('/po', (req, res) => {
           +item.amount || 0,
           item.hsn_code || '',
           +item.sr_no || idx + 1,
+          +item.part_price || 0,        // PP (Part Price)
+          +item.labour_rate || 0,        // Labour Rate
         );
       }
     });
@@ -172,8 +192,12 @@ router.post('/po', (req, res) => {
   res.status(201).json({ id: poId });
 });
 
-router.put('/po/:id', (req, res) => {
-  const { business_book_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, status, site_engineer_id, site_engineer_ids, crm_name } = req.body;
+router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {
+  const { business_book_id, po_number, po_date, total_amount, advance_amount, po_copy_link, boq_file_link, pt_advance, pt_delivery, pt_installation, pt_commissioning, pt_retention, status, site_engineer_id, site_engineer_ids, crm_name, jr_site_engineer_ids, supervisor_ids, welder_ids, helper_ids } = req.body;
+  // Extra-role CSVs — null when the field is absent so COALESCE keeps the
+  // existing value; an explicit [] clears it (csvIds → '').
+  const csvIds = (v) => v === undefined ? null : (Array.isArray(v) ? v.map(x => parseInt(x, 10)).filter(Boolean).join(',') : (v == null ? '' : String(v)));
+  const jrCsv = csvIds(jr_site_engineer_ids), supCsv = csvIds(supervisor_ids), weldCsv = csvIds(welder_ids), helpCsv = csvIds(helper_ids);
   // Same regex guard on edit — junk PO numbers can't be re-saved.
   if (po_number !== undefined && po_number !== null && String(po_number).trim() !== '') {
     const poErr = validatePoNumber(po_number);
@@ -225,7 +249,12 @@ router.put('/po/:id', (req, res) => {
       total_amount=COALESCE(?,total_amount), advance_amount=COALESCE(?,advance_amount),
       po_copy_link=?, boq_file_link=?,
       pt_advance=?, pt_delivery=?, pt_installation=?, pt_commissioning=?, pt_retention=?,
-      site_engineer_id=?, site_engineer_ids=?, crm_name=?,
+      site_engineer_id=?, site_engineer_ids=?,
+      jr_site_engineer_ids=COALESCE(?,jr_site_engineer_ids),
+      supervisor_ids=COALESCE(?,supervisor_ids),
+      welder_ids=COALESCE(?,welder_ids),
+      helper_ids=COALESCE(?,helper_ids),
+      crm_name=?,
       status=COALESCE(?,status) WHERE id=?`)
       .run(
         safeBbId,
@@ -233,7 +262,9 @@ router.put('/po/:id', (req, res) => {
         num(total_amount), num(advance_amount),
         po_copy_link || null, boq_file_link || null,
         num(pt_advance, 0), num(pt_delivery, 0), num(pt_installation, 0), num(pt_commissioning, 0), num(pt_retention, 0),
-        primaryEng, engCsv, crm_name,
+        primaryEng, engCsv,
+        jrCsv, supCsv, weldCsv, helpCsv,
+        crm_name,
         safeStatus, req.params.id
       );
 
@@ -255,7 +286,7 @@ router.put('/po/:id', (req, res) => {
   }
 });
 
-router.delete('/po/:id', (req, res) => {
+router.delete('/po/:id', requirePermission('orders', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   // ?force=1 cascades down through the entire procurement chain so admin
@@ -396,7 +427,7 @@ router.delete('/po/:id', (req, res) => {
   }
 });
 
-router.delete('/planning/:id', (req, res) => {
+router.delete('/planning/:id', requirePermission('orders', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM order_planning WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -417,7 +448,7 @@ router.get('/po/:id/items', (req, res) => {
 // bcs after labour rate add this happen". Used when a labour rate sheet
 // was applied to the wrong PO or with a wrong-shape sheet; mam can
 // reset and re-upload cleanly. Idempotent and scoped by business_book_id.
-router.post('/po/:id/labour-rates/reset', (req, res) => {
+router.post('/po/:id/labour-rates/reset', requirePermission('orders', 'edit'), (req, res) => {
   const db = getDb();
   const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
   if (!po?.business_book_id) return res.status(404).json({ error: 'PO not found or has no business_book link' });
@@ -434,7 +465,7 @@ router.post('/po/:id/labour-rates/reset', (req, res) => {
 // uploads the Labour Rate Sheet — the rate from each row is matched
 // to a po_item and written here without disturbing rate / quantity /
 // description. From here the rate flows into dpr_work_items.
-router.post('/po/:id/labour-rates', (req, res) => {
+router.post('/po/:id/labour-rates', requirePermission('orders', 'edit'), (req, res) => {
   const db = getDb();
   const po = db.prepare('SELECT business_book_id FROM purchase_orders WHERE id=?').get(req.params.id);
   if (!po) return res.status(404).json({ error: 'PO not found' });
@@ -469,7 +500,7 @@ router.post('/po/:id/labour-rates', (req, res) => {
   }
 });
 
-router.post('/po/:id/items', (req, res) => {
+router.post('/po/:id/items', requirePermission('orders', 'edit'), (req, res) => {
  try {
   const { items } = req.body;
   const db = getDb();
@@ -528,7 +559,7 @@ router.post('/po/:id/items', (req, res) => {
   // references without individual queries per row.
   const validMasterIds = new Set(db.prepare('SELECT id FROM item_master').all().map(r => r.id));
 
-  const insert = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, sr_no) VALUES (?,?,?,?,?,?,?,?,?,?)');
+  const insert = db.prepare('INSERT INTO po_items (business_book_id, po_id, item_master_id, description, quantity, unit, rate, amount, hsn_code, sr_no, part_price, labour_rate) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
   let count = 0;
   const errors = [];
   // Coerce numerics safely — empty strings, null, NaN all become 0 so a
@@ -561,7 +592,9 @@ router.post('/po/:id/items', (req, res) => {
             num(item.rate),
             num(item.amount),
             item.hsn_code || '',
-            num(item.sr_no) || idx + 1
+            num(item.sr_no) || idx + 1,
+            num(item.part_price),        // PP (Part Price)
+            num(item.labour_rate),        // Labour Rate
           );
           count++;
         } catch (rowErr) {
@@ -596,7 +629,7 @@ router.get('/planning', (req, res) => {
     LEFT JOIN purchase_orders po ON op.po_id=po.id LEFT JOIN business_book bb ON op.business_book_id=bb.id ORDER BY op.created_at DESC`).all());
 });
 
-router.post('/planning', (req, res) => {
+router.post('/planning', requirePermission('orders', 'create'), (req, res) => {
   const { po_id, business_book_id, planned_start, planned_end, notes } = req.body;
   const r = getDb().prepare(
     'INSERT INTO order_planning (po_id, business_book_id, planned_start, planned_end, notes, created_by) VALUES (?,?,?,?,?,?)'
@@ -604,7 +637,7 @@ router.post('/planning', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put('/planning/:id', (req, res) => {
+router.put('/planning/:id', requirePermission('orders', 'edit'), (req, res) => {
   const { status, planned_start, planned_end, notes } = req.body;
   getDb().prepare('UPDATE order_planning SET status=?, planned_start=?, planned_end=?, notes=? WHERE id=?')
     .run(status, planned_start, planned_end, notes, req.params.id);
@@ -664,7 +697,23 @@ router.get('/po-template', (req, res) => {
 // Upload PO Excel / BOQ and auto-import items
 // Supports: SEPL BOQ format (SN, Item Name, QTY, UNIT, Supply Rate, Installation Rate, SITC Rate, Total Cost)
 // Also supports: simple template (Item Name, Specification, Size, Qty, Unit, Rate, Amount, HSN)
-router.post('/po-upload-excel', upload.single('file'), (req, res) => {
+// Blank BOQ template (mam 2026-06-19: "give BOQ blank format so data fills in
+// the same format and parses correctly"). Headers are chosen to match the
+// upload parser exactly (SITC Rate / Purchase Price / Labour Rate etc.).
+router.get('/po-boq-template', requirePermission('orders', 'view'), (req, res) => {
+  const headers = ['SN', 'Description', 'Specification', 'Size', 'Qty', 'Unit', 'SITC Rate', 'Purchase Price', 'Labour Rate', 'Amount', 'HSN'];
+  const sample = [1, 'PVC FLEXIBLE CABLE 3 PHASE 2 CORE', '1.5 SQMM', '1.5sqmm', 100, 'mtr', 45, 38, 5, 4500, ''];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
+  ws['!cols'] = headers.map(h => ({ wch: Math.max(12, h.length + 3) }));
+  XLSX.utils.book_append_sheet(wb, ws, 'BOQ');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="BOQ-template.xlsx"');
+  res.send(buf);
+});
+
+router.post('/po-upload-excel', requirePermission('orders', 'create'), upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const wb = XLSX.readFile(req.file.path);
@@ -684,7 +733,7 @@ router.post('/po-upload-excel', upload.single('file'), (req, res) => {
       const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
       // Find header row — scan first 20 rows for any known column keyword
-      const HEADER_KEYWORDS = ['item name', 'description', 'particulars', 'work', 'item', 'qty', 'qnty', 'quantity', 'sitc', 'rate', 'amount', 's/n', 's.no'];
+      const HEADER_KEYWORDS = ['item name', 'description', 'particulars', 'work', 'item', 'qty', 'qnty', 'quantity', 'sitc', 'rate', 'amount', 's/n', 's.no', 'purchase', 'labour', 'labor'];
       let headerIdx = -1;
       for (let i = 0; i < Math.min(20, data.length); i++) {
         const row = (data[i] || []).map(c => String(c || '').toLowerCase().trim());
@@ -708,7 +757,10 @@ router.post('/po-upload-excel', upload.single('file'), (req, res) => {
         if (h.includes('installation')) colMap.installRate = i;
         if (h.includes('total cost')) colMap.totalCost = i;
         if (!colMap.rate && (h.includes('rate') && !h.includes('supply') && !h.includes('sitc') && !h.includes('install'))) colMap.rate = i;
-        if (h.includes('amount') && !h.includes('total')) colMap.amount = i;
+        if (h.includes('amount') && !h.includes('total') && !h.includes('labour') && !h.includes('labor')) colMap.amount = i;
+        // PP = Purchase Price (mam 2026-06-19), and per-item Labour Rate.
+        if (colMap.purchasePrice === undefined && (h === 'pp' || h === 'pp rate' || h.includes('purchase price') || h.includes('purchase rate') || h.includes('buying') || (h.includes('purchase') && !h.includes('order')))) colMap.purchasePrice = i;
+        if (colMap.labourRate === undefined && (h.includes('labour rate') || h.includes('labor rate') || h === 'labour' || h === 'labor')) colMap.labourRate = i;
         if (h.includes('hsn')) colMap.hsn = i;
         if (h === 'sn' || h === 's/n' || h === 'sr no' || h === 'sr' || h === 's.no' || h === 's. no' || h === 's.no.' || h === 'sl no' || h === 'sl.no') colMap.sn = i;
       });
@@ -756,6 +808,8 @@ router.post('/po-upload-excel', upload.single('file'), (req, res) => {
         const size = colMap.size !== undefined ? String(row[colMap.size] || '').trim() : '';
         const description = [name, spec, size].filter(Boolean).join(' / ');
         const unit = colMap.unit !== undefined ? String(row[colMap.unit] || 'Nos').trim() : 'Nos';
+        const part_price = colMap.purchasePrice !== undefined ? parseNum(row[colMap.purchasePrice]) : 0;
+        const labour_rate = colMap.labourRate !== undefined ? parseNum(row[colMap.labourRate]) : 0;
 
         items.push({
           sr_no: serial++,
@@ -767,6 +821,8 @@ router.post('/po-upload-excel', upload.single('file'), (req, res) => {
           unit: unit || 'Nos',
           rate: Math.round(rate * 100) / 100,
           amount: Math.round(amount * 100) / 100,
+          part_price: Math.round(part_price * 100) / 100,    // PP (Purchase Price)
+          labour_rate: Math.round(labour_rate * 100) / 100,
           hsn_code: colMap.hsn !== undefined ? String(row[colMap.hsn] || '').trim() : '',
         });
       }
@@ -826,7 +882,7 @@ router.post('/po-upload-excel', upload.single('file'), (req, res) => {
 // frontend can merge them onto the existing BOQ items without losing
 // SITC rates / quantities. Also persists the file so it can be re-shown
 // on the PO view later.
-router.post('/labour-upload-excel', upload.single('file'), (req, res) => {
+router.post('/labour-upload-excel', requirePermission('orders', 'edit'), upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
     const wb = XLSX.readFile(req.file.path);

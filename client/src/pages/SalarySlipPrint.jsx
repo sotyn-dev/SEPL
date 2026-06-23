@@ -276,9 +276,17 @@ export default function SalarySlipPrint() {
                 <td className="amount">{data.advance > 0 ? fmt(data.advance) : ''}</td>
               </tr>
             )}
+            {data.food > 0 && (
+              <tr>
+                <td><strong>Food Allowance</strong></td>
+                <td className="amount">{fmt(data.food)}</td>
+                <td></td>
+                <td className="amount"></td>
+              </tr>
+            )}
             <tr className="total">
               <td>Total Earnings</td>
-              <td className="amount">{fmt(data.total_earnings + (data.ot_pay || 0))}</td>
+              <td className="amount">{fmt(data.total_earnings + (data.ot_pay || 0) + (data.food || 0))}</td>
               <td><strong>Deduction</strong></td>
               <td className="amount">{fmt(data.total_deductions)}</td>
             </tr>

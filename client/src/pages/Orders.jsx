@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { FiPlus, FiTrash2, FiUpload, FiEdit2, FiExternalLink, FiEye, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import SearchableSelect from '../components/SearchableSelect';
+import MultiUserSelect from '../components/MultiUserSelect';
 import { useAuth } from '../context/AuthContext';
 
 const CRM_OPTIONS = ['Sushila', 'Lovely'];
@@ -32,7 +33,7 @@ export default function Orders() {
   const [bbEntries, setBbEntries] = useState([]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
-  const [poItems, setPoItems] = useState([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
+  const [poItems, setPoItems] = useState([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]);
   // Mam: "i upload jeewan mala order yesterday till ok but i check half
   // data delete". The bug: PO Edit ALWAYS re-saved po_items on Update,
   // even when she only changed CRM or status — and the server's save
@@ -47,6 +48,9 @@ export default function Orders() {
   const [poFilter, setPoFilter] = useState('');
   const [masterItems, setMasterItems] = useState([]);
   const [siteEngineers, setSiteEngineers] = useState([]);
+  // All active users — source for the extra project-role pickers (jr site
+  // eng / supervisor / welder / helper), which aren't tied to a single role.
+  const [allUsers, setAllUsers] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [editingPO, setEditingPO] = useState(null);
   // Sticky error banner inside the PO modal — so the exact server error is
@@ -64,12 +68,24 @@ export default function Orders() {
     api.get('/orders/business-book-entries').then(r => setBbEntries(r.data));
     api.get('/item-master/dropdown?type=PO').then(r => setMasterItems(r.data)).catch(() => {});
     api.get('/auth/users').then(r => {
-      setSiteEngineers((r.data || []).filter(u => (u.role_names || '').split(',').includes('Site Engineer') && u.active !== 0));
+      const active = (r.data || []).filter(u => u.active !== 0);
+      setSiteEngineers(active.filter(u => (u.role_names || '').split(',').includes('Site Engineer')));
+      setAllUsers(active);
     }).catch(() => {});
   }, []);
 
-  const addItem = () => { setPoItems([...poItems, { item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]); setPoItemsDirty(true); };
+  const addItem = () => { setPoItems([...poItems, { item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]); setPoItemsDirty(true); };
   const removeItem = (i) => { setPoItems(poItems.filter((_, idx) => idx !== i)); setPoItemsDirty(true); };
+  // Download the blank BOQ template so users fill data in the exact format the
+  // upload parser expects (mam 2026-06-19).
+  const downloadBoqTemplate = async () => {
+    try {
+      const r = await api.get('/orders/po-boq-template', { responseType: 'blob' });
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement('a'); a.href = url; a.download = 'BOQ-template.xlsx'; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { toast.error('Could not download template'); }
+  };
   const updateItem = (i, key, val) => {
     const items = [...poItems];
     items[i][key] = val;
@@ -101,15 +117,19 @@ export default function Orders() {
       pt_advance: po.pt_advance || '', pt_delivery: po.pt_delivery || '',
       pt_installation: po.pt_installation || '', pt_commissioning: po.pt_commissioning || '',
       pt_retention: po.pt_retention || '', status: po.status || 'received',
-      site_engineer_ids: engIds, crm_name: po.crm_name || ''
+      site_engineer_ids: engIds, crm_name: po.crm_name || '',
+      jr_site_engineer_ids: po.jr_site_engineer_ids_list || [],
+      supervisor_ids: po.supervisor_ids_list || [],
+      welder_ids: po.welder_ids_list || [],
+      helper_ids: po.helper_ids_list || [],
     });
     // Load existing PO items + reset dirty flag — fresh modal open is
     // a clean slate. We'll only re-save items when mam actually edits
     // one (or uploads a new BOQ).
     setPoItemsDirty(false);
     api.get(`/orders/po/${po.id}/items`).then(r => {
-      setPoItems(r.data.length > 0 ? r.data.map(i => ({ ...i, item_master_id: i.item_master_id || '' })) : [{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
-    }).catch(() => setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]));
+      setPoItems(r.data.length > 0 ? r.data.map(i => ({ ...i, item_master_id: i.item_master_id || '' })) : [{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]);
+    }).catch(() => setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]));
     setModal('po');
   };
 
@@ -140,7 +160,7 @@ export default function Orders() {
         toast.success('PO created');
       }
       setModal(false); setEditingPO(null);
-      setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
+      setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]);
       load();
     } catch (err) {
       // Show the real server response right in the modal so mam can read /
@@ -206,8 +226,8 @@ export default function Orders() {
               className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
             <button onClick={() => {
               setEditingPO(null);
-              setForm({ business_book_id: '', po_number: '', po_date: '', total_amount: 0, advance_amount: 0, po_copy_link: '', boq_file_link: '', pt_advance: '', pt_delivery: '', pt_installation: '', pt_commissioning: '', pt_retention: '', site_engineer_ids: [], crm_name: '' });
-              setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '' }]);
+              setForm({ business_book_id: '', po_number: '', po_date: '', total_amount: 0, advance_amount: 0, po_copy_link: '', boq_file_link: '', pt_advance: '', pt_delivery: '', pt_installation: '', pt_commissioning: '', pt_retention: '', site_engineer_ids: [], crm_name: '', jr_site_engineer_ids: [], supervisor_ids: [], welder_ids: [], helper_ids: [] });
+              setPoItems([{ item_master_id: '', description: '', quantity: 0, unit: 'nos', rate: 0, amount: 0, hsn_code: '', part_price: 0, labour_rate: 0 }]);
               setModal('po');
             }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add PO</button>
           </div>
@@ -361,6 +381,25 @@ export default function Orders() {
                   <p className="text-[10px] text-red-600 mt-0.5">{(form.site_engineer_ids || []).length} selected</p>
                 )}
               </div>
+              {/* Extra project roles (mam 2026-06-17): jr site eng / supervisor /
+                  welder / helper — compact multi-select dropdowns (one row each)
+                  instead of repeating the whole user list as chips. All optional. */}
+              {[
+                { key: 'jr_site_engineer_ids', label: 'Jr. Site Engineer(s)' },
+                { key: 'supervisor_ids', label: 'Supervisor(s)' },
+                { key: 'welder_ids', label: 'Welder(s)' },
+                { key: 'helper_ids', label: 'Helper(s)' },
+              ].map(role => (
+                <div className="col-span-2" key={role.key}>
+                  <label className="label">{role.label} <span className="text-gray-400 font-normal">(optional)</span></label>
+                  <MultiUserSelect
+                    options={allUsers.map(u => ({ id: u.id, name: u.name }))}
+                    value={form[role.key] || []}
+                    onChange={(ids) => setForm({ ...form, [role.key]: ids })}
+                    placeholder="Select one or more…"
+                  />
+                </div>
+              ))}
               <div>
                 <label className="label">CRM *</label>
                 <select className="select" required value={form.crm_name || ''} onChange={e => setForm({ ...form, crm_name: e.target.value })}>
@@ -399,7 +438,13 @@ export default function Orders() {
           {/* 3. Upload BOQ → Auto-fetch items (Excel) or just attach (PDF/image) */}
           <div className="border-2 border-dashed border-red-400 rounded-lg p-4 bg-red-50 text-center">
             <h4 className="font-bold text-red-800 mb-2">Upload BOQ File</h4>
-            <p className="text-xs text-red-600 mb-3">Upload Excel (.xlsx/.xls) to auto-fill items below. PDF/Image/Word also accepted — will just attach the file.</p>
+            <p className="text-xs text-red-600 mb-2">Upload Excel (.xlsx/.xls) to auto-fill items below. PDF/Image/Word also accepted — will just attach the file.</p>
+            <div className="mb-3">
+              <button type="button" onClick={downloadBoqTemplate} className="text-xs text-blue-700 underline hover:text-blue-900 inline-flex items-center gap-1">
+                <FiDownload size={12} /> Download blank BOQ format
+              </button>
+              <span className="text-[10px] text-gray-500 ml-1">— fill your data in this template so it imports correctly</span>
+            </div>
             <label className={`btn btn-primary inline-flex items-center gap-2 cursor-pointer text-base px-6 py-3 ${uploading ? 'opacity-60 pointer-events-none' : ''}`}>
               <FiUpload size={18} /> {uploading ? 'Uploading...' : 'Upload BOQ & Fetch Items'}
               <input type="file" accept=".xlsx,.xls,.pdf,.doc,.docx,.jpg,.jpeg,.png" className="hidden" disabled={uploading} onChange={async (e) => {
@@ -456,7 +501,7 @@ export default function Orders() {
                   let Planning own the labour workflow. */}
               {/* Desktop header — hidden on mobile where each row is a stacked card */}
               <div className="hidden md:grid grid-cols-12 gap-2 text-xs font-semibold text-gray-500 px-1">
-                <div>SN</div><div className="col-span-3">Description</div><div>Qty</div><div>Unit</div><div className="col-span-2">Rate (SITC)</div><div className="col-span-2">Amount</div><div></div>
+                <div>SN</div><div className="col-span-3">Description</div><div>Qty</div><div>Unit</div><div>Rate (SITC)</div><div title="Purchase Price">PP</div><div>Labour</div><div className="col-span-2">Amount</div><div></div>
               </div>
               {poItems.map((item, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2 items-center mb-3 md:mb-0 p-2 md:p-0 border md:border-0 border-gray-100 rounded">
@@ -492,15 +537,25 @@ export default function Orders() {
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Qty</div>
                     <input className="input text-sm" type="number" value={item.quantity} onChange={e => updateItem(i, 'quantity', +e.target.value)} />
                   </div>
-                  <div className="col-span-3 md:col-span-1">
+                  <div className="col-span-4 md:col-span-1">
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Unit</div>
                     <select className="select text-sm" value={item.unit} onChange={e => updateItem(i, 'unit', e.target.value)}>
                       <option>Nos</option><option>nos</option><option>mtr</option><option>kg</option><option>sqm</option><option>rft</option><option>set</option><option>lot</option><option>pair</option><option>pc</option><option>pcs</option><option>No</option>
                     </select>
                   </div>
-                  <div className="col-span-5 md:col-span-2">
+                  <div className="col-span-4 md:col-span-1">
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Rate (SITC)</div>
                     <input className="input text-sm" type="number" value={item.rate} onChange={e => updateItem(i, 'rate', +e.target.value)} />
+                  </div>
+                  {/* PP = Purchase Price — manual or auto-filled from BOQ Excel (mam 2026-06-19) */}
+                  <div className="col-span-6 md:col-span-1">
+                    <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">PP (Purchase Price)</div>
+                    <input className="input text-sm" type="number" value={item.part_price ?? 0} onChange={e => updateItem(i, 'part_price', +e.target.value)} />
+                  </div>
+                  {/* Labour Rate — manual */}
+                  <div className="col-span-6 md:col-span-1">
+                    <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Labour Rate</div>
+                    <input className="input text-sm" type="number" value={item.labour_rate ?? 0} onChange={e => updateItem(i, 'labour_rate', +e.target.value)} />
                   </div>
                   <div className="col-span-10 md:col-span-2">
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Amount</div>

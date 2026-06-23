@@ -150,6 +150,11 @@ export default function EngineerPerformance() {
         <div className="card text-center border-l-4 border-blue-500 py-2">
           <div className="text-2xl font-bold text-blue-600">{data.totals?.engineers || 0}</div>
           <div className="text-xs text-gray-500">Site Engineers</div>
+          {data.totals?.engineer_breakdown && (
+            <div className="text-[10px] text-gray-400 mt-0.5">
+              {data.totals.engineer_breakdown.se} Site · {data.totals.engineer_breakdown.jr} Jr
+            </div>
+          )}
         </div>
         <div className="card text-center border-l-4 border-teal-500 py-2">
           <div className="text-2xl font-bold text-teal-600">{data.totals?.sites || 0}</div>
@@ -196,7 +201,14 @@ export default function EngineerPerformance() {
                 <button onClick={() => toggleEng(eng.engineer_id)}
                   className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <div className="font-bold text-sm truncate">{eng.engineer_name}</div>
+                    <div className="font-bold text-sm truncate flex items-center gap-1.5">
+                      {eng.engineer_name}
+                      {eng.engineer_role_display && (
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold shrink-0 ${eng.engineer_role === 'jr' ? 'bg-violet-100 text-violet-700' : eng.engineer_role === 'fm' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                          {eng.engineer_role_display}
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[11px] text-gray-500 truncate">{eng.engineer_email}</div>
                   </div>
                   <span className="text-xs text-gray-400">{isOpen ? '▴' : '▾'}</span>

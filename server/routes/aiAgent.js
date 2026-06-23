@@ -446,11 +446,21 @@ const MODULE_GUIDES = {
 };
 const GUIDE_KEYS = Object.keys(MODULE_GUIDES);
 
+// Hard-cap the row count so a model-generated query with no LIMIT (e.g. an
+// accidental cartesian join) can't materialize the whole DB and freeze the
+// synchronous SQLite engine for every request (audit 2026-06-12).  We only
+// ADD a LIMIT when the query has none — column output is unchanged.
+function capSql(sql) {
+  const trimmed = String(sql).trim().replace(/;\s*$/, '');
+  if (/\blimit\s+\d+(\s*,\s*\d+|\s+offset\s+\d+)?\s*$/i.test(trimmed)) return trimmed;
+  return `${trimmed} LIMIT ${ROW_LIMIT + 1}`;
+}
+
 function safeRunQuery(db, sql) {
   const err = validateSelect(sql);
   if (err) return { error: err };
   try {
-    const stmt = db.prepare(sql);
+    const stmt = db.prepare(capSql(sql));
     const rows = stmt.all();
     const truncated = rows.length > ROW_LIMIT;
     return {
@@ -463,11 +473,113 @@ function safeRunQuery(db, sql) {
   }
 }
 
+// ── Google Gemini path (mam 2026-06-15: wants a FREE AI key) ───────────────
+// Runs the agent against Gemini's NATIVE generateContent API so we get BOTH
+// our function tools (read the ERP DB + module guides) AND Google Search
+// grounding — so it can quote live MARKET RATES, not only ERP data (mam:
+// "not satisfied ... give me rate from market also"). Search grounding is
+// handled server-side by Gemini; we only execute our own function calls.
+async function runGeminiAgent({ apiKey, model, systemPrompt, history, question, db }) {
+  if (typeof fetch !== 'function') {
+    const e = new Error('This server\'s Node is too old for Gemini (needs Node 18+).'); e.status = 500; throw e;
+  }
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const functionDeclarations = [
+    {
+      name: 'query_database',
+      description: 'Run a single read-only SQL query (SELECT or WITH only) against the ERP SQLite DB. Returns rows as JSON, max 500 rows.',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: 'A single SELECT/WITH query. No semicolons, no DDL/DML.' } }, required: ['query'] },
+    },
+    {
+      name: 'get_module_guide',
+      description: 'Look up the official step-by-step guide for an ERP module. Use for any "how to" / training / workflow question.',
+      parameters: { type: 'object', properties: { module: { type: 'string', enum: GUIDE_KEYS, description: `Module key — one of: ${GUIDE_KEYS.join(', ')}.` } }, required: ['module'] },
+    },
+  ];
+  // Both tools: our functions + Google Search grounding (for market rates).
+  let tools = [{ function_declarations: functionDeclarations }, { google_search: {} }];
+
+  const contents = [];
+  for (const m of history) {
+    if (!m || !m.role || !m.content) continue;
+    if (m.role !== 'user' && m.role !== 'assistant') continue;
+    contents.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: String(m.content).slice(0, 4000) }] });
+  }
+  contents.push({ role: 'user', parts: [{ text: question }] });
+
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  // Free-tier rate limits (429) are usually per-minute and clear quickly —
+  // retry with backoff so a transient limit doesn't surface as an error
+  // (mam 2026-06-15). The route's heartbeat keeps the connection alive while
+  // we wait.
+  const post = async (body, retries = 2) => {
+    for (let attempt = 0; ; attempt++) {
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify(body),
+      });
+      if (r.status !== 429 || attempt >= retries) return r;
+      await sleep(4000 * (attempt + 1)); // 4s, then 8s
+    }
+  };
+
+  const sqlRuns = [];
+  let answer = '';
+  for (let iter = 0; iter < MAX_TOOL_ITER; iter++) {
+    const body = {
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents, tools,
+      generationConfig: { temperature: 0.2, maxOutputTokens: 4000 },
+    };
+    let r = await post(body);
+    if (!r.ok) {
+      const txt = await r.text().catch(() => '');
+      // Some models reject Search-grounding + function-calling together —
+      // retry once with our function tools only so the chat still works.
+      if (tools.length > 1 && /(tool|search|grounding|function)/i.test(txt)) {
+        tools = [{ function_declarations: functionDeclarations }];
+        r = await post({ ...body, tools });
+        if (!r.ok) { const t2 = await r.text().catch(() => ''); const e = new Error(t2 || `Gemini HTTP ${r.status}`); e.status = r.status; throw e; }
+      } else {
+        const e = new Error(txt || `Gemini HTTP ${r.status}`); e.status = r.status; throw e;
+      }
+    }
+    const data = await r.json();
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    const fnCalls = parts.filter(p => p.functionCall).map(p => p.functionCall);
+    if (!fnCalls.length) {
+      answer = parts.filter(p => p.text).map(p => p.text).join('\n').trim();
+      break;
+    }
+    contents.push({ role: 'model', parts });
+    const responseParts = [];
+    for (const fc of fnCalls) {
+      const args = fc.args || {};
+      let resultObj;
+      if (fc.name === 'query_database') {
+        const result = safeRunQuery(db, args.query || '');
+        sqlRuns.push({ query: args.query, row_count: result.row_count ?? 0, error: result.error || null });
+        resultObj = result;
+      } else if (fc.name === 'get_module_guide') {
+        resultObj = MODULE_GUIDES[String(args.module || '').toLowerCase().trim()] || { error: `Unknown module. Available: ${GUIDE_KEYS.join(', ')}` };
+      } else {
+        resultObj = { error: `unknown tool ${fc.name}` };
+      }
+      let safe = resultObj;
+      try { if (JSON.stringify(resultObj).length > 50000) safe = { note: 'truncated', data: JSON.stringify(resultObj).slice(0, 50000) }; } catch (_) {}
+      responseParts.push({ functionResponse: { name: fc.name, response: { result: safe } } });
+    }
+    contents.push({ role: 'user', parts: responseParts });
+  }
+  return { answer: answer || '(no answer)', sqlRuns };
+}
+
 router.post('/ask', requirePermission('ai_agent', 'view'), async (req, res) => {
   const apiKey = getSetting('ai_api_key');
   if (!apiKey) {
     return res.status(400).json({
-      error: 'AI Agent not configured. Ask an admin to paste an Anthropic API key in Admin → AI Settings.',
+      error: 'AI Agent not configured. Ask an admin to paste an API key in Admin → AI Settings.',
     });
   }
   const question = String(req.body?.question || '').trim();
@@ -628,6 +740,25 @@ Guidance:
     messages.push({ role: m.role, content: String(m.content).slice(0, 4000) });
   }
   messages.push({ role: 'user', content: question });
+
+  // ── Provider fork: Google Gemini (free) vs Anthropic ─────────────────────
+  const provider = (getSetting('ai_provider') || 'anthropic').toLowerCase();
+  if (provider === 'gemini' || provider === 'google') {
+    const gStart = Date.now();
+    let gmodel = getSetting('ai_model');
+    if (!gmodel || !/gemini/i.test(gmodel)) gmodel = 'gemini-2.0-flash';
+    try {
+      const { answer, sqlRuns } = await runGeminiAgent({ apiKey, model: gmodel, systemPrompt, history: priorHistory, question, db });
+      console.log(`[AI Agent /ask] ok ${gmodel} (gemini) elapsed=${Date.now() - gStart}ms sqlRuns=${sqlRuns.length}`);
+      return sendJson(200, { answer, sql_runs: sqlRuns, model: gmodel });
+    } catch (e) {
+      console.error('[AI Agent /ask] Gemini call failed:', e.status, e.message);
+      let hint = '';
+      if (e.status === 401 || e.status === 403) hint = ' Check the Gemini API key in Admin → AI Settings.';
+      else if (e.status === 429) hint = ' Gemini free-tier quota hit (even after auto-retry). If this keeps happening you\'ve likely used the daily free limit — wait a while, slow down between questions, or switch to Anthropic Haiku in Admin → AI Settings.';
+      return sendJson(200, { error: `AI request failed (Gemini): ${String(e.message).slice(0, 300)}${hint}` });
+    }
+  }
 
   // supportsAdaptive declared earlier; reused for both adaptive thinking
   // params here and the conditional web_search tool above.

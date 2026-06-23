@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react';
-import { Link, useLocation, Outlet } from 'react-router-dom';
-import HelpTicket from './HelpTicket';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import AnnouncementBell from './AnnouncementBell';
 // Mam (2026-05-22): standalone NotificationsBell removed — its
 // functionality is now merged into AnnouncementBell as a second tab,
 // so there's a single bell icon in the header (was confusing with 3).
 import EnablePushButton from './EnablePushButton';
 import AIAgentChat from './AIAgentChat';
+import { CallProvider } from '../context/CallContext';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
 import api from '../api';
@@ -20,9 +21,9 @@ import {
   FiTarget, FiFileText, FiShoppingBag, FiBriefcase, FiUsers, FiPackage,
   FiCheckSquare, FiPhoneCall, FiStar, FiShield, FiSettings,
   // CRM children
-  FiGlobe, FiTrendingUp, FiFilter, FiBook, FiUser,
+  FiGlobe, FiTrendingUp, FiTrendingDown, FiFilter, FiBook, FiUser,
   // Quotes & Orders children
-  FiArchive, FiClipboard, FiTruck, FiShoppingCart,
+  FiArchive, FiClipboard, FiTruck, FiShoppingCart, FiSun,
   // Procurement children
   FiGrid, FiHexagon, FiInbox, FiTag,
   // Projects children
@@ -36,7 +37,7 @@ import {
   // Tasks children
   FiAward, FiPaperclip, FiLayers, FiCheckCircle,
   // Service Desk children
-  FiAlertTriangle, FiMessageCircle,
+  FiAlertTriangle, FiMessageCircle, FiMessageSquare,
   // Executive children
   FiCrosshair, FiMonitor, FiCompass,
   // Admin children + Settings children
@@ -51,6 +52,7 @@ import {
   FiHeart,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
+import { FaWhatsapp } from 'react-icons/fa';
 
 // ─── Sidebar structure (mam 2026-05-27 — SEPL_Sidebar_Restructure spec) ───
 // Dashboard stays standalone at the very top (no group, single URL).
@@ -91,11 +93,19 @@ const SIDEBAR_GROUPS = [
     // Full Kitting moved here (mam 2026-05-27): "full kitting is under CRM"
     { path: '/crm-kitting',   label: 'Full Kitting',      icon: FiArchive,    module: 'crm_kitting' },
   ]},
+  { id: 'solar_sales', label: 'Solar Division', icon: FiSun, items: [
+    { path: '/solar-funnel',          label: 'Solar Sales Funnel',   icon: FiTrendingUp, module: 'solar_quotation' },
+    { path: '/solar-quotation',       label: 'Solar Quotation',      icon: FiClipboard,  module: 'solar_quotation' },
+    { path: '/solar-projects',        label: 'Solar Projects',       icon: FiActivity,   module: 'solar_quotation' },
+    { path: '/solar-material-master', label: 'Solar Material Master', icon: FiPackage,   module: 'solar_quotation' },
+    { path: '/solar-labour-master',   label: 'Solar Labour Master',  icon: FiTool,       module: 'solar_quotation' },
+    { path: '/solar-rate-master',     label: 'Solar Settings',       icon: FiSliders,    module: 'solar_quotation' },
+  ]},
   { id: 'quotes_orders', label: 'Quotes & Orders', icon: FiFileText, items: [
     { path: '/quotations',  label: 'Quotations',        icon: FiClipboard,    module: 'quotations' },
-    { path: '/estimator',   label: 'AI Auto-Quotation', icon: FiClipboard,    module: 'quotations' },
-    { path: '/po-foc-stripped', label: 'PO/FOC Stripped', icon: FiClipboard,  module: 'quotations' },
-    { path: '/labour-rate',     label: 'Labour Rate',     icon: FiClipboard,  module: 'quotations' },
+    { path: '/estimator',   label: 'AI Auto-Quotation', icon: FiArchive,      module: 'ai_quotation' },
+    { path: '/po-foc-stripped', label: 'Price Breakup Master', icon: FiShoppingCart, module: 'quotations' },
+    { path: '/labour-rate',     label: 'Labour Rate',     icon: FiTruck,      module: 'labour_rates' },
   ]},
   // Procurement (mam 2026-05-27 follow-up): Dispatch + Order to Planning
   // moved here from Quotes & Orders — they're procurement workflow steps,
@@ -118,8 +128,10 @@ const SIDEBAR_GROUPS = [
     { path: '/indent-labour-payment', label: 'Indent Labour Payment', icon: FiClipboard, module: 'indent_labour_payment' },
     { path: '/dpr',          label: 'Daily Reports',    icon: FiBarChart2,   module: 'dpr' },
     { path: '/snags',        label: 'Snags',            icon: FiAlertCircle, module: 'snags' },
+    // WhatsApp moved OUT of this group → pinned at the bottom of the sidebar,
+    // just above Change Password (mam 2026-06-19). See SIDEBAR footer render.
     { path: '/fire-noc',     label: 'Fire NOC Renewal', icon: FiZap,         module: 'fire_noc' },
-    { path: '/installation', label: 'Installations',    icon: FiTool,        module: 'installation' },
+    { path: '/installation', label: 'Sales Billing',     icon: FiTool,        module: 'installation' },
   ]},
   { id: 'finance', label: 'Finance', icon: LuIndianRupee, items: [
     { path: '/cheques',          label: 'Cheques',     icon: FiFile,       module: 'cheques' },
@@ -127,6 +139,7 @@ const SIDEBAR_GROUPS = [
     { path: '/collections',      label: 'Collections', icon: FiSend,       module: 'collections' },
     { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing' },
     { path: '/cashflow',         label: 'Cash Flow',   icon: FiRefreshCw,  module: 'cashflow' },
+    { path: '/ar-ap-tracker',    label: 'AR/AP Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
     { path: '/expenses',         label: 'Expenses',    icon: FiPieChart,   module: 'expenses' },
   ]},
   // 'People' renamed → 'HRMS' (mam 2026-05-28). Sub-contractor Master
@@ -196,8 +209,94 @@ export default function Layout() {
   const [pwdModal, setPwdModal] = useState(false);
   const [pwdForm, setPwdForm] = useState({ current_password: '', new_password: '', confirm: '' });
   const [pwdSaving, setPwdSaving] = useState(false);
+  // Header user-avatar menu (mam 2026-06-17 header freeze): identity +
+  // Change Password + Logout reachable from the top bar even when the
+  // sidebar is collapsed — the footer copy stays as-is for the open state.
+  const [userMenu, setUserMenu] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
   const { user, logout, canView, isAdmin, userRoles } = useAuth();
+
+  // Admin bypasses mandatory fields everywhere (mam 2026-06-19: "admin can
+  // update anywhere, if a thing is mandatory it's not for him"). We disable
+  // the browser's native required-field blocking on every <form> — including
+  // modals mounted later — so admin can save partial records app-wide.
+  // Non-admins are untouched and keep full validation.
+  const adminBypass = isAdmin();
+  useEffect(() => {
+    if (!adminBypass) return;
+    const relax = (root) => {
+      if (!root || root.nodeType !== 1) return;
+      if (root.tagName === 'FORM') { root.noValidate = true; return; }
+      root.querySelectorAll?.('form').forEach(f => { f.noValidate = true; });
+    };
+    relax(document.body);
+    const obs = new MutationObserver(muts => { for (const m of muts) for (const n of m.addedNodes) relax(n); });
+    obs.observe(document.body, { childList: true, subtree: true });
+    return () => obs.disconnect();
+  }, [adminBypass]);
+
+  // ── WhatsApp background notifications (mam 2026-06-19) ─────────────────
+  // App-wide: a new message in ANY group the user belongs to pops a toast +
+  // browser notification and shows an unread badge on the sidebar WhatsApp
+  // link — even when not on the chat page. Driven by the chat Socket.IO with
+  // a 25 s poll fallback. `unread` already excludes the user's own messages.
+  const [waUnread, setWaUnread] = useState(0);
+  const waPrev = useRef(null);                 // Map<groupId, unread> from the last fetch
+  const pathRef = useRef(location.pathname);
+  pathRef.current = location.pathname;
+
+  const refreshWa = useCallback(async () => {
+    try {
+      const { data } = await api.get('/site-chat/groups');
+      const groups = data || [];
+      setWaUnread(groups.reduce((s, g) => s + (g.unread || 0), 0));
+      const prev = waPrev.current;
+      if (prev && pathRef.current !== '/site-chat') {       // don't alert for the page you're on
+        for (const g of groups) {
+          if ((g.unread || 0) > (prev.get(g.id) || 0)) {
+            const last = g.last || {};
+            const body = last.body || (last.attachment_name ? `📎 ${last.attachment_name}` : 'New message');
+            const line = `${last.sender_name ? last.sender_name.split(' ')[0] + ': ' : ''}${body}`;
+            const gid = g.id, gname = g.name;
+            // Prominent, clickable green banner pinned to the TOP-CENTER so the
+            // alert is unmistakably "on top" (mam 2026-06-19).
+            toast.custom((t) => (
+              <div onClick={() => { toast.dismiss(t.id); navigate('/site-chat'); }}
+                className="cursor-pointer flex items-start gap-2 w-[320px] max-w-[88vw] rounded-xl shadow-2xl px-3 py-2.5 text-white"
+                style={{ background: '#075e54' }}>
+                <FaWhatsapp className="mt-0.5 text-[#25d366] flex-shrink-0" size={20} />
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold text-sm truncate">{gname}</div>
+                  <div className="text-xs text-white/90 truncate">{line}</div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); toast.dismiss(t.id); }} className="text-white/70 hover:text-white flex-shrink-0">✕</button>
+              </div>
+            ), { position: 'top-center', duration: 6000, id: `wa-${gid}` });
+            if ('Notification' in window && Notification.permission === 'granted') {
+              try {
+                const n = new Notification(`SOTYN Chat · ${gname}`, { body: line, icon: '/icon.svg', tag: `wa-${gid}` });
+                n.onclick = () => { window.focus(); navigate('/site-chat'); n.close(); };
+              } catch { /* ignore */ }
+            }
+            break;                                          // one alert per refresh is enough
+          }
+        }
+      }
+      waPrev.current = new Map(groups.map(g => [g.id, g.unread || 0]));
+    } catch { /* not logged in / not a member yet — ignore */ }
+  }, []);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    if ('Notification' in window && Notification.permission === 'default') { try { Notification.requestPermission(); } catch { /* ignore */ } }
+    refreshWa();
+    const socket = io({ path: '/socket.io', auth: { token: localStorage.getItem('token') }, transports: ['websocket', 'polling'] });
+    socket.on('changed', refreshWa);
+    socket.on('group_deleted', refreshWa);
+    const poll = setInterval(refreshWa, 25000);             // fallback for groups joined after connect
+    return () => { socket.disconnect(); clearInterval(poll); };
+  }, [user?.id, refreshWa]);
 
   const changePassword = async (e) => {
     e.preventDefault();
@@ -235,6 +334,7 @@ export default function Layout() {
   // Close sidebar on mobile when route changes
   useEffect(() => {
     if (isMobile) setSidebarOpen(false);
+    setUserMenu(false);   // also dismiss the header avatar menu on navigation
   }, [location.pathname, isMobile]);
 
   // GLOBAL LOCATION TRACKING — was Attendance-page-only before, but mam's
@@ -280,9 +380,10 @@ export default function Layout() {
       } catch (e) { /* ignore */ }
     };
     requestWakeLock();
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') requestWakeLock();
-    });
+    // Named handler so the cleanup can remove it — an anonymous listener here
+    // leaked a new one on every user change (audit 2026-06-12).
+    const onVisible = () => { if (document.visibilityState === 'visible') requestWakeLock(); };
+    document.addEventListener('visibilitychange', onVisible);
 
     trackLocation();
     const interval = setInterval(trackLocation, 30 * 1000);
@@ -290,6 +391,7 @@ export default function Layout() {
     return () => {
       cancelled = true;
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
       if (wakeLock && wakeLock.release) wakeLock.release().catch(() => {});
     };
   }, [user?.id]);
@@ -379,7 +481,28 @@ export default function Layout() {
   const dashboardMatches = itemMatches(SIDEBAR_DASHBOARD);
   const nothingMatches = navQuery && !dashboardMatches && visibleGroups.length === 0 && !showSettings;
 
+  // ─── Header breadcrumb (mam 2026-06-17 header freeze) ───────────────
+  // Resolve the current route to { group, label } so the top bar reads
+  // "Finance › Cash Flow" instead of a context-free "Cash Flow".
+  // Dashboard is standalone (no group); unknown routes fall back to the
+  // app name with no crumb.
+  const crumb = (() => {
+    if (SIDEBAR_DASHBOARD.path === location.pathname) return { group: null, label: SIDEBAR_DASHBOARD.label };
+    for (const g of SIDEBAR_GROUPS) {
+      const it = g.items.find(m => m.path === location.pathname);
+      if (it) return { group: g.label, label: it.label };
+    }
+    const s = SIDEBAR_SETTINGS.items.find(m => m.path === location.pathname);
+    if (s) return { group: SIDEBAR_SETTINGS.label, label: s.label };
+    return { group: null, label: 'SEPL ERP' };
+  })();
+
+  // Avatar initials from the user's name (fallback to username), max 2 chars.
+  const initials = (user?.name || user?.username || '?')
+    .split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase() || '?';
+
   return (
+    <CallProvider>
     <div className="flex h-screen overflow-hidden">
       {/* Mobile overlay */}
       {sidebarOpen && isMobile && (
@@ -546,6 +669,18 @@ export default function Layout() {
             );
           })()}
         </nav>
+        {/* WhatsApp — pinned just above the user footer / Change Password
+            (mam 2026-06-19: "show above where is change password"). Shown to
+            EVERY signed-in user (no site_chat permission needed) — access is
+            by group membership, so added people can chat by default. */}
+        <div className="px-3 pt-2 border-t border-white/10">
+          <Link to="/site-chat"
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
+            <FaWhatsapp size={17} className="text-green-400" />
+            <span className="truncate flex-1">SOTYN Chat</span>
+            {waUnread > 0 && <span className="text-[10px] font-bold text-white bg-[#25d366] rounded-full px-1.5 min-w-[18px] text-center">{waUnread > 99 ? '99+' : waUnread}</span>}
+          </Link>
+        </div>
         <div className="p-3 border-t border-white/10">
           <div className="text-sm text-red-50">{user?.name}</div>
           {user?.username && <div className="text-[10px] text-red-200 font-mono">@{user.username}</div>}
@@ -619,21 +754,45 @@ export default function Layout() {
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="p-2 hover:bg-gray-100 rounded-lg flex-shrink-0 text-gray-700"
             title={sidebarOpen ? 'Hide sidebar' : 'Expand sidebar'}
+            aria-label={sidebarOpen ? 'Hide sidebar' : 'Expand sidebar'}
           >
             {sidebarOpen ? <FiMenu size={20} /> : <FiChevronRight size={20} />}
           </button>
-          <h2 className="text-sm md:text-lg font-semibold text-gray-800 truncate flex-1">
-            {(() => {
-              // Header title — look up the current route across Dashboard +
-              // every group + Settings to find the matching label.
-              if (SIDEBAR_DASHBOARD.path === location.pathname) return SIDEBAR_DASHBOARD.label;
-              const allItems = [
-                ...SIDEBAR_GROUPS.flatMap(g => g.items),
-                ...SIDEBAR_SETTINGS.items,
-              ];
-              return allItems.find(m => m.path === location.pathname)?.label || 'SEPL ERP';
-            })()}
-          </h2>
+          {/* Brand mark — only when the sidebar is collapsed on desktop, so
+              the header never loses the SEPL logo (mam 2026-06-17). Mirrors
+              the sidebar logo, with the same broken-image fallback. */}
+          {!sidebarOpen && !isMobile && (
+            <div className="flex items-center gap-2 flex-shrink-0 pr-1">
+              <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center ring-1 ring-gray-200 overflow-hidden p-0.5">
+                <img
+                  src="/sepl-logo.webp"
+                  alt="SEPL"
+                  className="w-full h-full object-contain"
+                  onError={(e) => {
+                    if (!e.target.dataset.fallback) {
+                      e.target.dataset.fallback = '1';
+                      e.target.style.display = 'none';
+                      const txt = e.target.parentElement.querySelector('span');
+                      if (txt) txt.style.display = '';
+                    }
+                  }}
+                />
+                <span className="text-blue-700 font-extrabold text-xs" style={{ display: 'none' }}>SE</span>
+              </div>
+            </div>
+          )}
+          {/* Breadcrumb title — "Group › Page" so the current location has
+              context across the 64-item app (mam 2026-06-17). */}
+          <div className="flex-1 min-w-0">
+            {crumb.group && (
+              <div className="text-[11px] font-medium text-gray-400 leading-none truncate hidden sm:block">
+                {crumb.group}
+              </div>
+            )}
+            <h2 className="text-sm md:text-lg font-semibold text-gray-800 truncate leading-tight">
+              {crumb.label}
+            </h2>
+          </div>
           {/* Push notification toggle — phone / laptop / desktop each
               need to be enabled separately. Mam's MD requirement. */}
           <EnablePushButton />
@@ -643,21 +802,62 @@ export default function Layout() {
               tabs inside a single dropdown — replaces the previous
               "3 separate bells" layout that confused users. */}
           <AnnouncementBell />
-          {/* Build stamp (mam 2026-06-02) — tiny version chip so we can
-              verify the iPhone PWA has the freshest bundle without
-              guessing.  Defined at build time via Vite define(). */}
-          <span
-            className="hidden md:inline text-[9px] font-mono text-gray-400 ml-1 px-1.5 py-0.5 rounded bg-gray-50 border border-gray-200"
-            title="Build timestamp — confirms which deploy is loaded"
-          >
-            v{typeof __BUILD_STAMP__ !== 'undefined' ? __BUILD_STAMP__ : 'dev'}
-          </span>
-          <span
-            className="md:hidden text-[8px] font-mono text-gray-400 ml-0.5"
-            title="Build version"
-          >
-            v{typeof __BUILD_STAMP__ !== 'undefined' ? __BUILD_STAMP__ : 'dev'}
-          </span>
+          {/* User avatar menu (mam 2026-06-17 header freeze) — identity +
+              Change Password + Logout always reachable from the top bar,
+              even when the sidebar is collapsed. */}
+          <div className="relative flex-shrink-0">
+            <button
+              onClick={() => setUserMenu(o => !o)}
+              className="flex items-center gap-2 p-1 pr-1.5 md:pr-2 rounded-lg hover:bg-gray-100"
+              title={user?.name || 'Account'}
+              aria-label="Account menu"
+              aria-haspopup="true"
+              aria-expanded={userMenu}
+            >
+              <span className="w-8 h-8 rounded-full bg-blue-900 text-white text-xs font-bold flex items-center justify-center flex-shrink-0">
+                {initials}
+              </span>
+              <span className="hidden md:block max-w-[120px] truncate text-sm font-medium text-gray-700">{user?.name}</span>
+              <FiChevronDown size={14} className={`hidden md:block text-gray-400 transition-transform ${userMenu ? 'rotate-180' : ''}`} />
+            </button>
+            {userMenu && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setUserMenu(false)} />
+                <div className="absolute right-0 mt-1 w-60 bg-white border border-gray-200 rounded-lg shadow-lg z-40 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-gray-100">
+                    <div className="text-sm font-semibold text-gray-800 truncate">{user?.name}</div>
+                    {user?.username && <div className="text-[11px] text-gray-500 font-mono truncate">@{user.username}</div>}
+                    {user?.email && <div className="text-[11px] text-gray-400 truncate">{user.email}</div>}
+                    {userRoles.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {userRoles.map((r, i) => (
+                          <span key={i} className="text-[9px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">{r}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => { setUserMenu(false); setPwdModal(true); }}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    <FiKey size={15} /> Change Password
+                  </button>
+                  <button
+                    onClick={logout}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 border-t border-gray-100"
+                  >
+                    <FiLogOut size={15} /> Logout
+                  </button>
+                  {/* Build stamp moved here (mam 2026-06-17) — kept for PWA
+                      cache verification but no longer cluttering the header
+                      in front of management. */}
+                  <div className="px-4 py-1.5 text-[9px] font-mono text-gray-300 border-t border-gray-100 bg-gray-50">
+                    build v{typeof __BUILD_STAMP__ !== 'undefined' ? __BUILD_STAMP__ : 'dev'}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </header>
         {/* iOS home-indicator padding so content doesn't hide behind the
             bottom safe-area on iPhone X+ (mam 2026-06-02). */}
@@ -666,10 +866,17 @@ export default function Layout() {
           style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
         >
           <Outlet />
+          {/* SOTYN.AI credit — shown at the bottom of every page (mam 2026-06-19). */}
+          <div className="mt-6 pt-3 border-t border-slate-200 text-center select-none">
+            <p className="text-[9px] uppercase tracking-[0.3em] text-slate-400">Powered by</p>
+            <p className="text-sm font-extrabold tracking-wide bg-gradient-to-r from-blue-700 via-blue-500 to-blue-700 bg-clip-text text-transparent">SOTYN.AI</p>
+          </div>
         </main>
       </div>
-      <HelpTicket />
+      {/* Floating "?" help-ticket bubble removed (mam 2026-06-19) — Help
+          Tickets is still reachable from the sidebar page. */}
       <AIAgentChat />
     </div>
+    </CallProvider>
   );
 }

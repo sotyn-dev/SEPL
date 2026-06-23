@@ -70,7 +70,7 @@ export default function Billing() {
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Bill No</th><th>PO</th><th>Date</th><th>Amount</th><th>GST</th><th>Total</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
-              {salesBills.map(b => (<tr key={b.id}><td className="font-medium">{b.bill_number}</td><td>{b.po_number}</td><td>{b.bill_date}</td><td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td><td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td><td><StatusBadge status={b.payment_status} /></td><td>{canDelete('procurement') && <button onClick={async () => {
+              {salesBills.map(b => (<tr key={b.id}><td className="font-medium">{b.bill_number}</td><td>{b.po_number}</td><td>{b.bill_date}</td><td>Rs {b.amount?.toLocaleString()}</td><td>Rs {b.gst_amount?.toLocaleString()}</td><td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td><td><StatusBadge status={b.payment_status} /></td><td>{(canDelete('billing') || canDelete('procurement')) && <button onClick={async () => {
                 if (!confirm(`Delete sales bill "${b.bill_number}"?`)) return;
                 try { await api.delete(`/procurement/sales-bills/${b.id}`); toast.success('Deleted'); load(); }
                 catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
@@ -90,7 +90,7 @@ export default function Billing() {
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Bill No</th><th>Date</th><th>Work Done</th><th>Previous</th><th>Current</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-              {raBills.map(b => (<tr key={b.id}><td className="font-medium">{b.bill_number}</td><td>{b.bill_date}</td><td>Rs {b.work_done_amount?.toLocaleString()}</td><td>Rs {b.previous_amount?.toLocaleString()}</td><td className="font-semibold">Rs {b.current_amount?.toLocaleString()}</td><td><StatusBadge status={b.status} /></td><td>{canDelete('installation') && <button onClick={async () => {
+              {raBills.map(b => (<tr key={b.id}><td className="font-medium">{b.bill_number}</td><td>{b.bill_date}</td><td>Rs {b.work_done_amount?.toLocaleString()}</td><td>Rs {b.previous_amount?.toLocaleString()}</td><td className="font-semibold">Rs {b.current_amount?.toLocaleString()}</td><td><StatusBadge status={b.status} /></td><td>{(canDelete('billing') || canDelete('installation')) && <button onClick={async () => {
                 if (!confirm(`Delete RA bill "${b.bill_number}"?`)) return;
                 try { await api.delete(`/installation/ra-bills/${b.id}`); toast.success('Deleted'); load(); }
                 catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
@@ -110,7 +110,7 @@ export default function Billing() {
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Bill No</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-              {mbBills.map(b => (<tr key={b.id}><td className="font-medium">{b.bill_number}</td><td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td><td><StatusBadge status={b.status} /></td><td>{canDelete('installation') && <button onClick={async () => {
+              {mbBills.map(b => (<tr key={b.id}><td className="font-medium">{b.bill_number}</td><td className="font-semibold">Rs {b.total_amount?.toLocaleString()}</td><td><StatusBadge status={b.status} /></td><td>{(canDelete('billing') || canDelete('installation')) && <button onClick={async () => {
                 if (!confirm(`Delete MB bill "${b.bill_number}"?`)) return;
                 try { await api.delete(`/installation/mb-bills/${b.id}`); toast.success('Deleted'); load(); }
                 catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
@@ -130,7 +130,7 @@ export default function Billing() {
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Bill No</th><th>Amount</th><th>Payment</th><th>Actions</th></tr></thead>
             <tbody>
-              {instBills.map(b => (<tr key={b.id}><td className="font-medium">{b.bill_number}</td><td className="font-semibold">Rs {b.amount?.toLocaleString()}</td><td><StatusBadge status={b.payment_status} /></td><td>{canDelete('installation') && <button onClick={async () => {
+              {instBills.map(b => (<tr key={b.id}><td className="font-medium">{b.bill_number}</td><td className="font-semibold">Rs {b.amount?.toLocaleString()}</td><td><StatusBadge status={b.payment_status} /></td><td>{(canDelete('billing') || canDelete('installation')) && <button onClick={async () => {
                 if (!confirm(`Delete installation bill "${b.bill_number}"?`)) return;
                 try { await api.delete(`/installation/inst-bills/${b.id}`); toast.success('Deleted'); load(); }
                 catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
@@ -150,7 +150,7 @@ export default function Billing() {
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>Date</th><th>Type</th><th>Result</th><th>Tested By</th><th>Notes</th><th>Actions</th></tr></thead>
             <tbody>
-              {testing.map(t => (<tr key={t.id}><td>{t.test_date}</td><td>{t.test_type}</td><td><StatusBadge status={t.result} /></td><td>{t.tested_by_name}</td><td className="max-w-xs truncate">{t.notes}</td><td>{canDelete('installation') && <button onClick={async () => {
+              {testing.map(t => (<tr key={t.id}><td>{t.test_date}</td><td>{t.test_type}</td><td><StatusBadge status={t.result} /></td><td>{t.tested_by_name}</td><td className="max-w-xs truncate">{t.notes}</td><td>{(canDelete('billing') || canDelete('installation')) && <button onClick={async () => {
                 if (!confirm(`Delete test record "${t.test_type}"?`)) return;
                 try { await api.delete(`/installation/testing/${t.id}`); toast.success('Deleted'); load(); }
                 catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }

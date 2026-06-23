@@ -601,7 +601,9 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Sales Bills (to client)
+    -- Sales Bills (to client). The 4-type sequential columns (bill_type,
+    -- business_book_id, …) are added by migration so the legacy rows used by
+    -- the delivery-note flow keep working.
     CREATE TABLE IF NOT EXISTS sales_bills (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       po_id INTEGER REFERENCES purchase_orders(id),
@@ -612,6 +614,26 @@ function initializeDatabase() {
       total_amount REAL DEFAULT 0,
       payment_status TEXT DEFAULT 'pending' CHECK(payment_status IN ('pending','partial','paid')),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    -- Line items for a sales bill (snapshot from the Business Book order).
+    CREATE TABLE IF NOT EXISTS sales_bill_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sales_bill_id INTEGER REFERENCES sales_bills(id) ON DELETE CASCADE,
+      description TEXT,
+      qty_ordered REAL DEFAULT 0,
+      qty_delivered REAL DEFAULT 0,
+      unit TEXT,
+      rate REAL DEFAULT 0,
+      amount REAL DEFAULT 0
+    );
+    -- Status / approval audit trail for a sales bill.
+    CREATE TABLE IF NOT EXISTS sales_bill_status_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sales_bill_id INTEGER REFERENCES sales_bills(id) ON DELETE CASCADE,
+      status TEXT,
+      changed_by INTEGER REFERENCES users(id),
+      changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      notes TEXT
     );
 
     -- Debit Notes (mam 2026-06-04 post-PO chart, stage 7): a document
@@ -1325,6 +1347,25 @@ function initializeDatabase() {
       name TEXT,
       manpower INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Contractor manpower attendance (mam 2026-06-22): the site engineer's
+    -- MORNING punch of which sub-contractors are present on a site and how many
+    -- manpower each brought. Separate from team (user) attendance; pre-fills the
+    -- DPR "Contractors on Site". One row per site + date + contractor (upsert).
+    CREATE TABLE IF NOT EXISTS contractor_attendance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      site_id INTEGER REFERENCES sites(id) ON DELETE CASCADE,
+      attendance_date TEXT NOT NULL,
+      subcontractor_id INTEGER,
+      contractor_name TEXT NOT NULL,
+      contractor_type TEXT,
+      manpower INTEGER DEFAULT 0,
+      photo_url TEXT,
+      marked_by INTEGER REFERENCES users(id),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(site_id, attendance_date, contractor_name)
     );
 
     -- Work items from PO (item name, qty, rate, amount + floor/zone + planned/actual)
@@ -2660,6 +2701,32 @@ function initializeDatabase() {
     // score" on the Add Vendor form). Optional 0–10 score the team sets
     // when onboarding / reviewing a vendor.
     ['vendors', 'rating REAL'],
+    // Last-edited timestamp (mam 2026-06-19: show each vendor's last update
+    // date/time in the list so master enrichment is visible at a glance).
+    // Stamped on every PUT / bulk-update; the list falls back to created_at
+    // for vendors never edited since this column was added.
+    ['vendors', 'updated_at DATETIME'],
+    // Profile photo (WhatsApp-style avatar) per user — shown in chat bubbles,
+    // member lists, etc. Stores an /uploads URL (mam 2026-06-19).
+    ['users', 'avatar_url TEXT'],
+    // Client PO BOQ: PP = Purchase Price per item (column kept as part_price),
+    // alongside the existing labour_rate column. Both manual or auto-filled
+    // from the BOQ Excel (mam 2026-06-19: "Rate SITC, Amount, PP, Labour Rate").
+    ['po_items', 'part_price REAL'],
+    // Suggestion-only AI "marketing rate" per indent item on the Vendor Rates
+    // table (mam 2026-06-19) — does NOT affect the 3 vendor rates.
+    ['indent_item_rates', 'marketing_rate REAL'],
+    // Vendor PO 2-level approval (mam 2026-06-19: "after PO make 2 approval
+    // need L1 Nitin Jain, L2 Ankur Kaplesh"). New POs start 'pending_l1';
+    // existing POs default to 'approved' so they're grandfathered, not parked.
+    ['vendor_pos', "po_approval TEXT DEFAULT 'approved'"],
+    ['vendor_pos', 'po_l1_by INTEGER'],
+    ['vendor_pos', 'po_l1_at DATETIME'],
+    ['vendor_pos', 'po_l2_by INTEGER'],
+    ['vendor_pos', 'po_l2_at DATETIME'],
+    ['vendor_pos', 'po_reject_by INTEGER'],
+    ['vendor_pos', 'po_reject_at DATETIME'],
+    ['vendor_pos', 'po_reject_reason TEXT'],
     // Per-rule dynamic From address for email triggers (mam 2026-06-03:
     // "from mail which id also dynamic"). Optional; supports {{vars}}.
     ['email_rules', 'from_addr TEXT'],
@@ -2710,7 +2777,16 @@ function initializeDatabase() {
     ['indents', 'crm_margin_pct REAL'],
     ['purchase_orders', 'site_engineer_id INTEGER REFERENCES users(id)'],
     ['purchase_orders', 'site_engineer_ids TEXT'],
+    // Extra project roles who sometimes fill site data (mam 2026-06-17) —
+    // each a CSV of user ids, same shape as site_engineer_ids.
+    ['purchase_orders', 'jr_site_engineer_ids TEXT'],
+    ['purchase_orders', 'supervisor_ids TEXT'],
+    ['purchase_orders', 'welder_ids TEXT'],
+    ['purchase_orders', 'helper_ids TEXT'],
     ['purchase_orders', 'crm_name TEXT'],
+    // EA's manual followup note for the MD on a delegation (mam 2026-06-17) —
+    // informational only, does not affect task status.
+    ['delegations', 'followup_remarks TEXT'],
     ['purchase_orders', 'boq_file_link TEXT'],
     ['attendance', 'auto_punched_in INTEGER DEFAULT 0'],
     ['attendance', 'auto_punched_out INTEGER DEFAULT 0'],
@@ -2970,6 +3046,13 @@ function initializeDatabase() {
     // Bill / Tax Invoice (templates require these in the Bill To block).
     ['business_book', 'gstin TEXT'],
     ['business_book', 'state_code TEXT'],
+    // Management discount (mam 2026-06-16): a discount given on the Sale
+    // Amount.  Stored as both a % and the resolved Rs amount (kept in
+    // sync by the UI / server).  Net Sale = Sale − discount, and the
+    // PO Amount (with GST) recomputes off the NET, not the gross sale.
+    ['business_book', 'management_discount_pct REAL DEFAULT 0'],
+    ['business_book', 'management_discount_amount REAL DEFAULT 0'],
+    ['business_book', 'net_sale_amount REAL DEFAULT 0'],
     // Item Master pricing audit — MD's Phase 1: "Right now Price is
     // just a number — no date, no vendor, no bill. We can't trust it
     // for tenders." Adds vendor link, source provenance (PO / Quote /
@@ -2982,6 +3065,13 @@ function initializeDatabase() {
     ['item_master', 'bill_po_date DATE'],
     ['item_master', 'priced_at DATETIME'],                     // when current price was captured
     ['item_master', 'priced_by INTEGER REFERENCES users(id)'],
+    // Item approval (mam 2026-06-16): a new item entered from anywhere
+    // must be approved by an Admin (e.g. Ankur Kaplesh) before it counts
+    // as "correct".  DEFAULT 'approved' grandfathers every existing row;
+    // new manual entries are inserted as 'pending' (see routes/itemMaster).
+    ['item_master', "approval_status TEXT DEFAULT 'approved'"], // approved | pending | rejected
+    ['item_master', 'approved_by INTEGER REFERENCES users(id)'],
+    ['item_master', 'approved_at DATETIME'],
     // item_price_history exists for BOQ-row rates already; extend so a
     // full Master-page edit also lands here with the same provenance
     // fields the master row carries. Older rows keep null in these.
@@ -3149,6 +3239,13 @@ function initializeDatabase() {
     // the vendor PO.  Falls back to the vendor master's terms when blank.
     ['vendor_pos', 'payment_terms TEXT'],                 // 'Advance' | 'Credit' | 'PDC' | 'COD' | free text
     ['vendor_pos', 'credit_days INTEGER'],                // optional credit period for the above
+    // Freight terms + charge entered on the Create / Edit PO modal (mam
+    // 2026-06-12).  Printed on the vendor PO.  freight_terms is who bears
+    // the freight ('Ex-Works' = buyer arranges, 'FOR' = vendor delivers to
+    // site); freight_amount (₹) is added to the PO's taxable value so GST
+    // applies on it, matching how vendors bill freight.
+    ['vendor_pos', 'freight_terms TEXT'],                 // 'Ex-Works' | 'FOR' | NULL
+    ['vendor_pos', 'freight_amount REAL DEFAULT 0'],      // ₹ freight added to the PO total
     // Purchase Bills also get an uploaded file (the bill PDF / image / excel)
     ['purchase_bills', 'file_path TEXT'],
     // Material acceptance at bill entry (mam 2026-06-04): 'approved' (default)
@@ -3373,6 +3470,14 @@ function initializeDatabase() {
     // line is stored in KG for pipes so amount = kg × ₹/kg works unchanged).
     ['vendor_po_items', 'weight_per_meter REAL'],
     ['vendor_po_items', 'original_qty_mtr REAL'],
+    // Editable PO line snapshot (mam 2026-05-25: edit PO line items after
+    // creation).  The Edit-PO modal lets the user override the printed
+    // description / HSN per line; these columns store that override.  Were
+    // referenced by /with-items + the PUT /vendor-po/:id line-item update
+    // since 2026-05-25 but never actually added — so /with-items threw
+    // "no such column" → 500 → the Edit modal showed zero line items.
+    ['vendor_po_items', 'description TEXT'],
+    ['vendor_po_items', 'hsn_code TEXT'],
     // CRM funnel ← Extra indent link (mam 2026-06-06): Extra-Schedule /
     // Extra-Non-Schedule indents drop a funnel "requirement" at raise time.
     ['crm_funnel', 'source_indent_id INTEGER'],
@@ -3400,6 +3505,44 @@ function initializeDatabase() {
     ['indent_items', 'parent_item_id INTEGER REFERENCES indent_items(id)'],
     ['indent_items', 'stock_issue_note_id INTEGER REFERENCES stock_issue_notes(id)'],
     ['indent_items', 'stock_movement_id INTEGER REFERENCES stock_movements(id)'],
+    // Food allowance per employee per month (mam 2026-06-12) — ADDED to net
+    // pay.  Lives on payroll_advances (already keyed by month + employee_id).
+    ['payroll_advances', 'food REAL DEFAULT 0'],
+    // Manual monthly overrides (mam 2026-06-13: "give me edit option on days,
+    // CL, late so i can give salary now").  NULL = use the auto-calculated
+    // value; a number (incl. 0) overrides it for that month.
+    ['payroll_advances', 'paid_days_override REAL'],
+    ['payroll_advances', 'cl_override REAL'],
+    ['payroll_advances', 'late_penalty_override REAL'],
+    // Disbursement tracking (mam 2026-06-13): after a month is finalised,
+    // Accounts marks each person Paid — anyone left unpaid stays in the record.
+    ['payroll_runs', 'paid INTEGER DEFAULT 0'],
+    ['payroll_runs', 'paid_at DATETIME'],
+    ['payroll_runs', 'paid_by INTEGER REFERENCES users(id)'],
+    // Sales Billing — 4-type sequential bill flow (mam 2026-06-13).  Added to
+    // the existing sales_bills table so legacy delivery-note rows (bill_type
+    // NULL) are untouched; the new module only handles bill_type 1-4.
+    ['sales_bills', 'bill_type INTEGER'],                 // 1=Sales Order 2=Delivery 3=Installation 4=Final
+    ['sales_bills', 'business_book_id INTEGER REFERENCES business_book(id)'],
+    ['sales_bills', 'customer_name TEXT'],
+    ['sales_bills', 'customer_gstin TEXT'],
+    ['sales_bills', 'project_name TEXT'],
+    ['sales_bills', 'gst_rate REAL DEFAULT 0'],
+    ['sales_bills', 'bill_status TEXT'],                  // ORDER BOOKED / MATERIAL DELIVERED / ...
+    ['sales_bills', 'previous_bill_id INTEGER'],
+    ['sales_bills', 'reference_doc_type TEXT'],
+    ['sales_bills', 'reference_doc_no TEXT'],
+    ['sales_bills', 'reference_id INTEGER'],
+    ['sales_bills', "approval_status TEXT DEFAULT 'draft'"],
+    ['sales_bills', 'created_by INTEGER REFERENCES users(id)'],
+    // Idempotency for the Type-3 installation auto-bill: each DPR is billed
+    // into exactly one Type-3 sales bill (mam 2026-06-13: installation bill
+    // every 15 days from DPRs).  NULL = not yet billed.
+    ['dpr', 'sales_bill_id INTEGER'],
+    // "Sent to Client" — the only manual step on an auto-generated installation
+    // bill (mam 2026-06-13: "only give option sent to client").
+    ['sales_bills', 'sent_to_client INTEGER DEFAULT 0'],
+    ['sales_bills', 'sent_at DATETIME'],
   ];
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}
@@ -3978,6 +4121,69 @@ function initializeDatabase() {
   for (const [table, col] of migrations) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`); } catch (e) {}
   }
+
+  // Manpower Plan — admin override of the auto (value-slab) required manpower
+  // per project (mam 2026-06-12: "admin wants to edit required manpower").
+  // Keyed by the normalized project key the manpower-plan endpoint groups by.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS manpower_required_overrides (
+      project_key TEXT PRIMARY KEY,
+      required    INTEGER NOT NULL,
+      updated_by  INTEGER REFERENCES users(id),
+      updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  } catch (e) { console.error('[schema] manpower_required_overrides create failed:', e.message); }
+
+  // Manpower Plan per-project settings (mam 2026-06-12): a project CATEGORY
+  // (Live / Old / Service Team / Handover) plus the required-manpower override.
+  // Handover ⇒ no team required, no planning (required forced to 0).
+  // Supersedes manpower_required_overrides; old overrides are backfilled.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS manpower_project_settings (
+      project_key       TEXT PRIMARY KEY,
+      required_override INTEGER,
+      category          TEXT,
+      updated_by        INTEGER REFERENCES users(id),
+      updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    try {
+      db.exec(`INSERT OR IGNORE INTO manpower_project_settings (project_key, required_override)
+               SELECT project_key, required FROM manpower_required_overrides`);
+    } catch (_) { /* old table may not exist */ }
+    // Mam (2026-06-12): "Old" category renamed to "Hold".
+    try { db.exec(`UPDATE manpower_project_settings SET category='Hold' WHERE category='Old'`); } catch (_) {}
+    // Mam (2026-06-13): also plan Site Engineers / Jr. Site Engineers per
+    // project — required comes from a value slab, but allow an admin override
+    // of each, same as required manpower.
+    // Contractor attendance photo (mam 2026-06-22): per-contractor site photo,
+    // people auto-counted by AI to fill the manpower count. Guarded for DBs
+    // whose contractor_attendance table was created before this column existed.
+    try { db.exec(`ALTER TABLE contractor_attendance ADD COLUMN photo_url TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN site_eng_override INTEGER`); } catch (_) {}
+    try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN jr_site_eng_override INTEGER`); } catch (_) {}
+    try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN foreman_override INTEGER`); } catch (_) {}
+  } catch (e) { console.error('[schema] manpower_project_settings create failed:', e.message); }
+
+  // Retention: GPS pings accumulate every 30s per user and were never purged
+  // (audit 2026-06-12).  Drop pings older than 60 days on each boot so the
+  // table — and the admin live-map self-join over it — stays fast.
+  try { db.exec(`DELETE FROM location_tracking WHERE date < date('now','-60 days')`); } catch (_) {}
+
+  // Multiple BOQs per lead (mam 2026-06-12: "after some time again again
+  // client send boq ... option + to add boq").  The single boq_* columns on
+  // sales_funnel keep the LATEST for existing views; the full history lives
+  // here so every re-sent BOQ is kept.
+  try {
+    db.exec(`CREATE TABLE IF NOT EXISTS sales_funnel_boqs (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      funnel_id     INTEGER REFERENCES sales_funnel(id) ON DELETE CASCADE,
+      boq_file_link TEXT,
+      boq_amount    REAL DEFAULT 0,
+      notes         TEXT,
+      created_by    TEXT,
+      created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+  } catch (e) { console.error('[schema] sales_funnel_boqs create failed:', e.message); }
 
   // ─── 2-Level Indent Approval — tag Nitin Jain ji = L1, Nitin Sir = L2 ─
   // Idempotent: only sets approval_role on rows that don't already carry one,
@@ -4586,29 +4792,39 @@ in your first week. If a process feels broken, raise a Help Ticket
 
   // Mam (2026-05-22): "add frequency fortnightly mean month 2 time
   // b/w 15 days distance" — relax the checklists.frequency CHECK so
-  // the new 'fortnightly' value is accepted.  Uses writable_schema
-  // to edit the constraint in place (same pattern as the
-  // payment_requests CHECK rebuild).  Idempotent via app_settings.
+  // the new 'fortnightly' value is accepted.  The old approach edited
+  // sqlite_master via `PRAGMA writable_schema`, but SQLite's defensive
+  // mode rejects that with "table sqlite_master may not be modified",
+  // so the migration silently failed and fortnightly inserts errored.
+  // Rebuild the table instead (same proven pattern as the
+  // payment_requests / indents CHECK rebuilds).  Idempotent: the CHECK
+  // check short-circuits once 'fortnightly' is present.
   try {
-    const done = db.prepare("SELECT value FROM app_settings WHERE key='checklist_freq_fortnightly_v1'").get();
-    if (!done) {
-      // Check current CHECK clause — only patch if it's the old one.
-      const cur = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='checklists'").get();
-      if (cur?.sql && !cur.sql.includes("'fortnightly'")) {
-        db.exec('PRAGMA writable_schema = 1');
-        db.exec(`
-          UPDATE sqlite_master SET sql = REPLACE(sql,
-            "CHECK(frequency IN ('daily','weekly','monthly','quarterly','yearly','once'))",
-            "CHECK(frequency IN ('daily','weekly','fortnightly','monthly','quarterly','yearly','once'))"
-          ) WHERE type='table' AND name='checklists'
-        `);
-        db.exec('PRAGMA writable_schema = 0');
-        console.log('[migration] checklists CHECK relaxed to allow fortnightly');
+    const cur = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='checklists'").get();
+    if (cur?.sql && /CHECK\s*\(\s*frequency\s+IN/i.test(cur.sql) && !cur.sql.includes("'fortnightly'")) {
+      const newSql = cur.sql
+        .replace(/CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(?:"checklists"|checklists)/i, 'CREATE TABLE checklists_new')
+        .replace(/CHECK\s*\(\s*frequency\s+IN\s*\([^)]*\)\s*\)/i,
+          "CHECK(frequency IN ('daily','weekly','fortnightly','monthly','quarterly','yearly','once'))");
+      if (newSql === cur.sql || !/CREATE TABLE checklists_new/.test(newSql)) {
+        throw new Error('regex did not rewrite checklists CREATE — CHECK shape unexpected');
       }
-      db.prepare("INSERT INTO app_settings (key, value) VALUES ('checklist_freq_fortnightly_v1', '1')").run();
+      db.pragma('foreign_keys = OFF');
+      try { db.exec('DROP TABLE IF EXISTS checklists_new'); } catch (_) {}
+      const cols = db.prepare('PRAGMA table_info(checklists)').all().map(c => `"${c.name}"`).join(', ');
+      db.exec('BEGIN');
+      db.exec(newSql);
+      db.exec(`INSERT INTO checklists_new (${cols}) SELECT ${cols} FROM checklists`);
+      db.exec('DROP TABLE checklists');
+      db.exec('ALTER TABLE checklists_new RENAME TO checklists');
+      db.exec('COMMIT');
+      db.pragma('foreign_keys = ON');
+      console.log('[migration] checklists CHECK rebuilt to allow fortnightly');
     }
   } catch (e) {
-    console.warn('[migration] checklist freq fortnightly CHECK relax failed:', e.message);
+    try { db.exec('ROLLBACK'); } catch (_) {}
+    try { db.pragma('foreign_keys = ON'); } catch (_) {}
+    console.warn('[migration] checklist freq fortnightly CHECK rebuild failed:', e.message);
   }
 
   // Seed the canonical 5 lead-source values per MD's TOC v3 spec.
@@ -4759,6 +4975,26 @@ in your first week. If a process feels broken, raise a Help Ticket
     // MB → Contractor RA → Client RA → Payment Received).  Coexists
     // with the simpler labour_payment above (open Q #2).
     'indent_labour_payment',
+    // Mam (2026-06-18): AR/AP Tracker — rolling weekly cash-flow forecast
+    // (receivables vs payables by party × week) with a mandatory-remark
+    // change log. Under the Finance sidebar group.
+    'ar_ap_tracker',
+    // Mam (2026-06-18): Site Chat — internal WhatsApp-style message thread
+    // per site (team-only).
+    'site_chat',
+    // Mam (2026-06-19): Labour Rate Sheet — was sharing the `quotations`
+    // permission so it never showed separately in Roles & Permissions.
+    // Now its own module so access can be granted/revoked on its own.
+    'labour_rates',
+    // AI Auto-Quotation (the /estimator page) — was sharing the `quotations`
+    // permission so it never showed separately in Roles & Permissions. Now its
+    // own module so access can be granted/revoked independently of BOQ quotes.
+    'ai_quotation',
+    // Solar Division (PR #2) — Solar Sales Funnel / Quotation / Projects /
+    // Material+Labour Master all gate on this one key in server/routes/solar.js
+    // and the sidebar, but it was never added here, so no role got a
+    // role_permissions row and it never showed in Roles & Permissions.
+    'solar_quotation',
   ];
 
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)');

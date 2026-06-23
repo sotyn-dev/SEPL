@@ -30,6 +30,7 @@ import {
   FiCamera, FiClock, FiSettings, FiPlus, FiTrash2, FiEdit2,
   FiPackage, FiX, FiCalendar, FiUser, FiSearch, FiRefreshCw,
 } from 'react-icons/fi';
+import { fmtDateTime, fmtDate } from '../utils/datetime';
 
 // ── Status meta ────────────────────────────────────────────────
 const STATUS_META = {
@@ -58,8 +59,8 @@ const minObsISO = () => {
   const d = new Date(); d.setDate(d.getDate() - 5);
   return d.toISOString().slice(0, 10);
 };
-const fmtDt = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' }) : '—';
-const fmtD  = (iso) => iso ? new Date(iso).toLocaleDateString('en-IN', { dateStyle: 'medium', timeZone: 'Asia/Kolkata' }) : '—';
+const fmtDt = (iso) => iso ? fmtDateTime(iso, { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+const fmtD  = (iso) => iso ? fmtDate(iso, { dateStyle: 'medium' }) : '—';
 
 // CRM owner options — taken from mam's screenshot.  Anyone can add
 // more by typing in the picklist field; values are stored as plain

@@ -13,24 +13,15 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
+import { fmtDateTime as fmtDateTimeIST, fmtDate } from '../utils/datetime';
 
 const COMPANY = {
   name: 'Secured Engineers Pvt. Ltd.',
 };
 
 const fmtINR = (n) => Number(n || 0).toLocaleString('en-IN');
-const fmtDateLong = (iso) => {
-  if (!iso) return '___________';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
-};
-const fmtDateTime = (iso) => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
-};
+const fmtDateLong = (iso) => iso ? fmtDate(iso, { day: '2-digit', month: 'long', year: 'numeric' }) : '___________';
+const fmtDateTime = (iso) => fmtDateTimeIST(iso, { dateStyle: 'medium', timeStyle: 'short' });
 
 export default function PublicOffer() {
   const { token } = useParams();

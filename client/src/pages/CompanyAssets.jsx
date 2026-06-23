@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiMonitor, FiSmartphone, FiCpu, FiUserPlus, FiCornerUpLeft, FiTool, FiArchive, FiTrash2, FiEdit2, FiSearch, FiClock, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDateTime } from '../utils/datetime';
 
 const CATEGORIES = [
   'Laptop', 'Desktop', 'Mobile', 'Tablet', 'SIM Card',
@@ -43,6 +44,7 @@ export default function CompanyAssets() {
   const [assets, setAssets] = useState([]);
   const [stats, setStats] = useState(null);
   const [users, setUsers] = useState([]);
+  const [vendors, setVendors] = useState([]);
   const [filters, setFilters] = useState({ category: '', status: '', search: '' });
   const [modal, setModal] = useState(null); // 'edit' | 'issue' | 'return' | 'maintenance' | 'scrap' | 'history'
   const [form, setForm] = useState({});
@@ -61,6 +63,7 @@ export default function CompanyAssets() {
   useEffect(() => {
     load();
     api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
+    api.get('/procurement/vendors').then(r => setVendors(r.data || [])).catch(() => {});
   }, [load]);
 
   const upload = async (file) => {
@@ -319,7 +322,7 @@ export default function CompanyAssets() {
             <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Purchase</h5></div>
             <div><label className="label">Purchase Date</label><input type="date" className="input" value={form.purchase_date || ''} onChange={e => setForm(f => ({ ...f, purchase_date: e.target.value }))} /></div>
             <div><label className="label">Purchase Price (Rs)</label><input type="number" className="input" value={form.purchase_price || 0} onChange={e => setForm(f => ({ ...f, purchase_price: +e.target.value }))} /></div>
-            <div><label className="label">Vendor</label><input className="input" value={form.vendor || ''} onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))} placeholder="Reliance Digital / Croma…" /></div>
+            <div><label className="label">Vendor</label><input className="input" list="caVendorsDL" value={form.vendor || ''} onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))} placeholder="Pick vendor or type" /><datalist id="caVendorsDL">{vendors.map(v => <option key={v.id} value={v.name} />)}</datalist></div>
             <div><label className="label">Warranty Till</label><input type="date" className="input" value={form.warranty_till || ''} onChange={e => setForm(f => ({ ...f, warranty_till: e.target.value }))} /></div>
 
             <div className="col-span-2 border-t pt-3 mt-1"><h5 className="font-bold text-sm">Assignment</h5></div>
@@ -434,7 +437,7 @@ export default function CompanyAssets() {
                     m.movement_type === 'maintenance' ? 'bg-amber-100 text-amber-700' :
                     'bg-red-100 text-red-700'
                   }`}>{m.movement_type}</span>
-                  <span className="text-gray-500">{m.performed_at ? new Date(m.performed_at).toLocaleString('en-IN') : '—'}</span>
+                  <span className="text-gray-500">{m.performed_at ? fmtDateTime(m.performed_at) : '—'}</span>
                 </div>
                 <div className="mt-1 text-gray-700">
                   {m.from_user_name && <span>From: <b>{m.from_user_name}</b> </span>}

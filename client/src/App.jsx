@@ -6,6 +6,12 @@ import Dashboard from './pages/Dashboard';
 import Leads from './pages/Leads';
 import Quotations from './pages/Quotations';
 import Estimator from './pages/Estimator';
+import SolarQuotation from './pages/SolarQuotation';
+import SolarRateMaster from './pages/SolarRateMaster';
+import SolarFunnel from './pages/SolarFunnel';
+import SolarMaterialMaster from './pages/SolarMaterialMaster';
+import SolarLabourMaster from './pages/SolarLabourMaster';
+import SolarProjects from './pages/SolarProjects';
 import PoFocStripped from './pages/PoFocStripped';
 import PoFocPrint from './pages/PoFocPrint';
 import LabourRate from './pages/LabourRate';
@@ -19,6 +25,7 @@ import Customers from './pages/Customers';
 import Procurement from './pages/Procurement';
 import PriceRequired from './pages/PriceRequired';
 import Installation from './pages/Installation';
+import SalesBilling from './pages/SalesBilling';
 import Billing from './pages/Billing';
 import Complaints from './pages/Complaints';
 import HR from './pages/HR';
@@ -34,6 +41,8 @@ import Expenses from './pages/Expenses';
 import Checklists from './pages/Checklists';
 import CashFlow from './pages/CashFlow';
 import Collections from './pages/Collections';
+import ArApTracker from './pages/ArApTracker';
+import SiteChat from './pages/SiteChat';
 import IndentFMS from './pages/IndentFMS';
 import DPR from './pages/DPR';
 import IndentLabourPayment from './pages/IndentLabourPayment';
@@ -159,6 +168,10 @@ export default function App() {
         <Route path="payment-required" element={<ModuleRoute module="payment_required"><PaymentRequired /></ModuleRoute>} />
         <Route path="attendance" element={<ModuleRoute module="attendance"><Attendance /></ModuleRoute>} />
         <Route path="collections" element={<ModuleRoute module="collections"><Collections /></ModuleRoute>} />
+        <Route path="ar-ap-tracker" element={<ModuleRoute module="ar_ap_tracker"><ArApTracker /></ModuleRoute>} />
+        {/* WhatsApp is open to all signed-in users — access is by group
+            membership, not the site_chat module permission (mam 2026-06-19). */}
+        <Route path="site-chat" element={<SiteChat />} />
         <Route path="indent-fms" element={<ModuleRoute module="indent_fms"><IndentFMS /></ModuleRoute>} />
         <Route path="dpr" element={<ModuleRoute module="dpr"><DPR /></ModuleRoute>} />
         {/* Mam (2026-06-01) — Project Execution & Billing pipeline. */}
@@ -168,9 +181,15 @@ export default function App() {
         {/* Other Modules */}
         <Route path="leads" element={<ModuleRoute module="leads"><Leads /></ModuleRoute>} />
         <Route path="quotations" element={<ModuleRoute module="quotations"><Quotations /></ModuleRoute>} />
-        <Route path="estimator" element={<ModuleRoute module="quotations"><Estimator /></ModuleRoute>} />
+        <Route path="estimator" element={<ModuleRoute module="ai_quotation"><Estimator /></ModuleRoute>} />
+        <Route path="solar-funnel" element={<ModuleRoute module="solar_quotation"><SolarFunnel /></ModuleRoute>} />
+        <Route path="solar-quotation" element={<ModuleRoute module="solar_quotation"><SolarQuotation /></ModuleRoute>} />
+        <Route path="solar-projects" element={<ModuleRoute module="solar_quotation"><SolarProjects /></ModuleRoute>} />
+        <Route path="solar-material-master" element={<ModuleRoute module="solar_quotation"><SolarMaterialMaster /></ModuleRoute>} />
+        <Route path="solar-labour-master" element={<ModuleRoute module="solar_quotation"><SolarLabourMaster /></ModuleRoute>} />
+        <Route path="solar-rate-master" element={<ModuleRoute module="solar_quotation"><SolarRateMaster /></ModuleRoute>} />
         <Route path="po-foc-stripped" element={<ModuleRoute module="quotations"><PoFocStripped /></ModuleRoute>} />
-        <Route path="labour-rate" element={<ModuleRoute module="quotations"><LabourRate /></ModuleRoute>} />
+        <Route path="labour-rate" element={<ModuleRoute module="labour_rates"><LabourRate /></ModuleRoute>} />
         <Route path="business-book" element={<ModuleRoute module="business_book"><BusinessBook /></ModuleRoute>} />
         <Route path="item-master" element={<ModuleRoute module="item_master"><ItemMaster /></ModuleRoute>} />
         <Route path="orders" element={<ModuleRoute module="orders"><Orders /></ModuleRoute>} />
@@ -180,7 +199,7 @@ export default function App() {
         <Route path="price-required" element={<PriceRequired />} />
         <Route path="inventory" element={<ModuleRoute module="inventory"><Inventory /></ModuleRoute>} />
         <Route path="help-tickets" element={<HelpTickets />} />
-        <Route path="installation" element={<ModuleRoute module="installation"><Installation /></ModuleRoute>} />
+        <Route path="installation" element={<ModuleRoute module="installation"><SalesBilling /></ModuleRoute>} />
         <Route path="billing" element={<ModuleRoute module="billing"><Billing /></ModuleRoute>} />
         <Route path="complaints" element={<ModuleRoute module="complaints"><Complaints /></ModuleRoute>} />
         <Route path="snags" element={<ModuleRoute module="snags"><Snags /></ModuleRoute>} />

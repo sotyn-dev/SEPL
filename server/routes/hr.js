@@ -4,10 +4,267 @@ const fs = require('fs');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { parseResume } = require('../utils/resumeParser');
 const router = express.Router();
 router.use(authMiddleware);
+
+// ── Project-wise manpower plan (mam 2026-06-12) ─────────────────────
+// For each UNIQUE project (business_book grouped by project / company
+// name) show the total project value, the REQUIRED manpower from the
+// value slab, the ACTUAL manpower from the latest DPR, and the gap — so
+// HR can see shortages at a glance and hire / redeploy.
+//
+//   Project value → required manpower:
+//     ≤ 5 L → 4 | ≤ 25 L → 6 | ≤ 50 L → 8 | ≤ 1 Cr → 10
+//     ≤ 5 Cr → 15 | ≤ 10 Cr → 25 | > 10 Cr → 40
+const LAKH = 100000, CRORE = 10000000;
+function requiredManpower(value) {
+  const v = +value || 0;
+  if (v <= 5 * LAKH)  return 4;
+  if (v <= 25 * LAKH) return 6;
+  if (v <= 50 * LAKH) return 8;
+  if (v <= 1 * CRORE) return 10;
+  if (v <= 5 * CRORE) return 15;
+  if (v <= 10 * CRORE) return 25;
+  return 40;
+}
+
+// Required Site Eng / Jr. Site Eng / Foreman per project (mam 2026-06-13):
+// every project needs 1 Jr. Site Eng + 1 Foreman; a senior Site Engineer is
+// only needed once the project crosses ₹1.5 Cr.  Each is editable per project
+// with the ✏️ if a project needs more.
+const ENG_THRESHOLD = 1.5 * CRORE;
+function requiredEngineers(value) {
+  const big = (+value || 0) >= ENG_THRESHOLD;
+  return { se: big ? 1 : 0, jr: 1, fm: 1 };
+}
+
+// Classify a PO-linked person by their assigned ROLE(S) — the same role badges
+// shown in User Management (e.g. "Jr. Site Eng", "Site Engineer", "Foreman") —
+// into one bucket: 'fm' · 'jr' · 'se'.  role_names is the comma-joined list of
+// the user's roles.  Foreman wins, then junior; anyone else (incl. a plain
+// "Site Engineer" or no matching role) counts as a senior Site Engineer.
+function classifyRole(roleNames) {
+  const d = String(roleNames || '').toLowerCase();
+  if (d.includes('foreman')) return 'fm';
+  if (/\b(jr|jnr|junior|trainee|gte|asst|assistant)\b/.test(d) || d.includes('junior')) return 'jr';
+  return 'se';
+}
+
+router.get('/manpower-plan', (req, res) => {
+  const db = getDb();
+  const bbs = db.prepare(
+    `SELECT id, lead_no, project_name, company_name, client_name, po_amount, status
+       FROM business_book`
+  ).all();
+  const sites = db.prepare(`SELECT id, business_book_id FROM sites`).all();
+  // Manpower per DPR: prefer the sum of dpr_contractors.manpower, else the
+  // legacy dpr.contractor_manpower.  One row per DPR.
+  const dprRows = db.prepare(
+    `SELECT d.id, d.site_id, d.report_date,
+            CASE WHEN COALESCE(SUM(dc.manpower), 0) > 0 THEN SUM(dc.manpower)
+                 ELSE COALESCE(d.contractor_manpower, 0) END AS mp
+       FROM dpr d
+       LEFT JOIN dpr_contractors dc ON dc.dpr_id = d.id
+      GROUP BY d.id`
+  ).all();
+  // Group business_book rows into unique projects by normalized name.
+  const norm = s => String(s || '').trim();
+  const keyOf = bb => (norm(bb.project_name) || norm(bb.company_name) || norm(bb.client_name)
+    || (bb.lead_no ? `Lead ${bb.lead_no}` : `BB#${bb.id}`)).toLowerCase();
+  const groupByBB = new Map();   // business_book_id → group key
+  const groups = new Map();      // key → { project, value, mpSum, mpCount, last_dpr_date }
+  for (const bb of bbs) {
+    const key = keyOf(bb);
+    groupByBB.set(bb.id, key);
+    const display = norm(bb.project_name) || norm(bb.company_name) || norm(bb.client_name)
+      || (bb.lead_no ? `Lead ${bb.lead_no}` : `BB#${bb.id}`);
+    if (!groups.has(key)) groups.set(key, { key, project: display, value: 0, mpSum: 0, mpCount: 0, last_dpr_date: null, engUserIds: new Set() });
+    groups.get(key).value += +bb.po_amount || 0;
+  }
+  const siteToBB = new Map();
+  for (const s of sites) siteToBB.set(s.id, s.business_book_id);
+  // Actual = AVERAGE manpower across the project's DPRs (mam 2026-06-12:
+  // "actual from dpr average").  Only DPRs that actually recorded manpower
+  // (mp > 0) count toward the average, so unrecorded days don't drag it to 0.
+  for (const r of dprRows) {
+    const bbId = siteToBB.get(r.site_id);
+    if (bbId == null) continue;
+    const g = groups.get(groupByBB.get(bbId));
+    if (!g) continue;
+    const mp = +r.mp || 0;
+    if (mp > 0) { g.mpSum += mp; g.mpCount += 1; }
+    if (r.report_date && (!g.last_dpr_date || r.report_date > g.last_dpr_date)) g.last_dpr_date = r.report_date;
+  }
+
+  // Actual Site Eng / Jr. Site Eng / Foreman per project (mam 2026-06-13):
+  // the site engineers attached to each project's POs, classified by their
+  // assigned ROLE (same badge shown in User Management), counting only ACTIVE
+  // users.  So someone whose role is "Jr. Site Eng" lands in Jr, not Site Eng.
+  try {
+    const pos = db.prepare(
+      `SELECT business_book_id, site_engineer_id, site_engineer_ids FROM purchase_orders`
+    ).all();
+    for (const po of pos) {
+      const g = groups.get(groupByBB.get(po.business_book_id));
+      if (!g) continue;
+      if (po.site_engineer_id) g.engUserIds.add(po.site_engineer_id);
+      if (po.site_engineer_ids) {
+        String(po.site_engineer_ids).split(',').map(s => parseInt(s, 10))
+          .filter(Boolean).forEach(i => g.engUserIds.add(i));
+      }
+    }
+    const allEngIds = [...new Set([...groups.values()].flatMap(g => [...g.engUserIds]))];
+    if (allEngIds.length) {
+      const ph = allEngIds.map(() => '?').join(',');
+      // Active users only, each with the comma-joined list of their role names.
+      const userMap = new Map(
+        db.prepare(
+          `SELECT u.id, u.name, GROUP_CONCAT(r.name) AS role_names
+             FROM users u
+             LEFT JOIN user_roles ur ON ur.user_id = u.id
+             LEFT JOIN roles r ON r.id = ur.role_id
+            WHERE u.id IN (${ph}) AND u.active = 1
+            GROUP BY u.id`
+        ).all(...allEngIds).map(u => [u.id, u])
+      );
+      for (const g of groups.values()) {
+        const seN = [], jrN = [], fmN = [];
+        for (const uid of g.engUserIds) {
+          const u = userMap.get(uid);
+          if (!u) continue;            // inactive or missing user → not counted
+          const nm = (u.name || '').trim();
+          const bucket = classifyRole(u.role_names);
+          if (bucket === 'fm') fmN.push(nm); else if (bucket === 'jr') jrN.push(nm); else seN.push(nm);
+        }
+        g.seActual = seN.length; g.jrActual = jrN.length; g.fmActual = fmN.length;
+        g.seNames = seN; g.jrNames = jrN; g.fmNames = fmN;
+      }
+    }
+  } catch (e) { /* purchase_orders / roles tables may be absent on a stale DB */ }
+
+  // Per-project settings — category + required override, keyed by project key.
+  const settings = new Map();
+  try {
+    for (const s of db.prepare(`SELECT project_key, required_override, category, site_eng_override, jr_site_eng_override, foreman_override FROM manpower_project_settings`).all()) {
+      settings.set(s.project_key, s);
+    }
+  } catch (e) { /* table may not exist on a very stale DB */ }
+
+  const projects = [...groups.values()].map(g => {
+    const s = settings.get(g.key) || {};
+    const category = s.category || '';
+    const isHandover = category === 'Handover';           // no team required, no planning
+    const requiredAuto = requiredManpower(g.value);
+    const ov = s.required_override;
+    const overridden = !isHandover && ov != null && ov >= 0;
+    const required = isHandover ? 0 : (overridden ? ov : requiredAuto);
+    const actual = g.mpCount > 0 ? Math.round(g.mpSum / g.mpCount) : 0;
+    // Site Eng / Jr. Site Eng / Foreman — required from the value rule, with
+    // optional per-project override.  Handover projects need none.
+    const engAuto = requiredEngineers(g.value);
+    const seOv = s.site_eng_override, jrOv = s.jr_site_eng_override, fmOv = s.foreman_override;
+    const seOverridden = !isHandover && seOv != null && seOv >= 0;
+    const jrOverridden = !isHandover && jrOv != null && jrOv >= 0;
+    const fmOverridden = !isHandover && fmOv != null && fmOv >= 0;
+    const seRequired = isHandover ? 0 : (seOverridden ? seOv : engAuto.se);
+    const jrRequired = isHandover ? 0 : (jrOverridden ? jrOv : engAuto.jr);
+    const fmRequired = isHandover ? 0 : (fmOverridden ? fmOv : engAuto.fm);
+    const seActual = g.seActual || 0;
+    const jrActual = g.jrActual || 0;
+    const fmActual = g.fmActual || 0;
+    return {
+      key: g.key,
+      project: g.project,
+      value: Math.round(g.value),
+      category,
+      is_handover: isHandover,
+      required,
+      required_auto: requiredAuto,
+      required_overridden: overridden,
+      actual,
+      gap: required - actual,            // > 0 = short (hire), < 0 = surplus
+      // Site Engineers
+      se_required: seRequired,
+      se_required_auto: engAuto.se,
+      se_required_overridden: seOverridden,
+      se_actual: seActual,
+      se_gap: seRequired - seActual,
+      se_names: g.seNames || [],
+      // Jr. Site Engineers
+      jr_required: jrRequired,
+      jr_required_auto: engAuto.jr,
+      jr_required_overridden: jrOverridden,
+      jr_actual: jrActual,
+      jr_gap: jrRequired - jrActual,
+      jr_names: g.jrNames || [],
+      // Foreman
+      fm_required: fmRequired,
+      fm_required_auto: engAuto.fm,
+      fm_required_overridden: fmOverridden,
+      fm_actual: fmActual,
+      fm_gap: fmRequired - fmActual,
+      fm_names: g.fmNames || [],
+      last_dpr_date: g.last_dpr_date,
+    };
+  }).sort((a, b) => b.gap - a.gap || b.value - a.value);
+  res.json(projects);
+});
+
+// PUT a manual override of a project's required manpower (mam 2026-06-12:
+// "admin wants to edit required manpower give then access").  Gated by hr
+// EDIT permission (admins always pass).  Body { key, required }.  A blank /
+// 0 / null required RESETS the project back to the auto value-slab number.
+router.put('/manpower-plan/required', requirePermission('hr', 'edit'), (req, res) => {
+  const db = getDb();
+  const key = String(req.body?.key || '').trim();
+  if (!key) return res.status(400).json({ error: 'project key is required' });
+  // role selects which target is being edited: manpower (default), Site
+  // Engineers, or Jr. Site Engineers — all stored on the same settings row.
+  const COLS = { manpower: 'required_override', site_eng: 'site_eng_override', jr_site_eng: 'jr_site_eng_override', foreman: 'foreman_override' };
+  const col = COLS[req.body?.role] || COLS.manpower;
+  const raw = req.body?.required;
+  const reset = raw === '' || raw === null || raw === undefined || +raw <= 0;
+  try {
+    if (reset) {
+      // Clear this override but keep the rest of the row.
+      db.prepare(`UPDATE manpower_project_settings SET ${col}=NULL, updated_at=CURRENT_TIMESTAMP WHERE project_key=?`).run(key);
+      return res.json({ ok: true, reset: true });
+    }
+    const required = Math.round(+raw);
+    if (!Number.isFinite(required) || required > 100000) return res.status(400).json({ error: 'required must be a positive number' });
+    db.prepare(
+      `INSERT INTO manpower_project_settings (project_key, ${col}, updated_by, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(project_key) DO UPDATE SET ${col}=excluded.${col}, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`
+    ).run(key, required, req.user.id);
+    res.json({ ok: true, required });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT a project's category (mam 2026-06-12): Live / Old / Service Team /
+// Handover.  Handover means no team required + no planning.  Gated by hr
+// edit permission; an empty / unknown value clears the category.
+router.put('/manpower-plan/category', requirePermission('hr', 'edit'), (req, res) => {
+  const db = getDb();
+  const key = String(req.body?.key || '').trim();
+  if (!key) return res.status(400).json({ error: 'project key is required' });
+  const ALLOWED = ['Live', 'Hold', 'Service Team', 'Handover'];
+  const category = ALLOWED.includes(req.body?.category) ? req.body.category : null;
+  try {
+    db.prepare(
+      `INSERT INTO manpower_project_settings (project_key, category, updated_by, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(project_key) DO UPDATE SET category=excluded.category, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`
+    ).run(key, category, req.user.id);
+    res.json({ ok: true, category });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Mam (2026-05-22): bulk Excel upload for checklists.  Re-uses the
 // /data/uploads dir + 10MB cap so behaviour matches the PO/BOQ
@@ -450,7 +707,7 @@ router.get('/employees', (req, res) => {
   res.json(rows.map(({ salary, ...rest }) => rest));
 });
 
-router.post('/employees', (req, res) => {
+router.post('/employees', requirePermission('employees', 'create'), (req, res) => {
   const { name, phone, email, designation, department, join_date, salary,
           aadhar_file, pan_file, qualification_file } = req.body;
   let { user_id } = req.body;
@@ -476,7 +733,7 @@ router.post('/employees', (req, res) => {
 
 // Auto-link existing employees to users by matching email (case-insensitive).
 // Safe to run any time — only fills rows where user_id IS NULL.
-router.post('/employees/auto-link', (req, res) => {
+router.post('/employees/auto-link', requirePermission('employees', 'edit'), (req, res) => {
   const db = getDb();
   const candidates = db.prepare(
     `SELECT e.id, u.id as user_id FROM employees e
@@ -490,7 +747,7 @@ router.post('/employees/auto-link', (req, res) => {
 });
 
 // Bulk import employees
-router.post('/employees/bulk', (req, res) => {
+router.post('/employees/bulk', requirePermission('employees', 'create'), (req, res) => {
   const { employees } = req.body;
   if (!employees || !Array.isArray(employees) || employees.length === 0) {
     return res.status(400).json({ error: 'No employee data provided' });
@@ -509,7 +766,7 @@ router.post('/employees/bulk', (req, res) => {
   res.json({ added, errors, total: employees.length });
 });
 
-router.put('/employees/:id', (req, res) => {
+router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
   const { name, phone, email, designation, department, salary, status, user_id,
           aadhar_file, pan_file, qualification_file } = req.body;
   // COALESCE so passing undefined for a doc field doesn't wipe the existing
@@ -526,7 +783,7 @@ router.put('/employees/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/employees/:id', (req, res) => {
+router.delete('/employees/:id', requirePermission('employees', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM employees WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -561,7 +818,7 @@ router.get('/expenses', (req, res) => {
     LEFT JOIN users u1 ON e.submitted_by=u1.id LEFT JOIN users u2 ON e.approved_by=u2.id ORDER BY e.created_at DESC`).all());
 });
 
-router.post('/expenses', (req, res) => {
+router.post('/expenses', requirePermission('expenses', 'create'), (req, res) => {
   const { title, description, amount, category, expense_date } = req.body;
   const db = getDb();
   // Server-side dedup — mam: "entry one time but showing data 4 to 5
@@ -589,7 +846,7 @@ router.post('/expenses', (req, res) => {
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put('/expenses/:id', (req, res) => {
+router.put('/expenses/:id', requirePermission('expenses', 'edit'), (req, res) => {
   // Two flows mam uses, both go through this endpoint:
   //   (1) edit the expense details (title/description/amount/category/date)
   //   (2) change status (approve / reject / mark paid / un-mark paid)
@@ -631,7 +888,7 @@ router.put('/expenses/:id', (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/expenses/:id', (req, res) => {
+router.delete('/expenses/:id', requirePermission('expenses', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM expenses WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });

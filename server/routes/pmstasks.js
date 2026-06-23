@@ -68,7 +68,8 @@ router.get('/', (req, res) => {
 
   const where = [];
   const params = [];
-  if (isAdmin && scope === 'all') {
+  if ((isAdmin || can(uid, 'approve')) && scope === 'all') {
+    // admin or a PMS executive (approve on pms_tasks) sees everything
     // no filter
   } else if (scope === 'followup') {
     // Everyone's tasks, defaulting to active (non-approved). Status dropdown
@@ -206,8 +207,8 @@ router.post('/:id/submit', (req, res) => {
   const db = getDb();
   const t = db.prepare('SELECT * FROM pms_tasks WHERE id=?').get(req.params.id);
   if (!t) return res.status(404).json({ error: 'Task not found' });
-  if (t.assigned_to !== req.user.id && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Only the assignee can submit proof' });
+  if (t.assigned_to !== req.user.id && req.user.role !== 'admin' && !can(req.user.id, 'approve')) {
+    return res.status(403).json({ error: 'Only the assignee or a PMS executive can submit proof' });
   }
   if (!proof_url) return res.status(400).json({ error: 'Proof file is required' });
   db.prepare(
@@ -240,6 +241,9 @@ function canApprovePmsTask(t, user) {
   if (user.role === 'admin') return true;
   if (t.assigned_by === user.id) return true;
   if (isCrmOwner(t, user)) return true;
+  // Honour the role-matrix "Approve" permission (mam 2026-06-17): a user
+  // granted PMS Tasks → Approve can approve/reject anyone's task.
+  if (can(user.id, 'approve')) return true;
   return false;
 }
 
@@ -280,8 +284,8 @@ router.post('/:id/request-extension', (req, res) => {
   const db = getDb();
   const t = db.prepare('SELECT * FROM pms_tasks WHERE id=?').get(req.params.id);
   if (!t) return res.status(404).json({ error: 'Task not found' });
-  if (t.assigned_to !== req.user.id && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Only the assignee can request an extension' });
+  if (t.assigned_to !== req.user.id && req.user.role !== 'admin' && !can(req.user.id, 'approve')) {
+    return res.status(403).json({ error: 'Only the assignee or a PMS executive can request an extension' });
   }
   if (t.status === 'approved') return res.status(400).json({ error: 'Task already approved' });
   db.prepare(

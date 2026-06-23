@@ -6,7 +6,22 @@ function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
   try {
-    req.user = jwt.verify(token, SECRET);
+    const decoded = jwt.verify(token, SECRET);
+    req.user = decoded;
+    // Sliding session (mam 2026-06-12: "after some time automatically logout
+    // ... very bad"). While the user is active, keep handing back a fresh
+    // token once the current one is more than a day old, so an active user
+    // never gets logged out. Only a session idle for the full token lifetime
+    // (7 days) expires. The client swaps the token in via the response header.
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const REFRESH_WHEN_REMAINING_UNDER = 6 * 24 * 60 * 60; // < 6 days left → token is >1 day old
+      if (decoded.exp && (decoded.exp - now) < REFRESH_WHEN_REMAINING_UNDER) {
+        const fresh = generateToken(decoded);
+        res.setHeader('X-Refresh-Token', fresh);
+        res.setHeader('Access-Control-Expose-Headers', 'X-Refresh-Token');
+      }
+    } catch (_) { /* refresh is best-effort; never block the request */ }
     next();
   } catch {
     res.status(401).json({ error: 'Invalid token' });
@@ -61,7 +76,7 @@ function getUserPermissions(userId) {
   if (user?.role === 'admin') {
     // Admin gets everything
     const modules = [
-      'dashboard','leads','quotations','orders','business_book','item_master','vendors','customers','procurement',
+      'dashboard','leads','quotations','solar_quotation','orders','business_book','item_master','vendors','customers','procurement',
       'cashflow','collections','payment_required','attendance','indent_fms','dpr',
       'installation','billing','complaints','hr','payroll','employees','expenses','checklists','users','delegations','pms_tasks','inventory','scoring','tools','rentals'
     ];
@@ -99,7 +114,7 @@ function generateToken(user) {
   return jwt.sign(
     { id: user.id, email: user.email, role: user.role, name: user.name },
     SECRET,
-    { expiresIn: '24h' }
+    { expiresIn: '7d' }   // base lifetime; slides forward on activity (see authMiddleware)
   );
 }
 

@@ -40,16 +40,64 @@ try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_vendor_id     ON item_mast
 try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_make          ON item_master(make)`); } catch (_) {}
 try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_bill_po_date  ON item_master(bill_po_date)`); } catch (_) {}
 try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_item_code     ON item_master(item_code)`); } catch (_) {}
+try { getDb().exec(`CREATE INDEX IF NOT EXISTS idx_im_approval       ON item_master(approval_status)`); } catch (_) {}
+
+// Guarantee the pricing/approval columns the list query joins on actually
+// exist (mam 2026-06-16: "data is missing"). The central migration adds these
+// with a "REFERENCES users(id)" clause, which some SQLite builds reject in an
+// ALTER ... ADD COLUMN — and since that migration is wrapped in a silent
+// try/catch, the column ends up missing on those servers. The Item Master list
+// JOINs on approved_by / priced_by, so a missing column made the WHOLE list
+// 500 and show "0 items / No items found", while the completion dashboard
+// (which never touches these columns) kept reporting the real count. Re-adding
+// them here with a plain ADD COLUMN (no REFERENCES) is idempotent and safe.
+for (const col of [
+  'priced_at DATETIME',
+  'priced_by INTEGER',
+  'approved_by INTEGER',
+  'approved_at DATETIME',
+  "approval_status TEXT DEFAULT 'approved'",
+]) {
+  try { getDb().exec(`ALTER TABLE item_master ADD COLUMN ${col}`); } catch (_) {}
+}
+
+// One-time backfill (mam 2026-06-16): flag items added in the LAST 2 DAYS
+// (i.e. "yesterday's new entries") as pending so an Admin reviews them;
+// everything older stays approved (the column default already grandfathered
+// every existing row to 'approved'). Guarded by an app_settings sentinel so
+// it runs exactly once per deploy of this rule.
+try {
+  const db = getDb();
+  db.exec(`CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)`);
+  const flag = db.prepare(`SELECT value FROM app_settings WHERE key='item_master_recent_pending_v1'`).get();
+  if (!flag) {
+    const r = db.prepare(`
+      UPDATE item_master
+         SET approval_status = 'pending', approved_by = NULL, approved_at = NULL
+       WHERE COALESCE(approval_status, 'approved') = 'approved'
+         AND created_at >= datetime('now', 'localtime', '-2 days')
+    `).run();
+    db.prepare(`INSERT INTO app_settings (key, value) VALUES ('item_master_recent_pending_v1', '1')`).run();
+    console.log(`[item_master] recent-pending backfill: ${r.changes} item(s) flagged for approval`);
+  }
+} catch (e) {
+  console.warn('[item_master] recent-pending backfill skipped:', e.message);
+}
 
 // Builds the WHERE clause + params shared by the list endpoint and the
 // COUNT(*) for the paginator. Keeping them in one place ensures the
 // "Showing X-Y of Z" total always matches what the table shows.
 function buildItemFilters(query) {
-  const { department, type, search, status } = query;
+  const { department, type, search, status, approval } = query;
   const clauses = [];
   const params = [];
   if (department) { clauses.push('im.department=?'); params.push(department); }
   if (type) { clauses.push('im.type=?'); params.push(type); }
+  // Approval filter (mam 2026-06-16): pending | approved | rejected.
+  // Treat a missing/NULL status as 'approved' (grandfathered rows).
+  if (approval === 'pending')  clauses.push(`im.approval_status = 'pending'`);
+  if (approval === 'approved') clauses.push(`COALESCE(im.approval_status, 'approved') = 'approved'`);
+  if (approval === 'rejected') clauses.push(`im.approval_status = 'rejected'`);
   if (search) {
     clauses.push('(im.item_name LIKE ? OR im.specification LIKE ? OR im.size LIKE ? OR im.item_code LIKE ? OR im.make LIKE ?)');
     const q = `%${search}%`;
@@ -77,12 +125,14 @@ router.get('/', requirePermission('item_master', 'view'), (req, res) => {
     SELECT im.*,
            v.name AS vendor_name,
            u.name AS priced_by_name,
+           au.name AS approved_by_name,
            CASE WHEN ${AGE_DATE_EXPR} IS NULL THEN NULL
                 ELSE CAST((julianday('now','localtime') - julianday(${AGE_DATE_EXPR})) AS INTEGER)
            END AS age_days
       FROM item_master im
       LEFT JOIN vendors v ON v.id = im.vendor_id
       LEFT JOIN users u ON u.id = im.priced_by
+      LEFT JOIN users au ON au.id = im.approved_by
     ${where}
     ORDER BY im.item_code
     LIMIT ? OFFSET ?
@@ -90,11 +140,79 @@ router.get('/', requirePermission('item_master', 'view'), (req, res) => {
   const countSql = `SELECT COUNT(*) AS n FROM item_master im ${where}`;
 
   const db = getDb();
-  const rows  = db.prepare(sql).all(...params, limit, offset);
-  const total = db.prepare(countSql).get(...params).n;
+  try {
+    const rows  = db.prepare(sql).all(...params, limit, offset);
+    const total = db.prepare(countSql).get(...params).n;
+    res.json({
+      items: rows.map(r => ({ ...r, age_status: ageStatus(r.age_days) })),
+      total, limit, offset,
+    });
+  } catch (e) {
+    // Never let a schema hiccup (e.g. a column an older server failed to add)
+    // blank out the entire Item Master. Log it, then fall back to a query that
+    // only touches base columns + the vendor name so the list still loads.
+    console.error('[item_master] list query failed, using degraded fallback:', e.message);
+    try {
+      const fbSql = `
+        SELECT im.*, v.name AS vendor_name,
+               CASE WHEN ${AGE_DATE_EXPR} IS NULL THEN NULL
+                    ELSE CAST((julianday('now','localtime') - julianday(${AGE_DATE_EXPR})) AS INTEGER)
+               END AS age_days
+          FROM item_master im
+          LEFT JOIN vendors v ON v.id = im.vendor_id
+        ${where}
+        ORDER BY im.item_code
+        LIMIT ? OFFSET ?`;
+      const rows  = db.prepare(fbSql).all(...params, limit, offset);
+      const total = db.prepare(countSql).get(...params).n;
+      res.json({
+        items: rows.map(r => ({ ...r, age_status: ageStatus(r.age_days) })),
+        total, limit, offset,
+      });
+    } catch (e2) {
+      console.error('[item_master] list fallback also failed:', e2.message);
+      res.status(500).json({ error: 'Could not load items', detail: e2.message });
+    }
+  }
+});
+
+// Data-completion dashboard (mam 2026-06-15): across ALL items, how many of
+// the required fields are filled — overall %, count of fully-complete items,
+// and per-field missing counts. Each item has N required fields, so the
+// denominator is items × N.
+router.get('/completion', requirePermission('item_master', 'view'), (req, res) => {
+  const db = getDb();
+  const F = (expr) => `SUM(CASE WHEN ${expr} THEN 1 ELSE 0 END)`;
+  const COND = {
+    item_name: "TRIM(COALESCE(item_name,''))<>''",
+    type: "TRIM(COALESCE(type,''))<>''",
+    specification: "TRIM(COALESCE(specification,''))<>''",
+    size: "TRIM(COALESCE(size,''))<>''",
+    uom: "TRIM(COALESCE(uom,''))<>''",
+    gst: "TRIM(COALESCE(gst,''))<>''",
+    make: "TRIM(COALESCE(make,''))<>''",
+    rate: "COALESCE(current_price,0)>0",
+    vendor: "vendor_id IS NOT NULL",
+    source_type: "TRIM(COALESCE(source_type,''))<>''",
+    bill_po_number: "TRIM(COALESCE(bill_po_number,''))<>''",
+    bill_po_date: "TRIM(COALESCE(bill_po_date,''))<>''",
+  };
+  const keys = Object.keys(COND);
+  const selects = keys.map(k => `${F(COND[k])} AS ${k}`).join(', ');
+  const allFilled = keys.map(k => `(${COND[k]})`).join(' AND ');
+  const row = db.prepare(
+    `SELECT COUNT(*) AS total, ${selects}, ${F(allFilled)} AS complete_items FROM item_master`
+  ).get();
+  const total = row.total || 0;
+  const per_field = keys.map(k => ({ key: k, filled: row[k] || 0, missing: total - (row[k] || 0) }));
+  const filled_total = per_field.reduce((s, x) => s + x.filled, 0);
   res.json({
-    items: rows.map(r => ({ ...r, age_status: ageStatus(r.age_days) })),
-    total, limit, offset,
+    total_items: total,
+    field_count: keys.length,
+    required_total: total * keys.length,
+    filled_total,
+    complete_items: row.complete_items || 0,
+    per_field,
   });
 });
 
@@ -109,17 +227,23 @@ router.get('/dropdown', (req, res) => {
   // current_price etc. from the SAME row as that min id — with two
   // aggregates the bare columns came from indeterminate rows, so the shown
   // code/unit didn't match the item (mam 2026-06-10).
-  const where = type ? 'WHERE type = ?' : '';
-  const sql = `SELECT MIN(id) AS id, item_code, department, item_name, specification, size, uom, gst, type, current_price
+  // `type` may be a single value or a comma list (e.g. 'PO,POC').
+  const types = type ? String(type).split(',').map(s => s.trim()).filter(Boolean) : [];
+  const where = types.length ? `WHERE type IN (${types.map(() => '?').join(',')})` : '';
+  const sql = `SELECT MIN(id) AS id, item_code, department, item_name, specification, size, uom, gst, type, make, current_price,
+                      COALESCE(approval_status, 'approved') AS approval_status
                  FROM item_master ${where}
                 GROUP BY LOWER(TRIM(item_name)), LOWER(TRIM(COALESCE(specification, ''))), LOWER(TRIM(COALESCE(size, '')))
                 ORDER BY department, item_name`;
   const stmt = getDb().prepare(sql);
-  const items = type ? stmt.all(type) : stmt.all();
-  res.json(items.map(i => ({
-    ...i,
-    display_name: [i.item_name, i.specification, i.size].filter(Boolean).join(' / ')
-  })));
+  const items = types.length ? stmt.all(...types) : stmt.all();
+  res.json(items.map(i => {
+    const base = [i.item_name, i.specification, i.size].filter(Boolean).join(' / ');
+    // Pending items stay selectable but are flagged so pickers can show
+    // they're awaiting approval (mam 2026-06-16).
+    const pending = i.approval_status === 'pending';
+    return { ...i, display_name: pending ? `${base} (Pending approval)` : base };
+  }));
 });
 
 // Single item — same shape as list, including age.
@@ -195,6 +319,49 @@ router.patch('/:id/price', requirePermission('item_master', 'edit'), (req, res) 
   res.json({ message: 'Price updated', current_price: price });
 });
 
+// ─── Item approval (mam 2026-06-16) ───────────────────────────────────
+// Only an Admin (e.g. Ankur Kaplesh) can approve / reject a pending item.
+// Approving stamps who & when; rejecting keeps the row (filterable) so it
+// can be corrected or deleted, but it's flagged out of the trusted set.
+const adminOnly = (req, res, next) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an Admin can approve items' });
+  next();
+};
+
+// Count of pending items — lets the page show a badge without fetching all.
+router.get('/approval/pending-count', (req, res) => {
+  const n = getDb().prepare(`SELECT COUNT(*) AS n FROM item_master WHERE approval_status='pending'`).get().n;
+  res.json({ pending: n });
+});
+
+// Approve everything currently pending — convenience for clearing a backlog.
+router.post('/approval/approve-all', adminOnly, (req, res) => {
+  const r = getDb().prepare(`UPDATE item_master
+       SET approval_status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+     WHERE approval_status='pending'`).run(req.user.id);
+  res.json({ message: `Approved ${r.changes} item(s)`, approved: r.changes });
+});
+
+router.post('/:id/approve', adminOnly, (req, res) => {
+  const db = getDb();
+  const item = db.prepare('SELECT id FROM item_master WHERE id=?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Not found' });
+  db.prepare(`UPDATE item_master
+                 SET approval_status='approved', approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+               WHERE id=?`).run(req.user.id, req.params.id);
+  res.json({ message: 'Item approved', approval_status: 'approved' });
+});
+
+router.post('/:id/reject', adminOnly, (req, res) => {
+  const db = getDb();
+  const item = db.prepare('SELECT id FROM item_master WHERE id=?').get(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Not found' });
+  db.prepare(`UPDATE item_master
+                 SET approval_status='rejected', approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+               WHERE id=?`).run(req.user.id, req.params.id);
+  res.json({ message: 'Item rejected', approval_status: 'rejected' });
+});
+
 router.post('/', requirePermission('item_master', 'create'), (req, res) => {
   const b = req.body || {};
   if (!b.item_name) return res.status(400).json({ error: 'Item name required' });
@@ -223,14 +390,20 @@ router.post('/', requirePermission('item_master', 'create'), (req, res) => {
   }
   const sourceType = ALLOWED_SOURCES.includes(b.source_type) ? b.source_type : 'Manual';
   const price = +b.current_price || 0;
+  // Mam (2026-06-16): a new item entered from anywhere starts as PENDING
+  // and must be approved by an Admin before it counts as "correct".
+  // Admins who add an item approve it on the spot (no point making them
+  // approve their own entry).
+  const isAdmin = req.user.role === 'admin';
   const r = getDb().prepare(`
     INSERT INTO item_master
       (item_code, department, item_name, specification, size, uom, gst, type, make, model_number,
        current_price, catalogue_link, photo_link,
        vendor_id, source_type, bill_po_number, bill_po_date,
        weight_per_meter,
-       priced_at, priced_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       priced_at, priced_by,
+       approval_status, approved_by, approved_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     code, b.department, b.item_name, b.specification, b.size,
     b.uom || 'PCS', b.gst || '18%', b.type || 'PO', b.make, b.model_number,
@@ -239,8 +412,11 @@ router.post('/', requirePermission('item_master', 'create'), (req, res) => {
     (b.weight_per_meter === '' || b.weight_per_meter == null) ? null : (+b.weight_per_meter || null),
     price > 0 ? new Date().toISOString() : null,
     price > 0 ? req.user.id : null,
+    isAdmin ? 'approved' : 'pending',
+    isAdmin ? req.user.id : null,
+    isAdmin ? new Date().toISOString() : null,
   );
-  res.status(201).json({ id: r.lastInsertRowid, item_code: code });
+  res.status(201).json({ id: r.lastInsertRowid, item_code: code, approval_status: isAdmin ? 'approved' : 'pending' });
 });
 
 router.put('/:id', requirePermission('item_master', 'edit'), (req, res) => {

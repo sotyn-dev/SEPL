@@ -10,7 +10,11 @@ import { exportCsv } from '../utils/exportCsv';
 import TimePicker from '../components/TimePicker';
 
 export default function Attendance() {
-  const { user, isAdmin, canDelete } = useAuth();
+  const { user, isAdmin, canDelete, canSeeAll } = useAuth();
+  // Admins, or anyone granted "See All" on the attendance module, can view
+  // everyone's attendance (mam 2026-06-15: "show all attendance if I give some
+  // permission to see all"). Write tools (Grid / Geofence) stay admin-only.
+  const seeAll = isAdmin() || canSeeAll('attendance');
   const [tab, setTab] = useUrlTab('punch');
   const [myToday, setMyToday] = useState(null);
   // Mam: daily attendance detail (in/out times + leave) belongs on the
@@ -34,6 +38,17 @@ export default function Attendance() {
   const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
   const [userDateFrom, setUserDateFrom] = useState(firstOfMonth);
   const [userDateTo, setUserDateTo] = useState(today);
+  // "My History" tab — every employee can review their OWN past attendance
+  // over a start→end date range (mam 2026-06-12).
+  const [myHistFrom, setMyHistFrom] = useState(firstOfMonth);
+  const [myHistTo, setMyHistTo] = useState(today);
+  const [myHistory, setMyHistory] = useState([]);
+  // Monthly Attendance Grid (mam 2026-06-13) — mark present/absent/half/leave
+  // for everyone in one screen so no-punch days don't drag payroll to absent.
+  const monthNow = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  const [gridMonth, setGridMonth] = useState(monthNow());
+  const [grid, setGrid] = useState(null);
+  const [gridBusy, setGridBusy] = useState(false);
   const [location, setLocation] = useState(null);
   const [address, setAddress] = useState('');
   const [photo, setPhoto] = useState(null);
@@ -56,7 +71,7 @@ export default function Attendance() {
     api.get('/attendance/my-month').then(r => setMyMonth(r.data)).catch(() => {});
     // Everyone needs geofence list to see auto-punch status live
     api.get('/attendance/geofence').then(r => setGeofences(r.data || [])).catch(() => {});
-    if (isAdmin()) {
+    if (seeAll) {
       api.get('/attendance/dashboard').then(r => setDashboard(r.data)).catch(() => {});
       api.get(`/attendance?date=${filterDate}`).then(r => setRecords(r.data)).catch(() => {});
       api.get('/attendance/leaves').then(r => setLeaves(r.data)).catch(() => {});
@@ -68,11 +83,20 @@ export default function Attendance() {
 
   // Load per-user records when the By User tab filters change
   useEffect(() => {
-    if (!isAdmin() || tab !== 'byuser' || !selectedUserId) { setUserRecords([]); return; }
+    if (!seeAll || tab !== 'byuser' || !selectedUserId) { setUserRecords([]); return; }
     api.get(`/attendance?user_id=${selectedUserId}&date_from=${userDateFrom}&date_to=${userDateTo}`)
       .then(r => setUserRecords(r.data))
       .catch(() => setUserRecords([]));
   }, [tab, selectedUserId, userDateFrom, userDateTo, isAdmin]);
+
+  // Load the logged-in user's own attendance when the My History tab /
+  // its date range changes. Self-service — works for every employee.
+  useEffect(() => {
+    if (tab !== 'myhistory') return;
+    api.get(`/attendance/my-history?from=${myHistFrom}&to=${myHistTo}`)
+      .then(r => setMyHistory(r.data || []))
+      .catch(() => setMyHistory([]));
+  }, [tab, myHistFrom, myHistTo]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -199,19 +223,152 @@ export default function Attendance() {
   const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
   const dateStr = now.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
+  // ── Monthly Attendance Grid helpers ──────────────────────────────
+  const loadGrid = useCallback(() => {
+    if (!isAdmin()) return;
+    api.get(`/attendance/grid?month=${gridMonth}`).then(r => setGrid(r.data)).catch(() => setGrid(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gridMonth]);
+  useEffect(() => { if (tab === 'grid') loadGrid(); }, [tab, gridMonth, loadGrid]);
+
+  const cellMeta = (c) => {
+    const s = c?.status || '';
+    if (s === 'present') return { t: 'P', cls: 'bg-emerald-100 text-emerald-700' };
+    if (s === 'late') return { t: 'L', cls: 'bg-amber-100 text-amber-700' };
+    if (s === 'half_day') return { t: '½', cls: 'bg-orange-100 text-orange-700' };
+    if (s === 'short_day') return { t: 'S', cls: 'bg-orange-100 text-orange-700' };
+    if (s === 'leave') return { t: 'CL', cls: 'bg-purple-100 text-purple-700' };
+    if (s === 'sunday') return { t: '–', cls: 'bg-gray-50 text-gray-300' };
+    if (s === 'absent') return { t: 'A', cls: 'bg-red-50 text-red-600' };
+    return { t: '·', cls: 'bg-white text-gray-300' };
+  };
+  const markCell = async (emp, date, status) => {
+    if (!emp.user_id) return;
+    setGridBusy(true);
+    try { await api.post('/attendance/admin-mark', { user_id: emp.user_id, date, status }); loadGrid(); }
+    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+    finally { setGridBusy(false); }
+  };
+  // Click cycles: blank/absent → Present → Absent → Half → Leave → (clear).
+  // Real punches and approved leaves are read-only here.
+  const onCellClick = (emp, day, c) => {
+    if (!emp.user_id || day.future) return;
+    if (c.source === 'punch') { toast('Real punch — edit it under Records'); return; }
+    if (c.source === 'leave') { toast('Approved leave — manage it under Leaves'); return; }
+    const order = ['present', 'absent', 'half_day', 'leave', 'clear'];
+    const next = c.source === 'admin' ? order[(order.indexOf(c.status) + 1) % order.length] : 'present';
+    markCell(emp, day.date, next);
+  };
+  const markAllPresent = async (emp) => {
+    if (!emp.user_id) return;
+    if (!confirm(`Mark ${emp.name} PRESENT on every blank working day in ${gridMonth}? (Sundays, real punches and leaves are left untouched.)`)) return;
+    setGridBusy(true);
+    try { const r = await api.post('/attendance/admin-mark-bulk', { user_id: emp.user_id, month: gridMonth, status: 'present' }); toast.success(r.data.message); loadGrid(); }
+    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+    finally { setGridBusy(false); }
+  };
+  const linkLogin = async (emp, userId) => {
+    if (!userId) return;
+    try { const r = await api.post('/attendance/link-login', { employee_id: emp.employee_id, user_id: +userId }); toast.success(r.data.message); loadGrid(); }
+    catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex gap-2 flex-wrap">
         <button onClick={() => setTab('punch')} className={`btn ${tab === 'punch' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Punch In/Out</button>
-        {isAdmin() && <>
+        <button onClick={() => setTab('myhistory')} className={`btn ${tab === 'myhistory' ? 'btn-primary' : 'btn-secondary'} text-sm`}>My History</button>
+        {seeAll && <>
           <button onClick={() => setTab('dashboard')} className={`btn ${tab === 'dashboard' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Dashboard</button>
           <button onClick={() => setTab('records')} className={`btn ${tab === 'records' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Records</button>
           <button onClick={() => setTab('byuser')} className={`btn ${tab === 'byuser' ? 'btn-primary' : 'btn-secondary'} text-sm`}>By User</button>
           <button onClick={() => setTab('report')} className={`btn ${tab === 'report' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Report</button>
-          <button onClick={() => setTab('geofence')} className={`btn ${tab === 'geofence' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Geofence</button>
           <button onClick={() => setTab('leaves')} className={`btn ${tab === 'leaves' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Leaves</button>
         </>}
+        {isAdmin() && <>
+          <button onClick={() => setTab('grid')} className={`btn ${tab === 'grid' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Monthly Grid</button>
+          <button onClick={() => setTab('geofence')} className={`btn ${tab === 'geofence' ? 'btn-primary' : 'btn-secondary'} text-sm`}>Geofence</button>
+        </>}
       </div>
+
+      {/* MONTHLY ATTENDANCE GRID TAB */}
+      {tab === 'grid' && isAdmin() && (
+        <div className="space-y-3">
+          <div className="text-xs text-gray-600 bg-amber-50 border border-amber-100 rounded-lg px-4 py-2.5">
+            A day with <b>no punch counts as absent</b> in payroll. Mark people here so salary is right.
+            Click a cell to cycle <b>P</b>resent → <b>A</b>bsent → <b>½</b> half → <b>CL</b> leave → clear.
+            Real punches and approved leaves are read-only. Use <b>“P all”</b> to fill a person’s blank working days as present.
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input type="month" className="input text-sm" value={gridMonth} onChange={e => setGridMonth(e.target.value)} />
+            <button onClick={loadGrid} className="btn btn-secondary text-sm">Refresh</button>
+            <div className="flex items-center gap-2 text-[11px] text-gray-500 ml-auto">
+              <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">P present</span>
+              <span className="px-1.5 py-0.5 rounded bg-red-50 text-red-600">A absent</span>
+              <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">½ half</span>
+              <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">CL leave</span>
+              <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">L late</span>
+            </div>
+          </div>
+          {!grid ? (
+            <div className="card p-8 text-center text-gray-400 text-sm">Loading…</div>
+          ) : grid.employees.length === 0 ? (
+            <div className="card p-8 text-center text-gray-400 text-sm">No active employees found.</div>
+          ) : (
+            <div className="card p-0 overflow-x-auto">
+              <table className="text-xs border-collapse">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="sticky left-0 z-10 bg-gray-50 text-left px-3 py-2 font-semibold min-w-[160px]">Employee</th>
+                    {grid.days.map(day => (
+                      <th key={day.date} className={`px-0 py-2 text-center font-semibold w-7 ${day.sunday ? 'text-red-400' : 'text-gray-500'}`} title={day.date}>{day.d}</th>
+                    ))}
+                    <th className="px-2 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {grid.employees.map(emp => (
+                    <tr key={emp.employee_id} className="border-t border-gray-100">
+                      <td className="sticky left-0 z-10 bg-white px-3 py-1.5 font-medium text-gray-800 min-w-[160px]">
+                        {emp.name}
+                        {emp.no_login && (
+                          <div className="mt-0.5 flex items-center gap-1">
+                            <span className="text-[10px] bg-amber-200 text-amber-800 px-1 rounded">⚠ no login</span>
+                            <select className="select text-[10px] py-0 h-6" defaultValue="" onChange={e => linkLogin(emp, e.target.value)} title="Link this employee to their login user">
+                              <option value="" disabled>link…</option>
+                              {emp.suggestions.map(s => <option key={s.user_id} value={s.user_id}>{s.name}</option>)}
+                            </select>
+                          </div>
+                        )}
+                      </td>
+                      {grid.days.map(day => {
+                        const c = emp.cells[day.date] || {};
+                        const meta = cellMeta(c);
+                        const ro = !emp.user_id || day.future || c.source === 'punch' || c.source === 'leave';
+                        return (
+                          <td key={day.date} className="p-0 text-center">
+                            <button type="button" disabled={gridBusy || ro}
+                              onClick={() => onCellClick(emp, day, c)}
+                              title={`${day.date}${c.status ? ' · ' + c.status : ''}${c.source ? ' (' + c.source + ')' : ''}`}
+                              className={`w-7 h-7 text-[10px] font-bold ${meta.cls} ${c.source === 'punch' ? 'ring-1 ring-inset ring-blue-200' : ''} ${ro ? 'cursor-default opacity-90' : 'hover:brightness-95'}`}>
+                              {day.future ? '' : meta.t}
+                            </button>
+                          </td>
+                        );
+                      })}
+                      <td className="px-2 py-1.5 whitespace-nowrap">
+                        {emp.user_id
+                          ? <button onClick={() => markAllPresent(emp)} disabled={gridBusy} className="btn btn-secondary text-[11px] py-0.5">P all</button>
+                          : <span className="text-[10px] text-gray-300">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* PUNCH IN/OUT TAB */}
       {tab === 'punch' && (
@@ -617,7 +774,111 @@ export default function Attendance() {
       )}
 
       {/* BY USER TAB — pick a person, see their in/out/hours over a range */}
-      {tab === 'byuser' && isAdmin() && (
+      {/* MY HISTORY — self-service: every employee can review their OWN past
+          attendance over a start→end date range (mam 2026-06-12). */}
+      {tab === 'myhistory' && (
+        <div className="space-y-4">
+          <div className="card p-3">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+              <div>
+                <label className="label">From</label>
+                <input type="date" className="input" value={myHistFrom} max={myHistTo} onChange={e => setMyHistFrom(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">To</label>
+                <input type="date" className="input" value={myHistTo} max={today} onChange={e => setMyHistTo(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">&nbsp;</label>
+                <button type="button" className="btn btn-secondary text-sm w-full" onClick={() => { setMyHistFrom(firstOfMonth); setMyHistTo(today); }}>This month</button>
+              </div>
+              <div>
+                <label className="label">&nbsp;</label>
+                <button type="button" disabled={myHistory.length === 0} className="btn btn-secondary text-sm w-full flex items-center justify-center gap-2 disabled:opacity-40"
+                  onClick={() => exportCsv(`my-attendance-${myHistFrom}_to_${myHistTo}`,
+                    ['Date','In','Out','Hours','Site','Status'],
+                    myHistory.map(r => [
+                      r.date,
+                      r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '',
+                      r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '',
+                      r.total_hours || 0, r.site_name || '', r.status || '',
+                    ]))}>
+                  <FiDownload /> Export
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Summary cards */}
+          {(() => {
+            const total = myHistory.length;
+            const present = myHistory.filter(r => r.punch_in_time).length;
+            const late = myHistory.filter(r => r.status === 'late').length;
+            const halfDay = myHistory.filter(r => r.status === 'half_day').length;
+            const totalHours = myHistory.reduce((s, r) => s + (r.total_hours || 0), 0);
+            const avgHours = present > 0 ? (totalHours / present).toFixed(1) : '0';
+            return (
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+                <div className="card p-3"><div className="text-[11px] text-gray-500">Records</div><div className="text-2xl font-bold">{total}</div></div>
+                <div className="card p-3"><div className="text-[11px] text-gray-500">Present</div><div className="text-2xl font-bold text-emerald-600">{present}</div></div>
+                <div className="card p-3"><div className="text-[11px] text-gray-500">Late</div><div className="text-2xl font-bold text-amber-600">{late}</div></div>
+                <div className="card p-3"><div className="text-[11px] text-gray-500">Half Day</div><div className="text-2xl font-bold text-orange-600">{halfDay}</div></div>
+                <div className="card p-3"><div className="text-[11px] text-gray-500">Total Hours</div><div className="text-2xl font-bold">{totalHours.toFixed(1)}</div></div>
+                <div className="card p-3"><div className="text-[11px] text-gray-500">Avg Hours / day</div><div className="text-2xl font-bold">{avgHours}</div></div>
+              </div>
+            );
+          })()}
+
+          {/* Detail table */}
+          <div className="card p-0 overflow-x-auto">
+            <div className="p-3 border-b"><h4 className="font-semibold text-sm">My Attendance · {myHistFrom} → {myHistTo}</h4></div>
+            <div className="overflow-x-auto">
+              <table className="text-sm w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-2 py-2 text-left">Date</th>
+                    <th className="px-2 py-2">In</th>
+                    <th className="px-2 py-2">Out</th>
+                    <th className="px-2 py-2">Hours</th>
+                    <th className="px-2 py-2 text-left">Site</th>
+                    <th className="px-2 py-2">Status</th>
+                    <th className="px-2 py-2">Photos</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {myHistory.map(r => (
+                    <tr key={r.id} className="border-b">
+                      <td className="px-2 py-2 font-medium">{r.date}</td>
+                      <td className="px-2 py-2 text-center text-xs text-emerald-600">
+                        {r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                        {r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}
+                      </td>
+                      <td className="px-2 py-2 text-center text-xs text-red-600">
+                        {r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                        {r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}
+                      </td>
+                      <td className="px-2 py-2 text-center font-semibold">{r.total_hours || '-'}</td>
+                      <td className="px-2 py-2 text-xs">{r.site_name || '-'}</td>
+                      <td className="px-2 py-2 text-center"><StatusBadge status={r.status} /></td>
+                      <td className="px-2 py-2">
+                        <div className="flex gap-1 justify-center">
+                          {r.punch_in_photo && <img src={r.punch_in_photo} alt="In" onClick={() => setLightbox({ src: r.punch_in_photo, label: `Punch In — ${r.date || ''}` })} className="w-8 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" title="Punch In" />}
+                          {r.punch_out_photo && <img src={r.punch_out_photo} alt="Out" onClick={() => setLightbox({ src: r.punch_out_photo, label: `Punch Out — ${r.date || ''}` })} className="w-8 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" title="Punch Out" />}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {myHistory.length === 0 && (
+                    <tr><td colSpan="7" className="text-center py-6 text-gray-400">No attendance records in this range</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === 'byuser' && seeAll && (
         <div className="space-y-4">
           <div className="card p-3">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3">

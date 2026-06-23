@@ -1,9 +1,170 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const { execFile } = require('child_process');
+const multer = require('multer');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
 const { findDuplicate, sendDuplicate } = require('../utils/duplicateGuard');
 const router = express.Router();
 router.use(authMiddleware);
+
+// ─── Voice-note → text (self-hosted, mam 2026-06-17: "give me free") ──────
+// Upload a recorded audio file; the server converts it to 16kHz mono WAV with
+// ffmpeg and runs whisper.cpp locally (no API key, no per-use cost). Paths are
+// configurable via env so the box can be set up without code changes; if the
+// binary/model aren't there yet we return a clear "not set up" message.
+//
+// VPS-safety (mam 2026-06-17: "my erp should not hang"). The box is tiny and
+// shared with the live ERP, so transcription is fenced in four ways:
+//   1. `nice -n 19` — lowest CPU priority, so ANY ERP request preempts it.
+//   2. whisper threads capped at (cores − 1, min 1) — always leaves a core
+//      free for Node, so the app keeps answering while a note transcribes.
+//   3. a single-flight busy lock — only one job at a time, so two big files
+//      can't pile up and exhaust CPU/RAM (the real "hang" risk on 1-2 GB RAM).
+//   4. ffmpeg caps input to 10 min and whisper is hard-killed after 3 min.
+const audioTmpDir = path.join(__dirname, '..', '..', 'data', 'uploads', 'audio_tmp');
+try { fs.mkdirSync(audioTmpDir, { recursive: true }); } catch (_) {}
+const audioUpload = multer({ dest: audioTmpDir, limits: { fileSize: 25 * 1024 * 1024 } });
+const WHISPER_BIN = process.env.WHISPER_BIN || '/root/whisper.cpp/main';
+const WHISPER_MODELS_DIR = process.env.WHISPER_MODELS_DIR || '/root/whisper.cpp/models';
+const FFMPEG_BIN = process.env.FFMPEG_BIN || 'ffmpeg';
+// Language: default 'hi' (Hindi) — these are Hindi/Hinglish voice notes, and
+// leaving it on auto/English made Whisper spell Hindi as gibberish English.
+// Forcing Hindi makes it transcribe the actual words (in Devanagari). Override
+// with WHISPER_LANG=auto or =en if a user mostly speaks English.
+const WHISPER_LANG = process.env.WHISPER_LANG || 'hi';
+const WHISPER_THREADS = Math.max(1, (require('os').cpus().length || 1) - 1);
+let transcribeBusy = false;  // single-flight guard — one job at a time
+
+// Pick the most accurate model that's actually installed (medium > small >
+// base). The tiny `base` model badly mis-hears Hindi/Hinglish, so dropping a
+// bigger model into the models dir + restarting upgrades accuracy with NO
+// config change. WHISPER_MODEL env overrides this outright.
+function resolveWhisperModel() {
+  if (process.env.WHISPER_MODEL) return process.env.WHISPER_MODEL;
+  for (const name of ['ggml-medium.bin', 'ggml-small.bin', 'ggml-base.bin']) {
+    const p = path.join(WHISPER_MODELS_DIR, name);
+    try { if (fs.existsSync(p)) return p; } catch (_) {}
+  }
+  return path.join(WHISPER_MODELS_DIR, 'ggml-base.bin');
+}
+
+function getSetting(key) {
+  try { const row = getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(key); return row?.value ?? null; }
+  catch (_) { return null; }
+}
+
+// Staff type tasks in Roman letters, so convert Whisper's accurate Hindi
+// (Devanagari) into casual Hinglish using the Claude key the ERP already has.
+// Best-effort: no key, or any failure, just returns the original text so
+// transcription never breaks. Set WHISPER_ROMANIZE=0 to keep Devanagari.
+// Free, dependency-free Devanagari → Roman transliteration. Not perfect
+// Hinglish (some inherent-'a' artifacts remain) but always readable Roman,
+// no API key / no cost. Used as the guaranteed fallback so output is NEVER
+// left in Hindi script.
+function devanagariToRoman(input) {
+  const V = { 'अ':'a','आ':'aa','इ':'i','ई':'ee','उ':'u','ऊ':'oo','ऋ':'ri','ए':'e','ऐ':'ai','ओ':'o','औ':'au','ऍ':'e','ऑ':'o','ॲ':'a' };
+  const M = { 'ा':'aa','ि':'i','ी':'ee','ु':'u','ू':'oo','ृ':'ri','े':'e','ै':'ai','ो':'o','ौ':'au','ॅ':'e','ॉ':'o','ं':'n','ँ':'n','ः':'h' };
+  const C = {
+    'क':'k','ख':'kh','ग':'g','घ':'gh','ङ':'n','च':'ch','छ':'chh','ज':'j','झ':'jh','ञ':'n',
+    'ट':'t','ठ':'th','ड':'d','ढ':'dh','ण':'n','त':'t','थ':'th','द':'d','ध':'dh','न':'n',
+    'प':'p','फ':'ph','ब':'b','भ':'bh','म':'m','य':'y','र':'r','ल':'l','व':'v',
+    'श':'sh','ष':'sh','स':'s','ह':'h','ळ':'l','ड़':'r','ढ़':'rh','क़':'q','ख़':'kh','ग़':'g','ज़':'z','फ़':'f','य़':'y',
+  };
+  const D = { '०':'0','१':'1','२':'2','३':'3','४':'4','५':'5','६':'6','७':'7','८':'8','९':'9' };
+  const HALANT = '्';
+  const chars = Array.from(input);
+  let out = '';
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (C[ch]) {
+      out += C[ch];
+      const nxt = chars[i + 1];
+      if (nxt === HALANT) { i++; continue; }            // conjunct → no vowel
+      if (nxt && M[nxt]) { out += M[nxt]; i++; continue; } // explicit matra
+      out += 'a';                                        // inherent vowel
+    } else if (V[ch]) { out += V[ch]; }
+    else if (M[ch]) { out += M[ch]; }
+    else if (D[ch]) { out += D[ch]; }
+    else { out += ch; }                                  // spaces / punctuation / latin
+  }
+  return out.replace(/([a-z])a\b/g, '$1');               // drop most word-final inherent 'a'
+}
+
+async function romanizeToHinglish(text) {
+  if (!text) return text;
+  if (process.env.WHISPER_ROMANIZE === '0') return text;
+  if (!/[ऀ-ॿ]/.test(text)) return text;   // no Hindi script → nothing to do
+  // Prefer Claude (natural Hinglish) IF a key is set — use the SAME model the
+  // ERP's AI agent already uses, so we never fail on an unsupported model id.
+  const apiKey = getSetting('ai_api_key');
+  if (apiKey) {
+    try {
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic.default({ apiKey, timeout: 30000 });
+      const model = process.env.ROMANIZE_MODEL || getSetting('ai_model') || 'claude-opus-4-7';
+      const r = await client.messages.create({
+        model, max_tokens: 1200,
+        system: 'You transliterate Hindi (Devanagari) into casual Romanized Hinglish exactly how an Indian office worker types in English letters (e.g. "मटेरियल भेजो" -> "material bhejo"). Keep English / brand / product words in English. Do NOT translate the meaning, and do NOT add, remove, or explain anything. Output ONLY the transliterated text.',
+        messages: [{ role: 'user', content: text }],
+      });
+      const out = (r.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+      if (out && !/[ऀ-ॿ]/.test(out)) return out;        // good Roman result from Claude
+    } catch (_) { /* fall through to the free local transliterator */ }
+  }
+  return devanagariToRoman(text);                         // guaranteed Roman, no key needed
+}
+
+router.post('/transcribe', audioUpload.single('audio'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No audio file received.' });
+  const inPath = req.file.path;
+  const wavPath = `${inPath}.wav`;
+  const txtPath = `${wavPath}.txt`;
+  const drop = (f) => { try { fs.unlinkSync(f); } catch (_) {} };
+  const WHISPER_MODEL = resolveWhisperModel();
+
+  if (transcribeBusy) {
+    drop(inPath);
+    return res.status(429).json({ error: 'Another voice note is being transcribed right now. Please try again in a few seconds.' });
+  }
+  if (!fs.existsSync(WHISPER_BIN) || !fs.existsSync(WHISPER_MODEL)) {
+    drop(inPath);
+    return res.status(503).json({ error: 'Voice transcription is not set up on the server yet. Ask the admin to install Whisper (one-time setup).' });
+  }
+
+  transcribeBusy = true;
+  // Centralised exit — always frees the temp files AND releases the lock, so
+  // the box can never get stuck "busy" after an error / timeout.
+  const finish = (status, body) => {
+    for (const f of [inPath, wavPath, txtPath]) drop(f);
+    transcribeBusy = false;
+    if (!res.headersSent) res.status(status).json(body);
+  };
+
+  // 1) Normalise to the WAV whisper.cpp expects; `-t 600` caps reading to the
+  //    first 10 minutes so a huge file can't peg the CPU indefinitely.
+  execFile(FFMPEG_BIN, ['-y', '-t', '600', '-i', inPath, '-ar', '16000', '-ac', '1', '-f', 'wav', wavPath],
+    { timeout: 60000 }, (ffErr) => {
+      if (ffErr) return finish(400, { error: 'Could not read that audio. Try mp3 / m4a / wav / ogg.' });
+      // 2) Transcribe at lowest priority, bounded threads, hard-killed at 5 min
+      //    (bigger/more-accurate models are slower). Language is forced to
+      //    Hindi (WHISPER_LANG) so it captures the real words instead of
+      //    spelling them as English gibberish.
+      execFile('nice', ['-n', '19', WHISPER_BIN, '-m', WHISPER_MODEL, '-t', String(WHISPER_THREADS),
+        '-l', WHISPER_LANG, '-f', wavPath, '-nt', '-np', '-otxt', '-of', wavPath],
+        { maxBuffer: 10 * 1024 * 1024, timeout: 300000, killSignal: 'SIGKILL' }, async (wErr, stdout) => {
+          let text = '';
+          try { text = fs.readFileSync(txtPath, 'utf8').trim(); } catch (_) {}
+          if (!text) text = String(stdout || '').replace(/\[[0-9:.\s\->]+\]/g, '').trim();
+          if (wErr && !text) return finish(500, { error: 'Transcription failed or timed out on the server.' });
+          // 3) Convert the Hindi text into the Roman Hinglish staff type in.
+          let out = text;
+          try { out = await romanizeToHinglish(text); } catch (_) {}
+          finish(200, { text: out });
+        });
+    });
+});
 
 // Is this user an EA / supervisor? Treated as having the can_approve flag on
 // the delegations module — mam grants this to whoever's her assistant, and
@@ -220,6 +381,22 @@ router.patch('/:id/project', (req, res) => {
   const value = raw && String(raw).trim() ? String(raw).trim() : null;
   db.prepare('UPDATE delegations SET project_name=? WHERE id=?').run(value, req.params.id);
   res.json({ message: 'Project updated', project_name: value });
+});
+
+// Inline edit of the EA's followup remark for the MD (mam 2026-06-17).
+// EA (can_approve on delegations) or admin only — it's the EA's note, and it
+// does NOT change the task's status/completion. Empty string clears it.
+router.patch('/:id/followup-remarks', (req, res) => {
+  const db = getDb();
+  const d = db.prepare('SELECT id FROM delegations WHERE id=?').get(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Task not found' });
+  if (req.user.role !== 'admin' && !isEA(req.user.id)) {
+    return res.status(403).json({ error: 'Only the EA or an admin can edit followup remarks' });
+  }
+  const raw = req.body?.followup_remarks;
+  const value = raw && String(raw).trim() ? String(raw).trim() : null;
+  db.prepare('UPDATE delegations SET followup_remarks=? WHERE id=?').run(value, req.params.id);
+  res.json({ message: 'Followup remark saved', followup_remarks: value });
 });
 
 // Assignee requests a due-date extension. Admin (not the assigner) approves.

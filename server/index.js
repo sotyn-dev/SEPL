@@ -79,6 +79,20 @@ try {
   console.warn('[seed] scoring failed:', e.message);
 }
 
+// Solar Quotation module — create tables + seed the rate book on first boot
+// (mam 2026-06-21). Idempotent: tables use IF NOT EXISTS, rows only seed when
+// each table is empty. Skip via ERP_DISABLE_SOLAR_SEED=1.
+if (!process.env.ERP_DISABLE_SOLAR_SEED) {
+  try {
+    const { initSolar } = require('./db/seedSolar');
+    const { getDb } = require('./db/schema');
+    const r = initSolar(getDb());
+    if (r.seeded > 0) console.log(`[seed] solar: seeded ${r.seeded} rate rows`);
+  } catch (e) {
+    console.warn('[seed] solar failed:', e.message);
+  }
+}
+
 // One-time cleanup: strip CSV-import quote artifacts ("""M/s X""") and
 // extra whitespace from business_book text columns. Idempotent — only
 // updates rows where the cleaned value differs.
@@ -131,6 +145,15 @@ try {
   scheduleDprAutoPrompt();
 } catch (e) {
   console.warn('[dpr-prompt] Scheduler not started:', e.message);
+}
+
+// AR collection-day auto-roll — daily 01:00 moves unpaid, overdue AR entries
+// to the next Mon/Thu (mam 2026-06-18). Skip via ERP_DISABLE_ARAP_ROLL=1.
+try {
+  const { scheduleArApRollCron } = require('./scripts/arApRollCron');
+  scheduleArApRollCron();
+} catch (e) {
+  console.warn('[arap-roll] Scheduler not started:', e.message);
 }
 
 // Cash fidelity cron — audit items A7 + A14.  Daily 00:00 rolls over
@@ -262,6 +285,17 @@ try {
   console.warn('[cmd-email] Scheduler not started:', e.message);
 }
 
+// Fortnightly (1st & 16th) installation-billing — auto-generates Type-3 sales
+// bills from approved DPRs (work value × Against-Installation %). Idempotent;
+// bills are approved but a human still clicks "Sent to Client".
+// Skip via ERP_DISABLE_INSTALL_BILLING=1.
+try {
+  const { scheduleInstallationBillingCron } = require('./scripts/installationBillingCron');
+  scheduleInstallationBillingCron();
+} catch (e) {
+  console.warn('[install-billing] Scheduler not started:', e.message);
+}
+
 // Admin-triggered procurement reminder run — fires the 1-day-before
 // scan on demand so mam can verify the announcement + push delivery
 // without waiting for the 09:00 cron tick.  Uses the same auth
@@ -310,6 +344,7 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/sales-funnel', require('./routes/salesfunnel'));
 app.use('/api/quotations', require('./routes/quotations'));
+app.use('/api/solar', require('./routes/solar'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/business-book', require('./routes/businessbook'));
 app.use('/api/payment-required', require('./routes/paymentrequired'));
@@ -320,6 +355,7 @@ app.use('/api/pipe-weights', require('./routes/pipeweights'));
 app.use('/api/procurement', require('./routes/procurement'));
 app.use('/api/customers', require('./routes/customers'));
 app.use('/api/installation', require('./routes/installation'));
+app.use('/api/sales-billing', require('./routes/salesBilling'));
 app.use('/api/complaints', require('./routes/complaints'));
 app.use('/api/hr', require('./routes/hr'));
 // Mam (2026-05-22 Batch D): unauthenticated public offer-accept
@@ -381,6 +417,10 @@ app.use('/api/hr-system', require('./routes/hrSystem'));
 // 4 Critical Systems
 app.use('/api/cashflow', require('./routes/cashflow'));
 app.use('/api/collections', require('./routes/collections'));
+// AR/AP Tracker — rolling weekly cash-flow forecast (mam 2026-06-18)
+app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
+// Site Chat — internal WhatsApp-style message thread per site (mam 2026-06-18)
+app.use('/api/site-chat', require('./routes/siteChat'));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 
@@ -476,7 +516,13 @@ app.use((err, req, res, next) => {
 });
 
 const serverPort = process.env.PORT || 5000;
-app.listen(serverPort, '0.0.0.0', () => {
+// Wrap Express in an HTTP server so Socket.IO (real-time chat) can attach to
+// it — the chat uses its own DB + this socket, separate from the rest (mam
+// 2026-06-18). Falls back gracefully if the socket layer fails to start.
+const httpServer = require('http').createServer(app);
+try { require('./lib/chatSocket').initChatSocket(httpServer); console.log('[chat] Socket.IO ready'); }
+catch (e) { console.warn('[chat] Socket.IO not started:', e.message); }
+httpServer.listen(serverPort, '0.0.0.0', () => {
   console.log(`\n======================================`);
   console.log(`  Business ERP Server`);
   console.log(`  Running on port ${serverPort}`);

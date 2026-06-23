@@ -41,48 +41,48 @@ const seesAll = (req) => {
   return !!row?.ok;
 };
 
-// Approval workflow based on category
-// TA/DA: Step 1 → Step 2 → Step 5 (skip velocity & billing eng)
-// Others: Step 1 → Step 2 → Step 3 (velocity auto) → Step 4 → Step 5
+// One standard approval flow for EVERY category (mam 2026-06-11): instead of
+// the old per-category chains (HR / Purchase-head / Site-engineer + auto
+// Velocity Check + Billing Engineer), every payment now runs:
+//   L1 Approval → Accountant (role)
+//   L2 Approval → Nitin Jain (named person)
+//   L3 Approval → Ankur Kaplesh (named person)
+//   Payment Release → Aanchal (named person)
+// Step numbers stay 1, 2, 3, 5 so the in-flight requests (parked on the old
+// step 1/2/5) keep flowing; step 4 (retired Billing Engineer) is migrated to 5.
+const STANDARD_FLOW = [
+  { step: 1, name: 'L1 Approval (Accountant)', approver_role: 'Accountant' },
+  { step: 2, name: 'L2 Approval (Nitin Jain)', approver_name: 'Nitin Jain' },
+  { step: 3, name: 'L3 Approval (MD - Ankur Kaplesh)', approver_name: 'Ankur Kaplesh' },
+  { step: 5, name: 'Payment Release (Aanchal)', approver_name: 'Aanchal' },
+];
+// TA/DA pre-approval (mam 2026-06-17): from 15/06/2026 every NEW TA/DA request
+// must clear HR (Prabhdeep Singh) BEFORE L1 Accountant. Step 0 is prepended so
+// it always sorts ahead of L1. Existing in-flight requests keep their current
+// step (1+) and simply never visit step 0 — i.e. only new requests get HR.
+const TADA_FLOW = [
+  { step: 0, name: 'HR Approval (Prabhdeep Singh)', approver_name: 'Prabhdeep Singh' },
+  ...STANDARD_FLOW,
+];
 const WORKFLOW = {
-  'TA/DA': [
-    { step: 1, name: 'HR Approval', approver_role: 'HR Manager' },
-    { step: 2, name: 'Accountant Approval', approver_role: 'Accountant' },
-    { step: 5, name: 'Payment Release', approver_role: 'Accountant' },
-  ],
-  'Purchase': [
-    { step: 1, name: 'Purchase Head Approval', approver_role: 'Purchase Manager' },
-    { step: 2, name: 'Accountant Approval', approver_role: 'Accountant' },
-    { step: 3, name: 'Velocity Check (Auto)', approver_role: 'System' },
-    { step: 4, name: 'Billing Engineer Approval', approver_role: 'Billing Engineer' },
-    { step: 5, name: 'Payment Release', approver_role: 'Accountant' },
-  ],
-  'Labour': [
-    { step: 1, name: 'Site Engineer Approval', approver_role: 'Site Engineer' },
-    { step: 2, name: 'Accountant Approval', approver_role: 'Accountant' },
-    { step: 3, name: 'Velocity Check (Auto)', approver_role: 'System' },
-    { step: 4, name: 'Billing Engineer Approval', approver_role: 'Billing Engineer' },
-    { step: 5, name: 'Payment Release', approver_role: 'Accountant' },
-  ],
-  'Transport': [
-    { step: 1, name: 'Purchase Dept Approval', approver_role: 'Purchase Manager' },
-    { step: 2, name: 'Accountant Approval', approver_role: 'Accountant' },
-    { step: 3, name: 'Velocity Check (Auto)', approver_role: 'System' },
-    { step: 4, name: 'Billing Engineer Approval', approver_role: 'Billing Engineer' },
-    { step: 5, name: 'Payment Release', approver_role: 'Accountant' },
-  ],
-  // Payroll / statutory payments — lighter approval (HR → Accountant → Release).
-  'Salary': [
-    { step: 1, name: 'HR Approval', approver_role: 'HR Manager' },
-    { step: 2, name: 'Accountant Approval', approver_role: 'Accountant' },
-    { step: 5, name: 'Payment Release', approver_role: 'Accountant' },
-  ],
-  'Compliance': [
-    { step: 1, name: 'HR Approval', approver_role: 'HR Manager' },
-    { step: 2, name: 'Accountant Approval', approver_role: 'Accountant' },
-    { step: 5, name: 'Payment Release', approver_role: 'Accountant' },
-  ],
+  'TA/DA': TADA_FLOW,
+  'Purchase': STANDARD_FLOW,
+  'Labour': STANDARD_FLOW,
+  'Transport': STANDARD_FLOW,
+  'Salary': STANDARD_FLOW,
+  'Compliance': STANDARD_FLOW,
 };
+
+// Resolve a named approver (the standard flow pins specific people) to an
+// active user record — exact name first, then a loose LIKE — so it survives
+// across the local/production DBs without hard-coded user ids.
+function resolveUserByName(db, name) {
+  if (!name) return null;
+  try {
+    return db.prepare('SELECT id, name FROM users WHERE active=1 AND LOWER(TRIM(name))=LOWER(TRIM(?)) LIMIT 1').get(name)
+      || db.prepare('SELECT id, name FROM users WHERE active=1 AND LOWER(name) LIKE LOWER(?) ORDER BY id LIMIT 1').get('%' + name + '%');
+  } catch (_) { return null; }
+}
 
 // Per-step approver override table (mam, 2026-05-16: "i want hr
 // approval will give to anchal how can be it dynamic all steps").
@@ -101,6 +101,39 @@ try {
     )
   `);
 } catch (_) {}
+
+// One-time standardization (mam 2026-06-11): every category now uses the named
+// L1→L2→L3→Release flow, so the OLD per-category routing overrides (e.g. step 1
+// HR → Ruksana) would shadow the new named approvers — clear them once. Also
+// move any request parked on the retired Billing-Engineer step (4) to Payment
+// Release (5) so it isn't stuck on a step that no longer exists. Guarded by a
+// marker row so it runs exactly once (won't wipe future manual overrides).
+try {
+  const db = getDb();
+  db.exec(`CREATE TABLE IF NOT EXISTS app_migrations (key TEXT PRIMARY KEY, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+  if (!db.prepare(`SELECT 1 FROM app_migrations WHERE key='pr_standard_flow_v1'`).get()) {
+    db.exec(`DELETE FROM payment_approval_overrides`);
+    db.exec(`UPDATE payment_requests SET current_step=5 WHERE current_step=4 AND status NOT IN ('final_approved','rejected')`);
+    db.prepare(`INSERT INTO app_migrations (key) VALUES ('pr_standard_flow_v1')`).run();
+    console.log('[migration] Payment Required standardized: L1 Accountant → L2 Nitin Jain → L3 Ankur Kaplesh → Release Aanchal');
+  }
+} catch (e) { console.error('[migration] PR standardize failed:', e.message); }
+
+// One-time TA/DA → HR backfill (mam 2026-06-17): TA/DA raised on/after
+// 15/06/2026 that are still waiting at L1 (not yet approved / not finalised)
+// move to the new HR step (0) so they show on Prabhdeep's HR dashboard.
+// Guarded so it runs exactly once; only touches in-flight, at-L1, dated rows.
+try {
+  const db = getDb();
+  if (!db.prepare(`SELECT 1 FROM app_migrations WHERE key='pr_tada_hr_backfill_v1'`).get()) {
+    const r = db.prepare(`UPDATE payment_requests SET current_step=0, updated_at=CURRENT_TIMESTAMP
+       WHERE category='TA/DA' AND current_step=1
+         AND status NOT IN ('final_approved','rejected')
+         AND DATE(created_at) >= '2026-06-15'`).run();
+    db.prepare(`INSERT INTO app_migrations (key) VALUES ('pr_tada_hr_backfill_v1')`).run();
+    console.log('[migration] TA/DA HR backfill: moved', r.changes, 'pending TA/DA (≥15/06) to HR step 0');
+  }
+} catch (e) { console.error('[migration] TA/DA HR backfill failed:', e.message); }
 
 function getApprovalRoutingFor(db, category, step) {
   try {
@@ -122,6 +155,22 @@ function canUserApproveStep(db, userId, category, step) {
   const overrideUserId = getApprovalRoutingFor(db, category, step);
   if (overrideUserId) {
     return overrideUserId === userId;
+  }
+  // COO escalation (mam 2026-06-18: "coo@securedengineers unable to approve").
+  // The COO may clear the L2 and L3 sign-offs. Matched by EMAIL (the `coo@`
+  // login is unique) rather than the display name "Nitin Jain", so a
+  // duplicate / differently-spelled name account can never block them, and
+  // the COO can stand in for the MD at L3. Skipped when an explicit
+  // Approval-Routing override is set (handled above — the override wins).
+  if (stepInfo.step === 2 || stepInfo.step === 3) {
+    const me = db.prepare('SELECT email, username FROM users WHERE id=?').get(userId);
+    const isCoo = (v) => String(v || '').trim().toLowerCase().startsWith('coo@');
+    if (isCoo(me?.email) || isCoo(me?.username)) return true;
+  }
+  // Named approver (the standard flow pins L2/L3/Release to a person).
+  if (stepInfo.approver_name) {
+    const u = resolveUserByName(db, stepInfo.approver_name);
+    return !!u && u.id === userId;
   }
   // No override → role-based fallback (the original behaviour).
   const userRoles = db.prepare(`SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id=r.id WHERE ur.user_id=?`).all(userId);
@@ -203,11 +252,13 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
         if (overrideUserId) {
           const u = db.prepare('SELECT name FROM users WHERE id=?').get(overrideUserId);
           row.next_approver_name = u?.name || null;
-          row.next_approver_role = curStep.approver_role;
+        } else if (curStep.approver_name) {
+          const u = resolveUserByName(db, curStep.approver_name);
+          row.next_approver_name = u?.name || curStep.approver_name;
         } else {
-          row.next_approver_name = null;             // no specific person
-          row.next_approver_role = curStep.approver_role;
+          row.next_approver_name = null;             // role-based step, no specific person
         }
+        row.next_approver_role = curStep.approver_role || null;
       }
       // ── Last approval that cleared (skip system / velocity check)
       const lastApproval = db.prepare(`
@@ -229,6 +280,16 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
           WHERE request_id = ? AND action = 'approved'`
       ).get(row.id);
       row.approvals_count = cleared?.c || 0;
+      // Per-step approved amount (mam 2026-06-15: per-level Pending/Approved
+      // views — "when I select Approved on L1 then show how much amount").
+      // step_amounts = { <step>: <amount approved at that step> }.
+      row.step_amounts = {};
+      for (const s of db.prepare(
+        `SELECT step, step_amount FROM payment_approvals
+          WHERE request_id = ? AND action = 'approved'`
+      ).all(row.id)) {
+        row.step_amounts[s.step] = (s.step_amount != null ? +s.step_amount : (+row.approved_amount || +row.amount || 0));
+      }
     } catch (e) {
       // Don't blow up the list response on a single bad row
       console.warn('[payment-required GET] enrich failed for row', row.id, e.message);
@@ -308,6 +369,10 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
     } else {
       // No override — any user with the matching role is "next".
       isMine = myRoles.includes(stepInfo.approver_role) || isAdmin;
+      // Also surface steps pinned to a NAMED approver (L2/L3/Release) and
+      // the COO escalation, using the same check the approve action uses —
+      // the role-only test above misses those (mam 2026-06-18).
+      if (!isMine) isMine = canUserApproveStep(db, uid, row.category, row.current_step);
     }
     if (!isMine) continue;
 
@@ -334,6 +399,16 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
           WHERE request_id = ? AND action = 'approved'`
       ).get(row.id);
       row.approvals_count = cleared?.c || 0;
+      // Per-step approved amount (mam 2026-06-15: per-level Pending/Approved
+      // views — "when I select Approved on L1 then show how much amount").
+      // step_amounts = { <step>: <amount approved at that step> }.
+      row.step_amounts = {};
+      for (const s of db.prepare(
+        `SELECT step, step_amount FROM payment_approvals
+          WHERE request_id = ? AND action = 'approved'`
+      ).all(row.id)) {
+        row.step_amounts[s.step] = (s.step_amount != null ? +s.step_amount : (+row.approved_amount || +row.amount || 0));
+      }
     } catch (_) {}
     inbox.push(row);
   }
@@ -460,6 +535,10 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
   try { db.exec('ALTER TABLE payment_requests ADD COLUMN km_photo TEXT'); } catch(e) {}
   try { db.exec('ALTER TABLE payment_requests ADD COLUMN end_km_photo TEXT'); } catch(e) {}
 
+  // Starting step: TA/DA now begins at the HR step (0); every other category
+  // still begins at L1 (1). This is what makes only NEW TA/DA requests require
+  // HR before L1 — existing rows are untouched.
+  const startStep = (b.category === 'TA/DA') ? TADA_FLOW[0].step : 1;
   const r = db.prepare(`INSERT INTO payment_requests (
     request_no, employee_name, site_id, site_name, department, contact_number, category, amount, purpose,
     payment_mode, required_by_date,
@@ -467,8 +546,8 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
     indent_number, item_description, vendor_name, quotation_link,
     labour_type, number_of_workers, work_duration, site_engineer_name,
     vehicle_type, from_to_location, material_description, driver_vendor_name,
-    created_by
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    created_by, current_step
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     requestNo, b.employee_name, b.site_id || null, b.site_name, b.department, b.contact_number,
     b.category, b.amount, b.purpose, b.payment_mode || 'Bank', b.required_by_date || null,
     b.travel_from_to, b.travel_dates, b.mode_of_travel, b.stay_details,
@@ -476,7 +555,7 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
     b.indent_number, b.item_description, b.vendor_name, b.quotation_link,
     b.labour_type, b.number_of_workers || 0, b.work_duration, b.site_engineer_name,
     b.vehicle_type, b.from_to_location, b.material_description, b.driver_vendor_name,
-    req.user.id
+    req.user.id, startStep
   );
   // Push to step-1 approvers (everyone with payment_required.approve permission)
   try {
@@ -546,30 +625,23 @@ function advanceToNextStep(db, request, approvedBy) {
   // Mam (2026-05-22): removed the in-app bell ping on step advance.
   // The 📥 My Inbox tab + 60s badge poll already surface what each
   // approver needs to act on; bells were too noisy.
-
-  // If next step is velocity check (Step 3), auto-approve if in top 3
-  if (nextStepInfo.step === 3) {
-    const inTop3 = isInTop3Velocity(db, request.site_name);
-    if (inTop3) {
-      db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, approved_by) VALUES (?,?,?,?,?,?)')
-        .run(request.id, 3, 'Velocity Check (Auto)', 'approved', `Auto-approved: Project in TOP 3 by velocity`, approvedBy);
-      const newReq = db.prepare('SELECT * FROM payment_requests WHERE id=?').get(request.id);
-      return advanceToNextStep(db, newReq, approvedBy);
-    } else {
-      db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, approved_by) VALUES (?,?,?,?,?,?)')
-        .run(request.id, 3, 'Velocity Check (Auto)', 'rejected', 'Auto-rejected: Project not in TOP 3 by velocity', approvedBy);
-      db.prepare('UPDATE payment_requests SET status=?, rejection_remarks=? WHERE id=?').run('rejected', 'Auto-rejected at velocity check (not in top 3)', request.id);
-      return 'rejected_velocity';
-    }
-  }
+  // (mam 2026-06-11: the auto Velocity Check at step 3 was retired when every
+  // category moved to the standard L1→L2→L3→Release flow — step 3 is now the
+  // manual L3 Approval, so there is no auto-advance/auto-reject here anymore.)
 
   return 'step_advanced';
 }
 
 // PUT approve
-router.put('/:id/approve', requirePermission('payment_required', 'approve'), (req, res) => {
+// Authorisation here is the STEP-APPROVER check below (canUserApproveStep:
+// admin / routing override / named approver / matching role / COO), NOT the
+// generic module 'approve' permission — that toggle was wrongly blocking the
+// designated approvers (e.g. L2 Nitin Jain) whose role didn't have it ticked
+// (mam 2026-06-18). authMiddleware still requires a logged-in user.
+router.put('/:id/approve', (req, res) => {
   const { remarks, approved_amount } = req.body;
-  if (!remarks || remarks.trim().length < 5) return res.status(400).json({ error: 'Remarks required (min 5 chars)' });
+  // Remarks are OPTIONAL on approval (mam 2026-06-18). Only rejection
+  // demands a reason — see the /reject handler below.
   const db = getDb();
   const request = db.prepare('SELECT * FROM payment_requests WHERE id=?').get(req.params.id);
   if (!request) return res.status(404).json({ error: 'Not found' });
@@ -599,7 +671,7 @@ router.put('/:id/approve', requirePermission('payment_required', 'approve'), (re
   const workflow = WORKFLOW[request.category];
   const stepInfo = workflow.find(w => w.step === request.current_step);
   db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, step_amount, approved_by) VALUES (?,?,?,?,?,?,?)')
-    .run(request.id, request.current_step, stepInfo.name, 'approved', remarks, stepAmount, req.user.id);
+    .run(request.id, request.current_step, stepInfo.name, 'approved', remarks || null, stepAmount, req.user.id);
 
   // Persist the new approved amount on the request itself so the next
   // approver (and the final cash-flow entry) see the latest figure.
@@ -623,7 +695,9 @@ router.put('/:id/approve', requirePermission('payment_required', 'approve'), (re
 });
 
 // PUT reject
-router.put('/:id/reject', requirePermission('payment_required', 'approve'), (req, res) => {
+// Same as /approve — gated by the step-approver check inside, not the
+// generic module permission (mam 2026-06-18).
+router.put('/:id/reject', (req, res) => {
   const { remarks } = req.body;
   if (!remarks || remarks.trim().length < 5) return res.status(400).json({ error: 'Remarks required' });
   const db = getDb();
@@ -656,6 +730,33 @@ router.delete('/:id', requirePermission('payment_required', 'delete'), (req, res
   res.json({ message: 'Deleted' });
 });
 
+// Admin-only: edit the request amount (mam 2026-06-17, e.g. a salary increase).
+// Unlike the approver decrease-only guard, the admin can set ANY positive
+// amount. We sync approved_amount to the new figure so the rest of the chain
+// (and the final payout) use it, and log an audit line. Not allowed once the
+// request is finalised / rejected.
+router.patch('/:id/amount', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an admin can edit the amount' });
+  const db = getDb();
+  const request = db.prepare('SELECT * FROM payment_requests WHERE id=?').get(req.params.id);
+  if (!request) return res.status(404).json({ error: 'Not found' });
+  if (request.status === 'final_approved' || request.status === 'rejected') {
+    return res.status(400).json({ error: 'Cannot edit the amount of a finalised / rejected request' });
+  }
+  const n = +req.body?.amount;
+  if (!Number.isFinite(n) || n <= 0) return res.status(400).json({ error: 'Amount must be a positive number' });
+  const old = +request.amount;
+  db.prepare('UPDATE payment_requests SET amount=?, approved_amount=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+    .run(n, n, req.params.id);
+  try {
+    db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, step_amount, approved_by) VALUES (?,?,?,?,?,?,?)')
+      .run(request.id, request.current_step, 'Amount edited (admin)', 'amount_edit',
+           `Amount changed from Rs ${old.toLocaleString('en-IN')} to Rs ${n.toLocaleString('en-IN')} by ${req.user.name || 'admin'}`,
+           n, req.user.id);
+  } catch (_) {}
+  res.json({ message: 'Amount updated', amount: n });
+});
+
 // PATCH attach a proof URL to an existing request. Some users miss the
 // upload step on the form and the approver only sees "No proofs uploaded"
 // — this endpoint lets the original creator OR an approver fix it after
@@ -675,7 +776,8 @@ router.patch('/:id/proof', requirePermission('payment_required', 'view'), (req, 
   // Permission: admin, original creator, OR anyone who can approve this category
   const isOwner = request.created_by === req.user.id;
   const isAdmin = req.user.role === 'admin';
-  const canApprove = canUserApproveStep(db, req.user.id, request.category, 1) ||
+  const canApprove = canUserApproveStep(db, req.user.id, request.category, 0) ||
+                     canUserApproveStep(db, req.user.id, request.category, 1) ||
                      canUserApproveStep(db, req.user.id, request.category, 2) ||
                      canUserApproveStep(db, req.user.id, request.category, 4) ||
                      canUserApproveStep(db, req.user.id, request.category, 5);
@@ -736,7 +838,7 @@ router.get('/approval-routing', (req, res) => {
         return {
           step: s.step,
           name: s.name,
-          role_default: s.approver_role,
+          role_default: s.approver_role || (s.approver_name ? `${s.approver_name} (named)` : null),
           override_user_id: o?.user_id || null,
           override_user_name: o?.user_name || null,
         };

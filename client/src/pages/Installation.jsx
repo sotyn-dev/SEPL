@@ -35,7 +35,7 @@ export default function Installation() {
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <h3 className="font-semibold">Installations</h3>
+        <h3 className="font-semibold">Sales Billing</h3>
         <div className="flex gap-2">
           <button onClick={() => exportCsv('installations',
             ['PO','Site Address','Start','End','Assigned To','Status'],

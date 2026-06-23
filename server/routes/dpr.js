@@ -1,8 +1,101 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
+
+// Read an app setting (AI provider/key/model live in app_settings, set in
+// Admin → AI Settings). Used by the contractor-attendance photo head-count.
+const getSetting = (k) => getDb().prepare('SELECT value FROM app_settings WHERE key=?').get(k)?.value ?? null;
 router.use(authMiddleware);
+
+// ── Contractor Manpower Attendance — morning punch (mam 2026-06-22) ──────
+// The site engineer records each morning which sub-contractors are on a site
+// and how many manpower each brought. Stored per site + date and used to
+// pre-fill the DPR "Contractors on Site". Registered before the param routes
+// below so the literal path isn't captured by '/:id'. No extra permission
+// gate (matches POST '/' DPR submit) — the DPR page is already module-gated.
+router.get('/contractor-attendance', (req, res) => {
+  const { site_id, date } = req.query;
+  if (!site_id || !date) return res.status(400).json({ error: 'site_id and date required' });
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT id, site_id, attendance_date, subcontractor_id, contractor_name, contractor_type, manpower, photo_url, marked_by
+       FROM contractor_attendance WHERE site_id=? AND attendance_date=? ORDER BY id`
+  ).all(site_id, date);
+  res.json(rows);
+});
+
+router.post('/contractor-attendance', (req, res) => {
+  const { site_id, date, rows } = req.body;
+  if (!site_id || !date) return res.status(400).json({ error: 'site_id and date required' });
+  const db = getDb();
+  // Keep only rows with a contractor name (the unique key); manpower can be 0.
+  const clean = (rows || []).filter(r => r && r.contractor_name && String(r.contractor_name).trim());
+  const save = db.transaction(() => {
+    db.prepare('DELETE FROM contractor_attendance WHERE site_id=? AND attendance_date=?').run(site_id, date);
+    const ins = db.prepare(`INSERT OR REPLACE INTO contractor_attendance
+      (site_id, attendance_date, subcontractor_id, contractor_name, contractor_type, manpower, photo_url, marked_by)
+      VALUES (?,?,?,?,?,?,?,?)`);
+    for (const r of clean) {
+      ins.run(site_id, date, r.subcontractor_id || null, String(r.contractor_name).trim(),
+        r.contractor_type || null, parseInt(r.manpower, 10) || 0, r.photo_url || null, req.user.id);
+    }
+  });
+  try { save(); res.json({ ok: true, count: clean.length }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Auto-count manpower from a site photo (mam 2026-06-22). The engineer uploads
+// a photo of the contractor's gang; Claude vision counts the people and returns
+// the head-count, which pre-fills the manpower field. Image is already on disk
+// (uploaded via /upload); we pass its path in as photo_url.
+router.post('/contractor-attendance/count-photo', async (req, res) => {
+  const { photo_url } = req.body;
+  if (!photo_url) return res.status(400).json({ error: 'photo_url required' });
+  // Resolve to the on-disk file. Uploads live at <repo>/data/uploads (see
+  // server/index.js), served at /uploads. basename guards path traversal.
+  const filename = path.basename(String(photo_url).split('?')[0]);
+  const filePath = path.join(__dirname, '..', '..', 'data', 'uploads', filename);
+  if (!filename || !fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Photo not found on server' });
+  }
+  const ext = (path.extname(filePath).toLowerCase().replace('.', '') || 'jpeg');
+  const mediaMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' };
+  const media_type = mediaMap[ext];
+  if (!media_type) return res.status(400).json({ error: 'Unsupported image type — use JPG / PNG / WEBP' });
+
+  const apiKey = getSetting('ai_api_key');
+  if (!apiKey) return res.status(400).json({ error: 'AI key not set — add it in Admin → AI Settings to use photo head-count' });
+  let Anthropic;
+  try { Anthropic = require('@anthropic-ai/sdk'); }
+  catch { return res.status(500).json({ error: '@anthropic-ai/sdk not installed on the server' }); }
+
+  try {
+    const data = fs.readFileSync(filePath).toString('base64');
+    const client = new Anthropic.default({ apiKey, timeout: 60000 });
+    // Vision works across the 4.x family; default to a fast model for counting.
+    const model = getSetting('ai_model') || 'claude-opus-4-7';
+    const msg = await client.messages.create({
+      model, max_tokens: 50,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type, data } },
+          { type: 'text', text: 'This is a site attendance photo of construction/MEPF labourers. Count how many distinct people (workers) are visible. Reply with ONLY a single integer — no words, no punctuation.' },
+        ],
+      }],
+    });
+    const txt = (msg.content || []).map(b => b.text || '').join(' ');
+    const m = txt.match(/\d+/);
+    const count = m ? parseInt(m[0], 10) : null;
+    if (count == null) return res.status(422).json({ error: 'Could not read a count from the photo — enter manpower manually' });
+    res.json({ count });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Photo head-count failed' });
+  }
+});
 
 // Bypass the site-engineer scope filter when the user's role has
 // can_approve OR can_see_all on the 'dpr' module — that's the
@@ -67,9 +160,11 @@ router.get('/sites', (req, res) => {
     sql += ` WHERE (s.site_engineer_id = ? OR EXISTS (
       SELECT 1 FROM purchase_orders po
       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
-        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?)
+        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?
+          OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ?
+          OR (',' || COALESCE(po.supervisor_ids,'') || ',') LIKE ?)
     ))`;
-    params.push(uid, `%,${uid},%`, uid);
+    params.push(uid, `%,${uid},%`, uid, `%,${uid},%`, `%,${uid},%`);
   }
 
   sql += ` GROUP BY ${siteKeySql('s.name')} ORDER BY name`;
@@ -452,9 +547,11 @@ router.get('/', (req, res) => {
     sql += ` AND (s.site_engineer_id = ? OR EXISTS (
       SELECT 1 FROM purchase_orders po
       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
-        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?)
+        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?
+          OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ?
+          OR (',' || COALESCE(po.supervisor_ids,'') || ',') LIKE ?)
     ))`;
-    params.push(uid, `%,${uid},%`, uid);
+    params.push(uid, `%,${uid},%`, uid, `%,${uid},%`, `%,${uid},%`);
   }
   sql += ' ORDER BY d.report_date DESC, s.name';
   res.json(db.prepare(sql).all(...params));
@@ -493,9 +590,11 @@ router.get('/summary', (req, res) => {
     missingSql += ` AND (s.site_engineer_id = ? OR EXISTS (
       SELECT 1 FROM purchase_orders po
       WHERE (po.id = s.po_id OR po.business_book_id = s.business_book_id)
-        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?)
+        AND ((',' || COALESCE(po.site_engineer_ids,'') || ',') LIKE ? OR po.site_engineer_id = ?
+          OR (',' || COALESCE(po.jr_site_engineer_ids,'') || ',') LIKE ?
+          OR (',' || COALESCE(po.supervisor_ids,'') || ',') LIKE ?)
     ))`;
-    missingParams.push(uid, `%,${uid},%`, uid);
+    missingParams.push(uid, `%,${uid},%`, uid, `%,${uid},%`, `%,${uid},%`);
   }
   missingSql += ` GROUP BY ${siteKeySql('s.name')} ORDER BY name`;
   const missingSites = db.prepare(missingSql).all(...missingParams);
@@ -1100,19 +1199,29 @@ router.get('/engineer-compliance', (req, res) => {
   // Excludes leave/absent/holiday — legitimately DPR-free.
   const PRESENT_STATUSES = "('present','half_day','short_day','late')";
 
-  // 1) Engineer pool — ONLY users with the Site Engineer role.
-  //    Mam (2026-05-29 v2): "only site eng here".  Admins were
-  //    leaking in via the `OR u.role='admin'` clause; dropped.
+  // 1) Engineer pool — Site Engineers AND Jr. Site Engineers (mam 2026-06-13:
+  //    "show site eng and jr site eng record").  Any role whose name contains
+  //    "site eng" qualifies; each engineer is tagged with their role so the
+  //    card can show Site Engineer vs Jr. Site Eng.  Admins are excluded.
+  const classifyRole = (roleNames) => {
+    const d = String(roleNames || '').toLowerCase();
+    if (d.includes('foreman')) return 'fm';
+    if (/\b(jr|jnr|junior|trainee|gte|asst|assistant)\b/.test(d) || d.includes('junior')) return 'jr';
+    return 'se';
+  };
+  const ROLE_DISPLAY = { fm: 'Foreman', jr: 'Jr. Site Eng', se: 'Site Engineer' };
   let engineers = db.prepare(`
-    SELECT DISTINCT u.id, u.name, u.email
+    SELECT u.id, u.name, u.email, GROUP_CONCAT(r.name) AS role_names
       FROM users u
       JOIN user_roles ur ON ur.user_id = u.id
       JOIN roles r       ON r.id = ur.role_id
      WHERE u.active = 1
-       AND r.name = 'Site Engineer'
+     GROUP BY u.id
+     HAVING SUM(CASE WHEN LOWER(r.name) LIKE '%site eng%' THEN 1 ELSE 0 END) > 0
      ORDER BY u.name
   `).all();
   if (!canSeeAll) engineers = engineers.filter(e => e.id === uid);
+  const roleByEng = new Map(engineers.map(e => [e.id, classifyRole(e.role_names)]));
   if (engineers.length === 0) {
     return res.json({
       range: { date_from: from, date_to: to, calendar_days: calendarDays },
@@ -1367,6 +1476,8 @@ router.get('/engineer-compliance', (req, res) => {
     engineer_id: e.id,
     engineer_name: e.name,
     engineer_email: e.email,
+    engineer_role: roleByEng.get(e.id) || 'se',
+    engineer_role_display: ROLE_DISPLAY[roleByEng.get(e.id) || 'se'],
     sites: [],
     // Headline numbers (engineer-wide, any site / no site link)
     days_present_total:    totalPresentByEng.get(e.id) || 0,
@@ -1415,9 +1526,11 @@ router.get('/engineer-compliance', (req, res) => {
     acc.days_dpr_filled += e.days_dpr_filled_total;
     acc.profit_loss     += e.profit_loss_total;
     acc.manpower        += e.manpower_total;
+    if (e.engineer_role === 'jr') acc.jr += 1; else acc.se += 1;
     return acc;
-  }, { engineers: 0, sites: 0, days_present: 0, days_dpr_filled: 0, profit_loss: 0, manpower: 0 });
+  }, { engineers: 0, sites: 0, days_present: 0, days_dpr_filled: 0, profit_loss: 0, manpower: 0, se: 0, jr: 0 });
   totals.gap_days = Math.max(0, totals.days_present - totals.days_dpr_filled);
+  totals.engineer_breakdown = { se: totals.se, jr: totals.jr };
 
   res.json({
     range: { date_from: from, date_to: to, calendar_days: calendarDays },

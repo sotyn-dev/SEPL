@@ -45,9 +45,11 @@ export default function AISettings() {
       <div className="card p-4 space-y-3">
         <h3 className="font-semibold text-gray-800">AI Agent — API Key</h3>
         <p className="text-sm text-gray-600">
-          Paste the Anthropic API key here to enable the floating "Ask ERP" chat bubble across the system.
+          Paste your API key here to enable the floating "Ask ERP" chat bubble across the system.
           The key is stored in the ERP database (not in any file), and never sent back to a browser.
-          Get a key at <a className="text-red-600 hover:underline" href="https://console.anthropic.com" target="_blank" rel="noreferrer">console.anthropic.com</a> → Settings → API Keys.
+          {form.provider === 'gemini'
+            ? <> Get a <b>free</b> Gemini key at <a className="text-red-600 hover:underline" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">aistudio.google.com</a> → <b>Get API key</b>. (Free tier has rate limits and may use data to improve Google's products — avoid for highly sensitive queries.)</>
+            : <> Get a key at <a className="text-red-600 hover:underline" href="https://console.anthropic.com" target="_blank" rel="noreferrer">console.anthropic.com</a> → Settings → API Keys.</>}
         </p>
 
         <div className={`text-sm px-3 py-2 rounded ${status.api_key_set ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-yellow-50 text-yellow-800 border border-yellow-200'}`}>
@@ -62,7 +64,7 @@ export default function AISettings() {
             <input
               className="input font-mono text-sm"
               type="password"
-              placeholder="sk-ant-..."
+              placeholder={form.provider === 'gemini' ? 'AIza...' : 'sk-ant-...'}
               value={form.api_key}
               onChange={e => setForm({ ...form, api_key: e.target.value })}
               autoComplete="off"
@@ -71,16 +73,28 @@ export default function AISettings() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="label">Provider</label>
-              <select className="select" value={form.provider} onChange={e => setForm({ ...form, provider: e.target.value })}>
-                <option value="anthropic">Anthropic (Claude) — recommended</option>
+              <select className="select" value={form.provider} onChange={e => {
+                const p = e.target.value;
+                // Switch the model default to match the provider so a Claude
+                // model id isn't sent to Gemini (or vice-versa).
+                setForm(f => ({ ...f, provider: p, model: p === 'gemini' ? 'gemini-2.0-flash' : 'claude-opus-4-7' }));
+              }}>
+                <option value="anthropic">Anthropic (Claude) — most capable, paid</option>
+                <option value="gemini">Google Gemini — free tier</option>
               </select>
             </div>
             <div>
               <label className="label">Model</label>
               <select className="select" value={form.model} onChange={e => setForm({ ...form, model: e.target.value })}>
-                <option value="claude-opus-4-7">Claude Opus 4.7 (most capable)</option>
-                <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (faster, cheaper)</option>
-                <option value="claude-haiku-4-5">Claude Haiku 4.5 (fastest, cheapest)</option>
+                {form.provider === 'gemini' ? <>
+                  <option value="gemini-2.0-flash">Gemini 2.0 Flash (free, fast)</option>
+                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (free, newer)</option>
+                  <option value="gemini-1.5-flash">Gemini 1.5 Flash (free)</option>
+                </> : <>
+                  <option value="claude-opus-4-7">Claude Opus 4.7 (most capable)</option>
+                  <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (faster, cheaper)</option>
+                  <option value="claude-haiku-4-5">Claude Haiku 4.5 (fastest, cheapest)</option>
+                </>}
               </select>
             </div>
           </div>

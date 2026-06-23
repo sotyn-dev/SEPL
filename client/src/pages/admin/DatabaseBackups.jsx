@@ -9,6 +9,7 @@ import { useState, useEffect } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { FiDownload, FiRefreshCw, FiDatabase, FiClock, FiHardDrive, FiAlertTriangle } from 'react-icons/fi';
+import { fmtDateTime } from '../../utils/datetime';
 
 const formatSize = (bytes) => {
   if (!bytes) return '0 B';
@@ -95,7 +96,7 @@ export default function DatabaseBackups() {
           {latest ? (
             <>
               <p className="text-2xl font-bold text-gray-800 mt-1">{latestAge === 0 ? 'Just now' : latestAge < 24 ? `${latestAge}h ago` : `${Math.floor(latestAge / 24)}d ago`}</p>
-              <p className="text-[11px] text-gray-400">{new Date(latest.created_at).toLocaleString()}</p>
+              <p className="text-[11px] text-gray-400">{fmtDateTime(latest.created_at)}</p>
             </>
           ) : (
             <p className="text-sm text-amber-700 mt-1 flex items-center gap-1"><FiAlertTriangle size={13} /> No backups yet — click "Backup Now"</p>
@@ -138,7 +139,7 @@ export default function DatabaseBackups() {
                   {b.filename}
                   {idx === 0 && <span className="ml-2 text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold">LATEST</span>}
                 </td>
-                <td className="whitespace-nowrap text-xs">{new Date(b.created_at).toLocaleString()}</td>
+                <td className="whitespace-nowrap text-xs">{fmtDateTime(b.created_at)}</td>
                 <td className="whitespace-nowrap text-xs">{formatSize(b.size)}</td>
                 <td>
                   <button onClick={() => download(b.filename)} className="btn btn-secondary text-xs flex items-center gap-1">

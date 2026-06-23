@@ -128,22 +128,22 @@ ${String(text).slice(0, 14000)}`;
 
 // POST a CLIENT BOQ (Excel / PDF / Word) → auto-match each line to Item
 // Master and return a suggested item + rate + confidence per line.
-router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  try {
-    const ext = String(req.file.originalname || '').toLowerCase().split('.').pop();
+// Core BOQ parse + match — shared by the upload route and the funnel auto-load.
+// Throws Error (with optional .status) on failure; the caller handles cleanup.
+async function matchBoqFile(filePath, originalName) {
+    const ext = String(originalName || '').toLowerCase().split('.').pop();
     let lines = [];
     if (ext === 'pdf') {
       const pdfParse = require('pdf-parse');
-      const data = await pdfParse(fs.readFileSync(req.file.path));
+      const data = await pdfParse(fs.readFileSync(filePath));
       lines = (await llmExtractItems(data.text).catch(() => null)) || textToLines(data.text);
     } else if (ext === 'docx' || ext === 'doc') {
       const mammoth = require('mammoth');
-      const r = await mammoth.extractRawText({ path: req.file.path });
+      const r = await mammoth.extractRawText({ path: filePath });
       lines = (await llmExtractItems(r.value).catch(() => null)) || textToLines(r.value);
     } else {
       // Excel / CSV — find the header row, then read Description/Qty/Unit cols.
-      const wb = XLSX.readFile(req.file.path);
+      const wb = XLSX.readFile(filePath);
       const parseNum = (v) => {
         if (v == null || v === '') return 0;
         if (typeof v === 'number') return v;
@@ -183,11 +183,11 @@ router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
       };
       for (const name of wb.SheetNames) { const r = parseSheet(name); if (r.length > lines.length) lines = r; }
     }
-    if (!lines.length) return res.status(400).json({ error: 'Could not read any items. For Excel: ensure a Description/Qty header row. For PDF/Word: the items must be text (not a scanned image).' });
+    if (!lines.length) { const e = new Error('Could not read any items. For Excel: ensure a Description/Qty header row. For PDF/Word: the items must be text (not a scanned image).'); e.status = 400; throw e; }
 
     // Match the client BOQ against OUR PO items only (the ones quoted, with
     // PO/FOC kits) — mam 2026-06-10. FOC/consumables aren't quoted as lines.
-    const items = getDb().prepare(`SELECT id, item_code, department, item_name, specification, size, uom, current_price FROM item_master WHERE type='PO'`).all();
+    const items = getDb().prepare(`SELECT id, item_code, department, item_name, specification, size, uom, make, current_price FROM item_master WHERE type='PO'`).all();
     const itemById = new Map(items.map(it => [it.id, it]));
     const itemTok = items.map(it => ({ it, toks: tokens([it.item_name, it.specification, it.size].filter(Boolean).join(' ')) }));
 
@@ -205,7 +205,7 @@ router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
         item_id: it.id, code: it.item_code,
         name: [it.item_name, it.specification, it.size].filter(Boolean).join(' / '),
         department: it.department || 'General', rate: it.current_price || 0,
-        uom: it.uom || '', score: Math.round(score || 0),
+        uom: it.uom || '', make: it.make || '', score: Math.round(score || 0),
       };
       if (k) { base.kit_pp = k.po_rate || 0; base.kit_labour = k.labour || 0; base.kit_focs = JSON.parse(k.focs_json || '[]'); }
       return base;
@@ -256,11 +256,77 @@ router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
         alternatives: alts.slice(1, 4),
       };
     });
-    res.json({ count: rows.length, rows, matched_by: llm ? 'ai' : 'keyword' });
+    return { count: rows.length, rows, matched_by: llm ? 'ai' : 'keyword' };
+}
+
+// Upload a BOQ file → match (the original route).
+router.post('/auto-match-boq', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  try {
+    res.json(await matchBoqFile(req.file.path, req.file.originalname));
   } catch (err) {
-    res.status(500).json({ error: 'Failed to parse BOQ: ' + err.message });
+    res.status(err.status || 500).json({ error: err.status ? err.message : ('Failed to parse BOQ: ' + err.message) });
   } finally {
-    try { if (req.file) fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+    try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+  }
+});
+
+// Auto-load a client's BOQ from the Sales Funnel and match it (mam 2026-06-22).
+// No manual upload: find the funnel BOQ file for the selected lead's company
+// and run the same matcher. lead_id comes from the /leads dropdown.
+router.get('/client-boq', async (req, res) => {
+  try {
+    const db = getDb();
+    const id = req.query.funnel_id || req.query.lead_id;
+    if (!id) return res.status(400).json({ error: 'client id required' });
+    // The Estimator's Client dropdown IS the Sales Funnel, so look the row up
+    // directly by id and take its BOQ file (revised first, then original).
+    let name = '', link = null;
+    const sfRow = db.prepare('SELECT client_name, company_name, revised_boq_file_link, boq_file_link FROM sales_funnel WHERE id=?').get(id);
+    if (sfRow) {
+      name = (sfRow.company_name || sfRow.client_name || '').trim();
+      link = sfRow.revised_boq_file_link || sfRow.boq_file_link || null;
+      // The denormalized column can be stale/null while the funnel's BOQ history
+      // (the "BOQs (N)" list) holds the actual file — check that too.
+      if (!link) {
+        const b = db.prepare(`SELECT boq_file_link FROM sales_funnel_boqs
+                              WHERE funnel_id=? AND COALESCE(boq_file_link,'')<>''
+                              ORDER BY created_at DESC, id DESC LIMIT 1`).get(id);
+        if (b?.boq_file_link) link = b.boq_file_link;
+      }
+    } else {
+      // Legacy fallback: a leads-table id → match the funnel by company name.
+      const lead = db.prepare('SELECT company_name FROM leads WHERE id=?').get(id);
+      name = (lead?.company_name || '').trim();
+    }
+    // Still no link? Try matching sales_funnel / crm_funnel by the company name.
+    if (!link && name) {
+      const sf = db.prepare(`SELECT COALESCE(NULLIF(revised_boq_file_link,''), NULLIF(boq_file_link,'')) AS link
+                       FROM sales_funnel WHERE (company_name=? OR client_name=?)
+                         AND (COALESCE(revised_boq_file_link,'')<>'' OR COALESCE(boq_file_link,'')<>'')
+                       ORDER BY id DESC LIMIT 1`).get(name, name);
+      if (sf?.link) link = sf.link;
+      if (!link) {
+        const cf = db.prepare(`SELECT COALESCE(NULLIF(cust_boq_link,''), NULLIF(boq_file_link,'')) AS link
+                         FROM crm_funnel WHERE (company_name=? OR client_name=?)
+                           AND (COALESCE(cust_boq_link,'')<>'' OR COALESCE(boq_file_link,'')<>'')
+                         ORDER BY id DESC LIMIT 1`).get(name, name);
+        if (cf?.link) link = cf.link;
+      }
+    }
+    if (!link) return res.status(404).json({ error: `No BOQ found in the Sales Funnel for "${name || 'this client'}". Upload it in the funnel, or use Upload Client BOQ.` });
+    // Resolve the stored link (e.g. '/uploads/xxx') to the real uploads dir,
+    // which is <repo>/data/uploads (see server/index.js). basename guards
+    // against path traversal and handles full-URL links.
+    const filename = path.basename(String(link).split('?')[0]);
+    const filePath = path.join(__dirname, '..', '..', 'data', 'uploads', filename);
+    if (!filename || !fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'The funnel BOQ file is not on this server — re-upload it in the funnel.' });
+    }
+    const out = await matchBoqFile(filePath, path.basename(filePath));
+    res.json({ ...out, client_name: name });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.status ? err.message : ('Failed to load client BOQ: ' + err.message) });
   }
 });
 
@@ -376,28 +442,38 @@ function itemDisplay(im) {
     `${im.uom ? ' · ' + im.uom : ''}`;
 }
 
+// Preload item_master + labour_rates into Maps so liveResolvePoFoc does O(1)
+// in-memory lookups instead of a DB query per entry AND per FOC item. The list
+// has 800+ kits × ~6-8 FOC each, so the old per-row queries meant thousands of
+// point lookups on every load/approve and the page crawled (mam 2026-06-11:
+// "takes lots of process time"). Two bulk reads replace all of them.
+function buildLiveMaps(db) {
+  const items = new Map();
+  for (const im of db.prepare('SELECT id, item_code, item_name, specification, size, uom, current_price FROM item_master').all()) items.set(im.id, im);
+  const labour = new Map();
+  for (const lr of db.prepare('SELECT id, item_name, rate FROM labour_rates').all()) labour.set(lr.id, lr);
+  return { items, labour };
+}
+
 // Serve an entry LIVE against the Item Master (mam 2026-06-11): PO rate, FOC
-// rates, names and UOM are re-read from item_master by id every time, so
-// editing an item's rate/UOM in the master reflects on existing PO/FOC entries
-// — same idea as the indent BoQ live-UOM change. Stored values stay as a
-// fallback when the item was deleted or typed manually (no item_id). cost/TPA
-// are recomputed from the live rates so the cards and PDF stay consistent.
-function liveResolvePoFoc(db, row) {
-  const getItem = db.prepare('SELECT item_code, item_name, specification, size, uom, current_price FROM item_master WHERE id=?');
+// rates, names and UOM are re-read by id every time, so editing an item's
+// rate/UOM in the master reflects on existing PO/FOC entries. Stored values
+// stay as a fallback when the item was deleted or typed manually (no item_id).
+// cost/TPA are recomputed from the live rates so cards and PDF stay consistent.
+function liveResolvePoFoc(row, maps) {
   let { po_rate, po_name, labour, labour_name } = row;
   if (row.po_item_id) {
-    const im = getItem.get(row.po_item_id);
+    const im = maps.items.get(row.po_item_id);
     if (im) { po_rate = im.current_price || 0; po_name = itemDisplay(im); }
   }
-  // Labour is live off the Labour Rate sheet too: a rate or item-name edit
-  // there reflects on existing kits (mam 2026-06-11).
+  // Labour is live off the Labour Rate sheet too.
   if (row.labour_item_id) {
-    const lr = db.prepare('SELECT item_name, rate FROM labour_rates WHERE id=?').get(row.labour_item_id);
+    const lr = maps.labour.get(row.labour_item_id);
     if (lr) { labour = lr.rate || 0; labour_name = lr.item_name; }
   }
   const focs = JSON.parse(row.focs_json || '[]').map(f => {
     if (f && f.item_id) {
-      const im = getItem.get(f.item_id);
+      const im = maps.items.get(f.item_id);
       if (im) return { ...f, rate: im.current_price || 0, name: itemDisplay(im) };
     }
     return f;
@@ -411,14 +487,15 @@ router.get('/po-foc', (req, res) => {
   const rows = db.prepare('SELECT * FROM po_foc_entries ORDER BY updated_at DESC, id DESC').all();
   const counts = { non_approved: 0, approved: 0, re_approved: 0 };
   for (const r of rows) counts[r.status] = (counts[r.status] || 0) + 1;
-  res.json({ rows: rows.map(r => liveResolvePoFoc(db, r)), counts });
+  const maps = buildLiveMaps(db);
+  res.json({ rows: rows.map(r => liveResolvePoFoc(r, maps)), counts });
 });
 
 router.get('/po-foc/:id', (req, res) => {
   const db = getDb();
   const r = db.prepare('SELECT * FROM po_foc_entries WHERE id=?').get(req.params.id);
   if (!r) return res.status(404).json({ error: 'Not found' });
-  res.json(liveResolvePoFoc(db, r));
+  res.json(liveResolvePoFoc(r, buildLiveMaps(db)));
 });
 
 router.post('/po-foc', (req, res) => {
@@ -628,10 +705,100 @@ router.delete('/estimates/:id', (req, res) => {
 
 // Build the multi-sheet quotation Excel (mam's saizar format): one sheet per
 // category + a SUMMARY with letterhead, category totals and a manpower block.
-router.post('/estimate-export', (req, res) => {
+// ── Styled quotation workbook (ExcelJS) — logo, navy headers, borders,
+// wrapped descriptions, currency number formats. Falls back to the plain
+// SheetJS export below if exceljs isn't installed on the server.
+async function buildStyledQuotation(ExcelJS, d) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Secured Engineers Pvt Ltd';
+  const NAVY = 'FF1E3A8A', LIGHT = 'FFE8EEF7', GREY = 'FFF4F6FA', MONEY = '#,##0.00';
+  const thin = { style: 'thin', color: { argb: 'FFD0D7E2' } };
+  const border = { top: thin, left: thin, bottom: thin, right: thin };
+  const QH = ['S.NO.', 'DESCRIPTION', 'MAKE', 'UNIT', 'QTY', 'RATE', 'AMOUNT', 'PP', 'ACCESS', 'LAB', 'TP', 'TPA', 'MARGIN', 'SP'];
+  const styleHeader = (ws, rowIdx, n) => {
+    const r = ws.getRow(rowIdx); r.height = 26;
+    for (let c = 1; c <= n; c++) { const cell = r.getCell(c); cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } }; cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 }; cell.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' }; cell.border = border; }
+  };
+
+  // ── SUMMARY ──
+  const sum = wb.addWorksheet('SUMMARY');
+  sum.columns = [{ width: 34 }, { width: 18 }, { width: 16 }, { width: 16 }, { width: 18 }];
+  const logoPath = path.join(__dirname, '..', '..', 'client', 'public', 'sepl-logo.png');
+  if (fs.existsSync(logoPath)) {
+    const imgId = wb.addImage({ filename: logoPath, extension: 'png' });
+    sum.addImage(imgId, { tl: { col: 0, row: 0 }, ext: { width: 175, height: 56 } });
+    sum.getRow(1).height = 46;
+  }
+  const co = [['B1', 'SECURED ENGINEERS PVT. LTD', { bold: true, size: 14, color: { argb: NAVY } }],
+    ['B2', 'H.O: 2480/1, B.K. Towers, Janta Nagar, Gill Road, Ludhiana', { size: 9, color: { argb: 'FF555555' } }],
+    ['B3', 'C.O: 58/A/1, First Floor, Kalu Sarai, New Delhi - 110016', { size: 9, color: { argb: 'FF555555' } }],
+    ['B4', 'Website: www.securedengineers.com', { size: 9, color: { argb: 'FF555555' } }]];
+  co.forEach(([a, v, f], i) => { sum.mergeCells(`${a}:E${i + 1}`); sum.getCell(a).value = v; sum.getCell(a).font = f; });
+  sum.mergeCells('A6:E6'); const tb = sum.getCell('A6'); tb.value = `QUOTATION FOR ${d.title || 'WORK'}`; tb.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } }; tb.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } }; tb.alignment = { horizontal: 'center', vertical: 'middle' }; sum.getRow(6).height = 24;
+  const info = [['NAME', d.client_name, 'Date', new Date().toISOString().slice(0, 10)], ['ADDRESS', d.client_address, 'Quotation No', d.quotation_no], ['PREP BY', d.prep_by, 'Revision No', 'R0']];
+  let rr = 8;
+  info.forEach(([k, v, k2, v2]) => { sum.getCell(`A${rr}`).value = k; sum.getCell(`A${rr}`).font = { bold: true }; sum.getCell(`B${rr}`).value = v; sum.getCell(`B${rr}`).alignment = { wrapText: true }; sum.getCell(`D${rr}`).value = k2; sum.getCell(`D${rr}`).font = { bold: true }; sum.getCell(`E${rr}`).value = v2; rr++; });
+  rr++;
+  sum.getCell(`A${rr}`).value = 'S.No.'; sum.getCell(`B${rr}`).value = 'Description'; sum.getCell(`C${rr}`).value = 'SP Amount (Rs)'; styleHeader(sum, rr, 3); rr++;
+  let grand = 0, ci = 1;
+  for (const [cat, items] of Object.entries(d.byCat)) { const sp = items.reduce((t, it) => t + (Number(it.sp) || 0), 0); grand += sp; sum.getCell(`A${rr}`).value = ci++; sum.getCell(`B${rr}`).value = cat; const cc = sum.getCell(`C${rr}`); cc.value = Math.round(sp * 100) / 100; cc.numFmt = MONEY; [`A${rr}`, `B${rr}`, `C${rr}`].forEach(a => sum.getCell(a).border = border); rr++; }
+  sum.getCell(`B${rr}`).value = 'SUB TOTAL'; sum.getCell(`B${rr}`).font = { bold: true }; const stc = sum.getCell(`C${rr}`); stc.value = Math.round(grand * 100) / 100; stc.numFmt = MONEY; stc.font = { bold: true }; rr += 2;
+  ['Additional / Manpower Cost', 'Qty', 'Monthly Cost', 'Months', 'Amount'].forEach((h, k) => sum.getCell(rr, k + 1).value = h); styleHeader(sum, rr, 5); rr++;
+  let mTotal = 0;
+  d.manpower.filter(m => m && m.name).forEach(m => { const amt = (Number(m.qty) || 0) * (Number(m.monthly_cost) || 0) * (Number(m.months) || 0); mTotal += amt; sum.getCell(rr, 1).value = m.name; sum.getCell(rr, 2).value = Number(m.qty) || 0; const mc = sum.getCell(rr, 3); mc.value = Number(m.monthly_cost) || 0; mc.numFmt = MONEY; sum.getCell(rr, 4).value = Number(m.months) || 0; const ac = sum.getCell(rr, 5); ac.value = Math.round(amt * 100) / 100; ac.numFmt = MONEY; for (let c = 1; c <= 5; c++) sum.getCell(rr, c).border = border; rr++; });
+  sum.getCell(rr, 4).value = 'Manpower Total'; sum.getCell(rr, 4).font = { bold: true }; const mtc = sum.getCell(rr, 5); mtc.value = Math.round(mTotal * 100) / 100; mtc.numFmt = MONEY; mtc.font = { bold: true }; rr++;
+  sum.getCell(rr, 4).value = 'GRAND TOTAL'; sum.getCell(rr, 4).font = { bold: true, size: 12 }; const gtc = sum.getCell(rr, 5); gtc.value = Math.round((grand + mTotal) * 100) / 100; gtc.numFmt = MONEY; gtc.font = { bold: true, size: 12, color: { argb: NAVY } }; for (let c = 1; c <= 5; c++) sum.getCell(rr, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } };
+
+  // ── per-category sheets ──
+  const safeSheet = (s) => String(s || 'General').replace(/[\\/?*[\]:]/g, ' ').slice(0, 28).trim() || 'Sheet';
+  for (const [cat, items] of Object.entries(d.byCat)) {
+    const ws = wb.addWorksheet(safeSheet(cat));
+    ws.columns = [{ width: 6 }, { width: 52 }, { width: 12 }, { width: 7 }, { width: 7 }, { width: 12 }, { width: 14 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 13 }, { width: 9 }, { width: 13 }];
+    QH.forEach((h, k) => ws.getCell(1, k + 1).value = h); styleHeader(ws, 1, QH.length);
+    let sp = 0, ri = 2;
+    items.forEach((it, idx) => {
+      const vals = [idx + 1, it.description || '', it.make || '', it.unit || '', Number(it.qty) || 0, Number(it.rate) || 0, Number(it.sp) || 0, Number(it.pp) || 0, Number(it.acc) || 0, Number(it.lab) || 0, Number(it.tp) || 0, Number(it.tpa) || 0, (Number(it.margin) || 0) + '%', Number(it.sp) || 0];
+      vals.forEach((v, k) => {
+        const cell = ws.getCell(ri, k + 1); cell.value = v; cell.border = border;
+        cell.alignment = { vertical: 'top', wrapText: k === 1, horizontal: k === 0 ? 'center' : (k >= 4 ? 'right' : 'left') };
+        if (k === 4) cell.numFmt = '0';
+        else if ([5, 6, 7, 8, 9, 10, 11, 13].includes(k)) cell.numFmt = MONEY;
+        if (idx % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREY } };
+      });
+      sp += Number(it.sp) || 0; ri++;
+    });
+    ws.getCell(ri, 1).value = 'TOTAL'; ws.getCell(ri, 1).font = { bold: true };
+    const t7 = ws.getCell(ri, 7); t7.value = Math.round(sp * 100) / 100; t7.numFmt = MONEY; t7.font = { bold: true };
+    const t14 = ws.getCell(ri, 14); t14.value = Math.round(sp * 100) / 100; t14.numFmt = MONEY; t14.font = { bold: true };
+    for (let c = 1; c <= QH.length; c++) { ws.getCell(ri, c).border = border; ws.getCell(ri, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT } }; }
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+  }
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+router.post('/estimate-export', async (req, res) => {
+  const { title = '', client_name = '', client_address = '', quotation_no = '', prep_by = '',
+    rows = [], manpower = [] } = req.body || {};
+  const sendBuf = (buf) => {
+    res.setHeader('Content-Disposition', `attachment; filename="quotation-${String(title || 'estimate').replace(/[^a-z0-9]/gi, '_')}.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
+  };
+  // Group by category once (shared by both export paths).
+  const byCatShared = {};
+  for (const r of rows) { const c = r.category || 'General'; (byCatShared[c] = byCatShared[c] || []).push(r); }
+
+  // Preferred: styled ExcelJS workbook. If exceljs isn't installed (or styling
+  // throws), fall through to the plain SheetJS export — never 500 on this.
+  let ExcelJS = null; try { ExcelJS = require('exceljs'); } catch { ExcelJS = null; }
+  if (ExcelJS) {
+    try {
+      const buf = await buildStyledQuotation(ExcelJS, { title, client_name, client_address, quotation_no, prep_by, byCat: byCatShared, manpower });
+      return sendBuf(buf);
+    } catch (e) { /* fall through to plain */ }
+  }
+
   try {
-    const { title = '', client_name = '', client_address = '', quotation_no = '', prep_by = '',
-      rows = [], manpower = [] } = req.body || {};
     const wb = XLSX.utils.book_new();
     const safeSheet = (s) => String(s || 'General').replace(/[\\/?*[\]:]/g, ' ').slice(0, 28).trim() || 'Sheet';
     const byCat = {};

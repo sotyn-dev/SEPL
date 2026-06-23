@@ -134,6 +134,10 @@ export default function Leads() {
   const [viewStage, setViewStage] = useState(null);
   const [followups, setFollowups] = useState([]);
   const [fuForm, setFuForm] = useState({ followup_date: '', followup_time: '', type: 'call', notes: '' });
+  // BOQ history (mam 2026-06-12: clients re-send BOQs over time).
+  const [boqList, setBoqList] = useState([]);
+  const [boqForm, setBoqForm] = useState({ boq_file_link: '', boq_amount: '', notes: '' });
+  const [boqAdding, setBoqAdding] = useState(false);
   // Employees list for the "Assign Meeting" dropdown — only active staff
   // are shown so dropped/inactive employees don't clutter the list.
   // Each option carries user_id so the lead row stores both the display
@@ -207,7 +211,19 @@ export default function Leads() {
   };
 
   const uploadFile = async (file) => { const fd = new FormData(); fd.append('file', file); const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); return r.data.url; };
-  const viewLead = (l) => { setViewData(l); setStageForm({}); setViewStage(null); setModal('view'); api.get(`/sales-funnel/${l.id}/followups`).then(r=>setFollowups(r.data)).catch(()=>setFollowups([])); };
+  const loadBoqs = (id) => api.get(`/sales-funnel/${id}/boqs`).then(r=>setBoqList(r.data||[])).catch(()=>setBoqList([]));
+  const viewLead = (l) => { setViewData(l); setStageForm({}); setViewStage(null); setModal('view'); setBoqForm({ boq_file_link:'', boq_amount:'', notes:'' }); api.get(`/sales-funnel/${l.id}/followups`).then(r=>setFollowups(r.data)).catch(()=>setFollowups([])); loadBoqs(l.id); };
+  const addBoq = async () => {
+    if (!boqForm.boq_file_link && !(+boqForm.boq_amount > 0)) return toast.error('Attach a BOQ file or enter an amount');
+    setBoqAdding(true);
+    try {
+      await api.post(`/sales-funnel/${viewData.id}/boq`, boqForm);
+      toast.success('BOQ added');
+      setBoqForm({ boq_file_link:'', boq_amount:'', notes:'' });
+      loadBoqs(viewData.id);
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed to add BOQ'); }
+    finally { setBoqAdding(false); }
+  };
 
   const addFollowup = async () => {
     if (!fuForm.followup_date) return toast.error('Date required');
@@ -470,7 +486,34 @@ export default function Leads() {
           {viewData.meeting_date&&<div className="bg-purple-50 p-2 rounded text-xs"><strong>Meeting:</strong> {viewData.meeting_date} - {viewData.meeting_location}</div>}
           {viewData.mom_notes&&<div className="bg-violet-50 p-2 rounded text-xs"><strong>MOM:</strong> {viewData.mom_notes} {viewData.mom_file_link&&<a href={viewData.mom_file_link} className="text-red-600 underline" target="_blank" rel="noreferrer">File</a>}</div>}
           {viewData.drawing_file1&&<div className="bg-amber-50 p-2 rounded text-xs"><strong>Drawings:</strong> <a href={viewData.drawing_file1} className="text-red-600 underline" target="_blank" rel="noreferrer">1</a> {viewData.drawing_file2&&<a href={viewData.drawing_file2} className="text-red-600 underline ml-2" target="_blank" rel="noreferrer">2</a>} {viewData.drawing_file3&&<a href={viewData.drawing_file3} className="text-red-600 underline ml-2" target="_blank" rel="noreferrer">3</a>}</div>}
-          {viewData.boq_file_link&&<div className="bg-orange-50 p-2 rounded text-xs"><strong>BOQ:</strong> Rs {viewData.boq_amount?.toLocaleString()} <a href={viewData.boq_file_link} className="text-red-600 underline" target="_blank" rel="noreferrer">View</a></div>}
+          {/* BOQ history + add — clients re-send BOQs over time (mam 2026-06-12). */}
+          <div className="border border-orange-200 bg-orange-50/50 rounded-lg p-3 space-y-2">
+            <strong className="text-xs text-orange-800">BOQs{boqList.length>0 && <span className="text-orange-500 font-normal"> ({boqList.length})</span>}</strong>
+            {boqList.length>0 ? (
+              <div className="space-y-1">
+                {boqList.map((b,i) => (
+                  <div key={b.id} className="flex items-center justify-between gap-2 bg-white rounded px-2 py-1 text-xs border border-orange-100">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-[10px] font-mono text-orange-400">#{boqList.length - i}</span>
+                      <span className="font-semibold whitespace-nowrap">Rs {(+b.boq_amount||0).toLocaleString('en-IN')}</span>
+                      {b.boq_file_link && <a href={b.boq_file_link} className="text-red-600 underline" target="_blank" rel="noreferrer">View</a>}
+                      {b.notes && <span className="text-gray-500 truncate">· {b.notes}</span>}
+                    </div>
+                    <span className="text-[10px] text-gray-400 whitespace-nowrap">{(b.created_at||'').slice(0,10)}{b.created_by?` · ${b.created_by}`:''}</span>
+                  </div>
+                ))}
+              </div>
+            ) : <div className="text-[11px] text-gray-400">No BOQ added yet.</div>}
+            {canEdit('leads') && (
+              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-orange-100">
+                <input type="file" className="text-[11px]" onChange={async e=>{const f=e.target.files[0]; if(!f) return; try{ const url=await uploadFile(f); setBoqForm(s=>({...s, boq_file_link:url})); toast.success('BOQ uploaded'); }catch{ toast.error('Upload failed'); }}} />
+                <input className="input text-xs" style={{width:'130px'}} type="number" placeholder="Amount (₹)" value={boqForm.boq_amount} onChange={e=>setBoqForm(s=>({...s, boq_amount:e.target.value}))} />
+                <input className="input text-xs flex-1 min-w-[120px]" placeholder="Note (optional)" value={boqForm.notes} onChange={e=>setBoqForm(s=>({...s, notes:e.target.value}))} />
+                <button type="button" disabled={boqAdding} onClick={addBoq} className="btn btn-primary text-xs py-1 px-3 disabled:opacity-40">{boqAdding?'Adding…':'+ Add BOQ'}</button>
+                {boqForm.boq_file_link && <span className="text-[10px] text-emerald-600 w-full">✓ File attached — set amount/note, then Add BOQ</span>}
+              </div>
+            )}
+          </div>
           {/* Quote-sent summary — mam (2026-06-01): "NOT SHOWING QUOTE
               SENT FILE WHEN SHOWING FILE THEN I AUDIT".  Surface the
               uploaded quotation PDF as a clickable link so any later

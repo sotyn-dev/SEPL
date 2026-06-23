@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiClock, FiCheck, FiAlertTriangle, FiPaperclip, FiEye, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDateTime } from '../utils/datetime';
 import { useUrlTab } from '../hooks/useUrlTab';
 
 // Cheque FMS — 3-stage cheque workflow.
@@ -46,12 +47,15 @@ export default function ChequeFMS() {
   const [cheques, setCheques] = useState([]);
   const [stats, setStats] = useState({ by_status: [], action_due_count: 0 });
   const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');   // cheque-date range filter (from)
+  const [dateTo, setDateTo] = useState('');       // cheque-date range filter (to)
 
   const [modal, setModal] = useState(null); // 'issue' | 'edit' | 'action' | 'view'
   const [form, setForm] = useState({});
   const [actionForm, setActionForm] = useState({ action: '', remarks: '', next_date: '' });
   const [selected, setSelected] = useState(null);
   const [history, setHistory] = useState([]);
+  const [vendors, setVendors] = useState([]);
 
   const load = () => {
     const params = new URLSearchParams();
@@ -62,6 +66,8 @@ export default function ChequeFMS() {
     api.get('/cheques/stats/summary').then(r => setStats(r.data || { by_status: [], action_due_count: 0 })).catch(() => {});
   };
   useEffect(load, [tab, search]);
+  // Vendor suggestions for the Payee field (mam 2026-06-15 automation).
+  useEffect(() => { api.get('/procurement/vendors').then(r => setVendors(r.data || [])).catch(() => {}); }, []);
 
   // STAGE 1 — open the issue modal with sensible defaults.
   const openIssue = () => {
@@ -151,6 +157,18 @@ export default function ChequeFMS() {
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  // Client-side cheque-date range filter. cheque_date is an ISO 'YYYY-MM-DD'
+  // string, so a plain string compare gives a correct date range.
+  const visible = useMemo(() => {
+    if (!dateFrom && !dateTo) return cheques;
+    return cheques.filter(c => {
+      const d = c.cheque_date || '';
+      if (dateFrom && d < dateFrom) return false;
+      if (dateTo && d > dateTo) return false;
+      return true;
+    });
+  }, [cheques, dateFrom, dateTo]);
+
   const counts = useMemo(() => {
     const m = { pending: 0, clear: 0, hold: 0, bounce: 0, stopped: 0, cancel: 0 };
     // Parallel amount-sum map so the Total Value tile can switch
@@ -201,7 +219,7 @@ export default function ChequeFMS() {
           <div className="flex gap-2">
             <button onClick={() => exportCsv('cheques',
               ['Cheque #','Payee','Bank','Date','Amount','Status','Hold Until','Raised By'],
-              cheques.map(c => [c.cheque_number, c.payee_to, c.bank_name || c.bank_other, c.cheque_date, c.amount, c.current_status, c.hold_until, c.raised_by_name]))}
+              visible.map(c => [c.cheque_number, c.payee_to, c.bank_name || c.bank_other, c.cheque_date, c.amount, c.current_status, c.hold_until, c.raised_by_name]))}
               className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
             {canCreate('cheques') && (
               <button onClick={openIssue} className="btn btn-primary flex items-center gap-2 justify-center">
@@ -225,13 +243,23 @@ export default function ChequeFMS() {
           ))}
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <input
             className="input text-sm flex-1 min-w-[200px]"
             placeholder="Search cheque no, payee, bank…"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
+          {/* Cheque-date range filter (mam 2026-06-22: "need date filter from to") */}
+          <div className="flex items-center gap-1.5">
+            <label className="text-[11px] font-semibold text-gray-500 uppercase">From</label>
+            <input type="date" className="input text-sm w-[150px]" value={dateFrom} max={dateTo || undefined} onChange={e => setDateFrom(e.target.value)} />
+            <label className="text-[11px] font-semibold text-gray-500 uppercase">To</label>
+            <input type="date" className="input text-sm w-[150px]" value={dateTo} min={dateFrom || undefined} onChange={e => setDateTo(e.target.value)} />
+            {(dateFrom || dateTo) && (
+              <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Clear</button>
+            )}
+          </div>
         </div>
 
         {/* Stats cards */}
@@ -266,8 +294,8 @@ export default function ChequeFMS() {
             </tr>
           </thead>
           <tbody>
-            {cheques.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">No cheques in this tab</td></tr>}
-            {cheques.map(c => {
+            {visible.length === 0 && <tr><td colSpan="7" className="text-center py-8 text-gray-400">{(dateFrom || dateTo) ? 'No cheques in this date range' : 'No cheques in this tab'}</td></tr>}
+            {visible.map(c => {
               const due = c.action_due === 1;
               return (
                 <tr key={c.id} className={`border-b ${due ? 'bg-red-50/40' : ''}`}>
@@ -309,7 +337,7 @@ export default function ChequeFMS() {
         <form onSubmit={saveIssue} className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><label className="label">Cheque Number *</label><input className="input" value={form.cheque_number || ''} onChange={e => setForm({ ...form, cheque_number: e.target.value })} required /></div>
-            <div><label className="label">Payee To *</label><input className="input" value={form.payee_to || ''} onChange={e => setForm({ ...form, payee_to: e.target.value })} required /></div>
+            <div><label className="label">Payee To *</label><input className="input" list="chqVendorsDL" value={form.payee_to || ''} onChange={e => setForm({ ...form, payee_to: e.target.value })} placeholder="Pick vendor or type" required /><datalist id="chqVendorsDL">{vendors.map(v => <option key={v.id} value={v.name} />)}</datalist></div>
             <div>
               <label className="label">Bank Name *</label>
               <select className="select" value={form.bank_name || ''} onChange={e => setForm({ ...form, bank_name: e.target.value })} required>
@@ -400,7 +428,7 @@ export default function ChequeFMS() {
                 <tbody>
                   {history.map(h => (
                     <tr key={h.id} className="border-b">
-                      <td className="px-2 py-1 whitespace-nowrap">{h.action_at?.slice(0, 16).replace('T', ' ')}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{fmtDateTime(h.action_at)}</td>
                       <td className="px-2 py-1"><StatusBadge status={h.action === 're_issue' ? 'pending' : h.action} dueDate={h.next_date} /></td>
                       <td className="px-2 py-1">{h.remarks}</td>
                       <td className="px-2 py-1 text-gray-500">{h.action_by_name || '—'}</td>

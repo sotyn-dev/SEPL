@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiMic, FiMicOff, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiClock, FiCalendar, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { compressImage } from '../utils/compressImage';
+import { fmtDate } from '../utils/datetime';
 
 // Web Speech API — available as SpeechRecognition in Chromium-based browsers
 const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
@@ -53,6 +54,9 @@ export default function Delegation() {
   // Voice input
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef(null);
+  // Audio-file → text (server-side transcription)
+  const [transcribing, setTranscribing] = useState(false);
+  const audioInputRef = useRef(null);
 
   const load = () => {
     const params = new URLSearchParams({ scope });
@@ -136,6 +140,27 @@ export default function Delegation() {
     setListening(true);
   };
 
+  // Upload an audio file → server transcribes (self-hosted Whisper) → text is
+  // appended to the description. Works for recordings shared on WhatsApp etc.
+  const handleAudioUpload = async (file) => {
+    if (!file) return;
+    setTranscribing(true);
+    try {
+      const fd = new FormData();
+      fd.append('audio', file);
+      const r = await api.post('/delegations/transcribe', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const text = (r.data?.text || '').trim();
+      if (!text) { toast.error('No speech detected in that audio.'); return; }
+      setForm(f => ({ ...f, description: (f.description ? f.description.trim() + ' ' : '') + text, _base: undefined }));
+      toast.success('Audio transcribed into the task description');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not transcribe the audio.');
+    } finally {
+      setTranscribing(false);
+      if (audioInputRef.current) audioInputRef.current.value = '';
+    }
+  };
+
   const openCreate = () => {
     setForm({ description: '', assigned_to: '', due_date: new Date().toISOString().split('T')[0], project_name: '', attachment_file: null });
     setCreateModal(true);
@@ -194,6 +219,22 @@ export default function Delegation() {
       // Revert on error
       setTasks(prev => prev.map(t => t.id === task.id ? { ...t, project_name: current || null } : t));
       toast.error(err.response?.data?.error || 'Failed to update project');
+    }
+  };
+
+  // Followup remark (mam 2026-06-17): a manual note the EA keeps for the MD.
+  // Purely informational — it does NOT affect task status / completion.
+  // EA (or admin) edits; everyone else sees it read-only.
+  const saveFollowup = async (task, newValue) => {
+    const trimmed = (newValue || '').trim();
+    const current = task.followup_remarks || '';
+    if (trimmed === current) return;
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, followup_remarks: trimmed || null } : t));
+    try {
+      await api.patch(`/delegations/${task.id}/followup-remarks`, { followup_remarks: trimmed });
+    } catch (err) {
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, followup_remarks: current || null } : t));
+      toast.error(err.response?.data?.error || 'Failed to save followup remark');
     }
   };
 
@@ -480,7 +521,7 @@ export default function Delegation() {
       {/* Reverted to the original 10-column table per mam
           (2026-05-21: "not change delegation like previous"). */}
       <div className="card p-0 overflow-auto max-h-[70vh]">
-        <table className="text-sm min-w-[1100px]">
+        <table className="text-sm min-w-[1100px] lg:min-w-0 lg:w-full">
           <thead className="sticky top-0 z-10 bg-gray-100">
             <tr>
               <th className="w-12 text-center">S.No.</th>
@@ -492,6 +533,7 @@ export default function Delegation() {
               <th>Status</th>
               <th>Upload Proof</th>
               <th>Extension</th>
+              <th>Followup Remarks<br/><span className="text-[9px] font-normal normal-case text-gray-400">(EA → MD)</span></th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -509,12 +551,12 @@ export default function Delegation() {
               const isAssignee = t.assigned_to === user?.id;
               const isAssigner = t.assigned_by === user?.id;
               const canEditProject = isAdmin() || isAssigner;
-              const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
+              const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
                   <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
-                  <td className="align-top" style={{ minWidth: '220px', maxWidth: '420px' }}>
+                  <td className="align-top" style={{ minWidth: '180px', maxWidth: '340px' }}>
                     <div className="text-gray-800 font-medium whitespace-normal break-words leading-snug">
                       {cleanDesc(t.description || t.title)}
                     </div>
@@ -583,6 +625,23 @@ export default function Delegation() {
                       <span className="text-[10px] text-gray-400">Rejected</span>
                     ) : <span className="text-gray-300 text-xs">—</span>}
                   </td>
+                  {/* Followup Remarks — EA writes a manual note for the MD;
+                      read-only for everyone else. Does not affect task status. */}
+                  <td className="align-top">
+                    {isEA ? (
+                      <textarea
+                        defaultValue={t.followup_remarks || ''}
+                        placeholder="— add note —"
+                        rows={2}
+                        className="text-xs bg-transparent border border-transparent hover:border-gray-200 focus:border-red-400 focus:bg-white rounded px-1.5 py-0.5 w-40 resize-y focus:outline-none align-top"
+                        onBlur={e => saveFollowup(t, e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Escape') { e.target.value = t.followup_remarks || ''; e.target.blur(); } }}
+                        title="EA followup note for MD — does not affect task status"
+                      />
+                    ) : (
+                      <span className="text-xs text-gray-700 whitespace-normal break-words block max-w-[180px]">{t.followup_remarks || <span className="text-gray-300">—</span>}</span>
+                    )}
+                  </td>
                   <td>
                     <div className="flex gap-1 items-center">
                       {isAdmin() && t.status === 'submitted' && (
@@ -619,7 +678,7 @@ export default function Delegation() {
           const isAssignee = t.assigned_to === user?.id;
           const isAssigner = t.assigned_by === user?.id;
           const canEditProject = isAdmin() || isAssigner;
-          const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
+          const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
           return (
             <div key={t.id} className={`card p-3 ${t.status === 'rejected' ? 'border-l-4 border-red-500' : t.status === 'submitted' ? 'border-l-4 border-blue-500' : ''}`}>
               <div className="flex justify-between items-start gap-2 mb-2">
@@ -711,10 +770,22 @@ export default function Delegation() {
         <form onSubmit={save} className="space-y-3">
           <div>
             <label className="label flex items-center justify-between">
-              <span>Task Description * {listening && <span className="ml-2 text-[10px] text-red-600 animate-pulse">● Listening…</span>}</span>
-              <button type="button" onClick={toggleVoice} className={`text-[11px] px-2 py-1 rounded-full flex items-center gap-1 ${listening ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                {listening ? <><FiMicOff size={12} /> Stop</> : <><FiMic size={12} /> Voice</>}
-              </button>
+              <span>Task Description *
+                {listening && <span className="ml-2 text-[10px] text-red-600 animate-pulse">● Listening…</span>}
+                {transcribing && <span className="ml-2 text-[10px] text-blue-600 animate-pulse">● Transcribing audio…</span>}
+              </span>
+              <span className="flex items-center gap-1.5">
+                <button type="button" onClick={toggleVoice} className={`text-[11px] px-2 py-1 rounded-full flex items-center gap-1 ${listening ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  {listening ? <><FiMicOff size={12} /> Stop</> : <><FiMic size={12} /> Voice</>}
+                </button>
+                {/* Upload a recorded audio file → server transcribes it to text. */}
+                <button type="button" disabled={transcribing} onClick={() => audioInputRef.current?.click()}
+                  className={`text-[11px] px-2 py-1 rounded-full flex items-center gap-1 ${transcribing ? 'bg-gray-100 text-gray-400 cursor-wait' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  <FiUpload size={12} /> {transcribing ? 'Transcribing…' : 'Upload audio'}
+                </button>
+                <input ref={audioInputRef} type="file" accept="audio/*,.m4a,.mp3,.wav,.ogg,.opus,.webm" className="hidden"
+                  onChange={e => handleAudioUpload(e.target.files?.[0])} />
+              </span>
             </label>
             <textarea className="input" rows="4" required value={form.description || ''} onChange={e => setForm({ ...form, description: e.target.value, _base: undefined })} placeholder="Type or speak the task details…" />
             {!SR && <p className="text-[10px] text-amber-600 mt-0.5">Voice input needs Chrome or Edge browser.</p>}

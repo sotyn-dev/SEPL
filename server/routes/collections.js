@@ -1,6 +1,6 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, requirePermission } = require('../middleware/auth');
 const {
   calculateAgeing, getStatusColor,
   syncSalesBillPaymentStatus, ensureTodayCashFlowDaily,
@@ -343,7 +343,7 @@ router.get('/payment-advice', (req, res) => {
 // v2 fields (site_id / site_name / crm_name / next_planned_date /
 // last_discussion). client_name is auto-derived from site_name when
 // missing so the existing dashboard still groups things correctly.
-router.post('/', (req, res) => {
+router.post('/', requirePermission('collections', 'create'), (req, res) => {
   const b = req.body || {};
   const {
     client_name, project_name, po_id, invoice_number, invoice_date,
@@ -379,7 +379,7 @@ router.post('/', (req, res) => {
 //   - Full edit: also accepts client_name / project_name / invoice_number /
 //     invoice_date / invoice_amount / due_date. When invoice_amount or
 //     due_date change, ageing days/bucket and status colour are recomputed.
-router.put('/:id', (req, res) => {
+router.put('/:id', requirePermission('collections', 'edit'), (req, res) => {
   const db = getDb();
   const cur = db.prepare('SELECT * FROM receivables WHERE id=?').get(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Not found' });
@@ -489,7 +489,7 @@ router.get('/target-summary', (req, res) => {
 });
 
 // Delete receivable (blocks if any collection received)
-router.delete('/:id', (req, res) => {
+router.delete('/:id', requirePermission('collections', 'delete'), (req, res) => {
   const db = getDb();
   const id = req.params.id;
   const received = db.prepare('SELECT COUNT(*) as c FROM collections WHERE receivable_id=?').get(id).c;
@@ -500,7 +500,7 @@ router.delete('/:id', (req, res) => {
 });
 
 // Add follow-up
-router.post('/:id/follow-up', (req, res) => {
+router.post('/:id/follow-up', requirePermission('collections', 'edit'), (req, res) => {
   const { follow_up_date, contact_method, response, promised_date, promised_amount } = req.body;
   const db = getDb();
   db.prepare('INSERT INTO collection_follow_ups (receivable_id, follow_up_date, contact_method, response, promised_date, promised_amount, followed_by) VALUES (?,?,?,?,?,?,?)')
@@ -520,7 +520,7 @@ router.get('/:id/follow-ups', (req, res) => {
 });
 
 // Record collection (payment received from client)
-router.post('/:id/collect', (req, res) => {
+router.post('/:id/collect', requirePermission('collections', 'edit'), (req, res) => {
   const { amount, collection_date, payment_mode, transaction_ref, notes } = req.body;
   if (!amount) return res.status(400).json({ error: 'Amount required' });
   const db = getDb();
@@ -568,7 +568,7 @@ router.post('/:id/collect', (req, res) => {
 
 // Refresh all ageing (run daily or on demand).  Same code path as
 // the 01:00 cron in scripts/cashFidelityCron.js — shared helper.
-router.post('/refresh-ageing', (req, res) => {
+router.post('/refresh-ageing', requirePermission('collections', 'edit'), (req, res) => {
   const r = refreshAllAgeing(getDb());
   res.json({ message: `Ageing refreshed for ${r.updated} receivables` });
 });

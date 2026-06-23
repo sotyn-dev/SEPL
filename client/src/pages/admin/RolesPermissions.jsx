@@ -20,7 +20,11 @@ const ALL_MODULES = [
   { key: 'payment_required', label: 'Payment Required' },
   { key: 'attendance', label: 'Attendance' },
   { key: 'collections', label: 'Collection Engine' },
+  { key: 'ar_ap_tracker', label: 'AR/AP Tracker' },
+  { key: 'site_chat', label: 'SOTYN Chat — create/manage groups (chatting is open to all)' },
   { key: 'dpr', label: 'DPR' },
+  { key: 'indent_labour_payment', label: 'Indent Labour Payment' },
+  { key: 'labour_payment', label: 'Labour Payment Indents' },
   { key: 'delegations', label: 'Delegations' },
   { key: 'pms_tasks', label: 'PMS Tasks' },
   { key: 'checklists', label: 'Checklists' },
@@ -33,7 +37,12 @@ const ALL_MODULES = [
   { key: 'influencers', label: 'Influencers' },
   { key: 'crm_kitting', label: 'CRM Full Kitting' },
   { key: 'quotations', label: 'BOQ & Quotations' },
+  { key: 'ai_quotation', label: 'AI Auto-Quotation' },
+  { key: 'labour_rates', label: 'Labour Rate Sheet' },
   { key: 'business_book', label: 'Business Book' },
+
+  // — Solar Division (PR #2: Funnel / Quotation / Projects / Masters)
+  { key: 'solar_quotation', label: 'Solar Division (Funnel / Quotation / Projects / Masters)' },
 
   // — Materials, Vendors, Procurement
   { key: 'item_master', label: 'Item Master' },

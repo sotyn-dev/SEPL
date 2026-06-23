@@ -483,10 +483,51 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
   }
 
   db.prepare(sql).run(...params);
+  // Keep every BOQ the client sends — the stage submit records one in the
+  // history table too (mam 2026-06-12), alongside the "latest" columns above.
+  if (stage === 'boq_costing' && (b.boq_file_link || +b.boq_amount > 0)) {
+    try {
+      db.prepare(`INSERT INTO sales_funnel_boqs (funnel_id, boq_file_link, boq_amount, created_by, notes)
+                  VALUES (?, ?, ?, ?, ?)`)
+        .run(req.params.id, b.boq_file_link || null, +b.boq_amount || 0, b.boq_created_by || req.user.name, b.boq_notes || null);
+    } catch (_) { /* history is best-effort */ }
+  }
   audit(db, req.params.id, stage, 'enter_stage', req.user, {
     notes: b.result_remarks || b.qualified_remarks || b.mom_notes || null,
   });
   res.json({ message: `Stage updated to ${stage}` });
+});
+
+// ===== BOQ HISTORY (mam 2026-06-12: clients re-send BOQs over time) =====
+
+// GET all BOQs submitted for a lead (newest first).
+router.get('/:id/boqs', requirePermission('leads', 'view'), (req, res) => {
+  const rows = getDb().prepare(
+    `SELECT id, boq_file_link, boq_amount, notes, created_by, created_at
+       FROM sales_funnel_boqs WHERE funnel_id=? ORDER BY created_at DESC, id DESC`
+  ).all(req.params.id);
+  res.json(rows);
+});
+
+// POST an ADDITIONAL BOQ for a lead — works at any stage so a re-sent BOQ
+// can always be added.  Records history + refreshes the "latest" columns.
+router.post('/:id/boq', requirePermission('leads', 'edit'), (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  if (!b.boq_file_link && !(+b.boq_amount > 0)) {
+    return res.status(400).json({ error: 'Attach a BOQ file or enter an amount' });
+  }
+  try {
+    db.prepare(`INSERT INTO sales_funnel_boqs (funnel_id, boq_file_link, boq_amount, created_by, notes)
+                VALUES (?, ?, ?, ?, ?)`)
+      .run(req.params.id, b.boq_file_link || null, +b.boq_amount || 0, req.user.name, b.boq_notes || null);
+    db.prepare(`UPDATE sales_funnel SET boq_file_link=?, boq_amount=?, boq_date=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(b.boq_file_link || null, +b.boq_amount || 0, req.params.id);
+    try { audit(db, req.params.id, 'boq_costing', 'add_boq', req.user, { notes: b.boq_notes || null }); } catch (_) {}
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ===== FOLLOW-UPS =====

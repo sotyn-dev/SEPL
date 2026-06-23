@@ -15,11 +15,12 @@ import { useAuth } from '../context/AuthContext';
 import {
   FiPlus, FiEdit2, FiTrash2, FiCalendar, FiCheckCircle, FiUser, FiFileText,
   FiAward, FiDownload, FiClock, FiTag, FiPauseCircle, FiPlayCircle, FiBriefcase,
-  FiAlertTriangle, FiClipboard, FiBarChart2, FiHelpCircle,
+  FiAlertTriangle, FiClipboard, FiBarChart2, FiHelpCircle, FiUsers,
 } from 'react-icons/fi';
 // FiPlayCircle is already imported above for the Hold/Unhold button
 // — reused here for the Training Library tab icon.
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDateTime, fmtDate, fmtTime } from '../utils/datetime';
 
 const candidateStatuses = ['lead','called','qualified','interview_scheduled','interview_done','offer_sent','accepted','onboarded','rejected'];
 const sources = ['facebook','naukri','linkedin','reference','other'];
@@ -473,7 +474,7 @@ export default function HR() {
     if (!s) return '';
     const d = new Date(s);
     if (isNaN(d.getTime())) return s;
-    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    return fmtDate(s, { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' + fmtTime(s, { hour: '2-digit', minute: '2-digit' });
   };
 
   return (
@@ -485,6 +486,7 @@ export default function HR() {
       <div className="flex gap-2 border-b border-gray-200 overflow-x-auto">
         {[
           { id: 'dashboard',       label: 'Dashboard',          icon: FiBarChart2 },
+          { id: 'manpower',        label: 'Manpower Plan',      icon: FiUsers },
           { id: 'candidates',      label: 'Candidates (ATS)',   icon: FiUser },
           { id: 'hiring-requests', label: 'Hiring Requests',    icon: FiBriefcase },
           { id: 'jds',             label: 'Job Descriptions',   icon: FiFileText },
@@ -511,6 +513,7 @@ export default function HR() {
       </div>
 
       {tab === 'dashboard'       && <DashboardTab />}
+      {tab === 'manpower'        && <ManpowerTab />}
       {tab === 'hiring-requests' && <HiringRequestsTab employees={employees} />}
       {tab === 'jds'             && <JobDescriptionsTab />}
       {tab === 'screening'       && <ScreeningQuestionsTab />}
@@ -755,7 +758,7 @@ export default function HR() {
             <h3 className="font-semibold">Sub-Contractors</h3>
             <button onClick={() => { setEditing(null); setForm({ name: '', phone: '', email: '', specialization: '', rate: 0, rate_unit: 'per_day', notes: '' }); setModal('contractor'); }} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add Contractor</button>
           </div>
-          <div className="card p-0"><table className="freeze-head">
+          <div className="card p-0 overflow-x-auto"><table className="freeze-head">
             <thead><tr><th>Name</th><th>Phone</th><th>Specialization</th><th>Rate</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {contractors.map(c => (
@@ -1149,7 +1152,7 @@ export default function HR() {
             <p className="text-[12px] text-gray-400 italic px-2 py-4 text-center">No events recorded yet.</p>
           )}
           {timelineEvents.map(ev => {
-            const dt = ev.created_at ? new Date(ev.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+            const dt = ev.created_at ? fmtDateTime(ev.created_at, { dateStyle: 'medium', timeStyle: 'short' }) : '';
             const typeColors = {
               created:             'bg-blue-100 text-blue-700 border-blue-300',
               interview_scheduled: 'bg-indigo-100 text-indigo-700 border-indigo-300',
@@ -1405,7 +1408,7 @@ export default function HR() {
                         </a>
                       )}
                       {doc.uploaded_at && !doc.file_url && (
-                        <div className="text-[10px] text-gray-400">Uploaded: {new Date(doc.uploaded_at).toLocaleDateString('en-IN')}</div>
+                        <div className="text-[10px] text-gray-400">Uploaded: {fmtDate(doc.uploaded_at)}</div>
                       )}
                     </div>
                     <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${statusColor}`}>
@@ -1476,7 +1479,7 @@ export default function HR() {
                       <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">{d.status?.replace(/_/g, ' ')}</span>
                     </td>
                     <td className="px-2 py-1.5 text-gray-500 text-[11px]">
-                      {d.created_at ? new Date(d.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : ''}
+                      {d.created_at ? fmtDate(d.created_at, { day: '2-digit', month: 'short', year: 'numeric' }) : ''}
                     </td>
                   </tr>
                 ))}
@@ -1509,6 +1512,334 @@ export default function HR() {
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">{editing ? 'Update' : 'Create'}</button></div>
         </form>
       </Modal>
+    </div>
+  );
+}
+
+// Project-wise manpower plan (mam 2026-06-12): per UNIQUE project, the
+// required manpower (from the value slab) vs the actual on site (latest
+// DPR), so HR can spot shortages and hire / redeploy.
+function ManpowerTab() {
+  const { canEdit } = useAuth();
+  const editable = canEdit('hr');         // admins + HR-editors can override Required
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [editKey, setEditKey] = useState(null);   // project key currently being edited
+  const [editVal, setEditVal] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [catFilter, setCatFilter] = useState('all');
+  const CATEGORIES = ['Live', 'Hold', 'Service Team', 'Handover'];
+  const load = () => {
+    api.get('/hr/manpower-plan')
+      .then(r => setRows(r.data || []))
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
+  };
+  // Keep the board live so one user's category / required edit shows up for
+  // everyone without a manual page refresh (mam 2026-06-12): poll every 20s
+  // and refetch whenever the tab regains focus.  The initial spinner only
+  // shows on first load; polls swap data in silently.
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 20000);
+    const onFocus = () => { if (document.visibilityState === 'visible') load(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Each project row has three editable targets — manpower, Site Engineers and
+  // Jr. Site Engineers — so the edit key is composite: `${projectKey}|${role}`.
+  const ROLES = {
+    manpower:    { label: 'Required manpower',      val: 'required',    auto: 'required_auto',    ov: 'required_overridden' },
+    site_eng:    { label: 'Required Site Eng',      val: 'se_required', auto: 'se_required_auto', ov: 'se_required_overridden' },
+    jr_site_eng: { label: 'Required Jr. Site Eng',  val: 'jr_required', auto: 'jr_required_auto', ov: 'jr_required_overridden' },
+    foreman:     { label: 'Required Foreman',       val: 'fm_required', auto: 'fm_required_auto', ov: 'fm_required_overridden' },
+  };
+  const ekey = (r, role) => `${r.key}|${role}`;
+  const startEdit = (r, role) => { setEditKey(ekey(r, role)); setEditVal(String(r[ROLES[role].val] ?? '')); };
+  const cancelEdit = () => { setEditKey(null); setEditVal(''); };
+  const saveEdit = async (r, value, role = 'manpower') => {
+    setSaving(true);
+    try {
+      await api.put('/hr/manpower-plan/required', { key: r.key, required: value, role });
+      toast.success(value === '' || +value <= 0 ? 'Reset to auto value' : `${ROLES[role].label} updated`);
+      cancelEdit();
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Update failed');
+    } finally { setSaving(false); }
+  };
+  const saveCategory = async (r, category) => {
+    try {
+      await api.put('/hr/manpower-plan/category', { key: r.key, category });
+      toast.success(category ? `Marked ${category}` : 'Category cleared');
+      load();
+    } catch (e) {
+      toast.error(e.response?.data?.error || 'Update failed');
+    }
+  };
+  const fmtMoney = n => '₹' + Math.round(+n || 0).toLocaleString('en-IN');
+  const fmtShort = n => {
+    const v = +n || 0;
+    if (v >= 1e7) return `₹${(v / 1e7).toFixed(2)} Cr`;
+    if (v >= 1e5) return `₹${(v / 1e5).toFixed(2)} L`;
+    return '₹' + Math.round(v).toLocaleString('en-IN');
+  };
+  const q = search.trim().toLowerCase();
+  const filtered = rows.filter(r =>
+    (catFilter === 'all' || (r.category || '') === catFilter) &&
+    (!q || (r.project || '').toLowerCase().includes(q))
+  );
+  const totalReq = filtered.reduce((s, r) => s + (r.required || 0), 0);
+  const totalAct = filtered.reduce((s, r) => s + (r.actual || 0), 0);
+  const totalGap = totalReq - totalAct;
+  const shortCount = filtered.filter(r => r.gap > 0).length;
+  const overallCoverage = totalReq > 0 ? Math.round((totalAct / totalReq) * 100) : 0;
+  const coverage = r => (r.required > 0 ? Math.min(100, Math.round((r.actual / r.required) * 100)) : 0);
+  const barColor = pct => (pct >= 100 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500');
+  const fmtDpr = s => {
+    if (!s) return null;
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return s;
+    return fmtDate(s, { day: '2-digit', month: 'short', year: '2-digit' });
+  };
+  // Compact "actual / target" cell for Site Eng & Jr. Site Eng — actual comes
+  // from the project's PO site engineers (classified by Employee designation);
+  // the target auto-fills from the value slab and the ✏️ overrides it.
+  const renderEngCell = (r, role, actualKey, gapKey, namesKey) => {
+    if (r.is_handover) return <span className="text-gray-300 text-xs">—</span>;
+    const cfg = ROLES[role];
+    const required = r[cfg.val] || 0;
+    const auto = r[cfg.auto] || 0;
+    const overridden = r[cfg.ov];
+    const actual = r[actualKey] || 0;
+    const gap = r[gapKey];
+    const names = r[namesKey] || [];
+    if (editKey === ekey(r, role)) {
+      return (
+        <div className="inline-flex items-center gap-1">
+          <input type="number" min="0" autoFocus className="input text-xs text-center" style={{ width: '48px' }}
+            value={editVal} onChange={e => setEditVal(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') saveEdit(r, editVal, role); if (e.key === 'Escape') cancelEdit(); }} />
+          <button type="button" disabled={saving} onClick={() => saveEdit(r, editVal, role)} className="text-emerald-600 hover:text-emerald-800" title="Save"><FiCheckCircle size={15} /></button>
+          <button type="button" onClick={cancelEdit} className="text-gray-400 hover:text-gray-600 text-sm font-bold" title="Cancel">✕</button>
+        </div>
+      );
+    }
+    const color = (required === 0 && actual === 0) ? 'text-gray-300' : gap > 0 ? 'text-red-600' : 'text-emerald-700';
+    return (
+      <div className="inline-flex flex-col items-center gap-0.5">
+        <div className="inline-flex items-center gap-1" title={overridden ? `Target manually set · default would be ${auto}` : 'Default target: 1 per project'}>
+          <span className={`font-bold text-xs ${color}`}>{actual}</span>
+          <span className="text-gray-400 text-xs">/ {required}</span>
+          {editable && <button type="button" onClick={() => startEdit(r, role)} className="text-gray-300 hover:text-blue-600" title={`Edit ${cfg.label.toLowerCase()}`}><FiEdit2 size={11} /></button>}
+          {editable && overridden && <button type="button" onClick={() => saveEdit(r, '', role)} className="text-gray-300 hover:text-red-500 text-sm leading-none" title={`Reset to auto (${auto})`}>↺</button>}
+        </div>
+        {names.length > 0 && (
+          <div className="text-[10px] leading-tight text-gray-500 max-w-[104px] truncate" title={names.join(', ')}>{names.join(', ')}</div>
+        )}
+      </div>
+    );
+  };
+  // Role totals across the filtered projects — required vs actual on site.
+  const sumOf = k => filtered.reduce((s, r) => s + (r[k] || 0), 0);
+  const roleCards = [
+    { label: 'Site Eng', actual: sumOf('se_actual'), required: sumOf('se_required'), ring: 'bg-indigo-100 text-indigo-600' },
+    { label: 'Jr. Site Eng', actual: sumOf('jr_actual'), required: sumOf('jr_required'), ring: 'bg-sky-100 text-sky-600' },
+    { label: 'Foreman', actual: sumOf('fm_actual'), required: sumOf('fm_required'), ring: 'bg-amber-100 text-amber-600' },
+  ];
+  const cards = [
+    { label: 'Projects', value: filtered.length, icon: FiBriefcase, ring: 'bg-slate-100 text-slate-600', text: 'text-slate-800' },
+    { label: 'Required', value: totalReq, icon: FiUsers, ring: 'bg-blue-100 text-blue-600', text: 'text-blue-700' },
+    { label: 'Actual (avg DPR)', value: totalAct, icon: FiCheckCircle, ring: 'bg-emerald-100 text-emerald-600', text: 'text-emerald-700' },
+    { label: 'Shortfall', value: totalGap > 0 ? `−${totalGap}` : totalGap === 0 ? '0' : `+${-totalGap}`, sub: `${shortCount} project(s) short`, icon: FiAlertTriangle, ring: totalGap > 0 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600', text: totalGap > 0 ? 'text-red-600' : 'text-emerald-600' },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* Info banner */}
+      <div className="text-xs text-gray-600 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-lg px-4 py-2.5">
+        <b>Required</b> manpower comes from each project's total value
+        (0–5 L → 4 · 5–25 L → 6 · 25–50 L → 8 · 50 L–1 Cr → 10 · 1–5 Cr → 15 · 5–10 Cr → 25 · 10 Cr+ → 40).
+        <b> Actual</b> is the average manpower across the project's DPRs. A red <b>gap</b> means more people are needed.
+        <b> Site Eng / Jr. Site Eng / Foreman</b> show <i>on site (from the project's PO engineers, by designation) / target</i> — red means short. Every project needs 1 Jr. Site Eng + 1 Foreman; a Site Eng is added once the project is ₹1.5 Cr+.
+        {editable && <span className="text-blue-700"> · Click the ✏️ on any <b>Required</b> / target to override it, and set a <b>Category</b> per project — <b>Handover</b> needs no team / no planning.</span>}
+      </div>
+
+      {/* Summary stat cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {cards.map((c, i) => {
+          const Icon = c.icon;
+          return (
+            <div key={i} className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${c.ring}`}><Icon size={18} /></div>
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wide text-gray-400 font-semibold truncate">{c.label}</div>
+                <div className={`text-2xl font-bold leading-tight ${c.text}`}>{c.value}</div>
+                {c.sub && <div className="text-[10px] text-gray-400">{c.sub}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Per-role required vs actual (on site) */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {roleCards.map((c, i) => {
+          const short = c.actual < c.required;
+          return (
+            <div key={i} className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${c.ring}`}><FiUsers size={18} /></div>
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wide text-gray-400 font-semibold truncate">{c.label}</div>
+                <div className="flex items-baseline gap-1.5 leading-tight">
+                  <span className={`text-2xl font-bold ${short ? 'text-red-600' : 'text-emerald-600'}`}>{c.actual}</span>
+                  <span className="text-sm text-gray-400">/ {c.required} needed</span>
+                </div>
+                <div className="text-[10px] text-gray-400">{short ? `${c.required - c.actual} short` : 'on target'}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Overall coverage bar */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-xs font-semibold text-gray-600">Overall manpower coverage</span>
+          <span className={`text-xs font-bold ${overallCoverage >= 100 ? 'text-emerald-600' : overallCoverage >= 50 ? 'text-amber-600' : 'text-red-600'}`}>{totalAct} / {totalReq} · {overallCoverage}%</span>
+        </div>
+        <div className="h-2.5 rounded-full bg-gray-100 overflow-hidden">
+          <div className={`h-full rounded-full transition-all ${barColor(overallCoverage)}`} style={{ width: `${Math.min(100, overallCoverage)}%` }} />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <input className="input text-sm max-w-xs flex-1 min-w-[180px]" placeholder="Search project…" value={search} onChange={e => setSearch(e.target.value)} />
+        <select className="select text-sm" style={{ width: '160px' }} value={catFilter} onChange={e => setCatFilter(e.target.value)} title="Filter by category">
+          <option value="all">All categories</option>
+          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          <option value="">Uncategorized</option>
+        </select>
+      </div>
+
+      {/* Table */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="text-sm w-full">
+            <thead>
+              <tr className="bg-gradient-to-b from-gray-50 to-gray-100 border-b border-gray-200 text-[10px] uppercase tracking-wider text-gray-500">
+                <th className="px-4 py-3 text-left font-semibold">Project</th>
+                <th className="px-4 py-3 text-left font-semibold">Category</th>
+                <th className="px-4 py-3 text-right font-semibold">Project Value</th>
+                <th className="px-4 py-3 text-center font-semibold">Required</th>
+                <th className="px-4 py-3 text-center font-semibold">Actual</th>
+                <th className="px-4 py-3 text-center font-semibold" title="On site (from PO) / target">Site Eng</th>
+                <th className="px-4 py-3 text-center font-semibold" title="On site (from PO) / target">Jr. Site Eng</th>
+                <th className="px-4 py-3 text-center font-semibold" title="On site (from PO) / target">Foreman</th>
+                <th className="px-4 py-3 text-left font-semibold w-44">Coverage</th>
+                <th className="px-4 py-3 text-center font-semibold">Gap</th>
+                <th className="px-4 py-3 text-left font-semibold">Last DPR</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan="11" className="text-center py-10 text-gray-400">Loading…</td></tr>
+              ) : filtered.length === 0 ? (
+                <tr><td colSpan="11" className="text-center py-10 text-gray-400">No projects found</td></tr>
+              ) : filtered.map((r, i) => {
+                const pct = coverage(r);
+                const accent = r.gap > 0 ? 'border-l-red-400' : r.gap === 0 ? 'border-l-emerald-400' : 'border-l-blue-400';
+                return (
+                  <tr key={i} className={`border-b border-gray-100 border-l-4 ${accent} ${i % 2 ? 'bg-gray-50/40' : 'bg-white'} hover:bg-blue-50/50 transition-colors`}>
+                    <td className="px-4 py-2.5 font-medium text-gray-800">{r.project}</td>
+                    <td className="px-4 py-2.5">
+                      {editable ? (
+                        <select
+                          className={`select text-xs ${r.category === 'Handover' ? 'text-gray-500' : ''}`}
+                          style={{ minWidth: '120px' }}
+                          value={r.category || ''}
+                          onChange={e => saveCategory(r, e.target.value)}>
+                          <option value="">—</option>
+                          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      ) : (
+                        r.category
+                          ? <span className={`text-[11px] px-2 py-0.5 rounded-full font-semibold ${r.category === 'Handover' ? 'bg-gray-100 text-gray-500' : r.category === 'Live' ? 'bg-emerald-100 text-emerald-700' : r.category === 'Service Team' ? 'bg-indigo-100 text-indigo-700' : 'bg-amber-100 text-amber-700'}`}>{r.category}</span>
+                          : <span className="text-gray-300 text-xs">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-gray-700 whitespace-nowrap" title={fmtMoney(r.value)}>{fmtShort(r.value)}</td>
+                    <td className="px-4 py-2.5 text-center">
+                      {r.is_handover ? (
+                        <span className="text-gray-400 text-xs" title="Handover — no team required, no planning">—</span>
+                      ) : editKey === ekey(r, 'manpower') ? (
+                        <div className="inline-flex items-center gap-1">
+                          <input type="number" min="0" autoFocus className="input text-xs text-center" style={{ width: '56px' }}
+                            value={editVal} onChange={e => setEditVal(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') saveEdit(r, editVal); if (e.key === 'Escape') cancelEdit(); }} />
+                          <button type="button" disabled={saving} onClick={() => saveEdit(r, editVal)} className="text-emerald-600 hover:text-emerald-800" title="Save"><FiCheckCircle size={16} /></button>
+                          <button type="button" onClick={cancelEdit} className="text-gray-400 hover:text-gray-600 text-sm font-bold" title="Cancel">✕</button>
+                        </div>
+                      ) : (
+                        <div className="inline-flex items-center gap-1">
+                          <span
+                            className={`inline-flex items-center justify-center min-w-[28px] h-6 px-1.5 rounded-md font-bold text-xs ${r.required_overridden ? 'bg-amber-100 text-amber-700' : 'bg-blue-50 text-blue-700'}`}
+                            title={r.required_overridden ? `Manually set · auto would be ${r.required_auto}` : 'Auto from project value'}>
+                            {r.required}
+                          </span>
+                          {editable && (
+                            <button type="button" onClick={() => startEdit(r, 'manpower')} className="text-gray-300 hover:text-blue-600" title="Edit required manpower"><FiEdit2 size={12} /></button>
+                          )}
+                          {editable && r.required_overridden && (
+                            <button type="button" onClick={() => saveEdit(r, '')} className="text-gray-300 hover:text-red-500 text-sm leading-none" title={`Reset to auto (${r.required_auto})`}>↺</button>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-center"><span className="inline-flex items-center justify-center min-w-[28px] h-6 px-1.5 rounded-md bg-emerald-50 text-emerald-700 font-bold text-xs">{r.actual}</span></td>
+                    <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'site_eng', 'se_actual', 'se_gap', 'se_names')}</td>
+                    <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'jr_site_eng', 'jr_actual', 'jr_gap', 'jr_names')}</td>
+                    <td className="px-4 py-2.5 text-center">{renderEngCell(r, 'foreman', 'fm_actual', 'fm_gap', 'fm_names')}</td>
+                    <td className="px-4 py-2.5">
+                      {r.is_handover ? (
+                        <span className="text-gray-300 text-xs">—</span>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden min-w-[56px]">
+                            <div className={`h-full rounded-full ${barColor(pct)}`} style={{ width: `${pct}%` }} />
+                          </div>
+                          <span className="text-[10px] font-semibold text-gray-500 w-8 text-right">{pct}%</span>
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                      {r.is_handover
+                        ? <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-500" title="Handover — no team required">No planning</span>
+                        : r.gap > 0
+                          ? <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-red-100 text-red-700">−{r.gap} short</span>
+                          : r.gap === 0
+                            ? <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-700">On target</span>
+                            : <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-700">+{-r.gap} extra</span>}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs whitespace-nowrap">
+                      {r.last_dpr_date
+                        ? <span className="text-gray-600">{fmtDpr(r.last_dpr_date)}</span>
+                        : <span className="text-gray-300 italic">no DPR</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

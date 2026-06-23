@@ -2,19 +2,26 @@
 // project. Same lifecycle as Delegations but with a project dropdown that
 // auto-captures the CRM name from that project's latest Client PO.
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiUpload, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiCalendar, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiUpload, FiMic, FiMicOff, FiCheck, FiX, FiTrash2, FiExternalLink, FiAlertTriangle, FiCalendar, FiDownload } from 'react-icons/fi';
+
+// Web Speech API — live mic dictation (Chromium browsers only).
+const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 import { exportCsv } from '../utils/exportCsv';
 import { compressImage } from '../utils/compressImage';
+import { fmtDate } from '../utils/datetime';
 
 export default function PMSTasks() {
-  const { user, isAdmin, canCreate } = useAuth();
+  const { user, isAdmin, canCreate, canApprove } = useAuth();
+  // A user granted PMS Tasks → Approve (or admin) can approve/reject and
+  // upload proof on ANYONE's task — mam 2026-06-17.
+  const pmsApprover = isAdmin() || canApprove('pms_tasks');
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -59,6 +66,57 @@ export default function PMSTasks() {
   const [submitForm, setSubmitForm] = useState({ proof_url: '', uploading: false });
   const [rejectReason, setRejectReason] = useState('');
   const [extendForm, setExtendForm] = useState({ requested_due_date: '', reason: '' });
+  // Voice dictation + audio-file transcription for the Task Description.
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const audioInputRef = useRef(null);
+
+  // Live mic → description (appends so typing + speaking can be combined).
+  const toggleVoice = () => {
+    if (!SR) { toast.error("Your browser doesn't support voice input. Use Chrome or Edge."); return; }
+    if (listening) { recognitionRef.current?.stop(); setListening(false); return; }
+    const rec = new SR();
+    rec.lang = 'en-IN';
+    rec.interimResults = true;
+    rec.continuous = true;
+    let finalBuf = '';
+    rec.onresult = (ev) => {
+      let interim = '';
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const t = ev.results[i][0].transcript;
+        if (ev.results[i].isFinal) finalBuf += t + ' '; else interim += t;
+      }
+      setForm(f => ({ ...f, description: ((f._base || '') + finalBuf + interim).trim() }));
+    };
+    rec.onstart = () => setForm(f => ({ ...f, _base: (f.description ? f.description + ' ' : '') }));
+    rec.onerror = (e) => { toast.error('Voice error: ' + (e.error || 'unknown')); setListening(false); };
+    rec.onend = () => setListening(false);
+    recognitionRef.current = rec;
+    rec.start();
+    setListening(true);
+  };
+
+  // Upload a recorded audio file → server transcribes (self-hosted Whisper) →
+  // text appended to the description. Reuses the delegations transcribe route.
+  const handleAudioUpload = async (file) => {
+    if (!file) return;
+    setTranscribing(true);
+    try {
+      const fd = new FormData();
+      fd.append('audio', file);
+      const r = await api.post('/delegations/transcribe', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const text = (r.data?.text || '').trim();
+      if (!text) { toast.error('No speech detected in that audio.'); return; }
+      setForm(f => ({ ...f, description: (f.description ? f.description.trim() + ' ' : '') + text, _base: undefined }));
+      toast.success('Audio transcribed into the task description');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not transcribe the audio.');
+    } finally {
+      setTranscribing(false);
+      if (audioInputRef.current) audioInputRef.current.value = '';
+    }
+  };
 
   const load = () => {
     const params = new URLSearchParams({ scope });
@@ -265,7 +323,7 @@ export default function PMSTasks() {
           { id: 'mine', label: 'My Tasks' },
           { id: 'given', label: 'Given by me' },
           { id: 'followup', label: 'Followup (all active)' },
-          ...(isAdmin() ? [{ id: 'all', label: 'All (admin)' }] : []),
+          ...(pmsApprover ? [{ id: 'all', label: isAdmin() ? 'All (admin)' : 'All' }] : []),
         ].map(t => (
           <button key={t.id} onClick={() => setScope(t.id)}
             className={`px-3 py-1.5 rounded-lg font-medium border ${scope === t.id ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
@@ -350,8 +408,8 @@ export default function PMSTasks() {
                 const u = String(user.name).toLowerCase().trim();
                 return c === u || c.split(/\s+/)[0] === u.split(/\s+/)[0];
               })();
-              const canActOnTask = isAssigner || isAdmin() || isCrmOwner;
-              const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
+              const canActOnTask = isAssigner || isAdmin() || isCrmOwner || pmsApprover;
+              const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
               return (
                 <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
                   <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
@@ -398,12 +456,12 @@ export default function PMSTasks() {
                       {t.proof_url && (
                         <a href={t.proof_url} target="_blank" rel="noreferrer" className="text-red-600 text-xs hover:underline flex items-center gap-1"><FiExternalLink size={11} /> View</a>
                       )}
-                      {(isAssignee || isAssigner || isAdmin()) && (t.status === 'pending' || t.status === 'rejected') && (
+                      {(isAssignee || isAssigner || isAdmin() || pmsApprover) && (t.status === 'pending' || t.status === 'rejected') && (
                         <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1 w-fit">
                           <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}
                         </button>
                       )}
-                      {!t.proof_url && !((isAssignee || isAssigner || isAdmin()) && (t.status === 'pending' || t.status === 'rejected')) && (
+                      {!t.proof_url && !((isAssignee || isAssigner || isAdmin() || pmsApprover) && (t.status === 'pending' || t.status === 'rejected')) && (
                         <span className="text-gray-400 text-xs">—</span>
                       )}
                     </div>
@@ -452,7 +510,7 @@ export default function PMSTasks() {
         {tasks.map((t, idx) => {
           const isAssignee = t.assigned_to === user?.id;
           const isAssigner = t.assigned_by === user?.id;
-          const completedDate = t.reviewed_at ? new Date(t.reviewed_at).toLocaleDateString() : null;
+          const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
           return (
             <div key={t.id} className={`card p-3 ${t.status === 'rejected' ? 'border-l-4 border-red-500' : t.status === 'submitted' ? 'border-l-4 border-blue-500' : ''}`}>
               <div className="flex justify-between items-start gap-2 mb-2">
@@ -479,7 +537,7 @@ export default function PMSTasks() {
               )}
               <div className="flex flex-wrap gap-1.5">
                 {t.proof_url && <a href={t.proof_url} target="_blank" rel="noreferrer" className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiExternalLink size={11} /> Proof</a>}
-                {(isAssignee || isAssigner || isAdmin()) && (t.status === 'pending' || t.status === 'rejected') && (
+                {(isAssignee || isAssigner || isAdmin() || pmsApprover) && (t.status === 'pending' || t.status === 'rejected') && (
                   <button onClick={() => { setSubmitModal(t); setSubmitForm({ proof_url: '', uploading: false }); }} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1">
                     <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
                   </button>
@@ -487,7 +545,7 @@ export default function PMSTasks() {
                 {isAssignee && t.status !== 'approved' && t.extension_status !== 'pending' && (
                   <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }} className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiCalendar size={11} /> Extension</button>
                 )}
-                {isAssigner && t.status === 'submitted' && (
+                {(isAssigner || isAdmin() || pmsApprover) && t.status === 'submitted' && (
                   <>
                     <button onClick={() => approve(t)} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiCheck size={11} /> Approve</button>
                     <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="btn btn-danger text-[11px] px-2 py-1 flex items-center gap-1"><FiX size={11} /> Reject</button>
@@ -530,8 +588,25 @@ export default function PMSTasks() {
             )}
           </div>
           <div>
-            <label className="label">Task Description *</label>
-            <textarea className="input" rows="4" required value={form.description || ''} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What needs to be done?" />
+            <label className="label flex items-center justify-between">
+              <span>Task Description *
+                {listening && <span className="ml-2 text-[10px] text-red-600 animate-pulse">● Listening…</span>}
+                {transcribing && <span className="ml-2 text-[10px] text-blue-600 animate-pulse">● Transcribing audio…</span>}
+              </span>
+              <span className="flex items-center gap-1.5">
+                <button type="button" onClick={toggleVoice} className={`text-[11px] px-2 py-1 rounded-full flex items-center gap-1 ${listening ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  {listening ? <><FiMicOff size={12} /> Stop</> : <><FiMic size={12} /> Voice</>}
+                </button>
+                <button type="button" disabled={transcribing} onClick={() => audioInputRef.current?.click()}
+                  className={`text-[11px] px-2 py-1 rounded-full flex items-center gap-1 ${transcribing ? 'bg-gray-100 text-gray-400 cursor-wait' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  <FiUpload size={12} /> {transcribing ? 'Transcribing…' : 'Upload audio'}
+                </button>
+                <input ref={audioInputRef} type="file" accept="audio/*,.m4a,.mp3,.wav,.ogg,.opus,.webm" className="hidden"
+                  onChange={e => handleAudioUpload(e.target.files?.[0])} />
+              </span>
+            </label>
+            <textarea className="input" rows="4" required value={form.description || ''} onChange={e => setForm({ ...form, description: e.target.value, _base: undefined })} placeholder="What needs to be done? — or speak / upload an audio note" />
+            {!SR && <p className="text-[10px] text-amber-600 mt-0.5">Live voice needs Chrome or Edge — “Upload audio” works in any browser.</p>}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>

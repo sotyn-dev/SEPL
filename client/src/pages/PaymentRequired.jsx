@@ -14,18 +14,18 @@ import { LuIndianRupee } from 'react-icons/lu';
 const CATEGORIES = ['TA/DA', 'Purchase', 'Labour', 'Transport', 'Salary', 'Compliance'];
 const STATUSES = ['pending', 'step1_approved', 'accounts_approved', 'dues_checked', 'velocity_checked', 'final_approved', 'rejected'];
 const STATUS_LABELS = { pending: 'Pending', step1_approved: 'Step 1 Approved', accounts_approved: 'Accounts Approved', dues_checked: 'Dues Checked', velocity_checked: 'Velocity Checked', final_approved: 'Final Approved', rejected: 'Rejected' };
+// One standard flow for every category (mam 2026-06-11):
+// L1 Accountant → L2 Nitin Jain → L3 Ankur Kaplesh → Payment Release Aanchal.
+// Step numbers (1,2,3,5) match the server WORKFLOW exactly.
 const STEPS = [
-  { step: 1, name: 'Category Approval' },
-  { step: 2, name: 'Accountant Approval' },
-  { step: 3, name: 'Velocity Check (Auto)' },
-  { step: 4, name: 'Billing Engineer' },
-  { step: 5, name: 'Payment Release' },
+  { step: 1, name: 'L1 Approval (Accountant)' },
+  { step: 2, name: 'L2 Approval (Nitin Jain)' },
+  { step: 3, name: 'L3 Approval (MD - Ankur Kaplesh)' },
+  { step: 5, name: 'Payment Release (Aanchal)' },
 ];
-const TADA_STEPS = [
-  { step: 1, name: 'HR Approval' },
-  { step: 2, name: 'Accountant Approval' },
-  { step: 5, name: 'Payment Release' },
-];
+// TA/DA gets an HR pre-approval step (mam 2026-06-17): HR (Prabhdeep Singh)
+// before L1 Accountant, for new requests from 15/06/2026.
+const TADA_STEPS = [{ step: 0, name: 'HR Approval (Prabhdeep Singh)' }, ...STEPS];
 
 // Canonical order of LIVE workflow stages for the dashboard tiles/chips
 // (union of the 5-step and TA/DA workflows). Mam (2026-05-30): the stage
@@ -33,7 +33,7 @@ const TADA_STEPS = [
 // every in-flight request — so everything piled into "HR Approval" and
 // the later stages showed 0. A request's true stage is its live
 // current_step_name; terminal states fall back to status.
-const STAGE_SEQ = ['HR Approval', 'Category Approval', 'Accountant Approval', 'Velocity Check (Auto)', 'Billing Engineer', 'Payment Release'];
+const STAGE_SEQ = ['HR Approval (Prabhdeep Singh)', 'L1 Approval (Accountant)', 'L2 Approval (Nitin Jain)', 'L3 Approval (MD - Ankur Kaplesh)', 'Payment Release (Aanchal)'];
 const stageOf = (r) =>
   r.status === 'final_approved' ? 'Approved'
   : r.status === 'rejected' ? 'Rejected'
@@ -44,6 +44,14 @@ const stageOf = (r) =>
 const defaultRequiredByDate = () => {
   const d = new Date();
   d.setDate(d.getDate() + 5);
+  return d.toISOString().split('T')[0];
+};
+// TA/DA travel date window: today and the previous 3 days only — no future
+// dates (mam 2026-06-11: travel is already done, claim it within 3 days).
+const todayStr = () => new Date().toISOString().split('T')[0];
+const minTravelDate = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 3);
   return d.toISOString().split('T')[0];
 };
 
@@ -75,6 +83,7 @@ export default function PaymentRequired() {
   const [stats, setStats] = useState(null);
   const [sites, setSites] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [vendors, setVendors] = useState([]);
   const [modal, setModal] = useState(null);
   const [viewData, setViewData] = useState(null);
   const [form, setForm] = useState({ ...emptyForm });
@@ -83,6 +92,13 @@ export default function PaymentRequired() {
   // Client-side filter by LIVE workflow stage (current_step_name / Approved /
   // Rejected). Set by clicking a stage tile or chip. Empty = all stages.
   const [stageFilter, setStageFilter] = useState('');
+  // "Approved by L1/L2/L3" view (mam 2026-06-15): step number 1/2/3, or null.
+  // When set, the list shows requests that level has signed off and the
+  // Approval Amt column shows the amount THAT level approved. Mutually
+  // exclusive with stageFilter (the pending-stage chips).
+  const [approvedLevel, setApprovedLevel] = useState(null);
+  const APPROVED_LEVELS = [{ step: 1, label: 'Approved by L1' }, { step: 2, label: 'Approved by L2' }, { step: 3, label: 'Approved by L3' }];
+  const clearedAt = (r, step) => !!(r.step_amounts && r.step_amounts[step] != null);
   const [uploading, setUploading] = useState(false);
 
   // Approval routing — admin-only (mam, 2026-05-16: "i want hr
@@ -162,6 +178,7 @@ export default function PaymentRequired() {
     // mam's ask on 2026-04-23.
     api.get('/dpr/sites?all=1').then(r => setSites(r.data)).catch(() => {});
     api.get('/hr/employees').then(r => setEmployees(r.data)).catch(() => {});
+    api.get('/procurement/vendors').then(r => setVendors(r.data || [])).catch(() => {});
   }, [load]);
 
   // Mandatory-proof validation per category + mode (mam: 'if proof
@@ -186,6 +203,10 @@ export default function PaymentRequired() {
 
   const handleSave = async (e) => {
     e.preventDefault();
+    // TA/DA travel date must be today or within the previous 3 days — no future.
+    if (form.category === 'TA/DA' && form.travel_dates && (form.travel_dates < minTravelDate() || form.travel_dates > todayStr())) {
+      return toast.error(`Travel Date must be between ${minTravelDate()} and ${todayStr()} (today or up to 3 days back).`, { duration: 7000 });
+    }
     const missing = requiredProofsMissing(form);
     if (missing.length > 0) {
       return toast.error(`Upload required proof${missing.length > 1 ? 's' : ''} before submitting: ${missing.join(', ')}`, { duration: 7000 });
@@ -201,11 +222,26 @@ export default function PaymentRequired() {
   // Approver-side amount adjustment (mam 2026-05-28). String state so
   // an empty input doesn't snap to 0 mid-typing.
   const [approvalAmount, setApprovalAmount] = useState('');
+  // Admin amount edit (mam 2026-06-17, e.g. salary increase). null = not
+  // editing; a string = the value being typed.
+  const [editAmt, setEditAmt] = useState(null);
+
+  const saveAmount = async () => {
+    const n = +editAmt;
+    if (!Number.isFinite(n) || n <= 0) return toast.error('Enter a valid amount');
+    try {
+      const res = await api.patch(`/payment-required/${viewData.id}/amount`, { amount: n });
+      toast.success(res.data.message || 'Amount updated');
+      setEditAmt(null);
+      setViewData(prev => ({ ...prev, amount: n, approved_amount: n }));
+      setApprovalAmount(String(n));
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed to update amount'); }
+  };
 
   const handleApprove = async (id) => {
-    if (!approvalRemarks || approvalRemarks.trim().length < 5) {
-      return toast.error('Please enter approval reason (minimum 5 characters)');
-    }
+    // Remarks are OPTIONAL when approving (mam 2026-06-18) — only a
+    // rejection needs a reason. Don't block approval on an empty box.
     const original = +(viewData?.amount || 0);
     const n = approvalAmount === '' ? null : +approvalAmount;
     if (n !== null) {
@@ -358,7 +394,7 @@ export default function PaymentRequired() {
             <select className="select w-40" value={filters.category} onChange={e => setFilters(f => ({ ...f, category: e.target.value }))}><option value="">All Categories</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
             <select className="select w-40" value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}><option value="">All Status</option>{STATUSES.map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}</select>
             {(filters.date_from || filters.date_to || filters.category || filters.status || stageFilter || search) && (
-              <button onClick={() => { setSearch(''); setStageFilter(''); setFilters({ status: '', category: '', date_from: '', date_to: '' }); }}
+              <button onClick={() => { setSearch(''); setStageFilter(''); setApprovedLevel(null); setFilters({ status: '', category: '', date_from: '', date_to: '' }); }}
                 className="btn btn-secondary text-xs flex items-center gap-1 text-red-600 whitespace-nowrap">
                 <FiX size={12} /> Clear filters
               </button>
@@ -396,10 +432,10 @@ export default function PaymentRequired() {
               { border: 'border-indigo-500', label: 'text-indigo-700', num: 'text-indigo-700', activeBg: 'bg-indigo-50', ring: 'ring-indigo-300' },
               { border: 'border-sky-500',    label: 'text-sky-700',    num: 'text-sky-700',    activeBg: 'bg-sky-50',    ring: 'ring-sky-300' },
             ];
-            // Only show in-flight stages that actually have rows (canonical
-            // order), plus Showing / Approved / Rejected — so the strip
-            // mirrors the live workflow, never a phantom 0-stage.
-            const presentStages = STAGE_SEQ.filter(st => visible.some(r => stageOf(r) === st));
+            // Always show the full standard flow (L1 → L2 → L3 → Release),
+            // even a stage with 0 rows, so L3 Ankur Kaplesh is never hidden
+            // just because no request sits there yet (mam 2026-06-11).
+            const presentStages = STAGE_SEQ;
             const tiles = [
               { key: 'all', label: 'Showing', stage: null, color: { border: 'border-blue-500', label: 'text-gray-500', num: 'text-blue-700', activeBg: 'bg-blue-50', ring: 'ring-blue-300' } },
               ...presentStages.map((st, i) => ({ key: st, label: st, stage: st, color: PALETTE[i % PALETTE.length] })),
@@ -409,12 +445,12 @@ export default function PaymentRequired() {
             const tile = ({ key, label, stage, color }) => {
               const rows = rowsOf(stage);
               const amt = rows.reduce((s, r) => s + (+r.amount || 0), 0);
-              const active = stage != null && stageFilter === stage;
+              const active = stage != null && stageFilter === stage && !approvedLevel;
               return (
                 <button
                   key={key}
                   type="button"
-                  onClick={() => setStageFilter(active ? '' : (stage || ''))}
+                  onClick={() => { setApprovedLevel(null); setStageFilter(active ? '' : (stage || '')); }}
                   disabled={stage == null}
                   className={`card px-2 py-1.5 border-l-4 text-left transition hover:shadow disabled:cursor-default disabled:hover:shadow-none ${color.border} ${active ? `${color.activeBg} ring-2 ${color.ring}` : ''}`}
                   title={`${label} · ${rows.length} ${rows.length === 1 ? 'request' : 'requests'} · Rs ${fmt(amt)}`}
@@ -434,12 +470,11 @@ export default function PaymentRequired() {
             );
           })()}
 
-          {/* Mini stage-tabs strip — single-row chips for fast filtering
-              between the workflow stages without going up to the tiles.
-              Mam 2026-05-29: 'show me mini tabs according to stage so
-              that approved pending show easily'. Each chip shows the
-              stage's count next to the label. Click to toggle the
-              filter; the active chip ringed in red. */}
+          {/* "Approved so far by L1/L2/L3" views (mam 2026-06-15): requests
+              each level has signed off + the amount it approved. The stage
+              filters all live in the clickable tiles above now — this row
+              used to duplicate them, which mam called "a mess" (2026-06-18),
+              so it shows ONLY these per-level approved views. */}
           {(() => {
             const source = tab === 'inbox' ? myInbox : requests;
             const visible = source.filter(r => {
@@ -448,40 +483,23 @@ export default function PaymentRequired() {
               if (tab === 'rejected') return r.status === 'rejected';
               return true;
             });
-            // Count by LIVE stage (current_step_name), same as the tiles.
-            const cnt = (stage) => stage === '' ? visible.length : visible.filter(r => stageOf(r) === stage).length;
-            const CHIP_PALETTE = [
-              'bg-amber-100 text-amber-700 border-amber-200',
-              'bg-orange-100 text-orange-700 border-orange-200',
-              'bg-purple-100 text-purple-700 border-purple-200',
-              'bg-indigo-100 text-indigo-700 border-indigo-200',
-              'bg-sky-100 text-sky-700 border-sky-200',
-            ];
-            const presentStages = STAGE_SEQ.filter(st => visible.some(r => stageOf(r) === st));
-            const chips = [
-              { id: 'all', stage: '', label: 'All', color: 'bg-blue-100 text-blue-700 border-blue-200' },
-              ...presentStages.map((st, i) => ({ id: st, stage: st, label: st, color: CHIP_PALETTE[i % CHIP_PALETTE.length] })),
-              { id: 'fin', stage: 'Approved', label: 'Approved', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
-              { id: 'rej', stage: 'Rejected', label: 'Rejected', color: 'bg-rose-100 text-rose-700 border-rose-200' },
-            ];
             return (
               <div className="flex gap-1.5 flex-wrap items-center">
-                <span className="text-[10px] uppercase font-semibold text-gray-500 mr-1">Filter:</span>
-                {chips.map(c => {
-                  const n = cnt(c.stage);
-                  const active = (stageFilter || '') === c.stage && c.stage !== '';
+                <span className="text-[10px] uppercase font-semibold text-gray-500 mr-1">Approved so far:</span>
+                {APPROVED_LEVELS.map(lv => {
+                  const lvRows = visible.filter(r => clearedAt(r, lv.step));
+                  const n = lvRows.length;
+                  const amt = lvRows.reduce((s, r) => s + (+r.step_amounts[lv.step] || 0), 0);
+                  const active = approvedLevel === lv.step;
                   return (
                     <button
-                      key={c.id}
-                      onClick={() => setStageFilter(active ? '' : c.stage)}
-                      className={`text-xs font-semibold px-2.5 py-1 rounded-full border transition flex items-center gap-1.5 ${
-                        active
-                          ? `${c.color} ring-2 ring-offset-1 ring-red-400`
-                          : `${c.color} opacity-70 hover:opacity-100`
-                      }`}
+                      key={lv.step}
+                      onClick={() => { setStageFilter(''); setApprovedLevel(active ? null : lv.step); }}
+                      className={`text-xs font-semibold px-2.5 py-1 rounded-full border transition flex items-center gap-1.5 bg-green-100 text-green-700 border-green-200 ${active ? 'ring-2 ring-offset-1 ring-green-500' : 'opacity-70 hover:opacity-100'}`}
                     >
-                      {c.label}
+                      ✓ {lv.label}
                       <span className={`text-[10px] font-bold rounded-full bg-white/70 px-1.5 ${n === 0 ? 'text-gray-400' : ''}`}>{n}</span>
+                      {amt > 0 && <span className="text-[10px] font-semibold opacity-90">Rs {fmt(amt)}</span>}
                     </button>
                   );
                 })}
@@ -495,7 +513,8 @@ export default function PaymentRequired() {
               if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
               if (tab === 'approved' && r.status !== 'final_approved') return false;
               if (tab === 'rejected' && r.status !== 'rejected') return false;
-              if (stageFilter && stageOf(r) !== stageFilter) return false;
+              if (approvedLevel) { if (!clearedAt(r, approvedLevel)) return false; }
+              else if (stageFilter && stageOf(r) !== stageFilter) return false;
               return true;
             }).map(r => {
               const { date, time } = fmtISTPair(r.created_at);
@@ -509,6 +528,9 @@ export default function PaymentRequired() {
                     </div>
                     <div className="text-right">
                       <div className="font-bold text-gray-900">{fmt(r.amount)}</div>
+                      {r.approved_amount != null && +r.approved_amount !== +r.amount && (
+                        <div className="text-[11px] font-semibold text-emerald-700">approved {fmt(r.approved_amount)}</div>
+                      )}
                       <div className="mt-1"><StatusBadge status={r.status} /></div>
                     </div>
                   </div>
@@ -561,14 +583,15 @@ export default function PaymentRequired() {
 
           {/* ─── DESKTOP TABLE (md+) ───────────────────────────────── */}
           <div className="hidden md:block card p-0"><table className="freeze-head">
-            <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Req No</th><th>Employee</th><th>Site</th><th>Category</th><th>Amount</th><th title="Amount the approver agreed — may be less than requested">Approval Amt</th><th>Purpose</th><th>Step</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
             <tbody>
               {(tab === 'inbox' ? myInbox : requests).filter(r => {
                 if (tab === 'pending' && ['final_approved', 'rejected'].includes(r.status)) return false;
                 if (tab === 'approved' && r.status !== 'final_approved') return false;
                 if (tab === 'rejected' && r.status !== 'rejected') return false;
-                // Live-stage filter set by clicking a stage tile / chip.
-                if (stageFilter && stageOf(r) !== stageFilter) return false;
+                // "Approved by Lx" view, else the live-stage chip filter.
+                if (approvedLevel) { if (!clearedAt(r, approvedLevel)) return false; }
+                else if (stageFilter && stageOf(r) !== stageFilter) return false;
                 return true;
               }).map(r => (
                 <tr key={r.id}>
@@ -577,6 +600,18 @@ export default function PaymentRequired() {
                   <td className="text-sm">{r.site_display || r.site_name || '-'}</td>
                   <td><span className={`badge ${r.category === 'TA/DA' ? 'badge-purple' : r.category === 'Purchase' ? 'badge-blue' : r.category === 'Labour' ? 'badge-green' : 'badge-gray'}`}>{r.category}</span></td>
                   <td className="font-semibold">{fmt(r.amount)}</td>
+                  {/* Approval Amt — always show a number (mam 2026-06-15
+                      "show how much amount"): the latest approver-agreed
+                      amount once any level approves, else the requested
+                      amount (greyed = not yet approved). Emerald = a level
+                      reduced it. */}
+                  <td className="font-semibold">
+                    {approvedLevel && r.step_amounts && r.step_amounts[approvedLevel] != null
+                      ? <span className="text-green-700" title={`Amount approved at L${approvedLevel}`}>{fmt(r.step_amounts[approvedLevel])}</span>
+                      : r.approved_amount != null
+                        ? <span className={+r.approved_amount !== +r.amount ? 'text-emerald-700' : ''} title={+r.approved_amount !== +r.amount ? `Adjusted from ${fmt(r.amount)}` : 'Approved at requested amount'}>{fmt(r.approved_amount)}</span>
+                        : <span className="text-gray-400" title="Not yet approved — will pay the requested amount unless a level adjusts it">{fmt(r.amount)}</span>}
+                  </td>
                   <td className="text-sm max-w-[280px]">
                     {/* Show full purpose text, wrap to multiple lines for
                         long entries. Hover shows it again as a tooltip
@@ -617,7 +652,22 @@ export default function PaymentRequired() {
                       </div>
                     )}
                   </td>
-                  <td><StatusBadge status={r.status} /></td>
+                  {/* Status follows the STAGE (mam 2026-06-15): pending at
+                      L1/L2/L3, 'Approved' once all 3 sign-offs are done and
+                      it's awaiting payment release, 'Paid' when released,
+                      'Rejected' if rejected. */}
+                  <td>{(() => {
+                    const st = stageOf(r);
+                    const cls = 'px-2 py-0.5 rounded text-[11px] font-semibold whitespace-nowrap ';
+                    if (st === 'Rejected') return <span className={cls + 'bg-red-100 text-red-700'}>Rejected</span>;
+                    if (st === 'Approved') return <span className={cls + 'bg-green-600 text-white'}>Paid</span>;
+                    if (st === 'Payment Release (Aanchal)') return <span className={cls + 'bg-emerald-100 text-emerald-700'}>Approved</span>;
+                    // Show WHICH level it's pending at (mam 2026-06-18: status was
+                    // a hotchpotch — everything just said "Pending"). Level read
+                    // from the current step name (HR / L1 / L2 / L3).
+                    const lvl = (r.current_step_name || '').match(/\b(HR|L1|L2|L3)\b/)?.[1] || '';
+                    return <span className={cls + 'bg-amber-100 text-amber-700'}>Pending{lvl ? ' · ' + lvl : ''}</span>;
+                  })()}</td>
                   {/* Date column — mam (2026-05-22): "this is pick wrong
                       time according to indian" — SQLite stores UTC,
                       now converted to IST via fmtISTPair so the row
@@ -646,7 +696,7 @@ export default function PaymentRequired() {
                   </div></td>
                 </tr>
               ))}
-              {requests.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No requests found</td></tr>}
+              {requests.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No requests found</td></tr>}
             </tbody>
           </table></div>
         </>
@@ -661,6 +711,26 @@ export default function PaymentRequired() {
               <div className="text-right">
                 <p className="text-2xl font-bold text-orange-700">{fmt(viewData.amount)}</p>
                 <StatusBadge status={viewData.status} />
+                {/* Admin amount edit (e.g. salary increase) — can set any
+                    positive figure, unlike approvers who can only decrease. */}
+                {isAdmin && viewData.status !== 'final_approved' && viewData.status !== 'rejected' && (
+                  editAmt === null ? (
+                    <button onClick={() => setEditAmt(String(viewData.amount))}
+                            className="block ml-auto mt-1 text-[10px] text-blue-600 hover:text-blue-800 underline"
+                            title="Edit the request amount (admin only)">
+                      ✏️ Edit amount
+                    </button>
+                  ) : (
+                    <div className="mt-1 flex items-center gap-1 justify-end">
+                      <span className="text-[11px]">₹</span>
+                      <input type="number" value={editAmt} onChange={e => setEditAmt(e.target.value)} autoFocus
+                             className="input text-xs w-28 py-0.5"
+                             onKeyDown={e => { if (e.key === 'Enter') saveAmount(); if (e.key === 'Escape') setEditAmt(null); }} />
+                      <button onClick={saveAmount} className="text-[10px] text-emerald-700 font-bold">Save</button>
+                      <button onClick={() => setEditAmt(null)} className="text-[10px] text-gray-500">Cancel</button>
+                    </div>
+                  )
+                )}
                 {isAdmin && (
                   <button onClick={openRoutingModal}
                           className="block ml-auto mt-2 text-[10px] text-blue-600 hover:text-blue-800 underline"
@@ -957,7 +1027,7 @@ export default function PaymentRequired() {
               const reduceBy = willReduce ? currentApproved - draft : 0;
               return (
               <div className="border-2 border-amber-300 rounded-lg p-4 bg-amber-50 space-y-3">
-                <h5 className="font-bold text-amber-800">Your Approval Required - Step {viewData.current_step}: {viewData.workflow?.[viewData.current_step - 1]?.name}</h5>
+                <h5 className="font-bold text-amber-800">Your Approval Required - Step {viewData.current_step}: {(viewData.workflow?.find(w => w.step === viewData.current_step) || {}).name || viewData.current_step_name}</h5>
 
                 {/* Approver-side amount adjustment (mam 2026-05-28) */}
                 <div>
@@ -993,9 +1063,9 @@ export default function PaymentRequired() {
                 </div>
 
                 <div>
-                  <label className="label text-amber-700">Reason / Remarks (Required) *</label>
+                  <label className="label text-amber-700">Reason / Remarks <span className="font-normal normal-case text-gray-500">(optional to approve · required to reject)</span></label>
                   <textarea className="input" rows="3" value={approvalRemarks} onChange={e => setApprovalRemarks(e.target.value)}
-                    placeholder="Enter detailed reason for approval or rejection (minimum 5 characters)..." required />
+                    placeholder="Optional for approval. Required (min 5 chars) if rejecting…" />
                 </div>
                 <div className="flex gap-3">
                   <button onClick={() => handleApprove(viewData.id)} className="btn btn-success flex-1 py-3 text-base font-bold">Approve</button>
@@ -1013,6 +1083,10 @@ export default function PaymentRequired() {
         <form onSubmit={handleSave} className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
 
           {/* Common fields */}
+          {/* Shared suggestion lists — pick from the master OR keep typing
+              (mam 2026-06-15 automation: vendor / person fields). */}
+          <datalist id="prVendorsDL">{vendors.map(v => <option key={v.id} value={v.name} />)}</datalist>
+          <datalist id="prEmployeesDL">{employees.map(e => <option key={e.id} value={e.name} />)}</datalist>
           <div className="border rounded-lg p-3 bg-gray-50">
             <h4 className="font-semibold text-sm text-gray-700 mb-3">Request Details</h4>
             <div className="grid grid-cols-3 gap-3">
@@ -1070,7 +1144,12 @@ export default function PaymentRequired() {
               <h4 className="font-semibold text-sm text-purple-700 mb-3">TA/DA Details</h4>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="label">Travel From-To *</label><input className="input" value={form.travel_from_to} onChange={e => F('travel_from_to', e.target.value)} required /></div>
-                <div><label className="label">Travel Dates *</label><input className="input" value={form.travel_dates} onChange={e => F('travel_dates', e.target.value)} required /></div>
+                <div><label className="label">Travel Dates *</label>
+                  <input className="input" type="date" value={form.travel_dates}
+                    min={minTravelDate()} max={todayStr()}
+                    onChange={e => F('travel_dates', e.target.value)} required />
+                  <p className="text-[10px] text-gray-400 mt-0.5">Today or up to 3 days back ({minTravelDate()} – {todayStr()}). No future dates.</p>
+                </div>
                 <div><label className="label">Mode of Travel *</label>
                   <select className="select" value={form.mode_of_travel} onChange={e => F('mode_of_travel', e.target.value)} required>
                     <option value="">Select</option><option>Bus / Rapido</option><option>Train</option><option>Flight</option><option>Car</option><option>Bike</option><option>Auto</option>
@@ -1145,7 +1224,7 @@ export default function PaymentRequired() {
               <h4 className="font-semibold text-sm text-red-700 mb-3">Purchase Details</h4>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="label">Indent Number *</label><input className="input" value={form.indent_number} onChange={e => F('indent_number', e.target.value)} required /></div>
-                <div><label className="label">Vendor Name *</label><input className="input" value={form.vendor_name} onChange={e => F('vendor_name', e.target.value)} required /></div>
+                <div><label className="label">Vendor Name *</label><input className="input" list="prVendorsDL" value={form.vendor_name} onChange={e => F('vendor_name', e.target.value)} placeholder="Pick or type" required /></div>
                 <div className="col-span-2"><label className="label">Item Description</label><textarea className="input" rows="2" value={form.item_description} onChange={e => F('item_description', e.target.value)} /></div>
                 <div><label className="label">Purchase Order Upload *</label>
                   {form.quotation_link ? (
@@ -1170,7 +1249,7 @@ export default function PaymentRequired() {
                 <div><label className="label">Labour Type *</label><select className="select" value={form.labour_type} onChange={e => F('labour_type', e.target.value)} required><option value="">Select</option><option>Skilled</option><option>Unskilled</option><option>Semi-skilled</option><option>Contractor</option></select></div>
                 <div><label className="label">Number of Workers *</label><input className="input" type="number" value={form.number_of_workers || ''} onChange={e => F('number_of_workers', +e.target.value)} required /></div>
                 <div><label className="label">Work Duration</label><input className="input" value={form.work_duration} onChange={e => F('work_duration', e.target.value)} placeholder="e.g. 5 days, 2 weeks" /></div>
-                <div><label className="label">Site Engineer Name</label><input className="input" value={form.site_engineer_name} onChange={e => F('site_engineer_name', e.target.value)} /></div>
+                <div><label className="label">Site Engineer Name</label><input className="input" list="prEmployeesDL" value={form.site_engineer_name} onChange={e => F('site_engineer_name', e.target.value)} placeholder="Pick or type" /></div>
               </div>
             </div>
           )}
@@ -1183,19 +1262,15 @@ export default function PaymentRequired() {
                 <div><label className="label">Vehicle Type *</label><select className="select" value={form.vehicle_type} onChange={e => F('vehicle_type', e.target.value)} required><option value="">Select</option><option>Truck</option><option>Pickup</option><option>Tempo</option><option>Car</option><option>Auto</option><option>Crane</option></select></div>
                 <div><label className="label">From-To Location *</label><input className="input" value={form.from_to_location} onChange={e => F('from_to_location', e.target.value)} required /></div>
                 <div><label className="label">Material Description</label><input className="input" value={form.material_description} onChange={e => F('material_description', e.target.value)} /></div>
-                <div><label className="label">Driver / Vendor Name</label><input className="input" value={form.driver_vendor_name} onChange={e => F('driver_vendor_name', e.target.value)} /></div>
+                <div><label className="label">Driver / Vendor Name</label><input className="input" list="prVendorsDL" value={form.driver_vendor_name} onChange={e => F('driver_vendor_name', e.target.value)} placeholder="Pick or type" /></div>
               </div>
             </div>
           )}
 
-          {/* Approval workflow info */}
+          {/* Approval workflow info — one standard flow for every category */}
           {form.category && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
-              <strong>Approval Flow:</strong> {form.category === 'TA/DA' ? (
-                <span>HR → Accountant → Payment Release</span>
-              ) : (
-                <span>{form.category === 'Purchase' ? 'Purchase Head' : form.category === 'Labour' ? 'Site Engineer' : 'Purchase Dept'} → Accountant → Velocity (Auto) → Billing Engineer → Payment Release</span>
-              )}
+              <strong>Approval Flow:</strong> <span>L1 Accountant → L2 Nitin Jain → L3 MD (Ankur Kaplesh) → Payment Release Aanchal</span>
             </div>
           )}
 
@@ -1234,10 +1309,11 @@ export default function PaymentRequired() {
         ) : (
           <div className="space-y-4">
             <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-gray-700 leading-relaxed">
-              <strong>How this works:</strong> Each payment category has fixed steps (HR → Accountant → Release, etc.).
-              By default, anyone holding the matching role can approve. Pick a specific user here to <strong>override</strong> —
-              from then on, only that user (or admin) can clear that step. Set back to "— Default —" to revert to role-based routing.
-              <br />Example: <em>TA/DA · HR Approval → pick Aanchal</em> means only Aanchal (or admin) can approve HR step on TA/DA requests, regardless of who holds "HR Manager" role.
+              <strong>How this works:</strong> Every category now uses one standard flow —
+              <em> L1 Accountant → L2 Nitin Jain → L3 MD (Ankur Kaplesh) → Payment Release Aanchal</em>.
+              L1 is open to anyone holding the Accountant role; L2/L3/Release are pinned to the named person.
+              Pick a specific user here to <strong>override</strong> a step — from then on only that user (or admin) can clear it.
+              Set back to "— Default —" to revert to the standard approver.
             </div>
             {Object.entries(routingMatrix).map(([category, steps]) => (
               <div key={category} className="card p-3">

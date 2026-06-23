@@ -91,13 +91,22 @@ router.post('/register', authMiddleware, adminOnly, (req, res) => {
 
 router.get('/me', authMiddleware, (req, res) => {
   const db = getDb();
-  const user = db.prepare('SELECT id, name, email, username, role, department, phone, recovery_code_hash, approval_role FROM users WHERE id = ?').get(req.user.id);
+  const user = db.prepare('SELECT id, name, email, username, role, department, phone, recovery_code_hash, approval_role, avatar_url FROM users WHERE id = ?').get(req.user.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   const has_recovery_code = !!user.recovery_code_hash;
   delete user.recovery_code_hash;
   const permissions = getUserPermissions(req.user.id);
   const userRoles = db.prepare(`SELECT r.name FROM roles r JOIN user_roles ur ON r.id=ur.role_id WHERE ur.user_id=?`).all(req.user.id);
   res.json({ ...user, has_recovery_code, permissions, userRoles: userRoles.map(r => r.name) });
+});
+
+// Set / clear the signed-in user's profile photo (WhatsApp-style avatar).
+// The client uploads the file via /api/upload first, then posts the URL here.
+// Pass avatar_url:null (or empty) to remove the photo.
+router.post('/avatar', authMiddleware, (req, res) => {
+  const url = req.body?.avatar_url ? String(req.body.avatar_url).trim() : null;
+  getDb().prepare('UPDATE users SET avatar_url=? WHERE id=?').run(url, req.user.id);
+  res.json({ avatar_url: url });
 });
 
 router.get('/users', authMiddleware, (req, res) => {
@@ -111,7 +120,7 @@ router.get('/users', authMiddleware, (req, res) => {
   const activeOnly = req.query.active_only === '1';
   const whereClause = activeOnly ? 'WHERE u.active = 1' : '';
   const users = db.prepare(`
-    SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.active,
+    SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.active, u.avatar_url,
            COALESCE(u.track_location, 1) as track_location, u.created_at, u.approval_role,
     GROUP_CONCAT(r.name) as role_names
     FROM users u
@@ -294,12 +303,16 @@ function findUserFkReferences(db) {
     try {
       // PRAGMA foreign_key_list returns one row per FK column.
       const fks = db.prepare(`PRAGMA foreign_key_list("${name}")`).all();
-      for (const fk of fks) {
-        // fk.table is the REFERENCED table (e.g. "users"); fk.from is
-        // the LOCAL column.  Match case-insensitively.
-        if (String(fk.table).toLowerCase() === 'users') {
-          refs.push({ table: name, column: fk.from, on_delete: fk.on_delete });
-        }
+      // fk.table is the REFERENCED table (e.g. "users"); fk.from is the LOCAL
+      // column.  Match case-insensitively.
+      const userFks = fks.filter(fk => String(fk.table).toLowerCase() === 'users');
+      if (!userFks.length) continue;
+      // Whether the local FK column is NOT NULL — a NOT NULL column can't be
+      // nulled to clear the reference, so the force path must delete the row.
+      const cols = db.prepare(`PRAGMA table_info("${name}")`).all();
+      for (const fk of userFks) {
+        const col = cols.find(c => c.name === fk.from);
+        refs.push({ table: name, column: fk.from, on_delete: fk.on_delete, notnull: !!(col && col.notnull) });
       }
     } catch (_) { /* skip tables that can't be inspected */ }
   }
@@ -345,12 +358,18 @@ router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
         for (const ref of refs) {
           if (ref.table === 'user_roles') continue;  // gets DELETED below
           try {
-            const r = db.prepare(`UPDATE "${ref.table}" SET "${ref.column}" = NULL WHERE "${ref.column}" = ?`).run(id);
+            // A NOT NULL FK column can't be nulled — delete those per-user rows
+            // (push_subscriptions / notifications / KPI targets etc. are
+            // per-user transient data).  Nullable columns keep their row and
+            // just drop the join, preserving any snapshotted user_name.
+            const r = ref.notnull
+              ? db.prepare(`DELETE FROM "${ref.table}" WHERE "${ref.column}" = ?`).run(id)
+              : db.prepare(`UPDATE "${ref.table}" SET "${ref.column}" = NULL WHERE "${ref.column}" = ?`).run(id);
             if (r.changes > 0) cleared[`${ref.table}.${ref.column}`] = r.changes;
           } catch (e) {
             // Don't kill the whole transaction on a single column —
             // some FKs may point at views or have other oddities.
-            console.warn('[user-delete] could not null', ref.table + '.' + ref.column, '-', e.message);
+            console.warn('[user-delete] could not clear', ref.table + '.' + ref.column, '-', e.message);
           }
         }
         db.prepare('DELETE FROM user_roles WHERE user_id = ?').run(id);

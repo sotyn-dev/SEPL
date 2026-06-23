@@ -10,6 +10,7 @@ import { useState, useEffect } from 'react';
 import api from '../../api';
 import toast from 'react-hot-toast';
 import { FiBarChart2, FiCalendar, FiRefreshCw, FiUser, FiPackage, FiAlertCircle, FiX, FiEye, FiShield } from 'react-icons/fi';
+import { fmtTime } from '../../utils/datetime';
 
 // Reduce a long UA string to a short "Chrome on Windows" style hint so
 // the IP/device column stays readable.  Falls back to first 30 chars
@@ -486,7 +487,7 @@ export default function WordCount() {
                               showed UTC time, not IST.  Explicit timeZone
                               forces Asia/Kolkata (+5:30) regardless of where
                               the user is browsing from. */}
-                          {new Date(d.at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
+                          {fmtTime(d.at, { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
                         </td>
                         <td className={`px-2 py-1.5 font-mono text-[11px] text-center ${gapClass}`} title={gapSec == null ? 'First action in window' : `${gapSec} seconds since previous action`}>
                           {gapLabel}

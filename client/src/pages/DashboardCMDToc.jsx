@@ -29,6 +29,7 @@ import {
   PageHeader, SectionHead, KpiTile, Card, MiniStat, Pill,
   TicksList, HBar, Row, ConstraintBanner, TocStep, StageTabs, DataGap,
 } from '../components/cmdDashboardUi';
+import { fmtDateTime } from '../utils/datetime';
 
 const tooltipStyle = {
   contentStyle: { background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, color: C.ink, fontSize: 11 },
@@ -538,7 +539,7 @@ export default function DashboardCMDToc() {
           until it's no longer binding, subordinate every other function to it, then elevate it with investment.
           Only after CCC ≤ 90 days do we shift focus to the next constraint.
           <br /><br />
-          <strong style={{ color: C.ink }}>Live data source:</strong> <code>/api/dashboards/cmd-detail</code> · spec_version {data.spec_version} · generated {new Date(data.generated_at).toLocaleString('en-IN')}.
+          <strong style={{ color: C.ink }}>Live data source:</strong> <code>/api/dashboards/cmd-detail</code> · spec_version {data.spec_version} · generated {fmtDateTime(data.generated_at)}.
         </div>
       </div>
     </div>

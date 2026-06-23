@@ -20,6 +20,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiAlertTriangle, FiCheckCircle, FiXCircle, FiUploadCloud, FiTrash2, FiEdit2, FiSearch, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import { fmtDate } from '../utils/datetime';
 
 const STATUS_PILL = {
   open: 'bg-amber-100 text-amber-700',
@@ -230,7 +231,7 @@ export default function Snags() {
               <tr key={s.id}>
                 <td className="font-bold text-red-700 text-xs">{s.snag_no}</td>
                 <td className="text-xs">
-                  <div>{s.raised_at ? new Date(s.raised_at).toLocaleDateString('en-IN') : '—'}</div>
+                  <div>{s.raised_at ? fmtDate(s.raised_at) : '—'}</div>
                   <div className="text-[10px] text-gray-500">{s.raised_by_name || '—'}</div>
                 </td>
                 <td className="text-xs">

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import api from '../api';
+import { getToken, setToken as persistToken, clearToken } from '../lib/tokenStore';
 
 const AuthContext = createContext();
 
@@ -7,7 +8,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [permissions, setPermissions] = useState({});
   const [userRoles, setUserRoles] = useState([]);
-  const [token, setToken] = useState(localStorage.getItem('token'));
+  const [token, setToken] = useState(getToken());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -24,17 +25,48 @@ export function AuthProvider({ children }) {
           setPermissions(r.data.permissions || {});
           setUserRoles(r.data.userRoles || []);
         })
-        .catch(() => logout())
+        // Only log out when the server actually rejects the token (401).
+        // A 500 / network blip must NOT nuke a valid session — that was
+        // turning a transient error into an instant logout (mam 2026-06-23).
+        .catch((e) => { if (e?.response?.status === 401) logout(); })
         .finally(() => setLoading(false));
     } else {
       setLoading(false);
     }
   }, [token]);
 
+  // Live-refresh permissions so a grant an admin just made takes effect WITHOUT
+  // a re-login (mam 2026-06-15: "if I give permission, not working proper").
+  // Backend enforces permissions live; the frontend used to only read them at
+  // login. Re-pull /auth/me when the tab regains focus and every 2 min while
+  // active, debounced. Background failures are ignored (never auto-logout here).
+  useEffect(() => {
+    if (!token) return;
+    let last = Date.now();
+    const refresh = () => {
+      if (Date.now() - last < 5000) return;     // debounce double events
+      last = Date.now();
+      api.get('/auth/me').then(r => {
+        setPermissions(r.data.permissions || {});
+        setUserRoles(r.data.userRoles || []);
+        setUser(u => u ? { ...u, role: r.data.role, department: r.data.department } : u);
+      }).catch(() => {});
+    };
+    const onVis = () => { if (document.visibilityState === 'visible') refresh(); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', onVis);
+    const id = setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, 120000);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', onVis);
+      clearInterval(id);
+    };
+  }, [token]);
+
   const login = async (identifier, password) => {
     // Accept username or email — backend matches either.
     const { data } = await api.post('/auth/login', { username: identifier, email: identifier, password });
-    localStorage.setItem('token', data.token);
+    persistToken(data.token);   // localStorage + in-memory fallback
     api.defaults.headers.common['Authorization'] = `Bearer ${data.token}`;
     setToken(data.token);
     setUser(data.user);
@@ -55,7 +87,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
-    localStorage.removeItem('token');
+    clearToken();
     delete api.defaults.headers.common['Authorization'];
     setToken(null);
     setUser(null);

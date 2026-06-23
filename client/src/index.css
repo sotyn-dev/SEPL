@@ -266,6 +266,14 @@ th {
 td {
   @apply px-4 py-3 border-t border-gray-50;
 }
+/* Dense variant for wide multi-column tables (mam 2026-06-16: "adjust
+   page to fit") — tighter horizontal padding so extra columns like the
+   Indent-to-Dispatch Billable / Delivery-Bill pair fit with far less
+   horizontal scrolling. Opt-in via the `dense-cols` className. */
+.dense-cols th,
+.dense-cols td {
+  @apply px-2;
+}
 tbody tr {
   @apply transition-colors;
 }

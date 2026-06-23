@@ -1,19 +1,38 @@
 import axios from 'axios';
+import { getToken, setToken, clearToken } from './lib/tokenStore';
 
 const api = axios.create({ baseURL: '/api' });
 
 api.interceptors.request.use(config => {
-  const token = localStorage.getItem('token');
+  // Resilient read: falls back to an in-memory copy when localStorage is
+  // blocked/wiped (in-app browsers, private mode) — otherwise the request
+  // goes out unauthenticated and the user is bounced to login.
+  const token = getToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
 api.interceptors.response.use(
-  res => res,
+  res => {
+    // Sliding session: the server hands back a fresh token once the current
+    // one is past a day old. Swap it in so an active user never gets logged
+    // out (mam 2026-06-12). Subsequent requests read it from the token store.
+    const fresh = res.headers?.['x-refresh-token'];
+    if (fresh) {
+      setToken(fresh);
+      api.defaults.headers.common.Authorization = `Bearer ${fresh}`;
+    }
+    return res;
+  },
   err => {
     if (err.response?.status === 401) {
-      localStorage.removeItem('token');
-      window.location.href = '/login';
+      clearToken();
+      delete api.defaults.headers.common.Authorization;
+      // Only hard-redirect if we're NOT already on the login page — a 401
+      // from a background poll on /login would otherwise loop the page.
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(err);
   }

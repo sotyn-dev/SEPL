@@ -253,6 +253,16 @@ const parseBoqExcel = (filePath) => {
 };
 
 // Vendors
+// Mam (2026-06-15): per-vendor list of brands / makes the vendor deals in
+// (up to 10), entered with a "+ Add" on the form. Stored comma-joined.
+try { getDb().exec('ALTER TABLE vendors ADD COLUMN makes TEXT'); } catch (_) {}
+// Normalise the form's makes (array OR string) → a clean comma-joined string
+// capped at 10 brands.
+function normaliseMakes(m) {
+  const arr = Array.isArray(m) ? m : (m == null ? [] : String(m).split(','));
+  const clean = arr.map(s => String(s || '').trim()).filter(Boolean).slice(0, 10);
+  return clean.length ? clean.join(', ') : null;
+}
 router.get('/vendors', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM vendors WHERE active=1 ORDER BY name').all());
 });
@@ -297,9 +307,97 @@ router.post('/vendors', (req, res) => {
     if (!Number.isFinite(n)) return null;
     return Math.max(0, Math.min(10, n));
   };
-  const r = db.prepare('INSERT OR IGNORE INTO vendors (vendor_code,name,firm_name,contact_person,phone,email,district,state,address,category,deals_in,authorized_dealer,type,turnover,team_size,payment_terms,credit_days,gst_number,source,category_wise,sub_category,existing_vendor,rating) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-    .run(code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state, b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size, b.payment_terms, b.credit_days, b.gst_number, b.source, b.category_wise, b.sub_category, b.existing_vendor, clampRating(b.rating));
+  const r = db.prepare('INSERT OR IGNORE INTO vendors (vendor_code,name,firm_name,contact_person,phone,email,district,state,address,category,deals_in,authorized_dealer,type,turnover,team_size,payment_terms,credit_days,gst_number,source,category_wise,sub_category,existing_vendor,rating,makes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state, b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size, b.payment_terms, b.credit_days, b.gst_number, b.source, b.category_wise, b.sub_category, b.existing_vendor, clampRating(b.rating), normaliseMakes(b.makes));
   res.status(201).json({ id: r.lastInsertRowid, vendor_code: code });
+});
+
+// Bulk vendor upsert (mam 2026-06-16: "add bulk with full details in excel" +
+// "bulk vendor details update"). One import does BOTH:
+//   - matches an EXISTING vendor by Vendor Code (exact), else phone, else GSTIN
+//     → UPDATES it, overwriting ONLY the columns the sheet actually fills in.
+//     Blank cells are left untouched, so a partial sheet enriches a vendor
+//     without wiping the rest of its details.
+//   - no match → INSERTS a new vendor (auto-codes a blank Vendor Code).
+// Excel users save the sheet as CSV; the client parses it (quote-aware) and
+// posts the rows here.
+router.post('/vendors/bulk', (req, res) => {
+  const rows = Array.isArray(req.body?.vendors) ? req.body.vendors : [];
+  if (!rows.length) return res.status(400).json({ error: 'No vendors to import' });
+  const db = getDb();
+  const { nextSequence } = require('../db/nextSequence');
+  const clampRating = (v) => {
+    if (v === '' || v === null || v === undefined) return null;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return Math.max(0, Math.min(10, n));
+  };
+  const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
+  const filled = (v) => v !== undefined && v !== null && String(v).trim() !== '';
+
+  // Lookup maps so we can resolve each row to an existing vendor id without a
+  // per-row query: by code, by phone, by GSTIN.
+  const allVendors = db.prepare(`SELECT id, vendor_code, phone, gst_number FROM vendors`).all();
+  const byCode = new Map(), byPhone = new Map(), byGst = new Map();
+  for (const v of allVendors) {
+    if (filled(v.vendor_code)) byCode.set(norm(v.vendor_code), v.id);
+    if (filled(v.phone)) byPhone.set(norm(v.phone), v.id);
+    if (filled(v.gst_number)) byGst.set(norm(v.gst_number), v.id);
+  }
+
+  const insert = db.prepare('INSERT OR IGNORE INTO vendors (vendor_code,name,firm_name,contact_person,phone,email,district,state,address,category,deals_in,authorized_dealer,type,turnover,team_size,payment_terms,credit_days,gst_number,source,category_wise,sub_category,existing_vendor,rating,makes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+
+  // Columns the sheet can fill. makes/rating are normalised separately.
+  const PLAIN = ['name','firm_name','contact_person','phone','email','district','state','address','category','deals_in','authorized_dealer','type','turnover','team_size','payment_terms','credit_days','gst_number','source','category_wise','sub_category','existing_vendor'];
+
+  let added = 0, updated = 0;
+  const skipped = [];
+  const errors = [];
+  const run = db.transaction(() => {
+    for (let i = 0; i < rows.length; i++) {
+      const b = rows[i] || {};
+      const rowNo = i + 1;
+      if (!filled(b.name)) { errors.push(`Row ${rowNo}: Vendor name required`); continue; }
+      const codeKey = norm(b.vendor_code), phoneKey = norm(b.phone), gstKey = norm(b.gst_number);
+      const existingId =
+        (codeKey && byCode.get(codeKey)) ||
+        (phoneKey && byPhone.get(phoneKey)) ||
+        (gstKey && byGst.get(gstKey)) || null;
+      try {
+        if (existingId) {
+          // UPDATE — only the columns the sheet actually fills in.
+          const sets = [], vals = [];
+          for (const k of PLAIN) { if (filled(b[k])) { sets.push(`${k}=?`); vals.push(String(b[k]).trim()); } }
+          if (Array.isArray(b.makes) ? b.makes.length : filled(b.makes)) { sets.push('makes=?'); vals.push(normaliseMakes(b.makes)); }
+          if (filled(b.rating)) { sets.push('rating=?'); vals.push(clampRating(b.rating)); }
+          if (!sets.length) { skipped.push(`Row ${rowNo}: ${b.name} — nothing to update (all cells blank)`); continue; }
+          sets.push('updated_at=CURRENT_TIMESTAMP');   // stamp last-edited on bulk update too
+          db.prepare(`UPDATE vendors SET ${sets.join(',')} WHERE id=?`).run(...vals, existingId);
+          updated++;
+          // Keep maps fresh so later rows can match newly-set phone/GST.
+          if (phoneKey) byPhone.set(phoneKey, existingId);
+          if (gstKey) byGst.set(gstKey, existingId);
+        } else {
+          const code = filled(b.vendor_code)
+            ? String(b.vendor_code).trim()
+            : nextSequence(db, 'vendors', 'vendor_code', 'SEVC', { startFrom: 1999, pad: 4 });
+          const r = insert.run(
+            code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state,
+            b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size,
+            b.payment_terms, b.credit_days, b.gst_number, b.source, b.category_wise, b.sub_category,
+            b.existing_vendor, clampRating(b.rating), normaliseMakes(b.makes),
+          );
+          added++;
+          const newId = r.lastInsertRowid;
+          if (codeKey) byCode.set(codeKey, newId);
+          if (phoneKey) byPhone.set(phoneKey, newId);
+          if (gstKey) byGst.set(gstKey, newId);
+        }
+      } catch (err) { errors.push(`Row ${rowNo}: ${err.message}`); }
+    }
+  });
+  run();
+  res.json({ added, updated, skipped, errors, total: rows.length });
 });
 
 router.put('/vendors/:id', (req, res) => {
@@ -307,8 +405,8 @@ router.put('/vendors/:id', (req, res) => {
   const rating = (b.rating === '' || b.rating === null || b.rating === undefined)
     ? null
     : Math.max(0, Math.min(10, Number(b.rating) || 0));
-  getDb().prepare('UPDATE vendors SET vendor_code=?,name=?,firm_name=?,contact_person=?,phone=?,email=?,district=?,state=?,address=?,category=?,deals_in=?,authorized_dealer=?,type=?,turnover=?,team_size=?,payment_terms=?,credit_days=?,gst_number=?,source=?,sub_category=?,rating=?,active=? WHERE id=?')
-    .run(b.vendor_code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state, b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size, b.payment_terms, b.credit_days, b.gst_number, b.source, b.sub_category, rating, b.active !== undefined ? (b.active ? 1 : 0) : 1, req.params.id);
+  getDb().prepare('UPDATE vendors SET vendor_code=?,name=?,firm_name=?,contact_person=?,phone=?,email=?,district=?,state=?,address=?,category=?,deals_in=?,authorized_dealer=?,type=?,turnover=?,team_size=?,payment_terms=?,credit_days=?,gst_number=?,source=?,sub_category=?,rating=?,makes=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
+    .run(b.vendor_code, b.name, b.firm_name, b.contact_person, b.phone, b.email, b.district, b.state, b.address, b.category, b.deals_in, b.authorized_dealer, b.type, b.turnover, b.team_size, b.payment_terms, b.credit_days, b.gst_number, b.source, b.sub_category, rating, normaliseMakes(b.makes), b.active !== undefined ? (b.active ? 1 : 0) : 1, req.params.id);
   res.json({ message: 'Updated' });
 });
 
@@ -638,7 +736,12 @@ router.get('/indents', (req, res) => {
             -- CRM person assigned on the linked Client PO (Sushila/Lovely).
             -- The frontend lets this person act on the CRM stage even without
             -- crm_funnel role access — must agree with the server gate.
-            opo.crm_name as planning_crm_name
+            opo.crm_name as planning_crm_name,
+            -- Billable preview (mam 2026-06-16): the order's Business Book and
+            -- its Against-Delivery % so the list can show BOQ-sale value and
+            -- the delivery-billable slice next to the internal Budget.
+            op.business_book_id AS business_book_id,
+            opb.payment_against_delivery AS bb_delivery_terms
      FROM indents i
      LEFT JOIN users u ON i.created_by = u.id
      LEFT JOIN users au ON i.approved_by = au.id
@@ -670,7 +773,7 @@ router.get('/indents', (req, res) => {
   // rate_source tells the UI which fallback hit so mam knows whether the
   // displayed rate came from master or history.
   const allItems = db.prepare(
-    `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity,
+    `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity, ii.po_item_id,
             -- Show the CURRENT Item Master UOM for linked items so a later
             -- unit change in Item Master reflects here (mam 2026-06-10);
             -- manual lines keep their own stored unit.
@@ -725,6 +828,106 @@ router.get('/indents', (req, res) => {
     budgetByIndent.set(it.indent_id, (budgetByIndent.get(it.indent_id) || 0) + (+it.line_budget || 0));
   }
 
+  // ── Billable + Delivery-Bill preview (mam 2026-06-16) ───────────────
+  // Billable = Σ (BOQ item rate × indent qty). The BOQ rate is the CLIENT
+  // SALE rate from the priced BOQ (po_items), resolved EXACTLY like the
+  // Sales Bill: the line's po_item link first, then a description match
+  // within the same order's BOQ. We deliberately DON'T require the indent
+  // to have a planning→Business Book link — in practice most indents reach
+  // their BOQ purely through indent_items.po_item_id (planning_id is often
+  // unset), so keying off that link directly is what makes the numbers
+  // appear. Delivery Bill = Billable × the order's Against-Delivery %.
+  // Both fall back to 0 → UI shows "—" when the BOQ rate or % is missing.
+
+  // Global po_item lookup: id → { rate, business_book }. One pass, reused
+  // for every indent so we never query per line.
+  const poItemById = new Map();
+  for (const p of db.prepare('SELECT id, business_book_id, rate FROM po_items').all()) {
+    poItemById.set(p.id, { rate: +p.rate || 0, bb: p.business_book_id });
+  }
+  // Lazy per-Business-Book description→rate map (the fallback the Sales
+  // Bill uses when a line has no usable po_item rate) — only priced rows.
+  const bbDescCache = new Map();
+  const bbDescMap = (bbId) => {
+    if (bbDescCache.has(bbId)) return bbDescCache.get(bbId);
+    const m = new Map();
+    for (const p of db.prepare('SELECT description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
+      if (p.description && +p.rate > 0) m.set(String(p.description).toLowerCase().trim(), +p.rate || 0);
+    }
+    bbDescCache.set(bbId, m);
+    return m;
+  };
+  // Lazy Business-Book against-delivery % (used when the planning join
+  // didn't carry the term — e.g. the bb was inferred from a po_item).
+  const bbPctCache = new Map();
+  const bbPct = (bbId) => {
+    if (bbPctCache.has(bbId)) return bbPctCache.get(bbId);
+    const row = db.prepare('SELECT payment_against_delivery FROM business_book WHERE id=?').get(bbId);
+    const pct = parseFloat(String((row && row.payment_against_delivery) || '').replace(/[^0-9.]/g, '')) || 0;
+    bbPctCache.set(bbId, pct);
+    return pct;
+  };
+  // Planning-derived Business Book + % per indent (primary, from the join).
+  const planBbByIndent = new Map();
+  const planPctByIndent = new Map();
+  for (const i of indents) {
+    if (i.business_book_id) planBbByIndent.set(i.id, i.business_book_id);
+    planPctByIndent.set(i.id, parseFloat(String(i.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) || 0);
+  }
+  // Indent site (name) — the most reliable bridge to the Order-to-Planning
+  // order when neither a planning link nor a po_item link is present.
+  const siteByIndent = new Map();
+  for (const i of indents) siteByIndent.set(i.id, i.site_name || i.client_name || '');
+  // site/project name → business_book_id, resolved the same way findBoq
+  // links a site to its order (sites.business_book_id, else a project /
+  // company name match on business_book). Cached per name.
+  const bbIdBySiteCache = new Map();
+  const bbIdForSite = (siteName) => {
+    if (!siteName) return null;
+    if (bbIdBySiteCache.has(siteName)) return bbIdBySiteCache.get(siteName);
+    const row = db.prepare(
+      `SELECT id FROM business_book
+        WHERE id IN (SELECT DISTINCT business_book_id FROM sites
+                      WHERE name = ? AND business_book_id IS NOT NULL)
+           OR project_name = ? OR company_name = ?
+        ORDER BY id DESC LIMIT 1`
+    ).get(siteName, siteName, siteName);
+    const id = row?.id || null;
+    bbIdBySiteCache.set(siteName, id);
+    return id;
+  };
+  const billableByIndent = new Map();
+  const deliveryByIndent = new Map();
+  const pctByIndent = new Map();
+  for (const [indentId, its] of itemsByIndent) {
+    // Resolve the order's Business Book (the Order-to-Planning order the
+    // BOQ rate is picked from): planning link first, else the first line's
+    // po_item link, else the indent's site → order mapping.
+    let bbId = planBbByIndent.get(indentId) || null;
+    if (!bbId) {
+      for (const it of its) {
+        const po = it.po_item_id != null ? poItemById.get(it.po_item_id) : null;
+        if (po && po.bb) { bbId = po.bb; break; }
+      }
+    }
+    if (!bbId) bbId = bbIdForSite(siteByIndent.get(indentId));
+    const descMap = bbId ? bbDescMap(bbId) : null;
+    let billable = 0;
+    for (const it of its) {
+      let rate = 0;
+      const po = it.po_item_id != null ? poItemById.get(it.po_item_id) : null;
+      if (po && po.rate > 0) rate = po.rate;
+      if (!rate && descMap) rate = descMap.get(String(it.description || '').toLowerCase().trim()) || 0;
+      billable += rate * (+it.quantity || 0);
+    }
+    // Against-delivery %: planning value first, else the resolved bb's.
+    let pct = planPctByIndent.get(indentId) || 0;
+    if (!pct && bbId) pct = bbPct(bbId);
+    billableByIndent.set(indentId, billable);
+    pctByIndent.set(indentId, pct);
+    deliveryByIndent.set(indentId, pct > 0 ? billable * pct / 100 : 0);
+  }
+
   // One BOQ-link lookup per unique site_name — cached in the loop so we
   // don't hit the DB once per indent when many share the same site.
   const boqCache = new Map();
@@ -764,8 +967,47 @@ router.get('/indents', (req, res) => {
     boq_file_link: findBoq(i.site_name || i.client_name),
     items: itemsByIndent.get(i.id) || [],
     budget_amount: +(budgetByIndent.get(i.id) || 0).toFixed(2),
+    billable_amount: +(billableByIndent.get(i.id) || 0).toFixed(2),
+    delivery_bill_amount: +(deliveryByIndent.get(i.id) || 0).toFixed(2),
+    delivery_pct: pctByIndent.get(i.id) || 0,
     approver_names: approverNames,
   })));
+});
+
+// ─── Indent raising window (mam 2026-06-16) ──────────────────────────
+// Indents may be raised ONLY on Saturday. For a mid-week emergency an
+// admin flips a one-day override: app_settings.indent_emergency_date holds
+// the IST date (YYYY-MM-DD) for which raising is open to everyone. It
+// lapses on its own the next day — the stored date no longer equals today,
+// so nobody can leave indents open forever. All dates computed in IST so
+// the rule follows India's calendar regardless of server timezone.
+function indentRaiseWindow(db) {
+  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const todayStr = `${ist.getFullYear()}-${String(ist.getMonth() + 1).padStart(2, '0')}-${String(ist.getDate()).padStart(2, '0')}`;
+  const isSaturday = ist.getDay() === 6;
+  const row = db.prepare("SELECT value FROM app_settings WHERE key='indent_emergency_date'").get();
+  const emergencyDate = (row && row.value) || '';
+  const emergencyActive = !!emergencyDate && emergencyDate === todayStr;
+  return { todayStr, isSaturday, emergencyDate, emergencyActive, allowed: isSaturday || emergencyActive };
+}
+
+// Raise-window status — read by the Raise Indent screen to show whether
+// indents are open today and to drive the admin emergency toggle.
+router.get('/indent-raise-window', (req, res) => {
+  res.json(indentRaiseWindow(getDb()));
+});
+
+// Admin-only: open ("enable") or close emergency raising for TODAY. Stores
+// today's IST date so it auto-expires tomorrow.
+router.put('/indent-raise-window', (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only — only an admin can open emergency indent raising.' });
+  const db = getDb();
+  const win = indentRaiseWindow(db);
+  const val = req.body && req.body.enable ? win.todayStr : '';
+  const exists = db.prepare("SELECT 1 FROM app_settings WHERE key='indent_emergency_date'").get();
+  if (exists) db.prepare("UPDATE app_settings SET value=?, updated_at=CURRENT_TIMESTAMP WHERE key='indent_emergency_date'").run(val);
+  else db.prepare("INSERT INTO app_settings (key, value) VALUES ('indent_emergency_date', ?)").run(val);
+  res.json(indentRaiseWindow(db));
 });
 
 router.post('/indents', (req, res) => {
@@ -773,6 +1015,16 @@ router.post('/indents', (req, res) => {
   const { planning_id, items, notes, site_name, raised_by_name, business_book_id, indent_category } = req.body;
   if (!items || items.length === 0) {
     return res.status(400).json({ error: 'At least one item is required' });
+  }
+  // Day gate (mam 2026-06-16): indents only on Saturday, unless an admin
+  // has opened today for an emergency. Applies to everyone (admin included
+  // — the admin opens the day via the toggle, then raises).
+  const win = indentRaiseWindow(db);
+  if (!win.allowed) {
+    return res.status(403).json({
+      error: 'Indents can be raised only on Saturday. For a weekday emergency, ask an admin to enable emergency raising for today.',
+      code: 'INDENT_DAY_BLOCKED',
+    });
   }
   // ─── Indent Category (mam's spec 2026-05-26) ─────────────────────────
   // Validate and normalise the category. Default 'material' so any
@@ -1663,7 +1915,13 @@ router.put('/indents/:id', (req, res) => {
         }
         if (fromStore === 0) continue;
         const row = db.prepare(
-          'SELECT id, indent_id, item_master_id, quantity, unit, rate, description, item_type FROM indent_items WHERE id=?'
+          `SELECT ii.id, ii.indent_id, ii.item_master_id, ii.quantity, ii.unit, ii.rate,
+                  COALESCE(NULLIF(TRIM(ii.description), ''), NULLIF(TRIM(im.item_name), ''),
+                           NULLIF(TRIM(im.specification), '')) AS description,
+                  ii.item_type
+             FROM indent_items ii
+             LEFT JOIN item_master im ON im.id = ii.item_master_id
+            WHERE ii.id = ?`
         ).get(itemId);
         if (!row || +row.indent_id !== +id) {
           return res.status(400).json({ error: `Item #${itemId} does not belong to this indent.` });
@@ -1789,6 +2047,17 @@ router.put('/indents/:id', (req, res) => {
                    required_date, source, parent_item_id, stock_issue_note_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'store', ?, ?)`
             );
+            // The store child copies FK columns from the parent. If the parent
+            // carries a STALE reference (e.g. po_item_id whose po_items row was
+            // deleted when the Business Book order was re-saved), copying it into
+            // a fresh INSERT fails the FK check and rolls back the whole approval
+            // ("FOREIGN KEY constraint failed").  Null any dangling FK first.
+            const fkCheck = {
+              vendors: db.prepare('SELECT 1 FROM vendors WHERE id=?'),
+              po_items: db.prepare('SELECT 1 FROM po_items WHERE id=?'),
+              item_master: db.prepare('SELECT 1 FROM item_master WHERE id=?'),
+            };
+            const safeFk = (val, table) => (val != null && fkCheck[table].get(val)) ? val : null;
             let lastWarehouseId = null;
             for (const plan of storePlans) {
               const bal = balRows.all(plan.masterId);
@@ -1831,9 +2100,9 @@ router.put('/indents/:id', (req, res) => {
                 insertChild.run(
                   parent.indent_id, parent.description, plan.fromStore,
                   parent.unit, parent.rate, plan.fromStore * (+parent.rate || 0),
-                  parent.vendor_id, parent.item_master_id, parent.make,
+                  safeFk(parent.vendor_id, 'vendors'), safeFk(parent.item_master_id, 'item_master'), parent.make,
                   parent.is_foc, parent.is_tool, parent.item_type,
-                  parent.po_item_id, parent.required_date,
+                  safeFk(parent.po_item_id, 'po_items'), parent.required_date,
                   parent.id, issueNoteId,
                 );
               }
@@ -2396,6 +2665,7 @@ router.get('/vendor-po', (req, res) => {
     SELECT vp.*, v.name as vendor_name,
            ind.indent_number, ind.site_name as indent_site_name,
            pcu.name as payment_cleared_by_name,
+           l1u.name as po_l1_by_name, l2u.name as po_l2_by_name, rju.name as po_reject_by_name,
            COALESCE((
              SELECT ROUND(SUM(vpi.amount) * 1.18, 2)
              FROM vendor_po_items vpi
@@ -2405,8 +2675,14 @@ router.get('/vendor-po', (req, res) => {
     LEFT JOIN vendors v ON vp.vendor_id = v.id
     LEFT JOIN indents ind ON vp.indent_id = ind.id
     LEFT JOIN users pcu ON vp.payment_cleared_by = pcu.id
+    LEFT JOIN users l1u ON vp.po_l1_by = l1u.id
+    LEFT JOIN users l2u ON vp.po_l2_by = l2u.id
+    LEFT JOIN users rju ON vp.po_reject_by = rju.id
     ORDER BY vp.created_at DESC
   `).all();
+  // Who the PO is waiting on right now (for the list badge / approve gating).
+  const PO_NEXT = { pending_l1: 'Nitin Jain', pending_l2: 'Ankur Kaplesh' };
+  for (const r of rows) r.po_pending_approver = PO_NEXT[r.po_approval] || null;
   // Surface drift so the frontend can show a small warning chip if
   // the stored header total disagrees with the items sum.
   for (const r of rows) {
@@ -2760,11 +3036,20 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
   const yr = new Date().getFullYear();
   const poNum = nextSequence(db, 'vendor_pos', 'po_number', `VPO/${yr}/`, { startFrom: 0, pad: 4 });
 
+  // Freight terms + charge (mam 2026-06-12). 'Ex-Works' / 'FOR' instruct
+  // who bears freight; freight_amount (₹) is a flat charge added to the PO
+  // value (and prints as its own line on the PDF).
+  const VALID_FREIGHT = ['Ex-Works', 'FOR'];
+  const freight_terms = VALID_FREIGHT.includes(b.freight_terms) ? b.freight_terms : null;
+  const freight_amount = +b.freight_amount > 0 ? Math.round(+b.freight_amount * 100) / 100 : 0;
+
   // Total: prefer what the user typed (matches the Tally printout). Fall back
-  // to the computed sum of line items if blank.
+  // to the computed sum of line items if blank.  Freight is always added on
+  // top of either base so the stored total reflects the full PO value.
   const typedTotal = Number(b.total_amount);
   const computedTotal = lines.reduce((s, i) => s + (+i.quantity * +i.rate), 0);
-  const totalAmount = Number.isFinite(typedTotal) && typedTotal > 0 ? typedTotal : computedTotal;
+  const baseTotal = Number.isFinite(typedTotal) && typedTotal > 0 ? typedTotal : computedTotal;
+  const totalAmount = baseTotal + freight_amount;
 
   // Move uploaded file to a readable name so downloads show the original
   // filename, and save /uploads/<name> as the file_path.
@@ -2812,11 +3097,11 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
         `INSERT INTO vendor_pos
            (indent_id, vendor_id, po_number, total_amount, advance_required, po_date, file_path, remarks, expected_receipt_date,
             payment_block_type, payment_block_amount, payment_block_notes, payment_block_status,
-            payment_terms, credit_days)
-         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            payment_terms, credit_days, freight_terms, freight_amount, po_approval)
+         VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_l1')`
       ).run(indent_id, vendor_id, poNum, Math.round(totalAmount * 100) / 100, po_date, filePath, remarks, expected_receipt_date,
             pmtType, pmtAmount, pmtNotes, pmtStatus,
-            payment_terms, credit_days);
+            payment_terms, credit_days, freight_terms, freight_amount);
       const vpoId = r.lastInsertRowid;
 
       // Only write line items if the uploader chose to link indent lines.
@@ -2846,6 +3131,59 @@ router.post('/vendor-po', needsApprove, vendorPoUpload.single('file'), (req, res
     }
     res.status(500).json({ error: err.message });
   }
+});
+
+// ── Vendor PO 2-level approval (mam 2026-06-19) ──────────────────────────
+// A new PO must be signed off L1 → L2 before it's live. L1 = Nitin Jain,
+// L2 = Ankur Kaplesh (resolved by name so it survives across local/prod DBs).
+// Admin and the COO (coo@… login) can stand in for either level.
+const PO_APPROVERS = { 1: 'Nitin Jain', 2: 'Ankur Kaplesh' };
+function resolvePoUserByName(db, name) {
+  if (!name) return null;
+  try {
+    return db.prepare('SELECT id, name FROM users WHERE active=1 AND LOWER(TRIM(name))=LOWER(TRIM(?)) LIMIT 1').get(name)
+      || db.prepare('SELECT id, name FROM users WHERE active=1 AND LOWER(name) LIKE LOWER(?) ORDER BY id LIMIT 1').get('%' + name + '%');
+  } catch (_) { return null; }
+}
+function canApprovePoLevel(db, userId, level) {
+  const u = db.prepare('SELECT role, email, username FROM users WHERE id=?').get(userId);
+  if (u?.role === 'admin') return true;
+  const isCoo = (v) => String(v || '').trim().toLowerCase().startsWith('coo@');
+  if (isCoo(u?.email) || isCoo(u?.username)) return true;          // COO can stand in
+  const approver = resolvePoUserByName(db, PO_APPROVERS[level]);
+  return !!approver && approver.id === userId;
+}
+const poLevelOf = (s) => (s === 'pending_l1' ? 1 : s === 'pending_l2' ? 2 : null);
+
+// Approve the current pending level (L1 → L2 → approved).
+router.post('/vendor-po/:id/po-approve', (req, res) => {
+  const db = getDb(); const id = +req.params.id;
+  const po = db.prepare('SELECT id, po_approval FROM vendor_pos WHERE id=?').get(id);
+  if (!po) return res.status(404).json({ error: 'PO not found' });
+  const level = poLevelOf(po.po_approval);
+  if (!level) return res.status(400).json({ error: 'This PO is not pending approval' });
+  if (!canApprovePoLevel(db, req.user.id, level)) {
+    return res.status(403).json({ error: `Only ${PO_APPROVERS[level]} (L${level}) or admin can approve this step` });
+  }
+  if (level === 1) db.prepare("UPDATE vendor_pos SET po_approval='pending_l2', po_l1_by=?, po_l1_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
+  else             db.prepare("UPDATE vendor_pos SET po_approval='approved',  po_l2_by=?, po_l2_at=CURRENT_TIMESTAMP WHERE id=?").run(req.user.id, id);
+  res.json({ ok: true, po_approval: level === 1 ? 'pending_l2' : 'approved' });
+});
+
+// Reject at the current pending level (reason required).
+router.post('/vendor-po/:id/po-reject', (req, res) => {
+  const db = getDb(); const id = +req.params.id;
+  const po = db.prepare('SELECT id, po_approval FROM vendor_pos WHERE id=?').get(id);
+  if (!po) return res.status(404).json({ error: 'PO not found' });
+  const level = poLevelOf(po.po_approval);
+  if (!level) return res.status(400).json({ error: 'This PO is not pending approval' });
+  if (!canApprovePoLevel(db, req.user.id, level)) {
+    return res.status(403).json({ error: `Only ${PO_APPROVERS[level]} (L${level}) or admin can reject this step` });
+  }
+  const reason = String(req.body?.reason || '').trim();
+  if (reason.length < 3) return res.status(400).json({ error: 'A rejection reason is required' });
+  db.prepare("UPDATE vendor_pos SET po_approval='rejected', po_reject_by=?, po_reject_at=CURRENT_TIMESTAMP, po_reject_reason=? WHERE id=?").run(req.user.id, reason, id);
+  res.json({ ok: true });
 });
 
 // PUT /vendor-po/:id  —  status / advance OR full header edit.
@@ -2899,6 +3237,19 @@ router.put('/vendor-po/:id', (req, res) => {
   if (b.payment_block_amount !== undefined) set('payment_block_amount', +b.payment_block_amount > 0 ? +b.payment_block_amount : null);
   if (b.payment_block_notes !== undefined)  set('payment_block_notes', b.payment_block_notes ? String(b.payment_block_notes).trim().slice(0, 500) : null);
 
+  // Freight terms + charge (mam 2026-06-12) — printed on the PO and folded
+  // into the recomputed total below.
+  if (b.freight_terms !== undefined) {
+    const VALID_FREIGHT = ['Ex-Works', 'FOR'];
+    set('freight_terms', VALID_FREIGHT.includes(b.freight_terms) ? b.freight_terms : null);
+  }
+  if (b.freight_amount !== undefined) set('freight_amount', +b.freight_amount > 0 ? Math.round(+b.freight_amount * 100) / 100 : 0);
+  // Freight value to use when recomputing the total: the new amount if the
+  // caller sent one, else whatever is currently stored on the PO.
+  const freightForTotal = (b.freight_amount !== undefined)
+    ? (+b.freight_amount > 0 ? Math.round(+b.freight_amount * 100) / 100 : 0)
+    : (+cur.freight_amount || 0);
+
   // High-impact edits: blocked when bills exist (would invalidate them)
   if (b.total_amount !== undefined) {
     if (billCount > 0) {
@@ -2950,17 +3301,24 @@ router.put('/vendor-po/:id', (req, res) => {
         const r = updLine.run(qty, rate, amount, desc, hsn, itemId, id);
         itemUpdates += r.changes;
       }
-      // Auto-recompute total_amount = sum(line amounts) × 1.18 (GST).
+      // Auto-recompute total_amount = sum(line amounts) × 1.18 (GST) + freight.
       // Skips if caller explicitly set total_amount above (avoid double-set).
       if (b.total_amount === undefined) {
         const newTotal = db.prepare(
           'SELECT COALESCE(ROUND(SUM(amount) * 1.18, 2), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
         ).get(id).t;
-        db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(newTotal, id);
+        db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(+(newTotal + freightForTotal).toFixed(2), id);
       }
     });
     try { tx(); }
     catch (err) { return res.status(500).json({ error: 'Line items update failed: ' + err.message }); }
+  } else if (b.freight_amount !== undefined && b.total_amount === undefined && billCount === 0) {
+    // Freight changed without touching line items — refresh the stored total
+    // so the Vendor PO list reflects the new freight (sum × 1.18 + freight).
+    const newTotal = db.prepare(
+      'SELECT COALESCE(ROUND(SUM(amount) * 1.18, 2), 0) as t FROM vendor_po_items WHERE vendor_po_id=?'
+    ).get(id).t;
+    db.prepare('UPDATE vendor_pos SET total_amount=? WHERE id=?').run(+(newTotal + freightForTotal).toFixed(2), id);
   }
 
   if (sets.length === 0 && itemUpdates === 0) return res.status(400).json({ error: 'No fields to update' });
@@ -3358,6 +3716,19 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       } catch (e) { console.error('[auto-short-debit] failed (bill saved anyway):', e.message); }
     }
 
+    // Auto SALES BILL (mam 2026-06-15: "i dont want to dispatch button click
+    // auto generated"): the moment a Purchase Bill is uploaded and the
+    // material is accepted, raise the client Sales Bill automatically
+    // (BOQ×delivery% rates + client GST).  Idempotent + skips POs with no
+    // rates.  Failure never blocks the bill upload.
+    let autoSalesBill = null;
+    if (materialStatus === 'approved' && vendor_po_id) {
+      try {
+        const sb = autoGenerateSalesBillForPO(db, vendor_po_id, req.user?.id);
+        if (sb && sb.id) autoSalesBill = { id: sb.id, document_number: sb.document_number };
+      } catch (e) { console.error('[auto-sales-bill] failed (bill saved anyway):', e.message); }
+    }
+
     res.status(201).json({
       id: r.lastInsertRowid,
       file_path: filePath,
@@ -3366,6 +3737,7 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       auto_debit: autoDebit,
       auto_short_debit: autoShortDebit,
       auto_reject_debit: autoRejectDebit,
+      auto_sales_bill: autoSalesBill,
       material_status: materialStatus,
       vendor_mailed: vendorMailed,
     });
@@ -3603,8 +3975,10 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
   if (!document_number) {
     const { nextSequence } = require('../db/nextSequence');
     const year = new Date().getFullYear();
-    const prefix = (document_type === 'sales_bill' ? `INV/${year}/` : `DC/${year}/`);
-    document_number = nextSequence(getDb(), 'delivery_notes', 'document_number', prefix, { pad: 4 });
+    // Sales-bill series GST/26-26/NN starting at 61 (mam 2026-06-15); challans keep DC/.
+    document_number = document_type === 'sales_bill'
+      ? nextSequence(getDb(), 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 })
+      : nextSequence(getDb(), 'delivery_notes', 'document_number', `DC/${year}/`, { pad: 4 });
   }
 
   let filePath = null;
@@ -3666,13 +4040,13 @@ router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req
                                     vehicle_no, driver_name, driver_mobile, lr_challan_no, total_packages,
                                     place_of_supply, state_code, reverse_charge, e_way_bill_no,
                                     cgst_pct, sgst_pct, igst_pct, freight_amount, round_off_amount,
-                                    subtotal_amount, grand_total_amount, sales_bill_pending)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                    subtotal_amount, grand_total_amount, items_json, sales_bill_pending)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(vendor_po_id, delivery_date, req.user.id, notes, document_type, document_number, filePath,
       fields.vehicle_no, fields.driver_name, fields.driver_mobile, fields.lr_challan_no, fields.total_packages,
       fields.place_of_supply, fields.state_code, fields.reverse_charge, fields.e_way_bill_no,
       fields.cgst_pct, fields.sgst_pct, fields.igst_pct, fields.freight_amount, fields.round_off_amount,
-      fields.subtotal_amount, fields.grand_total_amount, salesBillPending);
+      fields.subtotal_amount, fields.grand_total_amount, fields.items_json, salesBillPending);
     res.status(201).json({ id: r.lastInsertRowid, file_path: filePath, document_number, document_type, sales_bill_pending: salesBillPending });
   } catch (err) {
     if (filePath) { try { fs.unlinkSync(path.join(uploadDir, path.basename(filePath))); } catch (e) {} }
@@ -3771,7 +4145,7 @@ router.post('/delivery-notes/:id/generate-sales-bill', needsApprove, (req, res) 
   const isDraft = (items.some(it => !(it.rate > 0)) || !client.gstin) ? 1 : 0;
   const { nextSequence } = require('../db/nextSequence');
   const year = new Date().getFullYear();
-  const invNum = nextSequence(db, 'delivery_notes', 'document_number', `INV/${year}/`, { pad: 4 });
+  const invNum = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
   const today = new Date().toISOString().slice(0, 10);
   const sb = db.prepare(`
     INSERT INTO delivery_notes (vendor_po_id, indent_id, source, delivery_date, document_type, document_number, status, is_draft, items_json, notes)
@@ -4035,7 +4409,7 @@ router.patch('/delivery-notes/:id/receive', needsApprove, vendorPoUpload.single(
           const isDraft = (items.some(it => !(it.rate > 0)) || !client.gstin) ? 1 : 0;
           const { nextSequence } = require('../db/nextSequence');
           const year = new Date().getFullYear();
-          const invNum = nextSequence(db, 'delivery_notes', 'document_number', `INV/${year}/`, { pad: 4 });
+          const invNum = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
           const today = new Date().toISOString().slice(0, 10);
           const sb = db.prepare(`
             INSERT INTO delivery_notes (vendor_po_id, indent_id, source, delivery_date, document_type, document_number, status, is_draft, items_json, notes)
@@ -4109,6 +4483,142 @@ router.get('/vendor-pos/:id/bill-to', (req, res) => {
   res.json(r);
 });
 
+// Shared core for the client-facing line items of a Vendor PO. Used by
+// GET /vendor-pos/:id/client-po-items AND the server-side auto-sales-bill
+// generator below, so both produce identical items + rates.  For a sales
+// bill, rate = BOQ SITC rate × the order's Against-Delivery %.
+function computeClientPoItems(db, vendorPoId, isSalesBill) {
+  // Scope to THIS Vendor PO's items (mam 2026-05-25: "you pick all not
+  // pick all boq boq fill indent so here is indent wise").
+  const rows = db.prepare(`
+    SELECT vpi.id,
+           COALESCE(NULLIF(TRIM(im.item_name), ''),
+                    NULLIF(TRIM(ii.description), ''),
+                    poi.description) as description,
+           vpi.quantity,
+           COALESCE(ii.unit, poi.unit, im.uom) as unit,
+           COALESCE(poi.rate, 0) as rate,
+           COALESCE(poi.amount, 0) as amount,
+           poi.hsn_code,
+           im.item_code, im.specification, im.size, im.gst AS gst_text,
+           COALESCE(NULLIF(TRIM(im.item_name), ''), NULLIF(TRIM(ii.description), '')) as item_name,
+           vpi.rate as vendor_rate,
+           poi.id as po_item_id
+      FROM vendor_po_items vpi
+      LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
+      LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+     WHERE vpi.vendor_po_id = ?
+     ORDER BY vpi.id
+  `).all(vendorPoId);
+
+  if (isSalesBill) {
+    // Sales-bill RATE = the FULL BOQ SITC rate (MD 2026-06-15: "sales bill
+    // rate full is ok ... dont change it" — do NOT reduce by Against-Delivery
+    // %). The delivery % is still read + returned for reference only.
+    let pct = 0; const byId = new Map(), byDesc = new Map();
+    try {
+      const bbRow = db.prepare(
+        `SELECT op.business_book_id AS bb FROM vendor_pos vp
+           LEFT JOIN indents i ON i.id = vp.indent_id
+           LEFT JOIN order_planning op ON op.id = i.planning_id
+          WHERE vp.id = ?`
+      ).get(vendorPoId);
+      const bbId = bbRow && bbRow.bb;
+      if (bbId) {
+        const bb = db.prepare('SELECT payment_against_delivery FROM business_book WHERE id=?').get(bbId);
+        pct = parseFloat(String((bb && bb.payment_against_delivery) || '').replace(/[^0-9.]/g, '')) || 0;
+        for (const it of db.prepare('SELECT id, description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
+          byId.set(it.id, +it.rate || 0);
+          if (it.description) byDesc.set(String(it.description).toLowerCase().trim(), +it.rate || 0);
+        }
+      }
+    } catch (_) {}
+    const r2 = n => Math.round((+n || 0) * 100) / 100;
+    for (const r of rows) {
+      let boq = +r.rate || 0;
+      if (!boq && r.po_item_id != null && byId.has(r.po_item_id)) boq = byId.get(r.po_item_id);
+      if (!boq) boq = byDesc.get(String(r.description || '').toLowerCase().trim()) || 0;
+      r.boq_rate = boq;
+      r.rate = boq;                    // full BOQ SITC rate — no delivery-% reduction
+      r.amount = r2(boq * (+r.quantity || 0));
+    }
+    const withRate = rows.filter(r => +r.rate > 0).length;
+    const noRate = rows.length - withRate;
+    return {
+      items: rows,
+      source: 'vendor_po_items',
+      rate_source: noRate === 0 ? 'boq_sitc' : (withRate > 0 ? 'boq_sitc_partial' : 'rate_missing'),
+      delivery_pct: pct,
+      warning: noRate === 0 ? null
+        : `${noRate} of ${rows.length} line(s) have no BOQ SITC rate — fill the selling rate before saving.`,
+      rated_count: withRate,
+      total_count: rows.length,
+    };
+  }
+
+  // Challan / non-billable doc — vendor cost is fine for internal docs.
+  const vpRowsWithCost = rows.map(r => ({ ...r, rate: +r.rate > 0 ? r.rate : (+r.vendor_rate || 0) }));
+  return { items: vpRowsWithCost, source: 'vendor_po_items', rate_source: 'mixed' };
+}
+
+// Auto-generate the client SALES BILL for a Vendor PO, server-side, with no
+// human click (mam 2026-06-15: "i dont want to dispatch button click auto
+// generated").  Idempotent (skips if a sales bill already exists) and SAFE
+// (only bills when EVERY line has a rate — partial/unrated POs are left for
+// manual handling so we never bill a wrong amount).  Returns {id,
+// document_number} on create, or {skipped:<reason>}.
+function autoGenerateSalesBillForPO(db, vendorPoId, userId) {
+  if (!vendorPoId) return { skipped: 'no_po' };
+  const existing = db.prepare(
+    `SELECT id, document_number FROM delivery_notes WHERE vendor_po_id=? AND document_type='sales_bill' LIMIT 1`
+  ).get(vendorPoId);
+  if (existing) return { skipped: 'exists', id: existing.id, document_number: existing.document_number };
+
+  const data = computeClientPoItems(db, vendorPoId, true);
+  // Rate = full BOQ SITC rate (MD 2026-06-15: bill the full rate, no
+  // Against-Delivery % reduction).
+  const items = (data.items || []).filter(r => (r.description && String(r.description).trim()) || +r.quantity > 0 || +r.rate > 0);
+  if (!items.length) return { skipped: 'no_items' };
+  if (items.some(r => !(+r.rate > 0))) return { skipped: 'unrated' };
+
+  const bt = db.prepare(`
+    SELECT bb.state AS client_state, bb.state_code AS client_state_code
+      FROM vendor_pos vp
+      LEFT JOIN indents i ON i.id = vp.indent_id
+      LEFT JOIN order_planning op ON op.id = i.planning_id
+      LEFT JOIN business_book bb ON bb.id = op.business_book_id
+     WHERE vp.id = ?`).get(vendorPoId) || {};
+  const sameState = String(bt.client_state || '').toLowerCase() === 'punjab';
+  const cgst_pct = sameState ? 9 : 0, sgst_pct = sameState ? 9 : 0, igst_pct = sameState ? 0 : 18;
+
+  const r2 = n => Math.round((+n || 0) * 100) / 100;
+  const payloadItems = items.map(it => {
+    const qty = +it.quantity || 0, rate = +it.rate || 0;
+    return {
+      description: [it.description, it.specification, it.size].filter(Boolean).join(' / ') || it.item_name || '',
+      hsn: it.hsn_code || '', unit: it.unit || '',
+      quantity: qty, rate, disc_pct: 0, amount: r2(qty * rate),
+      item_code: it.item_code || '', specification: it.specification || '', size: it.size || '', item_name: it.item_name || '',
+    };
+  });
+  const subtotal = r2(payloadItems.reduce((s, it) => s + (it.amount || 0), 0));
+  const grand = r2(subtotal + subtotal * (cgst_pct + sgst_pct + igst_pct) / 100);
+
+  const { nextSequence } = require('../db/nextSequence');
+  const document_number = nextSequence(db, 'delivery_notes', 'document_number', 'GST/26-26/', { startFrom: 60, pad: 2 });
+
+  const ins = db.prepare(
+    `INSERT INTO delivery_notes (vendor_po_id, delivery_date, received_by, document_type, document_number,
+        place_of_supply, state_code, reverse_charge, cgst_pct, sgst_pct, igst_pct,
+        freight_amount, round_off_amount, subtotal_amount, grand_total_amount, items_json, sales_bill_pending)
+     VALUES (?, ?, ?, 'sales_bill', ?, ?, ?, 0, ?, ?, ?, 0, 0, ?, ?, ?, 0)`
+  ).run(vendorPoId, new Date().toISOString().slice(0, 10), userId || null, document_number,
+        bt.client_state || null, bt.client_state_code || null,
+        cgst_pct, sgst_pct, igst_pct, subtotal, grand, JSON.stringify(payloadItems));
+  return { id: ins.lastInsertRowid, document_number };
+}
+
 router.get('/vendor-pos/:id/client-po-items', (req, res) => {
   const db = getDb();
   // Sales Bill must always quote the BOQ SITC rate (mam, 2026-05-16:
@@ -4117,7 +4627,41 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
   // fallback — better empty + clear warning than wrong rate billed.
   const docType = String(req.query.doc_type || '').toLowerCase();
   const isSalesBill = docType === 'sales_bill';
+  return res.json(computeClientPoItems(db, req.params.id, isSalesBill));
+});
 
+// Sweep: auto-generate the client Sales Bill for every PO that's ready to
+// dispatch (has a Purchase Bill, no sales bill yet) — fired automatically
+// when mam opens the Dispatch tab so bills appear with NO click.
+router.post('/auto-sales-bills/sweep', needsApprove, (req, res) => {
+  const db = getDb();
+  let candidates = [];
+  try {
+    candidates = db.prepare(`
+      SELECT DISTINCT vp.id AS id
+        FROM vendor_pos vp
+        JOIN purchase_bills pb ON pb.vendor_po_id = vp.id
+       WHERE vp.id NOT IN (
+               SELECT vendor_po_id FROM delivery_notes
+                WHERE document_type='sales_bill' AND vendor_po_id IS NOT NULL)
+    `).all();
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+  const generated = [], skipped = [];
+  for (const c of candidates) {
+    try {
+      const r = autoGenerateSalesBillForPO(db, c.id, req.user?.id);
+      if (r && r.id) generated.push({ vendor_po_id: c.id, ...r });
+      else skipped.push({ vendor_po_id: c.id, reason: r?.skipped || 'unknown' });
+    } catch (e) { skipped.push({ vendor_po_id: c.id, reason: e.message }); }
+  }
+  res.json({ generated_count: generated.length, generated, skipped });
+});
+
+// Legacy alias retained for clarity — original inline body kept below was
+// replaced by computeClientPoItems(); guard block left intentionally blank.
+function _clientPoItemsUnusedTail() {
+  const db = getDb();
+  const isSalesBill = false;
   // Scope to THIS Vendor PO's items (mam 2026-05-25: "you pick all not
   // pick all boq boq fill indent so here is indent wise").  Earlier
   // version loaded the entire Client PO BOQ (~all items for the
@@ -4160,40 +4704,49 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
      ORDER BY vpi.id
   `).all(req.params.id);
 
-  // Decide what to return based on what data we found:
-  // - rows with po_item_id AND rate > 0  →  proper BOQ SITC link
-  // - rows with po_item_id but rate = 0  →  BOQ exists but SITC blank
-  // - rows with no po_item_id            →  indent-only fallback
-  const withBoqRate    = rows.filter(r => r.po_item_id && +r.rate > 0).length;
-  const withBoqNoRate  = rows.filter(r => r.po_item_id && +r.rate === 0).length;
-  const indentOnly     = rows.filter(r => !r.po_item_id).length;
-
-  if (rows.length && withBoqRate === rows.length) {
-    // Best case: every line has a BOQ SITC rate.  Just return.
+  if (isSalesBill) {
+    // Sales-bill RATE = BOQ SITC rate × the order's Against-Delivery %
+    // (mam 2026-06-15: "boq item rate × against delivery terms %"). Resolve
+    // this PO's Business Book order, then the BOQ rate per line (po_item link
+    // first, then a description match), then apply the %.
+    let pct = 0; const byId = new Map(), byDesc = new Map();
+    try {
+      const bbRow = db.prepare(
+        `SELECT op.business_book_id AS bb FROM vendor_pos vp
+           LEFT JOIN indents i ON i.id = vp.indent_id
+           LEFT JOIN order_planning op ON op.id = i.planning_id
+          WHERE vp.id = ?`
+      ).get(req.params.id);
+      const bbId = bbRow && bbRow.bb;
+      if (bbId) {
+        const bb = db.prepare('SELECT payment_against_delivery FROM business_book WHERE id=?').get(bbId);
+        pct = parseFloat(String((bb && bb.payment_against_delivery) || '').replace(/[^0-9.]/g, '')) || 0;
+        for (const it of db.prepare('SELECT id, description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
+          byId.set(it.id, +it.rate || 0);
+          if (it.description) byDesc.set(String(it.description).toLowerCase().trim(), +it.rate || 0);
+        }
+      }
+    } catch (_) {}
+    const r2 = n => Math.round((+n || 0) * 100) / 100;
+    for (const r of rows) {
+      let boq = +r.rate || 0;
+      if (!boq && r.po_item_id != null && byId.has(r.po_item_id)) boq = byId.get(r.po_item_id);
+      if (!boq) boq = byDesc.get(String(r.description || '').toLowerCase().trim()) || 0;
+      r.boq_rate = boq;
+      r.rate = pct > 0 ? r2(boq * pct / 100) : boq;
+      r.amount = r2(r.rate * (+r.quantity || 0));
+    }
+    const withRate = rows.filter(r => +r.rate > 0).length;
+    const noRate = rows.length - withRate;
     return res.json({
       items: rows,
       source: 'vendor_po_items',
-      rate_source: 'boq_sitc',
-      rated_count: withBoqRate,
-      total_count: rows.length,
-    });
-  }
-
-  // Some / all rows are missing rates.  For Sales Bill, surface a
-  // warning so mam fills the SELLING rate before saving (vendor cost
-  // is NEVER auto-used for Sales Bills — mam: "if sales bill we enter
-  // BOQ SITC rate").
-  if (isSalesBill) {
-    const safeRows = rows.map(r => ({ ...r, rate: +r.rate > 0 ? r.rate : 0, amount: +r.rate > 0 ? r.amount : 0 }));
-    return res.json({
-      items: safeRows,
-      source: 'vendor_po_items',
-      rate_source: withBoqRate > 0 ? 'boq_sitc_partial' : 'rate_missing',
-      warning:
-        withBoqRate > 0
-          ? `${withBoqNoRate + indentOnly} of ${rows.length} line(s) are missing the BOQ SITC rate.  Fill those before saving.`
-          : `${rows.length} line(s) pre-filled from the indent.  BOQ SITC rates not found → SELLING RATE column is blank.  Fill in the SITC selling rate before saving.`,
-      rated_count: withBoqRate,
+      rate_source: noRate === 0 ? 'boq_sitc' : (withRate > 0 ? 'boq_sitc_partial' : 'rate_missing'),
+      delivery_pct: pct,
+      warning: noRate === 0
+        ? (pct > 0 ? `Rate = BOQ SITC × ${pct}% (Against Delivery).` : null)
+        : `${noRate} of ${rows.length} line(s) have no BOQ SITC rate — fill the selling rate before saving.${pct > 0 ? ` Rate shown = BOQ × ${pct}%.` : ''}`,
+      rated_count: withRate,
       total_count: rows.length,
     });
   }
@@ -4226,7 +4779,7 @@ router.get('/vendor-pos/:id/client-po-items', (req, res) => {
     rated_count: 0,
     total_count: 0,
   });
-});
+}
 
 // Print-page renderer for a dispatch row. Returns a self-contained HTML
 // page styled to match mam's SEPL Delivery Note / Sales Bill templates
@@ -4253,19 +4806,75 @@ router.get('/delivery-notes/:id/print', (req, res) => {
            bb.billing_address AS client_address, bb.shipping_address AS site_address,
            bb.state AS client_state, bb.district AS client_district,
            bb.gstin AS client_gstin, bb.state_code AS client_state_code,
+           bb.payment_against_delivery AS bb_delivery_terms,
            COALESCE(NULLIF(TRIM(ind.site_name), ''), bb.project_name) AS site_name,
            ind.indent_number,
            bb.lead_no AS bb_lead_no
     FROM delivery_notes dn
     LEFT JOIN vendor_pos vp ON dn.vendor_po_id = vp.id
     LEFT JOIN vendors v ON vp.vendor_id = v.id
-    LEFT JOIN indents ind ON vp.indent_id = ind.id
+    -- Resolve the indent via the vendor PO, OR the DN's own indent_id for
+    -- store-issue / RGP challans that have no vendor PO (mam 2026-06-15:
+    -- store Delivery Note showed empty CLIENT / SITE because vp was NULL).
+    LEFT JOIN indents ind ON ind.id = COALESCE(vp.indent_id, dn.indent_id)
     LEFT JOIN order_planning op ON ind.planning_id = op.id
     LEFT JOIN business_book bb ON bb.id = op.business_book_id
     LEFT JOIN purchase_orders po ON op.po_id = po.id
     WHERE dn.id = ?
   `).get(req.params.id);
   if (!dn) return res.status(404).send('Dispatch not found');
+
+  // CLIENT + Against-Delivery % come from the Business Book ORDER the bill
+  // belongs to. Resolve it robustly (mam 2026-06-15):
+  //   1) the order the BILLED ITEMS belong to (po_items.business_book_id) —
+  //      authoritative; the indent→order_planning path can point at the wrong
+  //      order (GRA showed 40% but SEPL20175 is 60%).
+  //   2) failing that, match the order by client / site NAME (Emerald bill
+  //      had no BOQ-linked items, so address/order came up blank).
+  if (dn.document_type === 'sales_bill') {
+    let bb = null;
+    if (dn.vendor_po_id) {
+      try {
+        const bbRow = db.prepare(`
+          SELECT poi.business_book_id AS id, COUNT(*) AS n
+            FROM vendor_po_items vpi
+            JOIN indent_items ii ON ii.id = vpi.indent_item_id
+            JOIN po_items poi ON poi.id = ii.po_item_id
+           WHERE vpi.vendor_po_id = ? AND poi.business_book_id IS NOT NULL
+           GROUP BY poi.business_book_id
+           ORDER BY n DESC LIMIT 1`).get(dn.vendor_po_id);
+        if (bbRow && bbRow.id) bb = db.prepare('SELECT * FROM business_book WHERE id=?').get(bbRow.id);
+      } catch (_) {}
+    }
+    if (!bb) {
+      const nm = String(dn.client_company || dn.site_name || '').replace(/^\s*M\/?s\.?\s*/i, '').trim();
+      if (nm) {
+        try {
+          bb = db.prepare(`
+            SELECT * FROM business_book
+             WHERE UPPER(TRIM(COALESCE(company_name,''))) = UPPER(?)
+                OR UPPER(TRIM(COALESCE(project_name,''))) = UPPER(?)
+                OR UPPER(TRIM(COALESCE(client_name,'')))  = UPPER(?)
+             ORDER BY id DESC LIMIT 1`).get(nm, nm, nm);
+        } catch (_) {}
+      }
+    }
+    if (bb) {
+      // Order wins; keep existing value only where the order's field is blank.
+      dn.bb_delivery_terms  = bb.payment_against_delivery;
+      dn.client_company     = bb.company_name   || dn.client_company;
+      dn.client_person_name = bb.client_name    || dn.client_person_name;
+      dn.client_phone       = bb.client_contact || dn.client_phone;
+      dn.client_email       = bb.client_email   || dn.client_email;
+      dn.client_address     = bb.billing_address|| dn.client_address;
+      dn.site_address       = bb.shipping_address || dn.site_address;
+      dn.client_state       = bb.state          || dn.client_state;
+      dn.client_state_code  = bb.state_code      || dn.client_state_code;
+      dn.client_gstin       = bb.gstin          || dn.client_gstin;
+      dn.bb_lead_no         = bb.lead_no         || dn.bb_lead_no;
+      if (!dn.site_name)    dn.site_name = bb.project_name;
+    }
+  }
 
   // Resolve items in priority order:
   //   1) dn.items_json — per-row overrides the user tweaked in the create
@@ -4301,6 +4910,9 @@ router.get('/delivery-notes/:id/print', (req, res) => {
       }
     } catch (_) { /* fall through to po_items */ }
   }
+  // (MD 2026-06-15: sales bill bills the FULL BOQ rate — no Against-Delivery
+  // % recompute. The stored items_json / po_items fallback below already
+  // carry the full BOQ rate.)
   if (!items.length) {
     // Client PO line items via the chain:
     //   delivery_notes.vendor_po_id → vendor_pos.indent_id
@@ -4403,10 +5015,32 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     };
   })();
 
+  // On a material Supply sales bill the line scope must read "Supply of …".
+  // BOQ text is written for the FULL scope ("S/I/T & commisioning of …",
+  // "Supplying installing testing & commissioning of …"), which can't be billed
+  // on a goods invoice — so on a sales bill we strip the Installation / Testing /
+  // Commissioning scope and lead with "Supply of" (mam 2026-06-16, auto by bill
+  // type). Installation/DPR bills don't print through here, so they keep their
+  // full wording. Lines with nothing to strip are left untouched.
+  const toSupplyDescription = (raw) => {
+    const s = String(raw == null ? '' : raw).trim();
+    if (!s) return s;
+    // The scope prefix sits before the FIRST " of " (e.g. "S/I/T & commisioning of").
+    const m = s.match(/^(.*?)\bof\b\s+/i);
+    if (!m) return s;
+    const prefix = m[1];
+    const hasScope = /\binstall|\btest|commiss?ion/i.test(prefix)        // install / testing / commission(ing)
+      || /\bs\s*[\/.\-]?\s*i\s*[\/.\-]?\s*t\b/i.test(prefix)              // S/I/T abbreviation
+      || /\bsitc\b/i.test(prefix);                                       // SITC abbreviation
+    if (!hasScope) return s;                                             // already supply-only — leave as-is
+    return ('Supply of ' + s.slice(m[0].length)).replace(/\s+/g, ' ').trim();
+  };
+
   // Build items rows (pad to 8 like the template)
   const padCount = Math.max(0, 8 - items.length);
   const rowsHtml = items.map((it, idx) => {
-    const desc = [it.description, it.specification, it.size].filter(Boolean).join(' / ');
+    const rawDesc = [it.description, it.specification, it.size].filter(Boolean).join(' / ');
+    const desc = isSalesBill ? toSupplyDescription(rawDesc) : rawDesc;
     const qty = +it.quantity || 0;
     const rate = +it.rate || 0;
     const discPct = +it.disc_pct || 0;
@@ -4415,13 +5049,13 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     // otherwise compute from the disc %.
     const taxable = +it.amount || (gross * (1 - discPct / 100));
     if (isSalesBill) {
-      return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td class="num">${fmt(rate)}</td><td class="num">${discPct ? fmt(discPct) : '0'}</td><td class="num">${fmt(taxable)}</td><td class="num">${fmt(taxable)}</td></tr>`;
+      return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td class="num">${fmt(rate)}</td><td class="num">${discPct ? fmt(discPct) : '0'}</td><td class="num">${fmt(taxable)}</td></tr>`;
     }
     return `<tr><td class="num">${idx + 1}</td><td>${esc(desc)}</td><td class="num">${esc(it.gst_text || '')}</td><td class="num">${fmt(qty)}</td><td>${esc(it.unit || '')}</td><td></td></tr>`;
   }).join('') + Array.from({ length: padCount }, (_, i) => {
     const idx = items.length + i + 1;
     return isSalesBill
-      ? `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`
+      ? `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`
       : `<tr><td class="num">${idx}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
   }).join('');
 
@@ -4476,7 +5110,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
   const docTitle = isSalesBill ? 'TAX INVOICE / SALES BILL' : 'DELIVERY NOTE';
   // Use the stored document_number (auto-generated INV/YYYY/#### or
   // DC/YYYY/####); only fall back to id-based if somehow blank.
-  const docNo = dn.document_number || (isSalesBill ? `INV/${new Date().getFullYear()}/${dn.id}` : `DN/${new Date().getFullYear()}/${dn.id}`);
+  const docNo = dn.document_number || (isSalesBill ? `GST/26-26/${dn.id}` : `DN/${new Date().getFullYear()}/${dn.id}`);
   const dnNum = dn.document_number || docNo;
 
   // Best-effort state-name → GST state code lookup. Used when business_book
@@ -4508,12 +5142,35 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
     const discPct = +it.disc_pct || 0;
     subtotal += +it.amount || (qty * rate * (1 - discPct / 100));
   }
-  const cgst = subtotal * (+dn.cgst_pct || 0) / 100;
-  const sgst = subtotal * (+dn.sgst_pct || 0) / 100;
-  const igst = subtotal * (+dn.igst_pct || 0) / 100;
+  // GST split is decided by place of supply vs SEPL's Punjab GSTIN: intra-state
+  // (blank or Punjab) → CGST + SGST 9% each; a KNOWN other state → IGST 18%.
+  // Recompute for sales bills so only the right lines show (mam 2026-06-15:
+  // "CGST 9% SGST 9% ... 18% not need remove here").
+  let cgstPct = +dn.cgst_pct || 0, sgstPct = +dn.sgst_pct || 0, igstPct = +dn.igst_pct || 0;
+  if (isSalesBill) {
+    const cs = String(dn.client_state || '').trim().toLowerCase();
+    const interState = cs && cs !== 'punjab';
+    if (interState) { cgstPct = 0; sgstPct = 0; igstPct = 18; }
+    else { cgstPct = 9; sgstPct = 9; igstPct = 0; }
+  }
+  const cgst = subtotal * cgstPct / 100;
+  const sgst = subtotal * sgstPct / 100;
+  const igst = subtotal * igstPct / 100;
   const freight = +dn.freight_amount || 0;
   const roundOff = +dn.round_off_amount || 0;
   const grandTotal = subtotal + cgst + sgst + igst + freight + roundOff;
+
+  // Shared brand logo (mam 2026-06-17: "old also change") — the real SE
+  // lockup embedded as a data URI, used by BOTH the Delivery Note and the
+  // Sales Bill so every printed document carries the logo. Null until the
+  // file (client/public/sepl-logo.png) is present.
+  let logoDataUri = null;
+  try {
+    for (const lp of [
+      path.join(__dirname, '..', '..', 'client', 'public', 'sepl-logo.png'),
+      path.join(__dirname, '..', '..', 'client', 'dist', 'sepl-logo.png'),
+    ]) { if (fs.existsSync(lp)) { logoDataUri = `data:image/png;base64,${fs.readFileSync(lp).toString('base64')}`; break; } }
+  } catch (_) {}
 
   const headerBlock = `
     <div class="header">
@@ -4522,7 +5179,9 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       <div class="pan">PAN : AASCS7836D</div>
     </div>
     <div class="companyblock">
-      <h1>SECURED ENGINEERS PVT. LTD - 24-25</h1>
+      ${logoDataUri
+        ? `<img src="${logoDataUri}" alt="Secured Engineers Pvt. Ltd." style="height:46px;width:auto;display:block;margin:0 auto 4px" />`
+        : `<h1>SECURED ENGINEERS PVT. LTD - 24-25</h1>`}
       <div class="addr"><b>HO:</b> 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, LUDHIANA, Punjab - 141003 &nbsp;|&nbsp; <b>Noida:</b> 91, Springboard, Sector 2, Noida (UP)</div>
       <div class="tag">PAN-INDIA PRESENCE : <b>LUDHIANA | NOIDA | BANGALORE | MUMBAI</b> — ELECTRICAL | HVAC | FIRE SAFETY | PLUMBING | SOLAR | ELV</div>
     </div>
@@ -4545,103 +5204,282 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
   };
 
   if (isSalesBill) {
-    // Match the SEPL Sales Bill template page 1:1 — Bill To / Ship To
-    // with State + Code as two fields, GSTIN (if diff.) on Ship To,
-    // bank details + numbered T&C in side-by-side cards, and two
-    // separate signature panels.
-    const billState = esc(dn.client_state || '');
-    const billStateCode = esc(clientStateCode);
-    const shipStateCode = esc(dn.state_code || clientStateCode);
-    return `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(docNo)}</title><style>${css}</style></head><body>
+    // Tax Invoice redesigned to match the format mam supplied
+    // (Tax Invoice — Secured Engineers Pvt. Ltd_.pdf, 2026-06-16): monogram
+    // header + "ORIGINAL FOR RECIPIENT" GSTIN/PAN, meta grid with Financial
+    // Yr / Place of Supply (+ code) / Supply Type / Reverse Charge / E-Way
+    // Bill, Bill To + Ship To, items WITHOUT a discount column, amount + tax
+    // in words, "Payable on Delivery = basic × % + 100% GST", an e-Invoice /
+    // IRN block, bank details, T&C, and dual acknowledgement.
+    const stripMs = (s) => String(s || '').replace(/^\s*M\/?s\.?\s*/i, '').trim();
+    // Strip any leading "M/s" from the source so the template's own "M/s "
+    // prefix doesn't double up ("M/s M/s GRA Spinning Mill").
+    const billToName = stripMs(dn.client_company || dn.site_name || dn.client_person_name || '');
+    const billToAddr = dn.client_address || dn.site_address || '';
+    const shipAddr = dn.site_address || dn.client_address || '';
+    const interState = igstPct > 0;
+
+    // Financial year (India, Apr–Mar) derived from the invoice date.
+    const fyOf = (d) => { const m = String(d || '').match(/^(\d{4})-(\d{2})/); if (!m) return ''; const y = +m[1], mo = +m[2]; const s = mo >= 4 ? y : y - 1; return `${s}-${String(s + 1).slice(2)}`; };
+
+    // Auto-round the grand total to the whole rupee (matches the supplied
+    // PDF's "Round Off (–) 0.17 → 1,44,053.00").
+    const taxTotal = cgst + sgst + igst;
+    const rawTotal = subtotal + taxTotal + freight;
+    const grand = Math.round(rawTotal);
+    const round = grand - rawTotal;
+
+    // Amount-in-words; the tax line carries paise like the PDF.
+    const rupeesWhole = (amt) => `Rupees ${numToWords(Math.floor(+amt || 0))} Only`;
+    const rupeesPaise = (amt) => { const r = Math.round((+amt || 0) * 100); const ru = Math.floor(r / 100), pa = r % 100; return `Rupees ${numToWords(ru)}${pa ? ` and ${numToWords(pa)} Paise` : ''} Only`; };
+
+    // Payable on delivery = basic value × against-delivery % + 100% of GST.
+    // Round each part to paise before adding (matches the supplied PDF).
+    const r2 = (n) => Math.round((+n || 0) * 100) / 100;
+    const dpct = parseFloat(String(dn.bb_delivery_terms || '').replace(/[^0-9.]/g, '')) || 0;
+    const payable = dpct ? (r2(subtotal * dpct / 100) + r2(taxTotal)) : 0;
+
+    // Item rows — no discount column (SL / DESC / HSN / QTY / UOM / RATE / AMOUNT).
+    const sbRows = items.map((it, idx) => {
+      // v7 layout: description (SITC→Supply normalised) on the first line,
+      // the size / spec on its own muted sub-line beneath it
+      // (e.g. "Supply of cabling…" then "4C × 25 SQMM (CU)").
+      let desc = toSupplyDescription(it.description || '');
+      const specParts = [];
+      // The ERP item often carries the cable size INSIDE the description
+      // text (e.g. "…control panels 4CX25 SQMM(CU)"). Lift it onto its own
+      // line — and likewise a trailing "(set of …)" note — to match the
+      // supplied template (mam 2026-06-18). Falls back to the dedicated
+      // specification/size fields when present.
+      const cm = desc.match(/[-–,]?\s*(\d+)\s*C\s*[×xX]\s*([\d.]+)\s*SQ\.?\s*MM\s*\(\s*CU\s*\)\.?\s*$/i);
+      if (cm) { specParts.push(`${cm[1]}C × ${cm[2]} SQMM (CU)`); desc = desc.slice(0, cm.index).replace(/[,;\s]+$/, '').trim(); }
+      const pm = desc.match(/\(\s*(set of [^)]+?)\s*\)\.?\s*$/i);
+      if (pm) { specParts.push(pm[1].charAt(0).toUpperCase() + pm[1].slice(1)); desc = desc.slice(0, pm.index).replace(/[,;\s]+$/, '').trim(); }
+      for (const s of [it.specification, it.size]) if (s) specParts.push(String(s));
+      const specLine = specParts.join(' · ');
+      const qty = +it.quantity || 0, rate = +it.rate || 0, discPct = +it.disc_pct || 0;
+      const amount = +it.amount || (qty * rate * (1 - discPct / 100));
+      return `<tr><td class="c">${idx + 1}</td><td>${esc(desc)}${specLine ? `<div class="spec">${esc(specLine)}</div>` : ''}</td><td class="c">${esc(it.gst_text || '')}</td><td class="r">${fmt(qty)}</td><td class="c">${esc(it.unit || '')}</td><td class="r">${fmt(rate)}</td><td class="r">${fmt(amount)}</td></tr>`;
+    }).join('');
+
+    const sbCss = `
+      .sb { color:#1C2333; }
+      /* Royal-blue brand theme (mam 2026-06-16). */
+      .print-btn { background:#13318C; }
+      /* Vertical spacing tightened (mam 2026-06-16: "set it best way") so
+         a typical bill lands cleanly on one A4 page. */
+      .sb .top { display:flex; justify-content:space-between; align-items:flex-start; padding-bottom:2px; }
+      .sb .brand { display:flex; align-items:center; gap:10px; }
+      /* Brand badge — filled royal-blue "SE" mark recreated as vector
+         CSS (mam 2026-06-16) so it prints razor-sharp in the html2canvas
+         PDF with no external image / CORS dependency. */
+      .sb .mono { width:58px; height:40px; background:#fff; border:2px solid #13318C; color:#13318C; font-weight:900; font-style:italic; font-size:19px; display:flex; align-items:center; justify-content:center; border-radius:50%; letter-spacing:-1px; box-shadow:0 1px 3px rgba(30,64,175,.25); flex-shrink:0; }
+      .sb .cn { font-size:18px; font-weight:800; color:#13318C; line-height:1.1; }
+      .sb .tag { font-size:8px; letter-spacing:1.5px; color:#13318C; text-transform:uppercase; margin-top:2px; font-weight:600; }
+      .sb .haddr { font-size:8.5px; color:#5D6B85; line-height:1.6; text-align:center; margin:4px 0 0; padding-bottom:6px; border-bottom:2px solid #13318C; }
+      .sb .hr { text-align:right; min-width:185px; padding-left:12px; }
+      .sb .origpill { display:inline-block; background:#eef3ff; color:#13318C; border:1px solid #c9d8f5; border-radius:11px; padding:2px 12px; font-size:8px; font-weight:700; letter-spacing:1px; text-transform:uppercase; }
+      .sb .invtitle { display:inline-block; font-size:27px; font-weight:800; letter-spacing:2px; color:#13318C; margin:8px 0 4px; border-bottom:3px solid #13318C; padding-bottom:3px; }
+      .sb .gp { font-size:9px; color:#5D6B85; }
+      .sb .gp b { color:#13318C; }
+      .sb table { width:100%; border-collapse:collapse; }
+      .sb .meta td { border:1px solid #c9d8f5; padding:4px 8px; font-size:10px; vertical-align:top; width:33.33%; }
+      .sb .meta .lbl { display:block; font-size:7.5px; letter-spacing:1px; color:#8a93a6; text-transform:uppercase; font-weight:700; margin-bottom:1px; }
+      .sb .parties td { border:1px solid #c9d8f5; padding:5px 8px; font-size:9.5px; vertical-align:top; width:50%; }
+      .sb .parties .h { background:#13318C; color:#fff; font-weight:700; text-transform:uppercase; font-size:9px; padding:4px 8px; letter-spacing:1px; }
+      .sb .items { margin-top:5px; }
+      /* Borderless line-items table (mam 2026-06-18: "their table has no
+         lines") — keep only the blue header bar and a faint row separator,
+         no cell grid, to match the supplied invoice format. */
+      .sb .items th { background:#13318C; color:#fff; font-size:9px; text-transform:uppercase; padding:5px; border:none; }
+      .sb .items td { border:none; border-bottom:1px solid #eaf0fb; padding:5px 6px; font-size:9.5px; vertical-align:top; }
+      .sb .items tbody tr:last-child td { border-bottom:none; }
+      .sb .items td.c { text-align:center; } .sb .items td.r { text-align:right; }
+      .sb .items td .spec { font-size:8.5px; color:#13318C; font-weight:600; margin-top:2px; }
+      .sb .lower { display:flex; gap:8px; margin-top:5px; align-items:flex-start; }
+      .sb .words { flex:1; border:1px solid #c9d8f5; padding:5px 8px; font-size:9.5px; }
+      .sb .words .k { color:#13318C; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-top:4px; }
+      .sb .words .pod { margin-top:5px; background:#eef3ff; padding:5px 7px; border-radius:4px; }
+      .sb .tot { width:46%; }
+      .sb .tot td { padding:3px 8px; font-size:10px; border-bottom:1px solid #e8eefb; }
+      .sb .tot .lab { text-align:right; color:#5D6B85; } .sb .tot .v { text-align:right; white-space:nowrap; }
+      .sb .tot .grand td { background:#13318C; color:#fff; font-weight:800; font-size:12px; }
+      .sb .tot .podr td { color:#13318C; font-weight:700; }
+      .sb .cols { display:flex; gap:8px; margin-top:5px; }
+      .sb .box { flex:1; border:1px solid #c9d8f5; padding:5px 8px; font-size:9px; line-height:1.45; }
+      .sb .box .h { color:#13318C; font-weight:700; text-transform:uppercase; font-size:8.5px; margin-bottom:3px; }
+      .sb .sign { display:flex; gap:8px; margin-top:5px; }
+      .sb .sign .b { flex:1; border:1px solid #c9d8f5; padding:6px 9px; min-height:54px; font-size:9px; position:relative; }
+      .sb .sign .b .h { color:#13318C; font-weight:700; text-transform:uppercase; font-size:8.5px; }
+      .sb .sign .b .ln { position:absolute; bottom:16px; left:9px; right:9px; border-top:1px solid #999; }
+      .sb .sign .b .cap { position:absolute; bottom:5px; left:9px; right:9px; text-align:center; color:#5D6B85; }
+      .sb .foot { text-align:center; font-size:8.5px; color:#5D6B85; border-top:1px dashed #ccc; margin-top:8px; padding-top:6px; }
+      .sb .logo-img { height:54px; width:auto; display:block; }
+      .sb .promo2 { display:flex; gap:8px; margin-top:5px; }
+      .sb .promo2 .pb { flex:1; background:#eef3ff; border:1px solid #c9d8f5; border-radius:4px; padding:4px 10px; font-size:8.5px; color:#13318C; font-style:italic; }
+      .sb .words .wv { color:#13318C; font-weight:600; }
+    `;
+    // Brand block (mam 2026-06-17): prefer the real lockup logo
+    // (client/public/sepl-logo.png — also copied to dist on build), embedded
+    // as a data URI so it prints sharp with no network/CORS dependency. The
+    // lockup ALREADY contains the company name, so we don't repeat it — just
+    // add the service tagline under it. Falls back to the CSS "SE" badge +
+    // name + tagline if the file isn't present.
+    const TAGLINE = 'Electrical · HVAC · Fire Safety · Plumbing · Solar · EPC';
+    const brandInner = logoDataUri
+      ? `<div><img class="logo-img" src="${logoDataUri}" alt="Secured Engineers Pvt. Ltd." /><div class="tag" style="margin-top:3px">${TAGLINE}</div></div>`
+      : `<div class="mono">SE</div><div><div class="cn">Secured Engineers Pvt. Ltd.</div><div class="tag">${TAGLINE}</div></div>`;
+    return `<!doctype html><html><head><meta charset="UTF-8"><title>${esc(docNo)}</title><style>${css}${sbCss}</style></head><body>
       <button class="print-btn" onclick="window.print()">🖨 Print</button>
-      ${headerBlock}
-      <table class="meta">
-        <tr>
-          <td class="lbl">Invoice No.</td><td>${esc(docNo)}</td>
-          <td class="lbl">Invoice Date</td><td>${dispDate(dn.delivery_date)}</td>
-          <td class="lbl">Client PO No.</td><td>${esc(dn.client_po_no || '')}</td>
-          <td class="lbl">PO Date</td><td>${dispDate(dn.client_po_date)}</td>
-          <td class="lbl">Delivery Note Ref.</td><td>${esc(dnNum)}</td>
-        </tr>
-        <tr>
-          <td class="lbl">Place of Supply</td><td>${esc(dn.place_of_supply || dn.client_state || '')}</td>
-          <td class="lbl">State Code</td><td>${esc(dn.state_code || clientStateCode)}</td>
-          <td class="lbl">Reverse Charge</td><td>${dn.reverse_charge ? 'YES' : 'NO'}</td>
-          <td class="lbl">Vehicle No.</td><td>${esc(dn.vehicle_no || '')}</td>
-          <td class="lbl">E-Way Bill No.</td><td>${esc(dn.e_way_bill_no || '')}</td>
-        </tr>
-      </table>
-      <table class="parties">
-        <tr>
-          <td class="lbl" style="width:50%">Bill To</td>
-          <td class="lbl">Ship To / Site</td>
-        </tr>
-        <tr>
-          <td style="width:50%">
-            <div><b>M/s</b> ${fill(dn.client_company, '220px')}</div>
-            <div style="margin-top:3px"><b>Address:</b> ${fill(dn.client_address, '220px')}</div>
-            <div style="margin-top:3px"><b>GSTIN:</b> ${fill(dn.client_gstin, '180px')}</div>
-            <div style="margin-top:3px"><b>State:</b> ${fill(dn.client_state, '100px')} &nbsp; <b>Code:</b> ${fill(clientStateCode, '40px')}</div>
-            <div style="margin-top:3px"><b>Contact:</b> ${fill([dn.client_person_name, dn.client_phone].filter(Boolean).join(' · '), '180px')}</div>
-          </td>
-          <td>
-            <div><b>Site Name:</b> ${fill(dn.site_name, '220px')}</div>
-            <div style="margin-top:3px"><b>Address:</b> ${fill(dn.site_address, '220px')}</div>
-            <div style="margin-top:3px"><b>GSTIN (if diff.):</b> ${fill(dn.client_gstin, '180px')}</div>
-            <div style="margin-top:3px"><b>State:</b> ${fill(dn.client_state, '100px')} &nbsp; <b>Code:</b> ${fill(dn.state_code || clientStateCode, '40px')}</div>
-            <div style="margin-top:3px"><b>Site Engineer / Contact:</b> ${fill(dn.client_phone, '180px')}</div>
-          </td>
-        </tr>
-      </table>
-      <table class="items">
-        <thead><tr><th style="width:30px">SL NO.</th><th>DESCRIPTION OF GOODS / SERVICES</th><th style="width:60px">HSN / SAC</th><th style="width:50px">QTY</th><th style="width:40px">UOM</th><th style="width:60px">RATE (₹)</th><th style="width:40px">DISC. %</th><th style="width:80px">TAXABLE VALUE (₹)</th><th style="width:80px">AMOUNT (₹)</th></tr></thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-      <table class="totals">
-        <tr><td class="label">Sub Total (Taxable Value)</td><td class="val">₹ ${fmt(subtotal)}</td></tr>
-        <tr><td class="label">Add: CGST @ ${dn.cgst_pct || 0} %</td><td class="val">₹ ${fmt(cgst)}</td></tr>
-        <tr><td class="label">Add: SGST / UTGST @ ${dn.sgst_pct || 0} %</td><td class="val">₹ ${fmt(sgst)}</td></tr>
-        <tr><td class="label">Add: IGST @ ${dn.igst_pct || 0} %</td><td class="val">₹ ${fmt(igst)}</td></tr>
-        <tr><td class="label">Add: Freight / Packing / Other Charges</td><td class="val">₹ ${fmt(freight)}</td></tr>
-        <tr><td class="label">Less: Round Off</td><td class="val">₹ ${fmt(roundOff)}</td></tr>
-        <tr><td class="label grand">GRAND TOTAL (₹)</td><td class="val grand">₹ ${fmt(grandTotal)}</td></tr>
-      </table>
-      <div style="margin-top:6px;font-size:11px;border:1px solid #e7d4d4;padding:5px 8px;"><b>Amount Chargeable (in words):</b> Rupees ${esc(numToWords(grandTotal))} Only</div>
-      <div style="display:flex;gap:8px;margin-top:6px;">
-        <div class="bank" style="flex:1">
-          <div class="hdr">Bank Details for Payment</div>
-          <div><b>Beneficiary:</b> SECURED ENGINEERS PVT. LTD.</div>
-          <div><b>Bank Name:</b> __________________________</div>
-          <div><b>Branch:</b> ______________________________</div>
-          <div><b>A/c No.:</b> _____________________________</div>
-          <div><b>IFSC Code:</b> ___________________________</div>
-          <div><b>UPI ID:</b> ______________________________</div>
+      <div id="pdfgen" style="position:fixed;inset:0;background:rgba(255,255,255,.94);display:flex;align-items:center;justify-content:center;font:600 15px Arial,sans-serif;color:#13318C;z-index:99999">Generating PDF, please wait…</div>
+      <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+      <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+      <script>
+      (function(){
+        // The bill page renders itself to a PDF (html2canvas + jsPDF) and
+        // shows it in the browser's PDF viewer; falls back to printable HTML
+        // if the libs can't load.
+        var btn=null;
+        function showHtml(){ var o=document.getElementById('pdfgen'); if(o)o.remove(); if(btn)btn.style.display=''; }
+        window.addEventListener('load', function(){
+          setTimeout(function(){
+            try{
+              btn=document.querySelector('.print-btn'); if(btn)btn.style.display='none';
+              if(!window.html2canvas||!window.jspdf){ showHtml(); return; }
+              html2canvas(document.body,{scale:2,backgroundColor:'#ffffff',useCORS:true,windowWidth:document.body.scrollWidth,
+                ignoreElements:function(el){ return el.id==='pdfgen' || (el.classList && el.classList.contains('print-btn')); }}).then(function(canvas){
+                var jsPDF=window.jspdf.jsPDF;
+                var img=canvas.toDataURL('image/jpeg',0.95);
+                var pdf=new jsPDF({unit:'pt',format:'a4',compress:true});
+                var pw=pdf.internal.pageSize.getWidth();
+                var ph=pdf.internal.pageSize.getHeight();
+                var imgH=canvas.height*pw/canvas.width;
+                if(imgH<=ph+2){
+                  pdf.addImage(img,'JPEG',0,0,pw,imgH,'','FAST');
+                } else if(imgH<=ph*1.12){
+                  var w2=pw*ph/imgH;
+                  pdf.addImage(img,'JPEG',(pw-w2)/2,0,w2,ph,'','FAST');
+                } else {
+                  var left=imgH,pos=0;
+                  pdf.addImage(img,'JPEG',0,pos,pw,imgH,'','FAST'); left-=ph;
+                  while(left>0){ pos-=ph; pdf.addPage(); pdf.addImage(img,'JPEG',0,pos,pw,imgH,'','FAST'); left-=ph; }
+                }
+                window.location.replace(URL.createObjectURL(pdf.output('blob')));
+              }).catch(function(){ showHtml(); });
+            }catch(e){ showHtml(); }
+          }, 400);
+        });
+      })();
+      </script>
+      <div class="sb">
+        <div class="top">
+          <div class="hl">
+            <div class="brand">${brandInner}</div>
+          </div>
+          <div class="hr">
+            <div class="origpill">Original for Recipient</div>
+            <div class="invtitle">TAX INVOICE</div>
+            <div class="gp"><b>GSTIN:</b> 03AASCS7836D2Z3 &nbsp; <b>PAN:</b> AASCS7836D</div>
+          </div>
         </div>
-        <div class="terms" style="flex:1">
-          <div class="hdr">Terms &amp; Conditions</div>
-          <ol style="margin:0;padding-left:18px;line-height:1.6">
-            <li>Payment due within ______ days from invoice date.</li>
-            <li>Interest @ 18% p.a. shall be charged on overdue amounts.</li>
-            <li>Goods once sold will not be taken back / exchanged.</li>
-            <li>Subject to <b>LUDHIANA</b> jurisdiction only.</li>
-            <li>Cheque / DD to be drawn in favour of <b>"Secured Engineers Pvt. Ltd."</b></li>
-            <li>Please quote Invoice No. while making payment.</li>
+        <div class="haddr">
+          <div>HO: 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, Ludhiana, Punjab – 141003</div>
+          <div>Noida: 91, Springboard, Sector 2, Noida (UP)</div>
+          <div>Pan-India: Ludhiana · Noida · Bangalore · Mumbai</div>
+        </div>
+
+        <table class="meta" style="margin-top:9px">
+          <tr>
+            <td><span class="lbl">Invoice No.</span><b>${esc(docNo)}</b></td>
+            <td><span class="lbl">Invoice Date</span><b>${dispDate(dn.delivery_date)}</b></td>
+            <td><span class="lbl">Sales Order</span><b>${fill(dn.bb_lead_no)}</b></td>
+          </tr>
+          <tr>
+            <td><span class="lbl">Financial Year</span><b>${esc(fyOf(dn.delivery_date))}</b></td>
+            <td><span class="lbl">Client PO No.</span>${fill(dn.client_po_no)}</td>
+            <td><span class="lbl">E-Way Bill</span>${esc(dn.e_way_bill_no || 'As applicable')}</td>
+          </tr>
+        </table>
+
+        <table class="parties" style="margin-top:7px">
+          <tr><td class="h">Bill To</td><td class="h">Ship To / Site</td></tr>
+          <tr>
+            <td>
+              <div><b>M/s ${fill(billToName)}</b></div>
+              <div style="margin-top:2px">${fill(billToAddr)}</div>
+              <div style="margin-top:2px"><b>GSTIN:</b> ${fill(dn.client_gstin)} &nbsp; <b>State:</b> ${fill(dn.client_state)} · Code ${fill(clientStateCode)}</div>
+            </td>
+            <td>
+              <div><b>${fill(stripMs(dn.site_name) || billToName)} (Site)</b></div>
+              <div style="margin-top:2px">${fill(shipAddr)}</div>
+              <div style="margin-top:2px"><b>GSTIN:</b> ${fill(dn.client_gstin)} &nbsp; <b>State:</b> ${fill(dn.client_state)} · Code ${fill(dn.state_code || clientStateCode)}</div>
+            </td>
+          </tr>
+        </table>
+
+        <table class="items">
+          <thead><tr><th style="width:26px">SL</th><th>Description of Goods &amp; Accessories</th><th style="width:52px">HSN</th><th style="width:44px">Qty</th><th style="width:40px">UOM</th><th style="width:74px">Rate (₹)</th><th style="width:90px">Amount (₹)</th></tr></thead>
+          <tbody>${sbRows}</tbody>
+        </table>
+
+        <div class="promo2">
+          <div class="pb">＋ Our crews handle turnkey MEPF · Fire-Safety · Solar EPC · HVAC. Get a same-site quote.</div>
+          <div class="pb">★ Add an AMC in future &amp; save up to 15%.</div>
+        </div>
+
+        <div class="lower">
+          <div class="words">
+            <div class="k" style="margin-top:0">Amount Chargeable (in words)</div>
+            <div class="wv">${esc(rupeesWhole(grand))}</div>
+            <div class="k">${interState ? 'IGST' : 'CGST + SGST'} (in words)</div>
+            <div class="wv">${esc(rupeesPaise(taxTotal))}</div>
+            ${dpct ? `<div class="k">Payable on Delivery (in words)</div><div class="wv">${esc(rupeesPaise(payable))}</div><div class="pod"><b>Basis:</b> ${dpct}% of basic value + 100% GST = ₹ ${fmt(payable)} (≈ ₹ ${fmt(Math.round(payable))})</div>` : ''}
+          </div>
+          <table class="tot">
+            <tr><td class="lab">Sub Total (Taxable Value)</td><td class="v">₹ ${fmt(subtotal)}</td></tr>
+            ${cgstPct > 0 ? `<tr><td class="lab">Add: CGST @ ${cgstPct}%</td><td class="v">₹ ${fmt(cgst)}</td></tr>` : ''}
+            ${sgstPct > 0 ? `<tr><td class="lab">Add: SGST @ ${sgstPct}%</td><td class="v">₹ ${fmt(sgst)}</td></tr>` : ''}
+            ${igstPct > 0 ? `<tr><td class="lab">Add: IGST @ ${igstPct}%</td><td class="v">₹ ${fmt(igst)}</td></tr>` : ''}
+            <tr><td class="lab">Freight / Packing / Other</td><td class="v">₹ ${fmt(freight)}</td></tr>
+            <tr><td class="lab">Round Off</td><td class="v">${round < 0 ? '(–) ' : ''}₹ ${fmt(Math.abs(round))}</td></tr>
+            <tr class="grand"><td class="lab" style="color:#fff">Grand Total (₹)</td><td class="v">₹ ${fmt(grand)}</td></tr>
+            ${dpct ? `<tr class="podr"><td class="lab">Payable on Delivery (${dpct}% + GST)</td><td class="v">₹ ${fmt(payable)}</td></tr>` : ''}
+          </table>
+        </div>
+
+        <div class="cols">
+          <div class="box">
+            <div class="h">e-Invoice details (mandatory — turnover &gt; ₹5 Cr)</div>
+            <div>IRN: ____________________________________</div>
+            <div>Ack No.: ______________ &nbsp; Ack Date: ____________</div>
+            <div style="color:#5D6B85">Generate IRN + signed QR on the IRP before issuing.</div>
+          </div>
+          <div class="box">
+            <div class="h">Bank Details for Payment</div>
+            <div><b>Beneficiary:</b> Secured Engineers Pvt. Ltd.</div>
+            <div><b>Bank:</b> Punjab National Bank · Sarabha Nagar, Ludhiana</div>
+            <div><b>A/c No.:</b> 02054011000748 &nbsp; <b>IFSC:</b> PUNB0020510</div>
+          </div>
+        </div>
+
+        <div class="box" style="margin-top:7px">
+          <div class="h">Terms &amp; Conditions</div>
+          <ol style="margin:0;padding-left:16px;line-height:1.5">
+            <li>${dpct ? `${dpct}% of basic value + 100% GST due on delivery; balance per agreed terms.` : 'Payment per agreed terms.'}</li>
+            <li>Interest @ 18% p.a. on overdue amounts.</li>
+            <li>Goods once sold are not taken back / exchanged.</li>
+            <li>Subject to Ludhiana jurisdiction.</li>
+            <li>Cheque / DD in favour of "Secured Engineers Pvt. Ltd."; quote Invoice No. on payment.</li>
           </ol>
         </div>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:6px;">
-        <div class="signblk" style="flex:1">
-          <div class="hdr">Receiver's Acknowledgement</div>
-          <div style="font-size:10px;color:#444;">Received the above material / services in good condition.</div>
-          <div class="row"><div>Name, Signature &amp; Stamp with Date</div></div>
+
+        <div class="sign">
+          <div class="b"><div class="h">Receiver's Acknowledgement</div><div style="color:#5D6B85">Received the above goods / services in good condition.</div><div class="ln"></div><div class="cap">Name, Signature &amp; Stamp with Date</div></div>
+          <div class="b"><div class="h">For Secured Engineers Pvt. Ltd.</div><div class="ln"></div><div class="cap">Authorised Signatory</div></div>
         </div>
-        <div class="signblk" style="flex:1">
-          <div class="hdr">For Secured Engineers Pvt. Ltd.</div>
-          <div style="height:14px"></div>
-          <div class="row"><div>Authorised Signatory</div></div>
-        </div>
+
+        <div class="foot">This is a Computer-Generated Tax Invoice and is valid with the IRN / signed QR code. E. &amp; O.E. · Certified that the particulars given above are true and correct.</div>
       </div>
-      <div class="footnote">This is a Computer Generated Tax Invoice. &nbsp;|&nbsp; E. &amp; O.E. &nbsp;|&nbsp; Certified that the particulars given above are true and correct.</div>
     </body></html>`;
   }
 
@@ -4662,6 +5500,15 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
         <td class="lbl">Indent No.</td><td>${esc(dn.indent_number || '')}</td>
       </tr>
     </table>
+    ${(() => {
+      // Same Business-Book fallbacks as the sales bill (mam 2026-06-15
+      // "not showing proper data"): client name falls back to the site /
+      // project field (minus leading "M/s"), addresses cross-fall-back.
+      const stripMs = (s) => String(s || '').replace(/^\s*M\/?s\.?\s*/i, '').trim();
+      var clientName = dn.client_company || stripMs(dn.site_name) || dn.client_person_name || '';
+      var clientAddr = dn.client_address || dn.site_address || '';
+      var siteAddr = dn.site_address || dn.client_address || '';
+      return `
     <table class="parties">
       <tr>
         <td class="lbl" style="width:50%">Client / Company</td>
@@ -4669,19 +5516,20 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       </tr>
       <tr>
         <td style="width:50%">
-          <div><b>M/s</b> ${fill(dn.client_company, '220px')}</div>
+          <div><b>M/s</b> ${fill(clientName, '220px')}</div>
           <div style="margin-top:4px"><b>Address:</b></div>
-          <div style="margin-left:4px">${fill(dn.client_address, '260px')}</div>
+          <div style="margin-left:4px">${fill(clientAddr, '260px')}</div>
           <div style="margin-top:4px"><b>GSTIN:</b> ${fill(dn.client_gstin, '180px')}</div>
         </td>
         <td>
-          <div><b>Site Name:</b> ${fill(dn.site_name, '220px')}</div>
+          <div><b>Site Name:</b> ${fill(dn.site_name || clientName, '220px')}</div>
           <div style="margin-top:4px"><b>Address:</b></div>
-          <div style="margin-left:4px">${fill(dn.site_address, '260px')}</div>
+          <div style="margin-left:4px">${fill(siteAddr, '260px')}</div>
           <div style="margin-top:4px"><b>Site Engineer / Contact:</b> ${fill(dn.client_phone, '180px')}</div>
         </td>
       </tr>
-    </table>
+    </table>`;
+    })()}
     <table class="items">
       <thead><tr><th style="width:30px">SL NO.</th><th>DESCRIPTION OF MATERIAL / WORK</th><th style="width:80px">HSN / CODE</th><th style="width:70px">QUANTITY</th><th style="width:50px">UOM</th><th style="width:130px">REMARKS</th></tr></thead>
       <tbody>${rowsHtml}</tbody>
@@ -4773,27 +5621,31 @@ router.delete('/sales-bills/:id', (req, res) => {
 const APPROVED_FOR_RATES = "('approved','po_sent')";
 function assertIndentApprovedByItem(db, indentItemId) {
   const row = db.prepare(
-    `SELECT i.indent_number, i.status
+    `SELECT i.indent_number, i.status, i.l1_status, i.l2_status
        FROM indent_items ii
        JOIN indents i ON i.id = ii.indent_id
       WHERE ii.id = ?`
   ).get(indentItemId);
   if (!row) return { status: 404, error: 'Indent item not found' };
-  if (row.status !== 'approved' && row.status !== 'po_sent') {
+  const fullyApproved = row.status === 'approved' || row.status === 'po_sent'
+    || (row.l1_status === 'approved' && row.l2_status === 'approved');
+  if (!fullyApproved) {
     return { status: 403, error: `Indent ${row.indent_number} is not fully approved yet (current: ${row.status}). Vendor rates can only be entered after L1 + L2 approval.` };
   }
   return null;
 }
 function assertIndentApprovedByRate(db, rateId) {
   const row = db.prepare(
-    `SELECT i.indent_number, i.status
+    `SELECT i.indent_number, i.status, i.l1_status, i.l2_status
        FROM indent_item_rates r
        JOIN indent_items ii ON ii.id = r.indent_item_id
        JOIN indents i ON i.id = ii.indent_id
       WHERE r.id = ?`
   ).get(rateId);
   if (!row) return { status: 404, error: 'Rate row not found' };
-  if (row.status !== 'approved' && row.status !== 'po_sent') {
+  const fullyApproved = row.status === 'approved' || row.status === 'po_sent'
+    || (row.l1_status === 'approved' && row.l2_status === 'approved');
+  if (!fullyApproved) {
     return { status: 403, error: `Indent ${row.indent_number} is not fully approved yet (current: ${row.status}). Cannot finalize until L1 + L2 approve.` };
   }
   return null;
@@ -4817,7 +5669,8 @@ router.get('/item-rates', (req, res) => {
             ii.item_type, ii.item_master_id, ii.po_item_id,
             COALESCE(ii.weight_per_meter, im.weight_per_meter) as weight_per_meter,
             im.item_code, im.item_name as master_name, im.specification, im.size, im.uom,
-            poi.description as boq_description, poi.quantity as boq_qty,
+            poi.description as boq_description, poi.quantity as boq_qty, poi.part_price as pp_rate,
+            r.marketing_rate,
             i.indent_number, i.id as indent_id,
             i.site_name, i.raised_by_name, i.status as indent_status,
             bb.lead_no,
@@ -4835,16 +5688,25 @@ router.get('/item-rates', (req, res) => {
      LEFT JOIN users fu ON fu.id = r.finalized_by
      LEFT JOIN order_planning op ON op.id = i.planning_id
      LEFT JOIN business_book bb ON bb.id = op.business_book_id
-     WHERE i.status IN ${APPROVED_FOR_RATES}
+     -- Show fully-approved indents. Besides status IN ('approved','po_sent'),
+     -- also accept any indent whose L1 AND L2 are both signed off — some rows
+     -- get "stuck" at status='l1_approved' even though l2_status='approved'
+     -- (mam 2026-06-22: "after approval all indent not show"). Both signatures
+     -- present = ready for rates, regardless of the status column.
+     WHERE (i.status IN ${APPROVED_FOR_RATES}
+            OR (i.l1_status='approved' AND i.l2_status='approved'))
        -- From-store lines are fulfilled from stock — they don't need a
        -- vendor rate / PO, so only the PROCURE portion shows here.  mam
        -- (2026-06-04): a 1000 line approved as 10-store + 990-procure
        -- must show 990 in Vendor Rates, not 1000.
        AND (ii.source IS NULL OR ii.source <> 'store')
-       -- RGP (Returnable Gate Pass) is SEPL's own returnable material — it
-       -- goes to site and comes back, never purchased. mam (2026-06-06: "if
-       -- approve from store then why 3 rate") — keep it out of Vendor Rates.
-       AND UPPER(COALESCE(ii.item_type, '')) <> 'RGP'
+       -- RGP from SEPL's own returnable stock (source='rgp') goes to site and
+       -- comes back — never purchased — so it stays out of Vendor Rates. BUT
+       -- RGP marked source='procure' is NOT in stock and must be bought/rented,
+       -- so it DOES need 3-vendor rates (mam 2026-06-22: "not go to 3 vendor
+       -- even it is not in stock"). Only keep the returnable-stock RGP out.
+       AND NOT (UPPER(COALESCE(ii.item_type, '')) = 'RGP'
+                AND LOWER(COALESCE(ii.source, '')) <> 'procure')
        -- Lines the approver zeroed out (approved qty 0) aren't procured.
        AND COALESCE(ii.quantity, 0) > 0
      ORDER BY i.created_at DESC, ii.id`
@@ -4888,6 +5750,88 @@ router.post('/item-rates', needsApprove, (req, res) => {
       `INSERT INTO indent_item_rates (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`
     ).run(...vals);
     res.status(201).json({ id: r.lastInsertRowid, created: true });
+  }
+});
+
+// AI "marketing rate" suggestion (mam 2026-06-19) — on-demand per item. Asks
+// the configured AI model to estimate the current market PURCHASE rate for the
+// item. Suggestion ONLY: saved to indent_item_rates.marketing_rate, never the
+// 3 vendor rates. Gated to whoever can edit rates (procurement approve).
+router.post('/item-rates/ai-suggest', needsApprove, async (req, res) => {
+  const db = getDb();
+  const iiId = parseInt(req.body?.indent_item_id, 10);
+  if (!iiId) return res.status(400).json({ error: 'indent_item_id required' });
+  const item = db.prepare(`
+    SELECT ii.description, ii.make,
+           LOWER(COALESCE(NULLIF(TRIM(im.uom),''), NULLIF(TRIM(ii.unit),''), 'nos')) AS unit
+    FROM indent_items ii LEFT JOIN item_master im ON im.id = ii.item_master_id WHERE ii.id=?`).get(iiId);
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  const apiKey = db.prepare('SELECT value FROM app_settings WHERE key=?').get('ai_api_key')?.value;
+  if (!apiKey) return res.status(400).json({ error: 'AI not configured — add an API key in Admin → AI Settings' });
+  const model = db.prepare('SELECT value FROM app_settings WHERE key=?').get('ai_model')?.value || 'claude-opus-4-7';
+  let Anthropic;
+  try { Anthropic = require('@anthropic-ai/sdk'); }
+  catch (e) { return res.status(500).json({ error: 'AI SDK not installed on the server (run npm install on the VPS)' }); }
+  try {
+    const client = new Anthropic.default({ apiKey, timeout: 45000 });
+    const prompt = `You estimate procurement market rates for an Indian electrical / fire-fighting / construction contractor. Give the LOWEST (minimum) current market PURCHASE rate in INR, per ${item.unit}, for the item below — the cheapest realistic price a buyer could get in the open market. Reply with ONLY a plain number in rupees — no currency symbol, no commas, no words.\n\nItem: ${item.description}${item.make ? `\nMake/Brand: ${item.make}` : ''}\nUnit: ${item.unit}`;
+    const resp = await client.messages.create({ model, max_tokens: 40, messages: [{ role: 'user', content: prompt }] });
+    const text = (resp?.content || []).map(c => c.text || '').join(' ');
+    const m = String(text).replace(/[,\s₹]/g, '').match(/\d+(\.\d+)?/);
+    const rate = m ? Math.round(parseFloat(m[0]) * 100) / 100 : 0;
+    if (!rate) return res.status(422).json({ error: 'AI could not estimate a rate for this item' });
+    db.prepare('INSERT OR IGNORE INTO indent_item_rates (indent_item_id, status) VALUES (?, ?)').run(iiId, 'pending');
+    db.prepare('UPDATE indent_item_rates SET marketing_rate=?, updated_at=CURRENT_TIMESTAMP WHERE indent_item_id=?').run(rate, iiId);
+    res.json({ marketing_rate: rate, model });
+  } catch (err) {
+    res.status(500).json({ error: 'AI request failed: ' + (err.message || 'error') });
+  }
+});
+
+// AI "marketing rate" — BULK auto-suggest (mam 2026-06-19 "don't need to click,
+// automatically rate here"). Estimates many items in ONE AI call. Only the ids
+// passed are processed; the frontend sends just the ones still missing a rate,
+// so it converges and never recomputes. Suggestion ONLY.
+router.post('/item-rates/ai-suggest-bulk', needsApprove, async (req, res) => {
+  const db = getDb();
+  const ids = Array.isArray(req.body?.indent_item_ids)
+    ? req.body.indent_item_ids.map(n => parseInt(n, 10)).filter(Boolean).slice(0, 40) : [];
+  if (!ids.length) return res.json({ results: [] });
+  const apiKey = db.prepare('SELECT value FROM app_settings WHERE key=?').get('ai_api_key')?.value;
+  if (!apiKey) return res.status(400).json({ error: 'AI not configured — add an API key in Admin → AI Settings' });
+  const model = db.prepare('SELECT value FROM app_settings WHERE key=?').get('ai_model')?.value || 'claude-opus-4-7';
+  const ph = ids.map(() => '?').join(',');
+  const items = db.prepare(`
+    SELECT ii.id, ii.description, ii.make,
+           LOWER(COALESCE(NULLIF(TRIM(im.uom),''), NULLIF(TRIM(ii.unit),''), 'nos')) AS unit
+    FROM indent_items ii LEFT JOIN item_master im ON im.id = ii.item_master_id WHERE ii.id IN (${ph})`).all(...ids);
+  if (!items.length) return res.json({ results: [] });
+  let Anthropic;
+  try { Anthropic = require('@anthropic-ai/sdk'); }
+  catch (e) { return res.status(500).json({ error: 'AI SDK not installed on the server (run npm install on the VPS)' }); }
+  try {
+    const client = new Anthropic.default({ apiKey, timeout: 90000 });
+    const list = items.map(it => `${it.id}|${it.description}${it.make ? ` (Make: ${it.make})` : ''}|per ${it.unit}`).join('\n');
+    const prompt = `You estimate procurement market rates for an Indian electrical / fire-fighting / construction contractor. For EACH item below, give the LOWEST (minimum) current market PURCHASE rate in INR per its unit — the cheapest realistic open-market price a buyer could get. Each line is "id|description|unit". Reply with ONLY a JSON array of objects like [{"id":123,"rate":450}] — one per item, rate a plain number, no commas, no other text.\n\n${list}`;
+    const resp = await client.messages.create({ model, max_tokens: 2000, messages: [{ role: 'user', content: prompt }] });
+    const text = (resp?.content || []).map(c => c.text || '').join(' ');
+    const jm = text.match(/\[[\s\S]*\]/);
+    let arr = [];
+    try { arr = JSON.parse(jm ? jm[0] : text); } catch (_) { arr = []; }
+    const ins = db.prepare('INSERT OR IGNORE INTO indent_item_rates (indent_item_id, status) VALUES (?, ?)');
+    const upd = db.prepare('UPDATE indent_item_rates SET marketing_rate=?, updated_at=CURRENT_TIMESTAMP WHERE indent_item_id=?');
+    const idSet = new Set(ids);
+    const results = [];
+    db.transaction(() => {
+      for (const o of (Array.isArray(arr) ? arr : [])) {
+        const id = parseInt(o?.id, 10);
+        const rate = Math.round((+o?.rate || 0) * 100) / 100;
+        if (id && rate > 0 && idSet.has(id)) { ins.run(id, 'pending'); upd.run(rate, id); results.push({ id, rate }); }
+      }
+    })();
+    res.json({ results });
+  } catch (err) {
+    res.status(500).json({ error: 'AI request failed: ' + (err.message || 'error') });
   }
 });
 

@@ -7,7 +7,7 @@ import { FiPlus, FiEdit2, FiTrash2, FiUpload, FiDownload, FiCopy } from 'react-i
 // Labour Rate sheet (mam 2026-06-10) — item-wise labour / sub-contractor
 // rates by UOM and category. Seeded from her uploaded sheet; add/edit here.
 const UOMS = ['Kg', 'PCS', 'Nos', 'Each', 'Per Ltr', 'mtrs', 'RMT', 'RFT', 'R mtr', 'Per Point'];
-const CATEGORIES = ['Low Voltage', 'ELECTRICAL', 'Fire Fighting'];
+const CATEGORIES = ['Low Voltage', 'ELECTRICAL', 'Fire Fighting','Mechanical','HVAC','Plumbing','SOLAR','CIVIL'];
 const RENDER_CAP = 200;
 const fmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const blank = () => ({ id: null, item_name: '', specification: '', size: '', rate: '', uom: 'PCS', category: 'Low Voltage' });
@@ -40,9 +40,23 @@ export default function LabourRate() {
     if (r) { setForm({ id: r.id, item_name: r.item_name, specification: r.specification || '', size: r.size || '', rate: r.rate, uom: r.uom || 'PCS', category: r.category || 'Low Voltage' }); setModal(true); autoEditDone.current = true; }
   }, [rows]);
 
+  // Category chips = the predefined set PLUS any category that actually exists
+  // in the data (e.g. 'CABLE & TRAY' came in via import). Without this, imported
+  // categories had no chip and could never be filtered — they "showed wrong".
+  const catList = useMemo(() => {
+    const seen = new Set(CATEGORIES.map(c => c.toLowerCase()));
+    const extra = [];
+    rows.forEach(r => {
+      const c = (r.category || '').trim();
+      if (c && !seen.has(c.toLowerCase())) { seen.add(c.toLowerCase()); extra.push(c); }
+    });
+    extra.sort((a, b) => a.localeCompare(b));
+    return [...CATEGORIES, ...extra];
+  }, [rows]);
+
   const filtered = useMemo(() => {
     let list = rows;
-    if (catFilter) list = list.filter(r => r.category === catFilter);
+    if (catFilter) list = list.filter(r => (r.category || '') === catFilter);
     const q = search.toLowerCase().trim();
     if (q) { const toks = q.split(/\s+/).filter(Boolean); list = list.filter(r => toks.every(t => (r.item_name || '').toLowerCase().includes(t))); }
     return list;
@@ -141,7 +155,7 @@ export default function LabourRate() {
 
       {/* Filters */}
       <div className="flex items-center gap-2 flex-wrap">
-        {['', ...CATEGORIES].map(c => (
+        {['', ...catList].map(c => (
           <button key={c || 'all'} onClick={() => setCatFilter(c)}
             className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${catFilter === c ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
             {c || 'All'}
@@ -214,7 +228,7 @@ export default function LabourRate() {
             </div>
             <div>
               <label className="block text-[10px] font-semibold uppercase text-gray-400 mb-0.5">Category</label>
-              <select className="select" value={form.category} onChange={e => setF({ category: e.target.value })}>{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select>
+              <select className="select" value={form.category} onChange={e => setF({ category: e.target.value })}>{catList.map(c => <option key={c} value={c}>{c}</option>)}</select>
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-1">

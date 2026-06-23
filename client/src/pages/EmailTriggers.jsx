@@ -3,6 +3,7 @@ import api from '../api';
 import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
 import { FiPlus, FiEdit2, FiTrash2, FiSend, FiMail } from 'react-icons/fi';
+import { fmtDate } from '../utils/datetime';
 
 // Email Triggers (admin) — build dynamic email rules: when <event> fires AND
 // <conditions> match, email <recipients> using a {{variable}} template.
@@ -165,7 +166,7 @@ export default function EmailTriggers() {
                       </button>
                     </td>
                     <td className="px-3 py-2 text-gray-500 text-xs">
-                      {r.last_fired_at ? `${new Date(r.last_fired_at).toLocaleDateString('en-IN')} · ${r.fire_count || 0}×` : '—'}
+                      {r.last_fired_at ? `${fmtDate(r.last_fired_at)} · ${r.fire_count || 0}×` : '—'}
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center justify-end gap-1">

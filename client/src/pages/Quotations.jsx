@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 import { FiPlus, FiEdit2, FiTrash2, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { useAuth } from '../context/AuthContext';
+import { fmtDate } from '../utils/datetime';
 
 const blankRow = () => ({ description: '', quantity: 1, unit: 'nos', rate: 0, item_id: null, suggestion: null });
 
@@ -129,7 +130,7 @@ export default function Quotations() {
                     <td>{b.drawing_required ? 'Yes' : 'No'}</td>
                     <td>Rs {b.total_amount?.toLocaleString()}</td>
                     <td><StatusBadge status={b.status} /></td>
-                    <td className="text-gray-500">{new Date(b.created_at).toLocaleDateString()}</td>
+                    <td className="text-gray-500">{fmtDate(b.created_at)}</td>
                     <td>
                       {canDelete('quotations') && <button onClick={async () => {
                         if (!confirm(`Delete BOQ "${b.title}"?`)) return;
