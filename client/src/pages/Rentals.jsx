@@ -825,12 +825,25 @@ export default function Rentals() {
             if (!requestForm.owner_name || !requestForm.rent_month || !requestForm.arrange_for) {
               return toast.error('Owner name, rent month, and arrange-for are required');
             }
+            // PIN is mandatory (mam 2026-06-23). Must be a 6-digit code.
+            if (!/^\d{6}$/.test(String(requestForm.pincode || ''))) {
+              return toast.error('Room PIN code is required (6 digits)');
+            }
+            // If the user typed a PIN but didn't click "Verify PIN", classify
+            // it now so metro_type is always saved.
+            let payload = requestForm;
+            if (!requestForm.metro_type) {
+              try {
+                const { data } = await api.get(`/rentals/pincode/${requestForm.pincode}`);
+                payload = { ...requestForm, metro_type: data.metro_type, pincode_city: data.city || data.district || requestForm.pincode_city || null };
+              } catch { /* non-fatal — save the PIN even if classify fails */ }
+            }
             try {
               if (requestForm.id) {
-                await api.put(`/rentals/rent-requests/${requestForm.id}`, requestForm);
+                await api.put(`/rentals/rent-requests/${requestForm.id}`, payload);
                 toast.success(`Updated ${requestForm.request_no || ''}`);
               } else {
-                const r = await api.post('/rentals/rent-requests', requestForm);
+                const r = await api.post('/rentals/rent-requests', payload);
                 toast.success(`Raised ${r.data.request_no}`);
               }
               setRequestModal(false); setRequestForm({});
@@ -994,7 +1007,7 @@ function RaiseRentForm({ form, setForm, sites, users, onSubmit, onCancel }) {
         )}
         <div className="col-span-2 grid grid-cols-3 gap-3 items-end">
           <div>
-            <label className="label">Room PIN Code</label>
+            <label className="label">Room PIN Code *</label>
             <input className="input" inputMode="numeric" maxLength={6} placeholder="6-digit PIN"
               value={form.pincode || ''}
               onChange={e => setForm(f => ({ ...f, pincode: e.target.value.replace(/\D/g, '').slice(0, 6), metro_type: '', pincode_city: '' }))} />
