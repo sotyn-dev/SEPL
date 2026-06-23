@@ -2842,7 +2842,13 @@ router.get('/vendor-po/:id/print', (req, res) => {
       LEFT JOIN indent_items ii ON ii.id = vpi.indent_item_id
       LEFT JOIN item_master im ON im.id = ii.item_master_id
       LEFT JOIN po_items poi ON poi.id = ii.po_item_id
-      LEFT JOIN indent_item_rates ir ON ir.indent_item_id = vpi.indent_item_id
+      -- indent_item_rates has no UNIQUE(indent_item_id), so an item can carry
+      -- more than one rate row — a plain join then DOUBLES every PO line
+      -- (mam 2026-06-23: "in po double double item"). Join only the LATEST
+      -- (max-id) rate row per item so each line prints exactly once.
+      LEFT JOIN indent_item_rates ir
+        ON ir.id = (SELECT MAX(ir2.id) FROM indent_item_rates ir2
+                     WHERE ir2.indent_item_id = vpi.indent_item_id)
      WHERE vpi.vendor_po_id = ?
      ORDER BY vpi.id
   `).all(req.params.id);

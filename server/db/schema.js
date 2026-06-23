@@ -3553,6 +3553,21 @@ function initializeDatabase() {
   // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}
 
+  // De-duplicate indent_item_rates → one row per indent_item (mam 2026-06-23:
+  // "in po double double item"). The table never had a UNIQUE(indent_item_id),
+  // so the seed (INSERT OR IGNORE) could create multiple rows per item, and
+  // any query joining it printed each PO/indent line twice. Keep the LATEST
+  // (max-id) row per item, then enforce uniqueness so it can't recur — which
+  // also makes the existing INSERT OR IGNORE seeds idempotent.
+  try {
+    db.exec(`DELETE FROM indent_item_rates
+             WHERE indent_item_id IS NOT NULL
+               AND id NOT IN (SELECT MAX(id) FROM indent_item_rates
+                              WHERE indent_item_id IS NOT NULL
+                              GROUP BY indent_item_id)`);
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_iir_indent_item ON indent_item_rates(indent_item_id) WHERE indent_item_id IS NOT NULL');
+  } catch (e) { console.warn('[migration] indent_item_rates dedupe skipped:', e.message); }
+
   // Relax payment_requests.category CHECK to allow new categories like
   // 'Salary' and 'Compliance'. SQLite can't ALTER a CHECK constraint, so we
   // detect the old 4-category signature in sqlite_master and rebuild the
