@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>SEPL - Business ERP</title>
+
+    <!-- Favicon · SEPL logo (mam 2026-05-25: "IS IT POSIBLE AT HERE
+         SECURED LOGO CAN SHOW"). The old purple-bolt favicon.svg was a
+         template leftover. Modern browsers accept webp directly. -->
+    <link rel="icon" type="image/webp" href="/sepl-logo.webp" />
+
+    <!-- ─── PWA / Add-to-Home-Screen (mam 2026-05-26) ───────────────────
+         Without these, iPhone falls back to a SCREENSHOT of the login
+         page and Android falls back to the favicon (the purple blob),
+         so the two devices look wildly different.  These tags pin both
+         to the same SEPL-branded square icon. -->
+    <link rel="manifest" href="/manifest.json" />
+    <!-- Royal blue brand (Tailwind blue-800, matches Login hero via-stop
+         and the blue-900→blue-950 sidebar). Was red #dc2626 in v1; mam
+         rebranded the ERP from red to royal blue on 2026-05-20. -->
+    <meta name="theme-color" content="#1e40af" />
+
+    <!-- iOS — Add to Home Screen.  apple-touch-icon stops iOS from
+         screenshotting the page.  apple-mobile-web-app-title fixes the
+         "SEPL-Busin…" truncation in the home-screen label. -->
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <meta name="apple-mobile-web-app-title" content="SEPL ERP" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+    <!-- Android Chrome fallbacks. -->
+    <meta name="application-name" content="SEPL ERP" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <script type="module" crossorigin src="/assets/index-tpBafJSH.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BsM_kU68.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
