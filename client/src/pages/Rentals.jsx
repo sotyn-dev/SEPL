@@ -974,20 +974,24 @@ function RaiseRentForm({ form, setForm, sites, users, onSubmit, onCancel }) {
             <option value="Contractor">Contractor</option>
           </select>
         </div>
+        {/* Contractor → Contractor Name; SEPL → Employee Name (mam 2026-06-23:
+            show only the one that matches Arrange For, not both). */}
         {form.arrange_for === 'Contractor' && (
-          <div><label className="label">Contractor Name</label><input className="input" value={form.contractor_name || ''} onChange={e => setForm(f => ({ ...f, contractor_name: e.target.value }))} /></div>
+          <div className="col-span-2"><label className="label">Contractor Name</label><input className="input" value={form.contractor_name || ''} onChange={e => setForm(f => ({ ...f, contractor_name: e.target.value }))} /></div>
         )}
-        <div className="col-span-2">
-          <label className="label">Employee Name <span className="text-gray-400 font-normal text-[10px]">(room occupant)</span></label>
-          <SearchableSelect
-            options={(users || []).map(u => ({ ...u, label: u.name + (u.department ? ` — ${u.department}` : '') }))}
-            value={form.employee_user_id || null}
-            valueKey="id"
-            displayKey="label"
-            placeholder="Search employee…"
-            onChange={(u) => setForm(f => ({ ...f, employee_user_id: u?.id || '', employee_name: u?.name || '' }))}
-          />
-        </div>
+        {form.arrange_for === 'SEPL' && (
+          <div className="col-span-2">
+            <label className="label">Employee Name <span className="text-gray-400 font-normal text-[10px]">(room occupant)</span></label>
+            <SearchableSelect
+              options={(users || []).map(u => ({ ...u, label: u.name + (u.department ? ` — ${u.department}` : '') }))}
+              value={form.employee_user_id || null}
+              valueKey="id"
+              displayKey="label"
+              placeholder="Search employee…"
+              onChange={(u) => setForm(f => ({ ...f, employee_user_id: u?.id || '', employee_name: u?.name || '' }))}
+            />
+          </div>
+        )}
         <div className="col-span-2 grid grid-cols-3 gap-3 items-end">
           <div>
             <label className="label">Room PIN Code</label>
