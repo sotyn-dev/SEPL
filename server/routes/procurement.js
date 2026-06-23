@@ -1458,7 +1458,11 @@ router.put('/indents/:id', (req, res) => {
       // ALSO edit order qty + from-store qty, so we mark all approval levels
       // approved here and then FALL THROUGH to the legacy approve path, which
       // applies quantity_overrides / store_qty_per_item and flips status.
-      if (status === 'approved' && cur2 && (cur2.status === 'rejected' || cur2.status === 'approved')) {
+      if (status === 'approved' && cur2 && (cur2.status === 'rejected' || cur2.status === 'approved' || cur2.status === 'po_sent')) {
+        // po_sent included (mam 2026-06-23): admin/MD reopens a PO-sent indent
+        // to issue items from store. Re-approve flips it back to 'approved'
+        // and applies the from-store split; the already-sent vendor PO must be
+        // reduced/cancelled separately for the store-issued qty.
         if (!canRevoke) return res.status(403).json({ error: 'Only an admin or the L2 approver (MD) can re-approve this indent.' });
         isReapprove = true;
         db.prepare(
