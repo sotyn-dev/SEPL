@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
@@ -6,11 +6,16 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import {
   FiPlus, FiSearch, FiFilter, FiDownload, FiEdit2, FiTrash2, FiEye,
-  FiX, FiBook, FiTrendingUp, FiClock, FiUpload
+  FiX, FiBook, FiTrendingUp, FiClock, FiUpload, FiList, FiGrid,
+  FiChevronRight, FiChevronDown, FiUsers, FiMapPin
 } from 'react-icons/fi';
 import { LuIndianRupee } from 'react-icons/lu';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, DISTRICTS_BY_STATE, gstStateCode } from '../data/indiaLocations';
+import {
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell,
+  PieChart, Pie, Legend
+} from 'recharts';
 
 const STATUSES = ['booked', 'advance_received', 'planning', 'execution', 'completed'];
 const CATEGORIES = ['Low Voltage', 'Fire Fighting', 'Fire NOC', 'Fire Alarm', 'CCTV', 'Access Control', 'PA System', 'Networking', 'Solar', 'Other'];
@@ -53,6 +58,8 @@ export default function BusinessBook() {
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({ status: '', category: '', order_type: '', lead_type: '' });
   const [showFilters, setShowFilters] = useState(false);
+  const [viewMode, setViewMode] = useState('list'); // 'list' | 'dashboard'
+  const [expanded, setExpanded] = useState({});      // dashboard: which client+site groups are open
 
   const loadEntries = useCallback(() => {
     const params = new URLSearchParams();
@@ -175,6 +182,85 @@ export default function BusinessBook() {
     return next;
   });
 
+  // Dashboard view (mam): MERGE all entries that share the SAME client name
+  // AND the SAME site name into one consolidated row.  "Site name" is the
+  // Project / Location shown in the list (project_name, falling back to
+  // company_name) — the same value the table's Project column displays.
+  // Matching is case-insensitive and whitespace-normalised so "M/s ABC "
+  // and "m/s abc" collapse together.  Financials are summed across the
+  // merged orders; each group expands to its individual leads.
+  const norm = (s) => cleanText(s || '').toLowerCase();
+  const siteOf = (e) => cleanText(e.project_name) || cleanText(e.company_name) || '';
+  const groups = useMemo(() => {
+    const map = new Map();
+    for (const e of entries) {
+      const site = siteOf(e);
+      const key = norm(e.client_name) + '||' + norm(site);
+      if (!map.has(key)) {
+        map.set(key, {
+          key, client_name: cleanText(e.client_name) || '(no client)', site_name: site,
+          district: e.district, state: e.state,
+          orders: [], sale: 0, po: 0, net: 0, advance: 0, balance: 0, discount: 0,
+          statuses: new Set(), categories: new Set(),
+        });
+      }
+      const g = map.get(key);
+      g.orders.push(e);
+      g.sale += e.sale_amount_without_gst || 0;
+      g.po += e.po_amount || 0;
+      g.net += e.net_sale_amount || 0;
+      g.advance += e.advance_received || 0;
+      g.balance += e.balance_amount || 0;
+      g.discount += e.management_discount_amount || 0;
+      if (!g.site_name && site) g.site_name = site;
+      if (e.status) g.statuses.add(e.status);
+      if (e.category) g.categories.add(e.category);
+    }
+    return Array.from(map.values()).sort((a, b) => b.sale - a.sale);
+  }, [entries]);
+
+  const mergedCount = groups.filter(g => g.orders.length > 1).length;
+  const toggleGroup = (key) => setExpanded(p => ({ ...p, [key]: !p[key] }));
+
+  // Dashboard analytics — KPI roll-ups + chart series, all derived from the
+  // currently-filtered entries so the dashboard moves with the filters.
+  const PALETTE = ['#E5484D', '#0EA5E9', '#46A758', '#FFB224', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316', '#64748B', '#A32D2D'];
+  const dash = useMemo(() => {
+    const sum = (sel) => entries.reduce((s, e) => s + (Number(sel(e)) || 0), 0);
+    const clients = new Set(groups.map(g => norm(g.client_name)));
+    const sites = new Set(groups.map(g => g.key));
+    const tally = (keyFn, valFn) => {
+      const m = new Map();
+      for (const e of entries) {
+        const k = keyFn(e) || 'Uncategorised';
+        const cur = m.get(k) || { name: k, value: 0, count: 0 };
+        cur.value += Number(valFn(e)) || 0; cur.count += 1; m.set(k, cur);
+      }
+      return [...m.values()].sort((a, b) => b.value - a.value);
+    };
+    const byCategory = tally(e => e.category, e => e.sale_amount_without_gst);
+    const byOrderType = tally(e => e.order_type, e => e.sale_amount_without_gst);
+    const byStatus = (() => {
+      const m = new Map();
+      for (const e of entries) { const k = (e.status || 'booked').replace(/_/g, ' '); m.set(k, (m.get(k) || 0) + 1); }
+      return [...m.entries()].map(([name, value]) => ({ name, value }));
+    })();
+    // Top clients merge by client name only (across all their sites).
+    const cm = new Map();
+    for (const g of groups) {
+      const k = norm(g.client_name);
+      const cur = cm.get(k) || { name: g.client_name, value: 0, orders: 0 };
+      cur.value += g.sale; cur.orders += g.orders.length; cm.set(k, cur);
+    }
+    const topClients = [...cm.values()].sort((a, b) => b.value - a.value).slice(0, 8);
+    return {
+      sale: sum(e => e.sale_amount_without_gst), po: sum(e => e.po_amount),
+      advance: sum(e => e.advance_received), balance: sum(e => e.balance_amount),
+      clients: clients.size, sites: sites.size, orders: entries.length,
+      byCategory, byOrderType, byStatus, topClients,
+    };
+  }, [entries, groups]);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -183,7 +269,17 @@ export default function BusinessBook() {
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><FiBook className="text-red-600" /> Business Book</h1>
           <p className="text-sm text-gray-500 mt-1">Master New Business Booked Sheet</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5">
+            <button onClick={() => setViewMode('list')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'list' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              <FiList size={15} /> List
+            </button>
+            <button onClick={() => setViewMode('dashboard')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${viewMode === 'dashboard' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              <FiGrid size={15} /> Dashboard
+            </button>
+          </div>
           <button onClick={exportCSV} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload size={16} /> Export CSV</button>
           {canCreate('business_book') && (
             <button onClick={() => { setForm({ ...emptyForm }); setModal('add'); }} className="btn btn-primary flex items-center gap-2"><FiPlus size={16} /> New Entry</button>
@@ -238,7 +334,11 @@ export default function BusinessBook() {
 
       {/* Count */}
       <div className="flex justify-between items-center text-sm text-gray-500">
-        <span>Showing {entries.length} entries</span>
+        <span>
+          {viewMode === 'dashboard'
+            ? `${groups.length} client + site groups (${entries.length} entries${mergedCount > 0 ? `, ${mergedCount} merged` : ''})`
+            : `Showing ${entries.length} entries`}
+        </span>
         {entries.length > 0 && (
           <span className="font-medium">
             {/* Sum the SAME field the SALE AMT column displays per row
@@ -251,7 +351,8 @@ export default function BusinessBook() {
         )}
       </div>
 
-      {/* Table */}
+      {/* Table (List view) */}
+      {viewMode === 'list' && (
       <div className="card p-0">
         <div className="overflow-x-auto">
           <table className="min-w-full freeze-head">
@@ -305,6 +406,168 @@ export default function BusinessBook() {
           </table>
         </div>
       </div>
+      )}
+
+      {/* Dashboard view — entries merged by client name + site name */}
+      {viewMode === 'dashboard' && (
+        <div className="space-y-5">
+
+          {/* KPI roll-up (filtered) */}
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+            <KpiCard label="Sale Value" value={fmt(dash.sale)} color="text-gray-900" />
+            <KpiCard label="PO Value" value={fmt(dash.po)} color="text-blue-700" />
+            <KpiCard label="Advance" value={fmt(dash.advance)} color="text-emerald-600" />
+            <KpiCard label="Balance" value={fmt(dash.balance)} color="text-red-600" />
+            <KpiCard label="Clients" value={dash.clients} color="text-purple-700" />
+            <KpiCard label="Sites" value={dash.sites} color="text-amber-600" />
+            <KpiCard label="Orders" value={dash.orders} color="text-gray-900" />
+          </div>
+
+          {/* Charts */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Sale value by category */}
+            <div className="card p-4">
+              <h4 className="font-semibold text-sm text-gray-700 mb-3">Sale Value by Category</h4>
+              {dash.byCategory.length === 0 ? <Empty /> : (
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={dash.byCategory} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                    <XAxis dataKey="name" tick={{ fontSize: 9 }} interval={0} angle={-20} textAnchor="end" height={50} stroke="#94a3b8" axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10 }} stroke="#94a3b8" axisLine={false} tickLine={false} tickFormatter={(v) => v >= 100000 ? `${(v / 100000).toFixed(0)}L` : v} />
+                    <Tooltip formatter={(v) => fmt(v)} />
+                    <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                      {dash.byCategory.map((d, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+            {/* Order count by status */}
+            <div className="card p-4">
+              <h4 className="font-semibold text-sm text-gray-700 mb-3">Orders by Status</h4>
+              {dash.byStatus.length === 0 ? <Empty /> : (
+                <ResponsiveContainer width="100%" height={240}>
+                  <PieChart>
+                    <Pie data={dash.byStatus} dataKey="value" nameKey="name" innerRadius={50} outerRadius={85} paddingAngle={2}>
+                      {dash.byStatus.map((d, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}
+                    </Pie>
+                    <Tooltip formatter={(v) => `${v} orders`} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+            {/* Sale value by order type */}
+            <div className="card p-4">
+              <h4 className="font-semibold text-sm text-gray-700 mb-3">Sale Value by Order Type</h4>
+              {dash.byOrderType.length === 0 ? <Empty /> : (
+                <ResponsiveContainer width="100%" height={240}>
+                  <PieChart>
+                    <Pie data={dash.byOrderType} dataKey="value" nameKey="name" outerRadius={85} label={(e) => e.name}>
+                      {dash.byOrderType.map((d, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}
+                    </Pie>
+                    <Tooltip formatter={(v) => fmt(v)} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+            {/* Top clients by sale value */}
+            <div className="card p-4">
+              <h4 className="font-semibold text-sm text-gray-700 mb-3">Top Clients by Sale Value</h4>
+              {dash.topClients.length === 0 ? <Empty /> : (
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart layout="vertical" data={dash.topClients} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                    <XAxis type="number" tick={{ fontSize: 10 }} stroke="#94a3b8" axisLine={false} tickLine={false} tickFormatter={(v) => v >= 100000 ? `${(v / 100000).toFixed(0)}L` : v} />
+                    <YAxis type="category" dataKey="name" tick={{ fontSize: 9 }} width={110} stroke="#94a3b8" axisLine={false} tickLine={false} />
+                    <Tooltip formatter={(v) => fmt(v)} />
+                    <Bar dataKey="value" radius={[0, 4, 4, 0]}>
+                      {dash.topClients.map((d, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+          {/* Merged client + site table */}
+          <div className="card p-0">
+          <div className="overflow-x-auto">
+            <table className="min-w-full freeze-head">
+              <thead><tr className="bg-gray-50">
+                <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600 w-8"></th>
+                <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Client</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Site / Location</th>
+                <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Orders</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Status</th>
+                <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Sale Amt</th>
+                <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">PO Amt</th>
+                <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Advance</th>
+                <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Balance</th>
+              </tr></thead>
+              <tbody className="divide-y divide-gray-100">
+                {groups.map(g => {
+                  const open = !!expanded[g.key];
+                  const multi = g.orders.length > 1;
+                  return (
+                    <Fragment key={g.key}>
+                      <tr className={`transition-colors cursor-pointer ${multi ? 'bg-amber-50/40 hover:bg-amber-50' : 'hover:bg-red-50/30'}`} onClick={() => toggleGroup(g.key)}>
+                        <td className="px-3 py-3 text-gray-400">{multi ? (open ? <FiChevronDown size={16} /> : <FiChevronRight size={16} />) : null}</td>
+                        <td className="px-3 py-3">
+                          <div className="font-semibold text-sm text-gray-900 flex items-center gap-1.5"><FiUsers size={13} className="text-gray-400" /> {g.client_name}</div>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="text-sm text-gray-800 flex items-center gap-1.5"><FiMapPin size={13} className="text-gray-400" /> {g.site_name || '-'}</div>
+                          {g.district && <div className="text-xs text-gray-500 ml-5">{[g.district, g.state].filter(Boolean).join(', ')}</div>}
+                        </td>
+                        <td className="px-3 py-3 text-center">
+                          <span className={`inline-flex items-center justify-center min-w-[24px] px-2 py-0.5 rounded-full text-xs font-bold ${multi ? 'bg-amber-200 text-amber-800' : 'bg-gray-100 text-gray-600'}`}>{g.orders.length}</span>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex flex-wrap gap-1">{[...g.statuses].map(s => <StatusBadge key={s} status={s} />)}</div>
+                        </td>
+                        <td className="px-3 py-3 text-right font-semibold text-sm">{fmt(g.sale)}</td>
+                        <td className="px-3 py-3 text-right text-sm">{fmt(g.po)}</td>
+                        <td className="px-3 py-3 text-right text-sm text-emerald-600 font-medium">{fmt(g.advance)}</td>
+                        <td className="px-3 py-3 text-right text-sm text-red-600 font-bold">{fmt(g.balance)}</td>
+                      </tr>
+                      {open && multi && g.orders.map(o => (
+                        <tr key={o.id} className="bg-white hover:bg-gray-50 text-sm">
+                          <td></td>
+                          <td className="px-3 py-2 pl-6">
+                            <span className="font-bold text-red-600 cursor-pointer hover:underline" onClick={() => handleView(o)}>{o.lead_no}</span>
+                          </td>
+                          <td className="px-3 py-2 text-gray-600">{o.category || '-'}{o.po_number ? ` · PO ${o.po_number}` : ''}</td>
+                          <td className="px-3 py-2 text-center text-xs text-gray-500">{o.order_type}</td>
+                          <td className="px-3 py-2"><StatusBadge status={o.status} /></td>
+                          <td className="px-3 py-2 text-right">{fmt(o.sale_amount_without_gst)}</td>
+                          <td className="px-3 py-2 text-right">{fmt(o.po_amount)}</td>
+                          <td className="px-3 py-2 text-right text-emerald-600">{fmt(o.advance_received)}</td>
+                          <td className="px-3 py-2 text-right text-red-600 font-medium">{fmt(o.balance_amount)}</td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
+                {groups.length === 0 && <tr><td colSpan="9" className="text-center py-12 text-gray-400"><FiGrid size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">No entries found</p></td></tr>}
+              </tbody>
+              {groups.length > 0 && (
+                <tfoot>
+                  <tr className="bg-gray-100 font-bold text-sm border-t-2 border-gray-300">
+                    <td></td>
+                    <td className="px-3 py-3" colSpan="2">Total ({groups.length} groups)</td>
+                    <td className="px-3 py-3 text-center">{entries.length}</td>
+                    <td></td>
+                    <td className="px-3 py-3 text-right">{fmt(groups.reduce((s, g) => s + g.sale, 0))}</td>
+                    <td className="px-3 py-3 text-right">{fmt(groups.reduce((s, g) => s + g.po, 0))}</td>
+                    <td className="px-3 py-3 text-right text-emerald-700">{fmt(groups.reduce((s, g) => s + g.advance, 0))}</td>
+                    <td className="px-3 py-3 text-right text-red-700">{fmt(groups.reduce((s, g) => s + g.balance, 0))}</td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+          </div>
+        </div>
+      )}
 
       {/* View Modal */}
       <Modal isOpen={modal === 'view'} onClose={() => { setModal(null); setViewEntry(null); }} title={`${viewEntry?.lead_no || ''} - ${viewEntry?.client_name || ''}`} wide>
@@ -605,6 +868,19 @@ function StatCard({ icon: Icon, color, label, value, valueColor }) {
       </div>
     </div>
   );
+}
+
+function KpiCard({ label, value, color }) {
+  return (
+    <div className="card p-3">
+      <p className="text-[10px] text-gray-500 font-semibold uppercase tracking-wide">{label}</p>
+      <p className={`text-lg font-bold mt-0.5 ${color || 'text-gray-900'}`}>{value}</p>
+    </div>
+  );
+}
+
+function Empty() {
+  return <div className="h-[240px] flex items-center justify-center text-sm text-gray-400">No data</div>;
 }
 
 function FSection({ title, color, children }) {
