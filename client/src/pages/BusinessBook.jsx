@@ -253,27 +253,53 @@ export default function BusinessBook() {
   }, [entries]);
   const listMergedCount = listGroups.filter(g => g.leads.length > 1).length;
   const toggleListGroup = (key) => setListExpanded(p => ({ ...p, [key]: !p[key] }));
+  // List the distinct client names of a merged group instead of "Multiple (N)"
+  // (mam 2026-06-23). Cap at 2 names + "+N more" so the cell stays compact.
+  const clientList = (clientsSet) => {
+    const arr = [...clientsSet];
+    if (arr.length === 0) return '-';
+    if (arr.length <= 2) return arr.join(', ');
+    return `${arr.slice(0, 2).join(', ')} +${arr.length - 2} more`;
+  };
 
   // One Business Book lead as a table row — reused by the flat list, the
   // grouped-list children, so the columns never drift between modes.
+  // Slimmer 7-column row (mam 2026-06-23: "table view not good — too wide").
+  // Secondary fields (Type, Employee, Category, Order, PO, Advance) move into
+  // sub-lines under the main columns instead of their own columns.
   const renderLeadRow = (b, child = false) => (
     <tr key={b.id} className={`transition-colors ${child ? 'bg-gray-50/60 hover:bg-gray-100' : 'hover:bg-red-50/30'}`}>
-      <td className={`px-3 py-3 ${child ? 'pl-8' : ''}`}><span className="font-bold text-red-600 cursor-pointer hover:underline" onClick={() => handleView(b)}>{b.lead_no}</span></td>
-      <td className="px-3 py-3"><span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${b.lead_type === 'Government' ? 'bg-purple-100 text-purple-700' : 'bg-red-100 text-red-700'}`}>{b.lead_type}</span></td>
-      <td className="px-3 py-3"><div className="font-medium text-sm">{cleanText(b.client_name)}</div><div className="text-[10px] text-gray-400 uppercase tracking-wide">Client</div></td>
-      <td className="px-3 py-3">
-        <div className="font-medium text-sm text-gray-800">{cleanText(b.project_name) || cleanText(b.company_name) || '-'}</div>
-        {b.district && <div className="text-xs text-gray-500">{[cleanText(b.district), cleanText(b.state)].filter(Boolean).join(', ')}</div>}
+      {/* Lead No + Type */}
+      <td className={`px-3 py-2 align-top ${child ? 'pl-8' : ''}`}>
+        <span className="font-bold text-red-600 text-[13px] cursor-pointer hover:underline" onClick={() => handleView(b)}>{b.lead_no}</span>
+        <div className="mt-0.5"><span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium ${b.lead_type === 'Government' ? 'bg-purple-100 text-purple-700' : 'bg-red-100 text-red-700'}`}>{b.lead_type}</span></div>
       </td>
-      <td className="px-3 py-3 text-sm">{b.category || '-'}</td>
-      <td className="px-3 py-3"><span className="inline-flex px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">{b.order_type}</span></td>
-      <td className="px-3 py-3 text-sm font-medium">{b.po_number || '-'}</td>
-      <td className="px-3 py-3 text-right font-semibold text-sm">{fmt(b.sale_amount_without_gst)}</td>
-      <td className="px-3 py-3 text-right text-sm text-emerald-600 font-medium">{fmt(b.advance_received)}</td>
-      <td className="px-3 py-3 text-right text-sm text-red-600 font-bold">{fmt(b.balance_amount)}</td>
-      <td className="px-3 py-3 text-sm">{b.employee_assigned || '-'}</td>
-      <td className="px-3 py-3"><StatusBadge status={b.status} /></td>
-      <td className="px-3 py-3">
+      {/* Client + Employee */}
+      <td className="px-3 py-2 align-top">
+        <div className="font-medium text-[13px] leading-snug">{cleanText(b.client_name) || '-'}</div>
+        {b.employee_assigned && <div className="text-[11px] text-gray-500 leading-snug">👤 {b.employee_assigned}</div>}
+      </td>
+      {/* Project / Location + Category / Order / PO */}
+      <td className="px-3 py-2 align-top">
+        <div className="font-medium text-[13px] text-gray-800 leading-snug">{cleanText(b.project_name) || cleanText(b.company_name) || '-'}</div>
+        {b.district && <div className="text-[11px] text-gray-500 leading-snug">{[cleanText(b.district), cleanText(b.state)].filter(Boolean).join(', ')}</div>}
+        <div className="flex flex-wrap items-center gap-1 mt-0.5">
+          {b.category && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{b.category}</span>}
+          {b.order_type && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{b.order_type}</span>}
+          {b.po_number && <span className="text-[10px] text-gray-500">PO: {b.po_number}</span>}
+        </div>
+      </td>
+      {/* Sale + Advance */}
+      <td className="px-3 py-2 text-right align-top whitespace-nowrap">
+        <div className="font-semibold text-[13px]">{fmt(b.sale_amount_without_gst)}</div>
+        {b.advance_received > 0 && <div className="text-[11px] text-emerald-600">adv {fmt(b.advance_received)}</div>}
+      </td>
+      {/* Balance */}
+      <td className="px-3 py-2 text-right align-top text-[13px] text-red-600 font-bold whitespace-nowrap">{fmt(b.balance_amount)}</td>
+      {/* Status */}
+      <td className="px-3 py-2 align-top"><StatusBadge status={b.status} /></td>
+      {/* Actions */}
+      <td className="px-3 py-2 align-top">
         <div className="flex items-center justify-center gap-1">
           <button onClick={() => handleView(b)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="View"><FiEye size={15} /></button>
           {b.working_sheet_link && (
@@ -433,16 +459,10 @@ export default function BusinessBook() {
           <table className="min-w-full freeze-head">
             <thead><tr className="bg-gray-50">
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Lead No</th>
-              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Type</th>
-              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Client Name</th>
+              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Client</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Project / Location</th>
-              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Category</th>
-              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Order</th>
-              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">PO Number</th>
-              <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Sale Amt</th>
-              <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Advance</th>
+              <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Sale / Advance</th>
               <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Balance</th>
-              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Employee</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Status</th>
               <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Actions</th>
             </tr></thead>
@@ -455,34 +475,31 @@ export default function BusinessBook() {
                 const open = !!listExpanded[g.key];
                 return (
                   <Fragment key={g.key}>
-                    <tr className="bg-amber-50/40 hover:bg-amber-50 cursor-pointer transition-colors" onClick={() => toggleListGroup(g.key)}>
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-1.5 text-gray-500">
+                    <tr className="bg-amber-50/60 hover:bg-amber-100/60 cursor-pointer transition-colors border-l-4 border-amber-400" onClick={() => toggleListGroup(g.key)}>
+                      <td className="px-3 py-2 align-top">
+                        <div className="flex items-center gap-1.5 text-amber-700">
                           {open ? <FiChevronDown size={15} /> : <FiChevronRight size={15} />}
-                          <span className="bg-amber-200 text-amber-800 text-xs font-bold px-2 py-0.5 rounded-full">{g.leads.length}</span>
+                          <span className="bg-amber-500 text-white text-[11px] font-bold px-2 py-0.5 rounded-full">{g.leads.length} leads</span>
                         </div>
                       </td>
-                      <td className="px-3 py-3" />
-                      <td className="px-3 py-3 text-sm">{g.clients.size === 1 ? [...g.clients][0] : `Multiple (${g.clients.size})`}</td>
-                      <td className="px-3 py-3">
-                        <div className="font-semibold text-sm text-gray-900 flex items-center gap-1.5"><FiMapPin size={13} className="text-gray-400" /> {g.label}</div>
-                        <div className="text-[10px] text-gray-400 uppercase tracking-wide ml-5">{g.leads.length} leads merged · click to expand</div>
+                      <td className="px-3 py-2 align-top text-[13px] font-medium">{clientList(g.clients)}</td>
+                      <td className="px-3 py-2 align-top">
+                        <div className="font-semibold text-[13px] text-gray-900 flex items-start gap-1 leading-snug"><FiMapPin size={12} className="text-amber-500 mt-0.5 shrink-0" /> {g.label}</div>
+                        <div className="text-[10px] text-amber-700/80 ml-4">tap to {open ? 'collapse' : 'expand'}</div>
                       </td>
-                      <td className="px-3 py-3" />
-                      <td className="px-3 py-3" />
-                      <td className="px-3 py-3" />
-                      <td className="px-3 py-3 text-right font-semibold text-sm">{fmt(g.sale)}</td>
-                      <td className="px-3 py-3 text-right text-sm text-emerald-600 font-medium">{fmt(g.advance)}</td>
-                      <td className="px-3 py-3 text-right text-sm text-red-600 font-bold">{fmt(g.balance)}</td>
-                      <td className="px-3 py-3" />
-                      <td className="px-3 py-3"><div className="flex flex-wrap gap-1">{[...g.statuses].map(s => <StatusBadge key={s} status={s} />)}</div></td>
-                      <td className="px-3 py-3" />
+                      <td className="px-3 py-2 text-right align-top whitespace-nowrap">
+                        <div className="font-semibold text-[13px]">{fmt(g.sale)}</div>
+                        {g.advance > 0 && <div className="text-[11px] text-emerald-600">adv {fmt(g.advance)}</div>}
+                      </td>
+                      <td className="px-3 py-2 text-right align-top text-[13px] text-red-600 font-bold whitespace-nowrap">{fmt(g.balance)}</td>
+                      <td className="px-3 py-2 align-top"><div className="flex flex-wrap gap-1">{[...g.statuses].map(s => <StatusBadge key={s} status={s} />)}</div></td>
+                      <td className="px-3 py-2" />
                     </tr>
                     {open && g.leads.map(b => renderLeadRow(b, true))}
                   </Fragment>
                 );
               })}
-              {entries.length === 0 && <tr><td colSpan="13" className="text-center py-12 text-gray-400"><FiBook size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">No entries found</p></td></tr>}
+              {entries.length === 0 && <tr><td colSpan="7" className="text-center py-12 text-gray-400"><FiBook size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">No entries found</p></td></tr>}
             </tbody>
           </table>
         </div>
