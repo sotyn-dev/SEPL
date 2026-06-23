@@ -64,13 +64,14 @@ router.post('/login', (req, res) => {
 });
 
 router.post('/register', authMiddleware, adminOnly, (req, res) => {
-  const { name, email, username, password, role, department, phone, role_ids } = req.body;
+  const { name, email, username, password, role, department, phone, role_ids, avatar_url } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password required' });
   const db = getDb();
   try {
     const hash = bcrypt.hashSync(password, 10);
-    const result = db.prepare('INSERT INTO users (name, email, username, password, role, department, phone) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(name, email, username ? username.trim() : null, hash, role || 'user', department || null, phone || null);
+    const result = db.prepare('INSERT INTO users (name, email, username, password, role, department, phone, avatar_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(name, email, username ? username.trim() : null, hash, role || 'user', department || null, phone || null,
+           avatar_url ? String(avatar_url).trim() : null);
 
     // Assign roles
     if (role_ids && role_ids.length > 0) {
@@ -143,7 +144,7 @@ router.patch('/users/:id/track-location', authMiddleware, adminOnly, (req, res) 
 
 // Update user (admin only)
 router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
-  const { name, email, username, department, phone, role, active, role_ids, password, approval_role } = req.body;
+  const { name, email, username, department, phone, role, active, role_ids, password, approval_role, avatar_url } = req.body;
   const db = getDb();
 
   try {
@@ -172,6 +173,11 @@ router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
       const VALID = ['l1', 'l2', 'hr'];
       const cleaned = approval_role && VALID.includes(approval_role) ? approval_role : null;
       db.prepare('UPDATE users SET approval_role=? WHERE id=?').run(cleaned, req.params.id);
+    }
+    // Employee photo (mam 2026-06-23): admin can set/clear any user's avatar
+    // from User Management. Sent separately so omitting it doesn't wipe it.
+    if (avatar_url !== undefined) {
+      db.prepare('UPDATE users SET avatar_url=? WHERE id=?').run(avatar_url ? String(avatar_url).trim() : null, req.params.id);
     }
   } catch (e) {
     if (e.message.includes('UNIQUE')) {

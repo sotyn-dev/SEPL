@@ -200,7 +200,14 @@ export default function UserManagement() {
           <tbody>
             {users.map(u => (
               <tr key={u.id}>
-                <td className="font-medium">{u.name}</td>
+                <td className="font-medium">
+                  <div className="flex items-center gap-2">
+                    {u.avatar_url
+                      ? <img src={u.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover border shrink-0" />
+                      : <span className="w-8 h-8 rounded-full bg-gray-200 text-gray-500 flex items-center justify-center text-xs font-bold shrink-0">{(u.name || '?').slice(0, 1).toUpperCase()}</span>}
+                    <span>{u.name}</span>
+                  </div>
+                </td>
                 <td className="font-mono text-xs text-red-700">{u.username || <span className="text-gray-300">—</span>}</td>
                 <td className="text-gray-600">{u.email}</td>
                 <td>{u.phone}</td>
@@ -251,6 +258,26 @@ export default function UserManagement() {
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit User' : 'Create New User'} wide>
         <form onSubmit={save} className="space-y-5">
           <div className="grid grid-cols-2 gap-4">
+            {/* Employee photo (mam 2026-06-23) — upload via /api/upload, stored as avatar_url */}
+            <div className="col-span-2 flex items-center gap-3">
+              {form.avatar_url
+                ? <img src={form.avatar_url} alt="" className="w-16 h-16 rounded-full object-cover border" />
+                : <span className="w-16 h-16 rounded-full bg-gray-100 text-gray-400 flex items-center justify-center text-xl font-bold border">{(form.name || '?').slice(0, 1).toUpperCase()}</span>}
+              <div>
+                <label className="label">Employee Photo</label>
+                {form.avatar_url ? (
+                  <button type="button" onClick={() => setForm(f => ({ ...f, avatar_url: '' }))} className="text-red-500 text-xs underline">Remove photo</button>
+                ) : (
+                  <input type="file" accept="image/*" className="text-xs" onChange={async e => {
+                    const file = e.target.files?.[0]; if (!file) return;
+                    const fd = new FormData(); fd.append('file', file);
+                    try { const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); setForm(f => ({ ...f, avatar_url: r.data.url })); toast.success('Photo uploaded'); }
+                    catch { toast.error('Upload failed'); }
+                    e.target.value = '';
+                  }} />
+                )}
+              </div>
+            </div>
             <div><label className="label">Full Name *</label><input className="input" value={form.name || ''} onChange={e => setForm({...form, name: e.target.value})} required /></div>
             <div>
               <label className="label">Username</label>
