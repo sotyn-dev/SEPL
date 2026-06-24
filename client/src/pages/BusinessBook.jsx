@@ -393,10 +393,10 @@ export default function BusinessBook() {
       {/* Stats */}
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard icon={FiBook} color="blue" label="Total Entries" value={stats.total} />
-          <StatCard icon={LuIndianRupee} color="emerald" label="Total PO Value" value={fmt(stats.total_po)} />
-          <StatCard icon={FiTrendingUp} color="amber" label="Advance Received" value={fmt(stats.total_advance)} valueColor="text-emerald-600" />
-          <StatCard icon={FiClock} color="red" label="Balance Pending" value={fmt(stats.total_balance)} valueColor="text-red-600" />
+          <StatCard icon={FiBook} color="blue" label="Total Entries" value={stats.total} subtext="↗ across all projects" subColor="text-blue-600" />
+          <StatCard icon={LuIndianRupee} color="emerald" label="Total PO Value" value={fmt(stats.total_po)} subtext="High-value pipeline (incl GST)" subColor="text-emerald-600" />
+          <StatCard icon={FiTrendingUp} color="amber" label="Advance Received" value={fmt(stats.total_advance)} valueColor="text-emerald-600" subtext="✓ verified payments" subColor="text-amber-600" />
+          <StatCard icon={FiClock} color="red" label="Balance Pending" value={fmt(stats.total_balance)} valueColor="text-red-600" subtext="⚠ attention required" subColor="text-red-600" />
         </div>
       )}
 
@@ -1015,13 +1015,17 @@ export default function BusinessBook() {
 }
 
 // Reusable components
-function StatCard({ icon: Icon, color, label, value, valueColor }) {
+function StatCard({ icon: Icon, color, label, value, valueColor, subtext, subColor }) {
   return (
-    <div className={`card p-4 border-l-4 border-${color}-500`}>
-      <div className="flex items-center gap-3">
-        <div className={`p-2 bg-${color}-50 rounded-lg`}><Icon className={`text-${color}-600`} size={20} /></div>
-        <div><p className="text-xs text-gray-500 font-medium">{label}</p><p className={`text-xl font-bold ${valueColor || 'text-gray-900'}`}>{value}</p></div>
+    <div className={`card p-4 border-t-2 border-${color}-500`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-[11px] text-gray-500 font-semibold uppercase tracking-wider">{label}</p>
+          <p className={`text-2xl font-bold mt-1 ${valueColor || 'text-gray-900'}`}>{value}</p>
+        </div>
+        <div className={`p-2 bg-${color}-50 rounded-lg shrink-0`}><Icon className={`text-${color}-600`} size={18} /></div>
       </div>
+      {subtext && <p className={`text-[11px] mt-2 font-medium ${subColor || 'text-gray-400'}`}>{subtext}</p>}
     </div>
   );
 }
