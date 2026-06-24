@@ -54,6 +54,7 @@ router.post('/login', (req, res) => {
       // Jain ji, 'l2' = Nitin Sir, NULL = ordinary user. Procurement UI
       // uses this to decide whether to show Approve L1 / L2 buttons.
       approval_role: user.approval_role || null,
+      avatar_url: user.avatar_url || null,
       // Frontend uses this to force a "set recovery code" modal on first
       // login, guaranteeing every user can self-recover later.
       has_recovery_code: !!user.recovery_code_hash,

@@ -672,8 +672,17 @@ export default function Layout() {
           </Link>
         </div>
         <div className="p-3 border-t border-white/10">
-          <div className="text-sm text-red-50">{user?.name}</div>
-          {user?.username && <div className="text-[10px] text-red-200 font-mono">@{user.username}</div>}
+          <div className="flex items-center gap-2.5 mb-1">
+            {user?.avatar_url ? (
+              <img src={user.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover flex-shrink-0 border border-white/30" />
+            ) : (
+              <span className="w-10 h-10 rounded-full bg-white/20 text-white text-sm font-bold flex items-center justify-center flex-shrink-0">{initials}</span>
+            )}
+            <div className="min-w-0">
+              <div className="text-sm text-red-50 truncate">{user?.name}</div>
+              {user?.username && <div className="text-[10px] text-red-200 font-mono truncate">@{user.username}</div>}
+            </div>
+          </div>
           <div className="text-[10px] text-red-300 mb-1">{user?.email}</div>
           <div className="flex flex-wrap gap-1 mb-2">
             {userRoles.map((r, i) => (
@@ -804,9 +813,13 @@ export default function Layout() {
               aria-haspopup="true"
               aria-expanded={userMenu}
             >
-              <span className="w-8 h-8 rounded-full bg-blue-900 text-white text-xs font-bold flex items-center justify-center flex-shrink-0">
-                {initials}
-              </span>
+              {user?.avatar_url ? (
+                <img src={user.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0 border border-gray-200" />
+              ) : (
+                <span className="w-8 h-8 rounded-full bg-blue-900 text-white text-xs font-bold flex items-center justify-center flex-shrink-0">
+                  {initials}
+                </span>
+              )}
               <span className="hidden md:block max-w-[120px] truncate text-sm font-medium text-gray-700">{user?.name}</span>
               <FiChevronDown size={14} className={`hidden md:block text-gray-400 transition-transform ${userMenu ? 'rotate-180' : ''}`} />
             </button>
