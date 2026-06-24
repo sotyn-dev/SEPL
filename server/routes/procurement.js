@@ -3049,8 +3049,11 @@ router.get('/indents/:id/billable-print', (req, res) => {
   if (!indent) return res.status(404).send('Indent not found');
   const items = db.prepare(`
     SELECT ii.id, ii.description, ii.quantity, ii.unit, ii.po_item_id, ii.item_type,
-           im.item_code, im.item_name AS master_name, im.size, im.specification
-      FROM indent_items ii LEFT JOIN item_master im ON im.id = ii.item_master_id
+           im.item_code, im.item_name AS master_name, im.size, im.specification,
+           poi.description AS boq_name, poi.quantity AS po_qty, poi.unit AS po_unit, poi.rate AS po_rate
+      FROM indent_items ii
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+      LEFT JOIN po_items poi ON poi.id = ii.po_item_id
      WHERE ii.indent_id=? AND COALESCE(ii.quantity,0) > 0 ORDER BY ii.id`).all(id);
   // Resolve the order (business_book) the BOQ sale rate comes from: planning,
   // else a line's po_item, else the site name — exactly like the list's billable.
@@ -3064,13 +3067,19 @@ router.get('/indents/:id/billable-print', (req, res) => {
   const bb = bbId ? db.prepare('SELECT company_name, client_name, billing_address, gstin, project_name FROM business_book WHERE id=?').get(bbId) : null;
   let total = 0;
   const rows = items.map((it, idx) => {
-    // FOC / RGP are free / returnable — not billed (mam 2026-06-24).
     const t = String(it.item_type || '').toUpperCase();
-    const rate = (t === 'FOC' || t === 'RGP') ? 0 : (poRate(it.po_item_id) || descMap.get(String(it.description || '').toLowerCase().trim()) || 0);
-    const amt = rate * (+it.quantity || 0);
+    // Show the CLIENT BOQ line — BOQ name + PO qty (mam 2026-06-24) — and bill
+    // on the PO qty. Fall back to the indent's own description/qty if the line
+    // isn't BOQ-linked. FOC / RGP stay free (rate 0).
+    const desc = it.boq_name && String(it.boq_name).trim()
+      ? it.boq_name
+      : [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
+    const qty = it.po_qty != null && +it.po_qty > 0 ? +it.po_qty : (+it.quantity || 0);
+    const unit = it.po_unit || it.unit || '';
+    const rate = (t === 'FOC' || t === 'RGP') ? 0 : ((+it.po_rate || 0) || descMap.get(String(it.description || '').toLowerCase().trim()) || 0);
+    const amt = rate * qty;
     total += amt;
-    const desc = [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
-    return { sn: idx + 1, code: it.item_code || '', desc, qty: +it.quantity || 0, unit: it.unit || '', type: t, rate, amt };
+    return { sn: idx + 1, code: it.item_code || '', desc, qty, unit, type: t, rate, amt };
   });
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const inr = n => (+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
@@ -3100,7 +3109,7 @@ router.get('/indents/:id/billable-print', (req, res) => {
   </div>
   ${bb && bb.billing_address ? `<div class="box"><b>Client Address:</b> ${esc(bb.billing_address)}${bb.gstin ? ` &nbsp; <b>GSTIN:</b> ${esc(bb.gstin)}` : ''}</div>` : ''}
   <table>
-    <thead><tr><th style="width:32px">SN</th><th>Description</th><th class="r" style="width:70px">Qty</th><th style="width:50px">Unit</th><th class="r" style="width:90px">Sale Rate ₹</th><th class="r" style="width:110px">Billable ₹</th></tr></thead>
+    <thead><tr><th style="width:32px">SN</th><th>BOQ Description</th><th class="r" style="width:70px">PO Qty</th><th style="width:50px">Unit</th><th class="r" style="width:90px">Sale Rate ₹</th><th class="r" style="width:110px">Billable ₹</th></tr></thead>
     <tbody>
     ${rows.map(r => `<tr><td>${r.sn}</td><td>${r.code ? `<span style="color:#888;font-family:monospace">[${esc(r.code)}]</span> ` : ''}${esc(r.desc)}${(r.type === 'FOC' || r.type === 'RGP') ? ` <span style="color:#9a8;font-size:9px">(${r.type} — free)</span>` : ''}</td><td class="r">${inr(r.qty)}</td><td>${esc(r.unit)}</td><td class="r">${r.rate > 0 ? inr(r.rate) : '—'}</td><td class="r">${r.amt > 0 ? inr(r.amt) : '—'}</td></tr>`).join('')}
     </tbody>
