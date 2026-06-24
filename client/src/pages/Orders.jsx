@@ -504,33 +504,45 @@ export default function Orders() {
                 <div>SN</div><div className="col-span-3">Description</div><div>Qty</div><div>Unit</div><div>Rate (SITC)</div><div title="Purchase Price">PP</div><div>Labour</div><div className="col-span-2">Amount</div><div></div>
               </div>
               {poItems.map((item, i) => (
-                <div key={i} className="grid grid-cols-12 gap-2 items-center mb-3 md:mb-0 p-2 md:p-0 border md:border-0 border-gray-100 rounded">
+                <div key={i} className="grid grid-cols-12 gap-2 items-start mb-3 md:mb-2 p-2 md:p-0 border md:border-0 border-gray-100 rounded">
                   {/* SN — full-width small label on mobile */}
                   <div className="col-span-12 md:col-span-1 text-xs font-bold text-gray-500 md:text-center">
                     <span className="md:hidden text-[10px] uppercase text-gray-400">Row </span>{item.sr_no || i + 1}
                   </div>
                   <div className="col-span-12 md:col-span-3">
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Description</div>
-                    {item.description && !item.item_master_id ? (
-                      <div className="input text-xs bg-red-50 font-medium text-red-800 truncate" title={item.description}>{item.description}</div>
-                    ) : (
+                    {/* BOQ description — full text that WRAPS, editable (mam
+                        2026-06-24: "wrap description"). Red while it's not yet
+                        mapped to an Item Master item. */}
+                    <textarea
+                      className={`input text-xs w-full resize-y leading-snug ${item.description && !item.item_master_id ? 'bg-red-50 text-red-800 font-medium' : ''}`}
+                      rows={2}
+                      value={item.description || ''}
+                      onChange={e => updateItem(i, 'description', e.target.value)}
+                      placeholder="BOQ description"
+                    />
+                    {/* Item Master dropdown beside the description — map the BOQ
+                        line to an item WITHOUT replacing the client's BOQ text;
+                        only fill blank unit/rate (mam 2026-06-24). */}
+                    <div className="mt-1">
                       <SearchableSelect
                         options={masterItems.map(mi => ({ id: mi.id, label: `[${mi.item_code}] ${mi.display_name}`, ...mi }))}
                         value={item.item_master_id || null}
                         valueKey="id"
                         displayKey="label"
-                        placeholder="Search or upload Excel..."
+                        placeholder="🔗 Map item (Item Master)…"
                         onChange={(mi) => {
                           const items = [...poItems];
                           items[i].item_master_id = mi?.id || '';
-                          items[i].description = mi?.display_name || '';
-                          items[i].unit = mi?.uom?.toLowerCase() || items[i].unit;
-                          items[i].rate = mi?.current_price || items[i].rate;
-                          items[i].amount = (items[i].quantity || 0) * (items[i].rate || 0);
+                          if (mi) {
+                            if (!items[i].unit || items[i].unit === 'nos') items[i].unit = (mi.uom || '').toLowerCase() || items[i].unit;
+                            if (!(+items[i].rate > 0)) items[i].rate = mi.current_price || items[i].rate;
+                            items[i].amount = (items[i].quantity || 0) * (items[i].rate || 0);
+                          }
                           setPoItems(items);
                         }}
                       />
-                    )}
+                    </div>
                   </div>
                   {/* Qty — wider on mobile so digits fit */}
                   <div className="col-span-4 md:col-span-1">
