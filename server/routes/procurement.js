@@ -3065,22 +3065,36 @@ router.get('/indents/:id/billable-print', (req, res) => {
   if (bbId) for (const p of db.prepare('SELECT description, rate FROM po_items WHERE business_book_id=?').all(bbId)) { if (p.description && +p.rate > 0) descMap.set(String(p.description).toLowerCase().trim(), +p.rate); }
   const poRate = (poid) => poid ? (+(db.prepare('SELECT rate FROM po_items WHERE id=?').get(poid) || {}).rate || 0) : 0;
   const bb = bbId ? db.prepare('SELECT company_name, client_name, billing_address, gstin, project_name FROM business_book WHERE id=?').get(bbId) : null;
+  // Build one row per CLIENT BOQ line. Several indent sub-items (a PO item +
+  // its FOC accessories) can map to the SAME po_item — the client is billed for
+  // that BOQ line ONCE, so dedupe by po_item_id (mam 2026-06-24: "double not").
+  // Non-BOQ-linked lines show individually; FOC/RGP among those stay free.
   let total = 0;
-  const rows = items.map((it, idx) => {
-    const t = String(it.item_type || '').toUpperCase();
-    // Show the CLIENT BOQ line — BOQ name + PO qty (mam 2026-06-24) — and bill
-    // on the PO qty. Fall back to the indent's own description/qty if the line
-    // isn't BOQ-linked. FOC / RGP stay free (rate 0).
-    const desc = it.boq_name && String(it.boq_name).trim()
-      ? it.boq_name
-      : [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
-    const qty = it.po_qty != null && +it.po_qty > 0 ? +it.po_qty : (+it.quantity || 0);
-    const unit = it.po_unit || it.unit || '';
-    const rate = (t === 'FOC' || t === 'RGP') ? 0 : ((+it.po_rate || 0) || descMap.get(String(it.description || '').toLowerCase().trim()) || 0);
-    const amt = rate * qty;
-    total += amt;
-    return { sn: idx + 1, code: it.item_code || '', desc, qty, unit, type: t, rate, amt };
-  });
+  const rows = [];
+  const seenPo = new Set();
+  let sn = 0;
+  for (const it of items) {
+    if (it.po_item_id != null) {
+      if (seenPo.has(it.po_item_id)) continue;     // already printed this BOQ line
+      seenPo.add(it.po_item_id);
+      const desc = (it.boq_name && String(it.boq_name).trim())
+        ? it.boq_name
+        : [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
+      const qty = (+it.po_qty > 0) ? +it.po_qty : (+it.quantity || 0);
+      const rate = +it.po_rate || 0;               // the BOQ line's sale rate
+      const amt = rate * qty;
+      total += amt;
+      rows.push({ sn: ++sn, code: it.item_code || '', desc, qty, unit: it.po_unit || it.unit || '', type: '', rate, amt });
+    } else {
+      const t = String(it.item_type || '').toUpperCase();
+      const desc = [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
+      const qty = +it.quantity || 0;
+      const rate = (t === 'FOC' || t === 'RGP') ? 0 : (descMap.get(String(it.description || '').toLowerCase().trim()) || 0);
+      const amt = rate * qty;
+      total += amt;
+      rows.push({ sn: ++sn, code: it.item_code || '', desc, qty, unit: it.unit || '', type: t, rate, amt });
+    }
+  }
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const inr = n => (+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
   const gst = Math.round(total * 0.18);
