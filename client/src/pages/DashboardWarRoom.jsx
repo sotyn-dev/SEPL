@@ -11,6 +11,7 @@
 // dashboards — single source of truth across the three views.
 
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import toast from 'react-hot-toast';
@@ -241,6 +242,9 @@ export default function DashboardWarRoom() {
   const [days, setDays] = useState(90);
   const [tab, setTab] = useUrlTab('cmd');
   const [loading, setLoading] = useState(false);
+  const [approvals, setApprovals] = useState(null);   // consolidated pending-approvals inbox
+  const navigate = useNavigate();
+  useEffect(() => { api.get('/dashboards/pending-approvals').then(r => setApprovals(r.data)).catch(() => {}); }, []);
 
   const load = async (d = days) => {
     setLoading(true);
@@ -298,6 +302,10 @@ export default function DashboardWarRoom() {
         <div onClick={() => setTab('cmd')} style={tabStyle(tab === 'cmd')}>CMD VIEW (Director)</div>
         <div onClick={() => setTab('coo')} style={tabStyle(tab === 'coo')}>COO VIEW (Operations)</div>
         <div onClick={() => setTab('hide')} style={tabStyle(tab === 'hide')}>DO-NOT-SHOW LIST</div>
+        <div onClick={() => setTab('approvals')} style={tabStyle(tab === 'approvals')}>
+          MY APPROVALS
+          {approvals?.total > 0 && <span style={{ background: '#E5484D', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 11, marginLeft: 6, fontWeight: 700 }}>{approvals.total}</span>}
+        </div>
       </div>
 
       <main style={{ padding: 28, maxWidth: 1400, margin: '0 auto' }}>
@@ -829,6 +837,40 @@ export default function DashboardWarRoom() {
             governance (Tata). Each role sees only what they can act on. Audit log captures who saw what,
             so any data leak is traceable. RBAC is a Day-30 P0 — without it, every other dashboard is at risk.
           </div>
+        </>)}
+
+        {/* ============== MY APPROVALS ============== */}
+        {tab === 'approvals' && (<>
+          <div style={{ fontSize: 11, letterSpacing: '.12em', color: C.ink2, fontWeight: 700, margin: '4px 0 14px' }}>EVERYWHERE YOUR APPROVAL IS PENDING — ACT FROM ONE PLACE</div>
+          {!approvals ? (
+            <div style={{ color: C.ink2, padding: 20 }}>Loading…</div>
+          ) : approvals.total === 0 ? (
+            <div style={{ padding: 28, textAlign: 'center', color: '#46A758', fontWeight: 600, background: C.card, borderRadius: 10, border: '1px solid #d7e9d9' }}>✅ All clear — nothing is waiting on your approval right now.</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 14 }}>
+              {approvals.items.map(it => (
+                <div key={it.key} onClick={() => it.count > 0 && navigate(it.link)}
+                  style={{
+                    background: C.card, borderRadius: 12, padding: 18, cursor: it.count > 0 ? 'pointer' : 'default',
+                    border: it.count > 0 ? '1px solid #f0c9ca' : '1px solid #e7e7e2', opacity: it.count > 0 ? 1 : 0.55,
+                    display: 'flex', alignItems: 'center', gap: 14, transition: 'box-shadow .15s',
+                  }}
+                  onMouseEnter={e => { if (it.count > 0) e.currentTarget.style.boxShadow = '0 4px 14px rgba(0,0,0,.08)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.boxShadow = 'none'; }}>
+                  <span style={{ fontSize: 26 }}>{it.icon}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{it.label}</div>
+                    <div style={{ fontSize: 11, color: C.ink2 }}>{it.count > 0 ? 'tap to review & approve →' : 'nothing pending'}</div>
+                  </div>
+                  <span style={{
+                    minWidth: 34, textAlign: 'center', fontSize: 16, fontWeight: 800, padding: '4px 10px', borderRadius: 20,
+                    background: it.count > 0 ? '#E5484D' : '#eceae5', color: it.count > 0 ? '#fff' : '#9a958c',
+                  }}>{it.count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ marginTop: 20, fontSize: 11, color: C.ink2 }}>Counts are ERP-wide pending items; tap a card to jump straight to that module's approval screen.</div>
         </>)}
 
       </main>

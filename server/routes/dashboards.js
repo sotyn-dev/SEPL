@@ -19,6 +19,34 @@ const { computeCmdDetail } = require('../utils/cmdDashboard');
 const router = express.Router();
 router.use(authMiddleware);
 
+// GET /api/dashboards/pending-approvals — one consolidated inbox of every
+// place in the ERP awaiting an approval, so the CMD/MD acts from one screen
+// instead of hunting tab-by-tab (mam 2026-06-23). Counts are ERP-wide
+// (admin sees all); delegations are scoped to the signed-in approver.
+router.get('/pending-approvals', (req, res) => {
+  const db = getDb();
+  const uid = req.user.id;
+  const safe = (sql, ...a) => { try { return db.prepare(sql).get(...a)?.c || 0; } catch (_) { return 0; } };
+  const items = [
+    { key: 'indents', label: 'Indent Approval', icon: '📋',
+      count: safe("SELECT COUNT(*) c FROM indents WHERE status IN ('submitted','l1_approved','crm_approved')"),
+      link: '/procurement?tab=indents' },
+    { key: 'vendor_po', label: 'Vendor PO Approval', icon: '🧾',
+      count: safe("SELECT COUNT(*) c FROM vendor_pos WHERE po_approval IN ('pending_l1','pending_l2')"),
+      link: '/procurement?tab=vendorpo' },
+    { key: 'payment', label: 'Payment Approval', icon: '💸',
+      count: safe("SELECT COUNT(*) c FROM payment_requests WHERE status NOT IN ('final_approved','rejected')"),
+      link: '/payment-required' },
+    { key: 'dpr', label: 'DPR Approval', icon: '📝',
+      count: safe("SELECT COUNT(*) c FROM dpr WHERE approval_status='pending'"),
+      link: '/dpr' },
+    { key: 'delegation', label: 'Delegation Sign-off', icon: '✅',
+      count: safe("SELECT COUNT(*) c FROM delegations WHERE assigned_by=? AND status='submitted'", uid),
+      link: '/delegations' },
+  ];
+  res.json({ items, total: items.reduce((s, x) => s + x.count, 0) });
+});
+
 // GET /api/dashboards/kpi?days=N — same payload as /audit/kpi.
 // Admin-gated until the RBAC rollout (TOC v3 P1 #1) defines the
 // five canonical roles; at that point this loosens to allow any
