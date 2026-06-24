@@ -243,8 +243,40 @@ export default function DashboardWarRoom() {
   const [tab, setTab] = useUrlTab('cmd');
   const [loading, setLoading] = useState(false);
   const [approvals, setApprovals] = useState(null);   // consolidated pending-approvals inbox
+  const [apprExpanded, setApprExpanded] = useState(null);  // which card's item list is open
+  const [apprItems, setApprItems] = useState({});          // key -> items[]
+  const [apprLoading, setApprLoading] = useState(false);
+  const [apprBusy, setApprBusy] = useState(null);          // id being approved
   const navigate = useNavigate();
-  useEffect(() => { api.get('/dashboards/pending-approvals').then(r => setApprovals(r.data)).catch(() => {}); }, []);
+  const reloadApprovalCounts = () => api.get('/dashboards/pending-approvals').then(r => setApprovals(r.data)).catch(() => {});
+  useEffect(() => { reloadApprovalCounts(); }, []);
+
+  // Open/close a card's inline item list (mam 2026-06-23: "show here").
+  const toggleApprovalList = async (key, count) => {
+    if (!count) return;
+    if (apprExpanded === key) { setApprExpanded(null); return; }
+    setApprExpanded(key); setApprLoading(true);
+    try { const r = await api.get(`/dashboards/pending-approvals/${key}`); setApprItems(p => ({ ...p, [key]: r.data.items || [] })); }
+    catch { toast.error('Could not load items'); }
+    finally { setApprLoading(false); }
+  };
+  // Approve one item inline by reusing that module's own approve endpoint, so
+  // its level/permission rules stay intact; refresh the list + counts after.
+  const approveOne = async (key, id) => {
+    setApprBusy(id);
+    try {
+      // Indents & POs: one-click FULL approve (admin/CMD is final). DPR &
+      // delegations: their own single-step approve. Payment is Open-only.
+      if (key === 'indents' || key === 'vendor_po') await api.post(`/dashboards/approve/${key}/${id}`);
+      else if (key === 'dpr') await api.put(`/dpr/${id}/approve`);
+      else if (key === 'delegation') await api.post(`/delegations/${id}/approve`);
+      else { navigate(`/payment-required`); return; }
+      toast.success('Approved ✓');
+      setApprItems(p => ({ ...p, [key]: (p[key] || []).filter(it => it.id !== id) }));
+      reloadApprovalCounts();
+    } catch (e) { toast.error(e.response?.data?.error || 'Could not approve — open the module to act'); }
+    finally { setApprBusy(null); }
+  };
 
   const load = async (d = days) => {
     setLoading(true);
@@ -849,18 +881,19 @@ export default function DashboardWarRoom() {
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 14 }}>
               {approvals.items.map(it => (
-                <div key={it.key} onClick={() => it.count > 0 && navigate(it.link)}
+                <div key={it.key} onClick={() => toggleApprovalList(it.key, it.count)}
                   style={{
-                    background: C.card, borderRadius: 12, padding: 18, cursor: it.count > 0 ? 'pointer' : 'default',
-                    border: it.count > 0 ? '1px solid #f0c9ca' : '1px solid #e7e7e2', opacity: it.count > 0 ? 1 : 0.55,
-                    display: 'flex', alignItems: 'center', gap: 14, transition: 'box-shadow .15s',
+                    background: apprExpanded === it.key ? '#fff7f7' : C.card, borderRadius: 12, padding: 18,
+                    cursor: it.count > 0 ? 'pointer' : 'default',
+                    border: apprExpanded === it.key ? '2px solid #E5484D' : (it.count > 0 ? '1px solid #f0c9ca' : '1px solid #e7e7e2'),
+                    opacity: it.count > 0 ? 1 : 0.55, display: 'flex', alignItems: 'center', gap: 14, transition: 'box-shadow .15s',
                   }}
                   onMouseEnter={e => { if (it.count > 0) e.currentTarget.style.boxShadow = '0 4px 14px rgba(0,0,0,.08)'; }}
                   onMouseLeave={e => { e.currentTarget.style.boxShadow = 'none'; }}>
                   <span style={{ fontSize: 26 }}>{it.icon}</span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{it.label}</div>
-                    <div style={{ fontSize: 11, color: C.ink2 }}>{it.count > 0 ? 'tap to review & approve →' : 'nothing pending'}</div>
+                    <div style={{ fontSize: 11, color: C.ink2 }}>{it.count > 0 ? (apprExpanded === it.key ? 'tap to close ▲' : 'tap to review & approve ▾') : 'nothing pending'}</div>
                   </div>
                   <span style={{
                     minWidth: 34, textAlign: 'center', fontSize: 16, fontWeight: 800, padding: '4px 10px', borderRadius: 20,
@@ -870,7 +903,43 @@ export default function DashboardWarRoom() {
               ))}
             </div>
           )}
-          <div style={{ marginTop: 20, fontSize: 11, color: C.ink2 }}>Counts are ERP-wide pending items; tap a card to jump straight to that module's approval screen.</div>
+
+          {/* Inline item list for the expanded card — review + approve here */}
+          {apprExpanded && (
+            <div style={{ marginTop: 16, background: C.card, borderRadius: 12, border: '1px solid #f0c9ca', overflow: 'hidden' }}>
+              <div style={{ padding: '12px 16px', borderBottom: '1px solid #eee', fontWeight: 600, fontSize: 13, color: C.ink, display: 'flex', justifyContent: 'space-between' }}>
+                <span>{approvals.items.find(i => i.key === apprExpanded)?.label} — pending items</span>
+                <span onClick={() => navigate(approvals.items.find(i => i.key === apprExpanded)?.link || '/')} style={{ fontSize: 11, color: '#E5484D', cursor: 'pointer' }}>open full module →</span>
+              </div>
+              {apprLoading ? (
+                <div style={{ padding: 20, color: C.ink2, fontSize: 12 }}>Loading…</div>
+              ) : (apprItems[apprExpanded] || []).length === 0 ? (
+                <div style={{ padding: 20, color: '#46A758', fontSize: 12 }}>✅ Nothing pending here now.</div>
+              ) : (
+                <div style={{ maxHeight: 440, overflowY: 'auto' }}>
+                  {(apprItems[apprExpanded] || []).map(item => (
+                    <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: '1px solid #f3f3f3' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{item.title}</div>
+                        <div style={{ fontSize: 11, color: C.ink2 }}>
+                          {item.subtitle}{item.amount ? ` · ₹${Number(item.amount).toLocaleString('en-IN')}` : ''}
+                          {item.meta ? <span style={{ marginLeft: 6, background: '#f1eee9', padding: '1px 6px', borderRadius: 8 }}>{item.meta}</span> : null}
+                        </div>
+                      </div>
+                      <button onClick={() => navigate(item.link)} style={{ fontSize: 11, color: '#4A4F57', background: 'none', border: '1px solid #ddd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer' }}>Open</button>
+                      {item.key !== 'payment' && (
+                        <button onClick={() => approveOne(item.key, item.id)} disabled={apprBusy === item.id}
+                          style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: apprBusy === item.id ? '#9aa' : '#46A758', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer' }}>
+                          {apprBusy === item.id ? '…' : 'Approve'}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <div style={{ marginTop: 20, fontSize: 11, color: C.ink2 }}>Tap a card to list its pending items, then <b>Approve</b> inline (uses that module's own approval rules) or <b>Open</b> to act in the full module. Approving updates the module live.</div>
         </>)}
 
       </main>
