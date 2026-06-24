@@ -283,30 +283,30 @@ export default function BusinessBook() {
   // grouped-list children, so the columns never drift between modes.
   // Polish (mam 2026-06-24): coloured pills for Type + Category. Category
   // colour is a deterministic hash so each category keeps a stable distinct hue.
-  const TYPE_PILL = { Government: 'bg-purple-100 text-purple-700', Private: 'bg-rose-100 text-rose-700', Public: 'bg-blue-100 text-blue-700', Corporate: 'bg-indigo-100 text-indigo-700' };
+  const TYPE_PILL = { Government: 'bg-purple-100 text-purple-700', Private: 'bg-blue-100 text-blue-700', Public: 'bg-sky-100 text-sky-700', Corporate: 'bg-indigo-100 text-indigo-700' };
   const CAT_PILL = ['bg-blue-50 text-blue-700', 'bg-emerald-50 text-emerald-700', 'bg-purple-50 text-purple-700', 'bg-orange-50 text-orange-700', 'bg-pink-50 text-pink-700', 'bg-cyan-50 text-cyan-700', 'bg-rose-50 text-rose-700', 'bg-teal-50 text-teal-700'];
   const catColor = (c) => { let h = 0; const s = String(c || ''); for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return CAT_PILL[h % CAT_PILL.length]; };
 
   const renderLeadRow = (b, child = false) => (
-    <tr key={b.id} className={`transition-colors ${child ? 'bg-gray-50/60 hover:bg-gray-100' : 'hover:bg-red-50/30'}`}>
+    <tr key={b.id} className={`transition-colors ${child ? 'bg-gray-50/60 hover:bg-gray-100' : 'hover:bg-blue-50/40'}`}>
       {/* Lead No + Type */}
-      <td className={`px-3 py-2 align-top ${child ? 'pl-8' : ''}`}>
-        <span className="font-bold text-red-600 text-[13px] cursor-pointer hover:underline" onClick={() => handleView(b)}>{b.lead_no}</span>
+      <td className={`px-3 py-1.5 align-top ${child ? 'pl-8' : ''}`}>
+        <span className="font-bold text-blue-700 text-[13px] cursor-pointer hover:underline" onClick={() => handleView(b)}>{b.lead_no}</span>
         <div className="mt-1"><span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${TYPE_PILL[b.lead_type] || 'bg-gray-100 text-gray-600'}`}>{b.lead_type}</span></div>
       </td>
       {/* Client */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-1.5 align-top">
         <div className="font-medium text-[13px] leading-snug">{cleanText(b.client_name) || '-'}</div>
         {b.employee_assigned && <div className="text-[11px] text-gray-500 leading-snug">👤 {b.employee_assigned}</div>}
       </td>
       {/* Project / Location */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-1.5 align-top">
         <div className="font-medium text-[13px] text-gray-800 leading-snug">{cleanText(b.project_name) || cleanText(b.company_name) || '-'}</div>
         {locationOf(b) && <div className="text-[11px] text-gray-500 leading-snug">📍 {locationOf(b)}</div>}
         {b.po_number && <div className="text-[10px] text-gray-400">PO: {b.po_number}</div>}
       </td>
       {/* Category */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-1.5 align-top">
         {b.category ? <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${catColor(b.category)}`}>{b.category}</span> : <span className="text-gray-300 text-[12px]">-</span>}
         {b.order_type && <div className="text-[10px] text-gray-500 italic mt-1">{b.order_type}</div>}
       </td>
@@ -319,7 +319,7 @@ export default function BusinessBook() {
       {/* Management discount */}
       <td className="px-3 py-2 text-right align-top whitespace-nowrap text-[12px] text-amber-700">{mgmtDiscOf(b) > 0 ? fmt(mgmtDiscOf(b)) : <span className="text-gray-300">-</span>}</td>
       {/* Actions */}
-      <td className="px-3 py-2 align-top">
+      <td className="px-3 py-1.5 align-top">
         <div className="flex items-center justify-center gap-0.5">
           <button onClick={() => handleView(b)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="View"><FiEye size={15} /></button>
           {b.boq_file_link && <a href={b.boq_file_link} target="_blank" rel="noreferrer" className="px-1.5 py-1 text-indigo-600 hover:bg-indigo-50 rounded-md text-[10px] font-bold transition-colors" title="View attached BOQ file">BOQ</a>}
@@ -497,23 +497,23 @@ export default function BusinessBook() {
                     {/* Collapsed merged row — project name + project-wise totals
                         (Sales, GST sales, Mgmt discount). Client/Category/Actions
                         stay blank; the per-lead detail appears on expand. */}
-                    <tr className="bg-amber-50/60 hover:bg-amber-100/60 cursor-pointer transition-colors border-l-4 border-amber-400" onClick={() => toggleListGroup(g.key)}>
-                      <td className="px-3 py-2 align-top">
-                        <div className="flex items-center gap-1.5 text-amber-700">
+                    <tr className="bg-blue-50/60 hover:bg-blue-100/60 cursor-pointer transition-colors border-l-4 border-blue-600" onClick={() => toggleListGroup(g.key)}>
+                      <td className="px-3 py-1.5 align-top">
+                        <div className="flex items-center gap-1.5 text-blue-700">
                           {open ? <FiChevronDown size={15} /> : <FiChevronRight size={15} />}
-                          <span className="bg-amber-500 text-white text-[11px] font-bold px-2 py-0.5 rounded-full">{g.leads.length} leads</span>
+                          <span className="bg-blue-600 text-white text-[11px] font-bold px-2 py-0.5 rounded-full">{g.leads.length} leads</span>
                         </div>
                       </td>
-                      <td className="px-3 py-2 align-top text-[13px] font-medium">{g.client}</td>
-                      <td className="px-3 py-2 align-top">
-                        <div className="font-semibold text-[13px] text-gray-900 flex items-start gap-1 leading-snug"><FiMapPin size={12} className="text-amber-500 mt-0.5 shrink-0" /> {g.label}</div>
-                        <div className="text-[10px] text-amber-700/80 ml-4">{g.leads.length} leads · tap to {open ? 'collapse' : 'expand'}</div>
+                      <td className="px-3 py-1.5 align-top text-[13px] font-medium">{g.client}</td>
+                      <td className="px-3 py-1.5 align-top">
+                        <div className="font-semibold text-[13px] text-gray-900 flex items-start gap-1 leading-snug"><FiMapPin size={12} className="text-blue-600 mt-0.5 shrink-0" /> {g.label}</div>
+                        <div className="text-[10px] text-blue-700/80 ml-4">{g.leads.length} leads · tap to {open ? 'collapse' : 'expand'}</div>
                       </td>
-                      <td className="px-3 py-2" />
-                      <td className="px-3 py-2 text-right align-top whitespace-nowrap font-bold text-[13px]">{fmt(g.sale)}<div className="text-[9px] text-gray-400 font-normal uppercase">total sales</div></td>
-                      <td className="px-3 py-2 text-right align-top whitespace-nowrap font-bold text-[13px] text-blue-700">{fmt(g.gstIncl)}<div className="text-[9px] text-gray-400 font-normal uppercase">incl GST</div></td>
-                      <td className="px-3 py-2 text-right align-top whitespace-nowrap font-bold text-[13px] text-amber-700">{g.mgmtDisc > 0 ? fmt(g.mgmtDisc) : '-'}<div className="text-[9px] text-gray-400 font-normal uppercase">mgmt disc</div></td>
-                      <td className="px-3 py-2" />
+                      <td className="px-3 py-1.5" />
+                      <td className="px-3 py-1.5 text-right align-top whitespace-nowrap font-bold text-[13px]">{fmt(g.sale)}<div className="text-[9px] text-gray-400 font-normal uppercase">total sales</div></td>
+                      <td className="px-3 py-1.5 text-right align-top whitespace-nowrap font-bold text-[13px] text-blue-700">{fmt(g.gstIncl)}<div className="text-[9px] text-gray-400 font-normal uppercase">incl GST</div></td>
+                      <td className="px-3 py-1.5 text-right align-top whitespace-nowrap font-bold text-[13px] text-amber-700">{g.mgmtDisc > 0 ? fmt(g.mgmtDisc) : '-'}<div className="text-[9px] text-gray-400 font-normal uppercase">mgmt disc</div></td>
+                      <td className="px-3 py-1.5" />
                     </tr>
                     {/* Sub-header for the expanded per-lead rows */}
                     {open && (
