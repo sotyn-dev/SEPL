@@ -243,6 +243,19 @@ router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {
 
   try {
     const db = getDb();
+    // Guard the FK columns so a stale pick never 500s with "FOREIGN KEY
+    // constraint failed" (mam 2026-06-24, "error if I update jr site eng"):
+    // drop any engineer id that no longer exists in `users` (site_engineer_id
+    // REFERENCES users(id)), and ignore a business_book link that's been
+    // deleted. The jr/supervisor/welder/helper CSVs are plain TEXT (no FK).
+    const liveUserIds = new Set(db.prepare('SELECT id FROM users').all().map(r => r.id));
+    const liveEngIds = engIds.filter(id => liveUserIds.has(id));
+    if (!liveEngIds.length) return res.status(400).json({ error: 'The selected Site Engineer no longer exists as an active user — pick a current user.' });
+    const primaryEngSafe = liveEngIds[0];
+    const engCsvSafe = liveEngIds.join(',');
+    let bbIdSafe = safeBbId;
+    if (bbIdSafe && !db.prepare('SELECT 1 FROM business_book WHERE id=?').get(bbIdSafe)) bbIdSafe = null;
+
     db.prepare(`UPDATE purchase_orders SET
       business_book_id=COALESCE(?,business_book_id),
       po_number=COALESCE(?,po_number), po_date=COALESCE(?,po_date),
@@ -257,12 +270,12 @@ router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {
       crm_name=?,
       status=COALESCE(?,status) WHERE id=?`)
       .run(
-        safeBbId,
+        bbIdSafe,
         safePoNumber, safePoDate,
         num(total_amount), num(advance_amount),
         po_copy_link || null, boq_file_link || null,
         num(pt_advance, 0), num(pt_delivery, 0), num(pt_installation, 0), num(pt_commissioning, 0), num(pt_retention, 0),
-        primaryEng, engCsv,
+        primaryEngSafe, engCsvSafe,
         jrCsv, supCsv, weldCsv, helpCsv,
         crm_name,
         safeStatus, req.params.id
@@ -271,12 +284,12 @@ router.put('/po/:id', requirePermission('orders', 'edit'), (req, res) => {
     // When the link changed, keep the dependent rows consistent — mirror
     // what POST /po does: re-point this PO's items to the new business
     // book (for indent/DPR pooling) and sync the new lead's po_* fields.
-    if (safeBbId) {
-      db.prepare('UPDATE po_items SET business_book_id=? WHERE po_id=?').run(safeBbId, req.params.id);
+    if (bbIdSafe) {
+      db.prepare('UPDATE po_items SET business_book_id=? WHERE po_id=?').run(bbIdSafe, req.params.id);
       const cur = db.prepare('SELECT po_number, po_date, total_amount FROM purchase_orders WHERE id=?').get(req.params.id);
       if (cur) {
         db.prepare('UPDATE business_book SET po_number=?, po_date=?, po_amount=? WHERE id=?')
-          .run(cur.po_number, cur.po_date, cur.total_amount || 0, safeBbId);
+          .run(cur.po_number, cur.po_date, cur.total_amount || 0, bbIdSafe);
       }
     }
     res.json({ message: 'Updated' });
