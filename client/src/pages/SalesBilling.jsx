@@ -3,7 +3,7 @@ import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTrash2, FiCheckCircle, FiDownload, FiGrid, FiFileText, FiPackage, FiClipboard } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiCheckCircle, FiDownload, FiGrid, FiFileText, FiPackage, FiClipboard, FiPrinter } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
 const TYPE_LABEL = { 1: 'Type 1 · Sales Order', 2: 'Type 2 · Material Delivery', 3: 'Type 3 · Installation', 4: 'Type 4 · Final' };
@@ -99,6 +99,13 @@ export default function SalesBilling() {
       await api.put(`/sales-billing/${b.id}/approve`, { approval_status: next });
       toast.success(next === 'approved' ? 'Approved' : 'Reverted to draft'); load();
     } catch (e) { toast.error(e.response?.data?.error || 'Failed'); }
+  };
+  // Open the printable TAX INVOICE (auth-protected HTML → blob → new tab).
+  const printBill = async (b) => {
+    try {
+      const r = await api.get(`/sales-billing/${b.id}/print`, { responseType: 'arraybuffer' });
+      window.open(URL.createObjectURL(new Blob([r.data], { type: 'text/html;charset=utf-8' })), '_blank');
+    } catch { toast.error('Could not open the invoice'); }
   };
   const del = async (b) => {
     if (!confirm(`Delete bill ${b.bill_number}?`)) return;
@@ -197,7 +204,8 @@ export default function SalesBilling() {
                   ) : <span className="text-gray-300 text-xs">—</span>}
                 </td>
               )}
-              <td className="px-3 py-2 text-right">
+              <td className="px-3 py-2 text-right whitespace-nowrap">
+                <button onClick={() => printBill(b)} className="text-gray-400 hover:text-blue-700 mr-2" title="Print Tax Invoice (PDF)"><FiPrinter size={14} /></button>
                 {canDelete && canDelete('installation') && <button onClick={() => del(b)} className="text-gray-300 hover:text-red-500" title="Delete"><FiTrash2 size={14} /></button>}
               </td>
             </tr>

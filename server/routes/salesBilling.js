@@ -243,6 +243,123 @@ router.get('/:id', requirePermission('installation', 'view'), (req, res) => {
   res.json(bill);
 });
 
+// ─── Installation Sales Bill — printable TAX INVOICE (mam 2026-06-24, matches
+// the supplied template) ──────────────────────────────────────────────────
+function amountInWords(n) {
+  const a = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  const two = (x) => x < 20 ? a[x] : `${b[Math.floor(x / 10)]}${x % 10 ? ' ' + a[x % 10] : ''}`;
+  const three = (x) => x >= 100 ? `${a[Math.floor(x / 100)]} Hundred${x % 100 ? ' ' + two(x % 100) : ''}` : two(x);
+  let num = Math.floor(+n || 0); if (!num) return 'Zero';
+  const parts = [];
+  const cr = Math.floor(num / 10000000); num %= 10000000;
+  const la = Math.floor(num / 100000); num %= 100000;
+  const th = Math.floor(num / 1000); num %= 1000;
+  if (cr) parts.push(`${two(cr)} Crore`);
+  if (la) parts.push(`${two(la)} Lakh`);
+  if (th) parts.push(`${two(th)} Thousand`);
+  if (num) parts.push(three(num));
+  return parts.join(' ').trim();
+}
+router.get('/:id/print', requirePermission('installation', 'view'), (req, res) => {
+  const db = getDb();
+  const bill = db.prepare('SELECT * FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
+  if (!bill) return res.status(404).send('Bill not found');
+  const items = db.prepare('SELECT * FROM sales_bill_items WHERE sales_bill_id=? ORDER BY id').all(bill.id);
+  const bb = bill.business_book_id ? db.prepare('SELECT * FROM business_book WHERE id=?').get(bill.business_book_id) : null;
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(Buffer.from(installBillHTML({ bill, items, bb }), 'utf8'));
+});
+function installBillHTML({ bill, items, bb }) {
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inr = (n) => (+n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const sub = +bill.amount || 0;
+  const igst = +bill.gst_amount || 0;
+  const gstPct = +bill.gst_rate || 18;
+  const grand = +bill.total_amount || (sub + igst);
+  const roundOff = +(Math.round(grand) - (sub + igst)).toFixed(2);
+  const billTo = esc(bill.customer_name || bb?.company_name || bb?.client_name || '');
+  const billAddr = esc(bb?.billing_address || '');
+  const shipName = esc(bill.project_name || bb?.project_name || '');
+  const shipAddr = esc(bb?.shipping_address || bb?.billing_address || '');
+  const clientGstin = esc(bill.customer_gstin || bb?.gstin || '');
+  const fy = (String(bill.bill_number || '').match(/SB\/([0-9-]+)\//) || [])[1] || fyLabel(bill.bill_date);
+  const padRows = Math.max(0, 8 - items.length);
+  const itemRows = items.map((it, i) => {
+    const qty = +it.qty_delivered || +it.qty_ordered || 0;
+    return `<tr><td class="c">${i + 1}</td><td>${esc(it.description || '')}</td><td class="c">${esc(it.hsn_code || '')}</td><td class="r">${inr(qty)}</td><td class="c">${esc(it.unit || '')}</td><td class="r">${inr(it.rate)}</td><td class="r">${inr(it.amount)}</td></tr>`;
+  }).join('') + Array.from({ length: padRows }, () => `<tr><td class="c">&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`).join('');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(bill.bill_number)}</title>
+<style>
+  *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;margin:0;padding:16px;font-size:11px}
+  .sheet{max-width:820px;margin:0 auto;border:1.5px solid #7a1b1b}
+  .hd{text-align:center;padding:8px 10px;border-bottom:1.5px solid #7a1b1b}
+  .hd h1{margin:0;color:#7a1b1b;font-size:20px;letter-spacing:1px}
+  .hd .tag{font-size:9px;letter-spacing:2px;color:#444;margin-top:2px}
+  .hd .addr{font-size:9.5px;color:#444;margin-top:3px;line-height:1.5}
+  .hd .gst{font-size:10px;font-weight:bold;margin-top:3px}
+  .title{background:#7a1b1b;color:#fff;text-align:center;font-weight:bold;letter-spacing:1px;padding:5px;font-size:12px}
+  .orig{text-align:right;font-size:9px;color:#7a1b1b;padding:2px 8px;font-style:italic}
+  table{width:100%;border-collapse:collapse}
+  .meta td{border:1px solid #d8c4c4;padding:4px 6px;font-size:10px} .meta .k{color:#7a1b1b;font-weight:bold;width:14%}
+  .party td{border:1px solid #d8c4c4;padding:6px 8px;vertical-align:top;width:50%}
+  .party .lab{color:#7a1b1b;font-weight:bold;font-size:10px;margin-bottom:3px}
+  .items th{background:#7a1b1b;color:#fff;padding:5px 6px;font-size:10px;border:1px solid #7a1b1b}
+  .items td{border:1px solid #d8c4c4;padding:4px 6px;font-size:10px} .items .r{text-align:right} .items .c{text-align:center}
+  .tot td{border:1px solid #d8c4c4;padding:3px 8px;font-size:10.5px} .tot .k{text-align:right;font-weight:600;width:78%} .tot .v{text-align:right}
+  .grand{background:#f6eaea;font-weight:bold} .grand td{font-size:12px;color:#7a1b1b}
+  .words{border:1px solid #d8c4c4;padding:5px 8px;font-size:10px;font-style:italic}
+  .blk{border:1px solid #d8c4c4;padding:6px 8px;font-size:9.5px;line-height:1.6;vertical-align:top}
+  .blk b{color:#7a1b1b}
+  .sign{border:1px solid #d8c4c4;padding:8px;height:74px;font-size:9.5px;position:relative}
+  .sign .auth{position:absolute;bottom:6px;right:8px;font-weight:bold;color:#7a1b1b}
+  .foot{text-align:center;font-size:8.5px;color:#777;padding:6px}
+  .print-btn{position:fixed;top:10px;right:10px;padding:8px 14px;background:#7a1b1b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px}
+  @media print{.print-btn{display:none}}
+</style></head><body>
+<button class="print-btn" onclick="window.print()">🖨 Print / Save PDF</button>
+<div class="sheet">
+  <div class="hd">
+    <h1>SECURED ENGINEERS PVT. LTD</h1>
+    <div class="tag">ELECTRICAL · HVAC · FIRE SAFETY · PLUMBING · SOLAR EPC</div>
+    <div class="addr">H.O.: 2480/1, B.K Tower, 1st Floor, Near Grewal Hospital, Gill Road, Ludhiana, Punjab – 141003<br>
+    Noida: 91, Springboard, Sector 2, Noida (UP) &nbsp;|&nbsp; PAN-INDIA: LUDHIANA | NOIDA | BANGALORE | MUMBAI</div>
+    <div class="gst">GSTIN: 03AASCS7836D2Z3 &nbsp;&nbsp; PAN: AASCS7836D</div>
+  </div>
+  <div class="title">TAX INVOICE – INSTALLATION SALES BILL</div>
+  <div class="orig">ORIGINAL FOR RECIPIENT</div>
+  <table class="meta"><tbody>
+    <tr><td class="k">Invoice No.</td><td>${esc(bill.bill_number)}</td><td class="k">Invoice Date</td><td>${esc(bill.bill_date)}</td><td class="k">Sales Order</td><td>${esc(bill.reference_doc_no || '')}</td></tr>
+    <tr><td class="k">Financial Yr</td><td>${esc(fy)}</td><td class="k">Client PO No.</td><td>${esc(bb?.po_number || '')}</td><td class="k">E-Way Bill</td><td></td></tr>
+  </tbody></table>
+  <table class="party"><tbody><tr>
+    <td><div class="lab">BILL TO</div><b>${billTo}</b><br>${billAddr}${clientGstin ? `<br>GSTIN: ${clientGstin}` : ''}</td>
+    <td><div class="lab">SHIP TO / INSTALLATION SITE</div><b>${shipName}</b><br>${shipAddr}</td>
+  </tr></tbody></table>
+  <table class="items"><thead><tr>
+    <th style="width:5%">SL</th><th>DESCRIPTION OF GOODS / INSTALLATION SERVICE</th><th style="width:10%">HSN/SAC</th><th style="width:8%">QTY</th><th style="width:8%">UOM</th><th style="width:13%">RATE (Rs.)</th><th style="width:14%">AMOUNT (Rs.)</th>
+  </tr></thead><tbody>${itemRows}</tbody></table>
+  <table class="tot"><tbody>
+    <tr><td class="k">Sub Total (Taxable Value)</td><td class="v">${inr(sub)}</td></tr>
+    <tr><td class="k">Freight / Packing / Other</td><td class="v">0.00</td></tr>
+    <tr><td class="k">Add: IGST @ ${gstPct}%</td><td class="v">${inr(igst)}</td></tr>
+    <tr><td class="k">Round Off</td><td class="v">${roundOff >= 0 ? '+' : ''}${inr(roundOff)}</td></tr>
+    <tr class="grand"><td class="k">GRAND TOTAL (Rs.)</td><td class="v">${inr(Math.round(grand))}</td></tr>
+  </tbody></table>
+  <div class="words"><b>AMOUNT CHARGEABLE (IN WORDS):</b> Rupees ${amountInWords(Math.round(grand))} Only</div>
+  <table><tbody><tr>
+    <td class="blk" style="width:55%"><b>PAYMENT TERMS</b><br>40% of basic value + 100% GST due on delivery; balance per agreed terms.<br><br>
+      <b>TERMS &amp; CONDITIONS</b><br>• Payment: 40% basic + 100% GST on delivery; balance per agreed terms.<br>• Interest @ 18% p.a. on overdue amounts.<br>• Goods once sold are not taken back / exchanged.<br>• Installation warranty as per work order. Subject to Ludhiana jurisdiction.<br>• Cheque / DD in favour of "Secured Engineers Pvt. Ltd."; quote Invoice No.</td>
+    <td class="blk" style="width:45%"><b>BANK DETAILS FOR PAYMENT</b><br>Beneficiary: Secured Engineers Pvt. Ltd.<br>Bank / Branch: ____________________<br>A/c No.: ____________________<br>IFSC: ____________________<br>UPI ID: ____________________</td>
+  </tr></tbody></table>
+  <table><tbody><tr>
+    <td class="sign" style="width:55%"><b>RECEIVER'S ACKNOWLEDGEMENT</b><br>Received the above goods / installation in good condition.<br><br>Name, Signature &amp; Stamp with Date</td>
+    <td class="sign" style="width:45%">For <b>SECURED ENGINEERS PVT. LTD.</b><div class="auth">Authorised Signatory</div></td>
+  </tr></tbody></table>
+  <div class="foot">This is a Computer-Generated Tax Invoice, valid with IRN / signed QR code. &nbsp;E. &amp; O.E.&nbsp; · Certified that the particulars given above are true and correct.</div>
+</div></body></html>`;
+}
+
 // Create a sales bill. Enforces the 1→2→3→4 chain per order.
 router.post('/', requirePermission('installation', 'create'), (req, res) => {
   try {
