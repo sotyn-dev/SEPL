@@ -927,9 +927,15 @@ router.get('/indents', (req, res) => {
     let billable = 0;
     for (const it of its) {
       let rate = 0;
-      const po = it.po_item_id != null ? poItemById.get(it.po_item_id) : null;
-      if (po && po.rate > 0) rate = po.rate;
-      if (!rate && descMap) rate = descMap.get(String(it.description || '').toLowerCase().trim()) || 0;
+      // FOC = Free Of Cost, RGP = returnable — NOT billed to the client, so
+      // their sale rate is 0 (mam 2026-06-24: "sale bill is wrong" — FOC lines
+      // were wrongly inheriting the parent BOQ rate). Only PO lines bill.
+      const t = String(it.item_type || '').toUpperCase();
+      if (t !== 'FOC' && t !== 'RGP') {
+        const po = it.po_item_id != null ? poItemById.get(it.po_item_id) : null;
+        if (po && po.rate > 0) rate = po.rate;
+        if (!rate && descMap) rate = descMap.get(String(it.description || '').toLowerCase().trim()) || 0;
+      }
       // Attach the BOQ SALE rate + billable per line so the expanded indent
       // can show "indent vs sales bill per BOQ" for estimation (mam 2026-06-24).
       it.boq_sale_rate = +rate.toFixed(2);
@@ -3058,11 +3064,13 @@ router.get('/indents/:id/billable-print', (req, res) => {
   const bb = bbId ? db.prepare('SELECT company_name, client_name, billing_address, gstin, project_name FROM business_book WHERE id=?').get(bbId) : null;
   let total = 0;
   const rows = items.map((it, idx) => {
-    const rate = poRate(it.po_item_id) || descMap.get(String(it.description || '').toLowerCase().trim()) || 0;
+    // FOC / RGP are free / returnable — not billed (mam 2026-06-24).
+    const t = String(it.item_type || '').toUpperCase();
+    const rate = (t === 'FOC' || t === 'RGP') ? 0 : (poRate(it.po_item_id) || descMap.get(String(it.description || '').toLowerCase().trim()) || 0);
     const amt = rate * (+it.quantity || 0);
     total += amt;
     const desc = [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
-    return { sn: idx + 1, code: it.item_code || '', desc, qty: +it.quantity || 0, unit: it.unit || '', rate, amt };
+    return { sn: idx + 1, code: it.item_code || '', desc, qty: +it.quantity || 0, unit: it.unit || '', type: t, rate, amt };
   });
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const inr = n => (+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
@@ -3094,7 +3102,7 @@ router.get('/indents/:id/billable-print', (req, res) => {
   <table>
     <thead><tr><th style="width:32px">SN</th><th>Description</th><th class="r" style="width:70px">Qty</th><th style="width:50px">Unit</th><th class="r" style="width:90px">Sale Rate ₹</th><th class="r" style="width:110px">Billable ₹</th></tr></thead>
     <tbody>
-    ${rows.map(r => `<tr><td>${r.sn}</td><td>${r.code ? `<span style="color:#888;font-family:monospace">[${esc(r.code)}]</span> ` : ''}${esc(r.desc)}</td><td class="r">${inr(r.qty)}</td><td>${esc(r.unit)}</td><td class="r">${r.rate > 0 ? inr(r.rate) : '—'}</td><td class="r">${r.amt > 0 ? inr(r.amt) : '—'}</td></tr>`).join('')}
+    ${rows.map(r => `<tr><td>${r.sn}</td><td>${r.code ? `<span style="color:#888;font-family:monospace">[${esc(r.code)}]</span> ` : ''}${esc(r.desc)}${(r.type === 'FOC' || r.type === 'RGP') ? ` <span style="color:#9a8;font-size:9px">(${r.type} — free)</span>` : ''}</td><td class="r">${inr(r.qty)}</td><td>${esc(r.unit)}</td><td class="r">${r.rate > 0 ? inr(r.rate) : '—'}</td><td class="r">${r.amt > 0 ? inr(r.amt) : '—'}</td></tr>`).join('')}
     </tbody>
     <tfoot>
       <tr><td colspan="5" class="r">Total Billable (Sale value)</td><td class="r">₹ ${inr(total)}</td></tr>
