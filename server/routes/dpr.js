@@ -27,6 +27,29 @@ router.get('/contractor-attendance', (req, res) => {
   res.json(rows);
 });
 
+// All saved contractor-attendance records (mam 2026-06-24): a register/report
+// view across sites + dates, so saved morning-manpower can be reviewed like an
+// attendance record — not just re-opened one site+date at a time. Optional
+// filters: site_id, from, to (attendance_date range).
+router.get('/contractor-attendance/records', (req, res) => {
+  const { site_id, from, to } = req.query;
+  const db = getDb();
+  let sql = `SELECT ca.id, ca.site_id, ca.attendance_date, ca.contractor_name,
+                    ca.contractor_type, ca.manpower, ca.photo_url, ca.marked_by,
+                    s.name AS site_name,
+                    u.name AS marked_by_name
+               FROM contractor_attendance ca
+               LEFT JOIN sites s ON s.id = ca.site_id
+               LEFT JOIN users u ON u.id = ca.marked_by
+              WHERE 1=1`;
+  const p = [];
+  if (site_id) { sql += ' AND ca.site_id = ?'; p.push(site_id); }
+  if (from) { sql += ' AND ca.attendance_date >= ?'; p.push(from); }
+  if (to) { sql += ' AND ca.attendance_date <= ?'; p.push(to); }
+  sql += ' ORDER BY ca.attendance_date DESC, s.name, ca.contractor_name';
+  res.json(db.prepare(sql).all(...p));
+});
+
 router.post('/contractor-attendance', (req, res) => {
   const { site_id, date, rows } = req.body;
   if (!site_id || !date) return res.status(400).json({ error: 'site_id and date required' });

@@ -6,7 +6,7 @@ import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar, FiUsers, FiCamera } from 'react-icons/fi';
+import { FiPlus, FiMapPin, FiAlertTriangle, FiCheck, FiEye, FiTrash2, FiAlertCircle, FiDownload, FiCalendar, FiUsers, FiCamera, FiList } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import EngineerPerformance from '../components/EngineerPerformance';
 
@@ -188,6 +188,14 @@ export default function DPR() {
   const [mmDate, setMmDate] = useState(new Date().toISOString().split('T')[0]);
   const [mmRows, setMmRows] = useState([{ name: '', manpower: 0, subcontractor_id: null, contractor_type: '' }]);
   const [mmBusy, setMmBusy] = useState(false);
+  // Attendance Records view (mam 2026-06-24) — a register of all saved
+  // morning-manpower across sites/dates.
+  const [mmRecModal, setMmRecModal] = useState(false);
+  const [mmRecRows, setMmRecRows] = useState([]);
+  const [mmRecBusy, setMmRecBusy] = useState(false);
+  const [mmRecSite, setMmRecSite] = useState('');
+  const [mmRecFrom, setMmRecFrom] = useState('');
+  const [mmRecTo, setMmRecTo] = useState('');
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const [poItemsForSite, setPoItemsForSite] = useState([]);
   // Server-side diagnostic when po_items can't be fetched (no BB, no
@@ -366,6 +374,22 @@ export default function DPR() {
     } catch (e) { toast.error(e.response?.data?.error || 'Failed to save'); }
     finally { setMmBusy(false); }
   };
+  // Load the saved contractor-attendance register (optionally filtered).
+  const loadAttendanceRecords = (filters = {}) => {
+    setMmRecBusy(true);
+    const params = {};
+    const site = 'site' in filters ? filters.site : mmRecSite;
+    const from = 'from' in filters ? filters.from : mmRecFrom;
+    const to = 'to' in filters ? filters.to : mmRecTo;
+    if (site) params.site_id = site;
+    if (from) params.from = from;
+    if (to) params.to = to;
+    api.get('/dpr/contractor-attendance/records', { params })
+      .then(r => setMmRecRows(r.data || []))
+      .catch(() => setMmRecRows([]))
+      .finally(() => setMmRecBusy(false));
+  };
+  const openAttendanceRecords = () => { setMmRecModal(true); loadAttendanceRecords({ site: '', from: '', to: '' }); };
 
   const addWorkItem = () => setWorkItems([...workItems, { po_item_id: '', description: '', qty: 0, location: '', rate: 0, amount: 0 }]);
   const removeWorkItem = (i) => setWorkItems(workItems.filter((_, idx) => idx !== i));
@@ -714,6 +738,9 @@ export default function DPR() {
               {/* Morning Manpower — contractor attendance punch (mam 2026-06-22) */}
               <button onClick={openMorningManpower}
                 className="btn btn-secondary flex items-center gap-2"><FiUsers /> Morning Manpower</button>
+              {/* Attendance Records — register of all saved morning manpower (mam 2026-06-24) */}
+              <button onClick={openAttendanceRecords}
+                className="btn btn-secondary flex items-center gap-2"><FiList /> Attendance Records</button>
               <button onClick={() => {
                 setForm({ site_id: '', report_date: filterDate, weather: 'clear', overall_status: 'on_track', system_type: '', shift: 'day', contractor_name: '', contractor_manpower: 0, mb_sheet_no: '', safety_toolbox_talk: false, safety_ppe_compliance: false, safety_incidents: '', next_day_plan: '', hindrances: '', hindrance_category: '', remarks: '' });
                 setWorkItems([]); setPoItemsForSite([]);
@@ -1529,6 +1556,75 @@ export default function DPR() {
             <button type="button" onClick={() => setMmModal(false)} className="btn btn-secondary">Cancel</button>
             <button type="button" onClick={saveMorningManpower} disabled={mmBusy} className="btn btn-primary disabled:opacity-50">{mmBusy ? 'Saving…' : 'Save Morning Manpower'}</button>
           </div>
+        </div>
+      </Modal>
+
+      {/* ── Contractor Attendance — saved records register (mam 2026-06-24) ── */}
+      <Modal isOpen={mmRecModal} onClose={() => setMmRecModal(false)} title="Contractor Attendance — Records" wide>
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500">All saved morning-manpower attendance. Filter by site and date range.</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
+            <div>
+              <label className="label">Site</label>
+              <select className="select" value={mmRecSite} onChange={e => { setMmRecSite(e.target.value); loadAttendanceRecords({ site: e.target.value }); }}>
+                <option value="">All sites</option>
+                {sites.map(s => <option key={s.id} value={s.id}>{s.lead_no ? `[${s.lead_no}] ` : ''}{s.name}</option>)}
+              </select>
+            </div>
+            <div><label className="label">From</label><input type="date" className="input" value={mmRecFrom} onChange={e => { setMmRecFrom(e.target.value); loadAttendanceRecords({ from: e.target.value }); }} /></div>
+            <div><label className="label">To</label><input type="date" className="input" value={mmRecTo} onChange={e => { setMmRecTo(e.target.value); loadAttendanceRecords({ to: e.target.value }); }} /></div>
+            {(mmRecSite || mmRecFrom || mmRecTo) && (
+              <button type="button" onClick={() => { setMmRecSite(''); setMmRecFrom(''); setMmRecTo(''); loadAttendanceRecords({ site: '', from: '', to: '' }); }} className="btn btn-secondary text-red-500">Clear</button>
+            )}
+          </div>
+
+          {mmRecBusy ? (
+            <p className="text-sm text-gray-400 text-center py-8">Loading…</p>
+          ) : mmRecRows.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-8">No attendance records found.</p>
+          ) : (
+            <div className="overflow-x-auto max-h-[58vh] border rounded-lg">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th className="px-2 py-2 text-left text-xs font-semibold text-gray-600">Date</th>
+                    <th className="px-2 py-2 text-left text-xs font-semibold text-gray-600">Site</th>
+                    <th className="px-2 py-2 text-left text-xs font-semibold text-gray-600">Contractor</th>
+                    <th className="px-2 py-2 text-left text-xs font-semibold text-gray-600">Type</th>
+                    <th className="px-2 py-2 text-right text-xs font-semibold text-gray-600">Manpower</th>
+                    <th className="px-2 py-2 text-center text-xs font-semibold text-gray-600">Photo</th>
+                    <th className="px-2 py-2 text-left text-xs font-semibold text-gray-600">Marked By</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {mmRecRows.map(r => (
+                    <tr key={r.id} className="hover:bg-gray-50">
+                      <td className="px-2 py-1.5 whitespace-nowrap">{r.attendance_date}</td>
+                      <td className="px-2 py-1.5">{r.site_name || '—'}</td>
+                      <td className="px-2 py-1.5 font-medium">{r.contractor_name}</td>
+                      <td className="px-2 py-1.5 text-gray-500">{r.contractor_type || '—'}</td>
+                      <td className="px-2 py-1.5 text-right font-semibold">{r.manpower}</td>
+                      <td className="px-2 py-1.5 text-center">
+                        {r.photo_url
+                          ? <a href={r.photo_url} target="_blank" rel="noreferrer"><img src={r.photo_url} alt="" className="w-8 h-8 object-cover rounded border inline-block hover:ring-2 hover:ring-red-300 cursor-zoom-in" /></a>
+                          : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-2 py-1.5 text-gray-500">{r.marked_by_name || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-gray-100 font-bold border-t-2 border-gray-300">
+                    <td className="px-2 py-2" colSpan="4">Total — {mmRecRows.length} record(s)</td>
+                    <td className="px-2 py-2 text-right">{mmRecRows.reduce((s, r) => s + (+r.manpower || 0), 0)}</td>
+                    <td colSpan="2"></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+
+          <div className="flex justify-end"><button type="button" onClick={() => setMmRecModal(false)} className="btn btn-secondary">Close</button></div>
         </div>
       </Modal>
 

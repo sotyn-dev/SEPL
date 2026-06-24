@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -11,6 +11,34 @@ import MultiUserSelect from '../components/MultiUserSelect';
 import { useAuth } from '../context/AuthContext';
 
 const CRM_OPTIONS = ['Sushila', 'Lovely'];
+
+// Auto-growing textarea (mam 2026-06-24): the BOQ Description must WRAP and
+// show the whole text — no fixed-height box that scrolls "top to down". It
+// sizes itself to its content on mount and on every edit, so long lines like
+// "STRING INVERTER (MPPT GRID CONNECTED STRING INVERTER 100 KW)" are fully
+// visible without an inner scrollbar.
+function GrowTextarea({ value, onChange, className, title, placeholder }) {
+  const ref = useRef(null);
+  const resize = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  useEffect(() => { resize(); }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      className={className}
+      style={{ overflow: 'hidden', resize: 'none' }}
+      title={title}
+      placeholder={placeholder}
+      value={value}
+      onChange={(e) => { onChange(e); resize(); }}
+    />
+  );
+}
 
 // Match a PO against a free-text filter. Empty filter = all rows. Checks
 // every field mam asked about: site/project (project field), client name,
@@ -511,12 +539,11 @@ export default function Orders() {
                   </div>
                   <div className="col-span-12 md:col-span-3">
                     <div className="md:hidden text-[10px] font-semibold text-gray-500 uppercase mb-0.5">Description</div>
-                    {/* BOQ description — full text that WRAPS, editable (mam
-                        2026-06-24: "wrap description"). Red while it's not yet
-                        mapped to an Item Master item. */}
-                    <textarea
-                      className={`input text-[11px] leading-tight px-2 py-1 w-full resize-none ${item.description && !item.item_master_id ? 'bg-red-50 text-red-800 font-medium' : ''}`}
-                      rows={2}
+                    {/* BOQ description — auto-grows to show the FULL text wrapped
+                        (mam 2026-06-24: "wrap text, don't scroll top-to-down").
+                        Red while it's not yet mapped to an Item Master item. */}
+                    <GrowTextarea
+                      className={`input text-[11px] leading-tight px-2 py-1 w-full whitespace-pre-wrap break-words ${item.description && !item.item_master_id ? 'bg-red-50 text-red-800 font-medium' : ''}`}
                       title={item.description || ''}
                       value={item.description || ''}
                       onChange={e => updateItem(i, 'description', e.target.value)}
