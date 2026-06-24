@@ -276,15 +276,18 @@ export default function BusinessBook() {
 
   // One Business Book lead as a table row — reused by the flat list, the
   // grouped-list children, so the columns never drift between modes.
-  // Slimmer 7-column row (mam 2026-06-23: "table view not good — too wide").
-  // Secondary fields (Type, Employee, Category, Order, PO, Advance) move into
-  // sub-lines under the main columns instead of their own columns.
+  // Polish (mam 2026-06-24): coloured pills for Type + Category. Category
+  // colour is a deterministic hash so each category keeps a stable distinct hue.
+  const TYPE_PILL = { Government: 'bg-purple-100 text-purple-700', Private: 'bg-rose-100 text-rose-700', Public: 'bg-blue-100 text-blue-700', Corporate: 'bg-indigo-100 text-indigo-700' };
+  const CAT_PILL = ['bg-blue-50 text-blue-700', 'bg-emerald-50 text-emerald-700', 'bg-purple-50 text-purple-700', 'bg-orange-50 text-orange-700', 'bg-pink-50 text-pink-700', 'bg-cyan-50 text-cyan-700', 'bg-rose-50 text-rose-700', 'bg-teal-50 text-teal-700'];
+  const catColor = (c) => { let h = 0; const s = String(c || ''); for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return CAT_PILL[h % CAT_PILL.length]; };
+
   const renderLeadRow = (b, child = false) => (
     <tr key={b.id} className={`transition-colors ${child ? 'bg-gray-50/60 hover:bg-gray-100' : 'hover:bg-red-50/30'}`}>
       {/* Lead No + Type */}
       <td className={`px-3 py-2 align-top ${child ? 'pl-8' : ''}`}>
         <span className="font-bold text-red-600 text-[13px] cursor-pointer hover:underline" onClick={() => handleView(b)}>{b.lead_no}</span>
-        <div className="mt-0.5"><span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium ${b.lead_type === 'Government' ? 'bg-purple-100 text-purple-700' : 'bg-red-100 text-red-700'}`}>{b.lead_type}</span></div>
+        <div className="mt-1"><span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${TYPE_PILL[b.lead_type] || 'bg-gray-100 text-gray-600'}`}>{b.lead_type}</span></div>
       </td>
       {/* Client */}
       <td className="px-3 py-2 align-top">
@@ -299,8 +302,8 @@ export default function BusinessBook() {
       </td>
       {/* Category */}
       <td className="px-3 py-2 align-top">
-        {b.category ? <span className="inline-flex px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-[11px]">{b.category}</span> : <span className="text-gray-300 text-[12px]">-</span>}
-        {b.order_type && <div className="text-[10px] text-gray-400 mt-0.5">{b.order_type}</div>}
+        {b.category ? <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${catColor(b.category)}`}>{b.category}</span> : <span className="text-gray-300 text-[12px]">-</span>}
+        {b.order_type && <div className="text-[10px] text-gray-500 italic mt-1">{b.order_type}</div>}
       </td>
       {/* Sales amount */}
       <td className="px-3 py-2 text-right align-top whitespace-nowrap font-semibold text-[13px]">{fmt(b.sale_amount_without_gst)}</td>
@@ -312,11 +315,11 @@ export default function BusinessBook() {
       <td className="px-3 py-2 text-right align-top whitespace-nowrap text-[12px] text-amber-700">{mgmtDiscOf(b) > 0 ? fmt(mgmtDiscOf(b)) : <span className="text-gray-300">-</span>}</td>
       {/* Actions */}
       <td className="px-3 py-2 align-top">
-        <div className="flex items-center justify-center gap-1">
-          <button onClick={() => handleView(b)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="View"><FiEye size={15} /></button>
-          {b.boq_file_link && <a href={b.boq_file_link} target="_blank" rel="noreferrer" className="px-1.5 py-1 text-indigo-600 hover:bg-indigo-50 rounded text-[10px] font-bold" title="View attached BOQ file">BOQ</a>}
-          {canEdit('business_book') && <button onClick={() => handleEdit(b)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded" title="Edit"><FiEdit2 size={15} /></button>}
-          {canDelete('business_book') && <button onClick={() => handleDelete(b.id, b.lead_no)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete"><FiTrash2 size={15} /></button>}
+        <div className="flex items-center justify-center gap-0.5">
+          <button onClick={() => handleView(b)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="View"><FiEye size={15} /></button>
+          {b.boq_file_link && <a href={b.boq_file_link} target="_blank" rel="noreferrer" className="px-1.5 py-1 text-indigo-600 hover:bg-indigo-50 rounded-md text-[10px] font-bold transition-colors" title="View attached BOQ file">BOQ</a>}
+          {canEdit('business_book') && <button onClick={() => handleEdit(b)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded-md transition-colors" title="Edit"><FiEdit2 size={15} /></button>}
+          {canDelete('business_book') && <button onClick={() => handleDelete(b.id, b.lead_no)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors" title="Delete"><FiTrash2 size={15} /></button>}
         </div>
       </td>
     </tr>
@@ -467,15 +470,15 @@ export default function BusinessBook() {
       <div className="card p-0">
         <div className="overflow-x-auto">
           <table className="min-w-full freeze-head">
-            <thead><tr className="bg-gray-50">
-              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Lead No</th>
-              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Client</th>
-              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Project / Location</th>
-              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Category</th>
-              <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Sales Amt</th>
-              <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">GST Sales</th>
-              <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Mgmt Disc</th>
-              <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Actions</th>
+            <thead><tr className="bg-gray-50/80 border-b border-gray-200">
+              <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Lead No</th>
+              <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Client</th>
+              <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Project / Location</th>
+              <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-gray-500">Category</th>
+              <th className="px-3 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-gray-500">Sales Amt</th>
+              <th className="px-3 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-gray-500">GST Sales</th>
+              <th className="px-3 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-gray-500">Mgmt Disc</th>
+              <th className="px-3 py-3 text-center text-[11px] font-semibold uppercase tracking-wider text-gray-500">Actions</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-100">
               {/* Flat list, or merged-by-project when grouping is on. */}
