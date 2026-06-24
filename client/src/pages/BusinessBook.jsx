@@ -482,10 +482,13 @@ export default function BusinessBook() {
                           <span className="bg-amber-500 text-white text-[11px] font-bold px-2 py-0.5 rounded-full">{g.leads.length} leads</span>
                         </div>
                       </td>
-                      <td className="px-3 py-2 align-top text-[13px] font-medium">{clientList(g.clients)}</td>
+                      {/* Collapsed merged row is PROJECT-centric: client names
+                          live in the per-lead rows shown on expand (mam
+                          2026-06-23). Here just a muted count, no names. */}
+                      <td className="px-3 py-2 align-top text-[11px] text-gray-400">{g.clients.size === 1 ? clientList(g.clients) : `${g.clients.size} clients`}</td>
                       <td className="px-3 py-2 align-top">
                         <div className="font-semibold text-[13px] text-gray-900 flex items-start gap-1 leading-snug"><FiMapPin size={12} className="text-amber-500 mt-0.5 shrink-0" /> {g.label}</div>
-                        <div className="text-[10px] text-amber-700/80 ml-4">tap to {open ? 'collapse' : 'expand'}</div>
+                        <div className="text-[10px] text-amber-700/80 ml-4">{g.leads.length} leads · tap to {open ? 'collapse' : 'expand'} for client-wise detail</div>
                       </td>
                       <td className="px-3 py-2 text-right align-top whitespace-nowrap">
                         <div className="font-semibold text-[13px]">{fmt(g.sale)}</div>
