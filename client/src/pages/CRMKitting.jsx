@@ -296,7 +296,7 @@ export default function CRMKitting() {
         />
       );
     }
-    const m = STATUS_META[entry.status];
+    const m = STATUS_META[entry.status] || STATUS_META.na;
     return (
       <button
         onClick={() => openCell(project, cp)}
@@ -634,7 +634,7 @@ export default function CRMKitting() {
             {(() => {
               const cur = getEntry(modalProject.project_key, modalCp.id);
               if (!cur) return null;
-              const m = STATUS_META[cur.status];
+              const m = STATUS_META[cur.status] || STATUS_META.na;
               return (
                 <div className="border-t pt-2 text-[11px] text-gray-600">
                   <span className="font-semibold">Current: </span>
@@ -744,7 +744,7 @@ export default function CRMKitting() {
               {historyLoading && <div className="text-sm text-gray-500">Loading…</div>}
               {!historyLoading && historyRows.length === 0 && <div className="text-sm text-gray-500">No history yet.</div>}
               {historyRows.map(e => {
-                const m = STATUS_META[e.status];
+                const m = STATUS_META[e.status] || STATUS_META.na;
                 return (
                   <div key={e.id} className="border rounded-lg p-2.5 bg-gray-50">
                     <div className="flex items-center justify-between flex-wrap gap-2">

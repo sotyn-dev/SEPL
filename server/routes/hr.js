@@ -2623,6 +2623,14 @@ const DEFAULT_DOC_TYPES = [
 router.get('/candidates/:id/docs', (req, res) => {
   const db = getDb();
   const cid = +req.params.id;
+  // Guard against a bad/non-numeric id — otherwise the seed INSERT below
+  // trips a FOREIGN KEY / NOT NULL constraint and 500s instead of 404ing.
+  if (!Number.isInteger(cid) || cid <= 0) {
+    return res.status(400).json({ error: 'invalid candidate id' });
+  }
+  if (!db.prepare('SELECT 1 FROM candidates WHERE id = ?').get(cid)) {
+    return res.status(404).json({ error: 'candidate not found' });
+  }
   // Seed defaults if nothing exists yet for this candidate.
   const existing = db.prepare('SELECT doc_type FROM candidate_docs WHERE candidate_id = ?').all(cid);
   if (existing.length === 0) {

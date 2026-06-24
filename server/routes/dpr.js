@@ -1514,9 +1514,9 @@ router.get('/engineer-compliance', (req, res) => {
   //    by name.  Inside each engineer, sort their sites the same way.
   const engineersOut = [...byEng.values()].map(b => {
     b.gap_total = Math.max(0, b.days_present_total - b.days_dpr_filled_total);
-    b.sites.sort((a, b) => (b.gap - a.gap) || a.site_name.localeCompare(b.site_name));
+    b.sites.sort((a, b) => (b.gap - a.gap) || (a.site_name || '').localeCompare(b.site_name || ''));
     return b;
-  }).sort((a, b) => (b.gap_total - a.gap_total) || a.engineer_name.localeCompare(b.engineer_name));
+  }).sort((a, b) => (b.gap_total - a.gap_total) || (a.engineer_name || '').localeCompare(b.engineer_name || ''));
 
   // 5) Overall roll-up for the header tiles.
   const totals = engineersOut.reduce((acc, e) => {
@@ -1773,7 +1773,7 @@ function progressHandler(req, res) {
         done_amount: Math.round(doneAmount),
       };
     });
-    itemRows.sort((a, b) => (a.pct_complete - b.pct_complete) || a.description.localeCompare(b.description));
+    itemRows.sort((a, b) => (a.pct_complete - b.pct_complete) || (a.description || '').localeCompare(b.description || ''));
     const overallPct = totalBoq > 0 ? Math.round((totalDone / totalBoq) * 1000) / 10 : 0;
 
     const bucket = engBucket.get(row.engineer_id);
@@ -1790,7 +1790,7 @@ function progressHandler(req, res) {
   }
 
   const result = [...engBucket.values()].map(b => {
-    b.sites.sort((a, b) => a.site_name.localeCompare(b.site_name));
+    b.sites.sort((a, b) => (a.site_name || '').localeCompare(b.site_name || ''));
     return { ...b, site_count: b.sites.length };
   });
   res.json(result);

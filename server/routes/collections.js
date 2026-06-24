@@ -522,16 +522,22 @@ router.get('/:id/follow-ups', (req, res) => {
 // Record collection (payment received from client)
 router.post('/:id/collect', requirePermission('collections', 'edit'), (req, res) => {
   const { amount, collection_date, payment_mode, transaction_ref, notes } = req.body;
-  if (!amount) return res.status(400).json({ error: 'Amount required' });
+  const amt = +amount;
+  if (!(amt > 0)) return res.status(400).json({ error: 'Valid amount required' });
   const db = getDb();
 
-  // Record collection
-  db.prepare('INSERT INTO collections (receivable_id, amount, collection_date, payment_mode, transaction_ref, notes, collected_by) VALUES (?,?,?,?,?,?,?)')
-    .run(req.params.id, amount, collection_date || new Date().toISOString().split('T')[0], payment_mode, transaction_ref, notes, req.user.id);
-
-  // Update receivable
+  // Guard against a deleted/stale receivable — otherwise the read below is
+  // undefined and rec.received_amount 500s.
   const rec = db.prepare('SELECT * FROM receivables WHERE id=?').get(req.params.id);
-  const newReceived = (rec.received_amount || 0) + amount;
+  if (!rec) return res.status(404).json({ error: 'Receivable not found' });
+
+  // Record collection (coerce optional fields to null so an omitted field
+  // never throws an undefined-bind error).
+  db.prepare('INSERT INTO collections (receivable_id, amount, collection_date, payment_mode, transaction_ref, notes, collected_by) VALUES (?,?,?,?,?,?,?)')
+    .run(req.params.id, amt, collection_date || new Date().toISOString().split('T')[0], payment_mode || null, transaction_ref || null, notes || null, req.user.id);
+
+  // Update receivable. Use the coerced number so we never string-concat money.
+  const newReceived = (rec.received_amount || 0) + amt;
   const newOutstanding = rec.invoice_amount - newReceived;
   const { days, bucket } = calculateAgeing(rec.due_date);
   const statusColor = getStatusColor(newOutstanding, days);

@@ -304,8 +304,9 @@ router.get('/dashboard', requirePermission('attendance', 'view'), (req, res) => 
   const todayRecords = db.prepare(`SELECT a.*, u.name as user_name, u.department FROM attendance a
     LEFT JOIN users u ON a.user_id=u.id WHERE a.date=? ORDER BY a.punch_in_time DESC`).all(today);
 
-  // Users who haven't punched in
-  const punchedUserIds = todayRecords.map(r => r.user_id);
+  // Users who haven't punched in. Keep only real integer ids — a stray
+  // NULL user_id would otherwise produce `IN (5,,8)` and 500 the dashboard.
+  const punchedUserIds = todayRecords.map(r => r.user_id).filter(id => Number.isInteger(id));
   const notPunched = db.prepare(`SELECT id, name, department, phone FROM users WHERE active=1 ${punchedUserIds.length > 0 ? 'AND id NOT IN (' + punchedUserIds.join(',') + ')' : ''}`).all();
 
   // Geofence settings
