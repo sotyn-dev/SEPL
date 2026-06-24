@@ -245,10 +245,15 @@ export default function BusinessBook() {
   const listGroups = useMemo(() => {
     const map = new Map();
     for (const e of entries) {
+      // Merge leads ONLY when BOTH the client name AND the site/project match
+      // (mam 2026-06-24). So two different clients on the same project no longer
+      // merge; same-client-same-site leads still do.
       const pk = norm(cleanText(e.project_name) || cleanText(e.company_name));
-      const key = pk || `__none__:${e.id}`;
+      const ck = norm(cleanText(e.client_name));
+      const key = (pk || ck) ? `${ck}||${pk}` : `__none__:${e.id}`;
       if (!map.has(key)) {
-        map.set(key, { key, label: projectLabel(e), leads: [], sale: 0, gstIncl: 0, mgmtDisc: 0,
+        map.set(key, { key, label: projectLabel(e), client: cleanText(e.client_name) || '—',
+          leads: [], sale: 0, gstIncl: 0, mgmtDisc: 0,
           advance: 0, balance: 0, clients: new Set(), statuses: new Set() });
       }
       const g = map.get(key);
@@ -442,14 +447,14 @@ export default function BusinessBook() {
             {viewMode === 'dashboard'
               ? `${groups.length} client + site groups (${entries.length} entries${mergedCount > 0 ? `, ${mergedCount} merged` : ''})`
               : groupList
-                ? `${listGroups.length} projects (${entries.length} leads${listMergedCount > 0 ? `, ${listMergedCount} merged` : ''})`
+                ? `${listGroups.length} client-site groups (${entries.length} leads${listMergedCount > 0 ? `, ${listMergedCount} merged` : ''})`
                 : `Showing ${entries.length} entries`}
           </span>
           {viewMode === 'list' && (
             <button onClick={() => setGroupList(v => !v)}
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${groupList ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white text-gray-500 border-gray-200 hover:border-amber-300'}`}
               title="Merge leads that share the same project name">
-              <FiGrid size={12} /> {groupList ? 'Grouped by Project' : 'Group by Project'}
+              <FiGrid size={12} /> {groupList ? 'Grouped by Client + Site' : 'Group by Client + Site'}
             </button>
           )}
         </div>
@@ -499,10 +504,10 @@ export default function BusinessBook() {
                           <span className="bg-amber-500 text-white text-[11px] font-bold px-2 py-0.5 rounded-full">{g.leads.length} leads</span>
                         </div>
                       </td>
-                      <td className="px-3 py-2 align-top text-[11px] text-gray-400">{g.clients.size === 1 ? clientList(g.clients) : `${g.clients.size} clients`}</td>
+                      <td className="px-3 py-2 align-top text-[13px] font-medium">{g.client}</td>
                       <td className="px-3 py-2 align-top">
                         <div className="font-semibold text-[13px] text-gray-900 flex items-start gap-1 leading-snug"><FiMapPin size={12} className="text-amber-500 mt-0.5 shrink-0" /> {g.label}</div>
-                        <div className="text-[10px] text-amber-700/80 ml-4">tap to {open ? 'collapse' : 'expand'} for client-wise detail</div>
+                        <div className="text-[10px] text-amber-700/80 ml-4">{g.leads.length} leads · tap to {open ? 'collapse' : 'expand'}</div>
                       </td>
                       <td className="px-3 py-2" />
                       <td className="px-3 py-2 text-right align-top whitespace-nowrap font-bold text-[13px]">{fmt(g.sale)}<div className="text-[9px] text-gray-400 font-normal uppercase">total sales</div></td>
