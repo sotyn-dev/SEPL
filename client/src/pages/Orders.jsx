@@ -515,22 +515,24 @@ export default function Orders() {
                         2026-06-24: "wrap description"). Red while it's not yet
                         mapped to an Item Master item. */}
                     <textarea
-                      className={`input text-xs w-full resize-y leading-snug ${item.description && !item.item_master_id ? 'bg-red-50 text-red-800 font-medium' : ''}`}
+                      className={`input text-[11px] leading-tight px-2 py-1 w-full resize-none ${item.description && !item.item_master_id ? 'bg-red-50 text-red-800 font-medium' : ''}`}
                       rows={2}
+                      title={item.description || ''}
                       value={item.description || ''}
                       onChange={e => updateItem(i, 'description', e.target.value)}
                       placeholder="BOQ description"
                     />
                     {/* Item Master dropdown beside the description — map the BOQ
                         line to an item WITHOUT replacing the client's BOQ text;
-                        only fill blank unit/rate (mam 2026-06-24). */}
-                    <div className="mt-1">
+                        only fill blank unit/rate (mam 2026-06-24). Compact. */}
+                    <div className="mt-0.5">
                       <SearchableSelect
                         options={masterItems.map(mi => ({ id: mi.id, label: `[${mi.item_code}] ${mi.display_name}`, ...mi }))}
                         value={item.item_master_id || null}
                         valueKey="id"
                         displayKey="label"
-                        placeholder="🔗 Map item (Item Master)…"
+                        placeholder="🔗 Map item…"
+                        buttonClassName="input text-left text-[11px] px-2 py-1 w-full truncate flex items-center justify-between gap-1 cursor-pointer"
                         onChange={(mi) => {
                           const items = [...poItems];
                           items[i].item_master_id = mi?.id || '';
