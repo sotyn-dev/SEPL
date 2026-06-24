@@ -3032,6 +3032,82 @@ router.get('/indents/:id/items-for-po', (req, res) => {
   res.json(rows);
 });
 
+// GET /procurement/indents/:id/billable-print — item-wise BILLABLE (sale)
+// statement for an indent: each BOQ line at its sale rate × qty, with totals
+// + GST, as a printable HTML page (Ctrl+P → PDF) for showing / auditing
+// (mam 2026-06-24: "sales bill itemwise pdf so can show and audit easily").
+router.get('/indents/:id/billable-print', (req, res) => {
+  const db = getDb();
+  const id = +req.params.id;
+  const indent = db.prepare('SELECT * FROM indents WHERE id=?').get(id);
+  if (!indent) return res.status(404).send('Indent not found');
+  const items = db.prepare(`
+    SELECT ii.id, ii.description, ii.quantity, ii.unit, ii.po_item_id, ii.item_type,
+           im.item_code, im.item_name AS master_name, im.size, im.specification
+      FROM indent_items ii LEFT JOIN item_master im ON im.id = ii.item_master_id
+     WHERE ii.indent_id=? AND COALESCE(ii.quantity,0) > 0 ORDER BY ii.id`).all(id);
+  // Resolve the order (business_book) the BOQ sale rate comes from: planning,
+  // else a line's po_item, else the site name — exactly like the list's billable.
+  let bbId = null;
+  if (indent.planning_id) bbId = db.prepare('SELECT business_book_id FROM order_planning WHERE id=?').get(indent.planning_id)?.business_book_id || null;
+  if (!bbId) for (const it of items) { if (it.po_item_id) { const p = db.prepare('SELECT business_book_id FROM po_items WHERE id=?').get(it.po_item_id); if (p && p.business_book_id) { bbId = p.business_book_id; break; } } }
+  if (!bbId && indent.site_name) bbId = db.prepare(`SELECT id FROM business_book WHERE id IN (SELECT DISTINCT business_book_id FROM sites WHERE name=? AND business_book_id IS NOT NULL) OR project_name=? OR company_name=? ORDER BY id DESC LIMIT 1`).get(indent.site_name, indent.site_name, indent.site_name)?.id || null;
+  const descMap = new Map();
+  if (bbId) for (const p of db.prepare('SELECT description, rate FROM po_items WHERE business_book_id=?').all(bbId)) { if (p.description && +p.rate > 0) descMap.set(String(p.description).toLowerCase().trim(), +p.rate); }
+  const poRate = (poid) => poid ? (+(db.prepare('SELECT rate FROM po_items WHERE id=?').get(poid) || {}).rate || 0) : 0;
+  const bb = bbId ? db.prepare('SELECT company_name, client_name, billing_address, gstin, project_name FROM business_book WHERE id=?').get(bbId) : null;
+  let total = 0;
+  const rows = items.map((it, idx) => {
+    const rate = poRate(it.po_item_id) || descMap.get(String(it.description || '').toLowerCase().trim()) || 0;
+    const amt = rate * (+it.quantity || 0);
+    total += amt;
+    const desc = [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
+    return { sn: idx + 1, code: it.item_code || '', desc, qty: +it.quantity || 0, unit: it.unit || '', rate, amt };
+  });
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inr = n => (+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const gst = Math.round(total * 0.18);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Billable ${esc(indent.indent_number)}</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:0;padding:24px;font-size:12px}
+    .hdr{text-align:center;border-bottom:3px solid #7a1b1b;padding-bottom:8px;margin-bottom:10px}
+    .hdr h1{margin:0;color:#7a1b1b;font-size:18px}
+    .meta{display:flex;justify-content:space-between;font-size:11px;color:#555;margin:8px 0;flex-wrap:wrap;gap:6px}
+    .box{border:1px solid #ddd;border-radius:6px;padding:8px 10px;margin:8px 0;font-size:11px}
+    table{width:100%;border-collapse:collapse;margin-top:8px}
+    th,td{border:1px solid #ccc;padding:6px 8px}
+    th{background:#f3eaea;color:#7a1b1b;text-align:left;font-size:11px}
+    td.r,th.r{text-align:right}
+    tfoot td{font-weight:bold;background:#faf5f5}
+    .title{text-align:center;background:#7a1b1b;color:#fff;font-weight:bold;padding:6px;border-radius:4px;letter-spacing:1px;margin:6px 0}
+    .pbtn{position:fixed;top:12px;right:12px;background:#7a1b1b;color:#fff;border:none;border-radius:4px;padding:8px 14px;cursor:pointer}
+    @media print{.pbtn{display:none}}
+  </style></head><body>
+  <button class="pbtn" onclick="window.print()">🖨 Print / Save PDF</button>
+  <div class="hdr"><h1>SECURED ENGINEERS PVT. LTD</h1><div style="font-size:11px">GSTIN: 03AASCS7836D2Z3 · PAN: AASCS7836D</div></div>
+  <div class="title">BILLABLE STATEMENT (ITEM-WISE)</div>
+  <div class="meta">
+    <div><b>Indent No:</b> ${esc(indent.indent_number)}<br><b>Site / Project:</b> ${esc(indent.site_name || (bb && bb.project_name) || '—')}</div>
+    <div><b>Date:</b> ${esc(String(indent.indent_date || indent.created_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10))}<br><b>Client:</b> ${esc((bb && (bb.company_name || bb.client_name)) || '—')}</div>
+  </div>
+  ${bb && bb.billing_address ? `<div class="box"><b>Client Address:</b> ${esc(bb.billing_address)}${bb.gstin ? ` &nbsp; <b>GSTIN:</b> ${esc(bb.gstin)}` : ''}</div>` : ''}
+  <table>
+    <thead><tr><th style="width:32px">SN</th><th>Description</th><th class="r" style="width:70px">Qty</th><th style="width:50px">Unit</th><th class="r" style="width:90px">Sale Rate ₹</th><th class="r" style="width:110px">Billable ₹</th></tr></thead>
+    <tbody>
+    ${rows.map(r => `<tr><td>${r.sn}</td><td>${r.code ? `<span style="color:#888;font-family:monospace">[${esc(r.code)}]</span> ` : ''}${esc(r.desc)}</td><td class="r">${inr(r.qty)}</td><td>${esc(r.unit)}</td><td class="r">${r.rate > 0 ? inr(r.rate) : '—'}</td><td class="r">${r.amt > 0 ? inr(r.amt) : '—'}</td></tr>`).join('')}
+    </tbody>
+    <tfoot>
+      <tr><td colspan="5" class="r">Total Billable (Sale value)</td><td class="r">₹ ${inr(total)}</td></tr>
+      <tr><td colspan="5" class="r">GST @18%</td><td class="r">₹ ${inr(gst)}</td></tr>
+      <tr><td colspan="5" class="r">Grand Total (incl GST)</td><td class="r">₹ ${inr(total + gst)}</td></tr>
+    </tfoot>
+  </table>
+  <p style="font-size:10px;color:#888;margin-top:10px">Billable = BOQ sale rate × indent qty, from the order's priced BOQ (po_items). For internal estimation / audit — not a tax invoice.</p>
+  </body></html>`;
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(Buffer.from(html, 'utf8'));
+});
+
 // Auto-quotation data for an Extra indent (mam 2026-06-06). Prices each
 // chargeable line from the most-recent matching previous BOQ × indent qty.
 // Rendered client-side at /quotation/:indentId/print in the SEPL format.

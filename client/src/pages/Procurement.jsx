@@ -1228,6 +1228,19 @@ export default function Procurement() {
     }
   };
 
+  // Open the item-wise BILLABLE statement (PDF) for an indent — the sale-rate
+  // breakdown for showing / auditing (mam 2026-06-24). Auth-protected HTML, so
+  // fetch as a blob and open it.
+  const openBillablePrint = async (indentId) => {
+    try {
+      const r = await api.get(`/procurement/indents/${indentId}/billable-print`, { responseType: 'arraybuffer' });
+      const blob = new Blob([r.data], { type: 'text/html;charset=utf-8' });
+      window.open(URL.createObjectURL(blob), '_blank');
+    } catch {
+      toast.error('Could not open the billable statement');
+    }
+  };
+
   const submitApprove = async () => {
     if (!approveTarget) return;
     // Only send overrides that actually CHANGED, so unchanged lines aren't
@@ -2639,9 +2652,12 @@ export default function Procurement() {
                       when no priced BOQ rate is linked to the lines. */}
                   <td className="text-right whitespace-nowrap">
                     {i.billable_amount > 0 ? (
-                      <span className="font-semibold text-blue-800">
+                      <button type="button" onClick={() => openBillablePrint(i.id)}
+                        title="Open the item-wise Billable statement (PDF) — show / audit"
+                        className="font-semibold text-blue-800 hover:underline inline-flex flex-col items-end leading-tight">
                         ₹{Math.round(i.billable_amount).toLocaleString('en-IN')}
-                      </span>
+                        <span className="text-[9px] font-normal text-blue-500">📄 item-wise PDF</span>
+                      </button>
                     ) : (
                       <span className="text-gray-300 text-xs" title="No priced-BOQ rate on the linked lines">—</span>
                     )}
