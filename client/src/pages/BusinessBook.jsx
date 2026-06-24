@@ -232,18 +232,30 @@ export default function BusinessBook() {
   // follows the first lead seen — entries arrive newest-first, so newest
   // projects stay on top.
   const projectLabel = (e) => cleanText(e.project_name) || cleanText(e.company_name) || '(no project)';
+  // GST rate is stored as text like "18%". GST sales amount = GST-inclusive
+  // total = Sale × (1 + rate%) (mam 2026-06-23). Management discount is its
+  // own stored amount.
+  // GST sales amount = GST-inclusive total. The ERP already stores this as
+  // po_amount (= Sale × 1.18, per the business_book rule); fall back to that
+  // formula if po_amount isn't set. The % is derived for the sub-label.
+  const gstInclOf = (e) => Number(e.po_amount) || ((Number(e.sale_amount_without_gst) || 0) * 1.18);
+  const gstPctOf = (e) => { const s = Number(e.sale_amount_without_gst) || 0; if (s <= 0) return 18; return Math.round((gstInclOf(e) / s - 1) * 100); };
+  const mgmtDiscOf = (e) => Number(e.management_discount_amount) || 0;
+  const locationOf = (e) => [cleanText(e.district), cleanText(e.state)].filter(Boolean).join(', ');
   const listGroups = useMemo(() => {
     const map = new Map();
     for (const e of entries) {
       const pk = norm(cleanText(e.project_name) || cleanText(e.company_name));
       const key = pk || `__none__:${e.id}`;
       if (!map.has(key)) {
-        map.set(key, { key, label: projectLabel(e), leads: [], sale: 0, advance: 0, balance: 0,
-          clients: new Set(), statuses: new Set() });
+        map.set(key, { key, label: projectLabel(e), leads: [], sale: 0, gstIncl: 0, mgmtDisc: 0,
+          advance: 0, balance: 0, clients: new Set(), statuses: new Set() });
       }
       const g = map.get(key);
       g.leads.push(e);
       g.sale += e.sale_amount_without_gst || 0;
+      g.gstIncl += gstInclOf(e);
+      g.mgmtDisc += mgmtDiscOf(e);
       g.advance += e.advance_received || 0;
       g.balance += e.balance_amount || 0;
       if (e.client_name) g.clients.add(cleanText(e.client_name));
@@ -274,37 +286,35 @@ export default function BusinessBook() {
         <span className="font-bold text-red-600 text-[13px] cursor-pointer hover:underline" onClick={() => handleView(b)}>{b.lead_no}</span>
         <div className="mt-0.5"><span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium ${b.lead_type === 'Government' ? 'bg-purple-100 text-purple-700' : 'bg-red-100 text-red-700'}`}>{b.lead_type}</span></div>
       </td>
-      {/* Client + Employee */}
+      {/* Client */}
       <td className="px-3 py-2 align-top">
         <div className="font-medium text-[13px] leading-snug">{cleanText(b.client_name) || '-'}</div>
         {b.employee_assigned && <div className="text-[11px] text-gray-500 leading-snug">👤 {b.employee_assigned}</div>}
       </td>
-      {/* Project / Location + Category / Order / PO */}
+      {/* Project / Location */}
       <td className="px-3 py-2 align-top">
         <div className="font-medium text-[13px] text-gray-800 leading-snug">{cleanText(b.project_name) || cleanText(b.company_name) || '-'}</div>
-        {b.district && <div className="text-[11px] text-gray-500 leading-snug">{[cleanText(b.district), cleanText(b.state)].filter(Boolean).join(', ')}</div>}
-        <div className="flex flex-wrap items-center gap-1 mt-0.5">
-          {b.category && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{b.category}</span>}
-          {b.order_type && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{b.order_type}</span>}
-          {b.po_number && <span className="text-[10px] text-gray-500">PO: {b.po_number}</span>}
-        </div>
+        {locationOf(b) && <div className="text-[11px] text-gray-500 leading-snug">📍 {locationOf(b)}</div>}
+        {b.po_number && <div className="text-[10px] text-gray-400">PO: {b.po_number}</div>}
       </td>
-      {/* Sale + Advance */}
-      <td className="px-3 py-2 text-right align-top whitespace-nowrap">
-        <div className="font-semibold text-[13px]">{fmt(b.sale_amount_without_gst)}</div>
-        {b.advance_received > 0 && <div className="text-[11px] text-emerald-600">adv {fmt(b.advance_received)}</div>}
+      {/* Category */}
+      <td className="px-3 py-2 align-top">
+        {b.category ? <span className="inline-flex px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-[11px]">{b.category}</span> : <span className="text-gray-300 text-[12px]">-</span>}
+        {b.order_type && <div className="text-[10px] text-gray-400 mt-0.5">{b.order_type}</div>}
       </td>
-      {/* Balance */}
-      <td className="px-3 py-2 text-right align-top text-[13px] text-red-600 font-bold whitespace-nowrap">{fmt(b.balance_amount)}</td>
-      {/* Status */}
-      <td className="px-3 py-2 align-top"><StatusBadge status={b.status} /></td>
+      {/* Sales amount */}
+      <td className="px-3 py-2 text-right align-top whitespace-nowrap font-semibold text-[13px]">{fmt(b.sale_amount_without_gst)}</td>
+      {/* GST sales amount (Sale + GST) */}
+      <td className="px-3 py-2 text-right align-top whitespace-nowrap text-[13px] text-blue-700 font-medium">
+        {fmt(gstInclOf(b))}<div className="text-[10px] text-gray-400 font-normal">incl {gstPctOf(b)}% GST</div>
+      </td>
+      {/* Management discount */}
+      <td className="px-3 py-2 text-right align-top whitespace-nowrap text-[12px] text-amber-700">{mgmtDiscOf(b) > 0 ? fmt(mgmtDiscOf(b)) : <span className="text-gray-300">-</span>}</td>
       {/* Actions */}
       <td className="px-3 py-2 align-top">
         <div className="flex items-center justify-center gap-1">
           <button onClick={() => handleView(b)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="View"><FiEye size={15} /></button>
-          {b.working_sheet_link && (
-            <a href={b.working_sheet_link} target="_blank" rel="noreferrer" className="p-1.5 text-blue-600 hover:bg-blue-50 rounded" title="Working Sheet">📎</a>
-          )}
+          {b.boq_file_link && <a href={b.boq_file_link} target="_blank" rel="noreferrer" className="px-1.5 py-1 text-indigo-600 hover:bg-indigo-50 rounded text-[10px] font-bold" title="View attached BOQ file">BOQ</a>}
           {canEdit('business_book') && <button onClick={() => handleEdit(b)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded" title="Edit"><FiEdit2 size={15} /></button>}
           {canDelete('business_book') && <button onClick={() => handleDelete(b.id, b.lead_no)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete"><FiTrash2 size={15} /></button>}
         </div>
@@ -461,9 +471,10 @@ export default function BusinessBook() {
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Lead No</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Client</th>
               <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Project / Location</th>
-              <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Sale / Advance</th>
-              <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Balance</th>
-              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Status</th>
+              <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600">Category</th>
+              <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Sales Amt</th>
+              <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">GST Sales</th>
+              <th className="px-3 py-3 text-right text-xs font-semibold text-gray-600">Mgmt Disc</th>
               <th className="px-3 py-3 text-center text-xs font-semibold text-gray-600">Actions</th>
             </tr></thead>
             <tbody className="divide-y divide-gray-100">
@@ -475,6 +486,9 @@ export default function BusinessBook() {
                 const open = !!listExpanded[g.key];
                 return (
                   <Fragment key={g.key}>
+                    {/* Collapsed merged row — project name + project-wise totals
+                        (Sales, GST sales, Mgmt discount). Client/Category/Actions
+                        stay blank; the per-lead detail appears on expand. */}
                     <tr className="bg-amber-50/60 hover:bg-amber-100/60 cursor-pointer transition-colors border-l-4 border-amber-400" onClick={() => toggleListGroup(g.key)}>
                       <td className="px-3 py-2 align-top">
                         <div className="flex items-center gap-1.5 text-amber-700">
@@ -482,27 +496,35 @@ export default function BusinessBook() {
                           <span className="bg-amber-500 text-white text-[11px] font-bold px-2 py-0.5 rounded-full">{g.leads.length} leads</span>
                         </div>
                       </td>
-                      {/* Collapsed merged row is PROJECT-centric: client names
-                          live in the per-lead rows shown on expand (mam
-                          2026-06-23). Here just a muted count, no names. */}
                       <td className="px-3 py-2 align-top text-[11px] text-gray-400">{g.clients.size === 1 ? clientList(g.clients) : `${g.clients.size} clients`}</td>
                       <td className="px-3 py-2 align-top">
                         <div className="font-semibold text-[13px] text-gray-900 flex items-start gap-1 leading-snug"><FiMapPin size={12} className="text-amber-500 mt-0.5 shrink-0" /> {g.label}</div>
-                        <div className="text-[10px] text-amber-700/80 ml-4">{g.leads.length} leads · tap to {open ? 'collapse' : 'expand'} for client-wise detail</div>
+                        <div className="text-[10px] text-amber-700/80 ml-4">tap to {open ? 'collapse' : 'expand'} for client-wise detail</div>
                       </td>
-                      <td className="px-3 py-2 text-right align-top whitespace-nowrap">
-                        <div className="font-semibold text-[13px]">{fmt(g.sale)}</div>
-                        {g.advance > 0 && <div className="text-[11px] text-emerald-600">adv {fmt(g.advance)}</div>}
-                      </td>
-                      <td className="px-3 py-2 text-right align-top text-[13px] text-red-600 font-bold whitespace-nowrap">{fmt(g.balance)}</td>
-                      <td className="px-3 py-2 align-top"><div className="flex flex-wrap gap-1">{[...g.statuses].map(s => <StatusBadge key={s} status={s} />)}</div></td>
+                      <td className="px-3 py-2" />
+                      <td className="px-3 py-2 text-right align-top whitespace-nowrap font-bold text-[13px]">{fmt(g.sale)}<div className="text-[9px] text-gray-400 font-normal uppercase">total sales</div></td>
+                      <td className="px-3 py-2 text-right align-top whitespace-nowrap font-bold text-[13px] text-blue-700">{fmt(g.gstIncl)}<div className="text-[9px] text-gray-400 font-normal uppercase">incl GST</div></td>
+                      <td className="px-3 py-2 text-right align-top whitespace-nowrap font-bold text-[13px] text-amber-700">{g.mgmtDisc > 0 ? fmt(g.mgmtDisc) : '-'}<div className="text-[9px] text-gray-400 font-normal uppercase">mgmt disc</div></td>
                       <td className="px-3 py-2" />
                     </tr>
+                    {/* Sub-header for the expanded per-lead rows */}
+                    {open && (
+                      <tr className="bg-gray-100/80 text-[10px] uppercase tracking-wide text-gray-500">
+                        <td className="px-3 py-1 pl-8">Lead No</td>
+                        <td className="px-3 py-1">Client</td>
+                        <td className="px-3 py-1">Project / Location</td>
+                        <td className="px-3 py-1">Category</td>
+                        <td className="px-3 py-1 text-right">Sales Amt</td>
+                        <td className="px-3 py-1 text-right">GST Sales</td>
+                        <td className="px-3 py-1 text-right">Mgmt Disc</td>
+                        <td className="px-3 py-1 text-center">Actions</td>
+                      </tr>
+                    )}
                     {open && g.leads.map(b => renderLeadRow(b, true))}
                   </Fragment>
                 );
               })}
-              {entries.length === 0 && <tr><td colSpan="7" className="text-center py-12 text-gray-400"><FiBook size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">No entries found</p></td></tr>}
+              {entries.length === 0 && <tr><td colSpan="8" className="text-center py-12 text-gray-400"><FiBook size={40} className="mx-auto mb-3 opacity-30" /><p className="font-medium">No entries found</p></td></tr>}
             </tbody>
           </table>
         </div>
@@ -940,6 +962,36 @@ export default function BusinessBook() {
                     className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
                 )}
                 <p className="text-[10px] text-gray-500 mt-1">Costing / calculation sheet for this order (Excel, PDF, CSV, image).</p>
+              </div>
+            </div>
+          </FSection>
+
+          {/* 11. BOQ File Upload (mam 2026-06-23) — attach the BOQ; the "BOQ"
+              button in the list opens it. */}
+          <FSection title="BOQ File" color="gray">
+            <div className="grid grid-cols-1 gap-3">
+              <div>
+                <label className="label flex items-center gap-2"><FiUpload size={14} /> Upload BOQ File</label>
+                {form.boq_file_link ? (
+                  <div className="flex items-center gap-2">
+                    <a href={form.boq_file_link} target="_blank" rel="noreferrer" className="text-sm text-indigo-600 underline truncate flex-1">📋 {form.boq_file_link.split('/').pop()}</a>
+                    <button type="button" onClick={() => F('boq_file_link', '')} className="text-red-500 text-xs hover:underline">Remove</button>
+                  </div>
+                ) : (
+                  <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.jpg,.jpeg,.png"
+                    onChange={async (e) => {
+                      const file = e.target.files[0]; if (!file) return;
+                      try {
+                        const fd = new FormData(); fd.append('file', file);
+                        const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                        F('boq_file_link', res.data.url);
+                        toast.success(`Uploaded: ${res.data.filename}`);
+                      } catch { toast.error('Upload failed'); }
+                      e.target.value = '';
+                    }}
+                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" />
+                )}
+                <p className="text-[10px] text-gray-500 mt-1">Bill of Quantities (Excel / PDF). Shows as a "BOQ" button on the lead row.</p>
               </div>
             </div>
           </FSection>
