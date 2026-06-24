@@ -2902,8 +2902,10 @@ export default function Procurement() {
                             <th className="text-right py-1 pr-3 w-20">Qty</th>
                             <th className="text-left py-1 pr-3 w-16">Unit</th>
                             <th className="text-left py-1 pr-3 w-16">Type</th>
-                            <th className="text-right py-1 pr-3 w-24">Rate</th>
-                            <th className="text-right py-1 pr-3 w-28">Line Budget</th>
+                            <th className="text-right py-1 pr-3 w-24" title="Cost rate (Item Master)">Rate</th>
+                            <th className="text-right py-1 pr-3 w-28" title="Cost = qty × master rate">Line Budget</th>
+                            <th className="text-right py-1 pr-3 w-24 text-indigo-600" title="BOQ sale rate (what the client is billed) — from order-planning po_items">Sales Rate</th>
+                            <th className="text-right py-1 pr-3 w-28 text-indigo-700" title="Billable = qty × BOQ sale rate">Billable</th>
                             <th className="text-right py-1 pr-3 w-24">PO Pending</th>
                           </tr>
                         </thead>
@@ -2967,6 +2969,14 @@ export default function Procurement() {
                               </td>
                               <td className="py-1 pr-3 text-right">
                                 {+it.line_budget > 0 ? <span className="font-medium">₹{Math.round(+it.line_budget).toLocaleString('en-IN')}</span> : <span className="text-gray-300">—</span>}
+                              </td>
+                              {/* Sales Rate + Billable — BOQ sale value per line, for
+                                  estimating sales vs cost (mam 2026-06-24). */}
+                              <td className="py-1 pr-3 text-right text-indigo-600">
+                                {+it.boq_sale_rate > 0 ? `₹${Math.round(+it.boq_sale_rate).toLocaleString('en-IN')}` : <span className="text-gray-300" title="No BOQ sale rate found for this line">—</span>}
+                              </td>
+                              <td className="py-1 pr-3 text-right">
+                                {+it.billable_line > 0 ? <span className="font-semibold text-indigo-700">₹{Math.round(+it.billable_line).toLocaleString('en-IN')}</span> : <span className="text-gray-300">—</span>}
                               </td>
                               {/* PO Pending (mam 2026-06-23): indent qty − qty already on a
                                   Vendor PO. Store lines and FOC/RGP don't go on a PO. */}

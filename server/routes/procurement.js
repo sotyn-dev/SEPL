@@ -930,6 +930,10 @@ router.get('/indents', (req, res) => {
       const po = it.po_item_id != null ? poItemById.get(it.po_item_id) : null;
       if (po && po.rate > 0) rate = po.rate;
       if (!rate && descMap) rate = descMap.get(String(it.description || '').toLowerCase().trim()) || 0;
+      // Attach the BOQ SALE rate + billable per line so the expanded indent
+      // can show "indent vs sales bill per BOQ" for estimation (mam 2026-06-24).
+      it.boq_sale_rate = +rate.toFixed(2);
+      it.billable_line = +(rate * (+it.quantity || 0)).toFixed(2);
       billable += rate * (+it.quantity || 0);
     }
     // Against-delivery %: planning value first, else the resolved bb's.
