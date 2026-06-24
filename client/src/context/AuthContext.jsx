@@ -29,7 +29,12 @@ export function AuthProvider({ children }) {
         // Only log out when the server actually rejects the token (401).
         // A 500 / network blip must NOT nuke a valid session — that was
         // turning a transient error into an instant logout (mam 2026-06-23).
-        .catch((e) => { if (e?.response?.status === 401) logout(); })
+        // Also ignore a 401 from a STALE /auth/me (one that used an older
+        // token than the now-active one) — that stale-request race logged a
+        // just-logged-in user straight back out (mam 2026-06-24, Nitin Jain).
+        .catch((e) => {
+          if (e?.response?.status === 401 && (e.config?.metadata?.tokenAtSend || null) === getToken()) logout();
+        })
         .finally(() => setLoading(false));
     } else {
       setLoading(false);
