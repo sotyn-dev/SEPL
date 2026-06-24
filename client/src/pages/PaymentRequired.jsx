@@ -275,6 +275,14 @@ export default function PaymentRequired() {
     setViewData(data); setModal('view');
   };
 
+  // Deep-link from the War Room "Open ↗" button — auto-open a specific
+  // request's proof view so the approver can verify it (mam 2026-06-24).
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('view');
+    if (id) viewRequest(id).catch(() => toast.error('Could not open that payment request'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const fmt = (n) => `Rs ${(n || 0).toLocaleString('en-IN')}`;
 

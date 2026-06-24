@@ -60,7 +60,7 @@ router.get('/pending-approvals/:key', (req, res) => {
       items = all(`SELECT id, indent_number AS title, COALESCE(NULLIF(site_name,''),'—') AS subtitle, status AS meta
                      FROM indents WHERE status IN ('submitted','l1_approved','crm_approved')
                      ORDER BY created_at DESC LIMIT 200`)
-        .map(r => ({ ...r, key: 'indents', link: '/procurement?tab=indents' }));
+        .map(r => ({ ...r, key: 'indents', link: `/procurement?tab=indents&approve=${r.id}` }));
       break;
     case 'vendor_po':
       items = all(`SELECT vp.id, vp.po_number AS title, COALESCE(v.name,'—') AS subtitle, vp.po_approval AS meta, vp.total_amount AS amount
@@ -73,19 +73,19 @@ router.get('/pending-approvals/:key', (req, res) => {
                           COALESCE(NULLIF(purpose,''), category, '') AS subtitle, status AS meta, amount
                      FROM payment_requests WHERE status NOT IN ('final_approved','rejected')
                      ORDER BY created_at DESC LIMIT 200`)
-        .map(r => ({ ...r, key: 'payment', link: '/payment-required' }));
+        .map(r => ({ ...r, key: 'payment', link: `/payment-required?view=${r.id}` }));
       break;
     case 'dpr':
       items = all(`SELECT d.id, COALESCE(s.name,'Site #'||d.site_id) AS title, d.report_date AS subtitle, 'pending' AS meta
                      FROM dpr d LEFT JOIN sites s ON s.id=d.site_id
                      WHERE d.approval_status='pending' ORDER BY d.report_date DESC LIMIT 200`)
-        .map(r => ({ ...r, key: 'dpr', link: '/dpr' }));
+        .map(r => ({ ...r, key: 'dpr', link: `/dpr?open=${r.id}` }));
       break;
     case 'delegation':
       items = all(`SELECT d.id, COALESCE(d.title,'Task') AS title, COALESCE(u.name,'') AS subtitle, 'submitted' AS meta
                      FROM delegations d LEFT JOIN users u ON u.id=d.assigned_to
                      WHERE d.assigned_by=? AND d.status='submitted' ORDER BY d.created_at DESC LIMIT 200`, uid)
-        .map(r => ({ ...r, key: 'delegation', link: '/delegations' }));
+        .map(r => ({ ...r, key: 'delegation', link: `/delegations?open=${r.id}` }));
       break;
   }
   res.json({ key: req.params.key, items });

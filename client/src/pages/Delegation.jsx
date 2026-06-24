@@ -107,6 +107,15 @@ export default function Delegation() {
     }
   }, [view]);
 
+  // Deep-link from the War Room "Open ↗" button — highlight + scroll to a
+  // specific delegation so the approver can verify its proof (mam 2026-06-24).
+  const [highlightId] = useState(() => new URLSearchParams(window.location.search).get('open'));
+  useEffect(() => {
+    if (!highlightId || !tasks.length) return;
+    const el = document.getElementById(`deleg-row-${highlightId}`);
+    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [highlightId, tasks]);
+
   // Voice → description. Appends to existing text so user can combine typing + voice.
   const toggleVoice = () => {
     if (!SR) {
@@ -553,7 +562,7 @@ export default function Delegation() {
               const canEditProject = isAdmin() || isAssigner;
               const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
               return (
-                <tr key={t.id} className={t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}>
+                <tr key={t.id} id={`deleg-row-${t.id}`} className={`${t.status === 'rejected' ? 'bg-red-50/40' : t.status === 'submitted' ? 'bg-blue-50/40' : ''}${String(t.id) === String(highlightId) ? ' ring-2 ring-amber-400 ring-inset' : ''}`}>
                   <td className="text-center text-xs text-gray-500 font-medium">{idx + 1}</td>
                   <td className="font-mono text-xs text-red-700 whitespace-nowrap">TSK-{String(t.id).padStart(4, '0')}</td>
                   <td className="align-top" style={{ minWidth: '180px', maxWidth: '340px' }}>

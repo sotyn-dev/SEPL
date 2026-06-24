@@ -929,7 +929,7 @@ export default function DashboardWarRoom() {
                           {item.meta ? <span style={{ marginLeft: 6, background: '#f1eee9', padding: '1px 6px', borderRadius: 8 }}>{item.meta}</span> : null}
                         </div>
                       </div>
-                      <button onClick={() => navigate(item.link)} style={{ fontSize: 11, color: '#4A4F57', background: 'none', border: '1px solid #ddd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer' }}>Open</button>
+                      <button onClick={() => window.open(item.link, '_blank', 'noopener,noreferrer')} title="Open the actual record in a new tab to verify proof" style={{ fontSize: 11, color: '#4A4F57', background: 'none', border: '1px solid #ddd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer' }}>Open ↗</button>
                       {item.key !== 'payment' && (
                         <button onClick={() => approveOne(item.key, item.id)} disabled={apprBusy === item.id}
                           style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: apprBusy === item.id ? '#9aa' : '#46A758', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
