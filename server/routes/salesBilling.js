@@ -265,7 +265,33 @@ router.get('/:id/print', requirePermission('installation', 'view'), (req, res) =
   const db = getDb();
   const bill = db.prepare('SELECT * FROM sales_bills WHERE id=? AND bill_type IS NOT NULL').get(req.params.id);
   if (!bill) return res.status(404).send('Bill not found');
-  const items = db.prepare('SELECT * FROM sales_bill_items WHERE sales_bill_id=? ORDER BY id').all(bill.id);
+  let items = db.prepare('SELECT * FROM sales_bill_items WHERE sales_bill_id=? ORDER BY id').all(bill.id);
+  // Installation (Type 3) bills store only the total — pull the BOQ work items
+  // from the DPRs they were generated from, aggregated per BOQ line, and scaled
+  // so they sum to the bill's taxable value (mam 2026-06-24: "as per DPR BOQ
+  // item show"). Works for already-created bills, no migration needed.
+  if (!items.length && bill.bill_type === 3) {
+    let wi = [];
+    try {
+      wi = db.prepare(
+        `SELECT wi.description, wi.unit, wi.rate,
+                COALESCE(SUM(wi.actual_qty), 0) AS qty, COALESCE(SUM(wi.amount), 0) AS amount
+           FROM dpr_work_items wi JOIN dpr d ON d.id = wi.dpr_id
+          WHERE d.sales_bill_id = ?
+          GROUP BY COALESCE(wi.po_item_id, wi.description), wi.rate, wi.unit
+          ORDER BY MIN(wi.id)`
+      ).all(bill.id);
+    } catch (_) { wi = []; }
+    const rawSum = wi.reduce((s, x) => s + (+x.amount || 0), 0);
+    const ratio = rawSum > 0 ? (+bill.amount || 0) / rawSum : 1;
+    items = wi.map(x => ({
+      description: x.description,
+      qty_ordered: +x.qty || 0,
+      unit: x.unit,
+      rate: round2((+x.rate || 0) * ratio),
+      amount: round2((+x.amount || 0) * ratio),
+    }));
+  }
   const bb = bill.business_book_id ? db.prepare('SELECT * FROM business_book WHERE id=?').get(bill.business_book_id) : null;
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(Buffer.from(installBillHTML({ bill, items, bb }), 'utf8'));
