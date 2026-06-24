@@ -3069,32 +3069,39 @@ router.get('/indents/:id/billable-print', (req, res) => {
   // its FOC accessories) can map to the SAME po_item — the client is billed for
   // that BOQ line ONCE, so dedupe by po_item_id (mam 2026-06-24: "double not").
   // Non-BOQ-linked lines show individually; FOC/RGP among those stay free.
+  // Bill on the INDENT qty (mam 2026-06-24: "according to indent") — NOT the
+  // full client-BOQ po_items qty — so this statement matches the indent's own
+  // Billable column (indent qty × BOQ sale rate). Sub-items that map to the
+  // SAME BOQ line (a PO line + its FOC accessories, or a split procure/store
+  // line) are summed into one row so a BOQ line still shows once.
   let total = 0;
   const rows = [];
-  const seenPo = new Set();
+  const poRow = new Map();     // po_item_id → its row, to sum indent qty
   let sn = 0;
   for (const it of items) {
+    const indentQty = +it.quantity || 0;
     if (it.po_item_id != null) {
-      if (seenPo.has(it.po_item_id)) continue;     // already printed this BOQ line
-      seenPo.add(it.po_item_id);
-      const desc = (it.boq_name && String(it.boq_name).trim())
-        ? it.boq_name
-        : [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
-      const qty = (+it.po_qty > 0) ? +it.po_qty : (+it.quantity || 0);
       const rate = +it.po_rate || 0;               // the BOQ line's sale rate
-      const amt = rate * qty;
-      total += amt;
-      rows.push({ sn: ++sn, code: it.item_code || '', desc, qty, unit: it.po_unit || it.unit || '', type: '', rate, amt });
+      if (poRow.has(it.po_item_id)) {
+        const row = poRow.get(it.po_item_id);
+        row.qty += indentQty;                      // add this sub-item's indent qty
+        row.amt = row.rate * row.qty;
+      } else {
+        const desc = (it.boq_name && String(it.boq_name).trim())
+          ? it.boq_name
+          : [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
+        const row = { sn: ++sn, code: it.item_code || '', desc, qty: indentQty, unit: it.po_unit || it.unit || '', type: '', rate, amt: rate * indentQty };
+        poRow.set(it.po_item_id, row);
+        rows.push(row);
+      }
     } else {
       const t = String(it.item_type || '').toUpperCase();
       const desc = [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
-      const qty = +it.quantity || 0;
       const rate = (t === 'FOC' || t === 'RGP') ? 0 : (descMap.get(String(it.description || '').toLowerCase().trim()) || 0);
-      const amt = rate * qty;
-      total += amt;
-      rows.push({ sn: ++sn, code: it.item_code || '', desc, qty, unit: it.unit || '', type: t, rate, amt });
+      rows.push({ sn: ++sn, code: it.item_code || '', desc, qty: indentQty, unit: it.unit || '', type: t, rate, amt: rate * indentQty });
     }
   }
+  total = rows.reduce((s, r) => s + (+r.amt || 0), 0);
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const inr = n => (+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
   const gst = Math.round(total * 0.18);
@@ -3123,7 +3130,7 @@ router.get('/indents/:id/billable-print', (req, res) => {
   </div>
   ${bb && bb.billing_address ? `<div class="box"><b>Client Address:</b> ${esc(bb.billing_address)}${bb.gstin ? ` &nbsp; <b>GSTIN:</b> ${esc(bb.gstin)}` : ''}</div>` : ''}
   <table>
-    <thead><tr><th style="width:32px">SN</th><th>BOQ Description</th><th class="r" style="width:70px">PO Qty</th><th style="width:50px">Unit</th><th class="r" style="width:90px">Sale Rate ₹</th><th class="r" style="width:110px">Billable ₹</th></tr></thead>
+    <thead><tr><th style="width:32px">SN</th><th>BOQ Description</th><th class="r" style="width:70px">Indent Qty</th><th style="width:50px">Unit</th><th class="r" style="width:90px">Sale Rate ₹</th><th class="r" style="width:110px">Billable ₹</th></tr></thead>
     <tbody>
     ${rows.map(r => `<tr><td>${r.sn}</td><td>${r.code ? `<span style="color:#888;font-family:monospace">[${esc(r.code)}]</span> ` : ''}${esc(r.desc)}${(r.type === 'FOC' || r.type === 'RGP') ? ` <span style="color:#9a8;font-size:9px">(${r.type} — free)</span>` : ''}</td><td class="r">${inr(r.qty)}</td><td>${esc(r.unit)}</td><td class="r">${r.rate > 0 ? inr(r.rate) : '—'}</td><td class="r">${r.amt > 0 ? inr(r.amt) : '—'}</td></tr>`).join('')}
     </tbody>
