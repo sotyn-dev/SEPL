@@ -245,12 +245,12 @@ export default function BusinessBook() {
   const listGroups = useMemo(() => {
     const map = new Map();
     for (const e of entries) {
-      // Merge leads ONLY when BOTH the client name AND the site/project match
-      // (mam 2026-06-24). So two different clients on the same project no longer
-      // merge; same-client-same-site leads still do.
+      // Merge leads by PROJECT NAME only (mam 2026-06-24): every lead with the
+      // same project (or company, when project is blank) collapses into one
+      // group — regardless of client. Leads with no project at all stay on
+      // their own row. The group lists its distinct clients in the Client cell.
       const pk = norm(cleanText(e.project_name) || cleanText(e.company_name));
-      const ck = norm(cleanText(e.client_name));
-      const key = (pk || ck) ? `${ck}||${pk}` : `__none__:${e.id}`;
+      const key = pk ? pk : `__none__:${e.id}`;
       if (!map.has(key)) {
         map.set(key, { key, label: projectLabel(e), client: cleanText(e.client_name) || '—',
           leads: [], sale: 0, gstIncl: 0, mgmtDisc: 0,
@@ -447,14 +447,14 @@ export default function BusinessBook() {
             {viewMode === 'dashboard'
               ? `${groups.length} client + site groups (${entries.length} entries${mergedCount > 0 ? `, ${mergedCount} merged` : ''})`
               : groupList
-                ? `${listGroups.length} client-site groups (${entries.length} leads${listMergedCount > 0 ? `, ${listMergedCount} merged` : ''})`
+                ? `${listGroups.length} projects (${entries.length} leads${listMergedCount > 0 ? `, ${listMergedCount} merged` : ''})`
                 : `Showing ${entries.length} entries`}
           </span>
           {viewMode === 'list' && (
             <button onClick={() => setGroupList(v => !v)}
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${groupList ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white text-gray-500 border-gray-200 hover:border-amber-300'}`}
               title="Merge leads that share the same project name">
-              <FiGrid size={12} /> {groupList ? 'Grouped by Client + Site' : 'Group by Client + Site'}
+              <FiGrid size={12} /> {groupList ? 'Grouped by Project' : 'Group by Project'}
             </button>
           )}
         </div>
