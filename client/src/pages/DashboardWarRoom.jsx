@@ -263,11 +263,14 @@ export default function DashboardWarRoom() {
   // Approve one item inline by reusing that module's own approve endpoint, so
   // its level/permission rules stay intact; refresh the list + counts after.
   const approveOne = async (key, id) => {
+    // Indents need the real L2 modal (items + qty-wise approval, From-Store),
+    // so open it in Procurement rather than blind-approving (mam 2026-06-24).
+    if (key === 'indents') { navigate(`/procurement?tab=indents&approve=${id}`); return; }
     setApprBusy(id);
     try {
-      // Indents & POs: one-click FULL approve (admin/CMD is final). DPR &
-      // delegations: their own single-step approve. Payment is Open-only.
-      if (key === 'indents' || key === 'vendor_po') await api.post(`/dashboards/approve/${key}/${id}`);
+      // Vendor PO: one-click sign-off (no qty-wise step). DPR & delegations:
+      // their own single-step approve. Payment is Open-only.
+      if (key === 'vendor_po') await api.post(`/dashboards/approve/${key}/${id}`);
       else if (key === 'dpr') await api.put(`/dpr/${id}/approve`);
       else if (key === 'delegation') await api.post(`/delegations/${id}/approve`);
       else { navigate(`/payment-required`); return; }
@@ -929,8 +932,8 @@ export default function DashboardWarRoom() {
                       <button onClick={() => navigate(item.link)} style={{ fontSize: 11, color: '#4A4F57', background: 'none', border: '1px solid #ddd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer' }}>Open</button>
                       {item.key !== 'payment' && (
                         <button onClick={() => approveOne(item.key, item.id)} disabled={apprBusy === item.id}
-                          style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: apprBusy === item.id ? '#9aa' : '#46A758', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer' }}>
-                          {apprBusy === item.id ? '…' : 'Approve'}
+                          style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: apprBusy === item.id ? '#9aa' : '#46A758', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                          {apprBusy === item.id ? '…' : (item.key === 'indents' ? 'Review & Approve →' : 'Approve')}
                         </button>
                       )}
                     </div>

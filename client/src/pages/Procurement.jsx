@@ -743,6 +743,24 @@ export default function Procurement() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
+  // Deep-link from the War Room "My Approvals" inbox: ?approve=<indentId>
+  // opens that indent's FULL qty-wise approval modal (mam 2026-06-24: dashboard
+  // approve must show items + qty-wise L2 approval, not a blind one-click).
+  const approveParamHandled = useRef(null);
+  useEffect(() => {
+    const id = searchParams.get('approve');
+    if (!id || approveParamHandled.current === id) return;
+    const it = indents.find(x => String(x.id) === String(id));
+    if (it) {
+      approveParamHandled.current = id;
+      openApproveModal(it);
+      const next = new URLSearchParams(searchParams);
+      next.delete('approve');
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, indents]);
+
   // Returning to this browser tab after editing an item's UOM / price on
   // the Item Master page in another tab should show the live value here.
   // Refetch the Raise-Indent data on focus; skipped for inline-edit tabs
