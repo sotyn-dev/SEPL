@@ -480,15 +480,22 @@ export default function SiteChat() {
                   <>
                     <input ref={fileRef} type="file" className="hidden" onChange={e => attach(e.target.files?.[0])} />
                     <button onClick={() => fileRef.current?.click()} disabled={busy} className="flex-shrink-0 p-2 text-gray-500 hover:text-emerald-600" title="Attach photo / file"><FiPaperclip size={18} /></button>
-                    <textarea ref={taRef} className="input flex-1 min-w-0 resize-none" rows="1" placeholder="Type a message… (@ to tag)" value={text}
-                      onChange={onTextChange}
-                      onKeyDown={e => {
-                        if (mention && mentionList.length) {
-                          if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionList[0].name); return; }
-                          if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
-                        }
-                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-                      }} />
+                    {/* Wrap the textarea in a flex-1 min-w-0 div (NOT on the
+                        textarea itself) — a textarea's intrinsic width isn't
+                        reliably collapsed by min-width:0 on mobile, which pushed
+                        the send button off the right edge so it never showed
+                        (mam 2026-06-25). The reply bar uses this same wrapper. */}
+                    <div className="flex-1 min-w-0">
+                      <textarea ref={taRef} className="input resize-none block" rows="1" placeholder="Type a message… (@ to tag)" value={text}
+                        onChange={onTextChange}
+                        onKeyDown={e => {
+                          if (mention && mentionList.length) {
+                            if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionList[0].name); return; }
+                            if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
+                          }
+                          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+                        }} />
+                    </div>
                     {text.trim()
                       ? <button onClick={() => send()} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#25d366' }}><FiSend size={16} /></button>
                       : <button onClick={startRec} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#25d366' }} title="Record voice message"><FiMic size={16} /></button>}
