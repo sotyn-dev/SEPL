@@ -489,8 +489,9 @@ export default function BusinessBook() {
               {/* Flat list, or merged-by-project when grouping is on. */}
               {!groupList && entries.map(b => renderLeadRow(b))}
               {groupList && listGroups.map(g => {
-                // Single-lead projects render as an ordinary row — nothing to merge.
-                if (g.leads.length === 1) return renderLeadRow(g.leads[0]);
+                // Every project — even a single-lead one — renders as the SAME
+                // collapsible group row (mam 2026-06-24: "view is same of all").
+                // The lead(s) appear on expand.
                 const open = !!listExpanded[g.key];
                 return (
                   <Fragment key={g.key}>
@@ -501,13 +502,13 @@ export default function BusinessBook() {
                       <td className="px-3 py-1.5 align-top">
                         <div className="flex items-center gap-1.5 text-blue-700">
                           {open ? <FiChevronDown size={15} /> : <FiChevronRight size={15} />}
-                          <span className="bg-blue-600 text-white text-[11px] font-bold px-2 py-0.5 rounded-full">{g.leads.length} leads</span>
+                          <span className="bg-blue-600 text-white text-[11px] font-bold px-2 py-0.5 rounded-full">{g.leads.length} lead{g.leads.length > 1 ? 's' : ''}</span>
                         </div>
                       </td>
                       <td className="px-3 py-1.5 align-top text-[13px] font-medium">{g.client}</td>
                       <td className="px-3 py-1.5 align-top">
                         <div className="font-semibold text-[13px] text-gray-900 flex items-start gap-1 leading-snug"><FiMapPin size={12} className="text-blue-600 mt-0.5 shrink-0" /> {g.label}</div>
-                        <div className="text-[10px] text-blue-700/80 ml-4">{g.leads.length} leads · tap to {open ? 'collapse' : 'expand'}</div>
+                        <div className="text-[10px] text-blue-700/80 ml-4">{g.leads.length} lead{g.leads.length > 1 ? 's' : ''} · tap to {open ? 'collapse' : 'expand'}</div>
                       </td>
                       <td className="px-3 py-1.5" />
                       <td className="px-3 py-1.5 text-right align-top whitespace-nowrap font-bold text-[13px]">{fmt(g.sale)}<div className="text-[9px] text-gray-400 font-normal uppercase">total sales</div></td>
