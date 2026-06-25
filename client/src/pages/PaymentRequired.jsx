@@ -1472,7 +1472,15 @@ export default function PaymentRequired() {
           ) : (
             <div className="max-h-[58vh] overflow-y-auto space-y-3 pr-1">
               {bulkVisible.map((r) => {
-                const proofs = [r.attachment_link, r.ticket_upload, r.km_photo, r.quotation_link].filter(Boolean);
+                // ALL proofs, labelled — incl. the bike Start KM + End KM
+                // odometer photos (mam 2026-06-25 "show bike start and end").
+                const proofs = [
+                  { url: r.km_photo, label: '🛵 Start KM' },
+                  { url: r.end_km_photo, label: '🏁 End KM' },
+                  { url: r.ticket_upload, label: '🎫 Ticket' },
+                  { url: r.quotation_link, label: '📄 Quotation' },
+                  { url: r.attachment_link, label: '📎 Other' },
+                ].filter(p => p.url);
                 const checked = bulkSel.has(r.id);
                 const isTada = r.category === 'TA/DA';
                 return (
@@ -1517,10 +1525,15 @@ export default function PaymentRequired() {
                     <div className="px-3 pb-3">
                       <div className="text-[11px] font-semibold text-blue-700 mb-1">📎 Proofs / Receipts ({proofs.length})</div>
                       {proofs.length > 0 ? (
-                        <div className="flex gap-2 flex-wrap">
-                          {proofs.map((u, j) => /\.(png|jpe?g|gif|webp)$/i.test(String(u))
-                            ? <a key={j} href={u} target="_blank" rel="noreferrer" title="Open full size"><img src={u} alt="proof" loading="lazy" className="w-32 h-32 object-cover rounded border hover:ring-2 hover:ring-blue-400" /></a>
-                            : <a key={j} href={u} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline flex items-center gap-1 px-2 py-1 border rounded h-9"><FiFile size={12} /> Proof {j + 1}</a>)}
+                        <div className="flex gap-3 flex-wrap">
+                          {proofs.map((p, j) => (
+                            <div key={j} className="flex flex-col items-center gap-1">
+                              <span className="text-[10px] font-semibold text-gray-600 whitespace-nowrap">{p.label}</span>
+                              {/\.(png|jpe?g|gif|webp)$/i.test(String(p.url))
+                                ? <a href={p.url} target="_blank" rel="noreferrer" title={`${p.label} — open full size`}><img src={p.url} alt={p.label} loading="lazy" className="w-32 h-32 object-cover rounded border hover:ring-2 hover:ring-blue-400" /></a>
+                                : <a href={p.url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline flex items-center gap-1 px-2 py-1 border rounded h-32 w-32 justify-center"><FiFile size={14} /> Open</a>}
+                            </div>
+                          ))}
                         </div>
                       ) : <div className="text-[11px] text-amber-600">⚠ no proof attached</div>}
                     </div>
