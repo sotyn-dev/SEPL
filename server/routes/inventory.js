@@ -67,17 +67,25 @@ try {
 // 2026-06-23: "select opening date so automation starts after that").
 // Opening stock is set manually as of this date; documents dated before it
 // should not drive automation. Stored as a single app_setting.
+// Opening date is now PER WAREHOUSE (mam 2026-06-25: "site wise date opening").
+// GET ?warehouse_id=X → that site's opening date. POST { warehouse_id,
+// opening_date } sets it on the warehouse. (The /warehouses list also returns
+// opening_date via w.*, so the UI usually reads it from there.)
 router.get('/opening-date', requirePermission('inventory', 'view'), (req, res) => {
-  const row = getDb().prepare("SELECT value FROM app_settings WHERE key='inventory_opening_date'").get();
-  res.json({ opening_date: row && row.value ? row.value : null });
+  const wid = +req.query.warehouse_id;
+  if (!wid) return res.json({ warehouse_id: null, opening_date: null });
+  const row = getDb().prepare('SELECT opening_date FROM warehouses WHERE id=?').get(wid);
+  res.json({ warehouse_id: wid, opening_date: row?.opening_date || null });
 });
 router.post('/opening-date', requirePermission('inventory', 'edit'), (req, res) => {
+  const wid = +req.body?.warehouse_id;
+  if (!wid) return res.status(400).json({ error: 'warehouse_id is required' });
   const d = String(req.body?.opening_date || '').trim();
   if (d && !/^\d{4}-\d{2}-\d{2}$/.test(d)) return res.status(400).json({ error: 'Date must be YYYY-MM-DD' });
-  getDb().prepare(
-    "INSERT INTO app_settings (key, value) VALUES ('inventory_opening_date', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
-  ).run(d || null);
-  res.json({ opening_date: d || null });
+  const ex = getDb().prepare('SELECT id FROM warehouses WHERE id=?').get(wid);
+  if (!ex) return res.status(404).json({ error: 'Warehouse not found' });
+  getDb().prepare('UPDATE warehouses SET opening_date=? WHERE id=?').run(d || null, wid);
+  res.json({ warehouse_id: wid, opening_date: d || null });
 });
 
 // ---------- WAREHOUSES ----------

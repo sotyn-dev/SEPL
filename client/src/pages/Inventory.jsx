@@ -31,8 +31,6 @@ export default function Inventory() {
   const [stock, setStock] = useState([]);
   const [summary, setSummary] = useState([]);
   const [movements, setMovements] = useState([]);
-  const [openingDate, setOpeningDate] = useState('');     // inventory automation baseline
-  const [savingOpenDate, setSavingOpenDate] = useState(false);
 
   // Filters
   const [stockFilter, setStockFilter] = useState({ warehouse_id: '', search: '', low_only: false });
@@ -56,18 +54,7 @@ export default function Inventory() {
         label: [i.item_code, i.item_name, i.specification, i.size, i.department && '·' + i.department]
           .filter(Boolean).join(' '),
       })));
-      api.get('/inventory/opening-date').then(r => setOpeningDate(r.data?.opening_date || '')).catch(() => {});
     } catch (err) { /* keep silent */ }
-  };
-
-  const saveOpeningDate = async (d) => {
-    setSavingOpenDate(true);
-    try {
-      await api.post('/inventory/opening-date', { opening_date: d || '' });
-      setOpeningDate(d || '');
-      toast.success(d ? `Inventory opening date set to ${d}` : 'Opening date cleared');
-    } catch (e) { toast.error(e.response?.data?.error || 'Failed to save'); }
-    finally { setSavingOpenDate(false); }
   };
 
   const loadSummary = async () => {
@@ -162,26 +149,8 @@ export default function Inventory() {
         </div>
       </div>
 
-      {/* Inventory Opening Date — automation baseline (mam 2026-06-23) */}
-      {(canEdit('inventory') || isAdmin()) && (
-        <div className="card p-3 flex flex-wrap items-center gap-3 border-l-4 border-indigo-400 bg-indigo-50/40">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">📅</span>
-            <div>
-              <div className="text-sm font-semibold text-gray-800">Inventory Opening Date</div>
-              <div className="text-[11px] text-gray-500">Set the day-1 baseline. Enter opening stock as of this date; automated movements count from here on.</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 ml-auto">
-            <input type="date" className="input w-44" value={openingDate || ''} disabled={savingOpenDate}
-              onChange={e => saveOpeningDate(e.target.value)} />
-            {openingDate && (
-              <button type="button" onClick={() => saveOpeningDate('')} className="text-xs text-red-500 hover:underline">Clear</button>
-            )}
-            {savingOpenDate && <span className="text-xs text-gray-400">saving…</span>}
-          </div>
-        </div>
-      )}
+      {/* Opening date is now set PER SITE inside the Opening Stock tab
+          (mam 2026-06-25), not as one global date here. */}
 
       {/* Tabs */}
       <div className="flex gap-2 flex-wrap">
@@ -762,6 +731,26 @@ function OpeningRowEntry({ warehouses, items, reload }) {
   const [rows, setRows] = useState([newRow()]);
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  // Per-site opening date (mam 2026-06-25: "site wise date opening — from that
+  // we go automatically"). When a warehouse is picked, load its opening date;
+  // editing saves it on that warehouse. Each site has its own day-1 baseline.
+  const [siteOpenDate, setSiteOpenDate] = useState('');
+  const [savingOpenDate, setSavingOpenDate] = useState(false);
+  useEffect(() => {
+    if (!warehouseId) { setSiteOpenDate(''); return; }
+    const w = warehouses.find(x => String(x.id) === String(warehouseId));
+    setSiteOpenDate(w?.opening_date ? String(w.opening_date).slice(0, 10) : '');
+  }, [warehouseId, warehouses]);
+  const saveSiteOpenDate = async (d) => {
+    if (!warehouseId) return;
+    setSavingOpenDate(true);
+    try {
+      await api.post('/inventory/opening-date', { warehouse_id: warehouseId, opening_date: d || '' });
+      setSiteOpenDate(d || '');
+      toast.success(d ? `Opening date set for this site: ${d}` : 'Opening date cleared for this site');
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed to save'); }
+    finally { setSavingOpenDate(false); }
+  };
   // Department pre-filter so mam can narrow the 3,100-item catalog
   // before searching. e.g. pick "CIVIL" -> dropdown only shows
   // Cement, Hume Pipe, masonry chamber, Excavation, ... etc.
@@ -864,9 +853,21 @@ function OpeningRowEntry({ warehouses, items, reload }) {
         <select className="select" value={warehouseId} onChange={e => setWarehouseId(e.target.value)} required>
           <option value="">Pick site / warehouse…</option>
           {activeWarehouses.map(w => (
-            <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}</option>
+            <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}{w.opening_date ? ` · opens ${String(w.opening_date).slice(0,10)}` : ''}</option>
           ))}
         </select>
+        {/* Per-site opening date — the day-1 baseline FOR THIS SITE. Automated
+            movements count from this date for this warehouse (mam 2026-06-25). */}
+        {warehouseId && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-blue-200/60 pt-2">
+            <span className="text-[11px] font-semibold text-gray-700">📅 Opening date for this site</span>
+            <span className="text-[10px] text-gray-500">— day-1 baseline; automated movements count from here for this warehouse</span>
+            <input type="date" className="input w-44 ml-auto" value={siteOpenDate || ''} disabled={savingOpenDate}
+              onChange={e => saveSiteOpenDate(e.target.value)} />
+            {siteOpenDate && <button type="button" onClick={() => saveSiteOpenDate('')} className="text-xs text-red-500 hover:underline">Clear</button>}
+            {savingOpenDate && <span className="text-xs text-gray-400">saving…</span>}
+          </div>
+        )}
       </div>
 
       {/* Department pre-filter — narrows the item dropdown from 3,000+

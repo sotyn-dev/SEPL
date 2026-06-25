@@ -3497,6 +3497,9 @@ function initializeDatabase() {
     // CRM funnel: expected lead closing date, captured alongside the tentative
     // amount when a lead is qualified (mam 2026-06-25).
     ['sales_funnel', 'closing_date DATE'],
+    // Inventory opening date is now PER WAREHOUSE (mam 2026-06-25: "site wise
+    // date opening — from that we go automatically"), not one global setting.
+    ['warehouses', 'opening_date DATE'],
     ['indent_items', 'weight_per_meter REAL'],
     // PO line snapshot: kg/m used, and the original meters (quantity on the
     // line is stored in KG for pipes so amount = kg × ₹/kg works unchanged).
