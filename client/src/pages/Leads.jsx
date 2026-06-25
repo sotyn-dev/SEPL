@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -7,7 +7,7 @@ import TimePicker from '../components/TimePicker';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateIST } from '../utils/dateIST';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
@@ -124,6 +124,10 @@ export default function Leads() {
   const [leads, setLeads] = useState([]);
   const [dashboard, setDashboard] = useState(null);
   const [search, setSearch] = useState('');
+  // Group the funnel list by PROJECT — same collapsible layout as Business
+  // Book (mam 2026-06-25: "merge project wise like business book").
+  const [groupLeads, setGroupLeads] = useState(true);
+  const [leadsExpanded, setLeadsExpanded] = useState({});
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [viewData, setViewData] = useState(null);
@@ -265,6 +269,62 @@ export default function Leads() {
   // Funnel data
   const funnelData = STAGES.filter(s=>s!=='lost').map(s => ({ stage: STAGE_SHORT[s], count: dashboard?.byStage?.find(b=>b.current_stage===s)?.count||0 }));
 
+  // SLA chip for a lead row (overdue / due-in / —).
+  const slaChipFor = (l) => {
+    if (l.sla_minutes_left === null || l.sla_minutes_left === undefined) return <span className="text-gray-300 text-[10px]">—</span>;
+    const m = l.sla_minutes_left;
+    if (m < 0) { const abs = -m; const label = abs < 60 ? `${abs}m` : abs < 1440 ? `${Math.round(abs/60)}h` : `${Math.round(abs/1440)}d`; return <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">OVERDUE {label}</span>; }
+    if (m < 60) return <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200">{m}m left</span>;
+    if (m < 1440) return <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">{Math.round(m/60)}h left</span>;
+    return <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">{Math.round(m/1440)}d left</span>;
+  };
+  const fmtRs = (n) => (+n > 0 ? `₹${(+n).toLocaleString('en-IN')}` : <span className="text-gray-300">-</span>);
+
+  // One lead row — reused by the flat list and the grouped children so the
+  // columns never drift. Tentative Amount column added (mam 2026-06-25).
+  const renderLeadRow = (l, child = false) => (
+    <tr key={l.id} className={`border-b hover:bg-red-50/40 cursor-pointer ${child ? 'bg-gray-50/60' : ''}`} onClick={()=>viewLead(l)}>
+      <td className={`px-3 py-2.5 font-bold text-red-600 ${child ? 'pl-8' : ''}`}>{l.lead_no}</td>
+      <td className="px-3 py-2.5"><div className="font-semibold">{l.client_name}</div></td>
+      <td className="px-3 py-2.5 text-gray-600">{l.company_name||'-'}</td>
+      <td className="px-3 py-2.5"><span className="text-[9px] bg-gray-100 px-2 py-0.5 rounded-full font-medium">{l.category||'-'}</span></td>
+      <td className="px-3 py-2.5 text-gray-500">{l.district||l.address||'-'}</td>
+      <td className="px-3 py-2.5 text-right font-semibold text-emerald-700">{fmtRs(l.tentative_amount)}</td>
+      <td className="px-3 py-2.5">{l.assigned_sc||'-'}</td>
+      <td className="px-3 py-2.5"><span className="text-[9px] px-2 py-1 rounded-full font-bold text-white" style={{backgroundColor:STAGE_COLORS[l.current_stage]||'#888'}}>{STAGE_SHORT[l.current_stage]||l.current_stage}</span></td>
+      <td className="px-3 py-2.5">{slaChipFor(l)}</td>
+      <td className="px-3 py-2.5 text-[10px] text-gray-400">{fmtDateIST(l.created_at)}</td>
+      <td className="px-3 py-2.5" onClick={e=>e.stopPropagation()}>
+        <div className="flex gap-1">
+          <button onClick={()=>viewLead(l)} className="p-1 text-red-600 hover:bg-red-50 rounded"><FiEye size={14}/></button>
+          {canEdit('leads')&&<button onClick={()=>{setForm(l);setModal('edit');}} className="p-1 text-amber-600 hover:bg-amber-50 rounded"><FiEdit2 size={14}/></button>}
+          {canDelete('leads')&&<button onClick={async()=>{if(!confirm('Delete?'))return;await api.delete(`/sales-funnel/${l.id}`);toast.success('Deleted');load();}} className="p-1 text-red-600 hover:bg-red-50 rounded"><FiTrash2 size={14}/></button>}
+        </div>
+      </td>
+    </tr>
+  );
+
+  // Group the funnel list by PROJECT NAME (like Business Book). Leads with no
+  // project_name stay on their own row (keyed by id) — avoids merging unrelated
+  // blank/"na" leads. Each group sums the tentative amounts.
+  const cleanTxt = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  const leadGroups = useMemo(() => {
+    const map = new Map();
+    for (const l of leads) {
+      const proj = cleanTxt(l.project_name);
+      const key = proj ? proj.toLowerCase() : `__none__:${l.id}`;
+      if (!map.has(key)) map.set(key, { key, label: proj || (cleanTxt(l.company_name) || cleanTxt(l.client_name) || '(no project)'), leads: [], amount: 0, clients: new Set() });
+      const g = map.get(key);
+      g.leads.push(l);
+      g.amount += (+l.tentative_amount || 0);
+      if (l.client_name) g.clients.add(cleanTxt(l.client_name));
+    }
+    return [...map.values()];
+  }, [leads]);
+  const leadsMergedCount = leadGroups.filter(g => g.leads.length > 1).length;
+  const toggleLeadGroup = (key) => setLeadsExpanded(p => ({ ...p, [key]: !p[key] }));
+  const leadClientList = (set) => { const a = [...set]; if (!a.length) return '-'; return a.length <= 2 ? a.join(', ') : `${a.slice(0,2).join(', ')} +${a.length-2} more`; };
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -397,47 +457,49 @@ export default function Leads() {
 
       {/* List Tab */}
       {tab === 'list' && (<>
-        <div className="relative"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16}/><input className="input pl-10" placeholder="Search client, company, lead no, phone..." value={search} onChange={e=>setSearch(e.target.value)}/></div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[220px]"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16}/><input className="input pl-10" placeholder="Search client, company, lead no, phone..." value={search} onChange={e=>setSearch(e.target.value)}/></div>
+          <button onClick={()=>setGroupLeads(v=>!v)}
+            className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${groupLeads ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white text-gray-500 border-gray-200 hover:border-amber-300'}`}
+            title="Merge leads that share the same project">
+            <FiGrid size={14}/> {groupLeads ? 'Grouped by Project' : 'Group by Project'}
+          </button>
+        </div>
+        {groupLeads && (
+          <div className="text-xs text-gray-500">{leadGroups.length} project{leadGroups.length!==1?'s':''} ({leads.length} lead{leads.length!==1?'s':''}{leadsMergedCount>0?`, ${leadsMergedCount} merged`:''}) · tap a project to expand</div>
+        )}
         <div className="card p-0"><table className="text-xs freeze-head">
-          <thead><tr><th className="px-3 py-2">Lead No</th><th className="px-3 py-2">Client</th><th className="px-3 py-2">Company</th><th className="px-3 py-2">Category</th><th className="px-3 py-2">Location</th><th className="px-3 py-2">SC</th><th className="px-3 py-2">Stage</th><th className="px-3 py-2">SLA</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Actions</th></tr></thead>
-          <tbody>{leads.map(l => {
-            // SLA chip: shows "due in Xh" / "overdue by Xd" / "—" based on
-            // sla_minutes_left from the backend. Overdue rows get a red chip
-            // so mam's team can spot them instantly in the list.
-            let slaChip = <span className="text-gray-300 text-[10px]">—</span>;
-            if (l.sla_minutes_left !== null && l.sla_minutes_left !== undefined) {
-              const m = l.sla_minutes_left;
-              if (m < 0) {
-                const abs = -m;
-                const label = abs < 60 ? `${abs}m` : abs < 1440 ? `${Math.round(abs/60)}h` : `${Math.round(abs/1440)}d`;
-                slaChip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">OVERDUE {label}</span>;
-              } else if (m < 60) {
-                slaChip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200">{m}m left</span>;
-              } else if (m < 1440) {
-                slaChip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">{Math.round(m/60)}h left</span>;
-              } else {
-                slaChip = <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200">{Math.round(m/1440)}d left</span>;
-              }
-            }
-            return (<tr key={l.id} className="border-b hover:bg-red-50/40 cursor-pointer" onClick={()=>viewLead(l)}>
-            <td className="px-3 py-2.5 font-bold text-red-600">{l.lead_no}</td>
-            <td className="px-3 py-2.5"><div className="font-semibold">{l.client_name}</div></td>
-            <td className="px-3 py-2.5 text-gray-600">{l.company_name||'-'}</td>
-            <td className="px-3 py-2.5"><span className="text-[9px] bg-gray-100 px-2 py-0.5 rounded-full font-medium">{l.category||'-'}</span></td>
-            <td className="px-3 py-2.5 text-gray-500">{l.district||l.address||'-'}</td>
-            <td className="px-3 py-2.5">{l.assigned_sc||'-'}</td>
-            <td className="px-3 py-2.5"><span className="text-[9px] px-2 py-1 rounded-full font-bold text-white" style={{backgroundColor:STAGE_COLORS[l.current_stage]||'#888'}}>{STAGE_SHORT[l.current_stage]||l.current_stage}</span></td>
-            <td className="px-3 py-2.5">{slaChip}</td>
-            <td className="px-3 py-2.5 text-[10px] text-gray-400">{fmtDateIST(l.created_at)}</td>
-            <td className="px-3 py-2.5" onClick={e=>e.stopPropagation()}>
-              <div className="flex gap-1">
-                <button onClick={()=>viewLead(l)} className="p-1 text-red-600 hover:bg-red-50 rounded"><FiEye size={14}/></button>
-                {canEdit('leads')&&<button onClick={()=>{setForm(l);setModal('edit');}} className="p-1 text-amber-600 hover:bg-amber-50 rounded"><FiEdit2 size={14}/></button>}
-                {canDelete('leads')&&<button onClick={async()=>{if(!confirm('Delete?'))return;await api.delete(`/sales-funnel/${l.id}`);toast.success('Deleted');load();}} className="p-1 text-red-600 hover:bg-red-50 rounded"><FiTrash2 size={14}/></button>}
-              </div>
-            </td>
-          </tr>);
-          })}{leads.length===0&&<tr><td colSpan="10" className="text-center py-8 text-gray-400">No leads</td></tr>}</tbody>
+          <thead><tr><th className="px-3 py-2">Lead No</th><th className="px-3 py-2">Client</th><th className="px-3 py-2">Company</th><th className="px-3 py-2">Category</th><th className="px-3 py-2">Location</th><th className="px-3 py-2 text-right">Tentative Amt</th><th className="px-3 py-2">SC</th><th className="px-3 py-2">Stage</th><th className="px-3 py-2">SLA</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Actions</th></tr></thead>
+          <tbody>
+            {/* Flat list, or merged-by-project when grouping is on. */}
+            {!groupLeads && leads.map(l => renderLeadRow(l))}
+            {groupLeads && leadGroups.map(g => {
+              const open = !!leadsExpanded[g.key];
+              return (
+                <Fragment key={g.key}>
+                  {/* Collapsed project row — project + lead count + tentative total. */}
+                  <tr className="bg-blue-50/60 hover:bg-blue-100/60 cursor-pointer border-l-4 border-blue-600" onClick={()=>toggleLeadGroup(g.key)}>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1.5 text-blue-700">
+                        {open ? <FiChevronDown size={14}/> : <FiChevronRight size={14}/>}
+                        <span className="bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">{g.leads.length} lead{g.leads.length>1?'s':''}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-[11px]">{leadClientList(g.clients)}</td>
+                    <td className="px-3 py-2" colSpan={2}>
+                      <span className="font-semibold text-[12px] text-gray-900 flex items-center gap-1"><FiMapPin size={11} className="text-blue-600"/> {g.label}</span>
+                      <span className="text-[9px] text-blue-700/80">tap to {open?'collapse':'expand'}</span>
+                    </td>
+                    <td className="px-3 py-2"></td>
+                    <td className="px-3 py-2 text-right font-bold text-emerald-700">{g.amount>0?`₹${g.amount.toLocaleString('en-IN')}`:'-'}<div className="text-[8px] text-gray-400 font-normal uppercase">tentative</div></td>
+                    <td className="px-3 py-2" colSpan={5}></td>
+                  </tr>
+                  {open && g.leads.map(l => renderLeadRow(l, true))}
+                </Fragment>
+              );
+            })}
+            {leads.length===0&&<tr><td colSpan="11" className="text-center py-8 text-gray-400">No leads</td></tr>}
+          </tbody>
         </table></div>
       </>)}
 
