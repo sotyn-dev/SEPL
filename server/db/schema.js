@@ -16,13 +16,17 @@ function getDb() {
     // - WAL: concurrent reads while a write is happening (mam: pages
     //   stay snappy even when multiple users punch / save simultaneously)
     // - synchronous=NORMAL: fewer fsyncs, still crash-safe in WAL mode
-    // - cache_size=-64000: 64 MB page cache (was ~2 MB default)
-    // - mmap_size=128 MB: read pages via memory-map, fewer syscalls
+    // - cache_size=-24000: 24 MB page cache. Trimmed from 64 MB (2026-06-25):
+    //   on the 1 GB VPS the old 64 MB cache + 128 MB mmap were ~190 MB of the
+    //   process footprint, feeding the OOM-killer that caused the recurring
+    //   502s. The DB is small and now well-indexed, so 24 MB is ample and
+    //   frees ~140 MB of headroom so the process is far less likely to OOM.
+    // - mmap_size=64 MB: read pages via memory-map, fewer syscalls (halved).
     // - temp_store=MEMORY: temp tables/indices in RAM, not disk
     db.pragma('journal_mode = WAL');
     db.pragma('synchronous = NORMAL');
-    db.pragma('cache_size = -64000');
-    db.pragma('mmap_size = 134217728');
+    db.pragma('cache_size = -24000');
+    db.pragma('mmap_size = 67108864');
     db.pragma('temp_store = MEMORY');
     db.pragma('foreign_keys = ON');
   }
