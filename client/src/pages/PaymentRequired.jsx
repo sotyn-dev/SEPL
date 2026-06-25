@@ -1445,55 +1445,68 @@ export default function PaymentRequired() {
           ) : bulkVisible.length === 0 ? (
             <div className="py-8 text-center text-emerald-600 text-sm">✅ Nothing pending your approval{bulkSearch ? ' for that filter' : ''}.</div>
           ) : (
-            <div className="max-h-[55vh] overflow-auto border rounded-lg">
-              <table className="w-full text-xs border-collapse">
-                <thead className="sticky top-0 z-10">
-                  <tr className="bg-gray-100 text-gray-500 uppercase text-[10px] border-b">
-                    <th className="px-2 py-2 w-8"><input type="checkbox" checked={bulkVisible.length > 0 && bulkPickedCount === bulkVisible.length} onChange={e => setAllVisible(e.target.checked)} className="w-4 h-4 accent-emerald-600 align-middle" /></th>
-                    <th className="px-2 py-2 text-left">#</th>
-                    <th className="px-2 py-2 text-left">Req No</th>
-                    <th className="px-2 py-2 text-left">Employee</th>
-                    <th className="px-2 py-2 text-left">Category</th>
-                    <th className="px-2 py-2 text-left">Step</th>
-                    <th className="px-2 py-2 text-left">Purpose</th>
-                    <th className="px-2 py-2 text-left">Proof</th>
-                    <th className="px-2 py-2 text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {bulkVisible.map((r, i) => {
-                    const proofs = [r.attachment_link, r.ticket_upload, r.km_photo, r.quotation_link].filter(Boolean);
-                    const checked = bulkSel.has(r.id);
-                    return (
-                      <tr key={r.id} onClick={() => toggleBulk(r.id)} className={`border-b border-gray-100 align-top cursor-pointer ${checked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'}`}>
-                        <td className="px-2 py-2 text-center" onClick={e => e.stopPropagation()}><input type="checkbox" checked={checked} onChange={() => toggleBulk(r.id)} className="w-4 h-4 accent-emerald-600" /></td>
-                        <td className="px-2 py-2 text-gray-400">{i + 1}</td>
-                        <td className="px-2 py-2 font-bold text-red-600 whitespace-nowrap">{r.request_no}</td>
-                        <td className="px-2 py-2 whitespace-nowrap">{r.employee_name || r.created_by_name}</td>
-                        <td className="px-2 py-2"><span className="px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] whitespace-nowrap">{r.category}</span></td>
-                        <td className="px-2 py-2 text-gray-500 whitespace-nowrap">{r.current_step_name || `Step ${r.current_step}`}</td>
-                        <td className="px-2 py-2 text-gray-600 max-w-[170px] truncate" title={r.purpose}>{r.purpose || '—'}</td>
-                        <td className="px-2 py-2" onClick={e => e.stopPropagation()}>
-                          {proofs.length > 0 ? (
-                            <div className="flex gap-1 flex-wrap">
-                              {proofs.map((u, j) => /\.(png|jpe?g|gif|webp)$/i.test(String(u))
-                                ? <a key={j} href={u} target="_blank" rel="noreferrer"><img src={u} alt="proof" loading="lazy" className="w-10 h-10 object-cover rounded border" /></a>
-                                : <a key={j} href={u} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 underline flex items-center gap-0.5 px-1.5 py-1 border rounded"><FiFile size={10} /> {j + 1}</a>)}
-                            </div>
-                          ) : <span className="text-[10px] text-amber-600">⚠ none</span>}
-                        </td>
-                        <td className="px-2 py-2 text-right font-semibold whitespace-nowrap">₹{Number(r.approved_amount ?? r.amount).toLocaleString('en-IN')}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className="bg-emerald-50 font-semibold sticky bottom-0">
-                    <td colSpan="8" className="px-2 py-2 text-right">Selected Total ({bulkPickedCount})</td>
-                    <td className="px-2 py-2 text-right text-emerald-700 whitespace-nowrap">₹{Math.round(bulkSelectedTotal).toLocaleString('en-IN')}</td>
-                  </tr>
-                </tfoot>
-              </table>
+            <div className="max-h-[58vh] overflow-y-auto space-y-3 pr-1">
+              {bulkVisible.map((r) => {
+                const proofs = [r.attachment_link, r.ticket_upload, r.km_photo, r.quotation_link].filter(Boolean);
+                const checked = bulkSel.has(r.id);
+                const isTada = r.category === 'TA/DA';
+                return (
+                  <div key={r.id} className={`border rounded-lg overflow-hidden ${checked ? 'border-emerald-400 ring-1 ring-emerald-300' : 'border-gray-200'}`}>
+                    {/* header — req no, purpose, amount + the tick */}
+                    <div className={`flex items-start gap-3 p-3 ${checked ? 'bg-emerald-50' : 'bg-gradient-to-r from-orange-50 to-amber-50'}`}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleBulk(r.id)} className="mt-0.5 w-5 h-5 accent-emerald-600 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-orange-800">{r.request_no}</span>
+                          <span className="font-bold text-orange-700 whitespace-nowrap">₹{Number(r.approved_amount ?? r.amount).toLocaleString('en-IN')}</span>
+                        </div>
+                        <div className="text-xs text-orange-600 break-words">{r.category} — {r.purpose}</div>
+                      </div>
+                    </div>
+
+                    {/* step pipeline */}
+                    {Array.isArray(r.steps) && r.steps.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 px-3 py-2 bg-white border-b border-gray-100">
+                        {r.steps.map((s, j) => (
+                          <div key={j} className={`text-[10px] px-2 py-1 rounded border ${s.status === 'done' ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : s.status === 'current' ? 'bg-amber-50 border-amber-400 text-amber-800 font-semibold' : 'bg-gray-50 border-gray-200 text-gray-400'}`} title={s.at ? fmtISTPair(s.at).date : ''}>
+                            {s.status === 'done' ? '✓ ' : s.status === 'current' ? '⏳ ' : '○ '}{s.name}{s.by_name ? ` · ${s.by_name}` : ''}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* details */}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 px-3 py-2 text-xs">
+                      <div><span className="text-gray-400">Employee:</span> <b>{r.employee_name || r.created_by_name}</b></div>
+                      {r.site_name && <div><span className="text-gray-400">Site:</span> {r.site_name}</div>}
+                      {r.contact_number && <div><span className="text-gray-400">Contact:</span> {r.contact_number}</div>}
+                      {r.payment_mode && <div><span className="text-gray-400">Mode:</span> {r.payment_mode}</div>}
+                      {r.required_by_date && <div><span className="text-gray-400">Required by:</span> {r.required_by_date}</div>}
+                      {isTada && r.travel_from_to && <div><span className="text-gray-400">Travel:</span> {r.travel_from_to}</div>}
+                      {isTada && r.mode_of_travel && <div><span className="text-gray-400">Travel mode:</span> {r.mode_of_travel}</div>}
+                      {isTada && r.travel_dates && <div><span className="text-gray-400">Dates:</span> {r.travel_dates}</div>}
+                      {isTada && r.stay_details && <div><span className="text-gray-400">Stay:</span> {r.stay_details}</div>}
+                    </div>
+
+                    {/* proofs — big, viewable */}
+                    <div className="px-3 pb-3">
+                      <div className="text-[11px] font-semibold text-blue-700 mb-1">📎 Proofs / Receipts ({proofs.length})</div>
+                      {proofs.length > 0 ? (
+                        <div className="flex gap-2 flex-wrap">
+                          {proofs.map((u, j) => /\.(png|jpe?g|gif|webp)$/i.test(String(u))
+                            ? <a key={j} href={u} target="_blank" rel="noreferrer" title="Open full size"><img src={u} alt="proof" loading="lazy" className="w-32 h-32 object-cover rounded border hover:ring-2 hover:ring-blue-400" /></a>
+                            : <a key={j} href={u} target="_blank" rel="noreferrer" className="text-xs text-blue-600 underline flex items-center gap-1 px-2 py-1 border rounded h-9"><FiFile size={12} /> Proof {j + 1}</a>)}
+                        </div>
+                      ) : <div className="text-[11px] text-amber-600">⚠ no proof attached</div>}
+                    </div>
+                  </div>
+                );
+              })}
+              {/* running total */}
+              <div className="sticky bottom-0 bg-emerald-50 border border-emerald-200 rounded px-3 py-2 flex justify-between text-sm font-semibold">
+                <span>Selected Total ({bulkPickedCount})</span>
+                <span className="text-emerald-700">₹{Math.round(bulkSelectedTotal).toLocaleString('en-IN')}</span>
+              </div>
             </div>
           )}
 

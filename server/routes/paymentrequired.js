@@ -409,6 +409,23 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
       ).all(row.id)) {
         row.step_amounts[s.step] = (s.step_amount != null ? +s.step_amount : (+row.approved_amount || +row.amount || 0));
       }
+      // Full step pipeline for the rich bulk-approve card (mam 2026-06-25):
+      // each workflow step with done / current / pending + who cleared it.
+      const apprByStep = {};
+      for (const a of db.prepare(
+        `SELECT pa.step, pa.approved_at, u.name AS by_name
+           FROM payment_approvals pa LEFT JOIN users u ON u.id = pa.approved_by
+          WHERE pa.request_id = ? AND pa.action = 'approved'`
+      ).all(row.id)) { apprByStep[a.step] = a; }
+      row.steps = workflow.map(w => {
+        const done = apprByStep[w.step];
+        return {
+          step: w.step, name: w.name,
+          status: done ? 'done' : (w.step === row.current_step ? 'current' : 'pending'),
+          by_name: done ? done.by_name : null,
+          at: done ? done.approved_at : null,
+        };
+      });
     } catch (_) {}
     inbox.push(row);
   }
