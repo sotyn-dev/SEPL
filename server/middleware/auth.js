@@ -1,12 +1,39 @@
 const jwt = require('jsonwebtoken');
 const { getDb } = require('../db/schema');
-const SECRET = process.env.JWT_SECRET || 'erp-secret-key-change-in-production';
+
+// JWT signing/verification secret — resolved ONCE and PERSISTED so it stays
+// identical across every restart and redeploy. It used to be read inline as
+// `process.env.JWT_SECRET || 'default'` at module load; if a restart didn't
+// load .env (pm2 caches the env from the first `pm2 start`, or a boot fell
+// back to the default), the effective secret FLIPPED and every already-issued
+// token instantly became "Invalid token" → users were logged out after each
+// deploy (mam, repeatedly). We now store the secret in app_settings on first
+// boot and read it back forever, so the secret can never change underneath
+// live sessions, no matter how the process is started.
+let _secret = null;
+function getSecret() {
+  if (_secret) return _secret;
+  const seed = process.env.JWT_SECRET || 'erp-secret-key-change-in-production';
+  try {
+    const db = getDb();
+    db.exec('CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)');
+    const row = db.prepare("SELECT value FROM app_settings WHERE key='jwt_secret'").get();
+    if (row && row.value) { _secret = row.value; return _secret; }
+    db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('jwt_secret', ?)").run(seed);
+    _secret = seed;
+    return _secret;
+  } catch (_) {
+    // DB not ready yet — use the seed for now and DON'T memoize, so the next
+    // call (once the DB is up) persists and locks it in.
+    return seed;
+  }
+}
 
 function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
   try {
-    const decoded = jwt.verify(token, SECRET);
+    const decoded = jwt.verify(token, getSecret());
     req.user = decoded;
     // Sliding session (mam 2026-06-12: "after some time automatically logout
     // ... very bad"). While the user is active, keep handing back a fresh
@@ -113,9 +140,14 @@ function getUserPermissions(userId) {
 function generateToken(user) {
   return jwt.sign(
     { id: user.id, email: user.email, role: user.role, name: user.name },
-    SECRET,
+    getSecret(),
     { expiresIn: '7d' }   // base lifetime; slides forward on activity (see authMiddleware)
   );
 }
 
-module.exports = { authMiddleware, adminOnly, requirePermission, getUserPermissions, generateToken, SECRET };
+// `SECRET` getter kept for back-compat (e.g. chatSocket) — always returns the
+// one persisted secret.
+module.exports = {
+  authMiddleware, adminOnly, requirePermission, getUserPermissions, generateToken, getSecret,
+  get SECRET() { return getSecret(); },
+};
