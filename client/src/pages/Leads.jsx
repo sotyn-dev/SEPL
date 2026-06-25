@@ -750,16 +750,24 @@ export default function Leads() {
                   Category, Type, Location, Purpose, Pain Points, Reqs,
                   M.O.M., Action Planned, Format, Time, photos, MOM file. */}
               {activeStage==='site_survey'&&(<div className="space-y-3">
-                {/* Customer Category — radio buttons matching the Google Form */}
+                {/* Customer Category — multi-select (mam 2026-06-25 "can select
+                    multiple"). Stored as a comma-separated list in `category`. */}
                 <div>
-                  <label className="label text-[10px]">Customer Category *</label>
+                  <label className="label text-[10px]">Customer Category * <span className="text-gray-400 normal-case font-normal">(select one or more)</span></label>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-1">
-                    {['Fire Fighting','Electrical','Low Voltage','HVAC','MEPF','Solar','Plumbing','Other'].map(cat => (
-                      <label key={cat} className={`flex items-center gap-1.5 px-2 py-1.5 border rounded text-xs cursor-pointer ${(stageForm.category||viewData.category)===cat ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-200 hover:bg-gray-50'}`}>
-                        <input type="radio" name="customer_category" value={cat} checked={(stageForm.category||viewData.category)===cat} onChange={()=>setStageForm({...stageForm,category:cat})} />
-                        {cat}
-                      </label>
-                    ))}
+                    {(() => {
+                      const selected = new Set(String(stageForm.category ?? viewData.category ?? '').split(',').map(s => s.trim()).filter(Boolean));
+                      return ['Fire Fighting','Electrical','Low Voltage','HVAC','MEPF','Solar','Plumbing','Other'].map(cat => {
+                        const isOn = selected.has(cat);
+                        return (
+                          <label key={cat} className={`flex items-center gap-1.5 px-2 py-1.5 border rounded text-xs cursor-pointer ${isOn ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-200 hover:bg-gray-50'}`}>
+                            <input type="checkbox" name="customer_category" value={cat} checked={isOn}
+                              onChange={() => { const next = new Set(selected); isOn ? next.delete(cat) : next.add(cat); setStageForm({ ...stageForm, category: [...next].join(', ') }); }} />
+                            {cat}
+                          </label>
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
 
