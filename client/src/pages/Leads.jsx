@@ -7,7 +7,7 @@ import TimePicker from '../components/TimePicker';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid } from 'react-icons/fi';
+import { FiPlus, FiSearch, FiEye, FiEdit2, FiTrash2, FiChevronRight, FiChevronDown, FiCheck, FiX, FiUpload, FiCalendar, FiFileText, FiTarget, FiTrendingUp, FiDownload, FiMapPin, FiGrid, FiCopy } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDateIST } from '../utils/dateIST';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
@@ -184,6 +184,38 @@ export default function Leads() {
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const fmt = n => `Rs ${(n||0).toLocaleString('en-IN')}`;
 
+  // New lead from an existing one (mam 2026-06-25): copies the client's BASIC
+  // details so a repeat lead doesn't get re-typed. Opens the New Lead form
+  // pre-filled; saving creates a brand-new lead with a freshly generated lead
+  // no. (id / lead_no / stage / dates / amounts are NOT copied — it's a new
+  // lead. Project name is left blank so the new project is filled in.)
+  const cloneLead = (l) => {
+    setForm({
+      lead_kind: l.lead_kind || 'private',
+      client_name: l.client_name || '',
+      company_name: l.company_name || '',
+      phone: l.phone || '',
+      email: l.email || '',
+      category: l.category || '',
+      building_category: l.building_category || '',
+      project_name: '',
+      project_location: l.project_location || '',
+      pin_code: l.pin_code || '',
+      state: l.state || '',
+      district: l.district || '',
+      address: l.address || '',
+      source: l.source || '',
+      influencer_id: l.influencer_id || null,
+      influencer_name: l.influencer_name || '',
+      assigned_sc: l.assigned_sc || user?.name || '',
+      assigned_asm: l.assigned_asm || '',
+      lead_type: l.lead_type || '',
+      remarks: '',
+    });
+    setModal('add');
+    toast.success(`Details copied from ${l.lead_no || 'lead'} — enter the project and save for a new lead no.`);
+  };
+
   const saveLead = async (e) => {
     e.preventDefault();
     // Mam (2026-06-01): "mobile number and email verified or
@@ -296,9 +328,10 @@ export default function Leads() {
       <td className="px-3 py-2.5 text-[10px] text-gray-400">{fmtDateIST(l.created_at)}</td>
       <td className="px-3 py-2.5" onClick={e=>e.stopPropagation()}>
         <div className="flex gap-1">
-          <button onClick={()=>viewLead(l)} className="p-1 text-red-600 hover:bg-red-50 rounded"><FiEye size={14}/></button>
-          {canEdit('leads')&&<button onClick={()=>{setForm(l);setModal('edit');}} className="p-1 text-amber-600 hover:bg-amber-50 rounded"><FiEdit2 size={14}/></button>}
-          {canDelete('leads')&&<button onClick={async()=>{if(!confirm('Delete?'))return;await api.delete(`/sales-funnel/${l.id}`);toast.success('Deleted');load();}} className="p-1 text-red-600 hover:bg-red-50 rounded"><FiTrash2 size={14}/></button>}
+          {canCreate('leads')&&<button onClick={()=>cloneLead(l)} className="p-1 text-emerald-600 hover:bg-emerald-50 rounded" title="New lead from this client — copies the details, gets a fresh lead no."><FiCopy size={14}/></button>}
+          <button onClick={()=>viewLead(l)} className="p-1 text-red-600 hover:bg-red-50 rounded" title="View"><FiEye size={14}/></button>
+          {canEdit('leads')&&<button onClick={()=>{setForm(l);setModal('edit');}} className="p-1 text-amber-600 hover:bg-amber-50 rounded" title="Edit"><FiEdit2 size={14}/></button>}
+          {canDelete('leads')&&<button onClick={async()=>{if(!confirm('Delete?'))return;await api.delete(`/sales-funnel/${l.id}`);toast.success('Deleted');load();}} className="p-1 text-red-600 hover:bg-red-50 rounded" title="Delete"><FiTrash2 size={14}/></button>}
         </div>
       </td>
     </tr>
