@@ -9,19 +9,46 @@ import { AuthProvider } from './context/AuthContext'
 import './index.css'
 import App from './App.jsx'
 
+// --- Stale-chunk recovery after a code-split deploy -----------------------
+// Each deploy gives the lazy route chunks new hashed filenames and removes the
+// old ones. A tab still running the PREVIOUS index.html then fails to fetch a
+// chunk when it navigates: "Failed to fetch dynamically imported module". We
+// reload once to pull the fresh index.html + assets. A 10s throttle prevents
+// any reload loop if the failure is something else (mam 2026-06-25).
+const CHUNK_ERR_RE = /dynamically imported module|module script failed|error loading dynamically/i
+function recoverFromStaleChunk() {
+  try {
+    const last = +sessionStorage.getItem('chunk-reload-at') || 0
+    if (Date.now() - last < 10000) return false   // reloaded just now → don't loop
+    sessionStorage.setItem('chunk-reload-at', String(Date.now()))
+  } catch { /* storage blocked — still reload below */ }
+  window.location.reload()
+  return true
+}
+// Vite emits this when a preloaded/imported chunk 404s after a deploy.
+window.addEventListener('vite:preloadError', (e) => { e?.preventDefault?.(); recoverFromStaleChunk() })
+// Catch the raw dynamic-import rejection too (covers non-preload paths).
+window.addEventListener('unhandledrejection', (e) => { if (CHUNK_ERR_RE.test(e?.reason?.message || '')) recoverFromStaleChunk() })
+
 // Friendly fallback shown if a render error escapes a per-page boundary.
 function ErrorScreen({ error, resetError }) {
+  const msg = error?.message || String(error)
+  const stale = CHUNK_ERR_RE.test(msg)
+  // A failed chunk = a new version was deployed under this tab → reload to it.
+  if (stale) recoverFromStaleChunk()
   return (
     <div style={{ padding: 32, fontFamily: 'sans-serif', color: '#7f1d1d' }}>
-      <h2 style={{ marginBottom: 8 }}>Something went wrong</h2>
+      <h2 style={{ marginBottom: 8 }}>{stale ? 'Updating to the latest version…' : 'Something went wrong'}</h2>
       <p style={{ color: '#374151', marginBottom: 16 }}>
-        The error has been reported. You can refresh or try again.
+        {stale ? 'A new version was just deployed — reloading the page.' : 'The error has been reported. You can refresh or try again.'}
       </p>
-      <pre style={{ background: '#fef2f2', padding: 12, borderRadius: 6, overflow: 'auto' }}>
-        {error?.message || String(error)}
-      </pre>
-      <button onClick={resetError} style={{ marginTop: 12, padding: '8px 14px', background: '#dc2626', color: 'white', border: 0, borderRadius: 6, cursor: 'pointer' }}>
-        Try again
+      {!stale && (
+        <pre style={{ background: '#fef2f2', padding: 12, borderRadius: 6, overflow: 'auto' }}>
+          {msg}
+        </pre>
+      )}
+      <button onClick={() => { try { sessionStorage.removeItem('chunk-reload-at') } catch {}; window.location.reload() }} style={{ marginTop: 12, padding: '8px 14px', background: '#dc2626', color: 'white', border: 0, borderRadius: 6, cursor: 'pointer' }}>
+        Reload
       </button>
     </div>
   )
