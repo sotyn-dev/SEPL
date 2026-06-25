@@ -84,6 +84,11 @@ export default function PaymentRequired() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkStage, setBulkStage] = useState('');        // level filter inside the modal
   const [bulkRejectReason, setBulkRejectReason] = useState('');
+  // Per-record RACI editor (mam 2026-06-25: pick R/A/C/I + time per record/step)
+  const [raciFor, setRaciFor] = useState(null);          // the record being edited
+  const [raciSteps, setRaciSteps] = useState([]);
+  const [raciUsers, setRaciUsers] = useState([]);
+  const [raciBusy, setRaciBusy] = useState(false);
   // Mam (2026-05-22): "My Inbox" — payment requests where the
   // current step's approver is THIS user.  Fetched separately so
   // we can also use the count for the badge on the tab.
@@ -328,6 +333,37 @@ export default function PaymentRequired() {
       setBulkOpen(false); load();
     } catch (e) { toast.error(e.response?.data?.error || 'Bulk approve failed'); }
     finally { setBulkBusy(false); }
+  };
+  // Open the per-record RACI editor for one request: load its saved RACI +
+  // (once) the employee list for the dropdowns.
+  const openRaci = async (record) => {
+    setRaciFor(record); setRaciBusy(true);
+    try {
+      const [cfg, usr] = await Promise.all([
+        api.get(`/raci/record/payables/${record.id}`),
+        raciUsers.length ? Promise.resolve({ data: raciUsers }) : api.get('/auth/users'),
+      ]);
+      setRaciSteps(cfg.data.steps || []);
+      if (!raciUsers.length) setRaciUsers((usr.data || []).filter(u => u.active !== 0));
+    } catch { toast.error('Could not load RACI'); }
+    finally { setRaciBusy(false); }
+  };
+  const setRaciField = (i, k, v) => setRaciSteps(s => s.map((x, idx) => idx === i ? { ...x, [k]: v } : x));
+  const saveRaci = async () => {
+    if (!raciFor) return;
+    setRaciBusy(true);
+    try {
+      await api.put(`/raci/record/payables/${raciFor.id}`, {
+        steps: raciSteps.map(s => ({
+          step_key: s.key,
+          responsible_id: s.responsible_id || null, accountable_id: s.accountable_id || null,
+          consulted_id: s.consulted_id || null, informed_id: s.informed_id || null,
+          sla_hours: s.sla_hours === '' || s.sla_hours == null ? null : +s.sla_hours,
+        })),
+      });
+      toast.success('RACI saved'); setRaciFor(null); openBulk();   // refresh late badges
+    } catch (e) { toast.error(e.response?.data?.error || 'Save failed'); }
+    finally { setRaciBusy(false); }
   };
   const rejectBulk = async () => {
     const ids = bulkVisible.filter(r => bulkSel.has(r.id)).map(r => r.id);
@@ -1491,7 +1527,10 @@ export default function PaymentRequired() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-bold text-orange-800">{r.request_no}</span>
-                          <span className="font-bold text-orange-700 whitespace-nowrap">₹{Number(r.approved_amount ?? r.amount).toLocaleString('en-IN')}</span>
+                          <div className="flex items-center gap-2 whitespace-nowrap">
+                            <button type="button" onClick={() => openRaci(r)} title="Set Responsible / Accountable / Consulted / Informed + time per step for THIS request" className="text-[10px] font-semibold text-indigo-700 hover:text-white hover:bg-indigo-600 border border-indigo-300 rounded px-1.5 py-0.5 transition">⚙ RACI</button>
+                            <span className="font-bold text-orange-700">₹{Number(r.approved_amount ?? r.amount).toLocaleString('en-IN')}</span>
+                          </div>
                         </div>
                         <div className="text-xs text-orange-600 break-words">{r.category} — {r.purpose}</div>
                       </div>
@@ -1574,6 +1613,43 @@ export default function PaymentRequired() {
                 <FiCheckCircle size={16} /> {bulkBusy ? 'Working…' : `Approve ${bulkPickedCount}`}
               </button>
             </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Per-record RACI editor — set R/A/C/I + SLA per step for ONE request */}
+      <Modal isOpen={!!raciFor} onClose={() => setRaciFor(null)} title={`RACI & time — ${raciFor?.request_no || ''}`} wide>
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500">Pick the <b>R</b>esponsible / <b>A</b>ccountable / <b>C</b>onsulted / <b>I</b>nformed person and the expected time (SLA hours) for each step of <b>this</b> request. The system flags who is late and by how much.</p>
+          {raciBusy && raciSteps.length === 0 ? (
+            <div className="py-8 text-center text-gray-400 text-sm">Loading…</div>
+          ) : (
+            <div className="space-y-2">
+              {raciSteps.map((s, i) => (
+                <div key={s.key} className="border rounded-lg p-3 bg-white">
+                  <div className="font-semibold text-sm mb-2 text-gray-800">{s.label}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    {[['responsible_id', 'Responsible', 'text-emerald-600'], ['accountable_id', 'Accountable', 'text-blue-600'], ['consulted_id', 'Consulted', 'text-amber-600'], ['informed_id', 'Informed', 'text-gray-500']].map(([field, label, tint]) => (
+                      <div key={field}>
+                        <label className={`label text-[10px] ${tint}`}>{label}</label>
+                        <select className="input text-xs" value={s[field] || ''} onChange={e => setRaciField(i, field, e.target.value ? +e.target.value : null)}>
+                          <option value="">— pick —</option>
+                          {raciUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                    <div>
+                      <label className="label text-[10px] text-rose-600">SLA (hours)</label>
+                      <input type="number" min="0" step="any" className="input text-xs" placeholder="e.g. 24" value={s.sla_hours ?? ''} onChange={e => setRaciField(i, 'sla_hours', e.target.value === '' ? '' : +e.target.value)} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <button onClick={() => setRaciFor(null)} className="btn btn-secondary">Cancel</button>
+            <button onClick={saveRaci} disabled={raciBusy || raciSteps.length === 0} className="btn btn-primary">{raciBusy ? 'Saving…' : 'Save RACI & time'}</button>
           </div>
         </div>
       </Modal>

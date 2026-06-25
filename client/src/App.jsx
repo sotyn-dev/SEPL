@@ -60,7 +60,6 @@ const IndentPrint = lazy(() => import('./pages/IndentPrint'));
 const QuotationPrint = lazy(() => import('./pages/QuotationPrint'));
 const UserManagement = lazy(() => import('./pages/admin/UserManagement'));
 const RolesPermissions = lazy(() => import('./pages/admin/RolesPermissions'));
-const RaciSetup = lazy(() => import('./pages/admin/RaciSetup'));
 const DatabaseBackups = lazy(() => import('./pages/admin/DatabaseBackups'));
 const AuditLog = lazy(() => import('./pages/admin/AuditLog'));
 const WordCount = lazy(() => import('./pages/admin/WordCount'));
@@ -218,7 +217,6 @@ export default function App() {
         {/* Admin Routes */}
         <Route path="admin/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
         <Route path="admin/roles" element={<AdminRoute><RolesPermissions /></AdminRoute>} />
-        <Route path="admin/raci" element={<AdminRoute><RaciSetup /></AdminRoute>} />
         <Route path="admin/backups" element={<AdminRoute><DatabaseBackups /></AdminRoute>} />
         <Route path="admin/audit" element={<AdminRoute><AuditLog /></AdminRoute>} />
         <Route path="admin/word-count" element={<AdminRoute><WordCount /></AdminRoute>} />

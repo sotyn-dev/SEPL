@@ -3,7 +3,7 @@ const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
-const { getRaciMap } = require('./raci');
+const { getRaciForRecords } = require('./raci');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -355,9 +355,9 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
   ).all(uid).map(r => r.name);
   const isAdmin = req.user.role === 'admin';
 
-  // RACI/SLA template for payables — fetched once, names cached, so per-step
-  // enrichment adds no N+1 (mam 2026-06-25 RACI + late-tracking).
-  const raciCfg = getRaciMap(db, 'payables');
+  // Per-record RACI for payables — all assignments for the inbox records in
+  // one batched query (mam 2026-06-25 RACI + late-tracking, per record).
+  const raciByRecord = getRaciForRecords(db, 'payables', rows.map(r => r.id));
   const _nameCache = {};
   const nameById = (id) => { if (!id) return null; if (!(id in _nameCache)) _nameCache[id] = db.prepare('SELECT name FROM users WHERE id=?').get(id)?.name || null; return _nameCache[id]; };
 
@@ -434,7 +434,7 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
       row.steps = workflow.map(w => {
         const done = apprByStep[w.step];
         const isCurrent = !done && w.step === row.current_step;
-        const cfg = raciCfg[String(w.step)];
+        const cfg = (raciByRecord[row.id] || {})[String(w.step)];
         const sla = cfg && cfg.sla_hours != null ? +cfg.sla_hours : null;
         let elapsed = null;
         const atMs = done ? tsMs(done.approved_at) : null;
