@@ -82,6 +82,8 @@ export default function PaymentRequired() {
   const [bulkSel, setBulkSel] = useState(() => new Set());
   const [bulkSearch, setBulkSearch] = useState('');
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkStage, setBulkStage] = useState('');        // level filter inside the modal
+  const [bulkRejectReason, setBulkRejectReason] = useState('');
   // Mam (2026-05-22): "My Inbox" — payment requests where the
   // current step's approver is THIS user.  Fetched separately so
   // we can also use the count for the badge on the tab.
@@ -293,19 +295,24 @@ export default function PaymentRequired() {
   // ── Bulk approve: load only the requests pending MY step (/my-inbox), let
   // the approver filter by person, eyeball the proofs, and approve in one go.
   const openBulk = async () => {
-    setBulkOpen(true); setBulkBusy(true); setBulkSearch('');
+    setBulkOpen(true); setBulkBusy(true); setBulkSearch(''); setBulkRejectReason('');
+    setBulkStage(stageFilter || '');               // scope to the level pill you clicked (e.g. L3)
     try {
       const r = await api.get('/payment-required/my-inbox');
       const rows = r.data || [];
       setBulkRows(rows);
-      setBulkSel(new Set(rows.map(x => x.id)));   // everything ticked by default
+      // tick only the ones matching the active level so "click L3 → Bulk" pre-selects L3 only
+      const stage = stageFilter || '';
+      setBulkSel(new Set(rows.filter(x => !stage || x.current_step_name === stage).map(x => x.id)));
     } catch { toast.error('Could not load your pending approvals'); }
     finally { setBulkBusy(false); }
   };
   const toggleBulk = (id) => setBulkSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const bulkVisible = bulkRows.filter(r => {
     const q = bulkSearch.trim().toLowerCase();
-    return !q || (r.employee_name || r.created_by_name || '').toLowerCase().includes(q) || (r.request_no || '').toLowerCase().includes(q);
+    const matchQ = !q || (r.employee_name || r.created_by_name || '').toLowerCase().includes(q) || (r.request_no || '').toLowerCase().includes(q);
+    const matchStage = !bulkStage || r.current_step_name === bulkStage;
+    return matchQ && matchStage;
   });
   const setAllVisible = (on) => setBulkSel(s => { const n = new Set(s); bulkVisible.forEach(r => on ? n.add(r.id) : n.delete(r.id)); return n; });
   const bulkPickedCount = bulkVisible.filter(r => bulkSel.has(r.id)).length;
@@ -320,6 +327,20 @@ export default function PaymentRequired() {
       toast.success(`Approved ${approved.length}${skipped.length ? ` · ${skipped.length} skipped` : ''}`);
       setBulkOpen(false); load();
     } catch (e) { toast.error(e.response?.data?.error || 'Bulk approve failed'); }
+    finally { setBulkBusy(false); }
+  };
+  const rejectBulk = async () => {
+    const ids = bulkVisible.filter(r => bulkSel.has(r.id)).map(r => r.id);
+    if (!ids.length) return toast.error('Tick at least one request');
+    if (bulkRejectReason.trim().length < 5) return toast.error('Enter a rejection reason (min 5 characters) to reject');
+    if (!confirm(`Reject ${ids.length} selected request(s)? This cannot be undone.`)) return;
+    setBulkBusy(true);
+    try {
+      const r = await api.post('/payment-required/bulk-reject', { ids, remarks: bulkRejectReason.trim() });
+      const { rejected = [], skipped = [] } = r.data || {};
+      toast.success(`Rejected ${rejected.length}${skipped.length ? ` · ${skipped.length} skipped` : ''}`);
+      setBulkOpen(false); load();
+    } catch (e) { toast.error(e.response?.data?.error || 'Bulk reject failed'); }
     finally { setBulkBusy(false); }
   };
 
@@ -1423,9 +1444,13 @@ export default function PaymentRequired() {
       {/* Bulk approve — your pending requests, with proofs, tick-tick approve */}
       <Modal isOpen={bulkOpen} onClose={() => setBulkOpen(false)} title="Bulk Approve — pending your approval" wide>
         <div className="space-y-4">
-          {/* Filter + select-all controls */}
+          {/* Filter (person + level) + select-all controls */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-2">
             <input className="input flex-1" placeholder="Filter by person (e.g. Monika) or request no…" value={bulkSearch} onChange={e => setBulkSearch(e.target.value)} autoFocus />
+            <select className="select sm:w-60" value={bulkStage} onChange={e => setBulkStage(e.target.value)} title="Show only this approval level">
+              <option value="">All levels</option>
+              {STAGE_SEQ.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
             <div className="flex gap-3 text-xs flex-shrink-0">
               <button onClick={() => setAllVisible(true)} className="text-blue-600 hover:underline font-medium">Select all</button>
               <button onClick={() => setAllVisible(false)} className="text-gray-500 hover:underline">Clear</button>
@@ -1510,11 +1535,19 @@ export default function PaymentRequired() {
             </div>
           )}
 
-          <div className="flex justify-end gap-3 pt-2 border-t">
-            <button onClick={() => setBulkOpen(false)} className="btn btn-secondary">Cancel</button>
-            <button onClick={approveBulk} disabled={bulkBusy || bulkPickedCount === 0} className="btn btn-success flex items-center gap-1">
-              <FiCheckCircle size={16} /> {bulkBusy ? 'Approving…' : `Approve ${bulkPickedCount} selected`}
-            </button>
+          <div className="pt-2 border-t space-y-2">
+            <textarea className="input w-full text-xs" rows="2" placeholder="Rejection reason (min 5 chars) — required only if you Reject; applies to all selected"
+              value={bulkRejectReason} onChange={e => setBulkRejectReason(e.target.value)} />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setBulkOpen(false)} className="btn btn-secondary">Cancel</button>
+              <button onClick={rejectBulk} disabled={bulkBusy || bulkPickedCount === 0}
+                className="btn flex items-center gap-1 bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-40">
+                <FiXCircle size={16} /> Reject {bulkPickedCount}
+              </button>
+              <button onClick={approveBulk} disabled={bulkBusy || bulkPickedCount === 0} className="btn btn-success flex items-center gap-1">
+                <FiCheckCircle size={16} /> {bulkBusy ? 'Working…' : `Approve ${bulkPickedCount}`}
+              </button>
+            </div>
           </div>
         </div>
       </Modal>

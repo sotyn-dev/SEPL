@@ -746,6 +746,34 @@ router.post('/bulk-approve', (req, res) => {
   res.json({ message: `Approved ${approved.length}${skipped.length ? `, skipped ${skipped.length}` : ''}`, approved, skipped });
 });
 
+// Bulk reject — reject many at once at the current step, one shared reason
+// (mam 2026-06-25: "bulk approval along with rejection also"). Same per-step
+// gate as single reject; reason required; skips ones not at the caller's step.
+router.post('/bulk-reject', (req, res) => {
+  const db = getDb();
+  const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.map(Number).filter(Boolean))] : [];
+  const remarks = String(req.body.remarks || '').trim();
+  if (!ids.length) return res.status(400).json({ error: 'No requests selected' });
+  if (remarks.length < 5) return res.status(400).json({ error: 'A rejection reason (min 5 characters) is required' });
+  const rejected = [], skipped = [];
+  const run = db.transaction(() => {
+    for (const id of ids) {
+      const request = db.prepare('SELECT * FROM payment_requests WHERE id=?').get(id);
+      if (!request) { skipped.push({ id, reason: 'not found' }); continue; }
+      if (request.status === 'final_approved' || request.status === 'rejected') { skipped.push({ id, reason: 'already ' + request.status }); continue; }
+      if (!canUserApproveStep(db, req.user.id, request.category, request.current_step)) { skipped.push({ id, reason: 'not your step' }); continue; }
+      const stepInfo = WORKFLOW[request.category]?.find(w => w.step === request.current_step);
+      db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, approved_by) VALUES (?,?,?,?,?,?)')
+        .run(request.id, request.current_step, stepInfo?.name || 'Unknown', 'rejected', remarks, req.user.id);
+      db.prepare('UPDATE payment_requests SET status=?, rejection_remarks=?, rejected_by=?, rejected_at=CURRENT_TIMESTAMP WHERE id=?')
+        .run('rejected', remarks, req.user.id, request.id);
+      rejected.push(id);
+    }
+  });
+  run();
+  res.json({ message: `Rejected ${rejected.length}${skipped.length ? `, skipped ${skipped.length}` : ''}`, rejected, skipped });
+});
+
 // PUT reject
 // Same as /approve — gated by the step-approver check inside, not the
 // generic module permission (mam 2026-06-18).
