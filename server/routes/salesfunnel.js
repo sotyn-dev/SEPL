@@ -346,7 +346,7 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
         qualified_remarks=?, first_call_status=?, first_call_at=CURRENT_TIMESTAMP,
         first_call_remarks=?, tentative_amount=?, closing_date=?, stage_entered_at=CURRENT_TIMESTAMP,
         updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = [b.qualified_by || req.user.name, b.qualified_remarks,
+      params = [b.qualified_by || req.user.name, b.qualified_remarks || null,
         b.first_call_status || 'interested', b.first_call_remarks || b.qualified_remarks || null,
         (b.tentative_amount === '' || b.tentative_amount == null) ? null : (+b.tentative_amount || null),
         b.closing_date || null,
@@ -519,7 +519,15 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
       return res.status(400).json({ error: `Invalid stage: ${b.stage}` });
   }
 
-  db.prepare(sql).run(...params);
+  // Guard the stage write so a bad bind / SQL issue returns a clear message
+  // instead of an unhandled 500 surfacing as a generic "Error" toast
+  // (mam 2026-06-25 — empty Remarks bound undefined on Qualify).
+  try {
+    db.prepare(sql).run(...params);
+  } catch (e) {
+    console.error('[sales-funnel stage] write failed:', stage, e.message);
+    return res.status(500).json({ error: `Could not save this stage: ${e.message}` });
+  }
   // Keep every BOQ the client sends — the stage submit records one in the
   // history table too (mam 2026-06-12), alongside the "latest" columns above.
   if (stage === 'boq_costing' && (b.boq_file_link || +b.boq_amount > 0)) {
