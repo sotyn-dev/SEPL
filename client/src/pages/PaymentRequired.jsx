@@ -309,6 +309,7 @@ export default function PaymentRequired() {
   });
   const setAllVisible = (on) => setBulkSel(s => { const n = new Set(s); bulkVisible.forEach(r => on ? n.add(r.id) : n.delete(r.id)); return n; });
   const bulkPickedCount = bulkVisible.filter(r => bulkSel.has(r.id)).length;
+  const bulkSelectedTotal = bulkVisible.filter(r => bulkSel.has(r.id)).reduce((s, r) => s + Number(r.approved_amount ?? r.amount ?? 0), 0);
   const approveBulk = async () => {
     const ids = bulkVisible.filter(r => bulkSel.has(r.id)).map(r => r.id);
     if (!ids.length) return toast.error('Tick at least one request');
@@ -1421,51 +1422,85 @@ export default function PaymentRequired() {
 
       {/* Bulk approve — your pending requests, with proofs, tick-tick approve */}
       <Modal isOpen={bulkOpen} onClose={() => setBulkOpen(false)} title="Bulk Approve — pending your approval" wide>
-        <div className="space-y-3">
-          <input className="input" placeholder="Filter by person (e.g. Monika) or request no…" value={bulkSearch} onChange={e => setBulkSearch(e.target.value)} autoFocus />
-          <div className="flex items-center justify-between text-xs text-gray-500">
-            <span><b className="text-emerald-700">{bulkPickedCount}</b> of {bulkVisible.length} ticked</span>
-            <div className="flex gap-3">
-              <button onClick={() => setAllVisible(true)} className="text-blue-600 hover:underline">Select all</button>
+        <div className="space-y-4">
+          {/* Filter + select-all controls */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+            <input className="input flex-1" placeholder="Filter by person (e.g. Monika) or request no…" value={bulkSearch} onChange={e => setBulkSearch(e.target.value)} autoFocus />
+            <div className="flex gap-3 text-xs flex-shrink-0">
+              <button onClick={() => setAllVisible(true)} className="text-blue-600 hover:underline font-medium">Select all</button>
               <button onClick={() => setAllVisible(false)} className="text-gray-500 hover:underline">Clear</button>
             </div>
           </div>
+
+          {/* Summary card — same style as the Approve Indent modal */}
+          <div className="grid grid-cols-2 gap-3 text-xs bg-emerald-50 border border-emerald-200 rounded p-3">
+            <div><span className="text-gray-500">Approver:</span> <span className="font-medium">{user?.name || 'You'}</span></div>
+            <div><span className="text-gray-500">Pending your approval:</span> <span className="font-medium">{bulkRows.length}</span></div>
+            <div><span className="text-gray-500">Selected:</span> <span className="font-medium text-emerald-700">{bulkPickedCount}</span></div>
+            <div><span className="text-gray-500">Selected total:</span> <span className="font-medium">₹{Math.round(bulkSelectedTotal).toLocaleString('en-IN')}</span></div>
+          </div>
+
           {bulkBusy && !bulkRows.length ? (
             <div className="py-8 text-center text-gray-400 text-sm">Loading your pending approvals…</div>
           ) : bulkVisible.length === 0 ? (
             <div className="py-8 text-center text-emerald-600 text-sm">✅ Nothing pending your approval{bulkSearch ? ' for that filter' : ''}.</div>
           ) : (
-            <div className="max-h-[55vh] overflow-y-auto divide-y border rounded-lg">
-              {bulkVisible.map(r => {
-                const proofs = [r.attachment_link, r.ticket_upload, r.km_photo, r.quotation_link].filter(Boolean);
-                const checked = bulkSel.has(r.id);
-                return (
-                  <label key={r.id} className={`flex items-start gap-3 p-3 cursor-pointer ${checked ? 'bg-emerald-50/50' : ''}`}>
-                    <input type="checkbox" checked={checked} onChange={() => toggleBulk(r.id)} className="mt-1 w-5 h-5 accent-emerald-600 flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-bold text-red-600 text-sm">{r.request_no}</span>
-                        <span className="font-bold text-gray-800 text-sm whitespace-nowrap">Rs {Number(r.approved_amount ?? r.amount).toLocaleString('en-IN')}</span>
-                      </div>
-                      <div className="text-xs text-gray-600">{r.employee_name || r.created_by_name} · {r.category} · {r.current_step_name || `Step ${r.current_step}`}</div>
-                      {r.purpose && <div className="text-xs text-gray-500 truncate">{r.purpose}</div>}
-                      {proofs.length > 0 ? (
-                        <div className="flex gap-1.5 mt-1.5 flex-wrap">
-                          {proofs.map((u, i) => /\.(png|jpe?g|gif|webp)$/i.test(String(u))
-                            ? <a key={i} href={u} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}><img src={u} alt="proof" loading="lazy" className="w-12 h-12 object-cover rounded border" /></a>
-                            : <a key={i} href={u} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="text-[11px] text-blue-600 underline flex items-center gap-1 px-2 py-1 border rounded"><FiFile size={11} /> proof {i + 1}</a>)}
-                        </div>
-                      ) : <div className="text-[11px] text-amber-600 mt-1">⚠ no proof attached</div>}
-                    </div>
-                  </label>
-                );
-              })}
+            <div className="max-h-[55vh] overflow-auto border rounded-lg">
+              <table className="w-full text-xs border-collapse">
+                <thead className="sticky top-0 z-10">
+                  <tr className="bg-gray-100 text-gray-500 uppercase text-[10px] border-b">
+                    <th className="px-2 py-2 w-8"><input type="checkbox" checked={bulkVisible.length > 0 && bulkPickedCount === bulkVisible.length} onChange={e => setAllVisible(e.target.checked)} className="w-4 h-4 accent-emerald-600 align-middle" /></th>
+                    <th className="px-2 py-2 text-left">#</th>
+                    <th className="px-2 py-2 text-left">Req No</th>
+                    <th className="px-2 py-2 text-left">Employee</th>
+                    <th className="px-2 py-2 text-left">Category</th>
+                    <th className="px-2 py-2 text-left">Step</th>
+                    <th className="px-2 py-2 text-left">Purpose</th>
+                    <th className="px-2 py-2 text-left">Proof</th>
+                    <th className="px-2 py-2 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bulkVisible.map((r, i) => {
+                    const proofs = [r.attachment_link, r.ticket_upload, r.km_photo, r.quotation_link].filter(Boolean);
+                    const checked = bulkSel.has(r.id);
+                    return (
+                      <tr key={r.id} onClick={() => toggleBulk(r.id)} className={`border-b border-gray-100 align-top cursor-pointer ${checked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'}`}>
+                        <td className="px-2 py-2 text-center" onClick={e => e.stopPropagation()}><input type="checkbox" checked={checked} onChange={() => toggleBulk(r.id)} className="w-4 h-4 accent-emerald-600" /></td>
+                        <td className="px-2 py-2 text-gray-400">{i + 1}</td>
+                        <td className="px-2 py-2 font-bold text-red-600 whitespace-nowrap">{r.request_no}</td>
+                        <td className="px-2 py-2 whitespace-nowrap">{r.employee_name || r.created_by_name}</td>
+                        <td className="px-2 py-2"><span className="px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] whitespace-nowrap">{r.category}</span></td>
+                        <td className="px-2 py-2 text-gray-500 whitespace-nowrap">{r.current_step_name || `Step ${r.current_step}`}</td>
+                        <td className="px-2 py-2 text-gray-600 max-w-[170px] truncate" title={r.purpose}>{r.purpose || '—'}</td>
+                        <td className="px-2 py-2" onClick={e => e.stopPropagation()}>
+                          {proofs.length > 0 ? (
+                            <div className="flex gap-1 flex-wrap">
+                              {proofs.map((u, j) => /\.(png|jpe?g|gif|webp)$/i.test(String(u))
+                                ? <a key={j} href={u} target="_blank" rel="noreferrer"><img src={u} alt="proof" loading="lazy" className="w-10 h-10 object-cover rounded border" /></a>
+                                : <a key={j} href={u} target="_blank" rel="noreferrer" className="text-[10px] text-blue-600 underline flex items-center gap-0.5 px-1.5 py-1 border rounded"><FiFile size={10} /> {j + 1}</a>)}
+                            </div>
+                          ) : <span className="text-[10px] text-amber-600">⚠ none</span>}
+                        </td>
+                        <td className="px-2 py-2 text-right font-semibold whitespace-nowrap">₹{Number(r.approved_amount ?? r.amount).toLocaleString('en-IN')}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-emerald-50 font-semibold sticky bottom-0">
+                    <td colSpan="8" className="px-2 py-2 text-right">Selected Total ({bulkPickedCount})</td>
+                    <td className="px-2 py-2 text-right text-emerald-700 whitespace-nowrap">₹{Math.round(bulkSelectedTotal).toLocaleString('en-IN')}</td>
+                  </tr>
+                </tfoot>
+              </table>
             </div>
           )}
-          <div className="flex justify-end gap-2 pt-2 border-t">
+
+          <div className="flex justify-end gap-3 pt-2 border-t">
             <button onClick={() => setBulkOpen(false)} className="btn btn-secondary">Cancel</button>
-            <button onClick={approveBulk} disabled={bulkBusy || bulkPickedCount === 0} className="btn btn-primary flex items-center gap-2">
-              <FiCheckCircle size={16} /> Approve {bulkPickedCount} selected
+            <button onClick={approveBulk} disabled={bulkBusy || bulkPickedCount === 0} className="btn btn-success flex items-center gap-1">
+              <FiCheckCircle size={16} /> {bulkBusy ? 'Approving…' : `Approve ${bulkPickedCount} selected`}
             </button>
           </div>
         </div>
