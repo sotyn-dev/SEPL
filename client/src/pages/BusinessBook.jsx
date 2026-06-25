@@ -110,14 +110,53 @@ export default function BusinessBook() {
       toast.error('Client Name is required');
       return;
     }
-    // State & District use custom searchable selects that the browser's
-    // native `required` can't enforce. Check them here for non-admins
-    // (admin keeps the app-wide mandatory-field bypass — Layout.jsx).
-    if (!isAdmin()) {
-      const missing = [];
-      if (!form.state) missing.push('State');
-      if (!form.district) missing.push('District');
-      if (missing.length) { toast.error(`Required: ${missing.join(', ')}`); return; }
+    // Full mandatory-field check for NEW entries (mam 2026-06-25: "you don't
+    // do mandatory"). Runs in JS so it applies to EVERYONE — including admin,
+    // who otherwise bypasses native `required` app-wide (Layout.jsx
+    // noValidate). Editing an existing (possibly legacy) entry is NOT blocked
+    // on the full set, so old records stay editable.
+    if (modal !== 'edit') {
+      const REQUIRED = [
+        ['company_name', 'Company/Department'],
+        ['client_contact', 'Client Contact No.'],
+        ['client_email', 'Client Email ID'],
+        ['source_of_enquiry', 'Source of Enquiry'],
+        ['customer_type', 'Customer Type'],
+        ['client_type', 'Client Type'],
+        ['state', 'State'],
+        ['district', 'District'],
+        ['state_code', 'State Code'],
+        ['gstin', 'Client GSTIN'],
+        ['billing_address', 'Billing Address'],
+        ['shipping_address', 'Shipping / Site Address'],
+        ['project_name', 'Project Name'],
+        ['category', 'Category'],
+        ['committed_start_date', 'Committed Start'],
+        ['committed_delivery_date', 'Committed Delivery'],
+        ['committed_completion_date', 'Committed Completion'],
+        ['payment_advance', 'Advance %'],
+        ['payment_against_delivery', 'Against Delivery %'],
+        ['payment_against_installation', 'Against Installation %'],
+        ['payment_against_commissioning', 'Against Commissioning %'],
+        ['payment_retention', 'Retention %'],
+        ['payment_credit', 'Handover %'],
+        ['employee_assigned', 'Employee Name'],
+        ['management_person_name', 'Management Person'],
+        ['management_person_contact', 'Management Contact'],
+        ['accounts_person_name', 'Accounts Person'],
+        ['accounts_person_contact', 'Accounts Contact'],
+        ['working_sheet_link', 'Working Sheet (upload)'],
+        ['boq_file_link', 'BOQ File (upload)'],
+      ];
+      const missing = REQUIRED
+        .filter(([k]) => { const v = form[k]; return v === undefined || v === null || String(v).trim() === ''; })
+        .map(([, l]) => l);
+      if (!(Number(form.sale_amount_without_gst) > 0)) missing.push('Sale Amount');
+      if (!(Number(form.actual_margin_pct) > 0)) missing.push('Actual Margin %');
+      if (missing.length) {
+        toast.error(`Fill required: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ` + ${missing.length - 5} more` : ''}`);
+        return;
+      }
     }
     const cleaned = cleanFormText(form);
     try {
