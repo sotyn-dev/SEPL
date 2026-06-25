@@ -118,9 +118,20 @@ export default function Inventory() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => exportCsv('inventory-stock',
-            ['Code','Site','Item','Make','UoM','Qty','Avg Rate','Value','Reorder Level'],
-            flatStock.map(s => [s.item_code, s.site_name || s.warehouse_name, s.item_name, s.make, s.uom, s.qty, s.avg_rate, s.value, s.reorder_level]))}
+          <button onClick={() => {
+            // Export the currently-loaded stock rows. (Earlier this referenced
+            // `flatStock`, which only exists inside StockTab — so the click
+            // threw and nothing downloaded. Use the parent's own `stock`, with
+            // the real field names: quantity / effective_rate / value.)
+            if (!stock.length) { toast.error('No stock to export — open the Stock tab / pick a warehouse first'); return; }
+            exportCsv('inventory-stock',
+              ['Code','Site','Item','Size','Spec','Make','Type','UoM','Qty','Condition','Rate','Value','Reorder Level'],
+              stock.map(s => {
+                const rate = (+s.effective_rate > 0) ? +s.effective_rate : ((+s.avg_rate > 0) ? +s.avg_rate : (+s.master_price || 0));
+                const value = (+s.value > 0) ? +s.value : rate * (+s.quantity || 0);
+                return [s.item_code, s.warehouse_name, s.item_name, s.size, s.specification, s.make, s.item_type, s.uom, s.quantity, s.latest_condition, rate, value, s.reorder_level];
+              }));
+          }}
             className="btn btn-secondary flex items-center gap-2"><FiDownload size={14} /> Export Excel</button>
           <button onClick={() => { loadSummary(); if (tab === 'stock') loadStock(); if (tab === 'movements') loadMovements(); }}
             className="btn btn-secondary flex items-center gap-2"><FiRefreshCw size={14} /> Refresh</button>
