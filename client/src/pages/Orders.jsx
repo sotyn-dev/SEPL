@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, Fragment } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
-import { FiPlus, FiTrash2, FiUpload, FiEdit2, FiExternalLink, FiEye, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiUpload, FiEdit2, FiExternalLink, FiEye, FiDownload, FiChevronDown, FiChevronRight, FiMapPin, FiGrid } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import SearchableSelect from '../components/SearchableSelect';
 import MultiUserSelect from '../components/MultiUserSelect';
@@ -74,6 +74,10 @@ export default function Orders() {
   // matches against PO number, lead#, client/company, project, site engineer,
   // CRM. Lower-case substring match on whatever's typed.
   const [poFilter, setPoFilter] = useState('');
+  // Group the PO list by PROJECT — same collapsible layout as Business Book
+  // (mam 2026-06-25: "same business book merge with here project wise").
+  const [groupPo, setGroupPo] = useState(true);
+  const [poExpanded, setPoExpanded] = useState({});
   const [masterItems, setMasterItems] = useState([]);
   const [siteEngineers, setSiteEngineers] = useState([]);
   // All active users — source for the extra project-role pickers (jr site
@@ -225,6 +229,62 @@ export default function Orders() {
     { id: 'planning', label: 'Order Planning' },
   ];
 
+  // ── PO list grouped by PROJECT (collapsible) — same layout as the
+  // Business Book list (mam 2026-06-25). Project falls back to client /
+  // company when blank; POs with neither stay on their own row. ──
+  const cleanTxt = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  const poProjectOf = (p) => cleanTxt(p.bb_project) || cleanTxt(p.bb_client || p.company_name) || '';
+  const poGroups = useMemo(() => {
+    const map = new Map();
+    for (const p of pos.filter(x => poMatches(x, poFilter))) {
+      const proj = poProjectOf(p);
+      const key = proj ? proj.toLowerCase() : `__none__:${p.id}`;
+      if (!map.has(key)) map.set(key, { key, label: proj || '(no project)', pos: [], amount: 0, clients: new Set(), statuses: new Set() });
+      const g = map.get(key);
+      g.pos.push(p);
+      g.amount += (+p.total_amount || 0);
+      if (p.bb_client || p.company_name) g.clients.add(cleanTxt(p.bb_client || p.company_name));
+      if (p.status) g.statuses.add(p.status);
+    }
+    return [...map.values()];
+  }, [pos, poFilter]);
+  const poMergedCount = poGroups.filter(g => g.pos.length > 1).length;
+  const togglePoGroup = (key) => setPoExpanded(prev => ({ ...prev, [key]: !prev[key] }));
+  const poClientList = (set) => { const a = [...set]; if (!a.length) return '-'; return a.length <= 2 ? a.join(', ') : `${a.slice(0, 2).join(', ')} +${a.length - 2} more`; };
+
+  // One PO row — reused by the flat list and the grouped children so the
+  // columns never drift between the two modes.
+  const renderPoRow = (p, child = false) => (
+    <tr key={p.id} className={child ? 'bg-gray-50/60' : ''}>
+      <td className={`font-medium ${child ? 'pl-8' : ''}`}>{p.po_number}</td>
+      <td className="text-red-600 font-bold">{p.lead_no || '-'}</td>
+      <td>{p.bb_client || p.company_name || '-'}</td>
+      <td>{p.bb_project || '-'}</td>
+      <td>{p.bb_category || '-'}</td>
+      <td>{p.po_date}</td>
+      <td className="font-semibold">Rs {p.total_amount?.toLocaleString()}</td>
+      <td className="text-xs">{p.site_engineer_names || p.site_engineer_name || <span className="text-gray-400">-</span>}</td>
+      <td className="text-xs">{p.crm_name || <span className="text-gray-400">-</span>}</td>
+      <td>{p.po_copy_link ? <a href={p.po_copy_link} target="_blank" rel="noreferrer" className="text-red-600 hover:underline flex items-center gap-1 text-xs"><FiExternalLink size={12} /> View</a> : <span className="text-gray-400 text-xs">-</span>}</td>
+      <td>{p.boq_file_link ? <a href={p.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 hover:underline flex items-center gap-1 text-xs"><FiExternalLink size={12} /> View</a> : <span className="text-gray-400 text-xs">-</span>}</td>
+      <td><StatusBadge status={p.status} /></td>
+      <td>
+        <div className="flex gap-1">
+          <button onClick={() => handleEditPO(p)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded" title="Edit"><FiEdit2 size={15} /></button>
+          {canDelete('orders') && <button onClick={async () => {
+            if (!confirm(`Delete PO "${p.po_number}"?`)) return;
+            try { await api.delete(`/orders/po/${p.id}`); toast.success('Deleted'); load(); }
+            catch (err) {
+              const data = err.response?.data || {};
+              if (err.response?.status === 409 && data.canForce) toast.error(`${data.error} — use Edit to fix the PO instead of deleting.`, { duration: 6000 });
+              else toast.error(data.error || 'Delete failed');
+            }
+          }} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete"><FiTrash2 size={15} /></button>}
+        </div>
+      </td>
+    </tr>
+  );
+
   return (
     <div className="space-y-4">
       <div className="sticky-toolbar">
@@ -248,6 +308,11 @@ export default function Orders() {
                 <button onClick={() => setPoFilter('')} className="text-xs text-gray-500 hover:text-red-600 px-2" title="Clear">×</button>
               )}
             </div>
+            <button onClick={() => setGroupPo(v => !v)}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all ${groupPo ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white text-gray-500 border-gray-200 hover:border-amber-300'}`}
+              title="Merge POs that share the same project">
+              <FiGrid size={14} /> {groupPo ? 'Grouped by Project' : 'Group by Project'}
+            </button>
             <button onClick={() => exportCsv('purchase-orders',
               ['PO Number','Lead No','Client','Project','Category','Date','Amount','Advance','Status','Site Engineer','CRM'],
               pos.map(p => [p.po_number, p.lead_no, p.client_name, p.project_name, p.category, p.po_date, p.total_amount, p.advance_amount, p.status, p.site_engineer_name, p.crm_name]))}
@@ -271,49 +336,43 @@ export default function Orders() {
               </div>
             );
           })()}
+          {groupPo && (
+            <div className="text-xs text-gray-500">
+              {poGroups.length} project{poGroups.length !== 1 ? 's' : ''} ({pos.filter(p => poMatches(p, poFilter)).length} PO{pos.filter(p => poMatches(p, poFilter)).length !== 1 ? 's' : ''}{poMergedCount > 0 ? `, ${poMergedCount} merged` : ''}) · tap a project to expand
+            </div>
+          )}
           <div className="card p-0"><table className="freeze-head">
             <thead><tr><th>PO Number</th><th>Lead No</th><th>Client</th><th>Project</th><th>Category</th><th>Date</th><th>Amount</th><th>Site Engineer</th><th>CRM</th><th>PO Copy</th><th>BOQ File</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-              {pos.filter(p => poMatches(p, poFilter)).map(p => (
-                <tr key={p.id}>
-                  <td className="font-medium">{p.po_number}</td>
-                  <td className="text-red-600 font-bold">{p.lead_no || '-'}</td>
-                  <td>{p.bb_client || p.company_name || '-'}</td>
-                  <td>{p.bb_project || '-'}</td>
-                  <td>{p.bb_category || '-'}</td>
-                  <td>{p.po_date}</td>
-                  <td className="font-semibold">Rs {p.total_amount?.toLocaleString()}</td>
-                  <td className="text-xs">{p.site_engineer_names || p.site_engineer_name || <span className="text-gray-400">-</span>}</td>
-                  <td className="text-xs">{p.crm_name || <span className="text-gray-400">-</span>}</td>
-                  <td>{p.po_copy_link ? <a href={p.po_copy_link} target="_blank" rel="noreferrer" className="text-red-600 hover:underline flex items-center gap-1 text-xs"><FiExternalLink size={12} /> View</a> : <span className="text-gray-400 text-xs">-</span>}</td>
-                  <td>{p.boq_file_link ? <a href={p.boq_file_link} target="_blank" rel="noreferrer" className="text-red-600 hover:underline flex items-center gap-1 text-xs"><FiExternalLink size={12} /> View</a> : <span className="text-gray-400 text-xs">-</span>}</td>
-                  <td><StatusBadge status={p.status} /></td>
-                  <td>
-                    <div className="flex gap-1">
-                      <button onClick={() => handleEditPO(p)} className="p-1.5 text-gray-400 hover:text-amber-600 hover:bg-amber-50 rounded" title="Edit"><FiEdit2 size={15} /></button>
-                      {canDelete('orders') && <button onClick={async () => {
-                        if (!confirm(`Delete PO "${p.po_number}"?`)) return;
-                        try {
-                          await api.delete(`/orders/po/${p.id}`);
-                          toast.success('Deleted'); load();
-                        } catch (err) {
-                          // Per mam's decision (2026-04-23): if the PO is
-                          // linked to Vendor POs / Bills / Installations,
-                          // delete stays blocked — use Edit to fix bad data
-                          // instead. Force-delete backend endpoint still
-                          // exists but is no longer exposed here.
-                          const data = err.response?.data || {};
-                          if (err.response?.status === 409 && data.canForce) {
-                            toast.error(`${data.error} — use Edit to fix the PO instead of deleting.`, { duration: 6000 });
-                          } else {
-                            toast.error(data.error || 'Delete failed');
-                          }
-                        }
-                      }} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete"><FiTrash2 size={15} /></button>}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {/* Flat list, or merged-by-project when grouping is on. */}
+              {!groupPo && pos.filter(p => poMatches(p, poFilter)).map(p => renderPoRow(p))}
+              {groupPo && poGroups.map(g => {
+                const open = !!poExpanded[g.key];
+                return (
+                  <Fragment key={g.key}>
+                    {/* Collapsed project row — project name + PO count + total amount. */}
+                    <tr className="bg-blue-50/60 hover:bg-blue-100/60 cursor-pointer border-l-4 border-blue-600" onClick={() => togglePoGroup(g.key)}>
+                      <td className="font-medium">
+                        <div className="flex items-center gap-1.5 text-blue-700">
+                          {open ? <FiChevronDown size={14} /> : <FiChevronRight size={14} />}
+                          <span className="bg-blue-600 text-white text-[11px] font-bold px-2 py-0.5 rounded-full">{g.pos.length} PO{g.pos.length > 1 ? 's' : ''}</span>
+                        </div>
+                      </td>
+                      <td></td>
+                      <td className="text-xs">{poClientList(g.clients)}</td>
+                      <td className="font-semibold">
+                        <span className="flex items-center gap-1"><FiMapPin size={12} className="text-blue-600" /> {g.label}</span>
+                        <div className="text-[10px] text-blue-700/80">tap to {open ? 'collapse' : 'expand'}</div>
+                      </td>
+                      <td></td>
+                      <td></td>
+                      <td className="font-bold">Rs {g.amount.toLocaleString('en-IN')}<div className="text-[9px] text-gray-400 font-normal uppercase">total</div></td>
+                      <td colSpan={6}></td>
+                    </tr>
+                    {open && g.pos.map(p => renderPoRow(p, true))}
+                  </Fragment>
+                );
+              })}
               {pos.length === 0 && <tr><td colSpan="13" className="text-center py-8 text-gray-400">No orders yet</td></tr>}
             </tbody>
           </table></div>
