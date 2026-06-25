@@ -397,7 +397,7 @@ export default function VendorPOPrint() {
                   <td className="border-r border-gray-800 print:border-black px-1 py-2 text-right tabular-nums font-bold">
                     {(+it.quantity || 0).toLocaleString('en-IN')} {unit}
                     {isPipe && +it.original_qty_mtr > 0 && (
-                      <div className="text-[8.5px] font-normal text-gray-500">({(+it.original_qty_mtr).toLocaleString('en-IN')} MTR @ {it.weight_per_meter} kg/m)</div>
+                      <div className="text-[8.5px] font-normal text-gray-500">({(+it.original_qty_mtr).toLocaleString('en-IN')} MTR × {it.weight_per_meter} kg/pipe)</div>
                     )}
                   </td>
                   {/* Rate cell — shows current rate only.  Mam

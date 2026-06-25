@@ -3832,6 +3832,30 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[migration] indent item wpm backfill failed:', e.message); }
 
+  // mam 2026-06-25: pipe purchase qty = indent qty × the FULL per-pipe weight,
+  // NOT divided by length (e.g. 80 mm C-class weight 59.4, a 5 MTR indent →
+  // 5 × 59.4 = 297 kg). The conversion factor (weight_per_meter, multiplied by
+  // qty) must therefore hold the full per-pipe weight. Rebase every pipe item
+  // that has a weight_per_pipe, and its open indent-line snapshots, from the
+  // old divided value to the full weight. Guarded with weight_per_pipe > 0 so
+  // items without a per-pipe weight are left untouched (never nulled).
+  // Finalized vendor_po_items are NOT touched — issued POs stay as-billed.
+  try {
+    const done = db.prepare("SELECT value FROM app_settings WHERE key='pipe_wpm_full_weight_v1'").get();
+    if (!done) {
+      const r1 = db.prepare(
+        "UPDATE item_master SET weight_per_meter = weight_per_pipe WHERE weight_per_pipe IS NOT NULL AND weight_per_pipe > 0"
+      ).run();
+      const r2 = db.prepare(`
+        UPDATE indent_items
+           SET weight_per_meter = (SELECT im.weight_per_pipe FROM item_master im WHERE im.id = indent_items.item_master_id)
+         WHERE item_master_id IN (SELECT id FROM item_master WHERE weight_per_pipe IS NOT NULL AND weight_per_pipe > 0)
+      `).run();
+      db.prepare("INSERT INTO app_settings (key, value) VALUES ('pipe_wpm_full_weight_v1', '1')").run();
+      console.log(`[migration] pipe weight_per_meter set to full pipe weight: ${r1.changes} items, ${r2.changes} indent lines`);
+    }
+  } catch (e) { console.error('[migration] pipe full-weight rebase failed:', e.message); }
+
   // Backfill CRM funnel requirements for EXISTING Extra indents (mam
   // 2026-06-06: "extra schedule not go into crm funnel"). Older Extra-
   // Schedule / Extra-Non-Schedule indents only entered the funnel on CRM

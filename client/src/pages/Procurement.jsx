@@ -3257,7 +3257,7 @@ export default function Procurement() {
                         {(+r.weight_per_meter > 0) ? (
                           <div>
                             <div>{(Math.round(r.qty * r.weight_per_meter * 100) / 100).toLocaleString('en-IN')} <span className="text-blue-700">KG</span></div>
-                            <div className="text-[9px] font-normal text-gray-500">{r.qty} MTR @ {r.weight_per_meter} kg/m</div>
+                            <div className="text-[9px] font-normal text-gray-500">{r.qty} MTR × {r.weight_per_meter} kg/pipe</div>
                           </div>
                         ) : (
                           <>{r.qty} {cleanUnit(r.uom || r.unit)}</>
@@ -6259,7 +6259,7 @@ export default function Procurement() {
                               {it.item_code && <div className="text-[10px] font-mono text-gray-500">[{it.item_code}]</div>}
                               <div className="whitespace-normal leading-snug font-medium">{[it.master_name || it.description, it.specification, it.size].filter(Boolean).join(' / ')}</div>
                               {it.make && <div className="text-[10px] text-gray-400">Make: {it.make}</div>}
-                              {isPipe && <div className="text-[10px] text-blue-700 font-semibold">🪈 Pipe · {wpm} kg/m — PO in KG</div>}
+                              {isPipe && <div className="text-[10px] text-blue-700 font-semibold">🪈 Pipe · {wpm} kg/pipe — PO in KG</div>}
                               {orderedQty > 0 && (
                                 <div className={`text-[10px] font-semibold ${fullyOrdered ? 'text-gray-500 italic' : 'text-amber-600'}`}>
                                   {fullyOrdered ? `Fully ordered (${orderedQty} of ${it.quantity})` : `Ordered ${orderedQty} of ${it.quantity} · pending ${pending}`}

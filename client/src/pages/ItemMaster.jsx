@@ -602,15 +602,16 @@ export default function ItemMaster() {
             )}
           </div>
 
-          {/* Pipe weight (mam 2026-06-25). Pipes are sold + indented in METERS
-              but purchased in KG. Enter the WEIGHT PER PIPE (kg) the way mam's
-              Excel has it, plus the pipe length (default 6 m, editable per
-              pipe). We derive + store kg/m (weight_per_meter) — the value the
-              vendor enquiry + PO use to convert qty (kg = mtr × kg/m). */}
+          {/* Pipe weight (mam 2026-06-25). Pipes are indented in METERS but
+              purchased in KG. mam's rule: vendor-PO kg = indent qty × the
+              WEIGHT PER PIPE entered here — NO dividing by length. e.g. 80 mm
+              C-class weight 59.4, a 5 MTR indent → 5 × 59.4 = 297 kg. So the
+              entered weight IS the conversion factor (stored as
+              weight_per_meter, which the enquiry + PO multiply by qty). */}
           <div className="border border-blue-200 bg-blue-50/40 rounded-lg p-3">
-            <label className="label">Pipe weight — weight per pipe (kg) <span className="text-xs text-gray-400 font-normal">— optional, only for pipes; we convert MTR → KG on vendor enquiry &amp; PO</span></label>
+            <label className="label">Pipe weight — weight per pipe (kg) <span className="text-xs text-gray-400 font-normal">— optional, only for pipes; vendor enquiry &amp; PO use kg = indent qty × this weight</span></label>
             <div className="flex flex-wrap gap-2 items-end">
-              {/* Pick from the master — pre-fills weight/pipe + length. */}
+              {/* Pick from the master — fills the weight per pipe. */}
               <div className="flex-1 min-w-[220px]">
                 <label className="label text-[10px] mb-0.5 text-gray-500">Pick from Pipe Weights master</label>
                 <select className="select" value=""
@@ -618,39 +619,22 @@ export default function ItemMaster() {
                     const pw = pipeWeights.find(p => String(p.id) === e.target.value);
                     if (!pw) return;
                     setForm(f => {
-                      const wpp = pw.weight_per_pipe == null ? '' : pw.weight_per_pipe;
-                      const len = pw.pipe_length_m == null ? 6 : pw.pipe_length_m;
-                      const kgm = pw.kg_per_meter || ((+wpp > 0 && +len > 0) ? Math.round((+wpp / +len) * 1000) / 1000 : '');
-                      return { ...f, weight_per_pipe: wpp, pipe_length_m: len, weight_per_meter: kgm };
+                      const wpp = (pw.weight_per_pipe != null && +pw.weight_per_pipe > 0) ? +pw.weight_per_pipe : (+pw.kg_per_meter || '');
+                      return { ...f, weight_per_pipe: wpp, weight_per_meter: wpp };
                     });
                   }}>
                   <option value="">Pick from Pipe Weights master…</option>
-                  {pipeWeights.map(p => <option key={p.id} value={p.id}>{p.pipe_class} class · {p.size} ({p.weight_per_pipe ? `${p.weight_per_pipe} kg/pipe` : `${p.kg_per_meter} kg/m`})</option>)}
+                  {pipeWeights.map(p => <option key={p.id} value={p.id}>{p.pipe_class} class · {p.size} ({p.weight_per_pipe ? `${p.weight_per_pipe} kg/pipe` : `${p.kg_per_meter} kg`})</option>)}
                 </select>
               </div>
               <div>
                 <label className="label text-[10px] mb-0.5 text-gray-500">Weight / pipe (kg)</label>
-                <input className="input w-32" type="number" step="0.01" min="0" placeholder="e.g. 22.74"
+                <input className="input w-36" type="number" step="0.01" min="0" placeholder="e.g. 59.4"
                   value={form.weight_per_pipe ?? ''}
                   onChange={e => setForm(f => {
                     const v = e.target.value;
                     const wpp = v === '' ? '' : +v;
-                    const len = +f.pipe_length_m || 6;
-                    const kgm = (+wpp > 0 && len > 0) ? Math.round((+wpp / len) * 1000) / 1000 : '';
-                    return { ...f, weight_per_pipe: wpp, weight_per_meter: kgm };
-                  })} />
-              </div>
-              <div>
-                <label className="label text-[10px] mb-0.5 text-gray-500">Pipe length (m)</label>
-                <input className="input w-24" type="number" step="0.1" min="0" placeholder="6"
-                  value={form.pipe_length_m ?? ''}
-                  onChange={e => setForm(f => {
-                    const v = e.target.value;
-                    const len = v === '' ? '' : +v;
-                    const useLen = +len || 6;
-                    const wpp = +f.weight_per_pipe || 0;
-                    const kgm = (wpp > 0 && useLen > 0) ? Math.round((wpp / useLen) * 1000) / 1000 : '';
-                    return { ...f, pipe_length_m: len, weight_per_meter: kgm };
+                    return { ...f, weight_per_pipe: wpp, weight_per_meter: wpp };
                   })} />
               </div>
               {(form.weight_per_pipe || form.weight_per_meter) ? (
@@ -658,9 +642,9 @@ export default function ItemMaster() {
               ) : null}
             </div>
             {form.weight_per_pipe ? (
-              <p className="text-[11px] text-blue-700 mt-1.5">→ One {(+form.pipe_length_m || 6)} m pipe = <b>{form.weight_per_pipe} kg</b>. Indents raised in meters are purchased in kg automatically.</p>
+              <p className="text-[11px] text-blue-700 mt-1.5">→ Vendor PO kg = indent qty × <b>{form.weight_per_pipe}</b>. e.g. 5 MTR → <b>{Math.round(5 * (+form.weight_per_pipe || 0) * 100) / 100} kg</b>.</p>
             ) : (
-              <p className="text-[11px] text-gray-500 mt-1">Just enter the weight of one pipe (kg). Pipe length stays 6 m unless you change it. Leave blank for non-pipe items.</p>
+              <p className="text-[11px] text-gray-500 mt-1">Enter the weight per pipe (kg). On the vendor PO it's multiplied by the indent qty. Leave blank for non-pipe items.</p>
             )}
           </div>
 
