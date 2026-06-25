@@ -175,10 +175,16 @@ router.get('/:groupId', (req, res) => {
 router.post('/:groupId', (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
-  const { body, attachment_url, attachment_name } = req.body;
+  const { body, attachment_url, attachment_name, reply_to_id } = req.body;
   if ((!body || !String(body).trim()) && !attachment_url) return res.status(400).json({ error: 'Type a message or attach a file' });
-  const info = db.prepare(`INSERT INTO chat_messages (group_id, body, attachment_url, attachment_name, sender_id, sender_name) VALUES (?,?,?,?,?,?)`)
-    .run(g, body ? String(body).trim() : null, attachment_url || null, attachment_name || null, req.user.id, req.user.name || '');
+  // Quoted reply — only accept an id that belongs to THIS group (mam 2026-06-25).
+  let replyId = null;
+  if (reply_to_id) {
+    const ref = db.prepare('SELECT id FROM chat_messages WHERE id=? AND group_id=?').get(+reply_to_id, g);
+    if (ref) replyId = ref.id;
+  }
+  const info = db.prepare(`INSERT INTO chat_messages (group_id, body, attachment_url, attachment_name, sender_id, sender_name, reply_to_id) VALUES (?,?,?,?,?,?,?)`)
+    .run(g, body ? String(body).trim() : null, attachment_url || null, attachment_name || null, req.user.id, req.user.name || '', replyId);
   markRead(db, g, req.user.id);
   emitChat(g, 'changed', { groupId: g });
   res.json(db.prepare('SELECT * FROM chat_messages WHERE id=?').get(info.lastInsertRowid));

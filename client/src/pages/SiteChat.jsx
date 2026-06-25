@@ -8,7 +8,7 @@ import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiCornerUpLeft } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import { useCall } from '../context/CallContext';
 import { compressImage } from '../lib/imageCompress';
@@ -44,6 +44,7 @@ export default function SiteChat() {
   const [readsAt, setReadsAt] = useState({});      // user_id -> last-read timestamp (for Message Info)
   const [infoMsg, setInfoMsg] = useState(null);    // message whose "info" panel is open
   const [text, setText] = useState('');
+  const [replyTo, setReplyTo] = useState(null);   // WhatsApp-style quoted reply
   const [busy, setBusy] = useState(false);
   const [allUsers, setAllUsers] = useState([]);
   const [memOpen, setMemOpen] = useState(false);
@@ -99,6 +100,7 @@ export default function SiteChat() {
   }, [loadThread, loadGroups]);
   useEffect(() => {
     if (!sel) return;
+    setReplyTo(null);                                  // drop any pending reply when switching threads
     socketRef.current?.emit('join', sel.id);
     loadThread(sel.id);
     const t = setInterval(() => loadThread(sel.id), 6000);    // fallback poll (safe: GET no longer self-emits)
@@ -128,14 +130,17 @@ export default function SiteChat() {
   const todayLbl = fmtDate(new Date(), DAY_OPTS);
   const yestLbl = fmtDate(new Date(Date.now() - 864e5), DAY_OPTS);
   const dayLabel = (ts) => { const l = fmtDate(ts, DAY_OPTS); return l === todayLbl ? 'Today' : l === yestLbl ? 'Yesterday' : l; };
+  // Resolve a quoted reply's original message from the loaded thread.
+  const msgById = useMemo(() => { const o = {}; for (const x of msgs) o[x.id] = x; return o; }, [msgs]);
+  const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : (isImg(m.attachment_url) ? '📷 Photo' : '📎 Attachment'))) : 'Original message';
 
   const send = async (extra = {}) => {
     if (!sel || sendingRef.current) return;          // ref guard = no duplicate sends
-    const payload = { body: text, ...extra };
+    const payload = { body: text, ...(replyTo ? { reply_to_id: replyTo.id } : {}), ...extra };
     if (!payload.body?.trim() && !payload.attachment_url) return;
     sendingRef.current = true; setBusy(true);
     atBottomRef.current = true;                       // sending my own message always jumps to bottom
-    try { await api.post(`/site-chat/${sel.id}`, payload); setText(''); setMention(null); loadThread(sel.id); }
+    try { await api.post(`/site-chat/${sel.id}`, payload); setText(''); setMention(null); setReplyTo(null); loadThread(sel.id); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed to send'); }
     finally { sendingRef.current = false; setBusy(false); }
   };
@@ -402,10 +407,20 @@ export default function SiteChat() {
                   return (
                     <Fragment key={m.id}>
                       {sep && <div className="flex justify-center my-1.5"><span className="text-[10px] font-medium bg-white/85 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(m.created_at)}</span></div>}
-                      <div className={`flex items-end gap-1.5 ${own ? 'justify-end' : 'justify-start'}`}>
+                      <div id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
                         {!own && !sel.is_dm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
                         <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
                           {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
+                          {m.reply_to_id && (() => {
+                            const q = msgById[m.reply_to_id];
+                            return (
+                              <button type="button" onClick={() => { const el = document.getElementById(`msg-${m.reply_to_id}`); if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('ring-2', 'ring-emerald-400'); setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-400'), 1200); } }}
+                                className="block w-full text-left mb-1 rounded bg-black/[0.06] border-l-4 border-emerald-500 px-2 py-1">
+                                <div className="text-[11px] font-semibold text-emerald-700 truncate">{q ? (q.sender_id === user?.id ? 'You' : q.sender_name) : 'Message'}</div>
+                                <div className="text-[11px] text-gray-600 truncate">{q ? quotePreview(q) : 'Original message unavailable'}</div>
+                              </button>
+                            );
+                          })()}
                           {m.attachment_url && (
                             isImg(m.attachment_url)
                               ? <a href={m.attachment_url} target="_blank" rel="noreferrer"><img src={m.attachment_url} alt={m.attachment_name || ''} loading="lazy" decoding="async" className="rounded mb-1 max-h-52 max-w-full object-cover" /></a>
@@ -414,8 +429,9 @@ export default function SiteChat() {
                                 : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
                           {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
                           <div className="flex items-center justify-end gap-1.5 mt-0.5">
-                            <button onClick={() => setInfoMsg(m)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Message info"><FiInfo size={11} /></button>
-                            {(own || isAdmin()) && <button onClick={() => delMsg(m)} className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
+                            <button onClick={() => setReplyTo(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Reply"><FiCornerUpLeft size={11} /></button>
+                            <button onClick={() => setInfoMsg(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Message info"><FiInfo size={11} /></button>
+                            {(own || isAdmin()) && <button onClick={() => delMsg(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
                             <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
                             {own && <span title={others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet'} className={`text-[11px] leading-none ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>}
                           </div>
@@ -430,6 +446,16 @@ export default function SiteChat() {
               {/* min-w-0 on the textarea + flex-shrink-0 on the buttons so the
                   send / mic button never gets clipped off the right edge on a
                   narrow phone (mam 2026-06-19). */}
+              {/* Reply preview bar — WhatsApp-style quote above the composer */}
+              {replyTo && (
+                <div className="border-t bg-gray-100 px-3 py-1.5 flex items-center gap-2">
+                  <div className="flex-1 min-w-0 border-l-4 border-emerald-500 pl-2">
+                    <div className="text-[11px] font-semibold text-emerald-700 truncate">Replying to {replyTo.sender_id === user?.id ? 'yourself' : replyTo.sender_name}</div>
+                    <div className="text-[11px] text-gray-600 truncate">{quotePreview(replyTo)}</div>
+                  </div>
+                  <button onClick={() => setReplyTo(null)} className="flex-shrink-0 p-1 text-gray-400 hover:text-gray-700" title="Cancel reply"><FiX size={16} /></button>
+                </div>
+              )}
               <div className="border-t p-2 flex items-end gap-2 bg-gray-50 relative">
                 {/* @-mention picker — floats above the composer */}
                 {mention && mentionList.length > 0 && (

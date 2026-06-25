@@ -43,6 +43,12 @@ function getChatDb() {
     const cols = chatDb.prepare("PRAGMA table_info(chat_groups)").all().map(c => c.name);
     if (!cols.includes('is_dm')) chatDb.exec("ALTER TABLE chat_groups ADD COLUMN is_dm INTEGER DEFAULT 0");
   } catch (e) { /* ignore */ }
+  // reply_to_id: WhatsApp-style quoted reply — the id of the message this one
+  // replies to (mam 2026-06-25). NULL for normal messages.
+  try {
+    const mcols = chatDb.prepare("PRAGMA table_info(chat_messages)").all().map(c => c.name);
+    if (!mcols.includes('reply_to_id')) chatDb.exec("ALTER TABLE chat_messages ADD COLUMN reply_to_id INTEGER");
+  } catch (e) { /* ignore */ }
   return chatDb;
 }
 
