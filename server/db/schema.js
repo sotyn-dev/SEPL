@@ -3472,6 +3472,9 @@ function initializeDatabase() {
     // "here only give pipe per weight ... purchase in kg").
     ['item_master', 'weight_per_pipe REAL'],
     ['item_master', 'pipe_length_m REAL'],
+    // AI Auto-Quotation payment-terms split (mam 2026-06-25): Advance/Material/
+    // Installation/T&C/Handover/Retention %, persisted as JSON with the estimate.
+    ['estimate_quotations', 'payment_terms_json TEXT'],
     ['indent_items', 'weight_per_meter REAL'],
     // PO line snapshot: kg/m used, and the original meters (quantity on the
     // line is stored in KG for pipes so amount = kg × ₹/kg works unchanged).

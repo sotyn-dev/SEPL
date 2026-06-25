@@ -50,6 +50,12 @@ export default function Estimator() {
   // below the manpower table (mam 2026-06-22). Documentation was a flat ₹5,000.
   const [overheadPct, setOverheadPct] = useState(2);
   const [docPct, setDocPct] = useState(1);
+  // Payment terms (mam 2026-06-25): the client's milestone split. Must total
+  // 100%. Drives a cash-flow sanity check — the early inflow (Advance +
+  // Material) should at least cover the material + accessory outflow (PP+ACC),
+  // else the project can't be funded from the schedule ("you can't survive").
+  const PAY_TERM_DEFAULTS = { advance: 10, material: 50, installation: 20, tc: 10, handover: 5, retention: 5 };
+  const [payTerms, setPayTerms] = useState({ ...PAY_TERM_DEFAULTS });
   const [view, setView] = useState('build');     // 'build' | 'saved'
   const [savedList, setSavedList] = useState([]);
   const [currentId, setCurrentId] = useState(null);
@@ -259,6 +265,24 @@ export default function Estimator() {
   // Overhead + Documentation = % of project cost (items cost, before margin).
   const overheadAmt = r2((Number(totals.cost) || 0) * (Number(overheadPct) || 0) / 100);
   const docAmt = r2((Number(totals.cost) || 0) * (Number(docPct) || 0) / 100);
+  // Payment terms — must total 100%.
+  const PAY_FIELDS = [
+    ['advance', 'Advance'], ['material', 'Material'], ['installation', 'Installation'],
+    ['tc', 'T & C'], ['handover', 'Handover'], ['retention', 'Retention'],
+  ];
+  const payTotal = r2(PAY_FIELDS.reduce((t, [k]) => t + (Number(payTerms[k]) || 0), 0));
+  const payOk = Math.round(payTotal) === 100;
+  // Cash-flow viability: material + accessory OUTFLOW (what you pay vendors,
+  // PP×qty + ACC per line) vs the early INFLOW (Advance + Material % of the
+  // sale price). If the early money doesn't cover the material, the schedule
+  // can't fund the purchase (mam: "you can't survive").
+  const ppAccCost = useMemo(() => rows.reduce((t, row) => {
+    const c = calc(row); return t + (Number(row.pp) || 0) * (Number(row.qty) || 0) + c.acc;
+  }, 0), [rows, accPct, margins]);
+  const earlyPct = (Number(payTerms.advance) || 0) + (Number(payTerms.material) || 0);
+  const earlyInflow = r2((Number(totals.sp) || 0) * earlyPct / 100);
+  const payShortfall = r2(ppAccCost - earlyInflow);
+  const cashRisk = (Number(totals.sp) || 0) > 0 && payShortfall > 0;
   // Project duration (Start→End) in months → auto-fills the manpower months.
   const projMonths = useMemo(() => {
     if (!startDate || !endDate) return 0;
@@ -324,7 +348,7 @@ export default function Estimator() {
     if (!rows.some(r => r.description)) { toast.error('Add at least one item'); return; }
     const _cl = leads.find(l => String(l.id) === String(leadId));
     const clientName = (_cl?.company_name || _cl?.client_name || '');
-    const payload = { title, lead_id: leadId || null, client_name: clientName, acc_pct: accPct, margins, rows, manpower, cost: totals.cost, sp: totals.sp };
+    const payload = { title, lead_id: leadId || null, client_name: clientName, acc_pct: accPct, margins, rows, manpower, payment_terms: payTerms, cost: totals.cost, sp: totals.sp };
     try {
       if (currentId) { await api.put(`/quotations/estimates/${currentId}`, payload); }
       else { const r = await api.post('/quotations/estimates', payload); setCurrentId(r.data.id); }
@@ -336,12 +360,13 @@ export default function Estimator() {
       const { data } = await api.get(`/quotations/estimates/${id}`);
       setTitle(data.title || ''); setLeadId(data.lead_id || ''); setAccPct(data.acc_pct || 0);
       setMargins(data.margins || {}); setManpower((data.manpower && data.manpower.length) ? data.manpower : []);
+      setPayTerms((data.payment_terms && Object.keys(data.payment_terms).length) ? { ...PAY_TERM_DEFAULTS, ...data.payment_terms } : { ...PAY_TERM_DEFAULTS });
       setRows((data.rows && data.rows.length) ? data.rows : [blankRow()]);
       setCurrentId(id); setView('build'); toast.success('Loaded — you can edit and re-save');
     } catch (e) { toast.error('Failed to load'); }
   };
   const delEstimate = async (id) => { if (!confirm('Delete this saved quotation?')) return; try { await api.delete(`/quotations/estimates/${id}`); loadSavedList(); } catch (e) { toast.error('Failed'); } };
-  const newEstimate = () => { setTitle(''); setLeadId(''); setAccPct(0); setMargins({}); setRows([blankRow()]); setCurrentId(null); setView('build'); };
+  const newEstimate = () => { setTitle(''); setLeadId(''); setAccPct(0); setMargins({}); setRows([blankRow()]); setPayTerms({ ...PAY_TERM_DEFAULTS }); setCurrentId(null); setView('build'); };
 
   const lab = (s) => <span className="text-[10px] font-semibold text-gray-500 uppercase">{s}</span>;
 
@@ -664,6 +689,40 @@ export default function Estimator() {
           <span className="text-gray-400">% of project cost (before margin)</span>
           <span className="font-semibold text-indigo-700 ml-2">₹{fmt(docAmt)}</span>
         </div>
+      </div>
+
+      {/* Payment Terms — milestone split (must total 100%) + cash-flow check */}
+      <div className="card p-4">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <span className="text-sm font-semibold text-gray-700">Payment Terms <span className="text-xs font-normal text-gray-400">— must total 100%</span></span>
+          <span className={`text-xs font-bold px-2 py-1 rounded ${payOk ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
+            Total: {fmt(payTotal)}%{payOk ? ' ✓' : ' — must be 100%'}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+          {PAY_FIELDS.map(([k, label]) => (
+            <div key={k}>
+              <label className="label text-[10px]" title={k === 'tc' ? 'Testing & Commissioning' : undefined}>{label} %</label>
+              <input className="input text-right py-1" type="number" min="0" step="1"
+                value={payTerms[k]} onChange={e => setPayTerms(p => ({ ...p, [k]: e.target.value }))} />
+            </div>
+          ))}
+        </div>
+        {/* Cash-flow viability — Advance + Material vs material+accessory cost */}
+        {cashRisk ? (
+          <div className="mt-3 bg-red-50 border border-red-200 rounded-lg p-3 text-sm">
+            <div className="font-semibold text-red-700">⚠ Check payment terms — this schedule can't fund the material.</div>
+            <div className="text-red-600 text-[13px] mt-1 leading-relaxed">
+              Advance + Material = <b>{fmt(earlyPct)}%</b> brings in only <b>₹{fmt(earlyInflow)}</b> before installation,
+              but material + accessories (PP + ACC) cost <b>₹{fmt(ppAccCost)}</b>. You'd be short <b>₹{fmt(payShortfall)}</b> —
+              you can't survive on these terms (you'd fund the purchase from your own pocket). Raise the Advance / Material %.
+            </div>
+          </div>
+        ) : (Number(totals.sp) || 0) > 0 ? (
+          <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-lg p-2.5 text-[13px] text-emerald-700">
+            ✓ Advance + Material ({fmt(earlyPct)}% = ₹{fmt(earlyInflow)}) covers the material + accessories cost (₹{fmt(ppAccCost)}).
+          </div>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

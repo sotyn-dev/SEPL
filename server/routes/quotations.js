@@ -685,13 +685,13 @@ router.get('/estimates', (req, res) => {
 router.get('/estimates/:id', (req, res) => {
   const r = getDb().prepare('SELECT * FROM estimate_quotations WHERE id=?').get(req.params.id);
   if (!r) return res.status(404).json({ error: 'Not found' });
-  res.json({ ...r, margins: JSON.parse(r.margins_json || '{}'), rows: JSON.parse(r.rows_json || '[]'), manpower: JSON.parse(r.manpower_json || '[]') });
+  res.json({ ...r, margins: JSON.parse(r.margins_json || '{}'), rows: JSON.parse(r.rows_json || '[]'), manpower: JSON.parse(r.manpower_json || '[]'), payment_terms: JSON.parse(r.payment_terms_json || '{}') });
 });
 router.post('/estimates', (req, res) => {
   const b = req.body || {};
-  const r = getDb().prepare(`INSERT INTO estimate_quotations (title, lead_id, client_name, acc_pct, margins_json, rows_json, manpower_json, cost, sp, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(b.title || '', b.lead_id || null, b.client_name || '', Number(b.acc_pct) || 0,
-    JSON.stringify(b.margins || {}), JSON.stringify(b.rows || []), JSON.stringify(b.manpower || []),
+  const r = getDb().prepare(`INSERT INTO estimate_quotations (title, lead_id, client_name, acc_pct, margins_json, rows_json, manpower_json, payment_terms_json, cost, sp, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(b.title || '', b.lead_id || null, b.client_name || '', Number(b.acc_pct) || 0,
+    JSON.stringify(b.margins || {}), JSON.stringify(b.rows || []), JSON.stringify(b.manpower || []), JSON.stringify(b.payment_terms || {}),
     Number(b.cost) || 0, Number(b.sp) || 0, req.user.id);
   res.json({ id: r.lastInsertRowid, message: 'Saved' });
 });
@@ -699,9 +699,9 @@ router.put('/estimates/:id', (req, res) => {
   const b = req.body || {};
   const ex = getDb().prepare('SELECT id FROM estimate_quotations WHERE id=?').get(req.params.id);
   if (!ex) return res.status(404).json({ error: 'Not found' });
-  getDb().prepare(`UPDATE estimate_quotations SET title=?, lead_id=?, client_name=?, acc_pct=?, margins_json=?, rows_json=?, manpower_json=?, cost=?, sp=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+  getDb().prepare(`UPDATE estimate_quotations SET title=?, lead_id=?, client_name=?, acc_pct=?, margins_json=?, rows_json=?, manpower_json=?, payment_terms_json=?, cost=?, sp=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
     .run(b.title || '', b.lead_id || null, b.client_name || '', Number(b.acc_pct) || 0,
-      JSON.stringify(b.margins || {}), JSON.stringify(b.rows || []), JSON.stringify(b.manpower || []),
+      JSON.stringify(b.margins || {}), JSON.stringify(b.rows || []), JSON.stringify(b.manpower || []), JSON.stringify(b.payment_terms || {}),
       Number(b.cost) || 0, Number(b.sp) || 0, req.params.id);
   res.json({ message: 'Updated' });
 });
