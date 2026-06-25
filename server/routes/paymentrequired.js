@@ -694,6 +694,41 @@ router.put('/:id/approve', (req, res) => {
   res.json({ message: `${stepInfo.name} approved`, result, approved_amount: stepAmount });
 });
 
+// Bulk approve — approve many requests at once at the current step (mam
+// 2026-06-25: "approving one by one is very difficult; show all of a person's
+// pending with proof and tick-tick approve"). Each id is gated by the SAME
+// per-step authorisation as the single /approve; ones the caller can't approve
+// (wrong step / already done) are skipped and reported, never error the batch.
+// No per-item email (a 50-item batch would spam) — the step still advances.
+router.post('/bulk-approve', (req, res) => {
+  const db = getDb();
+  const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.map(Number).filter(Boolean))] : [];
+  if (!ids.length) return res.status(400).json({ error: 'No requests selected' });
+  const approved = [], skipped = [];
+  const run = db.transaction(() => {
+    for (const id of ids) {
+      const request = db.prepare('SELECT * FROM payment_requests WHERE id=?').get(id);
+      if (!request) { skipped.push({ id, reason: 'not found' }); continue; }
+      if (request.status === 'final_approved' || request.status === 'rejected') { skipped.push({ id, reason: 'already ' + request.status }); continue; }
+      if (!canUserApproveStep(db, req.user.id, request.category, request.current_step)) { skipped.push({ id, reason: 'not your step' }); continue; }
+      const workflow = WORKFLOW[request.category];
+      const stepInfo = workflow && workflow.find(w => w.step === request.current_step);
+      if (!stepInfo) { skipped.push({ id, reason: 'no workflow step' }); continue; }
+      const stepAmount = (request.approved_amount != null) ? +request.approved_amount : +request.amount;
+      db.prepare('INSERT INTO payment_approvals (request_id, step, step_name, action, remarks, step_amount, approved_by) VALUES (?,?,?,?,?,?,?)')
+        .run(request.id, request.current_step, stepInfo.name, 'approved', req.body.remarks || null, stepAmount, req.user.id);
+      if (request.approved_amount == null) {
+        db.prepare('UPDATE payment_requests SET approved_amount=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(stepAmount, request.id);
+        request.approved_amount = stepAmount;
+      }
+      advanceToNextStep(db, request, req.user.id);
+      approved.push(id);
+    }
+  });
+  run();
+  res.json({ message: `Approved ${approved.length}${skipped.length ? `, skipped ${skipped.length}` : ''}`, approved, skipped });
+});
+
 // PUT reject
 // Same as /approve — gated by the step-approver check inside, not the
 // generic module permission (mam 2026-06-18).

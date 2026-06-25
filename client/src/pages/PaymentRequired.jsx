@@ -6,7 +6,7 @@ import SearchableSelect from '../components/SearchableSelect';
 import StatusBadge from '../components/StatusBadge';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiSearch, FiFilter, FiEye, FiCheck, FiX, FiClock, FiCheckCircle, FiXCircle, FiUpload, FiTrash2, FiDownload, FiSettings } from 'react-icons/fi';
+import { FiPlus, FiSearch, FiFilter, FiEye, FiCheck, FiX, FiClock, FiCheckCircle, FiXCircle, FiUpload, FiTrash2, FiDownload, FiSettings, FiFile } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtISTPair } from '../utils/dateIST';
 import { LuIndianRupee } from 'react-icons/lu';
@@ -75,6 +75,13 @@ export default function PaymentRequired() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
   const [requests, setRequests] = useState([]);
+  // Bulk approve (mam 2026-06-25): pick a person, see all their pending with
+  // proof, tick-tick approve — instead of opening each one by one.
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkRows, setBulkRows] = useState([]);
+  const [bulkSel, setBulkSel] = useState(() => new Set());
+  const [bulkSearch, setBulkSearch] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
   // Mam (2026-05-22): "My Inbox" — payment requests where the
   // current step's approver is THIS user.  Fetched separately so
   // we can also use the count for the badge on the tab.
@@ -283,6 +290,38 @@ export default function PaymentRequired() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Bulk approve: load only the requests pending MY step (/my-inbox), let
+  // the approver filter by person, eyeball the proofs, and approve in one go.
+  const openBulk = async () => {
+    setBulkOpen(true); setBulkBusy(true); setBulkSearch('');
+    try {
+      const r = await api.get('/payment-required/my-inbox');
+      const rows = r.data || [];
+      setBulkRows(rows);
+      setBulkSel(new Set(rows.map(x => x.id)));   // everything ticked by default
+    } catch { toast.error('Could not load your pending approvals'); }
+    finally { setBulkBusy(false); }
+  };
+  const toggleBulk = (id) => setBulkSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const bulkVisible = bulkRows.filter(r => {
+    const q = bulkSearch.trim().toLowerCase();
+    return !q || (r.employee_name || r.created_by_name || '').toLowerCase().includes(q) || (r.request_no || '').toLowerCase().includes(q);
+  });
+  const setAllVisible = (on) => setBulkSel(s => { const n = new Set(s); bulkVisible.forEach(r => on ? n.add(r.id) : n.delete(r.id)); return n; });
+  const bulkPickedCount = bulkVisible.filter(r => bulkSel.has(r.id)).length;
+  const approveBulk = async () => {
+    const ids = bulkVisible.filter(r => bulkSel.has(r.id)).map(r => r.id);
+    if (!ids.length) return toast.error('Tick at least one request');
+    setBulkBusy(true);
+    try {
+      const r = await api.post('/payment-required/bulk-approve', { ids });
+      const { approved = [], skipped = [] } = r.data || {};
+      toast.success(`Approved ${approved.length}${skipped.length ? ` · ${skipped.length} skipped` : ''}`);
+      setBulkOpen(false); load();
+    } catch (e) { toast.error(e.response?.data?.error || 'Bulk approve failed'); }
+    finally { setBulkBusy(false); }
+  };
+
   const F = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const fmt = (n) => `Rs ${(n || 0).toLocaleString('en-IN')}`;
 
@@ -302,6 +341,12 @@ export default function PaymentRequired() {
             <button onClick={openRoutingModal} className="btn btn-secondary flex items-center gap-2"
                     title="Re-assign approval steps to specific users (HR → Aanchal, etc.)">
               <FiSettings size={16} /> Approval Routing
+            </button>
+          )}
+          {canApprove('payment_required') && (
+            <button onClick={openBulk} className="btn btn-secondary flex items-center gap-2"
+                    title="Approve many of your pending requests at once — filter by person, see proofs, tick-tick approve">
+              <FiCheckCircle size={16} /> Bulk Approve
             </button>
           )}
           {canCreate('payment_required') && (
@@ -1372,6 +1417,58 @@ export default function PaymentRequired() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Bulk approve — your pending requests, with proofs, tick-tick approve */}
+      <Modal isOpen={bulkOpen} onClose={() => setBulkOpen(false)} title="Bulk Approve — pending your approval" wide>
+        <div className="space-y-3">
+          <input className="input" placeholder="Filter by person (e.g. Monika) or request no…" value={bulkSearch} onChange={e => setBulkSearch(e.target.value)} autoFocus />
+          <div className="flex items-center justify-between text-xs text-gray-500">
+            <span><b className="text-emerald-700">{bulkPickedCount}</b> of {bulkVisible.length} ticked</span>
+            <div className="flex gap-3">
+              <button onClick={() => setAllVisible(true)} className="text-blue-600 hover:underline">Select all</button>
+              <button onClick={() => setAllVisible(false)} className="text-gray-500 hover:underline">Clear</button>
+            </div>
+          </div>
+          {bulkBusy && !bulkRows.length ? (
+            <div className="py-8 text-center text-gray-400 text-sm">Loading your pending approvals…</div>
+          ) : bulkVisible.length === 0 ? (
+            <div className="py-8 text-center text-emerald-600 text-sm">✅ Nothing pending your approval{bulkSearch ? ' for that filter' : ''}.</div>
+          ) : (
+            <div className="max-h-[55vh] overflow-y-auto divide-y border rounded-lg">
+              {bulkVisible.map(r => {
+                const proofs = [r.attachment_link, r.ticket_upload, r.km_photo, r.quotation_link].filter(Boolean);
+                const checked = bulkSel.has(r.id);
+                return (
+                  <label key={r.id} className={`flex items-start gap-3 p-3 cursor-pointer ${checked ? 'bg-emerald-50/50' : ''}`}>
+                    <input type="checkbox" checked={checked} onChange={() => toggleBulk(r.id)} className="mt-1 w-5 h-5 accent-emerald-600 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-red-600 text-sm">{r.request_no}</span>
+                        <span className="font-bold text-gray-800 text-sm whitespace-nowrap">Rs {Number(r.approved_amount ?? r.amount).toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="text-xs text-gray-600">{r.employee_name || r.created_by_name} · {r.category} · {r.current_step_name || `Step ${r.current_step}`}</div>
+                      {r.purpose && <div className="text-xs text-gray-500 truncate">{r.purpose}</div>}
+                      {proofs.length > 0 ? (
+                        <div className="flex gap-1.5 mt-1.5 flex-wrap">
+                          {proofs.map((u, i) => /\.(png|jpe?g|gif|webp)$/i.test(String(u))
+                            ? <a key={i} href={u} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}><img src={u} alt="proof" loading="lazy" className="w-12 h-12 object-cover rounded border" /></a>
+                            : <a key={i} href={u} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="text-[11px] text-blue-600 underline flex items-center gap-1 px-2 py-1 border rounded"><FiFile size={11} /> proof {i + 1}</a>)}
+                        </div>
+                      ) : <div className="text-[11px] text-amber-600 mt-1">⚠ no proof attached</div>}
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2 border-t">
+            <button onClick={() => setBulkOpen(false)} className="btn btn-secondary">Cancel</button>
+            <button onClick={approveBulk} disabled={bulkBusy || bulkPickedCount === 0} className="btn btn-primary flex items-center gap-2">
+              <FiCheckCircle size={16} /> Approve {bulkPickedCount} selected
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );
