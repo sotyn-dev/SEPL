@@ -579,6 +579,14 @@ export default function Leads() {
               {/* Stage 1 → Stage 2: Qualified or Not (GO/NO-GO) */}
               {activeStage==='lead_capture'&&(<div className="space-y-2">
                 <textarea className="input" rows="2" placeholder="Remarks..." value={stageForm.qualified_remarks||''} onChange={e=>setStageForm({...stageForm,qualified_remarks:e.target.value})}/>
+                {/* Tentative project value — captured when the lead is qualified
+                    (mam 2026-06-25). Optional; stored on the funnel lead. */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-0.5">Tentative project amount (₹) <span className="font-normal normal-case text-gray-400">— for a qualified lead</span></label>
+                  <input className="input" type="number" min="0" placeholder="e.g. 500000"
+                    value={stageForm.tentative_amount ?? (viewData.tentative_amount ?? '')}
+                    onChange={e=>setStageForm({...stageForm,tentative_amount:e.target.value})}/>
+                </div>
                 <div className="flex gap-2"><button onClick={()=>advanceStage(viewData.id,'qualification',stageForm)} className="btn btn-success flex-1"><FiCheck className="inline mr-1"/>Qualified</button><button onClick={()=>advanceStage(viewData.id,'not_qualified',stageForm)} className="btn btn-danger flex-1"><FiX className="inline mr-1"/>Not Qualified</button></div>
               </div>)}
               {/* Stage 2 → Stage 3: Schedule Site Survey (was 'Assign Meeting') */}

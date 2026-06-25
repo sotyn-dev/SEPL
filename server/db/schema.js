@@ -3475,6 +3475,9 @@ function initializeDatabase() {
     // AI Auto-Quotation payment-terms split (mam 2026-06-25): Advance/Material/
     // Installation/T&C/Handover/Retention %, persisted as JSON with the estimate.
     ['estimate_quotations', 'payment_terms_json TEXT'],
+    // CRM funnel: tentative project value captured when a lead is qualified
+    // at Stage 1 (mam 2026-06-25: "when qualified give option for tentative amt").
+    ['sales_funnel', 'tentative_amount REAL'],
     ['indent_items', 'weight_per_meter REAL'],
     // PO line snapshot: kg/m used, and the original meters (quantity on the
     // line is stored in KG for pipes so amount = kg × ₹/kg works unchanged).
