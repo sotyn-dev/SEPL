@@ -3071,34 +3071,41 @@ router.get('/indents/:id/billable-print', (req, res) => {
   // Non-BOQ-linked lines show individually; FOC/RGP among those stay free.
   // Bill on the INDENT qty (mam 2026-06-24: "according to indent") — NOT the
   // full client-BOQ po_items qty — so this statement matches the indent's own
-  // Billable column (indent qty × BOQ sale rate). Sub-items that map to the
-  // SAME BOQ line (a PO line + its FOC accessories, or a split procure/store
-  // line) are summed into one row so a BOQ line still shows once.
+  // Billable column. Sub-items that map to the SAME BOQ line (a PO line + its
+  // FOC accessories) collapse into one row, but ONLY the chargeable (PO) qty
+  // is billed: FOC / RGP sub-items are FREE, so they add 0 to the billable
+  // quantity (mam 2026-06-24: "we calculate only po item, but in sales bill you
+  // added the FOC qty"). The qty/unit shown is the PO sub-item's.
   let total = 0;
   const rows = [];
-  const poRow = new Map();     // po_item_id → its row, to sum indent qty
+  const poRow = new Map();     // po_item_id → its row, to sum the chargeable qty
   let sn = 0;
   for (const it of items) {
-    const indentQty = +it.quantity || 0;
+    const t = String(it.item_type || '').toUpperCase();
+    const isFree = (t === 'FOC' || t === 'RGP');
+    const billQty = isFree ? 0 : (+it.quantity || 0);   // FOC/RGP bill nothing
     if (it.po_item_id != null) {
       const rate = +it.po_rate || 0;               // the BOQ line's sale rate
       if (poRow.has(it.po_item_id)) {
         const row = poRow.get(it.po_item_id);
-        row.qty += indentQty;                      // add this sub-item's indent qty
-        row.amt = row.rate * row.qty;
+        if (!isFree) {
+          // First chargeable sub-item sets the billable unit/qty; later ones add.
+          if (row.qty === 0) row.unit = it.po_unit || it.unit || row.unit;
+          row.qty += billQty;
+          row.amt = row.rate * row.qty;
+        }
       } else {
         const desc = (it.boq_name && String(it.boq_name).trim())
           ? it.boq_name
           : [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
-        const row = { sn: ++sn, code: it.item_code || '', desc, qty: indentQty, unit: it.po_unit || it.unit || '', type: '', rate, amt: rate * indentQty };
+        const row = { sn: ++sn, code: it.item_code || '', desc, qty: billQty, unit: it.po_unit || it.unit || '', type: '', rate, amt: rate * billQty };
         poRow.set(it.po_item_id, row);
         rows.push(row);
       }
     } else {
-      const t = String(it.item_type || '').toUpperCase();
       const desc = [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
-      const rate = (t === 'FOC' || t === 'RGP') ? 0 : (descMap.get(String(it.description || '').toLowerCase().trim()) || 0);
-      rows.push({ sn: ++sn, code: it.item_code || '', desc, qty: indentQty, unit: it.unit || '', type: t, rate, amt: rate * indentQty });
+      const rate = isFree ? 0 : (descMap.get(String(it.description || '').toLowerCase().trim()) || 0);
+      rows.push({ sn: ++sn, code: it.item_code || '', desc, qty: (+it.quantity || 0), unit: it.unit || '', type: t, rate, amt: rate * (+it.quantity || 0) });
     }
   }
   total = rows.reduce((s, r) => s + (+r.amt || 0), 0);
