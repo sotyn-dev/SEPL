@@ -239,59 +239,58 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
   //   • approvals_total          — workflow length (denominator)
   // All best-effort — wrap in try/catch so a missing column doesn't
   // break the whole list.
+  //
+  // PERF (mam 2026-06-25 "reload time it hangs"): this used to run ~4 DB
+  // queries PER row. better-sqlite3 is synchronous, so over 900+ rows that
+  // was thousands of blocking queries on every reload → the page hung.
+  // Now we pre-fetch all 'approved' approvals in ONE (chunked) query and
+  // memoize the routing / name lookups by their handful of distinct keys.
+  const ids = rows.map(r => r.id);
+  const apprByReq = new Map();        // request_id -> [approval rows], step-ordered
+  for (let i = 0; i < ids.length; i += 900) {
+    const chunk = ids.slice(i, i + 900);
+    const ph = chunk.map(() => '?').join(',');
+    for (const a of db.prepare(`
+      SELECT pa.request_id, pa.step, pa.step_name, pa.approved_at, pa.step_amount, u.name AS by_name
+        FROM payment_approvals pa LEFT JOIN users u ON u.id = pa.approved_by
+       WHERE pa.action = 'approved' AND pa.request_id IN (${ph})
+       ORDER BY pa.step, pa.id`).all(...chunk)) {
+      if (!apprByReq.has(a.request_id)) apprByReq.set(a.request_id, []);
+      apprByReq.get(a.request_id).push(a);
+    }
+  }
+  // Memoized lookups — only a few distinct (category, step) and names exist.
+  const routeMemo = new Map();
+  const routeFor = (cat, step) => { const k = cat + '|' + step; if (!routeMemo.has(k)) routeMemo.set(k, getApprovalRoutingFor(db, cat, step) || null); return routeMemo.get(k); };
+  const idNameMemo = new Map();
+  const nameById = (uid) => { if (!idNameMemo.has(uid)) idNameMemo.set(uid, db.prepare('SELECT name FROM users WHERE id=?').get(uid)?.name || null); return idNameMemo.get(uid); };
+  const byNameMemo = new Map();
+  const userForName = (nm) => { if (!byNameMemo.has(nm)) byNameMemo.set(nm, resolveUserByName(db, nm) || null); return byNameMemo.get(nm); };
+
   for (const row of rows) {
     try {
       const workflow = WORKFLOW[row.category] || [];
       row.approvals_total = workflow.length || null;
-      // ── Current step info
       const curStep = workflow.find(w => w.step === row.current_step);
       row.current_step_name = curStep?.name || null;
-      // ── Who's next (override user if any, else role label)
       if (curStep) {
-        const overrideUserId = getApprovalRoutingFor(db, row.category, row.current_step);
-        if (overrideUserId) {
-          const u = db.prepare('SELECT name FROM users WHERE id=?').get(overrideUserId);
-          row.next_approver_name = u?.name || null;
-        } else if (curStep.approver_name) {
-          const u = resolveUserByName(db, curStep.approver_name);
-          row.next_approver_name = u?.name || curStep.approver_name;
-        } else {
-          row.next_approver_name = null;             // role-based step, no specific person
-        }
+        const overrideUserId = routeFor(row.category, row.current_step);
+        if (overrideUserId) row.next_approver_name = nameById(overrideUserId);
+        else if (curStep.approver_name) { const u = userForName(curStep.approver_name); row.next_approver_name = u?.name || curStep.approver_name; }
+        else row.next_approver_name = null;
         row.next_approver_role = curStep.approver_role || null;
       }
-      // ── Last approval that cleared (skip system / velocity check)
-      const lastApproval = db.prepare(`
-        SELECT pa.step, pa.step_name, pa.approved_at, u.name AS approved_by_name
-          FROM payment_approvals pa
-          LEFT JOIN users u ON u.id = pa.approved_by
-         WHERE pa.request_id = ? AND pa.action = 'approved'
-         ORDER BY pa.step DESC, pa.id DESC
-         LIMIT 1
-      `).get(row.id);
-      if (lastApproval) {
-        row.last_approved_step_name = lastApproval.step_name;
-        row.last_approved_by_name   = lastApproval.approved_by_name;
-        row.last_approved_at        = lastApproval.approved_at;
+      const appr = apprByReq.get(row.id) || [];
+      if (appr.length) {
+        const last = appr[appr.length - 1];          // highest step, latest id
+        row.last_approved_step_name = last.step_name;
+        row.last_approved_by_name   = last.by_name;
+        row.last_approved_at        = last.approved_at;
       }
-      // ── Approvals cleared so far
-      const cleared = db.prepare(
-        `SELECT COUNT(DISTINCT step) AS c FROM payment_approvals
-          WHERE request_id = ? AND action = 'approved'`
-      ).get(row.id);
-      row.approvals_count = cleared?.c || 0;
-      // Per-step approved amount (mam 2026-06-15: per-level Pending/Approved
-      // views — "when I select Approved on L1 then show how much amount").
-      // step_amounts = { <step>: <amount approved at that step> }.
+      row.approvals_count = new Set(appr.map(a => a.step)).size;
       row.step_amounts = {};
-      for (const s of db.prepare(
-        `SELECT step, step_amount FROM payment_approvals
-          WHERE request_id = ? AND action = 'approved'`
-      ).all(row.id)) {
-        row.step_amounts[s.step] = (s.step_amount != null ? +s.step_amount : (+row.approved_amount || +row.amount || 0));
-      }
+      for (const a of appr) row.step_amounts[a.step] = (a.step_amount != null ? +a.step_amount : (+row.approved_amount || +row.amount || 0));
     } catch (e) {
-      // Don't blow up the list response on a single bad row
       console.warn('[payment-required GET] enrich failed for row', row.id, e.message);
     }
   }
