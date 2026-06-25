@@ -3478,6 +3478,9 @@ function initializeDatabase() {
     // CRM funnel: tentative project value captured when a lead is qualified
     // at Stage 1 (mam 2026-06-25: "when qualified give option for tentative amt").
     ['sales_funnel', 'tentative_amount REAL'],
+    // CRM funnel: expected lead closing date, captured alongside the tentative
+    // amount when a lead is qualified (mam 2026-06-25).
+    ['sales_funnel', 'closing_date DATE'],
     ['indent_items', 'weight_per_meter REAL'],
     // PO line snapshot: kg/m used, and the original meters (quantity on the
     // line is stored in KG for pipes so amount = kg × ₹/kg works unchanged).

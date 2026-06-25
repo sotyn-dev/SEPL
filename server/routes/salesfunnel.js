@@ -311,11 +311,12 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
       sql = `UPDATE sales_funnel SET
         current_stage='qualification', is_qualified=1, qualified_by=?, qualified_date=CURRENT_TIMESTAMP,
         qualified_remarks=?, first_call_status=?, first_call_at=CURRENT_TIMESTAMP,
-        first_call_remarks=?, tentative_amount=?, stage_entered_at=CURRENT_TIMESTAMP,
+        first_call_remarks=?, tentative_amount=?, closing_date=?, stage_entered_at=CURRENT_TIMESTAMP,
         updated_at=CURRENT_TIMESTAMP WHERE id=?`;
       params = [b.qualified_by || req.user.name, b.qualified_remarks,
         b.first_call_status || 'interested', b.first_call_remarks || b.qualified_remarks || null,
         (b.tentative_amount === '' || b.tentative_amount == null) ? null : (+b.tentative_amount || null),
+        b.closing_date || null,
         req.params.id];
       break;
 

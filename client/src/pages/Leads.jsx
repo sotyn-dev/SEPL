@@ -643,11 +643,19 @@ export default function Leads() {
                 <textarea className="input" rows="2" placeholder="Remarks..." value={stageForm.qualified_remarks||''} onChange={e=>setStageForm({...stageForm,qualified_remarks:e.target.value})}/>
                 {/* Tentative project value — captured when the lead is qualified
                     (mam 2026-06-25). Optional; stored on the funnel lead. */}
-                <div>
-                  <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-0.5">Tentative project amount (₹) <span className="font-normal normal-case text-gray-400">— for a qualified lead</span></label>
-                  <input className="input" type="number" min="0" placeholder="e.g. 500000"
-                    value={stageForm.tentative_amount ?? (viewData.tentative_amount ?? '')}
-                    onChange={e=>setStageForm({...stageForm,tentative_amount:e.target.value})}/>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-0.5">Tentative project amount (₹) <span className="font-normal normal-case text-gray-400">— qualified lead</span></label>
+                    <input className="input" type="number" min="0" placeholder="e.g. 500000"
+                      value={stageForm.tentative_amount ?? (viewData.tentative_amount ?? '')}
+                      onChange={e=>setStageForm({...stageForm,tentative_amount:e.target.value})}/>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-500 uppercase mb-0.5">Lead closing date <span className="font-normal normal-case text-gray-400">— expected</span></label>
+                    <input className="input" type="date"
+                      value={stageForm.closing_date ?? (viewData.closing_date ? String(viewData.closing_date).slice(0,10) : '')}
+                      onChange={e=>setStageForm({...stageForm,closing_date:e.target.value})}/>
+                  </div>
                 </div>
                 <div className="flex gap-2"><button onClick={()=>advanceStage(viewData.id,'qualification',stageForm)} className="btn btn-success flex-1"><FiCheck className="inline mr-1"/>Qualified</button><button onClick={()=>advanceStage(viewData.id,'not_qualified',stageForm)} className="btn btn-danger flex-1"><FiX className="inline mr-1"/>Not Qualified</button></div>
               </div>)}
