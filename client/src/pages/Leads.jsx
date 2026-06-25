@@ -301,6 +301,13 @@ export default function Leads() {
   // Funnel data
   const funnelData = STAGES.filter(s=>s!=='lost').map(s => ({ stage: STAGE_SHORT[s], count: dashboard?.byStage?.find(b=>b.current_stage===s)?.count||0 }));
 
+  // Fortnightly expected-closing forecast (mam 2026-06-25): amount in Lakhs +
+  // lead count per 14-day bucket, from the dashboard API (closing_date +
+  // tentative_amount captured at Qualify). AR/AP-tracker style.
+  const closingChartData = (dashboard?.closingByFortnight || []).map(b => ({
+    name: b.label, amountL: Math.round(((b.amount||0)/100000)*100)/100, count: b.count||0, amount: b.amount||0,
+  }));
+
   // SLA chip for a lead row (overdue / due-in / —).
   const slaChipFor = (l) => {
     if (l.sla_minutes_left === null || l.sla_minutes_left === undefined) return <span className="text-gray-300 text-[10px]">—</span>;
@@ -483,6 +490,27 @@ export default function Leads() {
                     formatter={(name, entry) => `${name} — ${entry?.payload?.count ?? 0}`} />
                 </PieChart>
               </ResponsiveContainer>
+            </div>
+
+            {/* Fortnightly expected closings — AR/AP-tracker style: amount (₹L)
+                + lead count per 14-day bucket, from qualified leads' closing
+                date + tentative amount (mam 2026-06-25). */}
+            <div className="card md:col-span-2">
+              <h4 className="font-bold text-sm text-gray-700 mb-3">Expected Closings — Fortnightly <span className="font-normal text-gray-400">· ₹ in Lakhs · from qualified leads' closing date + tentative amount</span></h4>
+              {closingChartData.length === 0 || closingChartData.every(b => b.count === 0) ? (
+                <div className="h-[220px] flex items-center justify-center text-sm text-gray-400">No leads with a closing date yet — set the Lead Closing Date when qualifying a lead.</div>
+              ) : (
+                <ResponsiveContainer width="100%" height={260}>
+                  <BarChart data={closingChartData} margin={{top:16,right:10,left:0,bottom:5}}>
+                    <XAxis dataKey="name" tick={{fontSize:9}} angle={-15} textAnchor="end" height={55}/>
+                    <YAxis tick={{fontSize:10}} tickFormatter={(v)=>`${v}L`}/>
+                    <Tooltip formatter={(v,n,p)=>[`₹${(p.payload.amount||0).toLocaleString('en-IN')} · ${p.payload.count} lead${p.payload.count===1?'':'s'}`, 'Closing']}/>
+                    <Bar dataKey="amountL" radius={[4,4,0,0]}>
+                      {closingChartData.map((e,i)=>(<Cell key={i} fill={e.name==='Overdue' ? '#ef4444' : e.name==='Later' ? '#94a3b8' : '#6366f1'}/>))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
         </div>

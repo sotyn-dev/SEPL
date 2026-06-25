@@ -111,7 +111,40 @@ router.get('/dashboard', requirePermission('leads', 'view'), (req, res) => {
     todayFollowups = db.prepare("SELECT COUNT(*) as c FROM lead_followups WHERE done=0 AND followup_date=?").get(today)?.c || 0;
     overdueFollowups = db.prepare("SELECT COUNT(*) as c FROM lead_followups WHERE done=0 AND followup_date<?").get(today)?.c || 0;
   } catch(e) {}
-  res.json({ total: total.c, byStage: bystage, won, lost, thisMonth: thisMonth.c, byCategory, bySC, recent, stages: STAGES, todayFollowups, overdueFollowups });
+
+  // Fortnightly expected-closing forecast (mam 2026-06-25): qualified leads
+  // that have a closing date, bucketed into 14-day periods from today, summing
+  // their tentative amounts — an AR/AP-tracker-style pipeline view. Lost leads
+  // are excluded. Bucketing uses date PARTS (TZ-agnostic for DATE columns).
+  let closingByFortnight = [];
+  try {
+    const rows = db.prepare(
+      "SELECT closing_date, COALESCE(tentative_amount,0) AS amt FROM sales_funnel WHERE closing_date IS NOT NULL AND closing_date != '' AND current_stage != 'lost'"
+    ).all();
+    const DAY = 86400000, FN = 14 * DAY, N = 6;
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const fmtD = (ts) => { const d = new Date(ts); return `${String(d.getDate()).padStart(2,'0')} ${MON[d.getMonth()]}`; };
+    const buckets = [{ key: 'overdue', label: 'Overdue', count: 0, amount: 0 }];
+    for (let i = 0; i < N; i++) {
+      const start = todayStart + i * FN;
+      buckets.push({ key: 'f' + i, label: `${fmtD(start)}–${fmtD(start + (FN - DAY))}`, count: 0, amount: 0 });
+    }
+    buckets.push({ key: 'later', label: 'Later', count: 0, amount: 0 });
+    for (const r of rows) {
+      const parts = String(r.closing_date).slice(0, 10).split('-').map(Number);
+      if (parts.length < 3 || !parts[0]) continue;
+      const cdStart = new Date(parts[0], parts[1] - 1, parts[2]).getTime();
+      let b;
+      if (cdStart < todayStart) b = buckets[0];
+      else { const idx = Math.floor((cdStart - todayStart) / FN); b = idx < N ? buckets[idx + 1] : buckets[buckets.length - 1]; }
+      b.count += 1; b.amount += +r.amt || 0;
+    }
+    closingByFortnight = buckets;
+  } catch (e) {}
+
+  res.json({ total: total.c, byStage: bystage, won, lost, thisMonth: thisMonth.c, byCategory, bySC, recent, stages: STAGES, todayFollowups, overdueFollowups, closingByFortnight });
 });
 
 // GET single (with SLA info)
