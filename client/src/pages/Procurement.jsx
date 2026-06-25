@@ -5997,10 +5997,26 @@ export default function Procurement() {
                               {unitOpts.map(u => <option key={u} value={u}>{u}</option>)}
                             </select>
                           );
-                          const typeBox = (
-                            <div className={`text-center text-[11px] font-bold uppercase px-2 py-1.5 rounded-lg border ${typeClass}`} title="Auto-picked from Item Master sub-item">
-                              {item.item_type || <span className="text-gray-400 normal-case font-normal">—</span>}
+                          // Type box. For Material / Extra-Schedule the user
+                          // CHOOSES PO or FOC per sub-item (mam 2026-06-25:
+                          // "boq → under, give option PO or FOC … if FOC then
+                          // no need to enter PO"). PO = procured (goes to a
+                          // Vendor PO); FOC = free of cost — excluded from the
+                          // PO downstream, so nothing to enter. Defaults to the
+                          // Item Master type, else PO. RGP keeps its fixed type.
+                          const typeBox = cat === 'rgp' ? (
+                            <div className={`text-center text-[11px] font-bold uppercase px-2 py-1.5 rounded-lg border ${typeClass}`} title="RGP returnable item">
+                              {item.item_type || 'RGP'}
                             </div>
+                          ) : (
+                            <select
+                              className={`select text-[11px] font-bold uppercase py-1.5 text-center border ${typeClass}`}
+                              value={t === 'FOC' ? 'FOC' : 'PO'}
+                              onChange={e => { const n = [...indentItems]; n[i].item_type = e.target.value; setIndentItems(n); }}
+                              title="PO = procured, needs a Vendor PO.  FOC = free of cost — no PO needed.">
+                              <option value="PO">PO</option>
+                              <option value="FOC">FOC</option>
+                            </select>
                           );
                           // Per-sub-item remove only meaningful when there's more than 1 sub-item in this BOQ;
                           // to remove the LAST sub-item, the user removes the entire BOQ section via the header trash.
