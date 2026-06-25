@@ -48,6 +48,12 @@ const emptyForm = {
   remarks: '', status: 'booked'
 };
 
+// Fields that describe the CLIENT / PROJECT (not the specific order). Copied
+// when adding ANOTHER lead for the same client so it isn't re-typed; every
+// financial / PO / date / amount field starts fresh (mam 2026-06-25
+// "new lead generation button + basic old data fetch").
+const NEW_LEAD_BASIC = ['lead_type', 'client_name', 'company_name', 'project_name', 'client_contact', 'client_email', 'email_address', 'source_of_enquiry', 'district', 'state', 'state_code', 'gstin', 'billing_address', 'shipping_address', 'category', 'customer_type', 'client_type', 'customer_code', 'employee_assigned', 'employee_id', 'lead_by', 'management_person_name', 'management_person_contact', 'operations_person_name', 'operations_person_contact', 'pmc_person_name', 'pmc_person_contact', 'architect_person_name', 'architect_person_contact', 'accounts_person_name', 'accounts_person_contact', 'payment_advance', 'payment_against_delivery', 'payment_against_installation', 'payment_against_commissioning', 'payment_retention', 'payment_credit', 'credit_days', 'order_type'];
+
 export default function BusinessBook() {
   const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
   const [entries, setEntries] = useState([]);
@@ -192,6 +198,13 @@ export default function BusinessBook() {
 
   const handleView = (entry) => { setViewEntry(entry); setModal('view'); };
   const handleEdit = (entry) => { setForm({ ...emptyForm, ...entry }); setModal('edit'); };
+  // Add another lead for an existing client — prefill the basic client/project
+  // details from one of its leads; PO / amounts / dates stay blank to fill in.
+  const newLeadFrom = (entry) => {
+    const base = { ...emptyForm };
+    if (entry) for (const k of NEW_LEAD_BASIC) { const v = entry[k]; if (v != null && v !== '') base[k] = v; }
+    setForm(base); setModal('add');
+  };
 
   const exportCSV = () => {
     if (entries.length === 0) return toast.error('No data');
@@ -573,7 +586,12 @@ export default function BusinessBook() {
                       <td className="px-3 py-1.5 text-right align-top whitespace-nowrap font-bold text-[13px]">{fmt(g.sale)}<div className="text-[9px] text-gray-400 font-normal uppercase">total sales</div></td>
                       <td className="px-3 py-1.5 text-right align-top whitespace-nowrap font-bold text-[13px] text-blue-700">{fmt(g.gstIncl)}<div className="text-[9px] text-gray-400 font-normal uppercase">incl GST</div></td>
                       <td className="px-3 py-1.5 text-right align-top whitespace-nowrap font-bold text-[13px] text-amber-700">{g.mgmtDisc > 0 ? fmt(g.mgmtDisc) : '-'}<div className="text-[9px] text-gray-400 font-normal uppercase">mgmt disc</div></td>
-                      <td className="px-3 py-1.5" />
+                      <td className="px-3 py-1.5 text-center align-top" onClick={e => e.stopPropagation()}>
+                        {canCreate('business_book') && (
+                          <button onClick={() => newLeadFrom(g.leads[0])} title="Add another lead for this client — basic details prefilled, fill PO & amounts"
+                            className="text-[11px] font-semibold text-blue-700 hover:text-blue-900 whitespace-nowrap inline-flex items-center gap-1"><FiPlus size={12} /> New Lead</button>
+                        )}
+                      </td>
                     </tr>
                     {/* Sub-header for the expanded per-lead rows */}
                     {open && (
