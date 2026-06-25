@@ -50,7 +50,25 @@ function authMiddleware(req, res, next) {
       }
     } catch (_) { /* refresh is best-effort; never block the request */ }
     next();
-  } catch {
+  } catch (e) {
+    // Diagnostic (mam 2026-06-25, "Nitin Jain logs in then logs out"): record
+    // WHY a token was rejected so a real production logout can be traced to its
+    // exact cause instead of guessed at:
+    //   TokenExpiredError  → token genuinely aged past 7 days (sliding session
+    //                        not reaching this user — e.g. a long-idle tab)
+    //   JsonWebTokenError  → bad signature = the token was signed with a
+    //                        DIFFERENT secret (a stale browser token from
+    //                        before the secret was persisted) → one clean
+    //                        re-login fixes it
+    //   NotBeforeError     → clock skew between client and server
+    // We decode (WITHOUT verifying) just to attach the embedded user id so the
+    // log line names who it was. Only logged for the session check to avoid
+    // noise from the many unauthenticated/probe requests.
+    if (String(req.originalUrl || '').includes('/auth/me')) {
+      let who = '?';
+      try { who = (jwt.decode(token) || {}).id ?? '?'; } catch (_) {}
+      console.warn(`[auth] /auth/me 401 — ${e.name || 'Error'}: ${e.message} | token.user=${who}`);
+    }
     res.status(401).json({ error: 'Invalid token' });
   }
 }
