@@ -400,16 +400,18 @@ router.post('/', requirePermission('item_master', 'create'), (req, res) => {
       (item_code, department, item_name, specification, size, uom, gst, type, make, model_number,
        current_price, catalogue_link, photo_link,
        vendor_id, source_type, bill_po_number, bill_po_date,
-       weight_per_meter,
+       weight_per_meter, weight_per_pipe, pipe_length_m,
        priced_at, priced_by,
        approval_status, approved_by, approved_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     code, b.department, b.item_name, b.specification, b.size,
     b.uom || 'PCS', b.gst || '18%', b.type || 'PO', b.make, b.model_number,
     price, b.catalogue_link, b.photo_link,
     b.vendor_id || null, sourceType, b.bill_po_number || null, b.bill_po_date || null,
     (b.weight_per_meter === '' || b.weight_per_meter == null) ? null : (+b.weight_per_meter || null),
+    (b.weight_per_pipe === '' || b.weight_per_pipe == null) ? null : (+b.weight_per_pipe || null),
+    (b.pipe_length_m === '' || b.pipe_length_m == null) ? null : (+b.pipe_length_m || null),
     price > 0 ? new Date().toISOString() : null,
     price > 0 ? req.user.id : null,
     isAdmin ? 'approved' : 'pending',
@@ -444,7 +446,7 @@ router.put('/:id', requirePermission('item_master', 'edit'), (req, res) => {
            uom = ?, gst = ?, type = ?, make = ?, model_number = ?,
            current_price = ?, catalogue_link = ?, photo_link = ?,
            vendor_id = ?, source_type = ?, bill_po_number = ?, bill_po_date = ?,
-           weight_per_meter = ?,
+           weight_per_meter = ?, weight_per_pipe = ?, pipe_length_m = ?,
            priced_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE priced_at END,
            priced_by = CASE WHEN ? THEN ? ELSE priced_by END,
            updated_at = CURRENT_TIMESTAMP
@@ -455,6 +457,8 @@ router.put('/:id', requirePermission('item_master', 'edit'), (req, res) => {
     newPrice, b.catalogue_link, b.photo_link,
     newVendor, newSource, newBillNo, newBillDate,
     (b.weight_per_meter === '' || b.weight_per_meter == null) ? null : (+b.weight_per_meter || null),
+    (b.weight_per_pipe === '' || b.weight_per_pipe == null) ? null : (+b.weight_per_pipe || null),
+    (b.pipe_length_m === '' || b.pipe_length_m == null) ? null : (+b.pipe_length_m || null),
     priceProvenanceChanged ? 1 : 0,
     priceProvenanceChanged ? 1 : 0, req.user.id,
     req.params.id,

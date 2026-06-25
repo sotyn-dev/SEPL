@@ -3465,6 +3465,13 @@ function initializeDatabase() {
     // Pipe MTR→KG conversion (mam 2026-06-06): kg per meter. When >0 and the
     // item is indented in meters, Vendor Rates + PO convert qty to KG.
     ['item_master', 'weight_per_meter REAL'],
+    // Pipe weight captured as mam's Excel has it — weight of ONE pipe (kg) +
+    // the pipe length (m). The conversion still runs off weight_per_meter
+    // (= weight_per_pipe / pipe_length_m); these two are stored so the item
+    // round-trips and shows the same values mam typed (mam 2026-06-25:
+    // "here only give pipe per weight ... purchase in kg").
+    ['item_master', 'weight_per_pipe REAL'],
+    ['item_master', 'pipe_length_m REAL'],
     ['indent_items', 'weight_per_meter REAL'],
     // PO line snapshot: kg/m used, and the original meters (quantity on the
     // line is stored in KG for pipes so amount = kg × ₹/kg works unchanged).

@@ -14,7 +14,7 @@ const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 // Lightweight lookup — any authed user (used to fill kg/m on an item / indent).
 router.get('/lookup', (req, res) => {
   res.json(getDb().prepare(
-    "SELECT id, pipe_class, size, kg_per_meter FROM pipe_weights WHERE active=1 ORDER BY pipe_class, kg_per_meter DESC"
+    "SELECT id, pipe_class, size, kg_per_meter, weight_per_pipe, pipe_length_m FROM pipe_weights WHERE active=1 ORDER BY pipe_class, kg_per_meter DESC"
   ).all());
 });
 
