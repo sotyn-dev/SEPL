@@ -369,15 +369,17 @@ router.post('/:id/stage', requirePermission('leads', 'edit'), (req, res) => {
     // survey schedule (date, location, surveyor). Spec fields like load
     // study, photos, drawings will be added when mam asks for Stage 3.
     case 'site_survey':
-      if (!b.meeting_date) return res.status(400).json({ error: 'Survey date required' });
+      // Survey date is OPTIONAL (mam 2026-06-25). Empty -> NULL so it saves
+      // cleanly; meeting_status stays 'scheduled' only when a date is given.
       sql = `UPDATE sales_funnel SET
         current_stage='site_survey', meeting_date=?, meeting_location=?,
         meeting_assigned_to=?, meeting_assigned_to_id=?,
-        meeting_status='scheduled', meeting_recording_url=?,
+        meeting_status=?, meeting_recording_url=?,
         meeting_location_lat=?, meeting_location_lng=?,
         stage_entered_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`;
-      params = [b.meeting_date, b.meeting_location,
+      params = [b.meeting_date || null, b.meeting_location || null,
         b.meeting_assigned_to || null, b.meeting_assigned_to_id || null,
+        b.meeting_date ? 'scheduled' : 'pending',
         b.meeting_recording_url || null,
         b.meeting_location_lat || null, b.meeting_location_lng || null,
         req.params.id];
