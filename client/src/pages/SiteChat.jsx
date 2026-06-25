@@ -11,6 +11,7 @@ import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
 import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import { useCall } from '../context/CallContext';
+import { compressImage } from '../lib/imageCompress';
 
 const DAY_OPTS = { day: '2-digit', month: 'short', year: 'numeric' };
 const GREEN = '#075e54';                          // WhatsApp header green
@@ -142,7 +143,10 @@ export default function SiteChat() {
     if (!file || !sel) return;
     setBusy(true);
     try {
-      const fd = new FormData(); fd.append('file', file);
+      // Compress photos WhatsApp-style before upload so big phone images don't
+      // hang the chat (mam 2026-06-25). Keep the original display name.
+      const toSend = await compressImage(file);
+      const fd = new FormData(); fd.append('file', toSend);
       const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       await send({ attachment_url: r.data.url, attachment_name: r.data.filename || file.name });
     } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
@@ -183,7 +187,9 @@ export default function SiteChat() {
     if (!file) return;
     setBusy(true);
     try {
-      const fd = new FormData(); fd.append('file', file);
+      // Profile photo is shown tiny — compress hard (square-ish, small).
+      const toUpload = await compressImage(file, { maxDim: 512, quality: 0.7 });
+      const fd = new FormData(); fd.append('file', toUpload);
       const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       await api.post('/auth/avatar', { avatar_url: r.data.url });
       reloadUsers(); if (sel) loadThread(sel.id);
@@ -402,7 +408,7 @@ export default function SiteChat() {
                           {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
                           {m.attachment_url && (
                             isImg(m.attachment_url)
-                              ? <a href={m.attachment_url} target="_blank" rel="noreferrer"><img src={m.attachment_url} alt={m.attachment_name || ''} className="rounded mb-1 max-h-52 object-cover" /></a>
+                              ? <a href={m.attachment_url} target="_blank" rel="noreferrer"><img src={m.attachment_url} alt={m.attachment_name || ''} loading="lazy" decoding="async" className="rounded mb-1 max-h-52 max-w-full object-cover" /></a>
                               : isAudio(m.attachment_url)
                                 ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
                                 : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
