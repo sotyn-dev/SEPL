@@ -99,6 +99,17 @@ body {
   }
 }
 
+/* Mobile: iOS Safari auto-zooms the whole page whenever you focus an input
+   whose font-size is under 16px — so every form field on a phone yanked the
+   layout around. Force form controls to 16px on small screens only; desktop
+   keeps the compact 14px (mam 2026-06-25 mobile audit, "think like a user"). */
+@media (max-width: 640px) {
+  input, select, textarea,
+  .input, .select, .input-compact {
+    font-size: 16px !important;
+  }
+}
+
 /* Global protection for number inputs styled with `.input` — mam: "qty
    is very small not showing peroper when we enter". Without this, a
    number input inside a col-span-1 grid cell ends up with ~25px width
