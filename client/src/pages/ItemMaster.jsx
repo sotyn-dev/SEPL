@@ -657,10 +657,10 @@ export default function ItemMaster() {
                 <button type="button" onClick={() => setForm(f => ({ ...f, weight_per_pipe: '', pipe_length_m: '', weight_per_meter: '' }))} className="btn btn-secondary text-xs px-2 mb-0.5">Clear</button>
               ) : null}
             </div>
-            {form.weight_per_meter ? (
-              <p className="text-[11px] text-blue-700 mt-1.5">→ Converts at <b>{form.weight_per_meter} kg/m</b> (weight per pipe ÷ {(+form.pipe_length_m || 6)} m). Vendor enquiry &amp; PO show kg = meters × {form.weight_per_meter}.</p>
+            {form.weight_per_pipe ? (
+              <p className="text-[11px] text-blue-700 mt-1.5">→ One {(+form.pipe_length_m || 6)} m pipe = <b>{form.weight_per_pipe} kg</b>. Indents raised in meters are purchased in kg automatically.</p>
             ) : (
-              <p className="text-[11px] text-gray-500 mt-1">Leave blank for non-pipe items. Pipe length defaults to 6 m — change it for a different length. Manage the list via the “🪈 Pipe Weights” button at the top.</p>
+              <p className="text-[11px] text-gray-500 mt-1">Just enter the weight of one pipe (kg). Pipe length stays 6 m unless you change it. Leave blank for non-pipe items.</p>
             )}
           </div>
 
