@@ -2326,6 +2326,22 @@ function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_lpi_raised ON labour_payment_indents(raised_by);
     CREATE INDEX IF NOT EXISTS idx_lpi_created ON labour_payment_indents(created_at DESC);
 
+    -- Hot-path FK indexes (mam 2026-06-25 perf audit: "nothing should hang").
+    -- These cover the per-row subqueries / joins that ran full table scans on
+    -- list loads (vendor-PO list total, sales-bill + DPR lookups, indent items,
+    -- payments by reference). Pure speed, no behaviour change.
+    CREATE INDEX IF NOT EXISTS idx_vpitems_vpo      ON vendor_po_items(vendor_po_id);
+    CREATE INDEX IF NOT EXISTS idx_sbills_po        ON sales_bills(po_id);
+    CREATE INDEX IF NOT EXISTS idx_sbills_bb        ON sales_bills(business_book_id);
+    CREATE INDEX IF NOT EXISTS idx_sbitems_bill     ON sales_bill_items(sales_bill_id);
+    CREATE INDEX IF NOT EXISTS idx_dpr_site         ON dpr(site_id);
+    CREATE INDEX IF NOT EXISTS idx_dpr_salesbill    ON dpr(sales_bill_id);
+    CREATE INDEX IF NOT EXISTS idx_dprwi_dpr        ON dpr_work_items(dpr_id);
+    CREATE INDEX IF NOT EXISTS idx_indents_site     ON indents(site_id);
+    CREATE INDEX IF NOT EXISTS idx_indentitems_poi  ON indent_items(po_item_id);
+    CREATE INDEX IF NOT EXISTS idx_payments_ref     ON payments(reference_type, reference_id);
+    CREATE INDEX IF NOT EXISTS idx_pofoc_poi        ON po_foc_entries(po_item_id);
+
     -- ============================================================
     -- INDENT LABOUR PAYMENT (Project Execution & Billing) — mam
     -- (2026-06-01, amended 2026-06-02).  Coexists with the simpler
