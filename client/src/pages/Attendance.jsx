@@ -146,7 +146,7 @@ export default function Attendance() {
   const insideSite = location && geofences.length > 0
     ? geofences.filter(g => g.active !== 0).find(g => {
         const dist = haversineMeters(location.latitude, location.longitude, g.latitude, g.longitude);
-        const acc = Math.min(+location.accuracy || 0, 500);
+        const acc = Math.min(Math.max(+location.accuracy || 0, 100), 500); // min 100m GPS tolerance — matches server
         return dist - acc <= (g.radius_meters || 200);
       })
     : null;

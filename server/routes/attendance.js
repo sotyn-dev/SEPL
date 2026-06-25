@@ -543,7 +543,10 @@ router.post('/punch-in', (req, res) => {
   // GPS accuracy buffer (clamped to 500m to prevent junk from auto-passing)
   // so users with normal indoor / cloudy-day GPS noise aren't blocked from
   // punching in even though they're physically at site.
-  const acc = +req.body?.accuracy > 0 ? Math.min(+req.body.accuracy, 500) : 0;
+  // GPS tolerance: at least 100 m (devices often report a confident-but-wrong
+  // fix, so a small reported accuracy was blocking staff standing AT site —
+  // mam 2026-06-25 "person on exact location but says outside"), capped at 500 m.
+  const acc = Math.min(Math.max(+req.body?.accuracy || 0, 100), 500);
   const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
   if (geofences.length === 0) {
     return res.status(400).json({ error: 'No site locations configured. Contact admin to add geofence areas.' });
@@ -606,7 +609,10 @@ router.post('/punch-out', (req, res) => {
     if (geofences.length === 0) {
       return res.status(400).json({ error: 'No site locations configured. Contact admin.' });
     }
-    const acc = +req.body?.accuracy > 0 ? Math.min(+req.body.accuracy, 500) : 0;
+    // GPS tolerance: at least 100 m (devices often report a confident-but-wrong
+  // fix, so a small reported accuracy was blocking staff standing AT site —
+  // mam 2026-06-25 "person on exact location but says outside"), capped at 500 m.
+  const acc = Math.min(Math.max(+req.body?.accuracy || 0, 100), 500);
     let inside = false;
     let nearest = { dist: Infinity, site: '' };
     for (const gf of geofences) {
@@ -662,7 +668,7 @@ router.post('/track-location', (req, res) => {
   }
 
   if (!latitude || !longitude) return res.status(400).json({ error: 'Location required' });
-  const acc = +accuracy > 0 ? Math.min(+accuracy, 500) : 0; // clamp to 500m so a junk reading doesn't auto-pass
+  const acc = Math.min(Math.max(+accuracy || 0, 100), 500); // min 100m GPS tolerance, capped at 500m
   const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
   let siteName = 'Outside';
   for (const gf of geofences) {
