@@ -29,16 +29,25 @@ api.interceptors.response.use(
   },
   err => {
     if (err.response?.status === 401) {
-      // Ignore a 401 from a request whose token is no longer the active one.
-      // A slow request still in flight from BEFORE the user (re-)logged in —
-      // e.g. a stale /auth/me using an expired token — would otherwise clear
-      // the brand-new token and bounce a just-logged-in user. That looked
-      // like "log in, then instantly logged out" (mam 2026-06-24, Nitin Jain,
-      // who carried a stale token from a previous session). Only act when the
-      // token that failed is still the current session token.
+      // Bulletproof logout policy (mam, repeatedly: "automatically logout —
+      // very bad"). The ONLY thing that may end a session is the definitive
+      // session check, GET /auth/me, rejecting the CURRENT token. Two guards:
+      //
+      //   1. Only /auth/me 401s log out. A 401 from ANY other endpoint — a
+      //      stale in-flight request from a previous session, a flaky call, or
+      //      an endpoint that wrongly returns 401 instead of 403 — is ignored
+      //      and never drops a working session. AuthContext re-pulls /auth/me
+      //      on mount, on tab focus, and every 2 min, so a genuinely dead
+      //      token is still caught and logged out promptly.
+      //   2. Even for /auth/me, only act if the token that failed is still the
+      //      active one — a slow stale /auth/me resolving AFTER the user
+      //      re-logged in must not clear the brand-new token (the "log in,
+      //      then instantly logged out" race — Nitin Jain, 2026-06-24).
+      const url = err.config?.url || '';
       const used = err.config?.metadata?.tokenAtSend || null;
       const current = getToken();
-      if (used === current) {
+      const isSessionCheck = url.includes('/auth/me');
+      if (isSessionCheck && current && used === current) {
         clearToken();
         delete api.defaults.headers.common.Authorization;
         // Only hard-redirect if we're NOT already on the login page — a 401
