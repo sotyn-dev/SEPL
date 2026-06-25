@@ -1500,11 +1500,24 @@ export default function PaymentRequired() {
                     {/* step pipeline */}
                     {Array.isArray(r.steps) && r.steps.length > 0 && (
                       <div className="flex flex-wrap gap-1.5 px-3 py-2 bg-white border-b border-gray-100">
-                        {r.steps.map((s, j) => (
-                          <div key={j} className={`text-[10px] px-2 py-1 rounded border ${s.status === 'done' ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : s.status === 'current' ? 'bg-amber-50 border-amber-400 text-amber-800 font-semibold' : 'bg-gray-50 border-gray-200 text-gray-400'}`} title={s.at ? fmtISTPair(s.at).date : ''}>
-                            {s.status === 'done' ? '✓ ' : s.status === 'current' ? '⏳ ' : '○ '}{s.name}{s.by_name ? ` · ${s.by_name}` : ''}
-                          </div>
-                        ))}
+                        {r.steps.map((s, j) => {
+                          const ra = s.raci;
+                          const tip = ra
+                            ? `R: ${ra.responsible || '-'}  |  A: ${ra.accountable || '-'}  |  C: ${ra.consulted || '-'}  |  I: ${ra.informed || '-'}${ra.sla_hours != null ? `  |  SLA ${ra.sla_hours}h` : ''}`
+                            : (s.at ? fmtISTPair(s.at).date : '');
+                          return (
+                            <div key={j} className={`text-[10px] px-2 py-1 rounded border ${s.late_hours > 0 ? 'bg-rose-50 border-rose-300 text-rose-800' : s.status === 'done' ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : s.status === 'current' ? 'bg-amber-50 border-amber-400 text-amber-800 font-semibold' : 'bg-gray-50 border-gray-200 text-gray-400'}`} title={tip}>
+                              <div>{s.status === 'done' ? '✓ ' : s.status === 'current' ? '⏳ ' : '○ '}{s.name}{s.by_name ? ` · ${s.by_name}` : ''}</div>
+                              {(s.elapsed_hours != null || s.late_hours > 0 || ra?.responsible) && (
+                                <div className="flex flex-wrap gap-x-1.5 mt-0.5 leading-tight">
+                                  {s.elapsed_hours != null && <span className="text-[9px] text-gray-500">⏱ {s.elapsed_hours}h</span>}
+                                  {s.late_hours > 0 && <span className="text-[9px] font-bold text-rose-600">⚠ {s.late_hours}h late</span>}
+                                  {ra?.responsible && <span className="text-[9px] text-emerald-700">R:{ra.responsible}</span>}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
 

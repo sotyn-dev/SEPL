@@ -3,8 +3,12 @@ const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
+const { getRaciMap } = require('./raci');
 const router = express.Router();
 router.use(authMiddleware);
+
+// Parse a SQLite UTC timestamp ('YYYY-MM-DD HH:MM:SS') to epoch ms.
+const tsMs = (s) => s ? new Date(String(s).replace(' ', 'T') + 'Z').getTime() : null;
 
 // Resolve a user's email by id (for email-trigger recipients). Best-effort.
 function userEmail(db, id) {
@@ -351,6 +355,12 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
   ).all(uid).map(r => r.name);
   const isAdmin = req.user.role === 'admin';
 
+  // RACI/SLA template for payables — fetched once, names cached, so per-step
+  // enrichment adds no N+1 (mam 2026-06-25 RACI + late-tracking).
+  const raciCfg = getRaciMap(db, 'payables');
+  const _nameCache = {};
+  const nameById = (id) => { if (!id) return null; if (!(id in _nameCache)) _nameCache[id] = db.prepare('SELECT name FROM users WHERE id=?').get(id)?.name || null; return _nameCache[id]; };
+
   const inbox = [];
   for (const row of rows) {
     const workflow = WORKFLOW[row.category];
@@ -416,13 +426,29 @@ router.get('/my-inbox', requirePermission('payment_required', 'view'), (req, res
            FROM payment_approvals pa LEFT JOIN users u ON u.id = pa.approved_by
           WHERE pa.request_id = ? AND pa.action = 'approved'`
       ).all(row.id)) { apprByStep[a.step] = a; }
+      // RACI + timing per step: elapsed = time from the previous step's clear
+      // (or the request creation) to this step; for the CURRENT step it's how
+      // long it's been waiting NOW. late = elapsed beyond the step's SLA hours.
+      const HOUR = 3600000, nowMs = Date.now();
+      let prevTime = tsMs(row.created_at);
       row.steps = workflow.map(w => {
         const done = apprByStep[w.step];
+        const isCurrent = !done && w.step === row.current_step;
+        const cfg = raciCfg[String(w.step)];
+        const sla = cfg && cfg.sla_hours != null ? +cfg.sla_hours : null;
+        let elapsed = null;
+        const atMs = done ? tsMs(done.approved_at) : null;
+        if (done && prevTime != null && atMs != null) { elapsed = Math.max(0, (atMs - prevTime) / HOUR); prevTime = atMs; }
+        else if (isCurrent && prevTime != null) { elapsed = Math.max(0, (nowMs - prevTime) / HOUR); }
+        const late = (elapsed != null && sla != null && elapsed > sla) ? elapsed - sla : 0;
         return {
           step: w.step, name: w.name,
-          status: done ? 'done' : (w.step === row.current_step ? 'current' : 'pending'),
+          status: done ? 'done' : (isCurrent ? 'current' : 'pending'),
           by_name: done ? done.by_name : null,
           at: done ? done.approved_at : null,
+          raci: cfg ? { responsible: nameById(cfg.responsible_id), accountable: nameById(cfg.accountable_id), consulted: nameById(cfg.consulted_id), informed: nameById(cfg.informed_id), sla_hours: sla } : null,
+          elapsed_hours: elapsed != null ? Math.round(elapsed * 10) / 10 : null,
+          late_hours: late > 0 ? Math.round(late * 10) / 10 : 0,
         };
       });
     } catch (_) {}

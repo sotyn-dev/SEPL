@@ -331,6 +331,7 @@ app.use('/api/solar', require('./routes/solar'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/business-book', require('./routes/businessbook'));
 app.use('/api/payment-required', require('./routes/paymentrequired'));
+app.use('/api/raci', require('./routes/raci').router);
 app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/support', require('./routes/support'));
 app.use('/api/item-master', require('./routes/itemmaster'));
