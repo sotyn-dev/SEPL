@@ -4,3 +4,6 @@ node_modules/
 client/dist/
 client/node_modules/
 .claude/worktrees/
+
+# generated sales-billing exports that land in client/public
+client/public/*.xlsx
