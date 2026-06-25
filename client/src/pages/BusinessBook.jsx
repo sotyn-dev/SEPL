@@ -49,8 +49,12 @@ const emptyForm = {
 };
 
 export default function BusinessBook() {
-  const { canCreate, canEdit, canDelete } = useAuth();
+  const { canCreate, canEdit, canDelete, isAdmin } = useAuth();
   const [entries, setEntries] = useState([]);
+  // Active employees for the "Employee Name" dropdown (mam 2026-06-25:
+  // pick the assigned employee from a list instead of free text). Inactive
+  // / dropped staff are filtered out so the picker stays clean.
+  const [employees, setEmployees] = useState([]);
   const [stats, setStats] = useState(null);
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({ ...emptyForm });
@@ -76,6 +80,13 @@ export default function BusinessBook() {
 
   useEffect(() => { loadEntries(); loadStats(); }, [loadEntries]);
 
+  // Load active employees once for the "Employee Name" picker.
+  useEffect(() => {
+    api.get('/hr/employees')
+      .then(r => setEmployees((r.data || []).filter(e => !e.status || e.status === 'active')))
+      .catch(() => setEmployees([]));
+  }, []);
+
   // Strip CSV-import quote artifacts ('"""M/s X"""') and surrounding
   // whitespace from text fields before saving — also collapses internal
   // double-spaces. Runs on every text field so old quoted data gets
@@ -98,6 +109,15 @@ export default function BusinessBook() {
     if (!form.client_name || !form.client_name.trim()) {
       toast.error('Client Name is required');
       return;
+    }
+    // State & District use custom searchable selects that the browser's
+    // native `required` can't enforce. Check them here for non-admins
+    // (admin keeps the app-wide mandatory-field bypass — Layout.jsx).
+    if (!isAdmin()) {
+      const missing = [];
+      if (!form.state) missing.push('State');
+      if (!form.district) missing.push('District');
+      if (missing.length) { toast.error(`Required: ${missing.join(', ')}`); return; }
     }
     const cleaned = cleanFormText(form);
     try {
@@ -751,15 +771,15 @@ export default function BusinessBook() {
           {/* 1. Client */}
           <FSection title="Client & Company Details" color="gray">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              <Sel label="Lead Type" value={form.lead_type} onChange={v => F('lead_type', v)} options={LEAD_TYPES} />
+              <Sel label="Lead Type" value={form.lead_type} onChange={v => F('lead_type', v)} options={LEAD_TYPES} required />
               <Inp label="Client Name *" value={form.client_name} onChange={v => F('client_name', v)} required />
-              <Inp label="Company/Department" value={form.company_name} onChange={v => F('company_name', v)} />
-              <Inp label="Client Contact No." value={form.client_contact} onChange={v => F('client_contact', v)} />
-              <Inp label="Client Email ID" value={form.client_email} onChange={v => F('client_email', v)} />
+              <Inp label="Company/Department" value={form.company_name} onChange={v => F('company_name', v)} required />
+              <Inp label="Client Contact No." value={form.client_contact} onChange={v => F('client_contact', v)} required />
+              <Inp label="Client Email ID" value={form.client_email} onChange={v => F('client_email', v)} required />
               <Inp label="Email Address" value={form.email_address} onChange={v => F('email_address', v)} />
-              <Sel label="Source of Enquiry" value={form.source_of_enquiry} onChange={v => F('source_of_enquiry', v)} options={SOURCES} blank="Select" />
-              <Inp label="Customer Type" value={form.customer_type} onChange={v => F('customer_type', v)} placeholder="Hospital, Factory..." />
-              <Inp label="Client Type" value={form.client_type} onChange={v => F('client_type', v)} />
+              <Sel label="Source of Enquiry" value={form.source_of_enquiry} onChange={v => F('source_of_enquiry', v)} options={SOURCES} blank="Select" required />
+              <Inp label="Customer Type" value={form.customer_type} onChange={v => F('customer_type', v)} placeholder="Hospital, Factory..." required />
+              <Sel label="Client Type" value={form.client_type} onChange={v => F('client_type', v)} options={['CRM', 'NBD']} blank="Select" required />
               <Inp label="Customer Code" value={form.customer_code} onChange={v => F('customer_code', v)} />
             </div>
           </FSection>
@@ -785,23 +805,23 @@ export default function BusinessBook() {
                   onChange={(opt) => F('district', opt?.value || '')}
                 />
               </div>
-              <Inp label="State Code" value={form.state_code} onChange={v => F('state_code', v)} placeholder="auto from State (e.g. 03)" />
+              <Inp label="State Code" value={form.state_code} onChange={v => F('state_code', v)} placeholder="auto from State (e.g. 03)" required />
               {/* GSTIN feeds into the auto-generated Sales Bill / Tax
                   Invoice. Punjab GSTINs start with 03; verify the format
                   is 15 chars (2 digit state + 10 char PAN + entity code +
                   Z + checksum). */}
-              <Inp label="Client GSTIN" value={form.gstin} onChange={v => F('gstin', v)} placeholder="e.g. 03AABCS1234A1Z5" />
-              <Inp label="Billing Address" value={form.billing_address} onChange={v => F('billing_address', v)} />
-              <div className="col-span-2"><Inp label="Shipping / Site Address" value={form.shipping_address} onChange={v => F('shipping_address', v)} /></div>
+              <Inp label="Client GSTIN" value={form.gstin} onChange={v => F('gstin', v)} placeholder="e.g. 03AABCS1234A1Z5" required />
+              <Inp label="Billing Address" value={form.billing_address} onChange={v => F('billing_address', v)} required />
+              <div className="col-span-2"><Inp label="Shipping / Site Address" value={form.shipping_address} onChange={v => F('shipping_address', v)} required /></div>
             </div>
           </FSection>
 
           {/* 3. Project & Order + PO */}
           <FSection title="Project, Order & PO Details" color="blue">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              <Inp label="Project Name" value={form.project_name} onChange={v => F('project_name', v)} />
-              <Sel label="Order Type" value={form.order_type} onChange={v => F('order_type', v)} options={ORDER_TYPES} />
-              <Sel label="Category" value={form.category} onChange={v => F('category', v)} options={CATEGORIES} blank="Select" />
+              <Inp label="Project Name" value={form.project_name} onChange={v => F('project_name', v)} required />
+              <Sel label="Order Type" value={form.order_type} onChange={v => F('order_type', v)} options={ORDER_TYPES} required />
+              <Sel label="Category" value={form.category} onChange={v => F('category', v)} options={CATEGORIES} blank="Select" required />
               <Sel label="Guarantee Required" value={form.guarantee_required} onChange={v => F('guarantee_required', v)} options={['No', 'Yes']} />
               {form.guarantee_required === 'Yes' && <Inp label="Guarantee %" value={form.guarantee_percentage} onChange={v => F('guarantee_percentage', v)} />}
               <Sel label="Penalty Clause" value={form.penalty_clause} onChange={v => F('penalty_clause', v)} options={['No', 'Yes']} />
@@ -815,7 +835,7 @@ export default function BusinessBook() {
           {/* 4. Financial */}
           <FSection title="Financial Details" color="emerald">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              <Inp label="Sale Amount (Without GST)" value={form.sale_amount_without_gst} onChange={v => F('sale_amount_without_gst', +v)} type="number" />
+              <Inp label="Sale Amount (Without GST)" value={form.sale_amount_without_gst} onChange={v => F('sale_amount_without_gst', +v)} type="number" required />
               {/* PO Amount auto-computes as Sale × 1.18 — display only.
                   Mam (2026-05-21): "all business book = sales without
                   gst + (sales without gst *18%)". */}
@@ -852,40 +872,49 @@ export default function BusinessBook() {
               </div>
               <Inp label="Advance Received" value={form.advance_received} onChange={v => F('advance_received', +v)} type="number" />
               <Inp label="Accessory Amount" value={form.accessory_amount} onChange={v => F('accessory_amount', +v)} type="number" />
-              <Inp label="Actual Margin %" value={form.actual_margin_pct} onChange={v => F('actual_margin_pct', +v)} type="number" />
+              <Inp label="Actual Margin %" value={form.actual_margin_pct} onChange={v => F('actual_margin_pct', +v)} type="number" required />
             </div>
           </FSection>
 
           {/* 5. Payment Terms */}
           <FSection title="Payment Terms" color="indigo">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              <Inp label="Advance" value={form.payment_advance} onChange={v => F('payment_advance', v)} placeholder="%" />
-              <Inp label="Against Delivery" value={form.payment_against_delivery} onChange={v => F('payment_against_delivery', v)} placeholder="%" />
-              <Inp label="Against Installation" value={form.payment_against_installation} onChange={v => F('payment_against_installation', v)} placeholder="%" />
-              <Inp label="Against Commissioning" value={form.payment_against_commissioning} onChange={v => F('payment_against_commissioning', v)} placeholder="%" />
-              <Inp label="Retention" value={form.payment_retention} onChange={v => F('payment_retention', v)} placeholder="%" />
-              <Inp label="Handover" value={form.payment_credit} onChange={v => F('payment_credit', v)} placeholder="%" />
-              <Inp label="Credit Days" value={form.credit_days} onChange={v => F('credit_days', +v)} type="number" />
+              <Inp label="Advance" value={form.payment_advance} onChange={v => F('payment_advance', v)} placeholder="%" required />
+              <Inp label="Against Delivery" value={form.payment_against_delivery} onChange={v => F('payment_against_delivery', v)} placeholder="%" required />
+              <Inp label="Against Installation" value={form.payment_against_installation} onChange={v => F('payment_against_installation', v)} placeholder="%" required />
+              <Inp label="Against Commissioning" value={form.payment_against_commissioning} onChange={v => F('payment_against_commissioning', v)} placeholder="%" required />
+              <Inp label="Retention" value={form.payment_retention} onChange={v => F('payment_retention', v)} placeholder="%" required />
+              <Inp label="Handover" value={form.payment_credit} onChange={v => F('payment_credit', v)} placeholder="%" required />
+              <Inp label="Credit Days" value={form.credit_days} onChange={v => F('credit_days', +v)} type="number" required />
             </div>
           </FSection>
 
           {/* 6. Dates */}
           <FSection title="Committed Dates" color="amber">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              <Inp label="Committed Start" value={form.committed_start_date} onChange={v => F('committed_start_date', v)} type="date" />
-              <Inp label="Committed Delivery" value={form.committed_delivery_date} onChange={v => F('committed_delivery_date', v)} type="date" />
-              <Inp label="Committed Completion" value={form.committed_completion_date} onChange={v => F('committed_completion_date', v)} type="date" />
+              <Inp label="Committed Start" value={form.committed_start_date} onChange={v => F('committed_start_date', v)} type="date" required />
+              <Inp label="Committed Delivery" value={form.committed_delivery_date} onChange={v => F('committed_delivery_date', v)} type="date" required />
+              <Inp label="Committed Completion" value={form.committed_completion_date} onChange={v => F('committed_completion_date', v)} type="date" required />
             </div>
           </FSection>
 
           {/* 7. People */}
           <FSection title="People & Contacts" color="purple">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              <Inp label="Employee Name" value={form.employee_assigned} onChange={v => F('employee_assigned', v)} />
+              <div>
+                <label className="label">Employee Name</label>
+                <select className="select" value={form.employee_assigned || ''}
+                  onChange={e => F('employee_assigned', e.target.value)} required>
+                  <option value="">Select employee</option>
+                  {employees.map(emp => (
+                    <option key={emp.id} value={emp.name}>{emp.name}{emp.designation ? ` — ${emp.designation}` : ''}</option>
+                  ))}
+                </select>
+              </div>
               <Inp label="Lead By" value={form.lead_by} onChange={v => F('lead_by', v)} />
               <div></div>
-              <Inp label="Management Person" value={form.management_person_name} onChange={v => F('management_person_name', v)} />
-              <Inp label="Management Contact" value={form.management_person_contact} onChange={v => F('management_person_contact', v)} />
+              <Inp label="Management Person" value={form.management_person_name} onChange={v => F('management_person_name', v)} required />
+              <Inp label="Management Contact" value={form.management_person_contact} onChange={v => F('management_person_contact', v)} required />
               <div></div>
               <Inp label="Operations Person" value={form.operations_person_name} onChange={v => F('operations_person_name', v)} />
               <Inp label="Operations Contact" value={form.operations_person_contact} onChange={v => F('operations_person_contact', v)} />
@@ -896,8 +925,8 @@ export default function BusinessBook() {
               <Inp label="Architect Person" value={form.architect_person_name} onChange={v => F('architect_person_name', v)} />
               <Inp label="Architect Contact" value={form.architect_person_contact} onChange={v => F('architect_person_contact', v)} />
               <div></div>
-              <Inp label="Accounts Person" value={form.accounts_person_name} onChange={v => F('accounts_person_name', v)} />
-              <Inp label="Accounts Contact" value={form.accounts_person_contact} onChange={v => F('accounts_person_contact', v)} />
+              <Inp label="Accounts Person" value={form.accounts_person_name} onChange={v => F('accounts_person_name', v)} required />
+              <Inp label="Accounts Contact" value={form.accounts_person_contact} onChange={v => F('accounts_person_contact', v)} required />
             </div>
           </FSection>
 
@@ -957,7 +986,7 @@ export default function BusinessBook() {
                     <button type="button" onClick={() => F('working_sheet_link', '')} className="text-red-500 text-xs hover:underline">Remove</button>
                   </div>
                 ) : (
-                  <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.jpg,.jpeg,.png"
+                  <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.jpg,.jpeg,.png" required
                     onChange={async (e) => {
                       const file = e.target.files[0]; if (!file) return;
                       try {
@@ -987,7 +1016,7 @@ export default function BusinessBook() {
                     <button type="button" onClick={() => F('boq_file_link', '')} className="text-red-500 text-xs hover:underline">Remove</button>
                   </div>
                 ) : (
-                  <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.jpg,.jpeg,.png"
+                  <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.jpg,.jpeg,.png" required
                     onChange={async (e) => {
                       const file = e.target.files[0]; if (!file) return;
                       try {
@@ -1065,6 +1094,6 @@ function Inp({ label, value, onChange, type = 'text', required, placeholder }) {
   return (<div><label className="label">{label}</label><input className="input" type={type} value={value || ''} onChange={e => onChange(e.target.value)} required={required} placeholder={placeholder} /></div>);
 }
 
-function Sel({ label, value, onChange, options, blank }) {
-  return (<div><label className="label">{label}</label><select className="select" value={value || ''} onChange={e => onChange(e.target.value)}>{blank && <option value="">{blank}</option>}{options.map(o => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}</select></div>);
+function Sel({ label, value, onChange, options, blank, required }) {
+  return (<div><label className="label">{label}</label><select className="select" value={value || ''} onChange={e => onChange(e.target.value)} required={required}>{blank && <option value="">{blank}</option>}{options.map(o => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}</select></div>);
 }

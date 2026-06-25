@@ -3072,10 +3072,20 @@ router.get('/indents/:id/billable-print', (req, res) => {
   // Bill on the INDENT qty (mam 2026-06-24: "according to indent") — NOT the
   // full client-BOQ po_items qty — so this statement matches the indent's own
   // Billable column. Sub-items that map to the SAME BOQ line (a PO line + its
-  // FOC accessories) collapse into one row, but ONLY the chargeable (PO) qty
-  // is billed: FOC / RGP sub-items are FREE, so they add 0 to the billable
-  // quantity (mam 2026-06-24: "we calculate only po item, but in sales bill you
-  // added the FOC qty"). The qty/unit shown is the PO sub-item's.
+  // accessories) collapse into one row, but ONLY the chargeable PO qty is
+  // billed: every NON-PO sub-item under that BOQ line — FOC, RGP, or untyped
+  // accessories (e.g. a CIVIL consumable) — rides FREE and adds 0 to the
+  // billable quantity (mam 2026-06-25: "only pick PO item, not add FOC qty …
+  // sales bill 6 qty is correct but u add 10 of FOC which is wrong"). The
+  // qty/unit shown is the PO sub-item's.
+  //
+  // Pre-scan which BOQ lines actually HAVE a PO sub-item. Only those lines
+  // switch to PO-only billing; a line with no PO sub-item at all keeps the
+  // old "any non-FOC/RGP qty" rule so untyped standalone lines still bill.
+  const poLineHasPO = new Set();
+  for (const it of items) {
+    if (it.po_item_id != null && String(it.item_type || '').toUpperCase() === 'PO') poLineHasPO.add(it.po_item_id);
+  }
   let total = 0;
   const rows = [];
   const poRow = new Map();     // po_item_id → its row, to sum the chargeable qty
@@ -3083,7 +3093,12 @@ router.get('/indents/:id/billable-print', (req, res) => {
   for (const it of items) {
     const t = String(it.item_type || '').toUpperCase();
     const isFree = (t === 'FOC' || t === 'RGP');
-    const billQty = isFree ? 0 : (+it.quantity || 0);   // FOC/RGP bill nothing
+    // When this BOQ line has a PO sub-item, ONLY 'PO' sub-items are chargeable
+    // (accessories of any other type bill 0). Otherwise fall back to the old
+    // rule (anything not FOC/RGP bills its qty).
+    const billQty = (it.po_item_id != null && poLineHasPO.has(it.po_item_id))
+      ? (t === 'PO' ? (+it.quantity || 0) : 0)
+      : (isFree ? 0 : (+it.quantity || 0));
     if (it.po_item_id != null) {
       const rate = +it.po_rate || 0;               // the BOQ line's sale rate
       if (poRow.has(it.po_item_id)) {
