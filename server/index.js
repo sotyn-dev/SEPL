@@ -68,6 +68,23 @@ const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 // Initialize DB
 initializeDatabase();
 
+// Lock in the JWT signing secret NOW, while the DB is guaranteed ready and
+// before any request can arrive. getSecret() persists the secret in
+// app_settings on first call and memoizes it; calling it eagerly here
+// removes the last "DB not ready → seed fallback → secret flips → everyone
+// logged out" window (mam, repeatedly: "automatically logout — very bad").
+// The boot log lets us confirm the secret is stable instead of guessing the
+// next time a logout is reported.
+try {
+  const { getSecret } = require('./middleware/auth');
+  if (typeof getSecret === 'function') {
+    getSecret();
+    console.log('[auth] JWT secret locked in at boot (stable across restarts)');
+  }
+} catch (e) {
+  console.warn('[auth] could not pre-lock JWT secret:', e.message);
+}
+
 // Seed the 20 MIS scorecard templates on first boot. Idempotent — re-runs
 // when the table already has rows are no-ops.
 try {

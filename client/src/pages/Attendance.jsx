@@ -9,6 +9,18 @@ import { FiClock, FiMapPin, FiCamera, FiUsers, FiCalendar, FiCheckCircle, FiXCir
 import { exportCsv } from '../utils/exportCsv';
 import TimePicker from '../components/TimePicker';
 
+// Render a stored UTC ISO timestamp as IST time (hh:mm AM/PM). Always pins to
+// Asia/Kolkata so a punch shows the correct Indian time even when the viewing
+// device's clock isn't set to IST, and returns '—' for rows with no real punch
+// (e.g. admin-marked present days) instead of a bogus 1970 "5:30 AM".
+// (mam: "attendance punch but not showing timing")
+const fmtT = (iso) => {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+  } catch { return '—'; }
+};
+
 export default function Attendance() {
   const { user, isAdmin, canDelete, canSeeAll } = useAuth();
   // Admins, or anyone granted "See All" on the attendance module, can view
@@ -385,8 +397,8 @@ export default function Attendance() {
             <div className={`card p-4 ${myToday.punch_out_time ? 'bg-gray-50' : 'bg-emerald-50'}`}>
               <div className="flex justify-between items-center">
                 <div>
-                  <p className="text-sm font-bold text-emerald-700"><FiCheckCircle className="inline mr-1" /> Punched In: {new Date(myToday.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}{myToday.auto_punched_in ? <span className="ml-1 text-[10px] bg-purple-100 text-purple-700 px-1 py-0.5 rounded">AUTO</span> : null}</p>
-                  {myToday.punch_out_time && <p className="text-sm text-gray-600">Punched Out: {new Date(myToday.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}{myToday.auto_punched_out ? <span className="ml-1 text-[10px] bg-purple-100 text-purple-700 px-1 py-0.5 rounded">AUTO</span> : null}</p>}
+                  <p className="text-sm font-bold text-emerald-700"><FiCheckCircle className="inline mr-1" /> Punched In: {fmtT(myToday.punch_in_time)}{myToday.auto_punched_in ? <span className="ml-1 text-[10px] bg-purple-100 text-purple-700 px-1 py-0.5 rounded">AUTO</span> : null}</p>
+                  {myToday.punch_out_time && <p className="text-sm text-gray-600">Punched Out: {fmtT(myToday.punch_out_time)}{myToday.auto_punched_out ? <span className="ml-1 text-[10px] bg-purple-100 text-purple-700 px-1 py-0.5 rounded">AUTO</span> : null}</p>}
                   {myToday.total_hours > 0 && <p className="text-sm font-bold">Total: {myToday.total_hours} hours</p>}
                 </div>
                 <StatusBadge status={myToday.status} />
@@ -413,7 +425,7 @@ export default function Attendance() {
             {!myToday && !insideSite && <p className="text-xs text-amber-700">You're outside all geofences. Move inside an office/site to punch in.</p>}
             {myToday && !myToday.punch_out_time && (
               <p className="text-xs text-emerald-700">
-                ✓ Punched in at {myToday.punch_in_time ? new Date(myToday.punch_in_time).toLocaleTimeString() : '—'}.
+                ✓ Punched in at {fmtT(myToday.punch_in_time)}.
                 {!insideSite && ' Don\'t forget to Punch Out when your day is done.'}
               </p>
             )}
@@ -592,8 +604,8 @@ export default function Attendance() {
               <tbody>{dashboard.todayRecords?.map(r => (
                 <tr key={r.id}>
                   <td className="font-medium">{r.user_name}{r.admin_marked ? <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded font-bold" title="Admin marked — hidden from user">ADMIN</span> : null}</td><td className="text-xs">{r.department}</td>
-                  <td className="text-emerald-600 text-xs">{r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}{r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
-                  <td className="text-red-600 text-xs">{r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}{r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
+                  <td className="text-emerald-600 text-xs">{fmtT(r.punch_in_time)}{r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
+                  <td className="text-red-600 text-xs">{fmtT(r.punch_out_time)}{r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                   <td className="font-semibold">{r.total_hours || '-'}</td>
                   <td><StatusBadge status={r.status} /></td>
                   <td>{r.punch_in_photo && <img src={r.punch_in_photo} alt="" onClick={() => setLightbox({ src: r.punch_in_photo, label: `${r.user_name} — Punch In` })} className="w-10 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" />}</td>
@@ -624,13 +636,13 @@ export default function Attendance() {
                     <div>
                       <div className="text-[9px] uppercase text-gray-400">In</div>
                       <div className="font-semibold text-emerald-700">
-                        {r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                        {fmtT(r.punch_in_time)}
                       </div>
                     </div>
                     <div>
                       <div className="text-[9px] uppercase text-gray-400">Out</div>
                       <div className="font-semibold text-red-700">
-                        {r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                        {fmtT(r.punch_out_time)}
                       </div>
                     </div>
                     <div className="text-right">
@@ -667,8 +679,8 @@ export default function Attendance() {
             <tbody>{records.map(r => (
               <tr key={r.id}>
                 <td className="font-medium">{r.user_name}{r.admin_marked ? <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded font-bold" title="Admin marked — hidden from user">ADMIN</span> : null}</td><td>{r.date}</td>
-                <td className="text-xs">{r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}{r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
-                <td className="text-xs">{r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}{r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
+                <td className="text-xs">{fmtT(r.punch_in_time)}{r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
+                <td className="text-xs">{fmtT(r.punch_out_time)}{r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                 <td className="font-semibold">{r.total_hours || '-'}</td>
                 <td className="text-xs">{r.site_name || '-'}</td>
                 <td><StatusBadge status={r.status} /></td>
@@ -722,14 +734,14 @@ export default function Attendance() {
                   <div>
                     <div className="text-[9px] uppercase text-gray-400">In</div>
                     <div className="font-semibold text-emerald-700">
-                      {r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      {fmtT(r.punch_in_time)}
                       {r.auto_punched_in && <span className="ml-1 text-[8px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span>}
                     </div>
                   </div>
                   <div>
                     <div className="text-[9px] uppercase text-gray-400">Out</div>
                     <div className="font-semibold text-red-700">
-                      {r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      {fmtT(r.punch_out_time)}
                       {r.auto_punched_out && <span className="ml-1 text-[8px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span>}
                     </div>
                   </div>
@@ -799,8 +811,8 @@ export default function Attendance() {
                     ['Date','In','Out','Hours','Site','Status'],
                     myHistory.map(r => [
                       r.date,
-                      r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '',
-                      r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '',
+                      r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
+                      r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }) : '',
                       r.total_hours || 0, r.site_name || '', r.status || '',
                     ]))}>
                   <FiDownload /> Export
@@ -850,11 +862,11 @@ export default function Attendance() {
                     <tr key={r.id} className="border-b">
                       <td className="px-2 py-2 font-medium">{r.date}</td>
                       <td className="px-2 py-2 text-center text-xs text-emerald-600">
-                        {r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                        {fmtT(r.punch_in_time)}
                         {r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}
                       </td>
                       <td className="px-2 py-2 text-center text-xs text-red-600">
-                        {r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                        {fmtT(r.punch_out_time)}
                         {r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}
                       </td>
                       <td className="px-2 py-2 text-center font-semibold">{r.total_hours || '-'}</td>
@@ -986,11 +998,11 @@ export default function Attendance() {
                         <tr key={r.id} className="border-b">
                           <td className="px-2 py-2 font-medium">{r.date}</td>
                           <td className="px-2 py-2 text-center text-xs text-emerald-600">
-                            {r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                            {fmtT(r.punch_in_time)}
                             {r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}
                           </td>
                           <td className="px-2 py-2 text-center text-xs text-red-600">
-                            {r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                            {fmtT(r.punch_out_time)}
                             {r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}
                           </td>
                           <td className="px-2 py-2 text-center font-semibold">{r.total_hours || '-'}</td>
