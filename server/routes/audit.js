@@ -9,6 +9,16 @@ const router = express.Router();
 router.use(authMiddleware);
 router.use(adminOnly);
 
+// The two O(table-size) operations on this page are the unfiltered total
+// COUNT(*) and the /meta DISTINCT scans — both ran on every page load and, on
+// a large audit_log (every mutating request is logged, so it grows fast),
+// turned the page into a hang. The distinct filter values and the grand total
+// change slowly, so cache both for a minute. The row LIST query itself is
+// already index-backed (idx_audit_log_at) + LIMIT 50, so it stays live.
+const CACHE_MS = 60 * 1000;
+let _metaCache = { at: 0, data: null };
+let _countCache = { at: 0, total: null };
+
 // GET /api/admin/audit
 // Filters: user_id, entity_type, action, date_from, date_to, q (free text),
 // page (1-based), limit (default 50, max 500)
@@ -33,7 +43,17 @@ router.get('/', (req, res) => {
   }
 
   const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  const total = db.prepare(`SELECT COUNT(*) as c FROM audit_log ${whereSql}`).get(...params).c;
+  // Cache only the UNFILTERED grand total (the expensive full-table count run
+  // on every default page load). Filtered counts are narrower/indexed and vary
+  // per query, so compute those live.
+  let total;
+  const noFilters = where.length === 0;
+  if (noFilters && _countCache.total != null && (Date.now() - _countCache.at) < CACHE_MS) {
+    total = _countCache.total;
+  } else {
+    total = db.prepare(`SELECT COUNT(*) as c FROM audit_log ${whereSql}`).get(...params).c;
+    if (noFilters) _countCache = { at: Date.now(), total };
+  }
   const rows = db.prepare(
     `SELECT * FROM audit_log ${whereSql} ORDER BY at DESC LIMIT ? OFFSET ?`
   ).all(...params, limit, offset);
@@ -43,6 +63,9 @@ router.get('/', (req, res) => {
 
 // Metadata for filter dropdowns — distinct values the UI can offer
 router.get('/meta', (req, res) => {
+  if (_metaCache.data && (Date.now() - _metaCache.at) < CACHE_MS) {
+    return res.json(_metaCache.data);
+  }
   const db = getDb();
   const users = db.prepare(
     `SELECT DISTINCT user_id, user_name FROM audit_log
@@ -56,7 +79,9 @@ router.get('/meta', (req, res) => {
     `SELECT DISTINCT action FROM audit_log
      WHERE action IS NOT NULL ORDER BY action`
   ).all().map(r => r.action);
-  res.json({ users, entityTypes, actions });
+  const data = { users, entityTypes, actions };
+  _metaCache = { at: Date.now(), data };
+  res.json(data);
 });
 
 // Single entry with the full before/after JSON (for a detail popover).
