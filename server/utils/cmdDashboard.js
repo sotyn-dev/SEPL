@@ -421,6 +421,56 @@ function computeCmdDetail(db, daysRaw) {
     ORDER BY total_spend DESC LIMIT 5
   `, from);
 
+  // ── PO vs Sales Bill (mam 2026-06-26): per Vendor PO made in Indent-to-
+  // Dispatch, compare what we COMMITTED to the vendor (vendor_pos.total_amount,
+  // the cost side) against what we BILLED THE CLIENT for that PO (the sale
+  // side). The client sale figure is the actual Sales Bill raised against the
+  // PO in Dispatch & Receiving — a delivery_notes row of document_type
+  // 'sales_bill' (generated bill, value in grand_total_amount), or, if only an
+  // external bill number was uploaded onto the challan, that challan's value.
+  // Same "sales-billed" definition the Dispatch tab uses (doc='sales_bill' OR
+  // sales_bill_number present). Gap = sale − cost (the margin recovered so far;
+  // negative or zero where the PO is not yet sales-billed).
+  const pvsRows = (safeAll(db, `
+    SELECT vp.id, vp.po_number, vp.total_amount AS po_cost,
+           COALESCE(vp.po_date, vp.created_at) AS po_date,
+           v.name AS vendor_name, i.indent_number, i.site_name,
+           COALESCE(SUM(CASE WHEN dn.document_type='sales_bill'
+                             THEN dn.grand_total_amount ELSE 0 END), 0) AS sb_generated,
+           COALESCE(SUM(CASE WHEN dn.document_type='challan' AND dn.sales_bill_number IS NOT NULL
+                             THEN dn.grand_total_amount ELSE 0 END), 0) AS sb_uploaded
+      FROM vendor_pos vp
+      LEFT JOIN vendors v        ON v.id = vp.vendor_id
+      LEFT JOIN indents i        ON i.id = vp.indent_id
+      LEFT JOIN delivery_notes dn ON dn.vendor_po_id = vp.id
+     WHERE COALESCE(vp.cancelled, 0) = 0
+       AND date(COALESCE(vp.po_date, vp.created_at)) >= ?
+     GROUP BY vp.id
+     ORDER BY date(COALESCE(vp.po_date, vp.created_at)) DESC, vp.id DESC
+     LIMIT 200
+  `, from)).map(r => {
+    const cost = num(r.po_cost);
+    // Prefer the generated Sales Bill value; fall back to an uploaded-only bill.
+    const sale = num(r.sb_generated) > 0 ? num(r.sb_generated) : num(r.sb_uploaded);
+    const gap = sale - cost;
+    return {
+      po_id: r.id, po_number: r.po_number, po_date: r.po_date,
+      vendor: r.vendor_name || '—', indent_number: r.indent_number || null,
+      site: r.site_name || '—',
+      po_cost: cost, sales_bill: sale, gap,
+      margin_pct: cost > 0 ? Math.round((gap / cost) * 1000) / 10 : null,
+      billed: sale > 0,
+    };
+  });
+  const pvsTotals = pvsRows.reduce((t, r) => {
+    t.po_cost += r.po_cost; t.sales_bill += r.sales_bill;
+    t.po_count += 1; if (r.billed) t.billed_count += 1;
+    return t;
+  }, { po_cost: 0, sales_bill: 0, gap: 0, po_count: 0, billed_count: 0 });
+  pvsTotals.gap = pvsTotals.sales_bill - pvsTotals.po_cost;
+  pvsTotals.billed_pct = pvsTotals.po_cost > 0
+    ? Math.round((pvsTotals.sales_bill / pvsTotals.po_cost) * 1000) / 10 : null;
+
   // ── People ────────────────────────────────────────────────────
   const headcount = safeAll(db, `
     SELECT department, COUNT(*) cnt
@@ -621,6 +671,7 @@ function computeCmdDetail(db, daysRaw) {
 
     procurement: {
       top_vendors: topVendors,
+      po_vs_sales_bill: { rows: pvsRows, totals: pvsTotals },
     },
 
     people: {

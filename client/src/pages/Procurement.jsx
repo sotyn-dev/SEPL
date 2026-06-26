@@ -2001,7 +2001,7 @@ export default function Procurement() {
           })}</div>
           {/* One Export button — exports current tab's data */}
           <button onClick={() => {
-            if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items','Budget','Billable','Delivery Bill','Delivery %'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.billable_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
+            if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items','Budget','Delivery Bill','Delivery %'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
             if (tab === 'pos')        exportCsv('vendor-pos',      ['PO Number','PO Date','Vendor','Amount','Status'], vendorPos.map(v => [v.po_number, v.po_date, v.vendor_name, v.total_amount, v.status]));
             if (tab === 'bills')      exportCsv('purchase-bills',  ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], purchaseBills.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
             if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.doc_type, d.doc_number, d.po_number, d.delivery_date, d.received_by_name, d.received_on, d.status]));
@@ -2433,15 +2433,9 @@ export default function Procurement() {
                     </div>
                   </div>
 
-                  {/* Billable (BOQ sale value) · Delivery Bill (× against-delivery %) */}
+                  {/* Delivery Bill (Billable × against-delivery %) */}
                   <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
-                    <div>
-                      <div className="text-[9px] uppercase text-gray-400">Billable <span className="normal-case">(BOQ × qty)</span></div>
-                      <div className="font-semibold text-blue-800">
-                        {i.billable_amount > 0 ? `₹${Math.round(i.billable_amount).toLocaleString('en-IN')}` : '—'}
-                      </div>
-                    </div>
-                    <div className="text-right">
+                    <div className="text-right col-start-2">
                       <div className="text-[9px] uppercase text-gray-400">Delivery Bill{i.delivery_pct ? ` @ ${i.delivery_pct}%` : ''}</div>
                       <div className="font-semibold text-emerald-700">
                         {i.delivery_bill_amount > 0 ? `₹${Math.round(i.delivery_bill_amount).toLocaleString('en-IN')}` : '—'}
@@ -2568,7 +2562,7 @@ export default function Procurement() {
               to scroll-end-then-back to read row labels).  Hidden on phones
               in favour of the card list above. */}
           <div className="hidden md:block card p-0 overflow-auto max-h-[70vh]"><table className="freeze-head freeze-col dense-cols">
-            <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Category</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th className="text-right">Billable<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(BOQ rate × qty)</span></th><th className="text-right">Delivery Bill<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(billable × del. %)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
+            <thead><tr><th className="w-8"></th><th>Indent No</th><th>Date</th><th>Site</th><th>Category</th><th>Raised By</th><th>Items</th><th>BOQ</th><th className="text-right">Budget<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(qty × master rate)</span></th><th className="text-right">Delivery Bill<br/><span className="text-[9px] font-normal text-gray-400 normal-case">(billable × del. %)</span></th><th>Status</th><th>Approval</th><th>Actions</th></tr></thead>
             <tbody>
               {indPg.rows.map(i => {
                 const items = i.items || [];
@@ -2645,21 +2639,6 @@ export default function Procurement() {
                       </span>
                     ) : (
                       <span className="text-gray-300 text-xs" title="No item-master rate on any line">—</span>
-                    )}
-                  </td>
-                  {/* Billable = Σ (priced-BOQ sale rate × indent qty). Client
-                      sale value, not the internal Budget (master cost). '—'
-                      when no priced BOQ rate is linked to the lines. */}
-                  <td className="text-right whitespace-nowrap">
-                    {i.billable_amount > 0 ? (
-                      <button type="button" onClick={() => openBillablePrint(i.id)}
-                        title="Open the item-wise Billable statement (PDF) — show / audit"
-                        className="font-semibold text-blue-800 hover:underline inline-flex flex-col items-end leading-tight">
-                        ₹{Math.round(i.billable_amount).toLocaleString('en-IN')}
-                        <span className="text-[9px] font-normal text-blue-500">📄 item-wise PDF</span>
-                      </button>
-                    ) : (
-                      <span className="text-gray-300 text-xs" title="No priced-BOQ rate on the linked lines">—</span>
                     )}
                   </td>
                   {/* Delivery Bill = Billable × the order's Against-Delivery %

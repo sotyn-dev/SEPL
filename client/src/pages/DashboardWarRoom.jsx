@@ -489,6 +489,58 @@ export default function DashboardWarRoom() {
             </div>
           </div>
 
+          {/* PO vs Sales Bill — vendor cost vs client billed, per Vendor PO
+              made in Indent-to-Dispatch (mam 2026-06-26). One pill summary +
+              a per-PO table. PO COST = vendor_pos.total_amount; SALES BILL =
+              actual client Sales Bill raised against that PO (Dispatch flow);
+              GAP = sale − cost (margin recovered; red while unbilled). */}
+          {(() => {
+            const pvs = procurement.po_vs_sales_bill || { rows: [], totals: {} };
+            const t = pvs.totals || {};
+            const pill = (label, val, color) => (
+              <div style={cardStyle}>
+                <h3 style={{ margin: 0, fontSize: 11, letterSpacing: 1, color: C.ink2, textTransform: 'uppercase', fontWeight: 600 }}>{label}</h3>
+                <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-.5px', margin: '4px 0', color: color || C.ink }}>{val}</div>
+              </div>
+            );
+            return (<>
+              <div style={sectionTitle}>PO vs Sales Bill · Vendor cost vs Client billed (per Vendor PO)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 16 }}>
+                {pill('Vendor PO cost', fmtINR(t.po_cost || 0))}
+                {pill('Sales Bill (client)', fmtINR(t.sales_bill || 0), C.blue)}
+                {pill('Gap (sale − cost)', fmtINR(t.gap || 0), (t.gap || 0) >= 0 ? C.green : C.red)}
+                {pill('Billed', `${t.billed_count || 0}/${t.po_count || 0}`, (t.billed_count || 0) === (t.po_count || 0) && (t.po_count || 0) > 0 ? C.green : C.amber)}
+              </div>
+              <div style={cardStyle}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                  <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
+                    {['PO Number', 'Vendor', 'Site', 'PO cost', 'Sales Bill', 'Gap', 'Status'].map((h, hi) =>
+                      <th key={h} style={{ textAlign: hi >= 3 && hi <= 5 ? 'right' : 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
+                    )}
+                  </tr></thead>
+                  <tbody>
+                    {pvs.rows.length === 0 ? (
+                      <tr><td colSpan="7" style={{ textAlign: 'center', padding: 16, color: C.ink2 }}>No Vendor POs in this window.</td></tr>
+                    ) : pvs.rows.map((r, i) => (
+                      <tr key={r.po_id} style={{ borderBottom: i === pvs.rows.length - 1 ? 'none' : `1px solid ${C.line}` }}>
+                        <td style={{ padding: '11px 8px', fontFamily: 'monospace' }}>{r.po_number}{r.indent_number ? <span style={{ color: C.ink2, fontSize: 10.5 }}> · {r.indent_number}</span> : null}</td>
+                        <td style={{ padding: '11px 8px' }}>{(r.vendor || '—').slice(0, 22)}</td>
+                        <td style={{ padding: '11px 8px' }}>{(r.site || '—').slice(0, 22)}</td>
+                        <td style={{ padding: '11px 8px', textAlign: 'right' }}>{fmtINR(r.po_cost)}</td>
+                        <td style={{ padding: '11px 8px', textAlign: 'right', color: r.sales_bill > 0 ? C.blue : C.ink2 }}>{r.sales_bill > 0 ? fmtINR(r.sales_bill) : '—'}</td>
+                        <td style={{ padding: '11px 8px', textAlign: 'right', fontWeight: 600, color: r.gap >= 0 ? C.green : C.red }}>
+                          {fmtINR(r.gap)}
+                          {r.margin_pct != null && <span style={{ display: 'block', fontSize: 10, fontWeight: 400, color: C.ink2 }}>{r.margin_pct}%</span>}
+                        </td>
+                        <td style={{ padding: '11px 8px' }}><span style={badge(r.billed ? 'green' : 'amber')}>{r.billed ? 'BILLED' : 'NOT BILLED'}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>);
+          })()}
+
           {/* Section 5 — Pareto · Predictive · Exceptions */}
           <div style={sectionTitle}>Section 5 · Pareto · Predictive · Exceptions</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
