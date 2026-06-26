@@ -368,6 +368,7 @@ export default function DashboardWarRoom() {
           MY APPROVALS
           {approvals?.total > 0 && <span style={{ background: '#E5484D', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 11, marginLeft: 6, fontWeight: 700 }}>{approvals.total}</span>}
         </div>
+        <div onClick={() => setTab('posales')} style={tabStyle(tab === 'posales')}>PO vs SALES BILL</div>
       </div>
 
       <main style={{ padding: 28, maxWidth: 1400, margin: '0 auto' }}>
@@ -515,76 +516,6 @@ export default function DashboardWarRoom() {
               </table>
             </div>
           </div>
-
-          {/* PO vs Sales Bill — vendor cost vs client billed, per Vendor PO
-              made in Indent-to-Dispatch (mam 2026-06-26). One pill summary +
-              a per-PO table. PO COST = vendor_pos.total_amount; SALES BILL =
-              full-BOQ Sales Bill budget (Σ po_qty × sale rate per BOQ line);
-              THROUGHPUT = Sales − Purchase; CASH +% = throughput / sales × 100. */}
-          {(() => {
-            const pvs = procurement.po_vs_sales_bill || { rows: [], totals: {} };
-            const t = pvs.totals || {};
-            const pill = (label, val, color) => (
-              <div style={cardStyle}>
-                <h3 style={{ margin: 0, fontSize: 11, letterSpacing: 1, color: C.ink2, textTransform: 'uppercase', fontWeight: 600 }}>{label}</h3>
-                <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-.5px', margin: '4px 0', color: color || C.ink }}>{val}</div>
-              </div>
-            );
-            return (<>
-              <div style={sectionTitle}>PO vs Sales Bill · Vendor cost vs Client billed (per Vendor PO)</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 20, marginBottom: 16 }}>
-                {pill('Vendor PO cost', fmtINR(t.po_cost || 0))}
-                {pill('Sales Bill (budget)', fmtINR(t.sales_bill || 0), C.blue)}
-                {pill('Throughput (Sales − Purchase)', fmtINR(t.gap || 0), (t.gap || 0) >= 0 ? C.green : C.red)}
-                {pill('Cash positive %', t.cash_positive_pct != null ? `${t.cash_positive_pct}%` : '—', (t.cash_positive_pct || 0) >= 0 ? C.green : C.red)}
-                {pill('Billed', `${t.billed_count || 0}/${t.po_count || 0}`, (t.billed_count || 0) === (t.po_count || 0) && (t.po_count || 0) > 0 ? C.green : C.amber)}
-              </div>
-              <div style={cardStyle}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-                  <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
-                    {['PO Number', 'Vendor', 'Site', 'PO cost', 'Sales Bill', 'Throughput', 'Cash +%', 'PDF', 'Status'].map((h, hi) =>
-                      <th key={h} style={{ textAlign: hi >= 3 && hi <= 6 ? 'right' : 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
-                    )}
-                  </tr></thead>
-                  <tbody>
-                    {pvs.rows.length === 0 ? (
-                      <tr><td colSpan="9" style={{ textAlign: 'center', padding: 16, color: C.ink2 }}>No Vendor POs in this window.</td></tr>
-                    ) : pvs.rows.map((r, i) => (
-                      <tr key={r.po_id} style={{ borderBottom: i === pvs.rows.length - 1 ? 'none' : `1px solid ${C.line}` }}>
-                        <td style={{ padding: '11px 8px', fontFamily: 'monospace' }}>{r.po_number}{r.indent_number ? <span style={{ color: C.ink2, fontSize: 10.5 }}> · {r.indent_number}</span> : null}</td>
-                        <td style={{ padding: '11px 8px' }}>{(r.vendor || '—').slice(0, 22)}</td>
-                        <td style={{ padding: '11px 8px' }}>{(r.site || '—').slice(0, 22)}</td>
-                        <td style={{ padding: '11px 8px', textAlign: 'right' }}>{fmtINR(r.po_cost)}</td>
-                        <td style={{ padding: '11px 8px', textAlign: 'right', color: r.sales_bill > 0 ? C.blue : C.ink2 }}>{r.sales_bill > 0 ? fmtINR(r.sales_bill) : '—'}</td>
-                        <td style={{ padding: '11px 8px', textAlign: 'right', fontWeight: 600, color: r.gap >= 0 ? C.green : C.red }}>
-                          {fmtINR(r.gap)}
-                          {r.margin_pct != null && <span style={{ display: 'block', fontSize: 10, fontWeight: 400, color: C.ink2 }}>{r.margin_pct}% on cost</span>}
-                        </td>
-                        <td style={{ padding: '11px 8px', textAlign: 'right', fontWeight: 600, color: (r.cash_positive_pct ?? 0) >= 0 ? C.green : C.red }}>
-                          {r.cash_positive_pct != null ? `${r.cash_positive_pct}%` : '—'}
-                        </td>
-                        {/* PO PDF (vendor PO print) + Budget PDF (item-wise Billable
-                            statement) — the billable PDF moved here from the Indent
-                            list (mam 2026-06-26). */}
-                        <td style={{ padding: '11px 8px', whiteSpace: 'nowrap' }}>
-                          {r.po_id ? (
-                            <a href={`/vendor-po/${r.po_id}/print`} target="_blank" rel="noreferrer"
-                               style={{ color: C.blue, fontSize: 11.5, fontWeight: 600, textDecoration: 'none' }}>📄 PO</a>
-                          ) : <span style={{ color: C.ink2 }}>—</span>}
-                          {r.po_id && (
-                            <button type="button" onClick={() => openBudgetPrint(r.po_id)}
-                              title="Sales Bill budget for this Vendor PO (PO qty × sale rate)"
-                              style={{ marginLeft: 10, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: C.violet, fontSize: 11.5, fontWeight: 600 }}>📄 Budget</button>
-                          )}
-                        </td>
-                        <td style={{ padding: '11px 8px' }}><span style={badge(r.billed ? 'green' : 'amber')}>{r.billed ? 'BILLED' : 'NOT BILLED'}</span></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>);
-          })()}
 
           {/* Section 5 — Pareto · Predictive · Exceptions */}
           <div style={sectionTitle}>Section 5 · Pareto · Predictive · Exceptions</div>
@@ -735,6 +666,74 @@ export default function DashboardWarRoom() {
             <br /><br />
             <strong style={{ color: '#fff' }}>NORTH STAR:</strong> ₹10,000 cr by FY32 · 12 → 50 → 150 → 400 → 1000 → 2000 cr · Operating spine: Uber timestamps · Apple clarity · Tata governance · Reliance/Adani leverage.
           </div>
+        </>)}
+
+        {/* ============== PO vs SALES BILL ============== */}
+        {tab === 'posales' && (<>
+          {/* Per-Vendor-PO: vendor cost vs the client Sales Bill BUDGET
+              (Σ this PO's item qty × BOQ sale rate). Pulled out of the CMD
+              view into its own tab next to MY APPROVALS (mam 2026-06-26). */}
+          {(() => {
+            const pvs = procurement.po_vs_sales_bill || { rows: [], totals: {} };
+            const t = pvs.totals || {};
+            const pill = (label, val, color) => (
+              <div style={cardStyle}>
+                <h3 style={{ margin: 0, fontSize: 11, letterSpacing: 1, color: C.ink2, textTransform: 'uppercase', fontWeight: 600 }}>{label}</h3>
+                <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-.5px', margin: '4px 0', color: color || C.ink }}>{val}</div>
+              </div>
+            );
+            return (<>
+              <div style={{ ...sectionTitle, marginTop: 0 }}>PO vs Sales Bill · Vendor cost vs Client billed (per Vendor PO)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 20, marginBottom: 16 }}>
+                {pill('Vendor PO cost', fmtINR(t.po_cost || 0))}
+                {pill('Sales Bill (budget)', fmtINR(t.sales_bill || 0), C.blue)}
+                {pill('Throughput (Sales − Purchase)', fmtINR(t.gap || 0), (t.gap || 0) >= 0 ? C.green : C.red)}
+                {pill('Cash positive %', t.cash_positive_pct != null ? `${t.cash_positive_pct}%` : '—', (t.cash_positive_pct || 0) >= 0 ? C.green : C.red)}
+                {pill('Billed', `${t.billed_count || 0}/${t.po_count || 0}`, (t.billed_count || 0) === (t.po_count || 0) && (t.po_count || 0) > 0 ? C.green : C.amber)}
+              </div>
+              <div style={cardStyle}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                  <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
+                    {['PO Number', 'Vendor', 'Site', 'PO cost', 'Sales Bill', 'Throughput', 'Cash +%', 'PDF', 'Status'].map((h, hi) =>
+                      <th key={h} style={{ textAlign: hi >= 3 && hi <= 6 ? 'right' : 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
+                    )}
+                  </tr></thead>
+                  <tbody>
+                    {pvs.rows.length === 0 ? (
+                      <tr><td colSpan="9" style={{ textAlign: 'center', padding: 16, color: C.ink2 }}>No Vendor POs in this window.</td></tr>
+                    ) : pvs.rows.map((r, i) => (
+                      <tr key={r.po_id} style={{ borderBottom: i === pvs.rows.length - 1 ? 'none' : `1px solid ${C.line}` }}>
+                        <td style={{ padding: '11px 8px', fontFamily: 'monospace' }}>{r.po_number}{r.indent_number ? <span style={{ color: C.ink2, fontSize: 10.5 }}> · {r.indent_number}</span> : null}</td>
+                        <td style={{ padding: '11px 8px' }}>{(r.vendor || '—').slice(0, 22)}</td>
+                        <td style={{ padding: '11px 8px' }}>{(r.site || '—').slice(0, 22)}</td>
+                        <td style={{ padding: '11px 8px', textAlign: 'right' }}>{fmtINR(r.po_cost)}</td>
+                        <td style={{ padding: '11px 8px', textAlign: 'right', color: r.sales_bill > 0 ? C.blue : C.ink2 }}>{r.sales_bill > 0 ? fmtINR(r.sales_bill) : '—'}</td>
+                        <td style={{ padding: '11px 8px', textAlign: 'right', fontWeight: 600, color: r.gap >= 0 ? C.green : C.red }}>
+                          {fmtINR(r.gap)}
+                          {r.margin_pct != null && <span style={{ display: 'block', fontSize: 10, fontWeight: 400, color: C.ink2 }}>{r.margin_pct}% on cost</span>}
+                        </td>
+                        <td style={{ padding: '11px 8px', textAlign: 'right', fontWeight: 600, color: (r.cash_positive_pct ?? 0) >= 0 ? C.green : C.red }}>
+                          {r.cash_positive_pct != null ? `${r.cash_positive_pct}%` : '—'}
+                        </td>
+                        <td style={{ padding: '11px 8px', whiteSpace: 'nowrap' }}>
+                          {r.po_id ? (
+                            <a href={`/vendor-po/${r.po_id}/print`} target="_blank" rel="noreferrer"
+                               style={{ color: C.blue, fontSize: 11.5, fontWeight: 600, textDecoration: 'none' }}>📄 PO</a>
+                          ) : <span style={{ color: C.ink2 }}>—</span>}
+                          {r.po_id && (
+                            <button type="button" onClick={() => openBudgetPrint(r.po_id)}
+                              title="Sales Bill budget for this Vendor PO (PO qty × sale rate)"
+                              style={{ marginLeft: 10, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: C.violet, fontSize: 11.5, fontWeight: 600 }}>📄 Budget</button>
+                          )}
+                        </td>
+                        <td style={{ padding: '11px 8px' }}><span style={badge(r.billed ? 'green' : 'amber')}>{r.billed ? 'BILLED' : 'NOT BILLED'}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>);
+          })()}
         </>)}
 
         {/* ============== COO VIEW ============== */}
