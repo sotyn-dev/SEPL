@@ -295,6 +295,19 @@ export default function DashboardWarRoom() {
     }
   };
 
+  // Per-Vendor-PO Sales Bill BUDGET statement — ties to this row's Sales Bill
+  // amount (Σ this PO's item qty × BOQ sale rate), not the whole indent.
+  const openBudgetPrint = async (poId) => {
+    if (!poId) return;
+    try {
+      const r = await api.get(`/procurement/vendor-po/${poId}/budget-print`, { responseType: 'arraybuffer' });
+      const blob = new Blob([r.data], { type: 'text/html;charset=utf-8' });
+      window.open(URL.createObjectURL(blob), '_blank');
+    } catch {
+      toast.error('Could not open the budget statement');
+    }
+  };
+
   const load = async (d = days) => {
     setLoading(true);
     try { setData((await api.get(`/dashboards/cmd-detail?days=${d}`)).data); }
@@ -558,9 +571,9 @@ export default function DashboardWarRoom() {
                             <a href={`/vendor-po/${r.po_id}/print`} target="_blank" rel="noreferrer"
                                style={{ color: C.blue, fontSize: 11.5, fontWeight: 600, textDecoration: 'none' }}>📄 PO</a>
                           ) : <span style={{ color: C.ink2 }}>—</span>}
-                          {r.indent_id && (
-                            <button type="button" onClick={() => openBillablePrint(r.indent_id)}
-                              title="Item-wise Billable (budget) statement"
+                          {r.po_id && (
+                            <button type="button" onClick={() => openBudgetPrint(r.po_id)}
+                              title="Sales Bill budget for this Vendor PO (PO qty × sale rate)"
                               style={{ marginLeft: 10, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: C.violet, fontSize: 11.5, fontWeight: 600 }}>📄 Budget</button>
                           )}
                         </td>

@@ -3174,6 +3174,105 @@ router.get('/indents/:id/billable-print', (req, res) => {
   res.send(Buffer.from(html, 'utf8'));
 });
 
+// GET /procurement/vendor-po/:id/budget-print — per-VENDOR-PO Sales Bill BUDGET
+// statement (mam 2026-06-26: "according to sales bill make budget pdf"). Lists
+// the lines actually on THIS Vendor PO (vendor_po_items), each at its BOQ SALE
+// rate, so the total ties EXACTLY to the War Room "Sales Bill (budget)" for the
+// row: Σ (vendor_po_items qty × po_items.rate) over PO-type lines. Unlike the
+// indent billable statement, this is scoped to one Vendor PO, so an indent
+// split across several POs prints one budget per PO (no whole-indent repeat).
+router.get('/vendor-po/:id/budget-print', (req, res) => {
+  const db = getDb();
+  const id = +req.params.id;
+  const vp = db.prepare(`
+    SELECT vp.id, vp.po_number, vp.po_date, vp.created_at, vp.indent_id,
+           i.planning_id, v.name AS vendor_name, i.indent_number, i.site_name, i.indent_date
+      FROM vendor_pos vp
+      LEFT JOIN vendors v ON v.id = vp.vendor_id
+      LEFT JOIN indents i ON i.id = vp.indent_id
+     WHERE vp.id=?`).get(id);
+  if (!vp) return res.status(404).send('Vendor PO not found');
+
+  const items = db.prepare(`
+    SELECT vpi.id, vpi.quantity AS po_qty, ii.po_item_id, ii.item_type,
+           ii.description AS ii_desc, ii.unit AS ii_unit,
+           im.item_code, im.item_name AS master_name, im.size, im.specification,
+           poi.description AS boq_name, poi.unit AS po_unit, poi.rate AS sale_rate,
+           poi.business_book_id AS bb_id
+      FROM vendor_po_items vpi
+      JOIN indent_items ii ON ii.id = vpi.indent_item_id
+      LEFT JOIN item_master im ON im.id = ii.item_master_id
+      LEFT JOIN po_items poi   ON poi.id = ii.po_item_id
+     WHERE vpi.vendor_po_id=?
+     ORDER BY vpi.id`).all(id);
+
+  // Resolve the client (business_book) for the header — planning, else a line's
+  // po_item, else the indent site name (same chain as the indent statement).
+  let bbId = null;
+  if (vp.planning_id) bbId = db.prepare('SELECT business_book_id FROM order_planning WHERE id=?').get(vp.planning_id)?.business_book_id || null;
+  if (!bbId) for (const it of items) { if (it.bb_id) { bbId = it.bb_id; break; } }
+  if (!bbId && vp.site_name) bbId = db.prepare(`SELECT id FROM business_book WHERE id IN (SELECT DISTINCT business_book_id FROM sites WHERE name=? AND business_book_id IS NOT NULL) OR project_name=? OR company_name=? ORDER BY id DESC LIMIT 1`).get(vp.site_name, vp.site_name, vp.site_name)?.id || null;
+  const bb = bbId ? db.prepare('SELECT company_name, client_name, billing_address, gstin, project_name FROM business_book WHERE id=?').get(bbId) : null;
+
+  let sn = 0, total = 0;
+  const rows = items.map(it => {
+    // Only PO-type, BOQ-priced lines are billable to the client (FOC / non-PO
+    // accessories ride free) — matches the War Room budget exactly.
+    const chargeable = it.po_item_id != null && String(it.item_type || '').toUpperCase() === 'PO';
+    const qty = +it.po_qty || 0;
+    const rate = chargeable ? (+it.sale_rate || 0) : 0;
+    const amt = qty * rate;
+    total += amt;
+    const t = String(it.item_type || '').toUpperCase();
+    const desc = (it.boq_name && String(it.boq_name).trim())
+      ? it.boq_name
+      : [it.master_name || it.ii_desc, it.size, it.specification].filter(Boolean).join(' / ');
+    return { sn: ++sn, code: it.item_code || '', desc, qty, unit: it.po_unit || it.ii_unit || '', rate, amt, free: !chargeable, type: t };
+  });
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inr = n => (+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const gst = Math.round(total * 0.18);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Budget ${esc(vp.po_number)}</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:0;padding:24px;font-size:12px}
+    .hdr{text-align:center;border-bottom:3px solid #7a1b1b;padding-bottom:8px;margin-bottom:10px}
+    .hdr h1{margin:0;color:#7a1b1b;font-size:18px}
+    .meta{display:flex;justify-content:space-between;font-size:11px;color:#555;margin:8px 0;flex-wrap:wrap;gap:6px}
+    .box{border:1px solid #ddd;border-radius:6px;padding:8px 10px;margin:8px 0;font-size:11px}
+    table{width:100%;border-collapse:collapse;margin-top:8px}
+    th,td{border:1px solid #ccc;padding:6px 8px}
+    th{background:#f3eaea;color:#7a1b1b;text-align:left;font-size:11px}
+    td.r,th.r{text-align:right}
+    tfoot td{font-weight:bold;background:#faf5f5}
+    .title{text-align:center;background:#7a1b1b;color:#fff;font-weight:bold;padding:6px;border-radius:4px;letter-spacing:1px;margin:6px 0}
+    .pbtn{position:fixed;top:12px;right:12px;background:#7a1b1b;color:#fff;border:none;border-radius:4px;padding:8px 14px;cursor:pointer}
+    @media print{.pbtn{display:none}}
+  </style></head><body>
+  <button class="pbtn" onclick="window.print()">🖨 Print / Save PDF</button>
+  <div class="hdr"><h1>SECURED ENGINEERS PVT. LTD</h1><div style="font-size:11px">GSTIN: 03AASCS7836D2Z3 · PAN: AASCS7836D</div></div>
+  <div class="title">SALES BILL BUDGET — VENDOR PO</div>
+  <div class="meta">
+    <div><b>Vendor PO:</b> ${esc(vp.po_number)}<br><b>Vendor:</b> ${esc(vp.vendor_name || '—')}<br><b>Indent No:</b> ${esc(vp.indent_number || '—')}</div>
+    <div><b>Date:</b> ${esc(String(vp.po_date || vp.created_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10))}<br><b>Site / Project:</b> ${esc(vp.site_name || (bb && bb.project_name) || '—')}<br><b>Client:</b> ${esc((bb && (bb.company_name || bb.client_name)) || '—')}</div>
+  </div>
+  ${bb && bb.billing_address ? `<div class="box"><b>Client Address:</b> ${esc(bb.billing_address)}${bb.gstin ? ` &nbsp; <b>GSTIN:</b> ${esc(bb.gstin)}` : ''}</div>` : ''}
+  <table>
+    <thead><tr><th style="width:32px">SN</th><th>BOQ Description</th><th class="r" style="width:80px">PO Qty</th><th style="width:50px">Unit</th><th class="r" style="width:100px">Sale Rate ₹</th><th class="r" style="width:120px">Budget ₹<br><span style="font-weight:400;font-size:9px;color:#9a6e12">PO qty × sale rate</span></th></tr></thead>
+    <tbody>
+    ${rows.map(r => `<tr><td>${r.sn}</td><td>${r.code ? `<span style="color:#888;font-family:monospace">[${esc(r.code)}]</span> ` : ''}${esc(r.desc)}${r.free ? ` <span style="color:#9a8;font-size:9px">(${r.type || 'free'} — not billable)</span>` : ''}</td><td class="r">${inr(r.qty)}</td><td>${esc(r.unit)}</td><td class="r">${r.rate > 0 ? inr(r.rate) : '—'}</td><td class="r" style="font-weight:600">${r.amt > 0 ? inr(r.amt) : '—'}</td></tr>`).join('')}
+    </tbody>
+    <tfoot>
+      <tr><td colspan="5" class="r">Sales Bill Budget</td><td class="r">₹ ${inr(total)}</td></tr>
+      <tr><td colspan="5" class="r">GST @18%</td><td class="r">₹ ${inr(gst)}</td></tr>
+      <tr><td colspan="5" class="r">Grand Total (incl GST)</td><td class="r">₹ ${inr(total + gst)}</td></tr>
+    </tfoot>
+  </table>
+  <p style="font-size:10px;color:#888;margin-top:10px"><b>Budget ₹</b> = BOQ sale rate × this Vendor PO's item qty (PO-type lines only; FOC / non-PO accessories are not billable). This total matches the War Room "Sales Bill (budget)" for this Vendor PO. For internal estimation / audit — not a tax invoice.</p>
+  </body></html>`;
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(Buffer.from(html, 'utf8'));
+});
+
 // Auto-quotation data for an Extra indent (mam 2026-06-06). Prices each
 // chargeable line from the most-recent matching previous BOQ × indent qty.
 // Rendered client-side at /quotation/:indentId/print in the SEPL format.
