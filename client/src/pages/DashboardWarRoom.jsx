@@ -506,8 +506,8 @@ export default function DashboardWarRoom() {
           {/* PO vs Sales Bill — vendor cost vs client billed, per Vendor PO
               made in Indent-to-Dispatch (mam 2026-06-26). One pill summary +
               a per-PO table. PO COST = vendor_pos.total_amount; SALES BILL =
-              actual client Sales Bill raised against that PO (Dispatch flow);
-              GAP = sale − cost (margin recovered; red while unbilled). */}
+              full-BOQ Sales Bill budget (Σ po_qty × sale rate per BOQ line);
+              THROUGHPUT = Sales − Purchase; CASH +% = throughput / sales × 100. */}
           {(() => {
             const pvs = procurement.po_vs_sales_bill || { rows: [], totals: {} };
             const t = pvs.totals || {};
@@ -519,22 +519,23 @@ export default function DashboardWarRoom() {
             );
             return (<>
               <div style={sectionTitle}>PO vs Sales Bill · Vendor cost vs Client billed (per Vendor PO)</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 20, marginBottom: 16 }}>
                 {pill('Vendor PO cost', fmtINR(t.po_cost || 0))}
-                {pill('Sales Bill (client)', fmtINR(t.sales_bill || 0), C.blue)}
-                {pill('Gap (sale − cost)', fmtINR(t.gap || 0), (t.gap || 0) >= 0 ? C.green : C.red)}
+                {pill('Sales Bill (budget)', fmtINR(t.sales_bill || 0), C.blue)}
+                {pill('Throughput (Sales − Purchase)', fmtINR(t.gap || 0), (t.gap || 0) >= 0 ? C.green : C.red)}
+                {pill('Cash positive %', t.cash_positive_pct != null ? `${t.cash_positive_pct}%` : '—', (t.cash_positive_pct || 0) >= 0 ? C.green : C.red)}
                 {pill('Billed', `${t.billed_count || 0}/${t.po_count || 0}`, (t.billed_count || 0) === (t.po_count || 0) && (t.po_count || 0) > 0 ? C.green : C.amber)}
               </div>
               <div style={cardStyle}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                   <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
-                    {['PO Number', 'Vendor', 'Site', 'PO cost', 'Sales Bill', 'Gap', 'PDF', 'Status'].map((h, hi) =>
-                      <th key={h} style={{ textAlign: hi >= 3 && hi <= 5 ? 'right' : 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
+                    {['PO Number', 'Vendor', 'Site', 'PO cost', 'Sales Bill', 'Throughput', 'Cash +%', 'PDF', 'Status'].map((h, hi) =>
+                      <th key={h} style={{ textAlign: hi >= 3 && hi <= 6 ? 'right' : 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
                     )}
                   </tr></thead>
                   <tbody>
                     {pvs.rows.length === 0 ? (
-                      <tr><td colSpan="8" style={{ textAlign: 'center', padding: 16, color: C.ink2 }}>No Vendor POs in this window.</td></tr>
+                      <tr><td colSpan="9" style={{ textAlign: 'center', padding: 16, color: C.ink2 }}>No Vendor POs in this window.</td></tr>
                     ) : pvs.rows.map((r, i) => (
                       <tr key={r.po_id} style={{ borderBottom: i === pvs.rows.length - 1 ? 'none' : `1px solid ${C.line}` }}>
                         <td style={{ padding: '11px 8px', fontFamily: 'monospace' }}>{r.po_number}{r.indent_number ? <span style={{ color: C.ink2, fontSize: 10.5 }}> · {r.indent_number}</span> : null}</td>
@@ -544,7 +545,10 @@ export default function DashboardWarRoom() {
                         <td style={{ padding: '11px 8px', textAlign: 'right', color: r.sales_bill > 0 ? C.blue : C.ink2 }}>{r.sales_bill > 0 ? fmtINR(r.sales_bill) : '—'}</td>
                         <td style={{ padding: '11px 8px', textAlign: 'right', fontWeight: 600, color: r.gap >= 0 ? C.green : C.red }}>
                           {fmtINR(r.gap)}
-                          {r.margin_pct != null && <span style={{ display: 'block', fontSize: 10, fontWeight: 400, color: C.ink2 }}>{r.margin_pct}%</span>}
+                          {r.margin_pct != null && <span style={{ display: 'block', fontSize: 10, fontWeight: 400, color: C.ink2 }}>{r.margin_pct}% on cost</span>}
+                        </td>
+                        <td style={{ padding: '11px 8px', textAlign: 'right', fontWeight: 600, color: (r.cash_positive_pct ?? 0) >= 0 ? C.green : C.red }}>
+                          {r.cash_positive_pct != null ? `${r.cash_positive_pct}%` : '—'}
                         </td>
                         {/* PO PDF (vendor PO print) + Budget PDF (item-wise Billable
                             statement) — the billable PDF moved here from the Indent

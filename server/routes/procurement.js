@@ -3124,9 +3124,15 @@ router.get('/indents/:id/billable-print', (req, res) => {
     }
   }
   total = rows.reduce((s, r) => s + (+r.amt || 0), 0);
+  // Sales Bill BUDGET (mam 2026-06-26: "boq item = po qty * sales rate") — the
+  // full-BOQ value: PO item qty × sale rate per line. For BOQ-linked rows that's
+  // poQty × rate; non-BOQ lines (no poQty) fall back to their own billable amt.
+  const budgetOf = (r) => (r.poQty != null ? (+r.poQty || 0) * (+r.rate || 0) : (+r.amt || 0));
+  const budgetTotal = rows.reduce((s, r) => s + budgetOf(r), 0);
   const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const inr = n => (+n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
   const gst = Math.round(total * 0.18);
+  const gstBudget = Math.round(budgetTotal * 0.18);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Billable ${esc(indent.indent_number)}</title>
   <style>
     body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:0;padding:24px;font-size:12px}
@@ -3152,17 +3158,17 @@ router.get('/indents/:id/billable-print', (req, res) => {
   </div>
   ${bb && bb.billing_address ? `<div class="box"><b>Client Address:</b> ${esc(bb.billing_address)}${bb.gstin ? ` &nbsp; <b>GSTIN:</b> ${esc(bb.gstin)}` : ''}</div>` : ''}
   <table>
-    <thead><tr><th style="width:32px">SN</th><th>BOQ Description</th><th class="r" style="width:66px">PO Item Qty</th><th class="r" style="width:66px">Billable Qty</th><th style="width:50px">Unit</th><th class="r" style="width:90px">Sale Rate ₹</th><th class="r" style="width:110px">Billable ₹</th></tr></thead>
+    <thead><tr><th style="width:32px">SN</th><th>BOQ Description</th><th class="r" style="width:66px">PO Item Qty</th><th class="r" style="width:66px">Billable Qty</th><th style="width:50px">Unit</th><th class="r" style="width:90px">Sale Rate ₹</th><th class="r" style="width:110px">Budget ₹<br><span style="font-weight:400;font-size:9px;color:#9a6e12">PO qty × rate</span></th><th class="r" style="width:110px">Billable ₹</th></tr></thead>
     <tbody>
-    ${rows.map(r => { const diff = r.poQty != null && +r.poQty !== +r.qty; return `<tr><td>${r.sn}</td><td>${r.code ? `<span style="color:#888;font-family:monospace">[${esc(r.code)}]</span> ` : ''}${esc(r.desc)}${(r.type === 'FOC' || r.type === 'RGP') ? ` <span style="color:#9a8;font-size:9px">(${r.type} — free)</span>` : ''}</td><td class="r">${r.poQty != null ? inr(r.poQty) : '—'}</td><td class="r"${diff ? ' style="color:#b00"' : ''}>${inr(r.qty)}</td><td>${esc(r.unit)}</td><td class="r">${r.rate > 0 ? inr(r.rate) : '—'}</td><td class="r">${r.amt > 0 ? inr(r.amt) : '—'}</td></tr>`; }).join('')}
+    ${rows.map(r => { const diff = r.poQty != null && +r.poQty !== +r.qty; const bud = budgetOf(r); return `<tr><td>${r.sn}</td><td>${r.code ? `<span style="color:#888;font-family:monospace">[${esc(r.code)}]</span> ` : ''}${esc(r.desc)}${(r.type === 'FOC' || r.type === 'RGP') ? ` <span style="color:#9a8;font-size:9px">(${r.type} — free)</span>` : ''}</td><td class="r">${r.poQty != null ? inr(r.poQty) : '—'}</td><td class="r"${diff ? ' style="color:#b00"' : ''}>${inr(r.qty)}</td><td>${esc(r.unit)}</td><td class="r">${r.rate > 0 ? inr(r.rate) : '—'}</td><td class="r" style="font-weight:600">${bud > 0 ? inr(bud) : '—'}</td><td class="r">${r.amt > 0 ? inr(r.amt) : '—'}</td></tr>`; }).join('')}
     </tbody>
     <tfoot>
-      <tr><td colspan="6" class="r">Total Billable (Sale value)</td><td class="r">₹ ${inr(total)}</td></tr>
-      <tr><td colspan="6" class="r">GST @18%</td><td class="r">₹ ${inr(gst)}</td></tr>
-      <tr><td colspan="6" class="r">Grand Total (incl GST)</td><td class="r">₹ ${inr(total + gst)}</td></tr>
+      <tr><td colspan="6" class="r">Total (Sale value)</td><td class="r">₹ ${inr(budgetTotal)}</td><td class="r">₹ ${inr(total)}</td></tr>
+      <tr><td colspan="6" class="r">GST @18%</td><td class="r">₹ ${inr(gstBudget)}</td><td class="r">₹ ${inr(gst)}</td></tr>
+      <tr><td colspan="6" class="r">Grand Total (incl GST)</td><td class="r">₹ ${inr(budgetTotal + gstBudget)}</td><td class="r">₹ ${inr(total + gst)}</td></tr>
     </tfoot>
   </table>
-  <p style="font-size:10px;color:#888;margin-top:10px"><b>PO Item Qty</b> = full client-BOQ quantity for the line (po_items). <b>Billable Qty</b> = chargeable indent qty actually billed (FOC / RGP / free accessories excluded) — shown in red when it differs from the PO item qty. Billable ₹ = BOQ sale rate × billable qty. For internal estimation / audit — not a tax invoice.</p>
+  <p style="font-size:10px;color:#888;margin-top:10px"><b>PO Item Qty</b> = full client-BOQ quantity for the line (po_items). <b>Billable Qty</b> = chargeable indent qty actually billed (FOC / RGP / free accessories excluded) — shown in red when it differs from the PO item qty. <b>Budget ₹</b> = BOQ sale rate × PO item qty (full client-BOQ scope — the Sales Bill budget). <b>Billable ₹</b> = BOQ sale rate × billable qty. For internal estimation / audit — not a tax invoice.</p>
   </body></html>`;
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(Buffer.from(html, 'utf8'));

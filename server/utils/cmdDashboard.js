@@ -451,27 +451,35 @@ function computeCmdDetail(db, daysRaw) {
      LIMIT 200
   `, from);
 
-  // Expected client SALE per PO = its indent's Billable (BOQ sale rate ×
-  // chargeable indent qty) — the budget figure mam wants in the Sales Bill
-  // column even before an actual bill is raised (mam 2026-06-26: "sales bill
-  // total amount need to show here"). Only PO-type lines bill (FOC / RGP / free
-  // accessories excluded), matching the Billable statement's chargeable basis.
-  // One batched query over the indents in view; non-PO-linked billable lines
-  // (rare) aren't included, so it can read slightly under the Budget PDF total.
-  const billableByIndent = new Map();
+  // Expected client SALE per PO = its indent's Sales Bill BUDGET = full client
+  // BOQ scope = Σ (PO item qty × BOQ sale rate) over the distinct BOQ lines the
+  // indent covers (mam 2026-06-26: "according to indent po qty wise sales bill
+  // budget … boq item = po qty * sales rate"). This is the FULL-BOQ budget, NOT
+  // the chargeable indent qty — so it reads the po_items.quantity (the full
+  // client-BOQ qty), not indent_items.quantity.
+  //
+  // DISTINCT (indent, po_item) pairs first, then sum po_qty × rate ONCE per BOQ
+  // line — several indent sub-items (a PO line + its FOC accessories) map to the
+  // same po_item, so summing per indent_item would multiply the line in N times.
+  // Only BOQ lines actually procured (a PO-type indent sub-item exists) count.
+  const budgetByIndent = new Map();
   const indentIds = [...new Set(pvsRaw.map(r => r.indent_id).filter(Boolean))];
   if (indentIds.length) {
     const ph = indentIds.map(() => '?').join(',');
     for (const b of safeAll(db, `
-      SELECT ii.indent_id AS indent_id,
-             SUM(CASE WHEN ii.po_item_id IS NOT NULL AND UPPER(COALESCE(ii.item_type, '')) = 'PO'
-                      THEN COALESCE(ii.quantity, 0) * COALESCE(poi.rate, 0) ELSE 0 END) AS billable
-        FROM indent_items ii
-        LEFT JOIN po_items poi ON poi.id = ii.po_item_id
-       WHERE ii.indent_id IN (${ph})
-       GROUP BY ii.indent_id
+      SELECT d.indent_id AS indent_id,
+             SUM(COALESCE(poi.quantity, 0) * COALESCE(poi.rate, 0)) AS budget
+        FROM (
+          SELECT DISTINCT ii.indent_id, ii.po_item_id
+            FROM indent_items ii
+           WHERE ii.indent_id IN (${ph})
+             AND ii.po_item_id IS NOT NULL
+             AND UPPER(COALESCE(ii.item_type, '')) = 'PO'
+        ) d
+        JOIN po_items poi ON poi.id = d.po_item_id
+       GROUP BY d.indent_id
     `, ...indentIds)) {
-      billableByIndent.set(b.indent_id, num(b.billable));
+      budgetByIndent.set(b.indent_id, num(b.budget));
     }
   }
 
@@ -480,16 +488,20 @@ function computeCmdDetail(db, daysRaw) {
     // Actual Dispatch sales bill (generated value, else uploaded-bill value) —
     // drives the BILLED / NOT BILLED status only.
     const actualSale = num(r.sb_generated) > 0 ? num(r.sb_generated) : num(r.sb_uploaded);
-    // Displayed Sales Bill amount = expected Billable (budget) per mam's choice.
-    const expected = billableByIndent.get(r.indent_id) || 0;
+    // Displayed Sales Bill amount = full-BOQ Sales Bill budget (po_qty × rate).
+    const expected = budgetByIndent.get(r.indent_id) || 0;
     const gap = expected - cost;
     return {
       po_id: r.id, po_number: r.po_number, po_date: r.po_date,
       indent_id: r.indent_id || null,
       vendor: r.vendor_name || '—', indent_number: r.indent_number || null,
       site: r.site_name || '—',
+      // gap == Throughput (Sales − Purchase). margin_pct = throughput on COST;
+      // cash_positive_pct = throughput on SALE (mam 2026-06-26: "cash positive
+      // = (sales bill − purchase)/sales bill × 100").
       po_cost: cost, sales_bill: expected, gap,
       margin_pct: cost > 0 ? Math.round((gap / cost) * 1000) / 10 : null,
+      cash_positive_pct: expected > 0 ? Math.round((gap / expected) * 1000) / 10 : null,
       billed: actualSale > 0,
     };
   });
@@ -498,7 +510,9 @@ function computeCmdDetail(db, daysRaw) {
     t.po_count += 1; if (r.billed) t.billed_count += 1;
     return t;
   }, { po_cost: 0, sales_bill: 0, gap: 0, po_count: 0, billed_count: 0 });
-  pvsTotals.gap = pvsTotals.sales_bill - pvsTotals.po_cost;
+  pvsTotals.gap = pvsTotals.sales_bill - pvsTotals.po_cost;     // Throughput
+  pvsTotals.cash_positive_pct = pvsTotals.sales_bill > 0
+    ? Math.round((pvsTotals.gap / pvsTotals.sales_bill) * 1000) / 10 : null;
   pvsTotals.billed_pct = pvsTotals.po_cost > 0
     ? Math.round((pvsTotals.sales_bill / pvsTotals.po_cost) * 1000) / 10 : null;
 
