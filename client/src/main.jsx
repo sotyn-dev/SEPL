@@ -22,7 +22,17 @@ function recoverFromStaleChunk() {
     if (Date.now() - last < 10000) return false   // reloaded just now → don't loop
     sessionStorage.setItem('chunk-reload-at', String(Date.now()))
   } catch { /* storage blocked — still reload below */ }
-  window.location.reload()
+  // Belt-and-suspenders before reloading: drop any Cache-Storage app shell that
+  // could keep handing back a stale index.html (Chrome especially), then reload
+  // to the fresh build. The reload itself revalidates index.html (no-cache).
+  const reload = () => window.location.reload()
+  try {
+    if (window.caches && caches.keys) {
+      caches.keys().then(ks => Promise.all(ks.map(k => caches.delete(k)))).finally(reload)
+      return true
+    }
+  } catch { /* fall through */ }
+  reload()
   return true
 }
 // Vite emits this when a preloaded/imported chunk 404s after a deploy.
