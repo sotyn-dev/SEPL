@@ -451,33 +451,27 @@ function computeCmdDetail(db, daysRaw) {
      LIMIT 200
   `, from);
 
-  // Expected client SALE per PO = its indent's Sales Bill BUDGET = full client
-  // BOQ scope = Σ (PO item qty × BOQ sale rate) over the distinct BOQ lines the
-  // indent covers (mam 2026-06-26: "according to indent po qty wise sales bill
-  // budget … boq item = po qty * sales rate"). This is the FULL-BOQ budget, NOT
-  // the chargeable indent qty — so it reads the po_items.quantity (the full
-  // client-BOQ qty), not indent_items.quantity.
-  //
-  // DISTINCT (indent, po_item) pairs first, then sum po_qty × rate ONCE per BOQ
-  // line — several indent sub-items (a PO line + its FOC accessories) map to the
-  // same po_item, so summing per indent_item would multiply the line in N times.
-  // Only BOQ lines actually procured (a PO-type indent sub-item exists) count.
+  // Expected client SALE per PO = its indent's Sales Bill BUDGET =
+  // Σ (Vendor-PO item qty × BOQ sale rate) over the indent's PO-type lines
+  // (mam 2026-06-26: "Vendor PO qty (item only po) * billable rate"). Use the
+  // indent_items.quantity — the qty actually on the Vendor PO — NOT the full
+  // client-BOQ po_items.quantity (which over-states the budget). The billable
+  // (sale) rate is the linked po_items.rate. FOC / non-PO sub-items are
+  // excluded (item_type='PO' only); each PO sub-item contributes its own
+  // procured qty × sale rate, so summing per indent_item is correct.
   const budgetByIndent = new Map();
   const indentIds = [...new Set(pvsRaw.map(r => r.indent_id).filter(Boolean))];
   if (indentIds.length) {
     const ph = indentIds.map(() => '?').join(',');
     for (const b of safeAll(db, `
-      SELECT d.indent_id AS indent_id,
-             SUM(COALESCE(poi.quantity, 0) * COALESCE(poi.rate, 0)) AS budget
-        FROM (
-          SELECT DISTINCT ii.indent_id, ii.po_item_id
-            FROM indent_items ii
-           WHERE ii.indent_id IN (${ph})
-             AND ii.po_item_id IS NOT NULL
-             AND UPPER(COALESCE(ii.item_type, '')) = 'PO'
-        ) d
-        JOIN po_items poi ON poi.id = d.po_item_id
-       GROUP BY d.indent_id
+      SELECT ii.indent_id AS indent_id,
+             SUM(COALESCE(ii.quantity, 0) * COALESCE(poi.rate, 0)) AS budget
+        FROM indent_items ii
+        JOIN po_items poi ON poi.id = ii.po_item_id
+       WHERE ii.indent_id IN (${ph})
+         AND ii.po_item_id IS NOT NULL
+         AND UPPER(COALESCE(ii.item_type, '')) = 'PO'
+       GROUP BY ii.indent_id
     `, ...indentIds)) {
       budgetByIndent.set(b.indent_id, num(b.budget));
     }
