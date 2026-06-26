@@ -69,6 +69,7 @@ const ALL_MODULES = [
   { key: 'hr', label: 'HR & Hiring (legacy)' },
   { key: 'payroll', label: 'Payroll' },
   { key: 'scoring', label: 'Weekly Score' },
+  { key: 'gamification', label: 'Champions League (Gamification)' },
   { key: 'tools', label: 'Tools Management' },
   { key: 'rentals', label: 'Room Rentals' },
   { key: 'employees', label: 'Employees' },

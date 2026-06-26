@@ -366,6 +366,7 @@ app.use('/api/hr', require('./routes/hr'));
 app.use('/api/public', require('./routes/publicHr'));
 app.use('/api/payroll', require('./routes/payroll'));
 app.use('/api/scoring', require('./routes/scoring'));
+app.use('/api/gamification', require('./routes/champions'));
 app.use('/api/tools', require('./routes/tools'));
 app.use('/api/rentals', require('./routes/rentals'));
 app.use('/api/snags', require('./routes/snags'));

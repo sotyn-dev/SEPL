@@ -48,7 +48,7 @@ import {
   FiGitBranch,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
-import { FaWhatsapp } from 'react-icons/fa';
+import { FaWhatsapp, FaTrophy } from 'react-icons/fa';
 
 // ─── Sidebar structure (mam 2026-05-27 — SEPL_Sidebar_Restructure spec) ───
 // Dashboard stays standalone at the very top (no group, single URL).
@@ -150,6 +150,10 @@ const SIDEBAR_GROUPS = [
     // Mam (2026-05-30): "performance is under HRMS" — moved from
     // the Tasks group so the scorecard sits with the rest of HR.
     { path: '/scorecard',       label: 'Performance',               icon: FiAward,      module: 'scoring' },
+    // Mam (2026-06-26): company-wide gamification on top of Performance —
+    // ranks everyone on their own role targets, picks employee/team of the
+    // week / month / quarter / year. See GAMIFICATION.md.
+    { path: '/champions',       label: 'Champions League',          icon: FaTrophy,     module: 'gamification' },
     { path: '/sub-contractors', label: 'Sub-contractor Master Detail', icon: FiHexagon, module: 'sub_contractors' },
   ]},
   { id: 'inventory', label: 'Inventory', icon: FiPackage, items: [

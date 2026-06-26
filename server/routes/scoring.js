@@ -232,18 +232,16 @@ router.put('/assignments/:user_id', adminOnly, (req, res) => {
 
 // ---------- SCORECARD ----------
 // GET full scorecard for a user × week (with auto-fill from delegations/pms/etc.)
-router.get('/scorecard', (req, res) => {
-  try {
-    const userId = parseInt(req.query.user_id, 10) || req.user.id;
-    const weekStart = req.query.week_start && /^\d{4}-\d{2}-\d{2}$/.test(req.query.week_start)
-      ? req.query.week_start
-      : defaultWeekStart();
-    const db = getDb();
-
+// ---------- SCORECARD CORE (reusable) ----------
+// Role-normalized weekly score for ONE user measured against THEIR OWN
+// template targets. Extracted from the /scorecard route so the Champions
+// League gamification module can rank the very same scores without
+// duplicating any of the KPI math below.
+function computeScorecard(db, userId, weekStart) {
     // Find user's template
     const ut = db.prepare('SELECT template_id FROM score_user_template WHERE user_id=?').get(userId);
     if (!ut) {
-      return res.json({ user_id: userId, week_start: weekStart, template: null, kpis: [], score: 0, message: 'No template assigned to this user yet' });
+      return { user_id: userId, week_start: weekStart, template: null, kpis: [], score: 0, total_weight: 0, activity: 0, message: 'No template assigned to this user yet' };
     }
     const tpl = db.prepare('SELECT * FROM score_templates WHERE id=?').get(ut.template_id);
     const kpis = db.prepare('SELECT * FROM score_kpis WHERE template_id=? AND COALESCE(active,1)=1 ORDER BY display_order, id').all(ut.template_id);
@@ -727,7 +725,12 @@ router.get('/scorecard', (req, res) => {
 
     const score = totalWeight > 0 ? Math.round((totalScore / totalWeight) * 100) / 100 : 0;
 
-    res.json({
+    // Total auto work units this week — the Champions League min-activity gate
+    // uses this to decide whether a week counts toward a player's score (so a
+    // person can't win on two perfect tasks while doing almost nothing).
+    const activity = result.reduce((s, r) => s + (r.is_auto && Number.isFinite(+r.actual) ? +r.actual : 0), 0);
+
+    return {
       user_id: userId,
       week_start: weekStart,
       week_end: shiftWeek(weekStart, 5),
@@ -735,7 +738,19 @@ router.get('/scorecard', (req, res) => {
       kpis: result,
       score,
       total_weight: totalWeight,
-    });
+      activity,
+    };
+}
+
+// Thin HTTP wrapper — keeps the /scorecard response identical to before so
+// the existing Scorecard page is completely unaffected by the extraction.
+router.get('/scorecard', (req, res) => {
+  try {
+    const userId = parseInt(req.query.user_id, 10) || req.user.id;
+    const weekStart = req.query.week_start && /^\d{4}-\d{2}-\d{2}$/.test(req.query.week_start)
+      ? req.query.week_start
+      : defaultWeekStart();
+    res.json(computeScorecard(getDb(), userId, weekStart));
   } catch (err) {
     console.error('scorecard get error', err);
     res.status(500).json({ error: err.message });
@@ -998,3 +1013,6 @@ router.get('/weekly/detail', requirePermission('scoring', 'view'), (req, res) =>
 });
 
 module.exports = router;
+// Exposed so the Champions League gamification module can reuse the exact
+// same role-normalized weekly score.
+module.exports.computeScorecard = computeScorecard;

@@ -5039,7 +5039,7 @@ in your first week. If a process feels broken, raise a Help Ticket
     // checks but were missing from the server's seed list, so newly
     // created roles never got role_permissions rows for them.  Now
     // included so the top-up loop covers every module the UI exposes.
-    'payroll','scoring','tools','rentals',
+    'payroll','scoring','gamification','tools','rentals',
     // Mam (2026-05-22): HR System Phase 1 — recruitment / ATS /
     // interviews / offers / onboarding.  Gated behind one permission
     // string so individual roles can be tuned (HR Manager full, Hiring

@@ -33,6 +33,7 @@ const HR = lazy(() => import('./pages/HR'));
 const Payroll = lazy(() => import('./pages/Payroll'));
 const SalarySlipPrint = lazy(() => import('./pages/SalarySlipPrint'));
 const Scorecard = lazy(() => import('./pages/Scorecard'));
+const Champions = lazy(() => import('./pages/Champions'));
 const Tools = lazy(() => import('./pages/Tools'));
 const Rentals = lazy(() => import('./pages/Rentals'));
 const Snags = lazy(() => import('./pages/Snags'));
@@ -206,6 +207,7 @@ export default function App() {
         <Route path="hr" element={<ModuleRoute module="hr"><HR /></ModuleRoute>} />
         <Route path="payroll" element={<ModuleRoute module="payroll"><Payroll /></ModuleRoute>} />
         <Route path="scorecard" element={<ModuleRoute module="scoring"><Scorecard /></ModuleRoute>} />
+        <Route path="champions" element={<ModuleRoute module="gamification"><Champions /></ModuleRoute>} />
         {/* Legacy /weekly-score URL → redirect to Scorecard's Team Overview tab.
             Kept so any bookmarked links / push notification deep-links don't 404. */}
         <Route path="weekly-score" element={<Navigate to="/scorecard" replace />} />
