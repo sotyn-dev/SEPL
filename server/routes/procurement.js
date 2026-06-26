@@ -3113,14 +3113,14 @@ router.get('/indents/:id/billable-print', (req, res) => {
         const desc = (it.boq_name && String(it.boq_name).trim())
           ? it.boq_name
           : [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
-        const row = { sn: ++sn, code: it.item_code || '', desc, qty: billQty, unit: it.po_unit || it.unit || '', type: '', rate, amt: rate * billQty };
+        const row = { sn: ++sn, code: it.item_code || '', desc, qty: billQty, poQty: (+it.po_qty || 0), unit: it.po_unit || it.unit || '', type: '', rate, amt: rate * billQty };
         poRow.set(it.po_item_id, row);
         rows.push(row);
       }
     } else {
       const desc = [it.master_name || it.description, it.size, it.specification].filter(Boolean).join(' / ');
       const rate = isFree ? 0 : (descMap.get(String(it.description || '').toLowerCase().trim()) || 0);
-      rows.push({ sn: ++sn, code: it.item_code || '', desc, qty: (+it.quantity || 0), unit: it.unit || '', type: t, rate, amt: rate * (+it.quantity || 0) });
+      rows.push({ sn: ++sn, code: it.item_code || '', desc, qty: (+it.quantity || 0), poQty: null, unit: it.unit || '', type: t, rate, amt: rate * (+it.quantity || 0) });
     }
   }
   total = rows.reduce((s, r) => s + (+r.amt || 0), 0);
@@ -3152,17 +3152,17 @@ router.get('/indents/:id/billable-print', (req, res) => {
   </div>
   ${bb && bb.billing_address ? `<div class="box"><b>Client Address:</b> ${esc(bb.billing_address)}${bb.gstin ? ` &nbsp; <b>GSTIN:</b> ${esc(bb.gstin)}` : ''}</div>` : ''}
   <table>
-    <thead><tr><th style="width:32px">SN</th><th>BOQ Description</th><th class="r" style="width:70px">Indent Qty</th><th style="width:50px">Unit</th><th class="r" style="width:90px">Sale Rate ₹</th><th class="r" style="width:110px">Billable ₹</th></tr></thead>
+    <thead><tr><th style="width:32px">SN</th><th>BOQ Description</th><th class="r" style="width:66px">PO Item Qty</th><th class="r" style="width:66px">Billable Qty</th><th style="width:50px">Unit</th><th class="r" style="width:90px">Sale Rate ₹</th><th class="r" style="width:110px">Billable ₹</th></tr></thead>
     <tbody>
-    ${rows.map(r => `<tr><td>${r.sn}</td><td>${r.code ? `<span style="color:#888;font-family:monospace">[${esc(r.code)}]</span> ` : ''}${esc(r.desc)}${(r.type === 'FOC' || r.type === 'RGP') ? ` <span style="color:#9a8;font-size:9px">(${r.type} — free)</span>` : ''}</td><td class="r">${inr(r.qty)}</td><td>${esc(r.unit)}</td><td class="r">${r.rate > 0 ? inr(r.rate) : '—'}</td><td class="r">${r.amt > 0 ? inr(r.amt) : '—'}</td></tr>`).join('')}
+    ${rows.map(r => { const diff = r.poQty != null && +r.poQty !== +r.qty; return `<tr><td>${r.sn}</td><td>${r.code ? `<span style="color:#888;font-family:monospace">[${esc(r.code)}]</span> ` : ''}${esc(r.desc)}${(r.type === 'FOC' || r.type === 'RGP') ? ` <span style="color:#9a8;font-size:9px">(${r.type} — free)</span>` : ''}</td><td class="r">${r.poQty != null ? inr(r.poQty) : '—'}</td><td class="r"${diff ? ' style="color:#b00"' : ''}>${inr(r.qty)}</td><td>${esc(r.unit)}</td><td class="r">${r.rate > 0 ? inr(r.rate) : '—'}</td><td class="r">${r.amt > 0 ? inr(r.amt) : '—'}</td></tr>`; }).join('')}
     </tbody>
     <tfoot>
-      <tr><td colspan="5" class="r">Total Billable (Sale value)</td><td class="r">₹ ${inr(total)}</td></tr>
-      <tr><td colspan="5" class="r">GST @18%</td><td class="r">₹ ${inr(gst)}</td></tr>
-      <tr><td colspan="5" class="r">Grand Total (incl GST)</td><td class="r">₹ ${inr(total + gst)}</td></tr>
+      <tr><td colspan="6" class="r">Total Billable (Sale value)</td><td class="r">₹ ${inr(total)}</td></tr>
+      <tr><td colspan="6" class="r">GST @18%</td><td class="r">₹ ${inr(gst)}</td></tr>
+      <tr><td colspan="6" class="r">Grand Total (incl GST)</td><td class="r">₹ ${inr(total + gst)}</td></tr>
     </tfoot>
   </table>
-  <p style="font-size:10px;color:#888;margin-top:10px">Billable = BOQ sale rate × indent qty, from the order's priced BOQ (po_items). For internal estimation / audit — not a tax invoice.</p>
+  <p style="font-size:10px;color:#888;margin-top:10px"><b>PO Item Qty</b> = full client-BOQ quantity for the line (po_items). <b>Billable Qty</b> = chargeable indent qty actually billed (FOC / RGP / free accessories excluded) — shown in red when it differs from the PO item qty. Billable ₹ = BOQ sale rate × billable qty. For internal estimation / audit — not a tax invoice.</p>
   </body></html>`;
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(Buffer.from(html, 'utf8'));
