@@ -434,6 +434,7 @@ function computeCmdDetail(db, daysRaw) {
   const pvsRows = (safeAll(db, `
     SELECT vp.id, vp.po_number, vp.total_amount AS po_cost,
            COALESCE(vp.po_date, vp.created_at) AS po_date,
+           vp.indent_id AS indent_id,
            v.name AS vendor_name, i.indent_number, i.site_name,
            COALESCE(SUM(CASE WHEN dn.document_type='sales_bill'
                              THEN dn.grand_total_amount ELSE 0 END), 0) AS sb_generated,
@@ -455,6 +456,7 @@ function computeCmdDetail(db, daysRaw) {
     const gap = sale - cost;
     return {
       po_id: r.id, po_number: r.po_number, po_date: r.po_date,
+      indent_id: r.indent_id || null,
       vendor: r.vendor_name || '—', indent_number: r.indent_number || null,
       site: r.site_name || '—',
       po_cost: cost, sales_bill: sale, gap,

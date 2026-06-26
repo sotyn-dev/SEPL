@@ -281,6 +281,20 @@ export default function DashboardWarRoom() {
     finally { setApprBusy(null); }
   };
 
+  // Open the item-wise BILLABLE (budget/sale) statement for an indent — the
+  // same auth-protected HTML print the Procurement page serves, fetched as a
+  // blob so the Bearer token rides along (a plain link would 401).
+  const openBillablePrint = async (indentId) => {
+    if (!indentId) return;
+    try {
+      const r = await api.get(`/procurement/indents/${indentId}/billable-print`, { responseType: 'arraybuffer' });
+      const blob = new Blob([r.data], { type: 'text/html;charset=utf-8' });
+      window.open(URL.createObjectURL(blob), '_blank');
+    } catch {
+      toast.error('Could not open the billable statement');
+    }
+  };
+
   const load = async (d = days) => {
     setLoading(true);
     try { setData((await api.get(`/dashboards/cmd-detail?days=${d}`)).data); }
@@ -514,13 +528,13 @@ export default function DashboardWarRoom() {
               <div style={cardStyle}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                   <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
-                    {['PO Number', 'Vendor', 'Site', 'PO cost', 'Sales Bill', 'Gap', 'Status'].map((h, hi) =>
+                    {['PO Number', 'Vendor', 'Site', 'PO cost', 'Sales Bill', 'Gap', 'PDF', 'Status'].map((h, hi) =>
                       <th key={h} style={{ textAlign: hi >= 3 && hi <= 5 ? 'right' : 'left', fontSize: 11, padding: '10px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.5px' }}>{h}</th>
                     )}
                   </tr></thead>
                   <tbody>
                     {pvs.rows.length === 0 ? (
-                      <tr><td colSpan="7" style={{ textAlign: 'center', padding: 16, color: C.ink2 }}>No Vendor POs in this window.</td></tr>
+                      <tr><td colSpan="8" style={{ textAlign: 'center', padding: 16, color: C.ink2 }}>No Vendor POs in this window.</td></tr>
                     ) : pvs.rows.map((r, i) => (
                       <tr key={r.po_id} style={{ borderBottom: i === pvs.rows.length - 1 ? 'none' : `1px solid ${C.line}` }}>
                         <td style={{ padding: '11px 8px', fontFamily: 'monospace' }}>{r.po_number}{r.indent_number ? <span style={{ color: C.ink2, fontSize: 10.5 }}> · {r.indent_number}</span> : null}</td>
@@ -531,6 +545,20 @@ export default function DashboardWarRoom() {
                         <td style={{ padding: '11px 8px', textAlign: 'right', fontWeight: 600, color: r.gap >= 0 ? C.green : C.red }}>
                           {fmtINR(r.gap)}
                           {r.margin_pct != null && <span style={{ display: 'block', fontSize: 10, fontWeight: 400, color: C.ink2 }}>{r.margin_pct}%</span>}
+                        </td>
+                        {/* PO PDF (vendor PO print) + Budget PDF (item-wise Billable
+                            statement) — the billable PDF moved here from the Indent
+                            list (mam 2026-06-26). */}
+                        <td style={{ padding: '11px 8px', whiteSpace: 'nowrap' }}>
+                          {r.po_id ? (
+                            <a href={`/vendor-po/${r.po_id}/print`} target="_blank" rel="noreferrer"
+                               style={{ color: C.blue, fontSize: 11.5, fontWeight: 600, textDecoration: 'none' }}>📄 PO</a>
+                          ) : <span style={{ color: C.ink2 }}>—</span>}
+                          {r.indent_id && (
+                            <button type="button" onClick={() => openBillablePrint(r.indent_id)}
+                              title="Item-wise Billable (budget) statement"
+                              style={{ marginLeft: 10, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: C.violet, fontSize: 11.5, fontWeight: 600 }}>📄 Budget</button>
+                          )}
                         </td>
                         <td style={{ padding: '11px 8px' }}><span style={badge(r.billed ? 'green' : 'amber')}>{r.billed ? 'BILLED' : 'NOT BILLED'}</span></td>
                       </tr>
