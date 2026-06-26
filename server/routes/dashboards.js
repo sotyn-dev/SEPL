@@ -35,7 +35,10 @@ router.get('/pending-approvals', (req, res) => {
       count: safe("SELECT COUNT(*) c FROM vendor_pos WHERE po_approval IN ('pending_l1','pending_l2')"),
       link: '/procurement?tab=vendorpo' },
     { key: 'payment', label: 'Payment Approval', icon: '💸',
-      count: safe("SELECT COUNT(*) c FROM payment_requests WHERE status NOT IN ('final_approved','rejected')"),
+      // Director's inbox shows ONLY what is pending at L3 (MD) — current_step=3
+      // (mam 2026-06-26). The full Payment Required module still shows every
+      // stage; this card is just the MD's own queue.
+      count: safe("SELECT COUNT(*) c FROM payment_requests WHERE current_step=3 AND status NOT IN ('final_approved','rejected')"),
       link: '/payment-required' },
     { key: 'dpr', label: 'DPR Approval', icon: '📝',
       count: safe("SELECT COUNT(*) c FROM dpr WHERE approval_status='pending'"),
@@ -63,15 +66,24 @@ router.get('/pending-approvals/:key', (req, res) => {
         .map(r => ({ ...r, key: 'indents', link: `/procurement?tab=indents&approve=${r.id}` }));
       break;
     case 'vendor_po':
+      // Carry a `pdf` link (the Vendor PO print) so the inbox can show the PO
+      // before sign-off, and point Open at the pending-approval sub-tab so the
+      // actual PO approval screen opens (mam 2026-06-26).
       items = all(`SELECT vp.id, vp.po_number AS title, COALESCE(v.name,'—') AS subtitle, vp.po_approval AS meta, vp.total_amount AS amount
                      FROM vendor_pos vp LEFT JOIN vendors v ON v.id=vp.vendor_id
                      WHERE vp.po_approval IN ('pending_l1','pending_l2') ORDER BY vp.created_at DESC LIMIT 200`)
-        .map(r => ({ ...r, key: 'vendor_po', link: '/procurement?tab=vendorpo' }));
+        .map(r => ({ ...r, key: 'vendor_po', link: '/procurement?tab=vendorpo&subtab=pending', pdf: `/vendor-po/${r.id}/print` }));
       break;
     case 'payment':
+      // Director's queue = ONLY items pending at L3 (current_step=3), each with
+      // its proof attachment so it can be ticked + bulk-approved here (mam
+      // 2026-06-26). Amount shows the latest approver-agreed figure.
       items = all(`SELECT id, COALESCE(NULLIF(vendor_name,''), employee_name, '—') AS title,
-                          COALESCE(NULLIF(purpose,''), category, '') AS subtitle, status AS meta, amount
-                     FROM payment_requests WHERE status NOT IN ('final_approved','rejected')
+                          COALESCE(NULLIF(purpose,''), category, '') AS subtitle,
+                          'L3 · MD' AS meta, COALESCE(approved_amount, amount) AS amount,
+                          NULLIF(attachment_link,'') AS proof, request_no
+                     FROM payment_requests
+                     WHERE current_step=3 AND status NOT IN ('final_approved','rejected')
                      ORDER BY created_at DESC LIMIT 200`)
         .map(r => ({ ...r, key: 'payment', link: `/payment-required?view=${r.id}` }));
       break;

@@ -247,6 +247,8 @@ export default function DashboardWarRoom() {
   const [apprItems, setApprItems] = useState({});          // key -> items[]
   const [apprLoading, setApprLoading] = useState(false);
   const [apprBusy, setApprBusy] = useState(null);          // id being approved
+  const [apprSelected, setApprSelected] = useState(() => new Set()); // payment ids ticked for bulk
+  const [bulkBusy, setBulkBusy] = useState(false);         // bulk-approve in flight
   const navigate = useNavigate();
   const reloadApprovalCounts = () => api.get('/dashboards/pending-approvals').then(r => setApprovals(r.data)).catch(() => {});
   useEffect(() => { reloadApprovalCounts(); }, []);
@@ -254,6 +256,7 @@ export default function DashboardWarRoom() {
   // Open/close a card's inline item list (mam 2026-06-23: "show here").
   const toggleApprovalList = async (key, count) => {
     if (!count) return;
+    setApprSelected(new Set());                 // reset bulk ticks when switching cards
     if (apprExpanded === key) { setApprExpanded(null); return; }
     setApprExpanded(key); setApprLoading(true);
     try { const r = await api.get(`/dashboards/pending-approvals/${key}`); setApprItems(p => ({ ...p, [key]: r.data.items || [] })); }
@@ -273,12 +276,31 @@ export default function DashboardWarRoom() {
       if (key === 'vendor_po') await api.post(`/dashboards/approve/${key}/${id}`);
       else if (key === 'dpr') await api.put(`/dpr/${id}/approve`);
       else if (key === 'delegation') await api.post(`/delegations/${id}/approve`);
+      else if (key === 'payment') await api.put(`/payment-required/${id}/approve`); // L3 sign-off
       else { navigate(`/payment-required`); return; }
       toast.success('Approved ✓');
       setApprItems(p => ({ ...p, [key]: (p[key] || []).filter(it => it.id !== id) }));
+      setApprSelected(prev => { const n = new Set(prev); n.delete(id); return n; });
       reloadApprovalCounts();
     } catch (e) { toast.error(e.response?.data?.error || 'Could not approve — open the module to act'); }
     finally { setApprBusy(null); }
+  };
+
+  // Bulk-approve the ticked Payment (L3) requests in one call — reuses the
+  // Payment module's own /bulk-approve (per-step gated; skips any not at L3).
+  const bulkApprovePayments = async () => {
+    const ids = [...apprSelected];
+    if (!ids.length) return;
+    setBulkBusy(true);
+    try {
+      const r = await api.post('/payment-required/bulk-approve', { ids });
+      toast.success(r.data?.message || `Approved ${ids.length}`);
+      const okIds = new Set(r.data?.approved || ids);
+      setApprItems(p => ({ ...p, payment: (p.payment || []).filter(it => !okIds.has(it.id)) }));
+      setApprSelected(new Set());
+      reloadApprovalCounts();
+    } catch (e) { toast.error(e.response?.data?.error || 'Bulk approve failed'); }
+    finally { setBulkBusy(false); }
   };
 
   // Open the item-wise BILLABLE (budget/sale) statement for an indent — the
@@ -1010,6 +1032,24 @@ export default function DashboardWarRoom() {
                 <span>{approvals.items.find(i => i.key === apprExpanded)?.label} — pending items</span>
                 <span onClick={() => navigate(approvals.items.find(i => i.key === apprExpanded)?.link || '/')} style={{ fontSize: 11, color: '#E5484D', cursor: 'pointer' }}>open full module →</span>
               </div>
+
+              {/* Bulk-approve bar — Payment L3 only (mam 2026-06-26: tick-tick approve) */}
+              {apprExpanded === 'payment' && (apprItems.payment || []).length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px', background: '#fbfbf9', borderBottom: '1px solid #eee', fontSize: 12 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: C.ink2 }}>
+                    <input type="checkbox"
+                      checked={apprSelected.size > 0 && apprSelected.size === (apprItems.payment || []).length}
+                      onChange={e => setApprSelected(e.target.checked ? new Set((apprItems.payment || []).map(i => i.id)) : new Set())} />
+                    Select all
+                  </label>
+                  <span style={{ color: C.ink2 }}>{apprSelected.size} selected</span>
+                  <button disabled={!apprSelected.size || bulkBusy} onClick={bulkApprovePayments}
+                    style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 700, color: '#fff', background: (!apprSelected.size || bulkBusy) ? '#9aa' : '#46A758', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: (!apprSelected.size || bulkBusy) ? 'default' : 'pointer', whiteSpace: 'nowrap' }}>
+                    {bulkBusy ? 'Approving…' : `✓ Approve selected (${apprSelected.size})`}
+                  </button>
+                </div>
+              )}
+
               {apprLoading ? (
                 <div style={{ padding: 20, color: C.ink2, fontSize: 12 }}>Loading…</div>
               ) : (apprItems[apprExpanded] || []).length === 0 ? (
@@ -1018,6 +1058,11 @@ export default function DashboardWarRoom() {
                 <div style={{ maxHeight: 440, overflowY: 'auto' }}>
                   {(apprItems[apprExpanded] || []).map(item => (
                     <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: '1px solid #f3f3f3' }}>
+                      {item.key === 'payment' && (
+                        <input type="checkbox" checked={apprSelected.has(item.id)}
+                          onChange={e => setApprSelected(prev => { const n = new Set(prev); if (e.target.checked) n.add(item.id); else n.delete(item.id); return n; })}
+                          style={{ cursor: 'pointer', width: 16, height: 16, flexShrink: 0 }} />
+                      )}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{item.title}</div>
                         <div style={{ fontSize: 11, color: C.ink2 }}>
@@ -1025,13 +1070,18 @@ export default function DashboardWarRoom() {
                           {item.meta ? <span style={{ marginLeft: 6, background: '#f1eee9', padding: '1px 6px', borderRadius: 8 }}>{item.meta}</span> : null}
                         </div>
                       </div>
-                      <button onClick={() => window.open(item.link, '_blank', 'noopener,noreferrer')} title="Open the actual record in a new tab to verify proof" style={{ fontSize: 11, color: '#4A4F57', background: 'none', border: '1px solid #ddd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer' }}>Open ↗</button>
-                      {item.key !== 'payment' && (
-                        <button onClick={() => approveOne(item.key, item.id)} disabled={apprBusy === item.id}
-                          style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: apprBusy === item.id ? '#9aa' : '#46A758', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                          {apprBusy === item.id ? '…' : (item.key === 'indents' ? 'Review & Approve →' : 'Approve')}
-                        </button>
+                      {/* Vendor PO: PO PDF · Payment: proof attachment */}
+                      {item.pdf && (
+                        <a href={item.pdf} target="_blank" rel="noreferrer" title="Open the Vendor PO print" style={{ fontSize: 11, color: C.blue, fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}>📄 PO</a>
                       )}
+                      {item.proof && (
+                        <a href={item.proof} target="_blank" rel="noreferrer" title="Open the proof / attachment" style={{ fontSize: 11, color: C.violet, fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}>📎 Proof</a>
+                      )}
+                      <button onClick={() => window.open(item.link, '_blank', 'noopener,noreferrer')} title="Open the actual record to verify / approve" style={{ fontSize: 11, color: '#4A4F57', background: 'none', border: '1px solid #ddd', borderRadius: 6, padding: '5px 10px', cursor: 'pointer' }}>Open ↗</button>
+                      <button onClick={() => approveOne(item.key, item.id)} disabled={apprBusy === item.id}
+                        style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: apprBusy === item.id ? '#9aa' : '#46A758', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        {apprBusy === item.id ? '…' : (item.key === 'indents' ? 'Review & Approve →' : 'Approve')}
+                      </button>
                     </div>
                   ))}
                 </div>
