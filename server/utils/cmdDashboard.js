@@ -451,29 +451,29 @@ function computeCmdDetail(db, daysRaw) {
      LIMIT 200
   `, from);
 
-  // Expected client SALE per PO = its indent's Sales Bill BUDGET =
-  // Σ (Vendor-PO item qty × BOQ sale rate) over the indent's PO-type lines
-  // (mam 2026-06-26: "Vendor PO qty (item only po) * billable rate"). Use the
-  // indent_items.quantity — the qty actually on the Vendor PO — NOT the full
-  // client-BOQ po_items.quantity (which over-states the budget). The billable
-  // (sale) rate is the linked po_items.rate. FOC / non-PO sub-items are
-  // excluded (item_type='PO' only); each PO sub-item contributes its own
-  // procured qty × sale rate, so summing per indent_item is correct.
-  const budgetByIndent = new Map();
-  const indentIds = [...new Set(pvsRaw.map(r => r.indent_id).filter(Boolean))];
-  if (indentIds.length) {
-    const ph = indentIds.map(() => '?').join(',');
+  // Expected client SALE for THIS Vendor PO = Σ (its own purchased line qty ×
+  // BOQ sale rate) (mam 2026-06-26: "Vendor PO qty (item only po) * billable
+  // rate"). Authoritative source = vendor_po_items — the lines actually on
+  // this PO — joined to the indent line's priced BOQ po_item for the SALE
+  // rate. Keyed by vendor_po_id so each PO gets ONLY its own slice: one indent
+  // split across several Vendor POs no longer repeats (and double-counts in the
+  // totals) the whole-indent budget on every row. vpi.quantity = the qty on
+  // the PO; poi.rate = the client BOQ sale rate; PO-type lines only.
+  const budgetByPo = new Map();   // vendor_po_id → this PO's sales budget
+  const poIds = pvsRaw.map(r => r.id);
+  if (poIds.length) {
+    const ph = poIds.map(() => '?').join(',');
     for (const b of safeAll(db, `
-      SELECT ii.indent_id AS indent_id,
-             SUM(COALESCE(ii.quantity, 0) * COALESCE(poi.rate, 0)) AS budget
-        FROM indent_items ii
-        JOIN po_items poi ON poi.id = ii.po_item_id
-       WHERE ii.indent_id IN (${ph})
-         AND ii.po_item_id IS NOT NULL
+      SELECT vpi.vendor_po_id AS po_id,
+             SUM(COALESCE(vpi.quantity, 0) * COALESCE(poi.rate, 0)) AS budget
+        FROM vendor_po_items vpi
+        JOIN indent_items ii ON ii.id = vpi.indent_item_id
+        JOIN po_items poi    ON poi.id = ii.po_item_id
+       WHERE vpi.vendor_po_id IN (${ph})
          AND UPPER(COALESCE(ii.item_type, '')) = 'PO'
-       GROUP BY ii.indent_id
-    `, ...indentIds)) {
-      budgetByIndent.set(b.indent_id, num(b.budget));
+       GROUP BY vpi.vendor_po_id
+    `, ...poIds)) {
+      budgetByPo.set(b.po_id, num(b.budget));
     }
   }
 
@@ -482,8 +482,9 @@ function computeCmdDetail(db, daysRaw) {
     // Actual Dispatch sales bill (generated value, else uploaded-bill value) —
     // drives the BILLED / NOT BILLED status only.
     const actualSale = num(r.sb_generated) > 0 ? num(r.sb_generated) : num(r.sb_uploaded);
-    // Displayed Sales Bill amount = full-BOQ Sales Bill budget (po_qty × rate).
-    const expected = budgetByIndent.get(r.indent_id) || 0;
+    // Displayed Sales Bill amount = THIS Vendor PO's own sales budget
+    // (its purchased line qty × BOQ sale rate), keyed by vendor_po_id.
+    const expected = budgetByPo.get(r.id) || 0;
     const gap = expected - cost;
     return {
       po_id: r.id, po_number: r.po_number, po_date: r.po_date,
