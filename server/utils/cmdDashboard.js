@@ -431,7 +431,7 @@ function computeCmdDetail(db, daysRaw) {
   // Same "sales-billed" definition the Dispatch tab uses (doc='sales_bill' OR
   // sales_bill_number present). Gap = sale − cost (the margin recovered so far;
   // negative or zero where the PO is not yet sales-billed).
-  const pvsRows = (safeAll(db, `
+  const pvsRaw = safeAll(db, `
     SELECT vp.id, vp.po_number, vp.total_amount AS po_cost,
            COALESCE(vp.po_date, vp.created_at) AS po_date,
            vp.indent_id AS indent_id,
@@ -449,19 +449,48 @@ function computeCmdDetail(db, daysRaw) {
      GROUP BY vp.id
      ORDER BY date(COALESCE(vp.po_date, vp.created_at)) DESC, vp.id DESC
      LIMIT 200
-  `, from)).map(r => {
+  `, from);
+
+  // Expected client SALE per PO = its indent's Billable (BOQ sale rate ×
+  // chargeable indent qty) — the budget figure mam wants in the Sales Bill
+  // column even before an actual bill is raised (mam 2026-06-26: "sales bill
+  // total amount need to show here"). Only PO-type lines bill (FOC / RGP / free
+  // accessories excluded), matching the Billable statement's chargeable basis.
+  // One batched query over the indents in view; non-PO-linked billable lines
+  // (rare) aren't included, so it can read slightly under the Budget PDF total.
+  const billableByIndent = new Map();
+  const indentIds = [...new Set(pvsRaw.map(r => r.indent_id).filter(Boolean))];
+  if (indentIds.length) {
+    const ph = indentIds.map(() => '?').join(',');
+    for (const b of safeAll(db, `
+      SELECT ii.indent_id AS indent_id,
+             SUM(CASE WHEN ii.po_item_id IS NOT NULL AND UPPER(COALESCE(ii.item_type, '')) = 'PO'
+                      THEN COALESCE(ii.quantity, 0) * COALESCE(poi.rate, 0) ELSE 0 END) AS billable
+        FROM indent_items ii
+        LEFT JOIN po_items poi ON poi.id = ii.po_item_id
+       WHERE ii.indent_id IN (${ph})
+       GROUP BY ii.indent_id
+    `, ...indentIds)) {
+      billableByIndent.set(b.indent_id, num(b.billable));
+    }
+  }
+
+  const pvsRows = pvsRaw.map(r => {
     const cost = num(r.po_cost);
-    // Prefer the generated Sales Bill value; fall back to an uploaded-only bill.
-    const sale = num(r.sb_generated) > 0 ? num(r.sb_generated) : num(r.sb_uploaded);
-    const gap = sale - cost;
+    // Actual Dispatch sales bill (generated value, else uploaded-bill value) —
+    // drives the BILLED / NOT BILLED status only.
+    const actualSale = num(r.sb_generated) > 0 ? num(r.sb_generated) : num(r.sb_uploaded);
+    // Displayed Sales Bill amount = expected Billable (budget) per mam's choice.
+    const expected = billableByIndent.get(r.indent_id) || 0;
+    const gap = expected - cost;
     return {
       po_id: r.id, po_number: r.po_number, po_date: r.po_date,
       indent_id: r.indent_id || null,
       vendor: r.vendor_name || '—', indent_number: r.indent_number || null,
       site: r.site_name || '—',
-      po_cost: cost, sales_bill: sale, gap,
+      po_cost: cost, sales_bill: expected, gap,
       margin_pct: cost > 0 ? Math.round((gap / cost) * 1000) / 10 : null,
-      billed: sale > 0,
+      billed: actualSale > 0,
     };
   });
   const pvsTotals = pvsRows.reduce((t, r) => {
