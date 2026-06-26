@@ -42,7 +42,14 @@ function authMiddleware(req, res, next) {
     // (7 days) expires. The client swaps the token in via the response header.
     try {
       const now = Math.floor(Date.now() / 1000);
-      const REFRESH_WHEN_REMAINING_UNDER = 6 * 24 * 60 * 60; // < 6 days left → token is >1 day old
+      // Roll the token forward whenever it's more than a day old, so any active
+      // user's token always sits ~90 days from expiry and a logout effectively
+      // never happens (mam: "automatically logout — very bad"). 2026-06-26: a
+      // synchronized cohort hit the old 7-day cliff together (60% logged out at
+      // once) because the OOM crash-loop kept dropping the refresh response —
+      // the cliff is now 90 days, so a missed refresh is survivable, not fatal.
+      const TOKEN_LIFETIME_DAYS = 90;
+      const REFRESH_WHEN_REMAINING_UNDER = (TOKEN_LIFETIME_DAYS - 1) * 24 * 60 * 60; // >1 day old → roll
       if (decoded.exp && (decoded.exp - now) < REFRESH_WHEN_REMAINING_UNDER) {
         const fresh = generateToken(decoded);
         res.setHeader('X-Refresh-Token', fresh);
@@ -159,7 +166,7 @@ function generateToken(user) {
   return jwt.sign(
     { id: user.id, email: user.email, role: user.role, name: user.name },
     getSecret(),
-    { expiresIn: '7d' }   // base lifetime; slides forward on activity (see authMiddleware)
+    { expiresIn: '90d' }   // base lifetime; slides forward on activity (see authMiddleware)
   );
 }
 
