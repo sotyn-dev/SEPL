@@ -1,0 +1,1 @@
+import{E as d}from"./index-Dy4lr9Z8.js";function f(t,n,i="tab"){let s,e,a;Array.isArray(t)?(s=t,e=n,a=i):(s=null,e=t,a=n||"tab");const[o,b]=d(),r=o.get(a);return[(s?s.includes(r):!!r)?r:e,c=>{const l=new URLSearchParams(o),u=s?s.includes(c):!0;c===e||!u?l.delete(a):l.set(a,c),b(l,{replace:!1})}]}export{f as u};

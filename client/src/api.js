@@ -15,6 +15,18 @@ api.interceptors.request.use(config => {
   return config;
 });
 
+// When a normal data request rejects the CURRENT token, don't trust that one
+// endpoint to end the session — but re-validate immediately via /auth/me
+// (debounced) so a genuinely dead token logs out cleanly NOW instead of the
+// user seeing a stray "Invalid token" toast and waiting for the 2-min poll.
+let _revalidateAt = 0;
+function revalidateSession() {
+  const now = Date.now();
+  if (now - _revalidateAt < 5000) return;   // debounce — at most once / 5s
+  _revalidateAt = now;
+  api.get('/auth/me').catch(() => {});       // its own 401 → the handler below logs out
+}
+
 api.interceptors.response.use(
   res => {
     // Sliding session: the server hands back a fresh token once the current
@@ -54,6 +66,15 @@ api.interceptors.response.use(
         // from a background poll on /login would otherwise loop the page.
         if (!window.location.pathname.startsWith('/login')) {
           window.location.href = '/login';
+        }
+      } else if (!isSessionCheck && used && used === current) {
+        // A data endpoint rejected the current token. Re-validate the session
+        // now (clean logout if truly dead, ignored if a blip), and don't let
+        // the raw "Invalid token" text surface as a page error toast — pages
+        // fall back to their own friendly message instead (mam 2026-06-25).
+        revalidateSession();
+        if (err.response.data && /token/i.test(err.response.data.error || '')) {
+          err.response.data = { ...err.response.data, error: null };
         }
       }
     }
