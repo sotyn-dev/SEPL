@@ -452,23 +452,28 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
         (raciByRec[r.record_id] = raciByRec[r.record_id] || {})[r.step_key] = r;
       }
     }
+    // Module-wide default RACI (record_id 0) — applies where a record has no own
+    // assignment, so scoring matches the board's whole-module RACI (mam 2026-06-27).
+    const md = {};
+    for (const r of safeAll(db, `SELECT * FROM raci_assignment WHERE module=? AND record_id=0`, key)) md[r.step_key] = r;
     for (const rec of recs) {
       const recRaci = raciByRec[rec.id] || {};
       let prev = tsMs(rec.created_at);
       for (const s of def.steps) {
         const cfg = recRaci[s.key] || {};
+        const m = md[s.key] || {};
         // Completion = manual "mark done" stamp, else the module's native date.
         const stampRaw = (cfg && cfg.done_at) || (rec.stamps ? rec.stamps[s.key] : null) || null;
         if (!stampRaw) continue;                       // not completed → don't advance prev
         const atMs = tsMs(stampRaw);
         let elapsed = null;
         if (atMs != null && prev != null) { elapsed = Math.max(0, (atMs - prev) / HOUR); prev = atMs; }
-        const responsibleId = cfg.responsible_id || (rec.step_owners && rec.step_owners[s.key]) || rec.owner_id || null;
+        const responsibleId = cfg.responsible_id || m.responsible_id || (rec.step_owners && rec.step_owners[s.key]) || rec.owner_id || null;
         if (responsibleId !== userId) continue;        // not this person's step
         const dateStr = String(stampRaw).slice(0, 10);
         if (dateStr < sinceDate || dateStr > untilDate) continue; // closed outside the week
         stepsClosed += 1;
-        const sla = cfg.sla_hours != null ? +cfg.sla_hours : (s.default_sla != null ? +s.default_sla : null);
+        const sla = cfg.sla_hours != null ? +cfg.sla_hours : (m.sla_hours != null ? +m.sla_hours : (s.default_sla != null ? +s.default_sla : null));
         if (sla != null && elapsed != null) { slaJudged += 1; if (elapsed <= sla) onTime += 1; }
       }
     }

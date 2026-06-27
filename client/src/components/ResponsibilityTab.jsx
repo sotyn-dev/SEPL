@@ -107,6 +107,14 @@ export default function ResponsibilityTab({ module, title }) {
           <p className="text-[11px] text-gray-500">Assign R / A / C / I + target time per step on each record. Red = ran past the target (late).</p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Set RACI ONCE for the whole module (default for every record, mam
+              2026-06-27: "whole module raci one"). Each record inherits it unless
+              it has its own override. Stored under record_id 0. */}
+          <button
+            onClick={() => openEditor({ id: 0, title: 'Whole module — default for all records' })}
+            className="text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded px-2.5 h-8">
+            ⚙ Set RACI for whole module
+          </button>
           <input className="input text-xs h-8 w-44" placeholder="Search…" value={q} onChange={e => setQ(e.target.value)} />
           <div className="flex rounded-lg overflow-hidden border border-gray-300 text-xs">
             <button onClick={() => setView('grid')} className={`px-3 py-1.5 ${view === 'grid' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>Per record</button>

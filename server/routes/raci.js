@@ -162,6 +162,11 @@ function buildBoard(db, moduleKey) {
   if (!def) return null;
   const recs = def.rows(db) || [];
   const raci = getRaciForRecords(db, moduleKey, recs.map(r => r.id));
+  // Module-wide DEFAULT RACI (stored under the sentinel record_id = 0). It fills
+  // in any step a record hasn't been given its own R/A/C/I/SLA for, so mam can
+  // set the module's RACI once instead of on all N records (mam 2026-06-27:
+  // "whole module raci one"). A per-record assignment always overrides it.
+  const md = getRecordRaci(db, moduleKey, 0);
 
   const nameCache = {};
   const nm = (id) => { if (!id) return null; if (!(id in nameCache)) nameCache[id] = db.prepare('SELECT name FROM users WHERE id=?').get(id)?.name || null; return nameCache[id]; };
@@ -188,7 +193,9 @@ function buildBoard(db, moduleKey) {
     let prev = tsMs(rec.created_at);
     const steps = def.steps.map(s => {
       const cfg = recRaci[s.key] || {};
-      const sla = cfg.sla_hours != null ? +cfg.sla_hours : (s.default_sla != null ? +s.default_sla : null);
+      const m = md[s.key] || {};        // module-wide default for this step
+      const sla = cfg.sla_hours != null ? +cfg.sla_hours
+        : (m.sla_hours != null ? +m.sla_hours : (s.default_sla != null ? +s.default_sla : null));
       const stampRaw = stampOf(s.key);
       const atMs = stampRaw ? tsMs(stampRaw) : null;
       const isCurrent = !atMs && s.key === currentKey;
@@ -196,7 +203,11 @@ function buildBoard(db, moduleKey) {
       if (atMs != null && prev != null) { elapsed = Math.max(0, (atMs - prev) / HOUR); prev = atMs; }
       else if (isCurrent && prev != null) { elapsed = Math.max(0, (now - prev) / HOUR); }
       const late = (elapsed != null && sla != null && elapsed > sla) ? elapsed - sla : 0;
-      const responsible_id = cfg.responsible_id || (rec.step_owners && rec.step_owners[s.key]) || rec.owner_id || null;
+      // Precedence: per-record explicit → module default → step owner → record owner.
+      const responsible_id = cfg.responsible_id || m.responsible_id || (rec.step_owners && rec.step_owners[s.key]) || rec.owner_id || null;
+      const accountable_id = cfg.accountable_id || m.accountable_id || null;
+      const consulted_id = cfg.consulted_id || m.consulted_id || null;
+      const informed_id = cfg.informed_id || m.informed_id || null;
       const responsible = nm(responsible_id);
       bump(responsible, atMs != null ? elapsed : null, atMs != null ? late : 0);
       return {
@@ -206,9 +217,9 @@ function buildBoard(db, moduleKey) {
         done_at: cfg.done_at || null,
         responsible_id, responsible,
         responsible_default: !cfg.responsible_id && !!responsible_id,
-        accountable_id: cfg.accountable_id || null, accountable: nm(cfg.accountable_id),
-        consulted_id: cfg.consulted_id || null, consulted: nm(cfg.consulted_id),
-        informed_id: cfg.informed_id || null, informed: nm(cfg.informed_id),
+        accountable_id, accountable: nm(accountable_id),
+        consulted_id, consulted: nm(consulted_id),
+        informed_id, informed: nm(informed_id),
         sla_hours: sla,
         elapsed_hours: elapsed != null ? Math.round(elapsed * 10) / 10 : null,
         late_hours: late > 0 ? Math.round(late * 10) / 10 : 0,
