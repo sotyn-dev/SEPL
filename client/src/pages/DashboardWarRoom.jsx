@@ -392,6 +392,7 @@ export default function DashboardWarRoom() {
         </div>
         <div onClick={() => setTab('posales')} style={tabStyle(tab === 'posales')}>PO vs SALES BILL</div>
         <div onClick={() => setTab('hierarchy')} style={tabStyle(tab === 'hierarchy')}>HIERARCHY</div>
+        <div onClick={() => setTab('performance')} style={tabStyle(tab === 'performance')}>⚡ PERFORMANCE</div>
       </div>
 
       <main style={{ padding: 28, maxWidth: 1400, margin: '0 auto' }}>
@@ -1095,13 +1096,146 @@ export default function DashboardWarRoom() {
         {/* ============== HIERARCHY ============== */}
         {tab === 'hierarchy' && <HierarchyView />}
 
+        {/* ============== PERFORMANCE ============== */}
+        {tab === 'performance' && <PerformanceView />}
+
       </main>
     </div>
   );
 }
 
+// Consolidated PERFORMANCE scorecard (mam 2026-06-27, for the Monday management
+// review). One row per person aggregated across ALL RACI modules (CRM/Sales/
+// Solar funnels, Quotation, Indent-to-Dispatch, Cheques, Payables, Hiring),
+// scored on three EQUAL pillars — Quantity (volume of steps done), Time (% on
+// time), Quality (% of owned work completed). Reads /api/raci/performance.
+function PerformanceView() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    setLoading(true);
+    api.get('/raci/performance')
+      .then(r => setData(r.data))
+      .catch(e => setErr(e.response?.data?.error || 'Failed to load performance'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const scoreColor = (s) => s >= 75 ? C.green : s >= 50 ? C.amber : C.red;
+  const Bar = ({ v, color }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ flex: 1, height: 6, background: '#eee', borderRadius: 3, overflow: 'hidden', minWidth: 40 }}>
+        <div style={{ width: `${Math.max(0, Math.min(100, v))}%`, height: '100%', background: color }} />
+      </div>
+      <span style={{ fontSize: 11, color: C.ink2, width: 30, textAlign: 'right' }}>{v}</span>
+    </div>
+  );
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: C.ink2 }}>Loading performance…</div>;
+  if (err) return <div style={{ padding: 24, color: C.red }}>{err}</div>;
+  const people = data?.people || [];
+
+  return (
+    <>
+      <div style={{ ...sectionTitle, marginTop: 0 }}>Team Performance — Quality · Quantity · Time (all modules)</div>
+      <div style={{ ...cardStyle, marginBottom: 16, fontSize: 12, color: C.ink2, lineHeight: 1.6 }}>
+        One scorecard across every workflow (CRM / Sales / Solar funnels, Quotation, Indent-to-Dispatch, Cheques, Payables, Hiring).
+        <b> Score</b> = equal average of <b style={{ color: C.violet }}>Quantity</b> (steps completed, vs the top performer),
+        <b style={{ color: C.blue }}> Time</b> (% of steps finished on or before target), and
+        <b style={{ color: C.green }}> Quality</b> (% of the steps they own that are actually completed).
+        Assign the Responsible person + target time per step inside each module's <b>⚙ Responsible</b> tab; this rolls it all up.
+      </div>
+
+      {people.length === 0 ? (
+        <div style={{ ...cardStyle, textAlign: 'center', color: C.ink2, padding: 30 }}>
+          No performance data yet. Open any module's <b>⚙ Responsible</b> tab, assign people + target time per step, and mark steps done — they'll appear here.
+        </div>
+      ) : (
+        <div style={cardStyle}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ borderBottom: `2px solid ${C.line}` }}>
+                  {['#', 'Person', 'Score', 'Quantity', 'Time (on-time)', 'Quality', 'Done / Owned', 'Avg time', 'Late', 'Modules'].map((h, i) => (
+                    <th key={h} style={{ textAlign: i >= 3 ? 'left' : 'left', fontSize: 10.5, padding: '8px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.4px', whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {people.map((p, i) => (
+                  <tr key={p.name} style={{ borderBottom: `1px solid ${C.line}`, background: i < 3 ? '#FBFAF7' : 'transparent' }}>
+                    <td style={{ padding: '10px 8px', fontWeight: 700, color: i === 0 ? C.amber : C.ink2 }}>{i === 0 ? '🏆' : i + 1}</td>
+                    <td style={{ padding: '10px 8px', fontWeight: 600 }}>{p.name}</td>
+                    <td style={{ padding: '10px 8px' }}>
+                      <span style={{ fontSize: 20, fontWeight: 800, color: scoreColor(p.score) }}>{p.score}</span>
+                    </td>
+                    <td style={{ padding: '10px 8px', minWidth: 110 }}><Bar v={p.quantity_score} color={C.violet} /></td>
+                    <td style={{ padding: '10px 8px', minWidth: 110 }}><Bar v={p.time_score} color={C.blue} /></td>
+                    <td style={{ padding: '10px 8px', minWidth: 110 }}><Bar v={p.quality_score} color={C.green} /></td>
+                    <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}><b>{p.completed}</b> / {p.owned}</td>
+                    <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>{p.avg_hours ? (p.avg_hours < 24 ? `${p.avg_hours}h` : `${Math.round(p.avg_hours / 24)}d`) : '—'}</td>
+                    <td style={{ padding: '10px 8px', color: p.late ? C.red : C.green, fontWeight: 600 }}>{p.late || '0'}</td>
+                    <td style={{ padding: '10px 8px', color: C.ink2 }}>{p.modules}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // Org hierarchy — build the reporting structure (each user → their manager) and
-// see the whole org tree. All active users show here (mam 2026-06-27).
+// render the whole org as a top-down org chart (cards + circular photos + elbow
+// connectors). All active users show here (mam 2026-06-27).
+const orgInitials = (name = '') =>
+  (name.trim().split(/\s+/).slice(0, 2).map(w => w[0] || '').join('') || '?').toUpperCase();
+
+// Pure-CSS connector tree (::before/::after elbows) — impossible with inline
+// styles, so it's scoped under .octree. Classic nested-ul/li org-chart pattern.
+const ORG_TREE_CSS = `
+.octree { display:inline-block; padding:26px 16px 8px; }
+.octree ul { position:relative; padding-top:24px; display:flex; justify-content:center; list-style:none; margin:0; }
+.octree li { list-style:none; position:relative; padding:24px 12px 0; display:flex; flex-direction:column; align-items:center; }
+.octree li::before, .octree li::after { content:''; position:absolute; top:0; right:50%; border-top:2px solid #cdd5dd; width:50%; height:24px; }
+.octree li::after { right:auto; left:50%; border-left:2px solid #cdd5dd; }
+.octree li:only-child::before, .octree li:only-child::after { display:none; }
+.octree li:only-child { padding-top:0; }
+.octree li:first-child::before, .octree li:last-child::after { border:0 none; }
+.octree li:last-child::before { border-right:2px solid #cdd5dd; border-radius:0 6px 0 0; }
+.octree li:first-child::after { border-radius:6px 0 0 0; }
+.octree ul ul::before { content:''; position:absolute; top:0; left:50%; border-left:2px solid #cdd5dd; width:0; height:24px; }
+.octree > ul.octree-root { padding-top:0; }
+.octree > ul.octree-root > li { padding-top:0; }
+.octree > ul.octree-root > li::before, .octree > ul.octree-root > li::after { display:none; }
+`;
+
+// One org-chart card: circular photo straddling the top, ROLE (caps) + name.
+function OrgNode({ u }) {
+  const title = (u.designation || u.department || (u.role && u.role !== 'user' ? u.role : '') || '').toString();
+  return (
+    <div style={{
+      display: 'inline-flex', flexDirection: 'column', alignItems: 'center', minWidth: 150, maxWidth: 190,
+      border: '1.5px solid #c9d2da', borderRadius: 10, background: '#fff', padding: '32px 14px 12px',
+      position: 'relative', boxShadow: '0 1px 2px rgba(16,17,22,.05)',
+    }}>
+      <div style={{
+        position: 'absolute', top: -26, width: 54, height: 54, borderRadius: '50%', border: '3px solid #15B2C6',
+        background: '#eaf4f7', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: '0 1px 3px rgba(16,17,22,.14)',
+      }}>
+        {u.avatar_url
+          ? <img src={u.avatar_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          : <span style={{ fontSize: 16, fontWeight: 700, color: '#0E7C8B' }}>{orgInitials(u.name)}</span>}
+      </div>
+      {title ? <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: .4, textTransform: 'uppercase', color: '#2b3a44', textAlign: 'center', lineHeight: 1.25 }}>{title}</div> : null}
+      <div style={{ fontSize: 12.5, color: title ? '#7a8a96' : '#2b3a44', marginTop: 2, textAlign: 'center', lineHeight: 1.25 }}>{u.name}</div>
+    </div>
+  );
+}
+
 function HierarchyView() {
   const [users, setUsers] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -1116,28 +1250,49 @@ function HierarchyView() {
   };
   if (!users) return <div style={{ padding: 24, color: C.ink2 }}>Loading…</div>;
 
+  // Group children by manager. Users whose manager is missing/inactive bubble up
+  // to the top level so every active user stays visible (mam 2026-06-27).
+  const ids = new Set(users.map(u => u.id));
   const byManager = {};
-  for (const u of users) { const k = u.manager_id || 0; (byManager[k] = byManager[k] || []).push(u); }
-  const renderTree = (parentId, depth) => (byManager[parentId] || []).map(u => (
-    <div key={u.id}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', paddingLeft: 8 + depth * 22, borderBottom: '1px solid #f1f1f1' }}>
-        <span style={{ color: C.ink2 }}>{depth > 0 ? '↳' : '•'}</span>
-        <span style={{ fontWeight: 600, fontSize: 13 }}>{u.name}</span>
-        <span style={{ fontSize: 11, color: C.ink2 }}>{u.department || u.role || ''}</span>
-      </div>
-      {depth < 12 && renderTree(u.id, depth + 1)}
-    </div>
-  ));
+  for (const u of users) {
+    const k = (u.manager_id && ids.has(u.manager_id)) ? u.manager_id : 0;
+    (byManager[k] = byManager[k] || []).push(u);
+  }
   const roots = byManager[0] || [];
+  const renderNodes = (parentId, seen) => {
+    const kids = byManager[parentId] || [];
+    if (!kids.length) return null;
+    return (
+      <ul className={parentId === 0 ? 'octree-root' : undefined}>
+        {kids.map(u => {
+          if (seen.has(u.id)) return null; // cycle guard (server already blocks loops)
+          const next = new Set(seen); next.add(u.id);
+          return (
+            <li key={u.id}>
+              <OrgNode u={u} />
+              {renderNodes(u.id, next)}
+            </li>
+          );
+        })}
+      </ul>
+    );
+  };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-      {/* Org tree */}
+    <div style={{ display: 'grid', gap: 20 }}>
+      <style>{ORG_TREE_CSS}</style>
+
+      {/* Visual org chart */}
       <div style={cardStyle}>
-        <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Org chart ({users.length} users)</h2>
-        <div style={{ marginTop: 10 }}>
-          {roots.length === 0 ? <div style={{ color: C.ink2, fontSize: 12 }}>No top-level users yet — set "Reports to" on the right to build the tree.</div> : renderTree(0, 0)}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+          <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Org chart — reporting structure ({users.length} users)</h2>
+          <span style={{ fontSize: 11, color: C.ink2 }}>Photo &amp; title come from each user's profile · scroll sideways for the full tree</span>
         </div>
+        {roots.length === 0
+          ? <div style={{ color: C.ink2, fontSize: 12, marginTop: 10 }}>No users yet — set "Reports to" below to build the tree.</div>
+          : <div style={{ marginTop: 12, overflow: 'auto', paddingBottom: 8, textAlign: 'center' }}>
+              <div className="octree">{renderNodes(0, new Set())}</div>
+            </div>}
       </div>
 
       {/* Editor: each user → reports to */}
@@ -1152,7 +1307,7 @@ function HierarchyView() {
             <tbody>
               {users.map(u => (
                 <tr key={u.id} style={{ borderBottom: '1px solid #f3f3f3' }}>
-                  <td style={{ padding: '7px 8px' }}>{u.name}<span style={{ color: C.ink2, fontSize: 10.5, marginLeft: 6 }}>{u.department || u.role || ''}</span></td>
+                  <td style={{ padding: '7px 8px' }}>{u.name}<span style={{ color: C.ink2, fontSize: 10.5, marginLeft: 6 }}>{u.designation || u.department || u.role || ''}</span></td>
                   <td style={{ padding: '7px 8px' }}>
                     <select value={u.manager_id || ''} disabled={busy === u.id}
                       onChange={e => setManager(u.id, e.target.value ? +e.target.value : null)}

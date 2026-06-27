@@ -337,6 +337,143 @@ const MODULE_DEFS = {
       });
     },
   },
+
+  // ── DPR (daily report: Submit → Approve) ──────────────────────────────────
+  // High-volume daily record. Submit is owned by submitted_by (timed via
+  // submission_time); Approve is owned by approved_by but DPR has NO approval
+  // timestamp column, so Approve is timed only if someone marks it done.
+  dpr: {
+    label: 'DPR (Daily Project Report)',
+    steps: [
+      { key: 'submit', label: 'Submit' },
+      { key: 'approve', label: 'Approve' },
+    ],
+    rows(db) {
+      return safeAll(db, `
+        SELECT id, report_date, submission_time, created_at, submitted_by, approved_by,
+               approval_status, site_id
+          FROM dpr ORDER BY report_date DESC, id DESC LIMIT 500`).map(r => ({
+        id: r.id,
+        title: 'DPR ' + (r.report_date || ('#' + r.id)),
+        subtitle: 'Site #' + (r.site_id || '—'),
+        created_at: r.created_at || r.report_date,
+        owner_id: r.submitted_by || null,
+        step_owners: { submit: r.submitted_by || null, approve: r.approved_by || null },
+        stamps: { submit: r.submission_time || r.report_date || r.created_at || null, approve: null },
+        current_key: r.approval_status === 'approved' ? null : 'approve',
+      }));
+    },
+  },
+
+  // ── Sales Billing (per-bill lifecycle: Raise → Approve → Send → Paid) ──────
+  // Step times come from sales_bill_status_log (approved/sent/paid changed_at),
+  // with sent_at as a fallback for Send. Each step is owned by whoever performed
+  // it (changed_by), defaulting Raise to the bill's creator.
+  sales_billing: {
+    label: 'Sales Billing',
+    steps: [
+      { key: 'raise', label: 'Raise' },
+      { key: 'approve', label: 'Approve' },
+      { key: 'send', label: 'Send' },
+      { key: 'paid', label: 'Paid' },
+    ],
+    rows(db) {
+      const bills = safeAll(db, `
+        SELECT id, bill_number, bill_type, customer_name, project_name,
+               created_at, created_by, sent_at
+          FROM sales_bills WHERE bill_type IS NOT NULL
+         ORDER BY created_at DESC LIMIT 500`);
+      if (!bills.length) return [];
+      const ids = bills.map(b => b.id);
+      const logByBill = {};
+      for (let i = 0; i < ids.length; i += 400) {
+        const chunk = ids.slice(i, i + 400);
+        const ph = chunk.map(() => '?').join(',');
+        for (const l of safeAll(db, `
+          SELECT sales_bill_id, status, changed_by, changed_at
+            FROM sales_bill_status_log WHERE sales_bill_id IN (${ph})
+           ORDER BY changed_at ASC`, ...chunk)) {
+          (logByBill[l.sales_bill_id] = logByBill[l.sales_bill_id] || []).push(l);
+        }
+      }
+      const lastOf = (logs, st) => { let f = null; for (const l of logs) if (l.status === st) f = l; return f; };
+      return bills.map(b => {
+        const logs = logByBill[b.id] || [];
+        const apr = lastOf(logs, 'approved'), snt = lastOf(logs, 'sent'), pad = lastOf(logs, 'paid');
+        const stamps = {
+          raise: b.created_at || null,
+          approve: apr ? apr.changed_at : null,
+          send: b.sent_at || (snt ? snt.changed_at : null) || null,
+          paid: pad ? pad.changed_at : null,
+        };
+        const step_owners = {
+          raise: b.created_by || null,
+          approve: apr ? apr.changed_by : null,
+          send: snt ? snt.changed_by : null,
+          paid: pad ? pad.changed_by : null,
+        };
+        return {
+          id: b.id,
+          title: b.bill_number || ('Bill #' + b.id),
+          subtitle: b.customer_name || b.project_name || ('Type ' + b.bill_type),
+          created_at: b.created_at,
+          owner_id: b.created_by || null,
+          step_owners, stamps,
+          current_key: stamps.paid ? null : (!stamps.approve ? 'approve' : (!stamps.send ? 'send' : 'paid')),
+        };
+      });
+    },
+  },
 };
 
-module.exports = { MODULE_DEFS, tsMs };
+// RACI → scoring. Aggregate the steps a user is Responsible for that were
+// COMPLETED within [sinceDate, untilDate] ('YYYY-MM-DD'), across every module,
+// using the SAME sequential timing as the Responsible board (elapsed = gap from
+// the previous completed step, starting at the record's creation). Responsible
+// defaults to the record owner (created_by) when not explicitly assigned — the
+// same default the board shows. Returns { stepsClosed, slaJudged, onTime }:
+//   stepsClosed — steps the user closed this week (the "Quantity" KPI)
+//   slaJudged   — of those, how many had an SLA target (the on-time denominator)
+//   onTime      — of slaJudged, how many finished within SLA (the "Time" KPI)
+function raciUserWeek(db, userId, sinceDate, untilDate) {
+  const HOUR = 3600000;
+  let stepsClosed = 0, slaJudged = 0, onTime = 0;
+  for (const key of Object.keys(MODULE_DEFS)) {
+    const def = MODULE_DEFS[key];
+    let recs;
+    try { recs = def.rows(db) || []; } catch { continue; }
+    if (!recs.length) continue;
+    const ids = recs.map(r => r.id);
+    const raciByRec = {};
+    for (let i = 0; i < ids.length; i += 400) {
+      const chunk = ids.slice(i, i + 400);
+      const ph = chunk.map(() => '?').join(',');
+      for (const r of safeAll(db, `SELECT * FROM raci_assignment WHERE module=? AND record_id IN (${ph})`, key, ...chunk)) {
+        (raciByRec[r.record_id] = raciByRec[r.record_id] || {})[r.step_key] = r;
+      }
+    }
+    for (const rec of recs) {
+      const recRaci = raciByRec[rec.id] || {};
+      let prev = tsMs(rec.created_at);
+      for (const s of def.steps) {
+        const cfg = recRaci[s.key] || {};
+        // Completion = manual "mark done" stamp, else the module's native date.
+        const stampRaw = (cfg && cfg.done_at) || (rec.stamps ? rec.stamps[s.key] : null) || null;
+        if (!stampRaw) continue;                       // not completed → don't advance prev
+        const atMs = tsMs(stampRaw);
+        let elapsed = null;
+        if (atMs != null && prev != null) { elapsed = Math.max(0, (atMs - prev) / HOUR); prev = atMs; }
+        const responsibleId = cfg.responsible_id || (rec.step_owners && rec.step_owners[s.key]) || rec.owner_id || null;
+        if (responsibleId !== userId) continue;        // not this person's step
+        const dateStr = String(stampRaw).slice(0, 10);
+        if (dateStr < sinceDate || dateStr > untilDate) continue; // closed outside the week
+        stepsClosed += 1;
+        const sla = cfg.sla_hours != null ? +cfg.sla_hours : (s.default_sla != null ? +s.default_sla : null);
+        if (sla != null && elapsed != null) { slaJudged += 1; if (elapsed <= sla) onTime += 1; }
+      }
+    }
+  }
+  return { stepsClosed, slaJudged, onTime };
+}
+
+module.exports = { MODULE_DEFS, tsMs, raciUserWeek };

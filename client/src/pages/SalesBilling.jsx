@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import ResponsibilityTab from '../components/ResponsibilityTab';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiPlus, FiTrash2, FiCheckCircle, FiDownload, FiGrid, FiFileText, FiPackage, FiClipboard, FiPrinter } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiCheckCircle, FiDownload, FiGrid, FiFileText, FiPackage, FiClipboard, FiPrinter, FiUsers } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
 const TYPE_LABEL = { 1: 'Type 1 · Sales Order', 2: 'Type 2 · Material Delivery', 3: 'Type 3 · Installation', 4: 'Type 4 · Final' };
@@ -14,6 +15,7 @@ const TABS = [
   { id: 'orders', label: 'Sales Order Bills', icon: FiFileText },
   { id: 'material', label: 'Material · PO vs Bill', icon: FiPackage },
   { id: 'dpr', label: 'DPR / Installation Bills', icon: FiClipboard },
+  { id: 'responsible', label: 'Responsible', icon: FiUsers },
 ];
 
 export default function SalesBilling() {
@@ -423,6 +425,8 @@ export default function SalesBilling() {
           <BillTable rows={t3} showPayment={false} sentMode />
         </div>
       )}
+
+      {tab === 'responsible' && <ResponsibilityTab module="sales_billing" title="Sales Billing" />}
 
       {/* Create modal */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title="New Sales Bill">

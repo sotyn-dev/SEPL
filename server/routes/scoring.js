@@ -274,6 +274,7 @@ function computeScorecard(db, userId, weekStart) {
       return rows.map(r => r.id).filter(Boolean);
     };
 
+    let _raciAgg; // memoized RACI aggregate for this user/week — both raci sources reuse it
     const computeAutoCount = (source, since, until) => {
       const sinceDate = since.slice(0, 10);
       const untilDate = until.slice(0, 10);
@@ -298,6 +299,22 @@ function computeScorecard(db, userId, weekStart) {
         const given = cklAssigned * 6;
         const done = db.prepare(`SELECT COUNT(*) as c FROM checklist_completions WHERE user_id=? AND completion_date BETWEEN ? AND ?`).get(userId, sinceDate, untilDate).c;
         return { given, done };
+      }
+
+      // ── Responsibility (RACI / SLA) — cross-module per-person accountability ──
+      // Steps the user is Responsible for (explicit, else record owner) that were
+      // closed this week. Computed once per user and shared by both sources.
+      if (source === 'auto:raci_steps_done' || source === 'auto:raci_ontime_pct') {
+        if (_raciAgg === undefined) {
+          try { _raciAgg = require('../utils/raciModules').raciUserWeek(db, userId, sinceDate, untilDate); }
+          catch (e) { _raciAgg = { stepsClosed: 0, slaJudged: 0, onTime: 0 }; }
+        }
+        if (source === 'auto:raci_steps_done') return { given: null, done: _raciAgg.stepsClosed };
+        // On-time %: only meaningful when the user closed SLA-bearing steps this
+        // week. Otherwise stay neutral (planned 0 → 0%) so an idle week neither
+        // tanks the score nor falsely qualifies for the activity gate.
+        if (_raciAgg.stepsClosed === 0 || _raciAgg.slaJudged === 0) return { given: 0, done: 0 };
+        return { given: null, done: Math.round((_raciAgg.onTime / _raciAgg.slaJudged) * 100) };
       }
 
       // Site-scoped KPIs (Site Engineer / Supervisor templates) — need

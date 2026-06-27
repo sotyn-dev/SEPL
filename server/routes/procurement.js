@@ -464,11 +464,14 @@ router.put('/vendor-rates/:id/approve', (req, res) => {
 // company/site/project name. We return a representative lead_no (the latest)
 // just so the dropdown can show '[SEPL20227] CONSERN PHARMA' as a hint.
 router.get('/sites', (req, res) => {
+  // `category` (Business Book division — Fire Fighting / Solar / Electrical …) is
+  // returned so the indent Sub-Item picker can scope Item Master to the project's
+  // division when a BOQ line isn't linked to a master item (mam 2026-06-27).
   const rows = getDb().prepare(
-    `SELECT name, MAX(lead_no) as lead_no
+    `SELECT name, MAX(lead_no) as lead_no, MAX(category) as category
      FROM (
        SELECT COALESCE(s.name, bb.project_name, bb.company_name) as name,
-              bb.lead_no as lead_no
+              bb.lead_no as lead_no, bb.category as category
        FROM business_book bb
        LEFT JOIN sites s ON s.business_book_id = bb.id
        WHERE COALESCE(s.name, bb.project_name, bb.company_name) IS NOT NULL

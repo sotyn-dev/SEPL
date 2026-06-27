@@ -16,6 +16,27 @@ import { fmtDateTime as fmtIST } from '../utils/datetime';
 
 const EMPTY_ITEM = { po_item_id: '', item_master_id: '', description: '', make: '', quantity: 1, unit: 'nos', item_type: '', boq_qty: 0, remaining_qty: null, manual: false, required_date: '' };
 
+// Canonical division for a category / department string. Normalises the messy
+// real-world codes (SOLAR vs SOL, PLU vs PLUMB, CIVIL vs CIV, …) into ONE key so
+// the Sub-Item picker can scope Item Master to the project's / BOQ's division.
+// Returns '' for anything it can't confidently classify, so an unknown category
+// (e.g. "Water Tank") leaves the picker UNFILTERED rather than hiding everything.
+// mam 2026-06-27: a Fire-Fighting item (FF3387) was pickable under a Solar BOQ.
+const DIVISION_OF = (raw) => {
+  const c = String(raw || '').trim().toUpperCase();
+  if (!c) return '';
+  if (/SOLAR|^SOL$/.test(c)) return 'SOLAR';
+  if (/FIRE|^FF$/.test(c)) return 'FF';
+  if (/ELECTRIC|^ELE$/.test(c)) return 'ELE';
+  if (/^LV$|LOW.?VOLTAGE|^ELV$/.test(c)) return 'LV';
+  if (/PLUMB|^PLU$|^PLB$|^PHE$/.test(c)) return 'PLB';
+  if (/HVAC|AIR.?COND|^AC$/.test(c)) return 'HVAC';
+  if (/CIVIL|^CIV$/.test(c)) return 'CIVIL';
+  if (/CCTV/.test(c)) return 'CCTV';
+  if (/NETWORK|^NET$/.test(c)) return 'NET';
+  return '';
+};
+
 // True when the Client PO's assigned CRM name (a first name like "Sushila"
 // from the Orders dropdown) matches the logged-in user — equal, or one name
 // appears as a whitespace token in the other (so "Sushila Sharma" matches
@@ -5798,6 +5819,9 @@ export default function Procurement() {
                   Non-Schedule / Rental. */}
               {(form.indent_category === 'material' || form.indent_category === 'extra_schedule' || !form.indent_category) && (() => {
                 const cat = form.indent_category || 'material';
+                // Project division from the selected site's Business Book category —
+                // the fallback Sub-Item scope when a BOQ line has no master linkage.
+                const projectDiv = DIVISION_OF(sites.find(s => s.name === form.site_name)?.category);
                 const filteredBoqItems = boqItems.filter(b => {
                   const t = String(b.item_type || '').toUpperCase();
                   return t === 'PO' || t === 'FOC' || t === '';
@@ -5822,7 +5846,10 @@ export default function Procurement() {
                   // so a fire-fighting BOQ doesn't show civil/solar SKUs. A per-BOQ
                   // "show all" toggle overrides it for a genuine cross-division accessory.
                   const boqItemRow = boqItems.find(b => +b.id === +group.boq_id);
-                  const boqDept = String((boqItemRow?.item_master_id ? masterItems.find(m => +m.id === +boqItemRow.item_master_id)?.department : '') || '').trim().toUpperCase();
+                  const boqDiv = DIVISION_OF(boqItemRow?.item_master_id ? masterItems.find(m => +m.id === +boqItemRow.item_master_id)?.department : '');
+                  // Scope the Sub-Item picker to the BOQ line's own division, or — when
+                  // that line isn't linked to a master item — the project's division.
+                  const scopeDiv = boqDiv || projectDiv;
                   const showAllMast = showAllMasters.has(group.boq_id);
                   // Switch the whole BOQ between PO and FOC. FOC → all sub-items
                   // FOC (no PO). PO → make the first sub-item the PO if none yet.
@@ -5945,12 +5972,12 @@ export default function Procurement() {
                         </div>
 
                         {/* Division scope notice + Show-all toggle (mam 2026-06-27) */}
-                        {boqDept && (
+                        {scopeDiv && (
                           <div className="px-1 -mt-1 text-[10px] text-gray-500 flex items-center gap-1.5 flex-wrap">
-                            <span>🔎 {showAllMast ? <>Showing <b>all divisions</b></> : <>Sub-items limited to <b className="text-blue-700">{boqDept}</b> (this BOQ's division)</>}</span>
+                            <span>🔎 {showAllMast ? <>Showing <b>all divisions</b></> : <>Sub-items limited to <b className="text-blue-700">{scopeDiv}</b> {boqDiv ? "(this BOQ's division)" : '(project division)'}</>}</span>
                             <button type="button"
                               onClick={() => setShowAllMasters(prev => { const n = new Set(prev); if (n.has(group.boq_id)) n.delete(group.boq_id); else n.add(group.boq_id); return n; })}
-                              className="text-blue-600 hover:underline font-medium">{showAllMast ? `filter to ${boqDept}` : 'show all divisions'}</button>
+                              className="text-blue-600 hover:underline font-medium">{showAllMast ? `filter to ${scopeDiv}` : 'show all divisions'}</button>
                           </div>
                         )}
 
@@ -5989,9 +6016,11 @@ export default function Procurement() {
                                 const t = String(m.type || '').toUpperCase();
                                 return t === 'PO' || t === 'FOC' || t === '';
                               });
-                          // Division scope: same department as the BOQ line, unless "show all" is on.
-                          const deptScoped = (boqDept && !showAllMast)
-                            ? filteredMasterForBoq.filter(m => String(m.department || '').trim().toUpperCase() === boqDept)
+                          // Division scope: only items in the same division as the BOQ line
+                          // (or, if that line is unmapped, the project's division), unless
+                          // "show all" is on. DIVISION_OF normalises messy dept codes.
+                          const deptScoped = (scopeDiv && !showAllMast)
+                            ? filteredMasterForBoq.filter(m => DIVISION_OF(m.department) === scopeDiv)
                             : filteredMasterForBoq;
                           const masterPicker = (
                             <div className="flex items-center gap-1 w-full">

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
+import ResponsibilityTab from '../components/ResponsibilityTab';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
 import SearchableSelect from '../components/SearchableSelect';
@@ -560,13 +561,14 @@ export default function DPR() {
     <div className="space-y-6">
       <div className="sticky-toolbar">
         <div className="flex gap-2 flex-wrap">
-          {['dashboard', 'reports', 'compliance', 'sites', 'losses'].map(t => (
+          {['dashboard', 'reports', 'compliance', 'sites', 'losses', 'responsible'].map(t => (
             <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'}`}>
               {t === 'dashboard' ? 'Dashboard'
                 : t === 'reports' ? 'Daily Reports'
                 : t === 'compliance' ? 'Engineer Compliance'
                 : t === 'sites' ? 'Sites'
-                : 'Loss Reasons'}
+                : t === 'losses' ? 'Loss Reasons'
+                : 'Responsible'}
             </button>
           ))}
           {/* Always-visible morning contractor-attendance punch (mam 2026-06-22:
@@ -584,6 +586,7 @@ export default function DPR() {
           component drives both — single source of truth. */}
       {tab === 'losses' && <LossReasonsTab />}
       {tab === 'compliance' && <EngineerPerformance />}
+      {tab === 'responsible' && <ResponsibilityTab module="dpr" title="DPR" />}
 
       {tab === 'dashboard' && (
         <>

@@ -179,7 +179,11 @@ router.get('/users/export.xlsx', authMiddleware, adminOnly, (req, res) => {
 router.get('/users/hierarchy', authMiddleware, (req, res) => {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT u.id, u.name, u.role, u.department, u.manager_id, m.name AS manager_name
+    SELECT u.id, u.name, u.role, u.department, u.manager_id, u.avatar_url, m.name AS manager_name,
+           COALESCE(
+             (SELECT e.designation FROM employees e WHERE e.user_id = u.id ORDER BY e.id DESC LIMIT 1),
+             (SELECT e.designation FROM employees e WHERE LOWER(TRIM(e.name)) = LOWER(TRIM(u.name)) ORDER BY e.id DESC LIMIT 1)
+           ) AS designation
       FROM users u
       LEFT JOIN users m ON m.id = u.manager_id
      WHERE COALESCE(u.active, 1) = 1

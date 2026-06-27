@@ -51,6 +51,9 @@ const SOURCE_INFO = {
   'auto:pms':                   { plan: 'PMS tasks assigned to user',         actual: 'PMS tasks completed (status=approved)' },
   'auto:checklists':            { plan: 'Active checklists × 6 days',         actual: 'Checklist completions by user' },
   'auto:tickets':               { plan: 'Help tickets assigned to user',      actual: 'Tickets resolved / closed by user' },
+  // Responsibility (RACI / SLA) — cross-module accountability from the "Responsible" tabs
+  'auto:raci_steps_done':       { plan: 'You set (target steps/week)',        actual: 'RACI steps the user closed this week (all modules)' },
+  'auto:raci_ontime_pct':       { plan: 'You set (target %, e.g. 90)',        actual: '% of the user\'s closed steps done within SLA' },
   // DPR
   'auto:dpr_profit':            { plan: 'Σ planned cost (DPR Table B)',       actual: 'Σ actual cost (DPR Table B)' },
   'auto:dpr_count':             { plan: '6 days/week target',                 actual: 'DPR submissions for this site' },
@@ -852,6 +855,10 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:pms">pms tasks (assigned/done)</option>
                     <option value="auto:checklists">checklists (per day)</option>
                     <option value="auto:tickets">help tickets (assigned/resolved)</option>
+                  </optgroup>
+                  <optgroup label="Responsibility (RACI / SLA)">
+                    <option value="auto:raci_steps_done">RACI steps closed (by user)</option>
+                    <option value="auto:raci_ontime_pct">RACI on-time % (within SLA)</option>
                   </optgroup>
                   <optgroup label="DPR (Daily Project Report)">
                     <option value="auto:dpr_profit">DPR profit (planned vs actual ₹) [site]</option>

@@ -152,25 +152,22 @@ router.put('/step-done/:module/:recordId', (req, res) => {
   res.json({ message: doneAt ? 'Step marked done' : 'Step reopened', done_at: doneAt });
 });
 
-// GET /api/raci/board/:module — the "Responsible" tab feed. For every record of
-// the module: each step with its assigned R/A/C/I, the SLA, the ACTUAL time the
-// step took (elapsed) and how late it ran (late_hours). Plus a per-person
-// summary (steps owned / total hours / late count) so mam can judge people on
-// quality·quantity·time from one screen (mam 2026-06-27).
-router.get('/board/:module', (req, res) => {
-  const db = getDb();
-  const def = MODULE_DEFS[req.params.module];
-  if (!def) return res.status(404).json({ error: 'Unknown module' });
-
-  let recs = [];
-  try { recs = def.rows(db) || []; } catch (e) { return res.status(500).json({ error: e.message }); }
-  const raci = getRaciForRecords(db, req.params.module, recs.map(r => r.id));
+// Build the "Responsible" board for ONE module: every record with each step's
+// assigned R/A/C/I, SLA, actual time taken (elapsed) and how late it ran, plus
+// a per-person summary. Shared by GET /board/:module and the cross-module
+// /performance scorecard so the timing logic lives in exactly one place
+// (mam 2026-06-27: judge people on quality·quantity·time).
+function buildBoard(db, moduleKey) {
+  const def = MODULE_DEFS[moduleKey];
+  if (!def) return null;
+  const recs = def.rows(db) || [];
+  const raci = getRaciForRecords(db, moduleKey, recs.map(r => r.id));
 
   const nameCache = {};
   const nm = (id) => { if (!id) return null; if (!(id in nameCache)) nameCache[id] = db.prepare('SELECT name FROM users WHERE id=?').get(id)?.name || null; return nameCache[id]; };
 
   const HOUR = 3600000, now = Date.now();
-  const people = {};                  // name -> { name, steps, total_hours, late_count, late_hours }
+  const people = {};
   const bump = (name, hrs, late) => {
     if (!name) return;
     const p = people[name] || (people[name] = { name, steps: 0, total_hours: 0, late_count: 0, late_hours: 0 });
@@ -181,15 +178,8 @@ router.get('/board/:module', (req, res) => {
 
   const rows = recs.map(rec => {
     const recRaci = raci[rec.id] || {};
-    // A step's completion time = the manual "mark done" stamp if set, else the
-    // module's own date column for that step (some steps, e.g. Negotiation, have
-    // no native date — manual stamping is the only source).
     const stampOf = (k) => (recRaci[k] && recRaci[k].done_at) || rec.stamps[k] || null;
     const anyManual = def.steps.some(s => recRaci[s.key] && recRaci[s.key].done_at);
-    // When the module exposes an owner, or the user is hand-stamping steps, the
-    // "current" (running) step is the first one still without a stamp. Modules
-    // that do neither keep their own current_key — no change for the Payables
-    // pilot or any other already-live module.
     const useMerged = anyManual || rec.owner_id != null;
     const currentKey = useMerged
       ? (rec.current_key == null ? null : ((def.steps.find(s => !stampOf(s.key)) || {}).key || null))
@@ -206,18 +196,16 @@ router.get('/board/:module', (req, res) => {
       if (atMs != null && prev != null) { elapsed = Math.max(0, (atMs - prev) / HOUR); prev = atMs; }
       else if (isCurrent && prev != null) { elapsed = Math.max(0, (now - prev) / HOUR); }
       const late = (elapsed != null && sla != null && elapsed > sla) ? elapsed - sla : 0;
-      // Person = the explicitly-assigned Responsible, else the record owner
-      // (the lead's salesperson) as the default so scoring fills in by itself.
-      const responsible_id = cfg.responsible_id || rec.owner_id || null;
+      const responsible_id = cfg.responsible_id || (rec.step_owners && rec.step_owners[s.key]) || rec.owner_id || null;
       const responsible = nm(responsible_id);
       bump(responsible, atMs != null ? elapsed : null, atMs != null ? late : 0);
       return {
         key: s.key, label: s.label,
         status: atMs ? 'done' : (isCurrent ? 'current' : 'pending'),
         at: stampRaw || null,
-        done_at: cfg.done_at || null,                                  // the manual stamp (if any)
+        done_at: cfg.done_at || null,
         responsible_id, responsible,
-        responsible_default: !cfg.responsible_id && !!rec.owner_id,    // true when shown from owner
+        responsible_default: !cfg.responsible_id && !!responsible_id,
         accountable_id: cfg.accountable_id || null, accountable: nm(cfg.accountable_id),
         consulted_id: cfg.consulted_id || null, consulted: nm(cfg.consulted_id),
         informed_id: cfg.informed_id || null, informed: nm(cfg.informed_id),
@@ -240,7 +228,76 @@ router.get('/board/:module', (req, res) => {
     }))
     .sort((a, b) => b.steps - a.steps);
 
-  res.json({ module: req.params.module, label: def.label, steps: def.steps, rows, summary });
+  return { module: moduleKey, label: def.label, steps: def.steps, rows, summary };
+}
+
+// GET /api/raci/board/:module — one module's Responsible board.
+router.get('/board/:module', (req, res) => {
+  if (!MODULE_DEFS[req.params.module]) return res.status(404).json({ error: 'Unknown module' });
+  try { res.json(buildBoard(getDb(), req.params.module)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/raci/performance — CONSOLIDATED cross-module performance scorecard.
+// One row per person aggregated over ALL modules, scored on three equal pillars
+// (mam 2026-06-27, "evaluate performance of Quality, Quantity, Time" for the
+// Monday management review):
+//   • Quantity = how many steps they completed (volume, normalised to the top
+//     performer so the best = 100).
+//   • Time     = punctuality = % of their completed steps that were on time
+//     (not past the step's SLA).
+//   • Quality  = thoroughness = % of the steps they OWN that they've actually
+//     completed (low = lots of their work left hanging).
+//   Score = simple average of the three (each 0–100), equal weight.
+router.get('/performance', (req, res) => {
+  const db = getDb();
+  const agg = {};   // name -> tallies
+  const moduleKeys = Object.keys(MODULE_DEFS);
+  try {
+    for (const key of moduleKeys) {
+      const board = buildBoard(db, key);
+      if (!board) continue;
+      for (const rec of board.rows) {
+        for (const s of rec.steps) {
+          const name = s.responsible;
+          if (!name) continue;
+          const p = agg[name] || (agg[name] = { name, owned: 0, completed: 0, on_time: 0, late: 0, total_hours: 0, late_hours: 0, by_module: {} });
+          p.owned += 1;
+          p.by_module[key] = (p.by_module[key] || 0) + 1;
+          if (s.status === 'done') {
+            p.completed += 1;
+            if (s.late_hours > 0) { p.late += 1; p.late_hours += s.late_hours; } else { p.on_time += 1; }
+            if (s.elapsed_hours != null) p.total_hours += s.elapsed_hours;
+          }
+        }
+      }
+    }
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+
+  const list = Object.values(agg);
+  const maxCompleted = Math.max(1, ...list.map(p => p.completed));
+  const people = list.map(p => {
+    const quantity = Math.round((p.completed / maxCompleted) * 100);
+    const time = p.completed ? Math.round((p.on_time / p.completed) * 100) : 0;
+    const quality = p.owned ? Math.round((p.completed / p.owned) * 100) : 0;
+    const score = Math.round((quantity + time + quality) / 3);
+    return {
+      name: p.name,
+      owned: p.owned, completed: p.completed, on_time: p.on_time, late: p.late,
+      total_hours: Math.round(p.total_hours * 10) / 10,
+      avg_hours: p.completed ? Math.round((p.total_hours / p.completed) * 10) / 10 : 0,
+      late_hours: Math.round(p.late_hours * 10) / 10,
+      quantity_score: quantity, time_score: time, quality_score: quality, score,
+      modules: Object.keys(p.by_module).length,
+      by_module: p.by_module,
+    };
+  }).sort((a, b) => b.score - a.score || b.completed - a.completed);
+
+  res.json({
+    generated_at: new Date().toISOString(),
+    module_labels: Object.fromEntries(moduleKeys.map(k => [k, MODULE_DEFS[k].label])),
+    people,
+  });
 });
 
 module.exports = { router, getRecordRaci, getRaciForRecords };
