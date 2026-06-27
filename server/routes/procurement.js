@@ -1965,13 +1965,19 @@ router.put('/indents/:id', (req, res) => {
             error: `From-store qty (${fromStore}) exceeds approved qty (${finalQty}) for "${row.description}".`,
           });
         }
-        // NOTE (mam 2026-06-23: "store option give to all because our
-        // inventory is pending to correct"): we no longer BLOCK a store issue
-        // when recorded office stock is short. The physical store often has
-        // material the system hasn't been corrected for yet. We issue anyway
-        // and let the office balance go negative (handled in the decrement
-        // loop) so the item is flagged for inventory reconciliation. The only
-        // remaining guards: must be Item-Master-linked, and from_store ≤ approved.
+        // From-store cannot exceed the recorded office stock (mam 2026-06-27:
+        // "editable according to stock, not above" — reverses the 2026-06-23
+        // over-stock allowance). Same office-stock source the approval modal shows.
+        const officeStock = +((db.prepare(
+          `SELECT COALESCE(SUM(sb.quantity),0) q FROM stock_balance sb
+             JOIN warehouses w ON w.id = sb.warehouse_id AND COALESCE(w.active,1)=1 AND w.type='office'
+            WHERE sb.item_master_id = ?`
+        ).get(row.item_master_id) || {}).q || 0);
+        if (fromStore > officeStock + 0.0001) {
+          return res.status(400).json({
+            error: `From-store qty (${fromStore}) exceeds office stock (${officeStock}) for "${row.description}". Correct the inventory or reduce the from-store qty.`,
+          });
+        }
         storePlans.push({ itemId, fromStore, finalQty, masterId: row.item_master_id, rate: +row.rate || 0,
           description: row.description, specification: row.specification, size: row.size,
           make: row.make, item_code: row.item_code, unit: row.unit, item_type: row.item_type });
