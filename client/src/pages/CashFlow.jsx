@@ -16,6 +16,8 @@ export default function CashFlow() {
   const [dailySummary, setDailySummary] = useState(null);
   const [entries, setEntries] = useState([]);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [editingOpening, setEditingOpening] = useState(false);   // inline-edit the day's opening balance
+  const [openingInput, setOpeningInput] = useState('');
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({ date: '', type: 'inflow', category: '', description: '', amount: 0, payment_mode: '', party_name: '' });
   const [search, setSearch] = useState('');
@@ -63,6 +65,19 @@ export default function CashFlow() {
     e.preventDefault();
     await api.post('/cashflow/entry', { ...form, date: form.date || selectedDate });
     toast.success('Entry added'); setModal(false); load();
+  };
+
+  // Edit the Opening balance for the selected date. The server cascades the new
+  // opening through all following days (mam 2026-06-27).
+  const saveOpening = async () => {
+    const v = +openingInput;
+    if (!Number.isFinite(v)) return toast.error('Enter a valid amount');
+    try {
+      await api.post('/cashflow/opening-balance', { date: selectedDate, opening_balance: v });
+      toast.success('Opening updated');
+      setEditingOpening(false);
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed to update opening'); }
   };
 
   const deleteEntry = async (id) => {
@@ -425,7 +440,22 @@ export default function CashFlow() {
       {tab === 'daily' && dailySummary && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="card p-3"><LuIndianRupee className="text-red-600 inline mr-1" /><span className="text-xs text-gray-500">Opening</span><p className="text-lg font-bold">{fmt(dailySummary.today.opening_balance)}</p></div>
+            <div className="card p-3"><LuIndianRupee className="text-red-600 inline mr-1" /><span className="text-xs text-gray-500">Opening</span>
+              {editingOpening ? (
+                <div className="flex items-center gap-1 mt-1">
+                  <input type="number" autoFocus className="input text-sm py-1 w-28" value={openingInput}
+                    onChange={e => setOpeningInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') saveOpening(); if (e.key === 'Escape') setEditingOpening(false); }} />
+                  <button onClick={saveOpening} className="p-1 text-emerald-600 hover:bg-emerald-50 rounded" title="Save"><FiCheck size={15} /></button>
+                  <button onClick={() => setEditingOpening(false)} className="p-1 text-gray-400 hover:bg-gray-100 rounded" title="Cancel"><FiX size={15} /></button>
+                </div>
+              ) : (
+                <p className="text-lg font-bold flex items-center gap-1">{fmt(dailySummary.today.opening_balance)}
+                  <button onClick={() => { setOpeningInput(String(dailySummary.today.opening_balance || 0)); setEditingOpening(true); }}
+                    className="text-gray-300 hover:text-blue-600" title="Edit opening balance for this date"><FiEdit2 size={13} /></button>
+                </p>
+              )}
+            </div>
             <div className="card p-3"><FiTrendingUp className="text-emerald-600 inline mr-1" /><span className="text-xs text-gray-500">Inflows</span><p className="text-lg font-bold text-emerald-600">+{fmt(dailySummary.today.total_inflows)}</p></div>
             <div className="card p-3"><FiTrendingDown className="text-red-600 inline mr-1" /><span className="text-xs text-gray-500">Outflows</span><p className="text-lg font-bold text-red-600">-{fmt(dailySummary.today.total_outflows)}</p></div>
             <div className="card p-3"><LuIndianRupee className="text-purple-600 inline mr-1" /><span className="text-xs text-gray-500">Closing</span><p className="text-lg font-bold text-purple-600">{fmt(dailySummary.today.closing_balance)}</p></div>

@@ -414,16 +414,29 @@ router.delete('/entry/:id', (req, res) => {
 router.post('/opening-balance', (req, res) => {
   const { date, opening_balance } = req.body;
   const db = getDb();
-  let daily = db.prepare('SELECT id FROM cash_flow_daily WHERE date = ?').get(date);
-  if (daily) {
-    db.prepare('UPDATE cash_flow_daily SET opening_balance = ? WHERE id = ?').run(opening_balance, daily.id);
-  } else {
-    db.prepare('INSERT INTO cash_flow_daily (date, opening_balance, closing_balance, created_by) VALUES (?, ?, ?, ?)').run(date, opening_balance, opening_balance, req.user.id);
-  }
-  daily = db.prepare('SELECT * FROM cash_flow_daily WHERE date = ?').get(date);
-  const closing = opening_balance + (daily.total_inflows || 0) - (daily.total_outflows || 0);
-  db.prepare('UPDATE cash_flow_daily SET closing_balance = ? WHERE date = ?').run(closing, date);
-  res.json({ message: 'Set', closing_balance: closing });
+  if (!date) return res.status(400).json({ error: 'date required' });
+  const ob = +opening_balance || 0;
+  // Ensure the row exists, then set its opening.
+  const existing = db.prepare('SELECT id FROM cash_flow_daily WHERE date = ?').get(date);
+  if (existing) db.prepare('UPDATE cash_flow_daily SET opening_balance = ? WHERE id = ?').run(ob, existing.id);
+  else db.prepare('INSERT INTO cash_flow_daily (date, opening_balance, closing_balance, created_by) VALUES (?, ?, ?, ?)').run(date, ob, ob, req.user.id);
+
+  // Cascade forward (mam 2026-06-27: "edit opening" must flow through). For the
+  // edited day, opening = the value just set; every later day's opening = the
+  // prior day's closing; closing = opening + inflows − outflows.
+  const rows = db.prepare('SELECT id, date, COALESCE(total_inflows,0) AS inflows, COALESCE(total_outflows,0) AS outflows FROM cash_flow_daily WHERE date >= ? ORDER BY date ASC').all(date);
+  const upd = db.prepare('UPDATE cash_flow_daily SET opening_balance = ?, closing_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+  let prevClosing = null;
+  db.transaction(() => {
+    for (const r of rows) {
+      const opening = prevClosing == null ? ob : prevClosing;
+      const closing = opening + r.inflows - r.outflows;
+      upd.run(opening, closing, r.id);
+      prevClosing = closing;
+    }
+  })();
+  const closing = db.prepare('SELECT closing_balance FROM cash_flow_daily WHERE date = ?').get(date)?.closing_balance;
+  res.json({ message: 'Opening updated', closing_balance: closing });
 });
 
 module.exports = router;
