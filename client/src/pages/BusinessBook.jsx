@@ -256,6 +256,21 @@ export default function BusinessBook() {
     return next;
   });
 
+  // Keep Net Sale + PO Amount (with GST) in sync with Sale/discount even on
+  // EDIT load. The F handler only recomputes on a field change, so an order
+  // opened with a stale stored po_amount/net would otherwise show the OLD
+  // figure (mam 2026-06-27: Sale 1,21,91,818 but PO showed 6,98,654 — should be
+  // 1,43,86,345 = Sale × 1.18). Net = Sale − discount, PO = Net × 1.18.
+  useEffect(() => {
+    const sale = Number(form.sale_amount_without_gst) || 0;
+    const amt = Number(form.management_discount_amount) || 0;
+    const net = Math.round((sale - amt) * 100) / 100;
+    const po = Math.round(net * 1.18 * 100) / 100;
+    if (form.net_sale_amount !== net || form.po_amount !== po) {
+      setForm(f => ({ ...f, net_sale_amount: net, po_amount: po }));
+    }
+  }, [form.sale_amount_without_gst, form.management_discount_amount]);
+
   // Dashboard view (mam): MERGE all entries that share the SAME client name
   // AND the SAME site name into one consolidated row.  "Site name" is the
   // Project / Location shown in the list (project_name, falling back to
