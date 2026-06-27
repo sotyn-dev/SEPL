@@ -330,6 +330,7 @@ export default function Procurement() {
   const [finalModal, setFinalModal] = useState(null); // { row } being finalized
   const [finalForm, setFinalForm] = useState({});
   const [masterItems, setMasterItems] = useState([]); // Item Master dropdown source
+  const [showAllMasters, setShowAllMasters] = useState(() => new Set()); // BOQ ids whose sub-item picker shows ALL divisions, not just the line's
   const [boqItems, setBoqItems] = useState([]); // BOQ items for the currently-selected site
   const [boqLoading, setBoqLoading] = useState(false);
   const [boqDiag, setBoqDiag] = useState(null); // backend diagnostic when BOQ is empty/partial
@@ -5816,6 +5817,13 @@ export default function Procurement() {
                   // BOQ-level mode (mam 2026-06-26): a BOQ is in PO mode when it
                   // holds the one chargeable PO sub-item, else it's FOC-only.
                   const boqMode = group.rows.some(r => String(r.item.item_type || '').toUpperCase() === 'PO') ? 'PO' : 'FOC';
+                  // Division scoping (mam 2026-06-27): the Sub-Item picker lists only
+                  // Item Master items in the SAME division/department as this BOQ line,
+                  // so a fire-fighting BOQ doesn't show civil/solar SKUs. A per-BOQ
+                  // "show all" toggle overrides it for a genuine cross-division accessory.
+                  const boqItemRow = boqItems.find(b => +b.id === +group.boq_id);
+                  const boqDept = String((boqItemRow?.item_master_id ? masterItems.find(m => +m.id === +boqItemRow.item_master_id)?.department : '') || '').trim().toUpperCase();
+                  const showAllMast = showAllMasters.has(group.boq_id);
                   // Switch the whole BOQ between PO and FOC. FOC → all sub-items
                   // FOC (no PO). PO → make the first sub-item the PO if none yet.
                   const setBoqMode = (mode) => {
@@ -5936,6 +5944,16 @@ export default function Procurement() {
                           <div></div>
                         </div>
 
+                        {/* Division scope notice + Show-all toggle (mam 2026-06-27) */}
+                        {boqDept && (
+                          <div className="px-1 -mt-1 text-[10px] text-gray-500 flex items-center gap-1.5 flex-wrap">
+                            <span>🔎 {showAllMast ? <>Showing <b>all divisions</b></> : <>Sub-items limited to <b className="text-blue-700">{boqDept}</b> (this BOQ's division)</>}</span>
+                            <button type="button"
+                              onClick={() => setShowAllMasters(prev => { const n = new Set(prev); if (n.has(group.boq_id)) n.delete(group.boq_id); else n.add(group.boq_id); return n; })}
+                              className="text-blue-600 hover:underline font-medium">{showAllMast ? `filter to ${boqDept}` : 'show all divisions'}</button>
+                          </div>
+                        )}
+
                         {group.rows.map(({ item, idx: i }, subIdx) => {
                           const t = String(item.item_type || '').toUpperCase();
                           const typeClass = t === 'FOC' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -5971,11 +5989,15 @@ export default function Procurement() {
                                 const t = String(m.type || '').toUpperCase();
                                 return t === 'PO' || t === 'FOC' || t === '';
                               });
+                          // Division scope: same department as the BOQ line, unless "show all" is on.
+                          const deptScoped = (boqDept && !showAllMast)
+                            ? filteredMasterForBoq.filter(m => String(m.department || '').trim().toUpperCase() === boqDept)
+                            : filteredMasterForBoq;
                           const masterPicker = (
                             <div className="flex items-center gap-1 w-full">
                               <div className="flex-1 min-w-0">
                                 <SearchableSelect
-                                  options={filteredMasterForBoq.map(m => ({ id: m.id, label: `[${m.item_code}] ${m.display_name || m.item_name}${m.type ? ' · ' + m.type : ''}`, ...m }))}
+                                  options={deptScoped.map(m => ({ id: m.id, label: `[${m.item_code}] ${m.display_name || m.item_name}${m.type ? ' · ' + m.type : ''}`, ...m }))}
                                   value={item.item_master_id || null} valueKey="id" displayKey="label"
                                   placeholder={cat === 'rgp' ? 'Search RGP sub-item…' : 'Search sub-item from Item Master…'}
                                   onChange={(m) => pickMasterItem(i, m)}
