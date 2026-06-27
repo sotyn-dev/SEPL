@@ -461,8 +461,13 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
     // assignment, so scoring matches the board's whole-module RACI (mam 2026-06-27).
     const md = {};
     for (const r of safeAll(db, `SELECT * FROM raci_assignment WHERE module=? AND record_id=0`, key)) md[r.step_key] = r;
-    const responsibleOf = (s, cfg, m, rec) =>
-      cfg.responsible_id || m.responsible_id || (rec.step_owners && rec.step_owners[s.key]) || rec.owner_id || null;
+    // Scorecard attribution: a step counts for a person ONLY where mam explicitly
+    // named them in RACI — the per-record Responsible, else the whole-module
+    // default (record_id 0). Deliberately NO fallback to the record's owner/
+    // creator or the step's native doer (the board keeps those defaults; the
+    // scorecard must not), so opening any person's card shows only the steps
+    // assigned to their name (mam 2026-06-27: "show only where her name … from raci").
+    const responsibleOf = (s, cfg, m, rec) => (cfg && cfg.responsible_id) || (m && m.responsible_id) || null;
     for (const rec of recs) {
       const recRaci = raciByRec[rec.id] || {};
       // current_key === null means the module considers the record done/cancelled,
@@ -535,8 +540,13 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
     }
     const md = {};
     for (const r of safeAll(db, `SELECT * FROM raci_assignment WHERE module=? AND record_id=0`, key)) md[r.step_key] = r;
-    const responsibleOf = (s, cfg, m, rec) =>
-      cfg.responsible_id || m.responsible_id || (rec.step_owners && rec.step_owners[s.key]) || rec.owner_id || null;
+    // Scorecard attribution: a step counts for a person ONLY where mam explicitly
+    // named them in RACI — the per-record Responsible, else the whole-module
+    // default (record_id 0). Deliberately NO fallback to the record's owner/
+    // creator or the step's native doer (the board keeps those defaults; the
+    // scorecard must not), so opening any person's card shows only the steps
+    // assigned to their name (mam 2026-06-27: "show only where her name … from raci").
+    const responsibleOf = (s, cfg, m, rec) => (cfg && cfg.responsible_id) || (m && m.responsible_id) || null;
     for (const rec of recs) {
       const recRaci = raciByRec[rec.id] || {};
       const recClosed = rec.current_key == null;
