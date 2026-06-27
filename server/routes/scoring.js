@@ -302,14 +302,17 @@ function computeScorecard(db, userId, weekStart) {
       }
 
       // ── Responsibility (RACI / SLA) — cross-module per-person accountability ──
-      // Steps the user is Responsible for (explicit, else record owner) that were
-      // closed this week. Computed once per user and shared by both sources.
+      // Steps the user is Responsible for (explicit, else module default, else
+      // record owner) across every module. Computed once per user, shared below.
       if (source === 'auto:raci_steps_done' || source === 'auto:raci_ontime_pct') {
         if (_raciAgg === undefined) {
           try { _raciAgg = require('../utils/raciModules').raciUserWeek(db, userId, sinceDate, untilDate); }
-          catch (e) { _raciAgg = { stepsClosed: 0, slaJudged: 0, onTime: 0 }; }
+          catch (e) { _raciAgg = { stepsClosed: 0, slaJudged: 0, onTime: 0, openOnUser: 0, stepsPlanned: 0 }; }
         }
-        if (source === 'auto:raci_steps_done') return { given: null, done: _raciAgg.stepsClosed };
+        // Planned = steps on their plate this week (closed this week + still open
+        // on them); Actual = steps they closed this week. So % = how much of the
+        // RACI work assigned to this person they have finished (mam 2026-06-27).
+        if (source === 'auto:raci_steps_done') return { given: _raciAgg.stepsPlanned, done: _raciAgg.stepsClosed };
         // On-time %: only meaningful when the user closed SLA-bearing steps this
         // week. Otherwise stay neutral (planned 0 → 0%) so an idle week neither
         // tanks the score nor falsely qualifies for the activity gate.
@@ -770,6 +773,31 @@ router.get('/scorecard', (req, res) => {
     res.json(computeScorecard(getDb(), userId, weekStart));
   } catch (err) {
     console.error('scorecard get error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET step-wise breakdown of the "RACI Steps (All Modules)" row for one
+// user × week — powers the scorecard drill-down (mam 2026-06-27: "show step
+// wise"). Splits the single Planned/Actual total into one line per (module,
+// step) with planned / done / pending / on-time, mirroring the same weekly
+// scope the scorecard row uses.
+router.get('/raci-breakdown', (req, res) => {
+  try {
+    const userId = parseInt(req.query.user_id, 10) || req.user.id;
+    const weekStart = req.query.week_start && /^\d{4}-\d{2}-\d{2}$/.test(req.query.week_start)
+      ? req.query.week_start
+      : defaultWeekStart();
+    const sinceDate = weekStart;
+    const untilDate = shiftWeek(weekStart, 5);
+    const rows = require('../utils/raciModules').raciUserWeekBreakdown(getDb(), userId, sinceDate, untilDate);
+    const totals = rows.reduce(
+      (t, r) => ({ planned: t.planned + r.planned, actual: t.actual + r.actual, pending: t.pending + r.pending }),
+      { planned: 0, actual: 0, pending: 0 }
+    );
+    res.json({ user_id: userId, week_start: weekStart, week_end: untilDate, rows, totals });
+  } catch (err) {
+    console.error('raci-breakdown error', err);
     res.status(500).json({ error: err.message });
   }
 });

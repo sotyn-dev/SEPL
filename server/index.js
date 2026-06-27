@@ -92,6 +92,7 @@ try {
   const { getDb } = require('./db/schema');
   const r = seedScoringTemplates(getDb());
   if (r.seeded > 0) console.log(`[seed] scoring: seeded ${r.seeded} templates`);
+  if (r.raciAdded > 0) console.log(`[seed] scoring: added RACI row to ${r.raciAdded} templates`);
 } catch (e) {
   console.warn('[seed] scoring failed:', e.message);
 }

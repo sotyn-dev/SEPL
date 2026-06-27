@@ -401,12 +401,14 @@ function upgradeAutoSources(db) {
 }
 
 function seedScoringTemplates(db) {
-  // Always run the upgrade passes — both are idempotent
+  // Always run the upgrade passes — all are idempotent
   const upgraded = upgradeAutoSources(db);
   const targetsUpgraded = upgradeFixedTargets(db);
+  // Add the cross-module RACI row to any existing template missing it.
+  let raciAdded = addRaciKpiToTemplates(db);
   // Skip initial seed if templates already exist
   const count = db.prepare('SELECT COUNT(*) as c FROM score_templates').get().c;
-  if (count > 0) return { seeded: 0, skipped: count, upgraded, targetsUpgraded };
+  if (count > 0) return { seeded: 0, skipped: count, upgraded, targetsUpgraded, raciAdded };
 
   const insertTemplate = db.prepare(
     'INSERT INTO score_templates (name, description) VALUES (?, ?)'
@@ -437,9 +439,11 @@ function seedScoringTemplates(db) {
   });
   tx();
   // After initial seed, run the fixed-target pass so brand-new installs
-  // get all the bulk-seeded Planned values too.
+  // get all the bulk-seeded Planned values too, and attach the RACI row to
+  // every freshly-seeded template.
   const targetsApplied = upgradeFixedTargets(db);
-  return { seeded: TEMPLATES.length, skipped: 0, upgraded, targetsApplied };
+  raciAdded += addRaciKpiToTemplates(db);
+  return { seeded: TEMPLATES.length, skipped: 0, upgraded, targetsApplied, raciAdded };
 }
 
 // Bulk-seed all 100+ fixed Planned targets extracted from mam's MIS PDFs.
@@ -631,6 +635,28 @@ function upgradeFixedTargets(db) {
     changed += r.changes || 0;
   }
   return changed;
+}
+
+// Surface the cross-module RACI workload on EVERY scorecard (mam 2026-06-27:
+// "if I change every module's RACI according to that person, add in scoring also
+// planned actual"). Adds one "RACI Steps (All Modules)" row to each template
+// that lacks it: Planned = steps on that person this week (closed + still open),
+// Actual = steps they closed — both pulled live from raci_assignment. Weight 0
+// so it shows for everyone WITHOUT changing their current score; admin can give
+// it weight later. Idempotent — the NOT EXISTS guard skips templates already
+// carrying the row, so re-runs on every boot are no-ops.
+function addRaciKpiToTemplates(db) {
+  const r = db.prepare(`
+    INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order, default_planned)
+    SELECT t.id, 'Responsibility', 'RACI Steps (All Modules)', 0, 'higher_better', 'auto:raci_steps_done', 900, 0
+      FROM score_templates t
+     WHERE COALESCE(t.active, 1) = 1
+       AND NOT EXISTS (
+         SELECT 1 FROM score_kpis k
+          WHERE k.template_id = t.id AND k.data_source = 'auto:raci_steps_done'
+       )
+  `).run();
+  return r.changes || 0;
 }
 
 module.exports = { seedScoringTemplates, TEMPLATES };

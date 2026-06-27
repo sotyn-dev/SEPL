@@ -426,18 +426,23 @@ const MODULE_DEFS = {
   },
 };
 
-// RACI → scoring. Aggregate the steps a user is Responsible for that were
-// COMPLETED within [sinceDate, untilDate] ('YYYY-MM-DD'), across every module,
-// using the SAME sequential timing as the Responsible board (elapsed = gap from
-// the previous completed step, starting at the record's creation). Responsible
-// defaults to the record owner (created_by) when not explicitly assigned — the
-// same default the board shows. Returns { stepsClosed, slaJudged, onTime }:
-//   stepsClosed — steps the user closed this week (the "Quantity" KPI)
-//   slaJudged   — of those, how many had an SLA target (the on-time denominator)
-//   onTime      — of slaJudged, how many finished within SLA (the "Time" KPI)
+// RACI → scoring. Per-person weekly accountability across EVERY module, using
+// the SAME sequential timing + Responsible defaulting as the board (Responsible
+// = explicit assignment → module-wide default → step owner → record creator).
+// Returns { stepsClosed, slaJudged, onTime, openOnUser, stepsPlanned } where:
+//   stepsClosed — steps the user CLOSED within [sinceDate, untilDate] (Actual).
+//   openOnUser  — steps still OPEN and sitting on the user right now (the step
+//                 currently in-flight on an active record). This is their live
+//                 pending workload, the "wk" Pending side of the scorecard.
+//   stepsPlanned= stepsClosed + openOnUser → the Planned column: everything that
+//                 was on their plate this week (done this week + still pending).
+//                 mam 2026-06-27 chose weekly scope: Actual resets every Mon-Sat;
+//                 Planned = that week's closures plus what is still open on them.
+//   slaJudged   — of the closed steps, how many had an SLA (on-time denominator).
+//   onTime      — of slaJudged, how many finished within SLA (the "Time" KPI).
 function raciUserWeek(db, userId, sinceDate, untilDate) {
   const HOUR = 3600000;
-  let stepsClosed = 0, slaJudged = 0, onTime = 0;
+  let stepsClosed = 0, slaJudged = 0, onTime = 0, openOnUser = 0;
   for (const key of Object.keys(MODULE_DEFS)) {
     const def = MODULE_DEFS[key];
     let recs;
@@ -456,19 +461,33 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
     // assignment, so scoring matches the board's whole-module RACI (mam 2026-06-27).
     const md = {};
     for (const r of safeAll(db, `SELECT * FROM raci_assignment WHERE module=? AND record_id=0`, key)) md[r.step_key] = r;
+    const responsibleOf = (s, cfg, m, rec) =>
+      cfg.responsible_id || m.responsible_id || (rec.step_owners && rec.step_owners[s.key]) || rec.owner_id || null;
     for (const rec of recs) {
       const recRaci = raciByRec[rec.id] || {};
+      // current_key === null means the module considers the record done/cancelled,
+      // so no step is in-flight → nothing pending on anyone for it.
+      const recClosed = rec.current_key == null;
       let prev = tsMs(rec.created_at);
+      let sawOpen = false;                             // only the FIRST open step is in-flight
       for (const s of def.steps) {
         const cfg = recRaci[s.key] || {};
         const m = md[s.key] || {};
+        const responsibleId = responsibleOf(s, cfg, m, rec);
         // Completion = manual "mark done" stamp, else the module's native date.
         const stampRaw = (cfg && cfg.done_at) || (rec.stamps ? rec.stamps[s.key] : null) || null;
-        if (!stampRaw) continue;                       // not completed → don't advance prev
+        if (!stampRaw) {
+          // First unstamped step = the one in flight now. If it is on this user
+          // and the record is still active, it is pending work on them (Planned).
+          if (!sawOpen) {
+            sawOpen = true;
+            if (!recClosed && responsibleId === userId) openOnUser += 1;
+          }
+          continue;                                    // open → don't advance prev / don't close
+        }
         const atMs = tsMs(stampRaw);
         let elapsed = null;
         if (atMs != null && prev != null) { elapsed = Math.max(0, (atMs - prev) / HOUR); prev = atMs; }
-        const responsibleId = cfg.responsible_id || m.responsible_id || (rec.step_owners && rec.step_owners[s.key]) || rec.owner_id || null;
         if (responsibleId !== userId) continue;        // not this person's step
         const dateStr = String(stampRaw).slice(0, 10);
         if (dateStr < sinceDate || dateStr > untilDate) continue; // closed outside the week
@@ -478,7 +497,88 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
       }
     }
   }
-  return { stepsClosed, slaJudged, onTime };
+  return { stepsClosed, slaJudged, onTime, openOnUser, stepsPlanned: stepsClosed + openOnUser };
 }
 
-module.exports = { MODULE_DEFS, tsMs, raciUserWeek };
+// Same per-person weekly aggregate as raciUserWeek, but BROKEN DOWN per
+// (module, step) instead of a single total — powers the scorecard's "step-wise"
+// drill-down (mam 2026-06-27: "show step wise"). Each entry carries planned
+// (= done this week + still open on them), actual (= closed this week), pending,
+// the on-time tally, and up to 8 example pending record titles. Sorted in module
+// declaration order, then step order within each module.
+function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
+  const HOUR = 3600000;
+  const acc = new Map();                              // `${module}|${stepKey}` -> tally
+  const tallyFor = (mod, modLabel, stepKey, stepLabel) => {
+    const k = `${mod}|${stepKey}`;
+    let t = acc.get(k);
+    if (!t) {
+      t = { module: mod, module_label: modLabel, step_key: stepKey, step_label: stepLabel,
+            planned: 0, actual: 0, pending: 0, sla_judged: 0, on_time: 0, pending_records: [] };
+      acc.set(k, t);
+    }
+    return t;
+  };
+  for (const key of Object.keys(MODULE_DEFS)) {
+    const def = MODULE_DEFS[key];
+    let recs;
+    try { recs = def.rows(db) || []; } catch { continue; }
+    if (!recs.length) continue;
+    const ids = recs.map(r => r.id);
+    const raciByRec = {};
+    for (let i = 0; i < ids.length; i += 400) {
+      const chunk = ids.slice(i, i + 400);
+      const ph = chunk.map(() => '?').join(',');
+      for (const r of safeAll(db, `SELECT * FROM raci_assignment WHERE module=? AND record_id IN (${ph})`, key, ...chunk)) {
+        (raciByRec[r.record_id] = raciByRec[r.record_id] || {})[r.step_key] = r;
+      }
+    }
+    const md = {};
+    for (const r of safeAll(db, `SELECT * FROM raci_assignment WHERE module=? AND record_id=0`, key)) md[r.step_key] = r;
+    const responsibleOf = (s, cfg, m, rec) =>
+      cfg.responsible_id || m.responsible_id || (rec.step_owners && rec.step_owners[s.key]) || rec.owner_id || null;
+    for (const rec of recs) {
+      const recRaci = raciByRec[rec.id] || {};
+      const recClosed = rec.current_key == null;
+      let prev = tsMs(rec.created_at);
+      let sawOpen = false;
+      for (const s of def.steps) {
+        const cfg = recRaci[s.key] || {};
+        const m = md[s.key] || {};
+        const responsibleId = responsibleOf(s, cfg, m, rec);
+        const stampRaw = (cfg && cfg.done_at) || (rec.stamps ? rec.stamps[s.key] : null) || null;
+        if (!stampRaw) {
+          if (!sawOpen) {
+            sawOpen = true;
+            if (!recClosed && responsibleId === userId) {
+              const t = tallyFor(key, def.label, s.key, s.label);
+              t.planned += 1; t.pending += 1;
+              if (t.pending_records.length < 8) t.pending_records.push(rec.title);
+            }
+          }
+          continue;
+        }
+        const atMs = tsMs(stampRaw);
+        let elapsed = null;
+        if (atMs != null && prev != null) { elapsed = Math.max(0, (atMs - prev) / HOUR); prev = atMs; }
+        if (responsibleId !== userId) continue;
+        const dateStr = String(stampRaw).slice(0, 10);
+        if (dateStr < sinceDate || dateStr > untilDate) continue;
+        const t = tallyFor(key, def.label, s.key, s.label);
+        t.planned += 1; t.actual += 1;
+        const sla = cfg.sla_hours != null ? +cfg.sla_hours : (m.sla_hours != null ? +m.sla_hours : (s.default_sla != null ? +s.default_sla : null));
+        if (sla != null && elapsed != null) { t.sla_judged += 1; if (elapsed <= sla) t.on_time += 1; }
+      }
+    }
+  }
+  const moduleOrder = Object.keys(MODULE_DEFS);
+  const stepOrder = {};
+  for (const k of moduleOrder) stepOrder[k] = Object.fromEntries(MODULE_DEFS[k].steps.map((s, i) => [s.key, i]));
+  return Array.from(acc.values()).sort((a, b) => {
+    const mo = moduleOrder.indexOf(a.module) - moduleOrder.indexOf(b.module);
+    if (mo) return mo;
+    return (stepOrder[a.module][a.step_key] ?? 0) - (stepOrder[b.module][b.step_key] ?? 0);
+  });
+}
+
+module.exports = { MODULE_DEFS, tsMs, raciUserWeek, raciUserWeekBreakdown };

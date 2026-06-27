@@ -52,7 +52,7 @@ const SOURCE_INFO = {
   'auto:checklists':            { plan: 'Active checklists × 6 days',         actual: 'Checklist completions by user' },
   'auto:tickets':               { plan: 'Help tickets assigned to user',      actual: 'Tickets resolved / closed by user' },
   // Responsibility (RACI / SLA) — cross-module accountability from the "Responsible" tabs
-  'auto:raci_steps_done':       { plan: 'You set (target steps/week)',        actual: 'RACI steps the user closed this week (all modules)' },
+  'auto:raci_steps_done':       { plan: 'RACI steps on the user this week (closed + still open)', actual: 'RACI steps the user closed this week (all modules)' },
   'auto:raci_ontime_pct':       { plan: 'You set (target %, e.g. 90)',        actual: '% of the user\'s closed steps done within SLA' },
   // DPR
   'auto:dpr_profit':            { plan: 'Σ planned cost (DPR Table B)',       actual: 'Σ actual cost (DPR Table B)' },
@@ -127,6 +127,15 @@ export default function Scorecard() {
   const [assignments, setAssignments] = useState([]);
   const [tplDetail, setTplDetail] = useState(null);
   const [overview, setOverview] = useState(null);
+  const [stepBreakdown, setStepBreakdown] = useState(null);   // RACI step-wise drill-down
+
+  // Open the step-wise breakdown of the "RACI Steps (All Modules)" row.
+  const openStepBreakdown = useCallback(() => {
+    setStepBreakdown({ loading: true });
+    api.get(`/scoring/raci-breakdown?user_id=${viewUserId}&week_start=${weekStart}`)
+      .then(r => setStepBreakdown(r.data))
+      .catch(err => { setStepBreakdown(null); toast.error(err.response?.data?.error || 'Failed to load step-wise breakdown'); });
+  }, [viewUserId, weekStart]);
 
   const loadScorecard = useCallback(() => {
     api.get(`/scoring/scorecard?user_id=${viewUserId}&week_start=${weekStart}`)
@@ -305,6 +314,7 @@ export default function Scorecard() {
                       saving={savingKpi === k.kpi_id}
                       onSave={(patch) => saveEntry(k, patch)}
                       readOnly={viewUserId !== user.id && !isAdmin()}
+                      onStepWise={k.data_source === 'auto:raci_steps_done' ? openStepBreakdown : null}
                     />
                   ))}
                 </tbody>
@@ -368,6 +378,60 @@ export default function Scorecard() {
       <Modal isOpen={!!tplDetail} onClose={() => setTplDetail(null)} title={tplDetail?.name || 'Template'} wide>
         {tplDetail && <TemplateKpiEditor templateId={tplDetail.id} onChange={() => api.get(`/scoring/templates/${tplDetail.id}`).then(r => setTplDetail(r.data))} />}
       </Modal>
+
+      {/* RACI step-wise breakdown modal */}
+      <Modal isOpen={!!stepBreakdown} onClose={() => setStepBreakdown(null)} title="RACI Steps — step-wise" wide>
+        <RaciBreakdown data={stepBreakdown} />
+      </Modal>
+    </div>
+  );
+}
+
+// ---------- RACI step-wise breakdown (drill-down of the RACI Steps row) ----------
+function RaciBreakdown({ data }) {
+  if (!data || data.loading) return <p className="text-sm text-gray-500 p-4">Loading…</p>;
+  const rows = data.rows || [];
+  if (!rows.length) return <p className="text-sm text-gray-500 p-4">No RACI steps on this person for this week.</p>;
+  // Group the per-step rows under their module heading.
+  const byMod = rows.reduce((a, r) => { (a[r.module_label] = a[r.module_label] || []).push(r); return a; }, {});
+  return (
+    <div className="space-y-4">
+      <div className="text-sm text-gray-600">
+        Week {data.week_start} → {data.week_end} · <b>{data.totals.planned}</b> planned ·{' '}
+        <b className="text-emerald-700">{data.totals.actual}</b> done ·{' '}
+        <b className="text-amber-700">{data.totals.pending}</b> pending
+      </div>
+      {Object.entries(byMod).map(([mod, list]) => (
+        <div key={mod} className="border rounded overflow-hidden">
+          <div className="px-3 py-1.5 bg-amber-50 border-b border-amber-200 font-semibold text-amber-800 text-sm">{mod}</div>
+          <table className="w-full text-xs">
+            <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase">
+              <tr>
+                <th className="text-left p-2">Step</th>
+                <th className="text-center p-2 w-20">Planned</th>
+                <th className="text-center p-2 w-16">Done</th>
+                <th className="text-center p-2 w-16">Pending</th>
+                <th className="text-center p-2 w-20">On-time</th>
+                <th className="text-left p-2">Pending on</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map(r => (
+                <tr key={r.step_key} className="border-t">
+                  <td className="p-2 font-medium">{r.step_label}</td>
+                  <td className="text-center p-2 font-semibold">{r.planned}</td>
+                  <td className="text-center p-2 text-emerald-700">{r.actual}</td>
+                  <td className="text-center p-2 text-amber-700">{r.pending || ''}</td>
+                  <td className="text-center p-2">{r.sla_judged ? `${Math.round((r.on_time / r.sla_judged) * 100)}%` : <span className="text-gray-300">—</span>}</td>
+                  <td className="p-2 text-gray-500 truncate max-w-[240px]" title={(r.pending_records || []).join(', ')}>
+                    {(r.pending_records || []).join(', ') || '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
     </div>
   );
 }
@@ -393,7 +457,7 @@ function EmployeeSwitcher({ value, onChange }) {
 }
 
 // ---------- KPI Row (editable) ----------
-function KpiRow({ kpi, saving, onSave, readOnly }) {
+function KpiRow({ kpi, saving, onSave, readOnly, onStepWise }) {
   const [planned, setPlanned] = useState(kpi.planned ?? 0);
   const [actual, setActual] = useState(kpi.actual ?? 0);
   const [pendingUp, setPendingUp] = useState(kpi.pending_uptodate ?? '');
@@ -432,6 +496,9 @@ function KpiRow({ kpi, saving, onSave, readOnly }) {
           {kpi.direction === 'lower_better' && <span className="text-blue-600">↓ lower better</span>}
           {kpi.direction !== 'lower_better' && <span className="text-emerald-600">↑ higher better</span>}
           {isAuto && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold">AUTO</span>}
+          {onStepWise && (
+            <button onClick={onStepWise} className="ml-2 text-indigo-600 hover:underline font-semibold">▸ step-wise</button>
+          )}
         </div>
       </td>
       <td className="text-center p-2">{kpi.weightage}%</td>
