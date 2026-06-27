@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import ResponsibilityTab from '../components/ResponsibilityTab';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
@@ -104,8 +105,11 @@ export default function Quotations() {
         <div className="flex gap-2">
           <button onClick={() => setTab('boq')} className={`btn ${tab === 'boq' ? 'btn-primary' : 'btn-secondary'}`}>BOQ / Drawings</button>
           <button onClick={() => setTab('quotations')} className={`btn ${tab === 'quotations' ? 'btn-primary' : 'btn-secondary'}`}>Quotations</button>
+          <button onClick={() => setTab('responsible')} className={`btn ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>⚙ Responsible</button>
         </div>
       </div>
+
+      {tab === 'responsible' && <ResponsibilityTab module="quotation" title="Quotation" />}
 
       {tab === 'boq' && (
         <>

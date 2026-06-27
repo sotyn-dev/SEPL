@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../api';
+import ResponsibilityTab from '../components/ResponsibilityTab';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -424,8 +425,9 @@ export default function PaymentRequired() {
           here.  If anyone lands on ?tab=inbox via bookmark, the
           redirect effect just below kicks them to Dashboard. */}
       <div className="flex gap-2 flex-wrap">
-        {['dashboard', 'all', 'pending', 'approved', 'rejected'].map(t => {
+        {['dashboard', 'all', 'pending', 'approved', 'rejected', 'responsible'].map(t => {
           const label = t === 'all' ? 'All Requests'
+                      : t === 'responsible' ? '⚙ Responsible'
                       : t.charAt(0).toUpperCase() + t.slice(1);
           return (
             <button key={t} onClick={() => setTab(t)} className={`btn ${tab === t ? 'btn-primary' : 'btn-secondary'} text-sm`}>
@@ -434,6 +436,8 @@ export default function PaymentRequired() {
           );
         })}
       </div>
+
+      {tab === 'responsible' && <ResponsibilityTab module="payables" title="Payables" />}
 
       {/* Dashboard */}
       {tab === 'dashboard' && stats && (

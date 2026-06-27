@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import ResponsibilityTab from '../components/ResponsibilityTab';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { FiPlus, FiEdit2, FiTrash2, FiClock, FiCheck, FiAlertTriangle, FiPaperclip, FiEye, FiDownload } from 'react-icons/fi';
@@ -204,6 +205,7 @@ export default function ChequeFMS() {
     { id: 'clear', label: 'Cleared', count: counts.m.clear, color: 'emerald' },
     { id: 'bounce', label: 'Bounced', count: counts.m.bounce, color: 'red' },
     { id: 'all', label: 'All', count: null, color: 'gray' },
+    { id: 'responsible', label: '⚙ Responsible', count: null, color: 'gray' },
   ];
 
   return (
@@ -279,7 +281,10 @@ export default function ChequeFMS() {
         </div>
       </div>
 
+      {tab === 'responsible' && <ResponsibilityTab module="cheques" title="Cheques" />}
+
       {/* List */}
+      {tab !== 'responsible' && (
       <div className="card p-0">
         <table className="w-full text-xs freeze-head">
           <thead className="bg-gray-50 text-gray-600 uppercase">
@@ -331,6 +336,7 @@ export default function ChequeFMS() {
           </tbody>
         </table>
       </div>
+      )}
 
       {/* STAGE 1 — Issue / Edit modal */}
       <Modal isOpen={modal === 'issue' || modal === 'edit'} onClose={() => setModal(null)} title={modal === 'edit' ? 'Edit Cheque Details' : 'Issue Cheque'}>

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
+import ResponsibilityTab from '../components/ResponsibilityTab';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
@@ -57,6 +58,7 @@ export default function IndentFMS() {
           <button onClick={() => setTab('pipeline')} className={`btn ${tab === 'pipeline' ? 'btn-primary' : 'btn-secondary'}`}>Pipeline View</button>
           <button onClick={() => setTab('tracker')} className={`btn ${tab === 'tracker' ? 'btn-primary' : 'btn-secondary'}`}>Indent Tracker</button>
           <button onClick={() => setTab('grn')} className={`btn ${tab === 'grn' ? 'btn-primary' : 'btn-secondary'}`}>GRN</button>
+          <button onClick={() => setTab('responsible')} className={`btn ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>⚙ Responsible</button>
         </div>
         <button onClick={() => {
           if (tab === 'grn') {
@@ -69,6 +71,8 @@ export default function IndentFMS() {
           }
         }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
       </div>
+
+      {tab === 'responsible' && <ResponsibilityTab module="indent_to_dispatch" title="Indent to Dispatch" />}
 
       {tab === 'pipeline' && (
         <>

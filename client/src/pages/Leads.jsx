@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import api from '../api';
+import ResponsibilityTab from '../components/ResponsibilityTab';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -418,7 +419,15 @@ export default function Leads() {
             </button>
           );
         })}
+        <button
+          onClick={() => setTab('responsible')}
+          className={`btn ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
+        >
+          ⚙ Responsible
+        </button>
       </div>
+
+      {tab === 'responsible' && <ResponsibilityTab module="sales_funnel" title="Sales Funnel" />}
 
       {/* Dashboard Tab */}
       {tab === 'dashboard' && dashboard && (

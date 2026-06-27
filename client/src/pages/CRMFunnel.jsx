@@ -4,6 +4,7 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { FiPlus, FiEdit2, FiEye, FiTrash2, FiExternalLink, FiTarget, FiDownload } from 'react-icons/fi';
+import ResponsibilityTab from '../components/ResponsibilityTab';
 import { exportCsv } from '../utils/exportCsv';
 
 const fmt = (n) => 'Rs ' + Math.abs(Math.round(+n || 0)).toLocaleString('en-IN');
@@ -45,6 +46,7 @@ export default function CRMFunnel() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({ q: '', step: 'all', state: '', type: '' });
+  const [view, setView] = useState('funnel');   // 'funnel' | 'responsible'
   const [modal, setModal] = useState(false);
   // Read-only view modal (mam, 2026-05-16: "action as eye" on the
   // CRM funnel list).  Holds the row being inspected; null = closed.
@@ -228,11 +230,11 @@ export default function CRMFunnel() {
           { key: '2', label: 'Step 2 — Negotiation', chipCls: 'bg-amber-500' },
           { key: '3', label: 'Step 3 — Win / Loss', chipCls: 'bg-emerald-500' },
         ].map(s => {
-          const isActive = filter.step === s.key;
+          const isActive = view === 'funnel' && filter.step === s.key;
           return (
             <button
               key={s.key}
-              onClick={() => setFilter(f => ({ ...f, step: s.key }))}
+              onClick={() => { setView('funnel'); setFilter(f => ({ ...f, step: s.key })); }}
               className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
             >
               {s.label}
@@ -242,8 +244,18 @@ export default function CRMFunnel() {
             </button>
           );
         })}
+        {/* Responsible (RACI + time) pill — who owns each step & how long it took */}
+        <button
+          onClick={() => setView('responsible')}
+          className={`btn ${view === 'responsible' ? 'btn-primary' : 'btn-secondary'} flex items-center gap-1.5`}
+        >
+          ⚙ Responsible
+        </button>
       </div>
 
+      {view === 'responsible' ? (
+        <ResponsibilityTab module="crm_funnel" title="CRM Sales Funnel" />
+      ) : (<>
       {/* Metric cards — match the existing Sales Funnel dashboard 5-card
           layout (Total / This Month / Won / Lost / Win Rate). */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -342,6 +354,7 @@ export default function CRMFunnel() {
           </tbody>
         </table>
       </div>
+      </>)}
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? `Edit Lead — ${editing.lead_no}` : 'Add CRM Lead'} wide>
         <form onSubmit={save} className="space-y-4">

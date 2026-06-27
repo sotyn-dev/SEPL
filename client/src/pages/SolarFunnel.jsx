@@ -5,6 +5,7 @@ import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import SearchableSelect from '../components/SearchableSelect';
+import ResponsibilityTab from '../components/ResponsibilityTab';
 import { num as fmt, inr } from '../lib/solar/format';
 import { PROJECT_TYPES } from '../lib/solar/engine';
 import { STATES, DISTRICTS_BY_STATE } from '../data/indiaLocations';
@@ -82,6 +83,7 @@ export default function SolarFunnel() {
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => setTab('pipeline')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${tab === 'pipeline' ? 'bg-blue-800 text-white border-blue-800' : 'bg-white text-gray-600 border-gray-200'}`}>Pipeline</button>
           <button onClick={() => setTab('analytics')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${tab === 'analytics' ? 'bg-blue-800 text-white border-blue-800' : 'bg-white text-gray-600 border-gray-200'}`}><FiTrendingUp className="inline mr-1" />Conversion</button>
+          <button onClick={() => setTab('responsible')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${tab === 'responsible' ? 'bg-blue-800 text-white border-blue-800' : 'bg-white text-gray-600 border-gray-200'}`}>⚙ Responsible</button>
           <button onClick={() => setModal({ owner_name: user?.name || '', stage: 'inquiry', project_type: 'ongrid' })} className="btn btn-primary text-sm flex items-center gap-1"><FiPlus size={14} /> New Deal</button>
         </div>
       </div>
@@ -109,7 +111,9 @@ export default function SolarFunnel() {
         </div>
       )}
 
-      {tab === 'pipeline' ? (
+      {tab === 'responsible' ? (
+        <ResponsibilityTab module="solar_funnel" title="Solar Sales Funnel" />
+      ) : tab === 'pipeline' ? (
         <div className="overflow-x-auto pb-2">
           <div className="flex gap-3 min-w-max">
             {stages.map((s) => {

@@ -10,6 +10,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import ResponsibilityTab from '../components/ResponsibilityTab';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -33,6 +34,7 @@ export default function SubconHiring() {
   const { canEdit, canDelete, canCreate } = useAuth();
   const [list, setList] = useState([]);
   const [openId, setOpenId] = useState(null);          // null = list view
+  const [view, setView] = useState('list');            // 'list' | 'responsible'
   const [createOpen, setCreateOpen] = useState(false);
   const [sites, setSites] = useState([]);
 
@@ -46,7 +48,14 @@ export default function SubconHiring() {
 
   return (
     <div className="space-y-4">
-      {openId == null && (
+      <div className="flex gap-2 flex-wrap">
+        <button onClick={() => { setView('list'); setOpenId(null); }} className={`btn ${view === 'list' ? 'btn-primary' : 'btn-secondary'}`}>Hiring List</button>
+        <button onClick={() => setView('responsible')} className={`btn ${view === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>⚙ Responsible</button>
+      </div>
+
+      {view === 'responsible' && <ResponsibilityTab module="subcon_hiring" title="Hiring (Sub-contractor)" />}
+
+      {view === 'list' && openId == null && (
         <ListView
           list={list}
           onOpen={setOpenId}
@@ -56,7 +65,7 @@ export default function SubconHiring() {
           canDelete={canDelete('subcon_hiring')}
         />
       )}
-      {openId != null && (
+      {view === 'list' && openId != null && (
         <DetailView
           id={openId}
           onBack={() => { setOpenId(null); load(); }}
