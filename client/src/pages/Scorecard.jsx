@@ -5,7 +5,7 @@
 //   - Templates     : admin manages KPI templates per role
 //   - Assign        : admin maps each user to a template
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
@@ -127,14 +127,19 @@ export default function Scorecard() {
   const [assignments, setAssignments] = useState([]);
   const [tplDetail, setTplDetail] = useState(null);
   const [overview, setOverview] = useState(null);
-  const [stepBreakdown, setStepBreakdown] = useState(null);   // RACI step-wise drill-down
-
-  // Open the step-wise breakdown of the "RACI Steps (All Modules)" row.
-  const openStepBreakdown = useCallback(() => {
-    setStepBreakdown({ loading: true });
-    api.get(`/scoring/raci-breakdown?user_id=${viewUserId}&week_start=${weekStart}`)
-      .then(r => setStepBreakdown(r.data))
-      .catch(err => { setStepBreakdown(null); toast.error(err.response?.data?.error || 'Failed to load step-wise breakdown'); });
+  // "RACI Steps" row → step-wise breakdown shown INLINE, expanded under the row
+  // on the page (mam 2026-06-27: show it here, like an expand — not in a popup).
+  const [raci, setRaci] = useState({ open: false, loading: false, data: null });
+  // Collapse + drop stale data whenever the viewed user or week changes.
+  useEffect(() => { setRaci({ open: false, loading: false, data: null }); }, [viewUserId, weekStart]);
+  const toggleRaci = useCallback(() => {
+    setRaci(r => {
+      if (r.open) return { ...r, open: false };          // collapse
+      api.get(`/scoring/raci-breakdown?user_id=${viewUserId}&week_start=${weekStart}`)
+        .then(res => setRaci(rr => ({ ...rr, loading: false, data: res.data })))
+        .catch(err => { setRaci({ open: false, loading: false, data: null }); toast.error(err.response?.data?.error || 'Failed to load step-wise breakdown'); });
+      return { open: true, loading: true, data: r.data };  // expand + fetch fresh
+    });
   }, [viewUserId, weekStart]);
 
   const loadScorecard = useCallback(() => {
@@ -307,16 +312,30 @@ export default function Scorecard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {grouped[groupName].map(k => (
-                    <KpiRow
-                      key={k.kpi_id}
-                      kpi={k}
-                      saving={savingKpi === k.kpi_id}
-                      onSave={(patch) => saveEntry(k, patch)}
-                      readOnly={viewUserId !== user.id && !isAdmin()}
-                      onStepWise={k.data_source === 'auto:raci_steps_done' ? openStepBreakdown : null}
-                    />
-                  ))}
+                  {grouped[groupName].map(k => {
+                    const isRaci = k.data_source === 'auto:raci_steps_done';
+                    return (
+                      <Fragment key={k.kpi_id}>
+                        <KpiRow
+                          kpi={k}
+                          saving={savingKpi === k.kpi_id}
+                          onSave={(patch) => saveEntry(k, patch)}
+                          readOnly={viewUserId !== user.id && !isAdmin()}
+                          onStepWise={isRaci ? toggleRaci : null}
+                          stepWiseOpen={isRaci && raci.open}
+                        />
+                        {isRaci && raci.open && (
+                          <tr className="border-t bg-gray-50">
+                            <td colSpan={9} className="p-3">
+                              {raci.loading
+                                ? <p className="text-sm text-gray-500">Loading step-wise…</p>
+                                : <RaciBreakdown data={raci.data} />}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -377,11 +396,6 @@ export default function Scorecard() {
       {/* Template detail modal */}
       <Modal isOpen={!!tplDetail} onClose={() => setTplDetail(null)} title={tplDetail?.name || 'Template'} wide>
         {tplDetail && <TemplateKpiEditor templateId={tplDetail.id} onChange={() => api.get(`/scoring/templates/${tplDetail.id}`).then(r => setTplDetail(r.data))} />}
-      </Modal>
-
-      {/* RACI step-wise breakdown modal */}
-      <Modal isOpen={!!stepBreakdown} onClose={() => setStepBreakdown(null)} title="RACI Steps — step-wise" wide>
-        <RaciBreakdown data={stepBreakdown} />
       </Modal>
     </div>
   );
@@ -457,7 +471,7 @@ function EmployeeSwitcher({ value, onChange }) {
 }
 
 // ---------- KPI Row (editable) ----------
-function KpiRow({ kpi, saving, onSave, readOnly, onStepWise }) {
+function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
   const [planned, setPlanned] = useState(kpi.planned ?? 0);
   const [actual, setActual] = useState(kpi.actual ?? 0);
   const [pendingUp, setPendingUp] = useState(kpi.pending_uptodate ?? '');
@@ -497,7 +511,9 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise }) {
           {kpi.direction !== 'lower_better' && <span className="text-emerald-600">↑ higher better</span>}
           {isAuto && <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[9px] font-bold">AUTO</span>}
           {onStepWise && (
-            <button onClick={onStepWise} className="ml-2 text-indigo-600 hover:underline font-semibold">▸ step-wise</button>
+            <button onClick={onStepWise} className="ml-2 text-indigo-600 hover:underline font-semibold">
+              {stepWiseOpen ? '▾ hide steps' : '▸ step-wise'}
+            </button>
           )}
         </div>
       </td>
