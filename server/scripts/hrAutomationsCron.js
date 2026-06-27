@@ -164,7 +164,7 @@ function findHrUsers(db) {
       FROM users u
       LEFT JOIN user_roles ur ON ur.user_id = u.id
       LEFT JOIN roles r ON r.id = ur.role_id
-     WHERE u.is_active = 1
+     WHERE COALESCE(u.active, 1) = 1
        AND u.email IS NOT NULL AND u.email != ''
        AND (
          LOWER(COALESCE(u.role, '')) = 'admin'

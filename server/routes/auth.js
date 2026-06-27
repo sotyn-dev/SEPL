@@ -18,9 +18,15 @@ router.post('/login', (req, res) => {
   // Look up regardless of `active` so we can return a distinct message when
   // the account is disabled vs. when the password is wrong — otherwise mam
   // can't tell why she's locked out.
-  const user = db.prepare(
-    'SELECT * FROM users WHERE (LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?))'
-  ).get(identifier, identifier);
+  // Match ALL rows for this identifier, then pick the one whose password
+  // actually matches. Duplicate usernames have existed (e.g. two 'vijay.kumar'),
+  // and a plain .get() could return the WRONG row — rejecting a correct
+  // password ("invalid credentials") or logging the person into someone else's
+  // account (seeing the other user's data). mam 2026-06-27.
+  const candidates = db.prepare(
+    'SELECT * FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)'
+  ).all(identifier, identifier);
+  const user = candidates.find(u => u.password && bcrypt.compareSync(password, u.password)) || null;
   if (user && user.active === 0) {
     logAuditEvent({
       action: 'LOGIN_FAIL', entity_type: 'auth', entity_label: identifier,
@@ -28,7 +34,7 @@ router.post('/login', (req, res) => {
     });
     return res.status(403).json({ error: 'Your account is disabled. Please contact admin.' });
   }
-  if (!user || !bcrypt.compareSync(password, user.password)) {
+  if (!user) {
     // Log failed login attempts so admin can spot brute-force patterns.
     logAuditEvent({
       action: 'LOGIN_FAIL', entity_type: 'auth', entity_label: identifier,
@@ -68,10 +74,20 @@ router.post('/register', authMiddleware, adminOnly, (req, res) => {
   const { name, email, username, password, role, department, phone, role_ids, avatar_url } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password required' });
   const db = getDb();
+  // Reject duplicates case-insensitively. `email` has a (case-sensitive) UNIQUE
+  // index but `username` has NONE — which let two 'vijay.kumar' accounts be
+  // created and broke their login. Guard both here (mam 2026-06-27).
+  const uname = username ? username.trim() : null;
+  if (db.prepare('SELECT id FROM users WHERE LOWER(email)=LOWER(?)').get(email)) {
+    return res.status(409).json({ error: 'Email already exists' });
+  }
+  if (uname && db.prepare('SELECT id FROM users WHERE LOWER(username)=LOWER(?)').get(uname)) {
+    return res.status(409).json({ error: 'Username already taken' });
+  }
   try {
     const hash = bcrypt.hashSync(password, 10);
     const result = db.prepare('INSERT INTO users (name, email, username, password, role, department, phone, avatar_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(name, email, username ? username.trim() : null, hash, role || 'user', department || null, phone || null,
+      .run(name, email, uname, hash, role || 'user', department || null, phone || null,
            avatar_url ? String(avatar_url).trim() : null);
 
     // Assign roles
