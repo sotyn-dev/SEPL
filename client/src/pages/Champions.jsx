@@ -45,6 +45,7 @@ export default function Champions() {
   const [period, setPeriod] = useState('month');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [openTeam, setOpenTeam] = useState(null);   // expanded team roster on the board
 
   const load = useCallback(() => {
     setLoading(true);
@@ -159,14 +160,29 @@ export default function Champions() {
                   </h2>
                   <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                     {data.teams.map(t => (
-                      <div key={t.team_id} className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 last:border-0">
-                        <span className="w-7 text-center font-bold text-gray-400">{t.rank ? `#${t.rank}` : '–'}</span>
-                        <div className="flex-1">
-                          <div className="font-medium text-gray-800">{t.name}</div>
-                          {t.motto && <div className="text-xs text-gray-400">{t.motto}</div>}
+                      <div key={t.team_id} className="border-b border-gray-100 last:border-0">
+                        <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
+                          onClick={() => setOpenTeam(openTeam === t.team_id ? null : t.team_id)}>
+                          <span className="w-7 text-center font-bold text-gray-400">{t.rank ? `#${t.rank}` : '–'}</span>
+                          <div className="flex-1">
+                            <div className="font-medium text-gray-800 flex items-center gap-1">{t.name}
+                              <span className="text-gray-300 text-xs">{openTeam === t.team_id ? '▴' : '▾'}</span></div>
+                            {t.motto && <div className="text-xs text-gray-400">{t.motto}</div>}
+                          </div>
+                          <span className="text-xs text-gray-400">{t.qualified_count}/{t.member_count} active</span>
+                          <span className={`text-lg font-bold w-14 text-right ${scoreColor(t.score)}`}>{t.score ?? '–'}</span>
                         </div>
-                        <span className="text-xs text-gray-400">{t.qualified_count}/{t.member_count} active</span>
-                        <span className={`text-lg font-bold w-14 text-right ${scoreColor(t.score)}`}>{t.score ?? '–'}</span>
+                        {openTeam === t.team_id && t.members?.length > 0 && (
+                          <div className="bg-gray-50/60 px-4 pb-2">
+                            {t.members.map(m => (
+                              <div key={m.user_id} className="flex items-center gap-3 py-1 text-sm border-t border-gray-100 first:border-0">
+                                <span className="w-7 text-center text-[11px] text-gray-400">{m.rank ? `#${m.rank}` : '—'}</span>
+                                <span className="flex-1 text-gray-700">{m.name}</span>
+                                <span className={`text-sm font-semibold w-14 text-right ${scoreColor(m.score)}`}>{m.score ?? '—'}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

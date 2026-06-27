@@ -216,11 +216,18 @@ router.get('/leaderboard', (req, res) => {
 
     // Teams = average of qualified members' scores
     const teams = db.prepare('SELECT t.id, t.name, t.motto, COUNT(tm.user_id) AS member_count FROM gam_team t LEFT JOIN gam_team_member tm ON tm.team_id = t.id GROUP BY t.id ORDER BY t.name').all();
-    const scoreByUser = {}; qualified.forEach(r => { scoreByUser[r.user_id] = r.score; });
+    const rankByUser = {}; qualified.forEach(r => { rankByUser[r.user_id] = { rank: r.rank, score: r.score }; });
+    // Full roster per team — so the dashboard can show every member with their
+    // team (e.g. "Ankit Raj · Naye Nawab") and rank, even those without a score.
+    const membersByTeam = {};
+    for (const m of db.prepare('SELECT tm.team_id, tm.user_id, u.name FROM gam_team_member tm JOIN users u ON u.id = tm.user_id WHERE COALESCE(u.active,1)=1').all()) {
+      (membersByTeam[m.team_id] = membersByTeam[m.team_id] || []).push({ user_id: m.user_id, name: m.name, rank: rankByUser[m.user_id]?.rank ?? null, score: rankByUser[m.user_id]?.score ?? null });
+    }
     const teamRows = teams.map(t => {
       const memScores = qualified.filter(r => r.team_id === t.id).map(r => r.score);
       const avg = memScores.length ? Math.round((memScores.reduce((a, b) => a + b, 0) / memScores.length) * 10) / 10 : null;
-      return { team_id: t.id, name: t.name, motto: t.motto, member_count: t.member_count, qualified_count: memScores.length, score: avg };
+      const members = (membersByTeam[t.id] || []).sort((a, b) => (a.rank == null ? 1e9 : a.rank) - (b.rank == null ? 1e9 : b.rank) || String(a.name).localeCompare(String(b.name)));
+      return { team_id: t.id, name: t.name, motto: t.motto, member_count: t.member_count, qualified_count: memScores.length, score: avg, members };
     });
     teamRows.sort((a, b) => (b.score == null ? -1 : b.score) - (a.score == null ? -1 : a.score));
     teamRows.forEach((t, i) => { t.rank = t.score == null ? null : i + 1; });
