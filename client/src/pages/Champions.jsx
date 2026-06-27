@@ -13,7 +13,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { useUrlTab } from '../hooks/useUrlTab';
 import { FaTrophy, FaMedal } from 'react-icons/fa';
-import { FiUsers, FiZap, FiRefreshCw, FiAlertCircle, FiSettings } from 'react-icons/fi';
+import { FiUsers, FiZap, FiRefreshCw, FiAlertCircle, FiSettings, FiTrash2 } from 'react-icons/fi';
 
 const PERIODS = [
   { key: 'week', label: 'Week' },
@@ -256,6 +256,7 @@ function Setup({ onChanged }) {
   const [cfg, setCfg] = useState(null);
   const [count, setCount] = useState(4);
   const [busy, setBusy] = useState(false);
+  const [drag, setDrag] = useState(null);   // { userId, fromTeamId } while dragging a player card
 
   const loadAll = useCallback(() => {
     api.get('/gamification/teams').then(r => setTeams(r.data)).catch(() => {});
@@ -284,6 +285,31 @@ function Setup({ onChanged }) {
   const addMember = (teamId, userId) => {
     if (!userId) return;
     api.post(`/gamification/teams/${teamId}/members`, { user_id: +userId }).then(() => { loadAll(); onChanged?.(); });
+  };
+  const createTeam = () => {
+    const name = window.prompt('Team name:');
+    if (!name || !name.trim()) return;
+    api.post('/gamification/teams', { name: name.trim() }).then(() => { loadAll(); onChanged?.(); })
+      .catch(err => toast.error(err.response?.data?.error || 'Failed to create team'));
+  };
+  const deleteTeam = (id) => {
+    if (!window.confirm('Delete this team? Its members move back to Unassigned.')) return;
+    api.delete(`/gamification/teams/${id}`).then(() => { loadAll(); onChanged?.(); })
+      .catch(err => toast.error(err.response?.data?.error || 'Failed to delete team'));
+  };
+  // Drag a player card onto a column. Drop on a team → assign/move (user is
+  // unique, so it moves out of any old pod). Drop on Unassigned → remove.
+  const dropTo = async (targetTeamId) => {
+    const d = drag; setDrag(null);
+    if (!d || d.fromTeamId === targetTeamId) return;
+    try {
+      if (targetTeamId == null) {
+        if (d.fromTeamId != null) await api.delete(`/gamification/teams/${d.fromTeamId}/members/${d.userId}`);
+      } else {
+        await api.post(`/gamification/teams/${targetTeamId}/members`, { user_id: d.userId });
+      }
+      loadAll(); onChanged?.();
+    } catch (err) { toast.error(err.response?.data?.error || 'Move failed'); }
   };
 
   return (
@@ -326,33 +352,46 @@ function Setup({ onChanged }) {
         </div>
       </div>
 
-      {/* Teams list */}
-      {teams && (
-        <div className="space-y-3">
-          {teams.teams.length === 0 && <p className="text-sm text-gray-400">No teams yet — use auto-balance above to create them.</p>}
-          {teams.teams.map(t => (
-            <div key={t.id} className="bg-white rounded-xl border border-gray-200 p-4">
-              <div className="font-semibold text-gray-800 mb-2">{t.name} <span className="text-xs font-normal text-gray-400">({t.members.length})</span></div>
-              <div className="flex flex-wrap gap-2 mb-3">
-                {t.members.map(m => (
-                  <span key={m.user_id} className="text-xs bg-gray-100 rounded-full pl-3 pr-1 py-1 flex items-center gap-1">
-                    {m.name}
-                    <button onClick={() => removeMember(t.id, m.user_id)} className="w-4 h-4 rounded-full hover:bg-gray-300 text-gray-500">×</button>
-                  </span>
-                ))}
-                {t.members.length === 0 && <span className="text-xs text-gray-400">No members</span>}
-              </div>
-              {teams.unassigned.length > 0 && (
-                <select className="text-sm border rounded-lg px-2 py-1" defaultValue=""
-                  onChange={e => { addMember(t.id, e.target.value); e.target.value = ''; }}>
-                  <option value="">+ Add unassigned player…</option>
-                  {teams.unassigned.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                </select>
-              )}
+      {/* Teams — kanban board (drag players between pods) */}
+      {teams && (() => {
+        const columns = [
+          { id: null, name: 'Unassigned', members: (teams.unassigned || []).map(u => ({ user_id: u.id, name: u.name, role: u.role, department: u.department })) },
+          ...teams.teams,
+        ];
+        return (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold text-gray-700 flex items-center gap-2"><FiUsers /> Teams — drag players between pods</h3>
+              <button onClick={createTeam} className="text-sm text-indigo-600 hover:underline font-medium">+ Add team</button>
             </div>
-          ))}
-        </div>
-      )}
+            <div className="flex gap-3 overflow-x-auto pb-2">
+              {columns.map(col => (
+                <div key={col.id ?? 'unassigned'}
+                  onDragOver={e => e.preventDefault()} onDrop={() => dropTo(col.id)}
+                  className={`flex-shrink-0 w-56 rounded-xl border p-2 transition-colors ${col.id == null ? 'bg-gray-50 border-gray-200' : 'bg-amber-50/40 border-amber-200'}`}>
+                  <div className="flex items-center justify-between px-1 mb-2">
+                    <span className="text-sm font-semibold text-gray-700">{col.name} <span className="text-xs font-normal text-gray-400">({col.members.length})</span></span>
+                    {col.id != null && <button onClick={() => deleteTeam(col.id)} className="text-gray-300 hover:text-red-500 text-xs" title="Delete team"><FiTrash2 size={13} /></button>}
+                  </div>
+                  <div className="space-y-1.5 min-h-[48px]">
+                    {col.members.map(m => (
+                      <div key={m.user_id} draggable
+                        onDragStart={() => setDrag({ userId: m.user_id, fromTeamId: col.id })}
+                        onDragEnd={() => setDrag(null)}
+                        className="bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs shadow-sm cursor-grab active:cursor-grabbing hover:border-amber-300">
+                        <div className="font-medium text-gray-800 truncate">{m.name}</div>
+                        {(m.department || m.role) && <div className="text-[10px] text-gray-400 truncate">{m.department || m.role}</div>}
+                      </div>
+                    ))}
+                    {col.members.length === 0 && <div className="text-[11px] text-gray-300 text-center py-3 border border-dashed border-gray-200 rounded-lg">drop here</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-2">Drag a player card onto a team to assign or move them; drag to <b>Unassigned</b> to remove from a pod.</p>
+          </div>
+        );
+      })()}
     </div>
   );
 }
