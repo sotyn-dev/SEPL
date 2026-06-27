@@ -174,6 +174,8 @@ export const PROJECT_TYPES = [
   { v: 'hybrid', label: 'Hybrid (battery)' },
   { v: 'offgrid', label: 'Off-grid (battery)' },
   { v: 'pump', label: 'Solar pump / SWH' },
+  { v: 'streetlight', label: 'Solar street lighting' },
+  { v: 'thermal', label: 'Solar thermal' },
 ];
 export const MOUNTS = [
   { v: 'ground', label: 'Ground-mount' }, { v: 'rcc', label: 'Rooftop RCC' }, { v: 'tin', label: 'Rooftop tin-shed' },

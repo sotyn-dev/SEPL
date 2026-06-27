@@ -15,10 +15,14 @@ export default function QualificationChat({ deal, onClose, onDone }) {
   const set = (k, v) => setAns((p) => ({ ...p, [k]: v }));
   const prog = qualProgress(ans);
   const rec = useMemo(() => recommend(ans), [ans]);
+  // Suggested size is editable — the rep can override the auto-recommendation
+  // before saving (mam 2026-06-27). '' = use the recommended kW.
+  const [kwOverride, setKwOverride] = useState('');
+  const finalKw = kwOverride !== '' ? (+kwOverride || 0) : rec.kw;
 
   const next = () => setI((x) => Math.min(flat.length, x + 1));
   const back = () => setI((x) => Math.max(0, x - 1));
-  const finish = () => onDone(ans, rec);
+  const finish = () => onDone(ans, { ...rec, kw: finalKw });
 
   const showSectionHead = i === 0 || flat[i - 1]?.section !== q?.section;
 
@@ -57,7 +61,16 @@ export default function QualificationChat({ deal, onClose, onDone }) {
             <div>
               <p className="text-[11px] font-bold uppercase tracking-wide text-emerald-700 mb-2">✓ Lead qualified — recommended system</p>
               <div className="grid grid-cols-3 gap-2 mb-3">
-                <div className="border rounded-lg p-3"><p className="text-[10px] text-gray-400 uppercase">Suggested size</p><p className="text-xl font-bold">{fmt(rec.kw)} kW</p></div>
+                <div className="border rounded-lg p-3"><p className="text-[10px] text-gray-400 uppercase">Suggested size <span className="text-blue-500 normal-case">(editable)</span></p>
+                  <div className="flex items-baseline gap-1">
+                    <input type="number" min="0" step="0.5"
+                      value={kwOverride !== '' ? kwOverride : (rec.kw ?? '')}
+                      onChange={(e) => setKwOverride(e.target.value)}
+                      className="text-xl font-bold w-16 border-b border-gray-300 focus:border-blue-500 outline-none bg-transparent" />
+                    <span className="text-sm font-bold">kW</span>
+                  </div>
+                  {kwOverride !== '' && +kwOverride !== rec.kw && <p className="text-[9px] text-gray-400 mt-0.5">suggested {fmt(rec.kw)} kW</p>}
+                </div>
                 <div className="border rounded-lg p-3"><p className="text-[10px] text-gray-400 uppercase">System type</p><p className="text-xl font-bold capitalize">{rec.conn}</p></div>
                 <div className="border rounded-lg p-3"><p className="text-[10px] text-gray-400 uppercase">Est. units/mo</p><p className="text-xl font-bold">{fmt(rec.est_units)}</p></div>
               </div>
