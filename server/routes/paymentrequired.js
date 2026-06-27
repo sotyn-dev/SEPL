@@ -564,6 +564,28 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
     }
   }
   const db = getDb();
+
+  // Duplicate guard (mam 2026-06-27): a double-clicked Submit on a slow
+  // connection was creating 3-4 identical PRs at the same minute (e.g.
+  // PR-2026-1044..1047, Vivek Kumar Rs 210). Reject an identical request —
+  // same employee + category + amount + purpose + site — created in the last
+  // 90 seconds. The frontend also disables the button while submitting; this
+  // is the server-side safety net for genuine races / repeated API posts.
+  try {
+    const dup = db.prepare(`
+      SELECT request_no FROM payment_requests
+       WHERE employee_name = ? AND category = ? AND amount = ?
+         AND COALESCE(purpose,'') = COALESCE(?, '')
+         AND COALESCE(site_name,'') = COALESCE(?, '')
+         AND status != 'rejected'
+         AND created_at >= datetime('now', '-90 seconds')
+       ORDER BY id DESC LIMIT 1
+    `).get(b.employee_name, b.category, +b.amount, b.purpose || '', b.site_name || '');
+    if (dup) {
+      return res.status(409).json({ error: `Duplicate request — an identical payment request (${dup.request_no}) was just created. It's already in the queue; no need to submit again.` });
+    }
+  } catch (_) { /* if the guard query fails, fall through and create normally */ }
+
   const { nextSequence } = require('../db/nextSequence');
   const yr = new Date().getFullYear();
   // Schema column is `request_no` (NOT request_number) — earlier mismatch

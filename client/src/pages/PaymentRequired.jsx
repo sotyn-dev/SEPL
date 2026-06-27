@@ -215,8 +215,10 @@ export default function PaymentRequired() {
     return missing;
   };
 
+  const [saving, setSaving] = useState(false);   // create-request in flight — blocks double-submit
   const handleSave = async (e) => {
     e.preventDefault();
+    if (saving) return;   // guard double-submit — repeated clicks were creating duplicate PRs
     // TA/DA travel date must be today or within the previous 3 days — no future.
     if (form.category === 'TA/DA' && form.travel_dates && (form.travel_dates < minTravelDate() || form.travel_dates > todayStr())) {
       return toast.error(`Travel Date must be between ${minTravelDate()} and ${todayStr()} (today or up to 3 days back).`, { duration: 7000 });
@@ -225,11 +227,13 @@ export default function PaymentRequired() {
     if (missing.length > 0) {
       return toast.error(`Upload required proof${missing.length > 1 ? 's' : ''} before submitting: ${missing.join(', ')}`, { duration: 7000 });
     }
+    setSaving(true);
     try {
       const res = await api.post('/payment-required', form);
       toast.success(`Request ${res.data.request_no} created`);
       setModal(null); setForm({ ...emptyForm }); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+    finally { setSaving(false); }
   };
 
   const [approvalRemarks, setApprovalRemarks] = useState('');
@@ -1404,7 +1408,7 @@ export default function PaymentRequired() {
 
           <div className="flex justify-end gap-3 pt-2 border-t">
             <button type="button" onClick={() => setModal(null)} className="btn btn-secondary">Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={requiredProofsMissing(form).length > 0}>Submit Request</button>
+            <button type="submit" className="btn btn-primary" disabled={saving || requiredProofsMissing(form).length > 0}>{saving ? 'Submitting…' : 'Submit Request'}</button>
           </div>
         </form>
       </Modal>
