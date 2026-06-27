@@ -1102,10 +1102,10 @@ router.post('/indents', (req, res) => {
   const getMasterType = db.prepare('SELECT type FROM item_master WHERE id=?');
 
   // PO sub-item rules per BOQ (mam 2026-05-25 + 2026-05-27 follow-up):
-  //   - EXACTLY one PO sub-item per BOQ row is REQUIRED
-  //   - FOC + RGP sub-items can be multiple (or zero)
-  //   - "Only PO" rule was set earlier (max 1); now adding the
-  //     "at-least 1 PO" rule so an indent can't be all-FOC under a BOQ.
+  //   - A BOQ row is EITHER a PO line (exactly ONE PO sub-item + optional
+  //     FOC) OR a FOC-only line (no PO — free of cost, not billed to the
+  //     client) (mam 2026-06-26 BOQ-level PO/FOC toggle). Max ONE PO either way.
+  //   - A BOQ with neither PO nor FOC (untyped) is rejected — pick one.
   //   - Only applies to BOQ-linked categories (material + extra_schedule).
   //     Off-BOQ categories (rgp / extra_non_schedule / rental) skip this.
   if (!isRgp && !isExtraNonSchedule && !isRental) {
@@ -1126,9 +1126,9 @@ router.post('/indents', (req, res) => {
           error: `Only ONE PO sub-item allowed per BOQ row.  BOQ #${poId} has ${b.po} PO lines — keep one and convert the others to FOC or RGP if they're not chargeable.`
         });
       }
-      if (b.po === 0) {
+      if (b.po === 0 && b.foc === 0) {
         return res.status(400).json({
-          error: `BOQ #${poId} has no PO sub-item.  Each BOQ needs exactly ONE PO (chargeable) sub-item; FOC/RGP can be multiple but cannot stand alone.`
+          error: `BOQ #${poId} has no PO or FOC sub-item.  Choose PO (chargeable — needs a Vendor PO) or FOC (free of cost) for the sub-item.`
         });
       }
     }
@@ -2350,19 +2350,22 @@ router.put('/indents/:id', (req, res) => {
         const poId = Number.isInteger(+it.po_item_id) && +it.po_item_id > 0 ? +it.po_item_id : null;
         if (!poId) continue;
         const t = String(it.item_type || '').toUpperCase();
-        const b = subItemsPerBoqEdit.get(poId) || { po: 0 };
+        const b = subItemsPerBoqEdit.get(poId) || { po: 0, foc: 0 };
         if (t === 'PO') b.po++;
+        else if (t === 'FOC') b.foc++;
         subItemsPerBoqEdit.set(poId, b);
       }
       for (const [poId, b] of subItemsPerBoqEdit) {
         if (b.po > 1) {
           return res.status(400).json({
-            error: `Only ONE PO sub-item allowed per BOQ row.  BOQ #${poId} has ${b.po} PO lines — keep one and convert the others to FOC or RGP if they're not chargeable.`
+            error: `Only ONE PO sub-item allowed per BOQ row.  BOQ #${poId} has ${b.po} PO lines — keep one and convert the others to FOC if they're not chargeable.`
           });
         }
-        if (b.po === 0) {
+        // A BOQ may be FOC-only (no PO) — free of cost, not billed (mam
+        // 2026-06-26). Reject only when there is neither a PO nor a FOC line.
+        if (b.po === 0 && b.foc === 0) {
           return res.status(400).json({
-            error: `BOQ #${poId} has no PO sub-item.  Each BOQ needs exactly ONE PO (chargeable) sub-item; FOC/RGP can be multiple but cannot stand alone.`
+            error: `BOQ #${poId} has no PO or FOC sub-item.  Choose PO (chargeable) or FOC (free) for the sub-item.`
           });
         }
       }

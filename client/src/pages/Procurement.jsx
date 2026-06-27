@@ -892,7 +892,9 @@ export default function Procurement() {
       item_master_id: item?.item_master_id || '',
       description: item?.description || '',
       unit: (item?.unit || n[i].unit || 'nos').toString().toLowerCase(),
-      item_type: item?.item_type || '',
+      // Default a freshly-picked BOQ to PO mode (the chargeable case) unless the
+      // BOQ line itself is FOC. The BOQ-level PO/FOC toggle can switch it.
+      item_type: item?.item_type || 'PO',
       make: item?.item_make || n[i].make || '',
       boq_qty: item?.boq_qty || 0,
       remaining_qty: item?.remaining_qty,
@@ -934,26 +936,27 @@ export default function Procurement() {
       }
     }
 
-    // ─── BOQ sub-item rules (mam 2026-05-27) ───────────────────────────
-    // Each BOQ row in a Material / Extra-Schedule indent MUST have
-    // exactly ONE PO sub-item (chargeable). FOC + RGP sub-items can
-    // be multiple (or zero). Off-BOQ categories skip this entirely.
+    // ─── BOQ sub-item rules (mam 2026-06-26: BOQ-level PO/FOC toggle) ─────
+    // Each BOQ row is EITHER PO mode (exactly ONE chargeable PO sub-item +
+    // optional FOC) OR FOC-only mode (≥1 FOC, no PO — free, not billed).
+    // A BOQ with no PO and no FOC (untyped) is invalid. Off-BOQ categories skip.
     if (needsBoq) {
       const subItemsPerBoq = new Map();
       for (const it of indentItems) {
         const poId = Number.isInteger(+it.po_item_id) && +it.po_item_id > 0 ? +it.po_item_id : null;
         if (!poId) continue;
         const t = String(it.item_type || '').toUpperCase();
-        const b = subItemsPerBoq.get(poId) || { po: 0 };
+        const b = subItemsPerBoq.get(poId) || { po: 0, foc: 0 };
         if (t === 'PO') b.po++;
+        else if (t === 'FOC') b.foc++;
         subItemsPerBoq.set(poId, b);
       }
       for (const [, b] of subItemsPerBoq) {
         if (b.po > 1) {
-          return toast.error('Only ONE PO sub-item allowed per BOQ. Keep one and convert the others to FOC/RGP if they are not chargeable.');
+          return toast.error('Only ONE PO sub-item allowed per BOQ (PO mode). Keep one and make the rest FOC.');
         }
-        if (b.po === 0) {
-          return toast.error('Each BOQ needs exactly ONE PO (chargeable) sub-item. FOC/RGP cannot stand alone — add the PO row.');
+        if (b.po === 0 && b.foc === 0) {
+          return toast.error('Each BOQ needs a sub-item — pick PO (chargeable) or FOC (free) using the BOQ’s Type toggle.');
         }
       }
     }
@@ -5809,7 +5812,24 @@ export default function Procurement() {
                   groups[seen.get(key)].rows.push({ item, idx });
                 });
 
-                return groups.map((group, gi) => (
+                return groups.map((group, gi) => {
+                  // BOQ-level mode (mam 2026-06-26): a BOQ is in PO mode when it
+                  // holds the one chargeable PO sub-item, else it's FOC-only.
+                  const boqMode = group.rows.some(r => String(r.item.item_type || '').toUpperCase() === 'PO') ? 'PO' : 'FOC';
+                  // Switch the whole BOQ between PO and FOC. FOC → all sub-items
+                  // FOC (no PO). PO → make the first sub-item the PO if none yet.
+                  const setBoqMode = (mode) => {
+                    const ids = new Set(group.rows.map(r => r.idx));
+                    const firstIdx = group.rows[0]?.idx;
+                    const hasPo = group.rows.some(r => String(r.item.item_type || '').toUpperCase() === 'PO');
+                    setIndentItems(prev => prev.map((it, x) => {
+                      if (!ids.has(x)) return it;
+                      if (mode === 'FOC') return { ...it, item_type: 'FOC' };
+                      if (!hasPo) return { ...it, item_type: x === firstIdx ? 'PO' : 'FOC' };
+                      return it;
+                    }));
+                  };
+                  return (
                   // overflow-visible (not hidden) so the SearchableSelect's
                   // absolute-positioned options popup can escape this card.
                   // We use rounded-t-lg on the header instead so the top
@@ -5834,6 +5854,20 @@ export default function Procurement() {
                               ) : (
                                 <div className="text-[11px] text-gray-500 mt-0.5">{group.rows.length} sub-item{group.rows.length === 1 ? '' : 's'}</div>
                               )}
+                              {/* BOQ-level PO / FOC toggle — one choice mandatory
+                                  (mam 2026-06-26). PO = chargeable (one PO sub-item
+                                  + optional FOC, billed). FOC = free of cost (FOC
+                                  sub-items only, no PO, not billed). */}
+                              <div className="mt-2 flex items-center gap-1.5">
+                                <span className="text-[10px] font-bold text-gray-500 uppercase">Type <span className="text-red-500">*</span></span>
+                                <button type="button" onClick={() => setBoqMode('PO')}
+                                  className={`text-[10px] font-bold px-2.5 py-0.5 rounded border ${boqMode === 'PO' ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-500 border-gray-300 hover:border-red-300'}`}
+                                  title="PO = chargeable: exactly one PO sub-item (+ optional FOC). Billed to the client.">PO</button>
+                                <button type="button" onClick={() => setBoqMode('FOC')}
+                                  className={`text-[10px] font-bold px-2.5 py-0.5 rounded border ${boqMode === 'FOC' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-500 border-gray-300 hover:border-emerald-300'}`}
+                                  title="FOC = free of cost: FOC sub-items only, no PO. Not billed to the client.">FOC</button>
+                                <span className="text-[10px] text-gray-400 italic">{boqMode === 'FOC' ? 'free — not billed' : 'one PO + optional FOC'}</span>
+                              </div>
                             </>
                           ) : (
                             <>
@@ -5988,11 +6022,14 @@ export default function Procurement() {
                               {item.item_type || 'RGP'}
                             </div>
                           ) : (
+                            // In FOC mode the whole BOQ is FOC — lock the row to
+                            // FOC (use the header toggle to switch back to PO).
                             <select
-                              className={`select text-[11px] font-bold uppercase py-1.5 text-center border ${typeClass}`}
+                              className={`select text-[11px] font-bold uppercase py-1.5 text-center border ${typeClass} ${boqMode === 'FOC' ? 'opacity-70 cursor-not-allowed' : ''}`}
                               value={t === 'FOC' ? 'FOC' : 'PO'}
+                              disabled={boqMode === 'FOC'}
                               onChange={e => { const n = [...indentItems]; n[i].item_type = e.target.value; setIndentItems(n); }}
-                              title="PO = procured, needs a Vendor PO.  FOC = free of cost — no PO needed.">
+                              title={boqMode === 'FOC' ? 'FOC-only BOQ — switch the BOQ Type toggle to PO to change this.' : 'PO = procured, needs a Vendor PO.  FOC = free of cost — no PO needed.'}>
                               <option value="PO">PO</option>
                               <option value="FOC">FOC</option>
                             </select>
@@ -6070,19 +6107,19 @@ export default function Procurement() {
                           const isRgpCat = cat === 'rgp';
                           // What label + default sub-type goes on the new row?
                           //   RGP category: more RGP sub-items allowed under the same BOQ
-                          //   Else (Material / Extra-Schedule): FOC only after PO slot is filled
+                          //   PO mode: the one PO slot is the chargeable line, extra rows are FOC
+                          //   FOC mode (mam 2026-06-26): every sub-item is FOC (no PO)
                           const addLabel = isRgpCat
                             ? '+ Add RGP sub-item to this BOQ'
-                            : `+ Add ${hasPoLineInGroup ? 'FOC' : ''} sub-item to this BOQ`;
+                            : (boqMode === 'FOC' ? '+ Add FOC sub-item to this BOQ' : `+ Add ${hasPoLineInGroup ? 'FOC' : ''} sub-item to this BOQ`);
                           const lockHint = isRgpCat
                             ? null
-                            : (hasPoLineInGroup ? '(PO slot used — only FOC can be added here)' : null);
-                          const defaultType = isRgpCat ? 'RGP' : (hasPoLineInGroup ? 'FOC' : '');
-                          // Missing-PO warning chip (mam 2026-05-27): every
-                          // BOQ row must have exactly ONE PO sub-item.
-                          // Surfaces here so the user sees the requirement
-                          // BEFORE clicking Submit (server also enforces).
-                          const missingPo = !isRgpCat && !hasPoLineInGroup;
+                            : (boqMode === 'FOC' ? 'FOC-only BOQ — free of cost, not billed to the client'
+                               : (hasPoLineInGroup ? '(PO slot used — only FOC can be added here)' : null));
+                          const defaultType = isRgpCat ? 'RGP' : (boqMode === 'FOC' ? 'FOC' : (hasPoLineInGroup ? 'FOC' : 'PO'));
+                          // With the BOQ-level toggle a PO/FOC choice is always
+                          // set, so the old "missing PO" chip no longer applies.
+                          const missingPo = false;
                           return (
                             <div className="flex items-center gap-2 flex-wrap">
                               <button
@@ -6113,7 +6150,8 @@ export default function Procurement() {
                       </div>
                     )}
                   </div>
-                ));
+                  );
+                });
               })()}
 
               {(form.indent_category === 'material' || form.indent_category === 'rgp' || form.indent_category === 'extra_schedule' || !form.indent_category) && (
