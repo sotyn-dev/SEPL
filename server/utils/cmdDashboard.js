@@ -452,28 +452,53 @@ function computeCmdDetail(db, daysRaw) {
   `, from);
 
   // Expected client SALE for THIS Vendor PO = Σ (its own purchased line qty ×
-  // BOQ sale rate) (mam 2026-06-26: "Vendor PO qty (item only po) * billable
-  // rate"). Authoritative source = vendor_po_items — the lines actually on
-  // this PO — joined to the indent line's priced BOQ po_item for the SALE
-  // rate. Keyed by vendor_po_id so each PO gets ONLY its own slice: one indent
-  // split across several Vendor POs no longer repeats (and double-counts in the
-  // totals) the whole-indent budget on every row. vpi.quantity = the qty on
-  // the PO; poi.rate = the client BOQ sale rate; PO-type lines only.
+  // the order BOQ's LIVE SITC rate). vpi.quantity = the qty on this PO.
+  //
+  // The rate is resolved from the indent's CURRENT order BOQ by item name —
+  // NOT via the stored indent_items.po_item_id (mam 2026-06-27). Editing /
+  // re-uploading a Client PO BOQ does DELETE+re-INSERT of po_items (new IDs),
+  // so the old po_item_id link goes stale and the budget was showing the
+  // rate at indent-creation time instead of the current BOQ rate. Matching by
+  // (order business_book, description) against the live po_items always tracks
+  // the current rate; we only fall back to the linked po_item's rate when the
+  // item can't be matched by name. PO-type lines only; keyed by vendor_po_id.
   const budgetByPo = new Map();   // vendor_po_id → this PO's sales budget
   const poIds = pvsRaw.map(r => r.id);
   if (poIds.length) {
     const ph = poIds.map(() => '?').join(',');
-    for (const b of safeAll(db, `
-      SELECT vpi.vendor_po_id AS po_id,
-             SUM(COALESCE(vpi.quantity, 0) * COALESCE(poi.rate, 0)) AS budget
+    // indent → its order's business_book (the authoritative "which order")
+    const indentIds = [...new Set(pvsRaw.map(r => r.indent_id).filter(Boolean))];
+    const bbByIndent = {};
+    if (indentIds.length) {
+      const iph = indentIds.map(() => '?').join(',');
+      for (const r of safeAll(db, `SELECT i.id AS indent_id, op.business_book_id AS bb
+        FROM indents i LEFT JOIN order_planning op ON op.id = i.planning_id
+        WHERE i.id IN (${iph})`, ...indentIds)) bbByIndent[r.indent_id] = r.bb || null;
+    }
+    // live rate per (business_book, lower(description)) — latest row wins
+    const rateByBbDesc = {};
+    const bbIds = [...new Set(Object.values(bbByIndent).filter(v => v != null))];
+    if (bbIds.length) {
+      const bph = bbIds.map(() => '?').join(',');
+      for (const r of safeAll(db, `SELECT business_book_id AS bb, description, rate
+        FROM po_items WHERE business_book_id IN (${bph})`, ...bbIds)) {
+        rateByBbDesc[r.bb + '|' + String(r.description || '').toLowerCase().trim()] = num(r.rate);
+      }
+    }
+    // each PO line: qty × live rate (fallback to the linked po_item's rate)
+    for (const ln of safeAll(db, `
+      SELECT vpi.vendor_po_id AS po_id, vp.indent_id AS indent_id,
+             vpi.quantity AS qty, ii.description AS descr, poi.rate AS stale_rate
         FROM vendor_po_items vpi
-        JOIN indent_items ii ON ii.id = vpi.indent_item_id
-        JOIN po_items poi    ON poi.id = ii.po_item_id
+        JOIN vendor_pos vp     ON vp.id = vpi.vendor_po_id
+        JOIN indent_items ii   ON ii.id = vpi.indent_item_id
+        LEFT JOIN po_items poi ON poi.id = ii.po_item_id
        WHERE vpi.vendor_po_id IN (${ph})
-         AND UPPER(COALESCE(ii.item_type, '')) = 'PO'
-       GROUP BY vpi.vendor_po_id
-    `, ...poIds)) {
-      budgetByPo.set(b.po_id, num(b.budget));
+         AND UPPER(COALESCE(ii.item_type, '')) = 'PO'`, ...poIds)) {
+      const bb = bbByIndent[ln.indent_id];
+      const live = bb != null ? rateByBbDesc[bb + '|' + String(ln.descr || '').toLowerCase().trim()] : undefined;
+      const rate = (live != null) ? live : num(ln.stale_rate);
+      budgetByPo.set(ln.po_id, (budgetByPo.get(ln.po_id) || 0) + num(ln.qty) * rate);
     }
   }
 
