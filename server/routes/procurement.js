@@ -3139,17 +3139,17 @@ router.get('/indents/:id/billable-print', (req, res) => {
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Billable ${esc(indent.indent_number)}</title>
   <style>
     body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:0;padding:24px;font-size:12px}
-    .hdr{text-align:center;border-bottom:3px solid #7a1b1b;padding-bottom:8px;margin-bottom:10px}
-    .hdr h1{margin:0;color:#7a1b1b;font-size:18px}
+    .hdr{text-align:center;border-bottom:3px solid #1e40af;padding-bottom:8px;margin-bottom:10px}
+    .hdr h1{margin:0;color:#1e40af;font-size:18px}
     .meta{display:flex;justify-content:space-between;font-size:11px;color:#555;margin:8px 0;flex-wrap:wrap;gap:6px}
     .box{border:1px solid #ddd;border-radius:6px;padding:8px 10px;margin:8px 0;font-size:11px}
     table{width:100%;border-collapse:collapse;margin-top:8px}
     th,td{border:1px solid #ccc;padding:6px 8px}
-    th{background:#f3eaea;color:#7a1b1b;text-align:left;font-size:11px}
+    th{background:#e8eefc;color:#1e40af;text-align:left;font-size:11px}
     td.r,th.r{text-align:right}
-    tfoot td{font-weight:bold;background:#faf5f5}
-    .title{text-align:center;background:#7a1b1b;color:#fff;font-weight:bold;padding:6px;border-radius:4px;letter-spacing:1px;margin:6px 0}
-    .pbtn{position:fixed;top:12px;right:12px;background:#7a1b1b;color:#fff;border:none;border-radius:4px;padding:8px 14px;cursor:pointer}
+    tfoot td{font-weight:bold;background:#f4f7fe}
+    .title{text-align:center;background:#1e40af;color:#fff;font-weight:bold;padding:6px;border-radius:4px;letter-spacing:1px;margin:6px 0}
+    .pbtn{position:fixed;top:12px;right:12px;background:#1e40af;color:#fff;border:none;border-radius:4px;padding:8px 14px;cursor:pointer}
     @media print{.pbtn{display:none}}
   </style></head><body>
   <button class="pbtn" onclick="window.print()">🖨 Print / Save PDF</button>
@@ -3238,17 +3238,17 @@ router.get('/vendor-po/:id/budget-print', (req, res) => {
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Budget ${esc(vp.po_number)}</title>
   <style>
     body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:0;padding:24px;font-size:12px}
-    .hdr{text-align:center;border-bottom:3px solid #7a1b1b;padding-bottom:8px;margin-bottom:10px}
-    .hdr h1{margin:0;color:#7a1b1b;font-size:18px}
+    .hdr{text-align:center;border-bottom:3px solid #1e40af;padding-bottom:8px;margin-bottom:10px}
+    .hdr h1{margin:0;color:#1e40af;font-size:18px}
     .meta{display:flex;justify-content:space-between;font-size:11px;color:#555;margin:8px 0;flex-wrap:wrap;gap:6px}
     .box{border:1px solid #ddd;border-radius:6px;padding:8px 10px;margin:8px 0;font-size:11px}
     table{width:100%;border-collapse:collapse;margin-top:8px}
     th,td{border:1px solid #ccc;padding:6px 8px}
-    th{background:#f3eaea;color:#7a1b1b;text-align:left;font-size:11px}
+    th{background:#e8eefc;color:#1e40af;text-align:left;font-size:11px}
     td.r,th.r{text-align:right}
-    tfoot td{font-weight:bold;background:#faf5f5}
-    .title{text-align:center;background:#7a1b1b;color:#fff;font-weight:bold;padding:6px;border-radius:4px;letter-spacing:1px;margin:6px 0}
-    .pbtn{position:fixed;top:12px;right:12px;background:#7a1b1b;color:#fff;border:none;border-radius:4px;padding:8px 14px;cursor:pointer}
+    tfoot td{font-weight:bold;background:#f4f7fe}
+    .title{text-align:center;background:#1e40af;color:#fff;font-weight:bold;padding:6px;border-radius:4px;letter-spacing:1px;margin:6px 0}
+    .pbtn{position:fixed;top:12px;right:12px;background:#1e40af;color:#fff;border:none;border-radius:4px;padding:8px 14px;cursor:pointer}
     @media print{.pbtn{display:none}}
   </style></head><body>
   <button class="pbtn" onclick="window.print()">🖨 Print / Save PDF</button>
@@ -5398,35 +5398,35 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
        generated bill look like the printed template ("M/s ______") when
        a field isn't filled in the source data yet. */
     .blank { display: inline-block; min-width: 140px; border-bottom: 1px dotted #999; height: 1em; vertical-align: bottom; }
-    .header { background: #7a1b1b; color: #fff; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; }
+    .header { background: #1e40af; color: #fff; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; }
     .header .gstin, .header .pan { font-size: 10px; }
     .header .title { font-size: 18px; font-weight: bold; letter-spacing: 1px; }
     .companyblock { text-align: center; padding: 6px; }
-    .companyblock h1 { font-size: 16px; margin: 0 0 4px 0; color: #7a1b1b; }
+    .companyblock h1 { font-size: 16px; margin: 0 0 4px 0; color: #1e40af; }
     .companyblock .addr { font-size: 9.5px; color: #444; }
     .companyblock .tag { font-size: 9.5px; color: #444; margin-top: 2px; }
     table.meta, table.parties, table.items, table.totals, table.foot { width: 100%; border-collapse: collapse; }
     table.meta td, table.parties td { border: 1px solid #e7d4d4; padding: 6px 8px; vertical-align: top; }
-    table.meta .lbl, table.parties .lbl { background: #f8efef; color: #7a1b1b; font-weight: bold; font-size: 9.5px; text-transform: uppercase; }
+    table.meta .lbl, table.parties .lbl { background: #f8efef; color: #1e40af; font-weight: bold; font-size: 9.5px; text-transform: uppercase; }
     table.items { margin-top: 6px; border: 1px solid #e7d4d4; }
-    table.items th { background: #f8efef; color: #7a1b1b; font-size: 10px; padding: 6px 4px; border: 1px solid #e7d4d4; text-transform: uppercase; }
+    table.items th { background: #f8efef; color: #1e40af; font-size: 10px; padding: 6px 4px; border: 1px solid #e7d4d4; text-transform: uppercase; }
     table.items td { border: 1px solid #e7d4d4; padding: 5px 4px; font-size: 10px; min-height: 18px; }
     table.items td.num { text-align: right; }
     table.totals { margin-top: 6px; }
     table.totals td { padding: 4px 8px; font-size: 11px; }
     table.totals .label { text-align: right; color: #444; }
     table.totals .val { text-align: right; width: 130px; }
-    table.totals .grand { background: #f8efef; color: #7a1b1b; font-weight: bold; font-size: 13px; }
+    table.totals .grand { background: #f8efef; color: #1e40af; font-weight: bold; font-size: 13px; }
     .bank, .terms { border: 1px solid #e7d4d4; padding: 6px 8px; font-size: 10px; margin-top: 6px; }
-    .bank .hdr, .terms .hdr { background: #f8efef; color: #7a1b1b; font-weight: bold; padding: 4px 6px; margin: -6px -8px 6px -8px; text-transform: uppercase; font-size: 10px; }
+    .bank .hdr, .terms .hdr { background: #f8efef; color: #1e40af; font-weight: bold; padding: 4px 6px; margin: -6px -8px 6px -8px; text-transform: uppercase; font-size: 10px; }
     .signblk { border: 1px solid #e7d4d4; margin-top: 6px; padding: 6px 8px; }
-    .signblk .hdr { background: #f8efef; color: #7a1b1b; font-weight: bold; padding: 4px 6px; margin: -6px -8px 6px -8px; text-transform: uppercase; font-size: 10px; text-align: center; }
+    .signblk .hdr { background: #f8efef; color: #1e40af; font-weight: bold; padding: 4px 6px; margin: -6px -8px 6px -8px; text-transform: uppercase; font-size: 10px; text-align: center; }
     .signblk .row { display: flex; gap: 16px; margin-top: 18px; }
     .signblk .row > div { flex: 1; border-top: 1px solid #888; padding-top: 4px; font-size: 10px; text-align: center; }
-    .notice { margin-top: 6px; padding: 6px 8px; background: #f8efef; color: #7a1b1b; font-weight: bold; text-align: center; font-size: 10px; border: 1px solid #e7d4d4; }
+    .notice { margin-top: 6px; padding: 6px 8px; background: #f8efef; color: #1e40af; font-weight: bold; text-align: center; font-size: 10px; border: 1px solid #e7d4d4; }
     ul.checklist { font-size: 9.5px; padding-left: 16px; margin: 4px 0; color: #444; }
     .footnote { text-align: center; font-size: 9.5px; color: #888; padding: 8px; border-top: 1px dashed #ccc; margin-top: 10px; }
-    .print-btn { position: fixed; top: 10px; right: 10px; padding: 8px 14px; background: #7a1b1b; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+    .print-btn { position: fixed; top: 10px; right: 10px; padding: 8px 14px; background: #1e40af; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
     @media print { .print-btn { display: none; } }
   `;
 
@@ -5865,7 +5865,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       <tbody>${rowsHtml}</tbody>
     </table>
     <div style="margin-top:6px;border:1px solid #e7d4d4">
-      <div style="background:#f8efef;color:#7a1b1b;font-weight:bold;padding:4px 8px;font-size:10px;text-transform:uppercase">Vehicle / Transport Details</div>
+      <div style="background:#f8efef;color:#1e40af;font-weight:bold;padding:4px 8px;font-size:10px;text-transform:uppercase">Vehicle / Transport Details</div>
       <table class="parties" style="border-top:0"><tr>
         <td class="lbl" style="border-top:0">Vehicle No.</td>
         <td class="lbl" style="border-top:0">Driver Name &amp; Mobile</td>
@@ -5908,7 +5908,7 @@ function renderDispatchHTML({ dn, items, isSalesBill }) {
       <li>Original copy to be retained by Secured Engineers' site office; duplicate copy may be returned to the supplier for billing reference.</li>
       <li>For any clarification, contact the Stores / Project Department of Secured Engineers Pvt. Ltd., Ludhiana.</li>
     </ul>
-    <div style="margin-top:6px;border:1px solid #7a1b1b;background:#fdf2f2;color:#7a1b1b;font-weight:bold;text-align:center;padding:6px 8px;font-size:10.5px">
+    <div style="margin-top:6px;border:1px solid #1e40af;background:#f4f7fe;color:#1e40af;font-weight:bold;text-align:center;padding:6px 8px;font-size:10.5px">
       This is a Computer Generated Delivery Note. Valid only when received and signed at the designated SEPL site.
     </div>
   </body></html>`;

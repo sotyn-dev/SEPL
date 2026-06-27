@@ -81,7 +81,7 @@ export default function DeliveryNotePrint() {
 
       <div className="max-w-[820px] mx-auto bg-white shadow-lg print:shadow-none p-0 text-[11px] text-gray-900" style={{ fontFamily: 'Arial, Helvetica, sans-serif' }}>
         {/* ── Red top strip ── */}
-        <div className="bg-red-900 text-white px-4 py-2 flex justify-between items-center" style={{ backgroundColor: '#7a1b1b' }}>
+        <div className="bg-red-900 text-white px-4 py-2 flex justify-between items-center" style={{ backgroundColor: '#1e40af' }}>
           <div className="text-[10px]">GSTIN : <span className="font-semibold">{COMPANY.gstin}</span></div>
           <div className="text-[16px] font-bold tracking-widest">DELIVERY NOTE</div>
           <div className="text-[10px]">PAN : <span className="font-semibold">{COMPANY.pan}</span></div>
@@ -89,7 +89,7 @@ export default function DeliveryNotePrint() {
 
         {/* ── Company block ── */}
         <div className="text-center px-4 py-3 border-b border-gray-300">
-          <h1 className="text-[15px] font-bold m-0" style={{ color: '#7a1b1b' }}>{COMPANY.name} - {COMPANY.fy}</h1>
+          <h1 className="text-[15px] font-bold m-0" style={{ color: '#1e40af' }}>{COMPANY.name} - {COMPANY.fy}</h1>
           <div className="text-[9.5px] text-gray-600 mt-1">{COMPANY.ho} &nbsp;|&nbsp; {COMPANY.noida}</div>
           <div className="text-[9.5px] text-gray-600 mt-1">
             PAN-INDIA PRESENCE : <b>LUDHIANA</b> | <b>NOIDA</b> | <b>BANGALORE</b> | <b>MUMBAI</b>
@@ -155,7 +155,7 @@ export default function DeliveryNotePrint() {
         {/* ── Items table ── */}
         <table className="w-full border-collapse mt-1">
           <thead>
-            <tr style={{ backgroundColor: '#7a1b1b' }}>
+            <tr style={{ backgroundColor: '#1e40af' }}>
               <th className="border border-rose-900 px-1 py-1.5 text-[10px] text-white uppercase w-8">SL<br/>NO.</th>
               <th className="border border-rose-900 px-2 py-1.5 text-[10px] text-white uppercase text-left">Description of Material / Work</th>
               <th className="border border-rose-900 px-1 py-1.5 text-[10px] text-white uppercase w-20">HSN / Code</th>

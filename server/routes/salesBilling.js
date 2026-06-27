@@ -318,29 +318,29 @@ function installBillHTML({ bill, items, bb }) {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(bill.bill_number)}</title>
 <style>
   *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;margin:0;padding:16px;font-size:11px}
-  .sheet{max-width:820px;margin:0 auto;border:1.5px solid #7a1b1b}
-  .hd{text-align:center;padding:8px 10px;border-bottom:1.5px solid #7a1b1b}
-  .hd h1{margin:0;color:#7a1b1b;font-size:20px;letter-spacing:1px}
+  .sheet{max-width:820px;margin:0 auto;border:1.5px solid #1e40af}
+  .hd{text-align:center;padding:8px 10px;border-bottom:1.5px solid #1e40af}
+  .hd h1{margin:0;color:#1e40af;font-size:20px;letter-spacing:1px}
   .hd .tag{font-size:9px;letter-spacing:2px;color:#444;margin-top:2px}
   .hd .addr{font-size:9.5px;color:#444;margin-top:3px;line-height:1.5}
   .hd .gst{font-size:10px;font-weight:bold;margin-top:3px}
-  .title{background:#7a1b1b;color:#fff;text-align:center;font-weight:bold;letter-spacing:1px;padding:5px;font-size:12px}
-  .orig{text-align:right;font-size:9px;color:#7a1b1b;padding:2px 8px;font-style:italic}
+  .title{background:#1e40af;color:#fff;text-align:center;font-weight:bold;letter-spacing:1px;padding:5px;font-size:12px}
+  .orig{text-align:right;font-size:9px;color:#1e40af;padding:2px 8px;font-style:italic}
   table{width:100%;border-collapse:collapse}
-  .meta td{border:1px solid #d8c4c4;padding:4px 6px;font-size:10px} .meta .k{color:#7a1b1b;font-weight:bold;width:14%}
+  .meta td{border:1px solid #d8c4c4;padding:4px 6px;font-size:10px} .meta .k{color:#1e40af;font-weight:bold;width:14%}
   .party td{border:1px solid #d8c4c4;padding:6px 8px;vertical-align:top;width:50%}
-  .party .lab{color:#7a1b1b;font-weight:bold;font-size:10px;margin-bottom:3px}
-  .items th{background:#7a1b1b;color:#fff;padding:5px 6px;font-size:10px;border:1px solid #7a1b1b}
+  .party .lab{color:#1e40af;font-weight:bold;font-size:10px;margin-bottom:3px}
+  .items th{background:#1e40af;color:#fff;padding:5px 6px;font-size:10px;border:1px solid #1e40af}
   .items td{border:1px solid #d8c4c4;padding:4px 6px;font-size:10px} .items .r{text-align:right} .items .c{text-align:center}
   .tot td{border:1px solid #d8c4c4;padding:3px 8px;font-size:10.5px} .tot .k{text-align:right;font-weight:600;width:78%} .tot .v{text-align:right}
-  .grand{background:#f6eaea;font-weight:bold} .grand td{font-size:12px;color:#7a1b1b}
+  .grand{background:#e8eefc;font-weight:bold} .grand td{font-size:12px;color:#1e40af}
   .words{border:1px solid #d8c4c4;padding:5px 8px;font-size:10px;font-style:italic}
   .blk{border:1px solid #d8c4c4;padding:6px 8px;font-size:9.5px;line-height:1.6;vertical-align:top}
-  .blk b{color:#7a1b1b}
+  .blk b{color:#1e40af}
   .sign{border:1px solid #d8c4c4;padding:8px;height:74px;font-size:9.5px;position:relative}
-  .sign .auth{position:absolute;bottom:6px;right:8px;font-weight:bold;color:#7a1b1b}
+  .sign .auth{position:absolute;bottom:6px;right:8px;font-weight:bold;color:#1e40af}
   .foot{text-align:center;font-size:8.5px;color:#777;padding:6px}
-  .print-btn{position:fixed;top:10px;right:10px;padding:8px 14px;background:#7a1b1b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px}
+  .print-btn{position:fixed;top:10px;right:10px;padding:8px 14px;background:#1e40af;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px}
   @media print{.print-btn{display:none}}
 </style></head><body>
 <button class="print-btn" onclick="window.print()">🖨 Print / Save PDF</button>
