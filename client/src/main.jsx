@@ -15,7 +15,12 @@ import App from './App.jsx'
 // chunk when it navigates: "Failed to fetch dynamically imported module". We
 // reload once to pull the fresh index.html + assets. A 10s throttle prevents
 // any reload loop if the failure is something else (mam 2026-06-25).
-const CHUNK_ERR_RE = /dynamically imported module|module script failed|error loading dynamically/i
+// Also catch the symptom of a stale chunk URL being served index.html instead
+// of 404 (HTML parsed as a module): the lazy import resolves to undefined →
+// "reading 'default'", or the HTML trips "Unexpected token '<'". The 10s
+// throttle below means a genuine (non-stale) bug reloads at most once, then
+// shows the real error (mam 2026-06-27).
+const CHUNK_ERR_RE = /dynamically imported module|module script failed|error loading dynamically|reading ['"]default['"]|unexpected token/i
 function recoverFromStaleChunk() {
   try {
     const last = +sessionStorage.getItem('chunk-reload-at') || 0

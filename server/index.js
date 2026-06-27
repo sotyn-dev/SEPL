@@ -470,6 +470,16 @@ if (fs2.existsSync(clientBuild)) {
   }));
   app.get('*', (req, res) => {
     if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads')) {
+      // A request for a missing hashed asset (a STALE chunk after a re-deploy)
+      // must 404 — NOT fall back to index.html. Serving HTML for a .js import
+      // makes the dynamic import resolve to an HTML page → "Cannot read
+      // properties of undefined (reading 'default')" in the browser, which
+      // bypasses the client's stale-chunk auto-reload. A clean 404 surfaces as
+      // "failed to fetch dynamically imported module", which DOES auto-recover
+      // (mam 2026-06-27, /crm-funnel crash).
+      if (req.path.startsWith('/assets/') || /\.(js|mjs|css|map|json|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot)$/i.test(req.path)) {
+        return res.status(404).send('Not found');
+      }
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
