@@ -173,6 +173,38 @@ router.get('/users/export.xlsx', authMiddleware, adminOnly, (req, res) => {
   }
 });
 
+// Org hierarchy — every active user with their reporting manager (mam
+// 2026-06-27: War Room "Hierarchy" tab). Placed before GET /users/:id-style
+// routes so 'hierarchy' isn't swallowed as an id.
+router.get('/users/hierarchy', authMiddleware, (req, res) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT u.id, u.name, u.role, u.department, u.manager_id, m.name AS manager_name
+      FROM users u
+      LEFT JOIN users m ON m.id = u.manager_id
+     WHERE COALESCE(u.active, 1) = 1
+     ORDER BY u.name COLLATE NOCASE`).all();
+  res.json(rows);
+});
+
+// Set a user's reporting manager (admin only). Guards self-reference + loops.
+router.put('/users/:id/manager', authMiddleware, adminOnly, (req, res) => {
+  const db = getDb();
+  const id = +req.params.id;
+  let mgr = req.body.manager_id;
+  mgr = (mgr === '' || mgr == null) ? null : +mgr;
+  if (mgr === id) return res.status(400).json({ error: 'A user cannot report to themselves.' });
+  if (mgr != null) {
+    let cur = mgr, hops = 0;
+    while (cur != null && hops++ < 100) {
+      if (cur === id) return res.status(400).json({ error: 'That would create a reporting loop.' });
+      cur = db.prepare('SELECT manager_id FROM users WHERE id=?').get(cur)?.manager_id ?? null;
+    }
+  }
+  db.prepare('UPDATE users SET manager_id=? WHERE id=?').run(mgr, id);
+  res.json({ message: 'Saved', id, manager_id: mgr });
+});
+
 router.get('/users', authMiddleware, (req, res) => {
   const db = getDb();
   // Mam (2026-05-22): "I NEED DATA NOT DELETE PREVIOUS BUT IN FUTURE

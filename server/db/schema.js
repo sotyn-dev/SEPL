@@ -2878,6 +2878,9 @@ function initializeDatabase() {
     ['candidates', 'offered_salary REAL'],
     ['candidates', 'joining_date DATE'],
     ['candidates', 'reporting_to TEXT'],
+    // Org hierarchy: who each user reports to (self-ref on users). Built from the
+    // War Room "Hierarchy" tab (mam 2026-06-27).
+    ['users', 'manager_id INTEGER'],
     // Mam (2026-05-22): auto-parsed from the uploaded resume (PDF /
     // DOCX) so the offer letter has full contact details.
     ['candidates', 'address TEXT'],
@@ -3589,8 +3592,28 @@ function initializeDatabase() {
     ['rent_requests', 'pincode_city TEXT'],
     ['rent_requests', 'metro_type TEXT'],
   ];
-  // Unique index on username — allows NULLs for legacy rows while enforcing uniqueness on set values
-  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL'); } catch (e) {}
+  // Unique index on username — case-INSENSITIVE so 'Vijay' and 'vijay' can't
+  // coexist (the app always compares LOWER(username); the old case-sensitive index
+  // let case-variant duplicates slip through). Allows NULLs for legacy rows.
+  // Done defensively: only swap to the new index when the data has no collisions,
+  // so a duplicate row can never leave the table with NO uniqueness index at all.
+  // If duplicates exist, keep whatever index is there and log them loudly (was
+  // silently swallowed before) so they can be de-duped in User Management.
+  try {
+    const dup = db.prepare(
+      "SELECT 1 FROM users WHERE username IS NOT NULL AND username<>'' GROUP BY LOWER(username) HAVING COUNT(*)>1 LIMIT 1"
+    ).get();
+    if (!dup) {
+      db.exec('DROP INDEX IF EXISTS idx_users_username');
+      db.exec('CREATE UNIQUE INDEX idx_users_username ON users(LOWER(username)) WHERE username IS NOT NULL');
+    } else {
+      const list = db.prepare(
+        "SELECT LOWER(username) un, COUNT(*) c FROM users WHERE username IS NOT NULL AND username<>'' GROUP BY LOWER(username) HAVING c>1"
+      ).all();
+      console.error('[schema] username uniqueness NOT hardened — duplicate usernames exist:',
+        list.map(d => `${d.un}×${d.c}`).join(', '), '— de-dupe these in User Management, then restart.');
+    }
+  } catch (e) { console.error('[schema] username index error:', e.message); }
 
   // De-duplicate indent_item_rates → one row per indent_item (mam 2026-06-23:
   // "in po double double item"). The table never had a UNIQUE(indent_item_id),

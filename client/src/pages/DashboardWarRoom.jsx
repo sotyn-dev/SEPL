@@ -391,6 +391,7 @@ export default function DashboardWarRoom() {
           {approvals?.total > 0 && <span style={{ background: '#E5484D', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 11, marginLeft: 6, fontWeight: 700 }}>{approvals.total}</span>}
         </div>
         <div onClick={() => setTab('posales')} style={tabStyle(tab === 'posales')}>PO vs SALES BILL</div>
+        <div onClick={() => setTab('hierarchy')} style={tabStyle(tab === 'hierarchy')}>HIERARCHY</div>
       </div>
 
       <main style={{ padding: 28, maxWidth: 1400, margin: '0 auto' }}>
@@ -1091,7 +1092,81 @@ export default function DashboardWarRoom() {
           <div style={{ marginTop: 20, fontSize: 11, color: C.ink2 }}>Tap a card to list its pending items, then <b>Approve</b> inline (uses that module's own approval rules) or <b>Open</b> to act in the full module. Approving updates the module live.</div>
         </>)}
 
+        {/* ============== HIERARCHY ============== */}
+        {tab === 'hierarchy' && <HierarchyView />}
+
       </main>
+    </div>
+  );
+}
+
+// Org hierarchy — build the reporting structure (each user → their manager) and
+// see the whole org tree. All active users show here (mam 2026-06-27).
+function HierarchyView() {
+  const [users, setUsers] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const load = () => api.get('/auth/users/hierarchy').then(r => setUsers(r.data)).catch(() => setUsers([]));
+  useEffect(() => { load(); }, []);
+  const setManager = (id, managerId) => {
+    setBusy(id);
+    api.put(`/auth/users/${id}/manager`, { manager_id: managerId || null })
+      .then(() => load())
+      .catch(e => toast.error(e.response?.data?.error || 'Could not save'))
+      .finally(() => setBusy(null));
+  };
+  if (!users) return <div style={{ padding: 24, color: C.ink2 }}>Loading…</div>;
+
+  const byManager = {};
+  for (const u of users) { const k = u.manager_id || 0; (byManager[k] = byManager[k] || []).push(u); }
+  const renderTree = (parentId, depth) => (byManager[parentId] || []).map(u => (
+    <div key={u.id}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', paddingLeft: 8 + depth * 22, borderBottom: '1px solid #f1f1f1' }}>
+        <span style={{ color: C.ink2 }}>{depth > 0 ? '↳' : '•'}</span>
+        <span style={{ fontWeight: 600, fontSize: 13 }}>{u.name}</span>
+        <span style={{ fontSize: 11, color: C.ink2 }}>{u.department || u.role || ''}</span>
+      </div>
+      {depth < 12 && renderTree(u.id, depth + 1)}
+    </div>
+  ));
+  const roots = byManager[0] || [];
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+      {/* Org tree */}
+      <div style={cardStyle}>
+        <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Org chart ({users.length} users)</h2>
+        <div style={{ marginTop: 10 }}>
+          {roots.length === 0 ? <div style={{ color: C.ink2, fontSize: 12 }}>No top-level users yet — set "Reports to" on the right to build the tree.</div> : renderTree(0, 0)}
+        </div>
+      </div>
+
+      {/* Editor: each user → reports to */}
+      <div style={cardStyle}>
+        <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Build hierarchy — set each user's manager</h2>
+        <div style={{ maxHeight: 520, overflowY: 'auto', marginTop: 10 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead><tr style={{ borderBottom: `1px solid ${C.line}` }}>
+              <th style={{ textAlign: 'left', fontSize: 11, padding: '8px', color: C.ink2, textTransform: 'uppercase' }}>User</th>
+              <th style={{ textAlign: 'left', fontSize: 11, padding: '8px', color: C.ink2, textTransform: 'uppercase' }}>Reports to</th>
+            </tr></thead>
+            <tbody>
+              {users.map(u => (
+                <tr key={u.id} style={{ borderBottom: '1px solid #f3f3f3' }}>
+                  <td style={{ padding: '7px 8px' }}>{u.name}<span style={{ color: C.ink2, fontSize: 10.5, marginLeft: 6 }}>{u.department || u.role || ''}</span></td>
+                  <td style={{ padding: '7px 8px' }}>
+                    <select value={u.manager_id || ''} disabled={busy === u.id}
+                      onChange={e => setManager(u.id, e.target.value ? +e.target.value : null)}
+                      style={{ width: '100%', padding: '4px 6px', fontSize: 12, border: `1px solid ${C.line}`, borderRadius: 6 }}>
+                      <option value="">— Top level (no manager) —</option>
+                      {users.filter(m => m.id !== u.id).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
