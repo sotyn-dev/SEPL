@@ -167,6 +167,15 @@ export default function UserManagement() {
           <p className="text-sm text-gray-500">Create users and assign roles to control access</p>
         </div>
         <div className="flex gap-2">
+          <button onClick={async () => {
+            try {
+              const r = await api.get('/auth/users/export.xlsx', { responseType: 'blob' });
+              const url = URL.createObjectURL(r.data);
+              const a = document.createElement('a');
+              a.href = url; a.download = `active-users-${new Date().toISOString().slice(0, 10)}.xlsx`;
+              document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+            } catch { toast.error('Export failed'); }
+          }} className="btn btn-secondary flex items-center gap-2" title="Active users + salary (from Employees)"><FiDownload size={15} /> Export Excel</button>
           <button onClick={() => { setBulkData(''); setBulkPreview([]); setBulkModal(true); }} className="btn btn-secondary flex items-center gap-2"><FiUpload size={15} /> Bulk Import</button>
           <button onClick={openCreate} className="btn btn-primary flex items-center gap-2"><FiPlus /> Add User</button>
         </div>

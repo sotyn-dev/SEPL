@@ -26,7 +26,12 @@ router.post('/login', (req, res) => {
   const candidates = db.prepare(
     'SELECT * FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)'
   ).all(identifier, identifier);
-  const user = candidates.find(u => u.password && bcrypt.compareSync(password, u.password)) || null;
+  // Among EVERY row whose password matches, prefer an ACTIVE account. A disabled
+  // duplicate (same username + same password — e.g. an old deactivated row, or a
+  // shared office default like 'sepl@123') would otherwise be picked first and
+  // wrongly report "account disabled", locking a valid user out (mam 2026-06-27).
+  const matches = candidates.filter(u => u.password && bcrypt.compareSync(password, u.password));
+  const user = matches.find(u => u.active !== 0) || matches[0] || null;
   if (user && user.active === 0) {
     logAuditEvent({
       action: 'LOGIN_FAIL', entity_type: 'auth', entity_label: identifier,
@@ -127,6 +132,47 @@ router.post('/avatar', authMiddleware, (req, res) => {
   res.json({ avatar_url: url });
 });
 
+// Export all ACTIVE users to Excel, with salary (and designation) pulled from
+// the employees table — matched by user link first, else by name (mam
+// 2026-06-27: "all active users in Excel, salary from employees").
+router.get('/users/export.xlsx', authMiddleware, adminOnly, (req, res) => {
+  try {
+    const db = getDb();
+    const XLSX = require('xlsx');
+    const rows = db.prepare(`
+      SELECT u.name, u.email, u.username, u.role, u.department, u.phone,
+             COALESCE(
+               (SELECT e.salary FROM employees e WHERE e.user_id = u.id ORDER BY e.id DESC LIMIT 1),
+               (SELECT e.salary FROM employees e WHERE LOWER(TRIM(e.name)) = LOWER(TRIM(u.name)) ORDER BY e.id DESC LIMIT 1),
+               0
+             ) AS salary,
+             COALESCE(
+               (SELECT e.designation FROM employees e WHERE e.user_id = u.id ORDER BY e.id DESC LIMIT 1),
+               (SELECT e.designation FROM employees e WHERE LOWER(TRIM(e.name)) = LOWER(TRIM(u.name)) ORDER BY e.id DESC LIMIT 1)
+             ) AS designation
+        FROM users u
+       WHERE COALESCE(u.active, 1) = 1
+       ORDER BY u.name COLLATE NOCASE
+    `).all();
+    const header = ['Name', 'Email', 'Username', 'Role', 'Department', 'Designation', 'Phone', 'Salary (₹)'];
+    const aoa = [header, ...rows.map(r => [
+      r.name || '', r.email || '', r.username || '', r.role || '', r.department || '',
+      r.designation || '', r.phone || '', +r.salary || 0,
+    ])];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 24 }, { wch: 28 }, { wch: 18 }, { wch: 10 }, { wch: 18 }, { wch: 20 }, { wch: 14 }, { wch: 14 }];
+    XLSX.utils.book_append_sheet(wb, ws, 'Active Users');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="active-users-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.send(buf);
+  } catch (e) {
+    console.error('[users export] failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/users', authMiddleware, (req, res) => {
   const db = getDb();
   // Mam (2026-05-22): "I NEED DATA NOT DELETE PREVIOUS BUT IN FUTURE
@@ -166,6 +212,14 @@ router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
 
   try {
     const uname = username !== undefined ? (username ? String(username).trim() : null) : undefined;
+    // Block duplicate usernames case-INSENSITIVELY before writing. The DB index is
+    // case-sensitive, so without this an admin edit could set 'Vijay.Kumar' while
+    // 'vijay.kumar' exists — re-introducing the duplicate-login bug. register already
+    // guards this way; PUT must too (mam 2026-06-27).
+    if (uname) {
+      const clash = db.prepare('SELECT id FROM users WHERE LOWER(username)=LOWER(?) AND id<>?').get(uname, req.params.id);
+      if (clash) return res.status(409).json({ error: 'Username already taken' });
+    }
     if (uname !== undefined) {
       if (password) {
         db.prepare('UPDATE users SET name=?, email=?, username=?, department=?, phone=?, role=?, active=?, password=? WHERE id=?')
