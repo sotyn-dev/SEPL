@@ -3217,24 +3217,13 @@ router.get('/vendor-po/:id/budget-print', (req, res) => {
   if (!bbId && vp.site_name) bbId = db.prepare(`SELECT id FROM business_book WHERE id IN (SELECT DISTINCT business_book_id FROM sites WHERE name=? AND business_book_id IS NOT NULL) OR project_name=? OR company_name=? ORDER BY id DESC LIMIT 1`).get(vp.site_name, vp.site_name, vp.site_name)?.id || null;
   const bb = bbId ? db.prepare('SELECT company_name, client_name, billing_address, gstin, project_name FROM business_book WHERE id=?').get(bbId) : null;
 
-  // Live SITC rate per item from the order's CURRENT BOQ, matched by name — so a
-  // re-uploaded BOQ (new po_items IDs) still prices correctly even though the
-  // indent's stored po_item_id link is stale (mam 2026-06-27). Falls back to the
-  // linked po_item rate when an item can't be matched by name. Keep the match key
-  // (indent line description) identical to the War Room budget so totals agree.
-  const liveRate = {};
-  if (bbId) for (const p of db.prepare('SELECT description, rate FROM po_items WHERE business_book_id=?').all(bbId)) {
-    liveRate[String(p.description || '').toLowerCase().trim()] = +p.rate || 0;
-  }
-
   let sn = 0, total = 0;
   const rows = items.map(it => {
     // Only PO-type, BOQ-priced lines are billable to the client (FOC / non-PO
     // accessories ride free) — matches the War Room budget exactly.
     const chargeable = it.po_item_id != null && String(it.item_type || '').toUpperCase() === 'PO';
     const qty = +it.po_qty || 0;
-    const mk = String(it.ii_desc || it.boq_name || '').toLowerCase().trim();
-    const rate = chargeable ? (liveRate[mk] != null ? liveRate[mk] : (+it.sale_rate || 0)) : 0;
+    const rate = chargeable ? (+it.sale_rate || 0) : 0;
     const amt = qty * rate;
     total += amt;
     const t = String(it.item_type || '').toUpperCase();
