@@ -275,6 +275,7 @@ function computeScorecard(db, userId, weekStart) {
     };
 
     let _raciAgg; // memoized RACI aggregate for this user/week — both raci sources reuse it
+    let _raciBreakdown; // memoized per-(module,step) RACI breakdown — per-step KPIs reuse it
     const computeAutoCount = (source, since, until) => {
       const sinceDate = since.slice(0, 10);
       const untilDate = until.slice(0, 10);
@@ -302,8 +303,8 @@ function computeScorecard(db, userId, weekStart) {
       }
 
       // ── Responsibility (RACI / SLA) — cross-module per-person accountability ──
-      // Steps the user is Responsible for (explicit, else module default, else
-      // record owner) across every module. Computed once per user, shared below.
+      // Steps where the user is the EXPLICIT RACI Responsible (per-record, else
+      // whole-module default) across every module. Computed once per user, shared.
       if (source === 'auto:raci_steps_done' || source === 'auto:raci_ontime_pct') {
         if (_raciAgg === undefined) {
           try { _raciAgg = require('../utils/raciModules').raciUserWeek(db, userId, sinceDate, untilDate); }
@@ -318,6 +319,25 @@ function computeScorecard(db, userId, weekStart) {
         // tanks the score nor falsely qualifies for the activity gate.
         if (_raciAgg.stepsClosed === 0 || _raciAgg.slaJudged === 0) return { given: 0, done: 0 };
         return { given: null, done: Math.round((_raciAgg.onTime / _raciAgg.slaJudged) * 100) };
+      }
+
+      // Per-step RACI KPI — auto:raci_step:<module>:<stepKey>. Planned/Actual for
+      // ONE specific step (e.g. indent_to_dispatch → l1) for the person this
+      // scorecard belongs to, where they are the RACI Responsible for that step.
+      // Reuses the same per-(module,step) breakdown as the scorecard drill-down,
+      // memoized per user (mam 2026-06-27: "in template pick step-wise which
+      // person I select in RACI").
+      if (source.startsWith('auto:raci_step:')) {
+        if (_raciBreakdown === undefined) {
+          try { _raciBreakdown = require('../utils/raciModules').raciUserWeekBreakdown(db, userId, sinceDate, untilDate); }
+          catch (e) { _raciBreakdown = []; }
+        }
+        const rest = source.slice('auto:raci_step:'.length);
+        const ci = rest.indexOf(':');
+        const mod = ci >= 0 ? rest.slice(0, ci) : rest;
+        const stepKey = ci >= 0 ? rest.slice(ci + 1) : '';
+        const row = _raciBreakdown.find(r => r.module === mod && r.step_key === stepKey);
+        return row ? { given: row.planned, done: row.actual } : { given: 0, done: 0 };
       }
 
       // Site-scoped KPIs (Site Engineer / Supervisor templates) — need

@@ -114,7 +114,13 @@ const SOURCE_INFO = {
   'auto:customers_added':       { plan: 'You set',                            actual: 'Customers added by user' },
   'auto:vendors_added':         { plan: 'You set',                            actual: 'Vendors added by user' },
 };
-const sourceInfoFor = (src) => SOURCE_INFO[src] || { plan: '—', actual: '—' };
+const sourceInfoFor = (src) => {
+  // Per-step RACI sources are dynamic (auto:raci_step:<module>:<step>) — one hint covers them all.
+  if (src && src.startsWith('auto:raci_step:')) {
+    return { plan: 'This step on the user this week (closed + still open)', actual: 'This step the user closed this week' };
+  }
+  return SOURCE_INFO[src] || { plan: '—', actual: '—' };
+};
 
 export default function Scorecard() {
   const { user, isAdmin } = useAuth();
@@ -605,10 +611,28 @@ function TemplatesAdmin({ templates, reload, setTplDetail }) {
 }
 
 // ---------- Template KPI Editor ----------
+// Per-step RACI <optgroup>s for the template editor's source pickers — one group
+// per module, each step an option whose value is "auto:raci_step:<module>:<step>".
+// Lets mam tie a KPI to ONE specific step, scored for whoever she names Responsible
+// in RACI (mam 2026-06-27: "in template pick step-wise which person I select in RACI").
+function RaciStepOptions({ modules }) {
+  if (!modules || !modules.length) return null;
+  return modules.map(m => (
+    <optgroup key={m.key} label={`RACI step · ${m.label}`}>
+      {(m.steps || []).map(s => (
+        <option key={s.key} value={`auto:raci_step:${m.key}:${s.key}`}>{s.label}</option>
+      ))}
+    </optgroup>
+  ));
+}
+
 function TemplateKpiEditor({ templateId, onChange }) {
   const [tpl, setTpl] = useState(null);
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ group_name: 'Weekly', metric_name: '', weightage: 0, direction: 'higher_better', data_source: 'manual', default_planned: 0 });
+  // Module + step catalogue for the per-step RACI source options (one fetch).
+  const [raciModules, setRaciModules] = useState([]);
+  useEffect(() => { api.get('/raci/modules').then(r => setRaciModules(r.data || [])).catch(() => {}); }, []);
   // Mam (2026-06-02): "here we done with it plan fill but from where
   // is actual we not show".  Live actual preview — pick any user
   // assigned to THIS template, fetch their current-week scorecard,
@@ -931,7 +955,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                 </select>
               </td>
               <td className="p-2">
-                <select className="select text-xs" defaultValue={k.data_source} onChange={e => updateKpi(k, { data_source: e.target.value })}>
+                <select key={`src-${k.id}-${raciModules.length}`} className="select text-xs" defaultValue={k.data_source} onChange={e => updateKpi(k, { data_source: e.target.value })}>
                   <option value="manual">manual entry</option>
                   <optgroup label="Tasks & Tickets">
                     <option value="auto:delegations">delegations (assigned/done)</option>
@@ -940,9 +964,10 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:tickets">help tickets (assigned/resolved)</option>
                   </optgroup>
                   <optgroup label="Responsibility (RACI / SLA)">
-                    <option value="auto:raci_steps_done">RACI steps closed (by user)</option>
+                    <option value="auto:raci_steps_done">RACI steps closed (all modules)</option>
                     <option value="auto:raci_ontime_pct">RACI on-time % (within SLA)</option>
                   </optgroup>
+                  <RaciStepOptions modules={raciModules} />
                   <optgroup label="DPR (Daily Project Report)">
                     <option value="auto:dpr_profit">DPR profit (planned vs actual ₹) [site]</option>
                     <option value="auto:dpr_count">DPR count (6 days/week target) [site]</option>
@@ -1092,6 +1117,8 @@ function TemplateKpiEditor({ templateId, onChange }) {
             <option value="auto:pms">auto: pms tasks</option>
             <option value="auto:checklists">auto: checklists</option>
             <option value="auto:tickets">auto: tickets</option>
+            <option value="auto:raci_steps_done">auto: RACI steps (all modules)</option>
+            <RaciStepOptions modules={raciModules} />
           </select>
           <div className="col-span-2 flex justify-end gap-2">
             <button type="button" onClick={() => setAdding(false)} className="btn btn-secondary text-sm">Cancel</button>
