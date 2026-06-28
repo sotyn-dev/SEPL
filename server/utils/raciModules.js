@@ -424,6 +424,78 @@ const MODULE_DEFS = {
       });
     },
   },
+
+  // ── Collections (Receivables: Invoice → Contacted → Promised → Collected) ──
+  // Cash-in lifecycle for ONE receivable. Contacted/Promised are timed from the
+  // collection_follow_ups log (first follow-up, first one carrying a promise);
+  // Collected fires when outstanding clears, timed by the last payment row in
+  // collections. Covers "Cash Flow" too — mam 2026-06-27 chose Cash Flow =
+  // Collection. Each step's doer defaults from the source rows so the board fills
+  // without hand-assigning (scorecard still counts only explicit RACI names).
+  collections: {
+    label: 'Collections (Receivables)',
+    steps: [
+      { key: 'invoice', label: 'Invoice Raised' },
+      { key: 'contacted', label: 'Contacted' },
+      { key: 'promised', label: 'Promised' },
+      { key: 'collected', label: 'Collected' },
+    ],
+    rows(db) {
+      const steps = this.steps;
+      const recs = safeAll(db, `
+        SELECT id, client_name, invoice_number, invoice_date, outstanding_amount,
+               owner_id, created_at, updated_at
+          FROM receivables ORDER BY created_at DESC LIMIT 500`);
+      if (!recs.length) return [];
+      const ids = recs.map(r => r.id);
+      const fu = {}, col = {};
+      for (let i = 0; i < ids.length; i += 400) {
+        const chunk = ids.slice(i, i + 400);
+        const ph = chunk.map(() => '?').join(',');
+        // Earliest follow-up = Contacted; earliest one carrying a promise = Promised.
+        for (const f of safeAll(db, `
+          SELECT receivable_id, follow_up_date, promised_date, followed_by
+            FROM collection_follow_ups WHERE receivable_id IN (${ph})
+           ORDER BY follow_up_date ASC, id ASC`, ...chunk)) {
+          const e = fu[f.receivable_id] || (fu[f.receivable_id] = {});
+          if (!e.contactAt) { e.contactAt = f.follow_up_date; e.contactBy = f.followed_by; }
+          if (!e.promiseAt && f.promised_date) { e.promiseAt = f.follow_up_date; e.promiseBy = f.followed_by; }
+        }
+        // Latest payment = when Collected completed (ASC scan → last write wins).
+        for (const c of safeAll(db, `
+          SELECT receivable_id, collection_date, collected_by
+            FROM collections WHERE receivable_id IN (${ph})
+           ORDER BY collection_date ASC, id ASC`, ...chunk)) {
+          col[c.receivable_id] = { at: c.collection_date, by: c.collected_by };
+        }
+      }
+      return recs.map(r => {
+        const paid = r.outstanding_amount != null && r.outstanding_amount <= 0;
+        const e = fu[r.id] || {}, c = col[r.id] || {};
+        const stamps = {
+          invoice: r.invoice_date || r.created_at || null,
+          contacted: e.contactAt || null,
+          promised: e.promiseAt || null,
+          collected: paid ? (c.at || r.updated_at || null) : null,
+        };
+        return {
+          id: r.id,
+          title: r.invoice_number || ('AR #' + r.id),
+          subtitle: r.client_name || '—',
+          created_at: r.created_at || r.invoice_date,
+          owner_id: r.owner_id || null,
+          step_owners: {
+            invoice: r.owner_id || null,
+            contacted: e.contactBy || null,
+            promised: e.promiseBy || null,
+            collected: c.by || null,
+          },
+          stamps,
+          current_key: paid ? null : firstOpen(steps, stamps),
+        };
+      });
+    },
+  },
 };
 
 // RACI → scoring. Per-person weekly accountability across EVERY module, using

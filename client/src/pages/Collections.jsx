@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
+import ResponsibilityTab from '../components/ResponsibilityTab';
+import { useUrlTab } from '../hooks/useUrlTab';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
@@ -10,6 +12,7 @@ import { LuIndianRupee } from 'react-icons/lu';
 
 export default function Collections() {
   const { canDelete } = useAuth();
+  const [tab, setTab] = useUrlTab('list');
   const [receivables, setReceivables] = useState([]);
   const [summary, setSummary] = useState(null);
   const [targetSummary, setTargetSummary] = useState(null);
@@ -163,6 +166,14 @@ export default function Collections() {
 
   return (
     <div className="space-y-6">
+      <div className="flex gap-2 flex-wrap">
+        <button onClick={() => setTab('list')} className={`btn ${tab === 'responsible' ? 'btn-secondary' : 'btn-primary'}`}>Receivables</button>
+        <button onClick={() => setTab('responsible')} className={`btn ${tab === 'responsible' ? 'btn-primary' : 'btn-secondary'}`}>⚙ Responsible</button>
+      </div>
+      {tab === 'responsible' ? (
+        <ResponsibilityTab module="collections" title="Collections (Receivables)" />
+      ) : (
+      <>
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="card text-center border-l-4 border-red-500">
@@ -625,6 +636,8 @@ export default function Collections() {
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setCollectModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-success">Record Collection</button></div>
         </form>
       </Modal>
+      </>
+      )}
     </div>
   );
 }
