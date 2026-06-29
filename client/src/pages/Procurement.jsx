@@ -5,6 +5,7 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import { STATES, gstStateCode, SEPL_HOME_STATE } from '../data/indiaLocations';
 import StatusBadge from '../components/StatusBadge';
+import ResponsibilityTab from '../components/ResponsibilityTab';
 import NumInput from '../components/NumInput';
 import Pagination, { usePagination } from '../components/Pagination';
 import InfoTooltip from '../components/InfoTooltip';
@@ -264,7 +265,7 @@ export default function Procurement() {
   // wrong"). Use a setter helper that writes both React state AND the URL
   // in one shot — no useEffect ping-pong.
   const [searchParams, setSearchParams] = useSearchParams();
-  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'bills', 'delivery', 'debitnotes', 'pipeline'];
+  const VALID_TABS = ['indents', 'rates', 'vendorpo', 'bills', 'delivery', 'debitnotes', 'pipeline', 'responsible'];
   const urlTab = searchParams.get('tab');
   const [tab, _setTab] = useState(VALID_TABS.includes(urlTab) ? urlTab : 'indents');
   const setTab = (newTab) => {
@@ -1803,6 +1804,9 @@ export default function Procurement() {
     { id: 'delivery', label: 'Dispatch & Receiving', show: canPurchaseOps },
     { id: 'debitnotes', label: 'Debit Notes', show: canPurchaseOps },
     { id: 'pipeline', label: 'PO Pipeline', show: canPurchaseOps },
+    // Per-record RACI / SLA "Responsible" board for the indent→dispatch flow,
+    // right where the purchase team works (mam 2026-06-29: "where is RACI?").
+    { id: 'responsible', label: '⚙ Responsible', show: canPurchaseOps },
   ];
   const tabs = allTabs.filter(t => t.show);
 
@@ -2034,6 +2038,8 @@ export default function Procurement() {
           }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
         </div>
       </div>
+
+      {tab === 'responsible' && <ResponsibilityTab module="indent_to_dispatch" title="Indent to Dispatch" />}
 
       {tab === 'indents' && (() => {
         // ── Filtering / search ─────────────────────────────────────────
