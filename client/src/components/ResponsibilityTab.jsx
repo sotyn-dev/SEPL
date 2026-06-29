@@ -31,27 +31,35 @@ export default function ResponsibilityTab({ module, title }) {
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState('grid');         // 'grid' | 'summary'
   const [q, setQ] = useState('');
+  // The per-record board loads ALL records × steps — heavy enough to hang big
+  // modules on the small VPS (mam 2026-06-29: "per enquiry no need to show — it
+  // takes data and hangs; only need Set RACI for whole module"). So it's now
+  // opt-in: the tab opens straight to the whole-module RACI setter and the board
+  // loads only when the user clicks "Show per-record board".
+  const [showBoard, setShowBoard] = useState(false);
 
   // Editor modal
   const [editRec, setEditRec] = useState(null);      // record being edited
   const [editSteps, setEditSteps] = useState([]);
   const [busy, setBusy] = useState(false);
 
+  // Users for the R/A/C/I dropdowns — light; always loaded so the whole-module
+  // editor works without pulling the heavy board.
+  useEffect(() => {
+    api.get('/auth/users').then(u => setUsers((u.data || []).filter(x => x.active !== 0))).catch(() => {});
+  }, []);
+
+  // Heavy per-record board — loaded only on demand (see showBoard note above).
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [b, u] = await Promise.all([
-        api.get(`/raci/board/${module}`),
-        users.length ? Promise.resolve({ data: users }) : api.get('/auth/users'),
-      ]);
+      const b = await api.get(`/raci/board/${module}`);
       setData(b.data);
-      if (!users.length) setUsers((u.data || []).filter(x => x.active !== 0));
+      setShowBoard(true);
     } catch (e) {
       toast.error(e.response?.data?.error || 'Could not load the Responsible board');
     } finally { setLoading(false); }
-  }, [module]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => { load(); }, [load]);
+  }, [module]);
 
   const openEditor = async (rec) => {
     setEditRec(rec); setBusy(true);
@@ -76,7 +84,7 @@ export default function ResponsibilityTab({ module, title }) {
           commitment: s.commitment && String(s.commitment).trim() !== '' ? s.commitment : null,
         })),
       });
-      toast.success('Saved'); setEditRec(null); load();
+      toast.success('Saved'); setEditRec(null); if (showBoard) load();
     } catch (e) { toast.error(e.response?.data?.error || 'Save failed'); }
     finally { setBusy(false); }
   };
@@ -88,7 +96,7 @@ export default function ResponsibilityTab({ module, title }) {
     try {
       await api.put(`/raci/step-done/${module}/${rec.id}`, { step_key: step.key, done_at: value || null });
       toast.success(value ? `${step.label} marked done` : `${step.label} reopened`);
-      load();
+      if (showBoard) load();
     } catch (e) { toast.error(e.response?.data?.error || 'Could not update the step'); }
   };
   const todayStr = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
@@ -117,16 +125,29 @@ export default function ResponsibilityTab({ module, title }) {
             className="text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded px-2.5 h-8">
             ⚙ Set RACI for whole module
           </button>
-          <input className="input text-xs h-8 w-44" placeholder="Search…" value={q} onChange={e => setQ(e.target.value)} />
-          <div className="flex rounded-lg overflow-hidden border border-gray-300 text-xs">
-            <button onClick={() => setView('grid')} className={`px-3 py-1.5 ${view === 'grid' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>Per record</button>
-            <button onClick={() => setView('summary')} className={`px-3 py-1.5 ${view === 'summary' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>By person</button>
-          </div>
-          <button onClick={load} className="btn btn-secondary h-8 text-xs">↻</button>
+          {!showBoard ? (
+            <button onClick={load} disabled={loading} className="btn btn-secondary h-8 text-xs">
+              {loading ? 'Loading…' : 'Show per-record board'}
+            </button>
+          ) : (
+            <>
+              <input className="input text-xs h-8 w-44" placeholder="Search…" value={q} onChange={e => setQ(e.target.value)} />
+              <div className="flex rounded-lg overflow-hidden border border-gray-300 text-xs">
+                <button onClick={() => setView('grid')} className={`px-3 py-1.5 ${view === 'grid' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>Per record</button>
+                <button onClick={() => setView('summary')} className={`px-3 py-1.5 ${view === 'summary' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>By person</button>
+              </div>
+              <button onClick={load} className="btn btn-secondary h-8 text-xs">↻</button>
+            </>
+          )}
         </div>
       </div>
 
-      {loading && !data ? (
+      {!showBoard ? (
+        <div className="py-8 px-4 text-center text-gray-500 text-sm border rounded-lg bg-white">
+          Use <b>⚙ Set RACI for whole module</b> to assign Responsible / Accountable / Consulted / Informed, SLA, weight &amp; commitment once — it applies to every record.
+          <div className="text-xs text-gray-400 mt-1">The per-record list is hidden for speed. Click <b>Show per-record board</b> above only if you need to assign or mark steps on individual records.</div>
+        </div>
+      ) : loading && !data ? (
         <div className="py-12 text-center text-gray-400 text-sm">Loading…</div>
       ) : view === 'summary' ? (
         // ── By-person performance summary ──
