@@ -381,6 +381,13 @@ function upgradeAutoSources(db) {
     // and %/quality KPIs have no clean auto source and also stay manual.
     ['Sushila — Sales Coordinator', 'Complaint Resolved', 'auto:complaints_resolved'],
     ['Ruksana — HR Hiring', 'On-Board', 'auto:candidates_onboarded'],
+    // Finance amount KPIs whose target is in lakh / crore (mam 2026-06-29: auto
+    // them). Weekly collections in lakh; current open receivables in crore.
+    ['Aanchal — Finance Executive', 'Weekly Amount Received', 'auto:amount_received_lakh'],
+    ['Sushila — Sales Coordinator', 'Payments Cleared (In lakh)', 'auto:amount_received_lakh'],
+    ['Lovely — Sales Coordinator', 'Payments Cleared (In lakh)', 'auto:amount_received_lakh'],
+    ['Sushila — Sales Coordinator', 'AR (In CR)', 'auto:receivables_outstanding_cr'],
+    ['Lovely — Sales Coordinator', 'AR (In CR)', 'auto:receivables_outstanding_cr'],
     ['Site Engineer', 'MB Signed from Client', 'auto:mb_signed'],
     ['Site Engineer', 'Stock at site', 'auto:stock_at_site'],
     ['Supervisor', 'DPR Planning', 'auto:dpr_count'],

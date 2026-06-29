@@ -627,6 +627,18 @@ function computeScorecard(db, userId, weekStart) {
         const r = db.prepare(`SELECT COALESCE(SUM(amount),0) as s FROM collections WHERE collection_date BETWEEN ? AND ?`).get(sinceDate, untilDate);
         return { given: null, done: r.s };
       }
+      // In-LAKH / In-CRORE variants — finance KPIs whose TARGET is set in lakh/cr
+      // (mam 2026-06-29: auto the amount KPIs). Company-wide. Planned stays at the
+      // template's lakh/cr target; Actual = this week's collections in lakh, and
+      // current open receivables in crore (2 decimals).
+      if (source === 'auto:amount_received_lakh') {
+        const r = db.prepare(`SELECT COALESCE(SUM(amount),0) as s FROM collections WHERE collection_date BETWEEN ? AND ?`).get(sinceDate, untilDate);
+        return { given: null, done: Math.round((r.s / 100000) * 100) / 100 };
+      }
+      if (source === 'auto:receivables_outstanding_cr') {
+        const r = db.prepare(`SELECT COALESCE(SUM(outstanding_amount),0) as s FROM receivables WHERE outstanding_amount > 0`).get();
+        return { given: null, done: Math.round((r.s / 10000000) * 100) / 100 };
+      }
       if (source === 'auto:receivables_outstanding') {
         const r = db.prepare(`SELECT COALESCE(SUM(outstanding_amount),0) as s FROM receivables WHERE owner_id=? AND outstanding_amount > 0`).get(userId);
         return { given: null, done: r.s };

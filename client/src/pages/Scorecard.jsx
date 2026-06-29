@@ -99,6 +99,8 @@ const SOURCE_INFO = {
   // Cash Flow
   'auto:amount_received':       { plan: 'You set',                            actual: 'Σ collections amount (by user)' },
   'auto:amount_received_all':   { plan: 'You set',                            actual: 'Σ collections amount (everyone)' },
+  'auto:amount_received_lakh':  { plan: 'You set (target in lakh)',           actual: 'Σ collections this week, in LAKH (₹÷1,00,000)' },
+  'auto:receivables_outstanding_cr': { plan: 'You set (target in CR, lower better)', actual: 'Current open receivables, in CRORE (₹÷1,00,00,000)' },
   'auto:collections_count':     { plan: 'You set',                            actual: 'Number of collections (by user)' },
   'auto:receivables_outstanding':{ plan: 'You set',                           actual: 'Σ open receivables (owner)' },
   'auto:receivables_count':     { plan: 'You set',                            actual: 'Count of open receivables (owner)' },
@@ -1062,6 +1064,8 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   <optgroup label="Cash Flow / Collections">
                     <option value="auto:amount_received">amount received SUM (by user)</option>
                     <option value="auto:amount_received_all">amount received SUM (all)</option>
+                    <option value="auto:amount_received_lakh">amount received — in LAKH (all, weekly)</option>
+                    <option value="auto:receivables_outstanding_cr">receivables outstanding — in CRORE (all)</option>
                     <option value="auto:collections_count">collections count (by user)</option>
                     <option value="auto:receivables_outstanding">receivables outstanding SUM (owner)</option>
                     <option value="auto:receivables_count">receivables outstanding count (owner)</option>
