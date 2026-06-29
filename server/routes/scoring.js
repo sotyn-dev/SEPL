@@ -307,6 +307,38 @@ function computeScorecard(db, userId, weekStart) {
         return { given, done };
       }
 
+      // ── Owner / company-wide variants — for a PROCESS OWNER scored on the
+      // WHOLE process, not just their own records (mam 2026-06-29: Sushila owns
+      // ALL PMS). Same same-week cohort as the by-user versions, no assigned_to.
+      if (source === 'auto:pms_all') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE created_at BETWEEN ? AND ? AND status='approved'`).get(since, until).c;
+        return { given, done };
+      }
+      if (source === 'auto:delegations_all') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE created_at BETWEEN ? AND ? AND status='approved'`).get(since, until).c;
+        return { given, done };
+      }
+      if (source === 'auto:tickets_all') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE created_at BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(since, until).c;
+        return { given, done };
+      }
+      // ERP module coverage — how many of the tracked modules had ANY activity
+      // this week (mam 2026-06-29: Anmol owns the whole ERP — "is the system
+      // running"). Planned = modules tracked, Actual = modules active, so all
+      // modules busy = 0% (on plan); a quiet module pulls the score down.
+      if (source === 'auto:erp_module_coverage') {
+        const tables = ['delegations','pms_tasks','support_tickets','indents','vendor_pos','purchase_bills','sales_bills','collections','dpr','leads','quotations'];
+        let active = 0;
+        for (const t of tables) {
+          try { if (db.prepare(`SELECT COUNT(*) as c FROM ${t} WHERE created_at BETWEEN ? AND ?`).get(since, until).c > 0) active += 1; }
+          catch (e) { /* table missing on this DB — skip */ }
+        }
+        return { given: tables.length, done: active };
+      }
+
       // ── Responsibility (RACI / SLA) — cross-module per-person accountability ──
       // Steps where the user is the EXPLICIT RACI Responsible (per-record, else
       // whole-module default) across every module. Computed once per user, shared.

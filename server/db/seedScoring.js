@@ -406,9 +406,11 @@ function seedScoringTemplates(db) {
   const targetsUpgraded = upgradeFixedTargets(db);
   // Add the cross-module RACI row to any existing template missing it.
   let raciAdded = addRaciKpiToTemplates(db);
+  // Owner / company-wide KPIs for process owners (Sushila → all PMS, Anmol → ERP coverage).
+  let ownerAdded = addOwnerKpis(db);
   // Skip initial seed if templates already exist
   const count = db.prepare('SELECT COUNT(*) as c FROM score_templates').get().c;
-  if (count > 0) return { seeded: 0, skipped: count, upgraded, targetsUpgraded, raciAdded };
+  if (count > 0) return { seeded: 0, skipped: count, upgraded, targetsUpgraded, raciAdded, ownerAdded };
 
   const insertTemplate = db.prepare(
     'INSERT INTO score_templates (name, description) VALUES (?, ?)'
@@ -443,7 +445,8 @@ function seedScoringTemplates(db) {
   // every freshly-seeded template.
   const targetsApplied = upgradeFixedTargets(db);
   raciAdded += addRaciKpiToTemplates(db);
-  return { seeded: TEMPLATES.length, skipped: 0, upgraded, targetsApplied, raciAdded };
+  ownerAdded += addOwnerKpis(db);
+  return { seeded: TEMPLATES.length, skipped: 0, upgraded, targetsApplied, raciAdded, ownerAdded };
 }
 
 // Bulk-seed all 100+ fixed Planned targets extracted from mam's MIS PDFs.
@@ -657,6 +660,28 @@ function addRaciKpiToTemplates(db) {
        )
   `).run();
   return r.changes || 0;
+}
+
+// Owner / company-wide KPIs (mam 2026-06-29): a PROCESS OWNER is scored on the
+// whole process, not just their own records. Idempotent + guarded by template
+// name — no-op if the template was renamed/absent (then add it via the source
+// dropdown). Added at 0 weight so it shows Planned vs Actual without disturbing
+// the existing 100% split; the admin sets the weight they want.
+function addOwnerKpis(db) {
+  const add = (tplName, group, metric, source, order) => {
+    const r = db.prepare(`
+      INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order, default_planned)
+      SELECT t.id, ?, ?, 0, 'higher_better', ?, ?, 0
+        FROM score_templates t
+       WHERE t.name = ? AND COALESCE(t.active, 1) = 1
+         AND NOT EXISTS (SELECT 1 FROM score_kpis k WHERE k.template_id = t.id AND k.data_source = ?)
+    `).run(group, metric, source, order, tplName, source);
+    return r.changes || 0;
+  };
+  let n = 0;
+  n += add('Sushila — Sales Coordinator', 'Owner', 'All PMS Tasks (company-wide)', 'auto:pms_all', 950);
+  n += add('Anmol — DPR / Score Card', 'Owner', 'ERP Modules Active (coverage)', 'auto:erp_module_coverage', 950);
+  return n;
 }
 
 module.exports = { seedScoringTemplates, TEMPLATES };

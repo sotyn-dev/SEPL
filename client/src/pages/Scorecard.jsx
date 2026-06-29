@@ -52,6 +52,10 @@ const SOURCE_INFO = {
   'auto:checklists':            { plan: 'Active checklists × 6 days',         actual: 'Checklist completions by user' },
   'auto:tickets':               { plan: 'Help tickets assigned to user',      actual: 'Tickets resolved / closed by user' },
   // Responsibility (RACI / SLA) — cross-module accountability from the "Responsible" tabs
+  'auto:pms_all':               { plan: 'ALL PMS tasks assigned this week (company-wide)', actual: 'ALL PMS tasks done this week (company-wide)' },
+  'auto:delegations_all':       { plan: 'ALL delegations assigned this week (company-wide)', actual: 'ALL delegations done this week (company-wide)' },
+  'auto:tickets_all':           { plan: 'ALL help tickets raised this week (company-wide)', actual: 'ALL tickets resolved this week (company-wide)' },
+  'auto:erp_module_coverage':   { plan: 'ERP modules tracked (the target = all running)', actual: 'Modules with activity this week' },
   'auto:raci_steps_done':       { plan: 'RACI steps on the user this week (closed + still open)', actual: 'RACI steps the user closed this week (all modules)' },
   'auto:raci_ontime_pct':       { plan: 'You set (target %, e.g. 90)',        actual: '% of the user\'s closed steps done within SLA' },
   // DPR
@@ -998,6 +1002,12 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:pms">pms tasks (assigned/done)</option>
                     <option value="auto:checklists">checklists (per day)</option>
                     <option value="auto:tickets">help tickets (assigned/resolved)</option>
+                  </optgroup>
+                  <optgroup label="Owner / Company-wide (ALL records)">
+                    <option value="auto:pms_all">PMS tasks — ALL (company-wide)</option>
+                    <option value="auto:delegations_all">Delegations — ALL (company-wide)</option>
+                    <option value="auto:tickets_all">Help tickets — ALL (company-wide)</option>
+                    <option value="auto:erp_module_coverage">ERP module coverage (how many ran)</option>
                   </optgroup>
                   <optgroup label="Responsibility (RACI / SLA)">
                     <option value="auto:raci_steps_done">RACI steps closed (all modules)</option>
