@@ -10,6 +10,7 @@ import api from '../../api';
 import toast from 'react-hot-toast';
 import { FiDownload, FiRefreshCw, FiDatabase, FiClock, FiHardDrive, FiAlertTriangle } from 'react-icons/fi';
 import { fmtDateTime } from '../../utils/datetime';
+import { getToken } from '../../lib/tokenStore';
 
 const formatSize = (bytes) => {
   if (!bytes) return '0 B';
@@ -47,19 +48,19 @@ export default function DatabaseBackups() {
     setRunning(false);
   };
 
-  // Download = redirect to the admin download endpoint (server sets
-  // Content-Disposition so the browser saves it as <filename>.db)
-  const download = async (filename) => {
-    try {
-      const res = await api.get(`/admin/backups/${filename}/download`, { responseType: 'blob' });
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url; link.download = filename;
-      document.body.appendChild(link); link.click();
-      link.remove(); window.URL.revokeObjectURL(url);
-    } catch (err) {
-      toast.error('Download failed');
-    }
+  // Native streaming download: point a temporary <a> at the token-authorized
+  // endpoint so the BROWSER streams the (large, 150+ MB) .db straight to disk
+  // via its own download manager. The old approach pulled the whole file into
+  // an in-memory blob via axios, which failed on big backups (mam 2026-06-29:
+  // "not able to download"). The server accepts the token as a ?token= query
+  // param for this one endpoint (a plain navigation can't send an auth header).
+  const download = (filename) => {
+    const token = getToken();
+    if (!token) return toast.error('Session expired — please log in again');
+    const a = document.createElement('a');
+    a.href = `/api/admin/backups/${encodeURIComponent(filename)}/download?token=${encodeURIComponent(token)}`;
+    a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
   };
 
   const latest = data.backups?.[0];
