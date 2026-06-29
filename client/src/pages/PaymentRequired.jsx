@@ -12,7 +12,7 @@ import { exportCsv } from '../utils/exportCsv';
 import { fmtISTPair } from '../utils/dateIST';
 import { LuIndianRupee } from 'react-icons/lu';
 
-const CATEGORIES = ['TA/DA', 'Purchase', 'Labour', 'Transport', 'Salary', 'Compliance'];
+const CATEGORIES = ['TA/DA', 'Purchase', 'Labour', 'Transport', 'Salary', 'Compliance', 'Manpower Advance'];
 const STATUSES = ['pending', 'step1_approved', 'accounts_approved', 'dues_checked', 'velocity_checked', 'final_approved', 'rejected'];
 const STATUS_LABELS = { pending: 'Pending', step1_approved: 'Step 1 Approved', accounts_approved: 'Accounts Approved', dues_checked: 'Dues Checked', velocity_checked: 'Velocity Checked', final_approved: 'Final Approved', rejected: 'Rejected' };
 // One standard flow for every category (mam 2026-06-11):
@@ -61,7 +61,7 @@ const emptyForm = {
   category: '', amount: 0, purpose: '', payment_mode: 'Bank', required_by_date: defaultRequiredByDate(),
   travel_from_to: '', travel_dates: '', mode_of_travel: '', stay_details: '',
   ticket_upload: '', start_km: 0, end_km: 0, km_photo: '',
-  indent_number: '', item_description: '', vendor_name: '', quotation_link: '',
+  indent_number: '', item_description: '', vendor_name: '', quotation_link: '', advance_proof: '',
   labour_type: '', number_of_workers: 0, work_duration: '', site_engineer_name: '',
   vehicle_type: '', from_to_location: '', material_description: '', driver_vendor_name: '',
 };
@@ -212,6 +212,10 @@ export default function PaymentRequired() {
     }
     if (f.category === 'Purchase' && !f.quotation_link) {
       missing.push('Quotation / Purchase Order');
+    }
+    // Manpower Advance: at least one proof document is mandatory (mam 2026-06-29).
+    if (f.category === 'Manpower Advance' && !f.advance_proof) {
+      missing.push('Proof / Document');
     }
     return missing;
   };
@@ -1004,6 +1008,9 @@ export default function PaymentRequired() {
               if (viewData.category === 'Purchase') {
                 slots.push({ field: 'quotation_link', label: 'Quotation / Purchase Order', tint: 'red', required: true });
               }
+              if (viewData.category === 'Manpower Advance') {
+                slots.push({ field: 'advance_proof', label: 'Proof / Document', tint: 'blue', required: true });
+              }
               // Always allow a generic attachment slot at the end
               slots.push({ field: 'attachment_link', label: 'Other Attachment', tint: 'blue', required: false });
 
@@ -1383,6 +1390,24 @@ export default function PaymentRequired() {
                 <div><label className="label">Material Description</label><input className="input" value={form.material_description} onChange={e => F('material_description', e.target.value)} /></div>
                 <div><label className="label">Driver / Vendor Name</label><input className="input" list="prVendorsDL" value={form.driver_vendor_name} onChange={e => F('driver_vendor_name', e.target.value)} placeholder="Pick or type" /></div>
               </div>
+            </div>
+          )}
+
+          {form.category === 'Manpower Advance' && (
+            <div className="border rounded-lg p-3 bg-gray-50">
+              <h4 className="font-semibold text-sm text-gray-700 mb-1">Manpower Advance — Proof <span className="text-red-500">*</span></h4>
+              <p className="text-[11px] text-gray-500 mb-2">Attach at least one supporting document (manpower list, advance voucher, photo…). Image or PDF — mandatory.</p>
+              {form.advance_proof ? (
+                <div className="flex items-center gap-2">
+                  <a href={form.advance_proof} className="text-emerald-700 text-sm underline" target="_blank" rel="noreferrer">Proof uploaded</a>
+                  <button type="button" onClick={() => F('advance_proof', '')} className="text-red-500 text-xs">Remove</button>
+                </div>
+              ) : (
+                <input type="file" accept="image/*,application/pdf" onChange={async (e) => {
+                  const file = e.target.files[0]; if (!file) return;
+                  try { const fd = new FormData(); fd.append('file', file); const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); F('advance_proof', res.data.url); toast.success('Proof uploaded'); } catch { toast.error('Upload failed'); }
+                }} />
+              )}
             </div>
           )}
 

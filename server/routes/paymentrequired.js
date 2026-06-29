@@ -75,6 +75,9 @@ const WORKFLOW = {
   'Transport': STANDARD_FLOW,
   'Salary': STANDARD_FLOW,
   'Compliance': STANDARD_FLOW,
+  // mam 2026-06-29: new "Manpower Advance" category — standard L1→L2→L3→Release
+  // flow, plus a mandatory proof upload enforced at create time (below).
+  'Manpower Advance': STANDARD_FLOW,
 };
 
 // Resolve a named approver (the standard flow pins specific people) to an
@@ -552,6 +555,10 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
   if (b.category === 'Purchase' && !b.quotation_link) {
     missingProofs.push('Quotation / Purchase Order');
   }
+  // Manpower Advance: at least one proof document is mandatory (mam 2026-06-29).
+  if (b.category === 'Manpower Advance' && !b.advance_proof) {
+    missingProofs.push('Proof / Document');
+  }
   if (missingProofs.length > 0) {
     return res.status(400).json({ error: `Upload required proof${missingProofs.length > 1 ? 's' : ''} before submitting: ${missingProofs.join(', ')}` });
   }
@@ -598,6 +605,7 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
   try { db.exec('ALTER TABLE payment_requests ADD COLUMN end_km REAL DEFAULT 0'); } catch(e) {}
   try { db.exec('ALTER TABLE payment_requests ADD COLUMN km_photo TEXT'); } catch(e) {}
   try { db.exec('ALTER TABLE payment_requests ADD COLUMN end_km_photo TEXT'); } catch(e) {}
+  try { db.exec('ALTER TABLE payment_requests ADD COLUMN advance_proof TEXT'); } catch(e) {}
 
   // Starting step: TA/DA now begins at the HR step (0); every other category
   // still begins at L1 (1). This is what makes only NEW TA/DA requests require
@@ -607,16 +615,16 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
     request_no, employee_name, site_id, site_name, department, contact_number, category, amount, purpose,
     payment_mode, required_by_date,
     travel_from_to, travel_dates, mode_of_travel, stay_details, ticket_upload, start_km, end_km, km_photo, end_km_photo,
-    indent_number, item_description, vendor_name, quotation_link,
+    indent_number, item_description, vendor_name, quotation_link, advance_proof,
     labour_type, number_of_workers, work_duration, site_engineer_name,
     vehicle_type, from_to_location, material_description, driver_vendor_name,
     created_by, current_step
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     requestNo, b.employee_name, b.site_id || null, b.site_name, b.department, b.contact_number,
     b.category, b.amount, b.purpose, b.payment_mode || 'Bank', b.required_by_date || null,
     b.travel_from_to, b.travel_dates, b.mode_of_travel, b.stay_details,
     b.ticket_upload, b.start_km || 0, b.end_km || 0, b.km_photo, b.end_km_photo,
-    b.indent_number, b.item_description, b.vendor_name, b.quotation_link,
+    b.indent_number, b.item_description, b.vendor_name, b.quotation_link, b.advance_proof || null,
     b.labour_type, b.number_of_workers || 0, b.work_duration, b.site_engineer_name,
     b.vehicle_type, b.from_to_location, b.material_description, b.driver_vendor_name,
     req.user.id, startStep
