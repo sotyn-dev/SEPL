@@ -374,6 +374,7 @@ function upgradeAutoSources(db) {
   const map = [
     ['Site Engineer', 'Weekly DPR Profit', 'auto:dpr_profit'],
     ['Site Engineer', 'Indent Accuracy', 'auto:indents_in_week'],
+    ['Site Engineer', 'Indent vs Bill', 'auto:indent_vs_bill'],
     ['Site Engineer', 'MB Signed from Client', 'auto:mb_signed'],
     ['Site Engineer', 'Stock at site', 'auto:stock_at_site'],
     ['Supervisor', 'DPR Planning', 'auto:dpr_count'],

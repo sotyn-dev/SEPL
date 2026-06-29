@@ -400,9 +400,24 @@ function computeScorecard(db, userId, weekStart) {
         return { given: 6, done: c };
       }
       if (source === 'auto:indents_in_week') {
-        // Indents created in the week (no per-week target → planned=actual so % = 0; admin can override)
-        const c = db.prepare(`SELECT COUNT(*) as c FROM indents WHERE site_id IN ${inSites} AND created_at BETWEEN ? AND ?`).get(since, until).c;
+        // Indents created in the week for this user's site(s). indents carries
+        // site_name (TEXT), NOT site_id — match by name (the old site_id query
+        // silently returned nothing). No per-week target → planned=actual so %=0.
+        const c = db.prepare(`SELECT COUNT(*) as c FROM indents WHERE created_at BETWEEN ? AND ?
+          AND LOWER(TRIM(COALESCE(site_name,''))) IN (SELECT LOWER(TRIM(name)) FROM sites WHERE id IN ${inSites})`).get(since, until).c;
         return { given: c, done: c };
+      }
+      // Indent vs Bill — indents RAISED vs sales bills GENERATED for this site
+      // engineer's site(s) this week (mam 2026-06-29: "how much indent raise and
+      // sales bill generate"). Planned = indents raised, Actual = sales bills.
+      // Both link to the site by NAME: indents.site_name and sales_bills.project_name
+      // matched to sites.name (sales bills carry project_name, not site_id/po_id).
+      if (source === 'auto:indent_vs_bill') {
+        const indents = db.prepare(`SELECT COUNT(*) as c FROM indents WHERE created_at BETWEEN ? AND ?
+          AND LOWER(TRIM(COALESCE(site_name,''))) IN (SELECT LOWER(TRIM(name)) FROM sites WHERE id IN ${inSites})`).get(since, until).c;
+        const bills = db.prepare(`SELECT COUNT(*) as c FROM sales_bills WHERE created_at BETWEEN ? AND ?
+          AND LOWER(TRIM(COALESCE(project_name,''))) IN (SELECT LOWER(TRIM(name)) FROM sites WHERE id IN ${inSites})`).get(since, until).c;
+        return { given: indents, done: bills };
       }
       if (source === 'auto:mb_signed') {
         // MB bills approved (client-signed proxy) / total raised in the week.
