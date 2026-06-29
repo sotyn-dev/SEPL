@@ -158,6 +158,27 @@ router.put('/step-done/:module/:recordId', (req, res) => {
   res.json({ message: doneAt ? 'Step marked done' : 'Step reopened', done_at: doneAt });
 });
 
+// Set ONE step's "for next week" commitment in place (mam 2026-06-29: editable
+// straight from the scorecard step-wise breakdown). Touches ONLY commitment, so
+// it never wipes the step's R/A/C/I, SLA or weight. recordId 0 = module default.
+// Body: { step_key, commitment } — empty/null clears it.
+router.put('/step-commitment/:module/:recordId', (req, res) => {
+  const db = getDb();
+  const mod = MODULE_STEPS[req.params.module];
+  if (!mod) return res.status(404).json({ error: 'Unknown module' });
+  const stepKey = String(req.body.step_key || '');
+  if (!mod.steps.some(s => s.key === stepKey)) return res.status(400).json({ error: 'Unknown step' });
+  const commitment = (req.body.commitment != null && String(req.body.commitment).trim() !== '')
+    ? String(req.body.commitment).trim() : null;
+  db.prepare(`
+    INSERT INTO raci_assignment (module, record_id, step_key, commitment, updated_at)
+    VALUES (?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(module, record_id, step_key) DO UPDATE SET
+      commitment=excluded.commitment, updated_at=CURRENT_TIMESTAMP
+  `).run(req.params.module, +req.params.recordId, stepKey, commitment);
+  res.json({ message: 'Commitment saved', commitment });
+});
+
 // Build the "Responsible" board for ONE module: every record with each step's
 // assigned R/A/C/I, SLA, actual time taken (elapsed) and how late it ran, plus
 // a per-person summary. Shared by GET /board/:module and the cross-module

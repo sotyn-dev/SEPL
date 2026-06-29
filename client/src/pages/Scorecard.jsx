@@ -408,6 +408,29 @@ export default function Scorecard() {
 }
 
 // ---------- RACI step-wise breakdown (drill-down of the RACI Steps row) ----------
+// Editable "for next week" commitment per step — saves in place to the module
+// default (record_id 0) so it sticks for that module/step (mam 2026-06-29:
+// "commitment should be editable"). Touches only commitment, never R/A/C/I/SLA.
+function CommitmentCell({ row }) {
+  const [val, setVal] = useState(row.commitment ?? '');
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    const next = (val || '').trim();
+    if (next === (row.commitment || '')) return;     // unchanged — skip
+    setSaving(true);
+    try {
+      await api.put(`/raci/step-commitment/${row.module}/0`, { step_key: row.step_key, commitment: next });
+      row.commitment = next;                          // keep the row's data in sync
+    } catch { toast.error('Failed to save commitment'); setVal(row.commitment ?? ''); }
+    finally { setSaving(false); }
+  };
+  return (
+    <input type="text" className={`input text-xs w-full ${saving ? 'bg-amber-50' : ''}`}
+      placeholder="for next week…" value={val}
+      onChange={e => setVal(e.target.value)} onBlur={save} />
+  );
+}
+
 function RaciBreakdown({ data }) {
   if (!data || data.loading) return <p className="text-sm text-gray-500 p-4">Loading…</p>;
   const rows = data.rows || [];
@@ -445,7 +468,6 @@ function RaciBreakdown({ data }) {
                 <th className="text-center p-2 w-16">Pending</th>
                 <th className="text-center p-2 w-20">Actual %</th>
                 <th className="text-center p-2 w-20">On-time</th>
-                <th className="text-left p-2">Pending on</th>
                 <th className="text-left p-2">Commitment (next wk)</th>
               </tr>
             </thead>
@@ -459,10 +481,7 @@ function RaciBreakdown({ data }) {
                   <td className="text-center p-2 text-amber-700">{r.pending || ''}</td>
                   <td className={`text-center p-2 font-bold ${pctClr(pct(r.actual, r.planned))}`}>{pct(r.actual, r.planned)}%</td>
                   <td className="text-center p-2">{r.sla_judged ? `${Math.round((r.on_time / r.sla_judged) * 100)}%` : <span className="text-gray-300">—</span>}</td>
-                  <td className="p-2 text-gray-500 truncate max-w-[200px]" title={(r.pending_records || []).join(', ')}>
-                    {(r.pending_records || []).join(', ') || '—'}
-                  </td>
-                  <td className="p-2 text-amber-700">{r.commitment || <span className="text-gray-300">—</span>}</td>
+                  <td className="p-2"><CommitmentCell row={r} /></td>
                 </tr>
               ))}
             </tbody>
