@@ -72,6 +72,8 @@ export default function ResponsibilityTab({ module, title }) {
           responsible_id: s.responsible_id || null, accountable_id: s.accountable_id || null,
           consulted_id: s.consulted_id || null, informed_id: s.informed_id || null,
           sla_hours: s.sla_hours === '' || s.sla_hours == null ? null : +s.sla_hours,
+          weight: s.weight === '' || s.weight == null ? null : +s.weight,
+          commitment: s.commitment && String(s.commitment).trim() !== '' ? s.commitment : null,
         })),
       });
       toast.success('Saved'); setEditRec(null); load();
@@ -221,7 +223,7 @@ export default function ResponsibilityTab({ module, title }) {
       {/* Per-record editor */}
       <Modal isOpen={!!editRec} onClose={() => setEditRec(null)} title={`Responsible & time — ${editRec?.title || ''}`} wide>
         <div className="space-y-3">
-          <p className="text-xs text-gray-500">Pick the <b>R</b>esponsible / <b>A</b>ccountable / <b>C</b>onsulted / <b>I</b>nformed person and the target time (SLA hours) for each step of <b>this</b> record.</p>
+          <p className="text-xs text-gray-500">Pick the <b>R</b>esponsible / <b>A</b>ccountable / <b>C</b>onsulted / <b>I</b>nformed person, the target time (SLA hours), the <b>Weight %</b> (makes the scorecard step-wise % weighted) and a <b>Commitment</b> for next week — for each step of <b>this</b> record.</p>
           {busy && editSteps.length === 0 ? (
             <div className="py-8 text-center text-gray-400 text-sm">Loading…</div>
           ) : (
@@ -229,7 +231,7 @@ export default function ResponsibilityTab({ module, title }) {
               {editSteps.map((s, i) => (
                 <div key={s.key} className="border rounded-lg p-3 bg-white">
                   <div className="font-semibold text-sm mb-2 text-gray-800">{s.label}</div>
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-7 gap-2">
                     {RACI_FIELDS.map(([field, label, tint]) => (
                       <div key={field}>
                         <label className={`label text-[10px] ${tint}`}>{label}</label>
@@ -242,6 +244,14 @@ export default function ResponsibilityTab({ module, title }) {
                     <div>
                       <label className="label text-[10px] text-rose-600">SLA (hours)</label>
                       <input type="number" min="0" step="any" className="input text-xs" placeholder="e.g. 24" value={s.sla_hours ?? ''} onChange={e => setField(i, 'sla_hours', e.target.value === '' ? '' : +e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="label text-[10px] text-indigo-600">Weight %</label>
+                      <input type="number" min="0" step="any" className="input text-xs" placeholder="e.g. 20" value={s.weight ?? ''} onChange={e => setField(i, 'weight', e.target.value === '' ? '' : +e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="label text-[10px] text-amber-600">Commitment (next wk)</label>
+                      <input type="text" className="input text-xs" placeholder="for next week" value={s.commitment ?? ''} onChange={e => setField(i, 'commitment', e.target.value)} />
                     </div>
                   </div>
                 </div>

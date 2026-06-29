@@ -591,12 +591,16 @@ function raciUserWeek(db, userId, sinceDate, untilDate) {
 function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
   const HOUR = 3600000;
   const acc = new Map();                              // `${module}|${stepKey}` -> tally
-  const tallyFor = (mod, modLabel, stepKey, stepLabel) => {
+  const tallyFor = (mod, modLabel, stepKey, stepLabel, weight, commitment) => {
     const k = `${mod}|${stepKey}`;
     let t = acc.get(k);
     if (!t) {
       t = { module: mod, module_label: modLabel, step_key: stepKey, step_label: stepLabel,
-            planned: 0, actual: 0, pending: 0, sla_judged: 0, on_time: 0, pending_records: [] };
+            planned: 0, actual: 0, pending: 0, sla_judged: 0, on_time: 0, pending_records: [],
+            // Per-step weightage % + "for next week" commitment, set at the module-default
+            // level (record_id 0) in the ⚙ Responsible editor (mam 2026-06-29).
+            weight: (weight != null && weight !== '') ? +weight : null,
+            commitment: commitment || null };
       acc.set(k, t);
     }
     return t;
@@ -638,7 +642,7 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
           if (!sawOpen) {
             sawOpen = true;
             if (!recClosed && responsibleId === userId) {
-              const t = tallyFor(key, def.label, s.key, s.label);
+              const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
               t.planned += 1; t.pending += 1;
               if (t.pending_records.length < 8) t.pending_records.push(rec.title);
             }
@@ -651,7 +655,7 @@ function raciUserWeekBreakdown(db, userId, sinceDate, untilDate) {
         if (responsibleId !== userId) continue;
         const dateStr = String(stampRaw).slice(0, 10);
         if (dateStr < sinceDate || dateStr > untilDate) continue;
-        const t = tallyFor(key, def.label, s.key, s.label);
+        const t = tallyFor(key, def.label, s.key, s.label, m.weight, m.commitment);
         t.planned += 1; t.actual += 1;
         const sla = cfg.sla_hours != null ? +cfg.sla_hours : (m.sla_hours != null ? +m.sla_hours : (s.default_sla != null ? +s.default_sla : null));
         if (sla != null && elapsed != null) { t.sla_judged += 1; if (elapsed <= sla) t.on_time += 1; }

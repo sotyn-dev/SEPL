@@ -33,7 +33,9 @@ try {
 // have no date column of their own, so the user marks the step done and the
 // board uses this timestamp to compute elapsed time + late-by for scoring.
 // Guarded ALTERs so they run once on existing databases without a migration.
-for (const col of ['done_at DATETIME', 'done_by INTEGER']) {
+// weight (per-step weightage %, makes the scorecard step-wise % weighted) and
+// commitment (a free-text "for next week" note per step) — mam 2026-06-29.
+for (const col of ['done_at DATETIME', 'done_by INTEGER', 'weight REAL', 'commitment TEXT']) {
   try { getDb().exec(`ALTER TABLE raci_assignment ADD COLUMN ${col}`); } catch (e) { /* already exists */ }
 }
 
@@ -92,6 +94,8 @@ router.get('/record/:module/:recordId', (req, res) => {
         consulted_id: c.consulted_id || null, consulted: nm(c.consulted_id),
         informed_id: c.informed_id || null, informed: nm(c.informed_id),
         sla_hours: c.sla_hours != null ? +c.sla_hours : null,
+        weight: c.weight != null ? +c.weight : null,
+        commitment: c.commitment || null,
       };
     }),
   });
@@ -105,19 +109,21 @@ router.put('/record/:module/:recordId', (req, res) => {
   const validKeys = new Set(mod.steps.map(s => s.key));
   const rows = Array.isArray(req.body.steps) ? req.body.steps : [];
   const up = db.prepare(`
-    INSERT INTO raci_assignment (module, record_id, step_key, responsible_id, accountable_id, consulted_id, informed_id, sla_hours, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    INSERT INTO raci_assignment (module, record_id, step_key, responsible_id, accountable_id, consulted_id, informed_id, sla_hours, weight, commitment, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
     ON CONFLICT(module, record_id, step_key) DO UPDATE SET
       responsible_id=excluded.responsible_id, accountable_id=excluded.accountable_id,
       consulted_id=excluded.consulted_id, informed_id=excluded.informed_id,
-      sla_hours=excluded.sla_hours, updated_at=CURRENT_TIMESTAMP`);
+      sla_hours=excluded.sla_hours, weight=excluded.weight, commitment=excluded.commitment, updated_at=CURRENT_TIMESTAMP`);
   const id = (v) => { const n = +v; return Number.isFinite(n) && n > 0 ? n : null; };
   const sla = (v) => (v != null && v !== '' && +v >= 0) ? +v : null;
+  const wt = (v) => (v != null && v !== '' && Number.isFinite(+v) && +v >= 0) ? +v : null;
+  const txt = (v) => (v != null && String(v).trim() !== '') ? String(v).trim() : null;
   const tx = db.transaction(() => {
     for (const r of rows) {
       if (!validKeys.has(String(r.step_key))) continue;
       up.run(req.params.module, +req.params.recordId, String(r.step_key),
-        id(r.responsible_id), id(r.accountable_id), id(r.consulted_id), id(r.informed_id), sla(r.sla_hours));
+        id(r.responsible_id), id(r.accountable_id), id(r.consulted_id), id(r.informed_id), sla(r.sla_hours), wt(r.weight), txt(r.commitment));
     }
   });
   tx();

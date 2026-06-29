@@ -418,13 +418,19 @@ function RaciBreakdown({ data }) {
   const pct = (done, planned) => { if (!planned) return 0; const p = Math.round(((done - planned) / planned) * 100); return p < -100 ? -100 : p; };
   const pctClr = (p) => p >= 0 ? 'text-emerald-700' : p >= -50 ? 'text-amber-700' : 'text-red-700';
   const overall = pct(data.totals.actual, data.totals.planned);
+  // Weighted overall % when any step carries a weight: Σ(weight × stepPct)/Σ(weight).
+  const wRows = rows.filter(r => +r.weight > 0);
+  const hasW = wRows.length > 0;
+  const weightedOverall = hasW
+    ? Math.round(wRows.reduce((s, r) => s + (+r.weight) * pct(r.actual, r.planned), 0) / wRows.reduce((s, r) => s + (+r.weight), 0))
+    : overall;
   return (
     <div className="space-y-4">
       <div className="text-sm text-gray-600">
         Week {data.week_start} → {data.week_end} · <b>{data.totals.planned}</b> planned ·{' '}
         <b className="text-emerald-700">{data.totals.actual}</b> done ·{' '}
         <b className="text-amber-700">{data.totals.pending}</b> pending ·{' '}
-        <b className={pctClr(overall)}>{overall}%</b>
+        <b className={pctClr(weightedOverall)}>{weightedOverall}%</b>{hasW && <span className="text-[10px] text-gray-400"> (weighted)</span>}
       </div>
       {Object.entries(byMod).map(([mod, list]) => (
         <div key={mod} className="border rounded overflow-hidden">
@@ -433,26 +439,30 @@ function RaciBreakdown({ data }) {
             <thead className="bg-gray-50 text-[10px] text-gray-500 uppercase">
               <tr>
                 <th className="text-left p-2">Step</th>
+                <th className="text-center p-2 w-14">Wt %</th>
                 <th className="text-center p-2 w-20">Planned</th>
                 <th className="text-center p-2 w-16">Done</th>
                 <th className="text-center p-2 w-16">Pending</th>
                 <th className="text-center p-2 w-20">Actual %</th>
                 <th className="text-center p-2 w-20">On-time</th>
                 <th className="text-left p-2">Pending on</th>
+                <th className="text-left p-2">Commitment (next wk)</th>
               </tr>
             </thead>
             <tbody>
               {list.map(r => (
                 <tr key={r.step_key} className="border-t">
                   <td className="p-2 font-medium">{r.step_label}</td>
+                  <td className="text-center p-2 text-indigo-700">{r.weight != null ? `${r.weight}%` : <span className="text-gray-300">—</span>}</td>
                   <td className="text-center p-2 font-semibold">{r.planned}</td>
                   <td className="text-center p-2 text-emerald-700">{r.actual}</td>
                   <td className="text-center p-2 text-amber-700">{r.pending || ''}</td>
                   <td className={`text-center p-2 font-bold ${pctClr(pct(r.actual, r.planned))}`}>{pct(r.actual, r.planned)}%</td>
                   <td className="text-center p-2">{r.sla_judged ? `${Math.round((r.on_time / r.sla_judged) * 100)}%` : <span className="text-gray-300">—</span>}</td>
-                  <td className="p-2 text-gray-500 truncate max-w-[240px]" title={(r.pending_records || []).join(', ')}>
+                  <td className="p-2 text-gray-500 truncate max-w-[200px]" title={(r.pending_records || []).join(', ')}>
                     {(r.pending_records || []).join(', ') || '—'}
                   </td>
+                  <td className="p-2 text-amber-700">{r.commitment || <span className="text-gray-300">—</span>}</td>
                 </tr>
               ))}
             </tbody>
