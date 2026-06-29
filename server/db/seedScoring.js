@@ -375,6 +375,12 @@ function upgradeAutoSources(db) {
     ['Site Engineer', 'Weekly DPR Profit', 'auto:dpr_profit'],
     ['Site Engineer', 'Indent Accuracy', 'auto:indents_in_week'],
     ['Site Engineer', 'Indent vs Bill', 'auto:indent_vs_bill'],
+    // mam 2026-06-29 "automate where manual & data exists": only these two had a
+    // real source table with data (complaints=8, candidates=61). Meetings &
+    // quotations tables are EMPTY so those KPIs stay manual; amount-in-lakh/CR
+    // and %/quality KPIs have no clean auto source and also stay manual.
+    ['Sushila — Sales Coordinator', 'Complaint Resolved', 'auto:complaints_resolved'],
+    ['Ruksana — HR Hiring', 'On-Board', 'auto:candidates_onboarded'],
     ['Site Engineer', 'MB Signed from Client', 'auto:mb_signed'],
     ['Site Engineer', 'Stock at site', 'auto:stock_at_site'],
     ['Supervisor', 'DPR Planning', 'auto:dpr_count'],
