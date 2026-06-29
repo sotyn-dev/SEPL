@@ -77,6 +77,7 @@ const SOURCE_INFO = {
   // Procurement
   'auto:indents_in_week':       { plan: 'Indents created for user\'s site',    actual: 'Indents created for user\'s site' },
   'auto:indent_vs_bill':        { plan: 'Indents raised for the site (this week)', actual: 'Sales bills generated for the site (this week)' },
+  'auto:items_complete':        { plan: 'All indent line-items (total)',         actual: 'Items with a PO raised (procured) — company-wide' },
   'auto:indents_approved':      { plan: 'You set',                            actual: 'Indents approved by user' },
   'auto:vendor_pos_created':    { plan: 'You set',                            actual: 'Vendor POs created by user' },
   'auto:purchase_bills':        { plan: 'You set',                            actual: 'Purchase bills received this week' },
@@ -1039,6 +1040,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   <optgroup label="Procurement (Indent → Dispatch)">
                     <option value="auto:indents_in_week">indents created (site)</option>
                     <option value="auto:indent_vs_bill">Indent vs Bill — indents raised vs sales bills (site)</option>
+                    <option value="auto:items_complete">Itemwise complete — items with PO raised / total (all)</option>
                     <option value="auto:indents_approved">indents approved (by user)</option>
                     <option value="auto:vendor_pos_created">vendor POs created</option>
                     <option value="auto:purchase_bills">purchase bills received</option>

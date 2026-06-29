@@ -338,6 +338,17 @@ function computeScorecard(db, userId, weekStart) {
         }
         return { given: tables.length, done: active };
       }
+      // Itemwise total complete — of all indent line-items, how many are fully
+      // PROCURED (have a vendor PO raised, po_item_id set) — mam 2026-06-29
+      // ("itemwise total complete score"). Cumulative, company-wide. Planned =
+      // total items, Actual = items with a PO. ("Received" isn't usable — all
+      // deliveries are still 'pending'; switch to stock_movement_id once they're
+      // marked received.)
+      if (source === 'auto:items_complete') {
+        const given = db.prepare(`SELECT COUNT(*) as c FROM indent_items`).get().c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM indent_items WHERE po_item_id IS NOT NULL`).get().c;
+        return { given, done };
+      }
 
       // ── Responsibility (RACI / SLA) — cross-module per-person accountability ──
       // Steps where the user is the EXPLICIT RACI Responsible (per-record, else
