@@ -414,12 +414,17 @@ function RaciBreakdown({ data }) {
   if (!rows.length) return <p className="text-sm text-gray-500 p-4">No RACI steps on this person for this week.</p>;
   // Group the per-step rows under their module heading.
   const byMod = rows.reduce((a, r) => { (a[r.module_label] = a[r.module_label] || []).push(r); return a; }, {});
+  // Actual % per the scorecard's higher-better rule: (done − planned)/planned, floored at −100.
+  const pct = (done, planned) => { if (!planned) return 0; const p = Math.round(((done - planned) / planned) * 100); return p < -100 ? -100 : p; };
+  const pctClr = (p) => p >= 0 ? 'text-emerald-700' : p >= -50 ? 'text-amber-700' : 'text-red-700';
+  const overall = pct(data.totals.actual, data.totals.planned);
   return (
     <div className="space-y-4">
       <div className="text-sm text-gray-600">
         Week {data.week_start} → {data.week_end} · <b>{data.totals.planned}</b> planned ·{' '}
         <b className="text-emerald-700">{data.totals.actual}</b> done ·{' '}
-        <b className="text-amber-700">{data.totals.pending}</b> pending
+        <b className="text-amber-700">{data.totals.pending}</b> pending ·{' '}
+        <b className={pctClr(overall)}>{overall}%</b>
       </div>
       {Object.entries(byMod).map(([mod, list]) => (
         <div key={mod} className="border rounded overflow-hidden">
@@ -431,6 +436,7 @@ function RaciBreakdown({ data }) {
                 <th className="text-center p-2 w-20">Planned</th>
                 <th className="text-center p-2 w-16">Done</th>
                 <th className="text-center p-2 w-16">Pending</th>
+                <th className="text-center p-2 w-20">Actual %</th>
                 <th className="text-center p-2 w-20">On-time</th>
                 <th className="text-left p-2">Pending on</th>
               </tr>
@@ -442,6 +448,7 @@ function RaciBreakdown({ data }) {
                   <td className="text-center p-2 font-semibold">{r.planned}</td>
                   <td className="text-center p-2 text-emerald-700">{r.actual}</td>
                   <td className="text-center p-2 text-amber-700">{r.pending || ''}</td>
+                  <td className={`text-center p-2 font-bold ${pctClr(pct(r.actual, r.planned))}`}>{pct(r.actual, r.planned)}%</td>
                   <td className="text-center p-2">{r.sla_judged ? `${Math.round((r.on_time / r.sla_judged) * 100)}%` : <span className="text-gray-300">—</span>}</td>
                   <td className="p-2 text-gray-500 truncate max-w-[240px]" title={(r.pending_records || []).join(', ')}>
                     {(r.pending_records || []).join(', ') || '—'}
