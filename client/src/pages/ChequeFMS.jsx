@@ -42,7 +42,7 @@ export default function ChequeFMS() {
   // Tab persisted in URL ?tab=... so a refresh keeps the user where
   // they were (mam 2026-05-28: "when i refresh it it goes on first").
   const [tab, setTab] = useUrlTab(
-    ['action_due', 'pending', 'hold', 'clear', 'bounce', 'all'],
+    ['action_due', 'pending', 'hold', 'clear', 'bounce', 'all', 'responsible'],
     'action_due',
   );
   const [cheques, setCheques] = useState([]);
