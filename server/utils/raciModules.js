@@ -235,6 +235,7 @@ const MODULE_DEFS = {
       { key: 'po_l1', label: 'PO L1 Approval' },
       { key: 'po_l2', label: 'PO L2 Approval' },
       { key: 'dispatch', label: 'Dispatch / Delivery' },
+      { key: 'purchase_bill', label: 'Purchase Bill' },
     ],
     rows(db) {
       const steps = this.steps;
@@ -245,12 +246,16 @@ const MODULE_DEFS = {
                (SELECT MIN(vp.po_l2_at) FROM vendor_pos vp WHERE vp.indent_id=i.id AND COALESCE(vp.cancelled,0)=0) AS po_l2_at,
                (SELECT MIN(dn.created_at) FROM delivery_notes dn
                   JOIN vendor_pos vp ON vp.id=dn.vendor_po_id
-                 WHERE vp.indent_id=i.id) AS dispatch_at
+                 WHERE vp.indent_id=i.id) AS dispatch_at,
+               (SELECT MIN(pb.created_at) FROM purchase_bills pb
+                  JOIN vendor_pos vp ON vp.id=pb.vendor_po_id
+                 WHERE vp.indent_id=i.id) AS bill_at
           FROM indents i ORDER BY i.created_at DESC LIMIT 500`).map(r => {
         const stamps = {
           raised: r.created_at || null, l1: r.l1_at || null, l2: r.l2_at || null,
           crm: r.crm_at || null, approved: r.approved_at || null,
           po_l1: r.po_l1_at || null, po_l2: r.po_l2_at || null, dispatch: r.dispatch_at || null,
+          purchase_bill: r.bill_at || null,
         };
         return {
           id: r.id, title: r.indent_number || ('IND #' + r.id), subtitle: r.site_name || '—',
