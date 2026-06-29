@@ -280,19 +280,24 @@ function computeScorecard(db, userId, weekStart) {
       const sinceDate = since.slice(0, 10);
       const untilDate = until.slice(0, 10);
 
+      // mam 2026-06-29: count Planned vs Actual on the SAME cohort — tasks
+      // ASSIGNED this week, and of those how many reached the done status — so
+      // Actual can never exceed Planned. The old logic counted ANY task completed
+      // this week (including ones assigned in earlier weeks), which gave the
+      // confusing 5-given / 11-done case on Monika's Delegation row.
       if (source === 'auto:delegations') {
         const given = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND status='approved' AND COALESCE(reviewed_at, submitted_at, created_at) BETWEEN ? AND ?`).get(userId, since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM delegations WHERE assigned_to=? AND created_at BETWEEN ? AND ? AND status='approved'`).get(userId, since, until).c;
         return { given, done };
       }
       if (source === 'auto:pms') {
         const given = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND status='approved' AND COALESCE(reviewed_at, submitted_at, created_at) BETWEEN ? AND ?`).get(userId, since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM pms_tasks WHERE assigned_to=? AND created_at BETWEEN ? AND ? AND status='approved'`).get(userId, since, until).c;
         return { given, done };
       }
       if (source === 'auto:tickets') {
         const given = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
-        const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND status IN ('resolved','closed') AND COALESCE(resolved_at, updated_at, created_at) BETWEEN ? AND ?`).get(userId, since, until).c;
+        const done = db.prepare(`SELECT COUNT(*) as c FROM support_tickets WHERE assigned_to=? AND created_at BETWEEN ? AND ? AND status IN ('resolved','closed')`).get(userId, since, until).c;
         return { given, done };
       }
       if (source === 'auto:checklists') {
@@ -941,8 +946,7 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
       ).get(u.id, startTs, endTs).c;
       const delDone = db.prepare(
         `SELECT COUNT(*) as c FROM delegations
-         WHERE assigned_to = ? AND status = 'approved'
-           AND COALESCE(reviewed_at, submitted_at, created_at) BETWEEN ? AND ?`
+         WHERE assigned_to = ? AND created_at BETWEEN ? AND ? AND status = 'approved'`
       ).get(u.id, startTs, endTs).c;
 
       // PMS Tasks
@@ -952,8 +956,7 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
       ).get(u.id, startTs, endTs).c;
       const pmsDone = db.prepare(
         `SELECT COUNT(*) as c FROM pms_tasks
-         WHERE assigned_to = ? AND status = 'approved'
-           AND COALESCE(reviewed_at, submitted_at, created_at) BETWEEN ? AND ?`
+         WHERE assigned_to = ? AND created_at BETWEEN ? AND ? AND status = 'approved'`
       ).get(u.id, startTs, endTs).c;
 
       // Checklists — assigned daily checklists (one per weekday active days)
@@ -978,8 +981,7 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
       ).get(u.id, startTs, endTs).c;
       const tktDone = db.prepare(
         `SELECT COUNT(*) as c FROM support_tickets
-         WHERE assigned_to = ? AND status IN ('resolved', 'closed')
-           AND COALESCE(resolved_at, updated_at, created_at) BETWEEN ? AND ?`
+         WHERE assigned_to = ? AND created_at BETWEEN ? AND ? AND status IN ('resolved', 'closed')`
       ).get(u.id, startTs, endTs).c;
 
       const totalGiven = delGiven + pmsGiven + cklGiven + tktGiven;
