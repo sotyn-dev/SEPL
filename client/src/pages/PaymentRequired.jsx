@@ -783,7 +783,9 @@ export default function PaymentRequired() {
                     const st = stageOf(r);
                     const cls = 'px-2 py-0.5 rounded text-[11px] font-semibold whitespace-nowrap ';
                     if (st === 'Rejected') return <span className={cls + 'bg-red-100 text-red-700'}>Rejected</span>;
-                    if (st === 'Approved') return <span className={cls + 'bg-green-600 text-white'}>Paid</span>;
+                    if (st === 'Approved') return r.l3_missing
+                      ? <span className={cls + 'bg-red-100 text-red-700'} title="Released without L2 (Nitin) / L3 (MD) approval — not properly paid. Needs the L3 backfill to correct.">⚠ Not Paid</span>
+                      : <span className={cls + 'bg-green-600 text-white'}>Paid</span>;
                     if (st === 'Payment Release (Aanchal)') return <span className={cls + 'bg-emerald-100 text-emerald-700'}>Approved</span>;
                     // Show WHICH level it's pending at (mam 2026-06-18: status was
                     // a hotchpotch — everything just said "Pending"). Level read

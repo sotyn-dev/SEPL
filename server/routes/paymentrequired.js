@@ -295,6 +295,18 @@ router.get('/', requirePermission('payment_required', 'view'), (req, res) => {
         row.last_approved_at        = last.approved_at;
       }
       row.approvals_count = new Set(appr.map(a => a.step)).size;
+      // mam 2026-06-30: a request marked final_approved ("Paid") that never got
+      // L2 (Nitin) / L3 (MD) was wrongly released under the old flow. Flag it so
+      // the UI shows it as NOT actually paid (display only — data untouched).
+      {
+        const names = appr.map(a => String(a.step_name || '').toLowerCase());
+        const flow = WORKFLOW[row.category] || [];
+        const needsL2 = flow.some(w => /\bL2\b|nitin/i.test(w.name));
+        const needsL3 = flow.some(w => /\bL3\b|ankur/i.test(w.name));
+        const hasL2 = !needsL2 || names.some(n => n.includes('l2') || n.includes('nitin'));
+        const hasL3 = !needsL3 || names.some(n => n.includes('l3') || n.includes('ankur'));
+        row.l3_missing = (row.status === 'final_approved') && (!hasL2 || !hasL3);
+      }
       row.step_amounts = {};
       for (const a of appr) row.step_amounts[a.step] = (a.step_amount != null ? +a.step_amount : (+row.approved_amount || +row.amount || 0));
     } catch (e) {
