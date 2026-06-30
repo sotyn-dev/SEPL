@@ -96,7 +96,7 @@ export default function Estimator() {
       for (const k of (r.data.rows || [])) {
         if (!k.po_item_id) continue;
         if (!map[k.po_item_id] || (k.status === 'approved' && map[k.po_item_id].status !== 'approved')) {
-          map[k.po_item_id] = { labour: k.labour, po_rate: k.po_rate, focs: k.focs || [], status: k.status };
+          map[k.po_item_id] = { labour: k.labour, po_rate: k.po_rate, focs: k.focs || [], status: k.status, cost: k.cost, tpa: k.tpa };
         }
       }
       setKitByPoId(map);
@@ -123,10 +123,7 @@ export default function Estimator() {
       const map = await loadKits();
       const kit = map[pend.itemId];
       if (!kit) return; // not saved yet — keep waiting for the next return
-      setRows(rs => rs.map((r, idx) => idx === pend.i ? {
-        ...r, fromKit: true, lab: kit.labour || 0, pp: kit.po_rate || 0,
-        subs: (kit.focs || []).map(f => ({ item_id: f.item_id || null, name: f.name || '', qty: f.qty || 1, rate: f.rate || 0, foc: false })),
-      } : r));
+      setRows(rs => rs.map((r, idx) => idx === pend.i ? { ...r, ...kitToPatch(kit) } : r));
       pendingKit.current = null;
       toast.success('Price breakup pulled from the new PO/FOC kit');
     };
@@ -134,16 +131,28 @@ export default function Estimator() {
     return () => window.removeEventListener('focus', onFocus);
   }, [loadKits]);
 
-  // Pull labour + FOC + material rate from a PO/FOC kit for an item, if one exists.
-  const kitFields = (itemId, fallbackPp) => {
-    const kit = kitByPoId[itemId];
-    if (!kit) return null;
-    return {
+  // Turn a PO/FOC kit into the row patch: material rate (PP), labour, FOC items as
+  // charged accessories, and a SUGGESTED margin (mam 2026-06-30: "suggest the
+  // margin %"). The kit's tpa is its sell price and cost is the raw cost, so
+  // (tpa−cost)/cost is the single margin % that reproduces the kit's sell price —
+  // the quote's SP then equals the kit's intended sell. Editable afterwards.
+  const kitToPatch = (kit, fallbackPp) => {
+    const cost = Number(kit.cost) || 0, tpa = Number(kit.tpa) || 0;
+    const patch = {
       fromKit: true,
       lab: kit.labour || 0,
       pp: kit.po_rate || fallbackPp || 0,
       subs: (kit.focs || []).map(f => ({ item_id: f.item_id || null, name: f.name || '', qty: f.qty || 1, rate: f.rate || 0, foc: false })),
     };
+    if (cost > 0 && tpa > 0) patch.margin = Math.round((tpa - cost) / cost * 1000) / 10; // suggested blended margin %
+    return patch;
+  };
+
+  // Pull labour + FOC + material rate (+ suggested margin) from a PO/FOC kit for an
+  // item, if one exists.
+  const kitFields = (itemId, fallbackPp) => {
+    const kit = kitByPoId[itemId];
+    return kit ? kitToPatch(kit, fallbackPp) : null;
   };
 
   // Categories present across the rows → drives the per-category margin inputs.
@@ -242,7 +251,7 @@ export default function Estimator() {
   // the backend sends on the match), or fall back to the catalogue rate.
   const matchToRow = (m) => {
     const hasKit = m.kit_pp !== undefined || Array.isArray(m.kit_focs);
-    return {
+    const row = {
       item_id: m.item_id, code: m.code, category: m.department, make: m.make || '',
       pp: hasKit ? (m.kit_pp || m.rate || 0) : (m.rate || 0),
       lab: hasKit ? (m.kit_labour || 0) : 0,
@@ -251,6 +260,11 @@ export default function Estimator() {
       matchedName: m.name, matchScore: m.score,
       confidence: m.score >= 60 ? 'high' : m.score >= 30 ? 'medium' : 'low',
     };
+    // Suggest the kit's blended margin so SP reflects the kit's intended sell price
+    // (mam 2026-06-30: "suggest the margin %") — same source/logic as kitToPatch.
+    const kit = kitByPoId[m.item_id];
+    if (kit) { const mg = kitToPatch(kit).margin; if (mg != null) row.margin = mg; }
+    return row;
   };
   // Swap a row to one of the AI's alternative matches (one-click review).
   const applyMatch = (i, m) => patchRow(i, matchToRow(m));
