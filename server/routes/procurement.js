@@ -2003,7 +2003,7 @@ router.put('/indents/:id', (req, res) => {
           // 1b. Apply per-line UNIT overrides (mam 2026-06-06: L2 fixes a wrong
           // Item-Master UOM at approval). { indent_item_id: 'KG' }.
           if (unit_overrides && typeof unit_overrides === 'object') {
-            const updUnit = db.prepare('UPDATE indent_items SET unit = ? WHERE id = ? AND indent_id = ?');
+            const updUnit = db.prepare('UPDATE indent_items SET unit = ?, unit_overridden = 1 WHERE id = ? AND indent_id = ?');
             for (const [k, v] of Object.entries(unit_overrides)) {
               const itemId = +k;
               const unit = String(v || '').trim().slice(0, 20);
@@ -6114,7 +6114,9 @@ router.get('/item-rates', (req, res) => {
     // wins, falling back to ii.unit when no master link), `unit_raw`
     // is the original ii.unit preserved for any audit needs.
     `SELECT ii.id as indent_item_id, ii.description, ii.make, ii.quantity as qty,
-            LOWER(COALESCE(NULLIF(TRIM(im.uom), ''), NULLIF(TRIM(ii.unit), ''), 'nos')) as unit,
+            LOWER(CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
+                       THEN ii.unit
+                       ELSE COALESCE(NULLIF(TRIM(im.uom), ''), NULLIF(TRIM(ii.unit), ''), 'nos') END) as unit,
             ii.unit as unit_raw,
             ii.item_type, ii.item_master_id, ii.po_item_id,
             COALESCE(ii.weight_per_meter, im.weight_per_meter) as weight_per_meter,

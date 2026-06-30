@@ -4297,6 +4297,28 @@ function initializeDatabase() {
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN jr_site_eng_override INTEGER`); } catch (_) {}
     try { db.exec(`ALTER TABLE manpower_project_settings ADD COLUMN foreman_override INTEGER`); } catch (_) {}
+    // mam 2026-06-30: when the approver edits a line's UOM at approval, mark it so
+    // downstream views show THAT unit (Vendor Rates etc.) instead of the master UOM.
+    try { db.exec(`ALTER TABLE indent_items ADD COLUMN unit_overridden INTEGER DEFAULT 0`); } catch (_) {}
+    // One-time backfill: existing rows whose line UOM already differs from the
+    // master UOM were edited deliberately (e.g. IND-0172 mtr→KG), so flag them so
+    // the edit shows immediately. Guarded so it runs exactly once.
+    try {
+      const done = db.prepare("SELECT value FROM app_settings WHERE key='unit_overridden_backfill_v1'").get();
+      if (!done) {
+        const norm = (expr) => `(CASE LOWER(TRIM(${expr}))
+            WHEN 'metre' THEN 'mtr' WHEN 'metres' THEN 'mtr' WHEN 'meter' THEN 'mtr' WHEN 'meters' THEN 'mtr' WHEN 'mtrs' THEN 'mtr' WHEN 'mt' THEN 'mtr' WHEN 'm' THEN 'mtr'
+            WHEN 'each' THEN 'nos' WHEN 'piece' THEN 'nos' WHEN 'pieces' THEN 'nos' WHEN 'pcs' THEN 'nos' WHEN 'pc' THEN 'nos' WHEN 'no' THEN 'nos' WHEN 'nos.' THEN 'nos'
+            ELSE LOWER(TRIM(${expr})) END)`;
+        const mUom = `(SELECT uom FROM item_master WHERE id = indent_items.item_master_id)`;
+        db.exec(`UPDATE indent_items SET unit_overridden = 1
+           WHERE COALESCE(unit_overridden,0) = 0 AND item_master_id IS NOT NULL
+             AND TRIM(COALESCE(unit,'')) <> ''
+             AND TRIM(COALESCE(${mUom},'')) <> ''
+             AND ${norm('unit')} <> ${norm(mUom)}`);
+        db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('unit_overridden_backfill_v1','done')").run();
+      }
+    } catch (_) {}
   } catch (e) { console.error('[schema] manpower_project_settings create failed:', e.message); }
 
   // Retention: GPS pings accumulate every 30s per user and were never purged
