@@ -3341,7 +3341,7 @@ export default function Procurement() {
                             <div className="text-[9px] font-normal text-gray-500">{r.qty} MTR × {r.weight_per_meter} kg/pipe</div>
                           </div>
                         ) : (
-                          <>{r.qty} {cleanUnit(r.uom || r.unit)}</>
+                          <>{r.qty} {cleanUnit(r.unit || r.uom)}</>
                         )}
                       </td>
                       {/* PP Rate (purchase price from planning) — suggestion only */}
@@ -3459,7 +3459,7 @@ export default function Procurement() {
                       <div className="font-medium text-red-700 text-xs">{r.indent_number}</div>
                       {r.item_code && <div className="text-[10px] font-mono text-gray-500">[{r.item_code}]</div>}
                       <div className="text-sm font-medium line-clamp-2">{[r.master_name || r.description, r.specification, r.size].filter(Boolean).join(' / ')}</div>
-                      <div className="text-[10px] text-gray-400">{r.site_name} · {r.qty} {cleanUnit(r.uom || r.unit)}{r.make ? ` · ${r.make}` : ''}</div>
+                      <div className="text-[10px] text-gray-400">{r.site_name} · {r.qty} {cleanUnit(r.unit || r.uom)}{r.make ? ` · ${r.make}` : ''}</div>
                       {r.indent_item_ids.length > 1 && (
                         <div className="text-[9px] text-gray-400 italic mt-0.5">merged from {r.indent_item_ids.length} BOQ rows</div>
                       )}
