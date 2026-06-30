@@ -7,7 +7,7 @@ import { useState, useRef, useEffect } from 'react';
 //   options : [{ id, name }]
 //   value   : array of selected ids
 //   onChange: (nextIds[]) => void
-export default function MultiUserSelect({ options, value = [], onChange, placeholder = 'Select one or more…' }) {
+export default function MultiUserSelect({ options, value = [], onChange, placeholder = 'Select one or more…', emptyText = 'No users found' }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const ref = useRef(null);
@@ -61,7 +61,7 @@ export default function MultiUserSelect({ options, value = [], onChange, placeho
                 Clear all ({value.length})
               </button>
             )}
-            {filtered.length === 0 && <div className="px-3 py-4 text-sm text-gray-400 text-center">No users found</div>}
+            {filtered.length === 0 && <div className="px-3 py-4 text-sm text-gray-400 text-center">{emptyText}</div>}
             {filtered.map(o => {
               const on = sel.has(o.id);
               return (

@@ -230,8 +230,15 @@ router.get('/dropdown', (req, res) => {
   // `type` may be a single value or a comma list (e.g. 'PO,POC').
   const types = type ? String(type).split(',').map(s => s.trim()).filter(Boolean) : [];
   const where = types.length ? `WHERE type IN (${types.map(() => '?').join(',')})` : '';
+  // Age the material price so the Estimator can show "rate N days old" (mam #4
+  // "PP rate age"). Same rate-date logic as the Item Master list (bill/PO date,
+  // else priced_at, else updated_at when a price exists). Bare-column / single
+  // MIN(id) aggregate so the date comes from the same representative row.
+  const ageExpr = `COALESCE(bill_po_date, priced_at, CASE WHEN current_price > 0 THEN updated_at END)`;
   const sql = `SELECT MIN(id) AS id, item_code, department, item_name, specification, size, uom, gst, type, make, current_price,
-                      COALESCE(approval_status, 'approved') AS approval_status
+                      COALESCE(approval_status, 'approved') AS approval_status,
+                      CASE WHEN ${ageExpr} IS NULL THEN NULL
+                           ELSE CAST((julianday('now','localtime') - julianday(${ageExpr})) AS INTEGER) END AS age_days
                  FROM item_master ${where}
                 GROUP BY LOWER(TRIM(item_name)), LOWER(TRIM(COALESCE(specification, ''))), LOWER(TRIM(COALESCE(size, '')))
                 ORDER BY department, item_name`;
@@ -242,7 +249,7 @@ router.get('/dropdown', (req, res) => {
     // Pending items stay selectable but are flagged so pickers can show
     // they're awaiting approval (mam 2026-06-16).
     const pending = i.approval_status === 'pending';
-    return { ...i, display_name: pending ? `${base} (Pending approval)` : base };
+    return { ...i, display_name: pending ? `${base} (Pending approval)` : base, age_status: ageStatus(i.age_days) };
   }));
 });
 

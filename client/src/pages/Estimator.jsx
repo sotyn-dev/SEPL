@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, Fragment } from 'react';
 import api from '../api';
 import SearchableSelect from '../components/SearchableSelect';
+import MultiUserSelect from '../components/MultiUserSelect';
 import toast from 'react-hot-toast';
-import { FiPlus, FiTrash2, FiDownload, FiUploadCloud, FiEdit2, FiSave } from 'react-icons/fi';
+import { FiPlus, FiTrash2, FiDownload, FiUploadCloud, FiEdit2, FiSave, FiRotateCcw, FiRotateCw } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
 // AI Auto-Quotation (Estimator) — mam 2026-06-09.
@@ -22,6 +23,15 @@ const blankRow = () => ({
 
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const fmt = (n) => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+// Quotation Title disciplines (mam): the title is picked from this list and
+// multiple may be selected (e.g. "Electrical, Plumbing"). Stored as a
+// comma-joined string in `title` so it still flows to save / export / print.
+const QUOTE_DISCIPLINES = ['Electrical', 'Mechanical', 'Low Voltage', 'Solar', 'Fire Fighting', 'Plumbing'];
+// Split a saved title back into selected tokens, tolerating the legacy
+// free-text titles (e.g. "250 KVA Servo") so editing an old estimate never
+// loses its name — unknown tokens stay selectable/removable as their own chip.
+const titleTokens = (t) => String(t || '').split(',').map(s => s.trim()).filter(Boolean);
 
 export default function Estimator() {
   const [itemOptions, setItemOptions] = useState([]);
@@ -59,6 +69,20 @@ export default function Estimator() {
   const [view, setView] = useState('build');     // 'build' | 'saved'
   const [savedList, setSavedList] = useState([]);
   const [currentId, setCurrentId] = useState(null);
+  // Which row's "Manual breakup" panel is expanded (discount / acc% / extra
+  // cost / make). One at a time; null = all collapsed.
+  const [openRow, setOpenRow] = useState(null);
+  // Auto-save status (mam #5: "auto save like google sheets").
+  const [saveState, setSaveState] = useState('');   // '' | 'saving' | 'saved' | 'error'
+  const [savedAt, setSavedAt] = useState(null);
+  const savingRef = useRef(false);
+  // Undo/redo history for the items grid (mam #7). Snapshots are the immutable
+  // row arrays (patchRow always makes new arrays) so reference identity = a
+  // change worth recording.
+  const histRef = useRef({ past: [], future: [] });
+  const prevRowsRef = useRef(rows);
+  const isUndoRedo = useRef(false);
+  const [, bumpHist] = useState(0);   // force re-render so undo/redo buttons enable/disable
   const fileRef = useRef();
 
   useEffect(() => {
@@ -120,6 +144,7 @@ export default function Estimator() {
       lab: 0, subs: [], fromKit: false,
       ...(kit || {}),  // PO/FOC kit overrides pp + labour + FOC when it exists
       matchedName: opt.display_name || opt.item_name || '',
+      ppAgeDays: opt.age_days ?? null, ppAgeStatus: opt.age_status ?? null,  // rate age (#4)
       matchScore: 100, confidence: 'high', alternatives: [],
     } : r));
     if (kit) toast.success('Labour + FOC pulled from PO/FOC kit');
@@ -237,23 +262,43 @@ export default function Estimator() {
   };
 
   // Per-row computed economics (matches mam's sheet).
+  //  • Discount % comes off the material / list price (PP): list × (1 − disc%).
+  //    (mam #10: "item-wise master price list | discount %".)
+  //  • Accessories % can be set PER LINE (row.accPct); blank → the global accPct.
+  //  • Extra cost (with remark) is an additional per-line charge folded into TPA
+  //    (mam #2: "extra box for any additional cost with remarks").
+  //  • Qty NOT mentioned → quote a per-UNIT rate with +20 margin points and
+  //    drop the line from the totals — you can't bill an amount without a qty
+  //    (mam #9: "always add 20% extra margin to rate where Qty is not mentioned").
   const calc = (row) => {
-    const pp = Number(row.pp) || 0;
+    const listPp = Number(row.pp) || 0;
+    const discount = Math.min(Math.max(Number(row.discountPct) || 0, 0), 100);
+    const pp = r2(listPp * (1 - discount / 100));        // effective material after discount
+    const qtyMissing = row.qty === '' || row.qty == null || Number(row.qty) === 0;
     const qty = Number(row.qty) || 0;
+    const billQty = qtyMissing ? 1 : qty;                // price per-unit when qty unknown
     const lab = Number(row.lab) || 0;
-    // ACC = total of the FOC / accessory items of this PO line (mam 2026-06-10:
-    // "acc = foc total rate of that po item") + an optional % of material.
+    const lineAccPct = (row.accPct === '' || row.accPct == null) ? (Number(accPct) || 0) : (Number(row.accPct) || 0);
+    const extra = Number(row.extraCost) || 0;
+    // ACC = charged accessory/FOC subs + a % of material. Per-unit material %
+    // so it still works when qty is missing.
     const subsCharged = r2((row.subs || []).filter(s => !s.foc)
       .reduce((t, s) => t + (Number(s.rate) || 0) * (Number(s.qty) || 0), 0));
-    const acc = r2(subsCharged + pp * qty * (Number(accPct) || 0) / 100);
-    const tp = r2(pp + lab);                 // per-unit base (material + labour)
-    const tpa = r2(tp * qty + acc);          // line total = base × qty + accessories
-    // Per-line margin overrides the category margin when set (mam 2026-06-23:
-    // "margin percentage is not editable"). Blank → fall back to the category.
-    const mPct = (row.margin === '' || row.margin == null) ? marginFor(row.category) : Number(row.margin) || 0;
-    const sp = r2(tpa * (1 + mPct / 100));
-    const rate = qty ? r2(sp / qty) : 0;
-    return { acc, tp, tpa, mPct, sp, rate, cost: tpa, subsCharged };
+    const accPerUnit = r2(pp * lineAccPct / 100);
+    const acc = r2(subsCharged + accPerUnit * billQty);
+    const tp = r2(pp + lab);                              // per-unit base (material + labour)
+    const tpa = r2(tp * billQty + acc + extra);           // line cost incl accessories + extra
+    // Per-line margin overrides the category margin when set. Blank → category.
+    const baseMargin = (row.margin === '' || row.margin == null) ? marginFor(row.category) : Number(row.margin) || 0;
+    const mPct = baseMargin + (qtyMissing ? 20 : 0);      // +20 pts when qty not mentioned (#9)
+    const spFull = r2(tpa * (1 + mPct / 100));            // when qty missing this IS the per-unit rate
+    const rate = qtyMissing ? spFull : (qty ? r2(spFull / qty) : 0);
+    return {
+      acc, tp, tpa, mPct, rate, subsCharged, discount, extra,
+      effPp: pp, listPp, qtyMissing,
+      sp: qtyMissing ? 0 : spFull,        // no line amount without a qty
+      cost: qtyMissing ? 0 : tpa,
+    };
   };
 
   const totals = useMemo(() => rows.reduce((t, row) => {
@@ -262,6 +307,28 @@ export default function Estimator() {
     return t;
   }, { cost: 0, sp: 0 }), [rows, accPct, margins]);
   const marginAmt = r2(totals.sp - totals.cost);
+  // Per-row readiness (mam #8: "whichever is still pending → yellow"). A line is
+  // 'ready' once it has a description AND yields a sale rate; 'pending' if it has
+  // a BOQ/description but no price yet; 'empty' blank rows are ignored.
+  const rowStatus = (row) => {
+    const hasDesc = !!(row.description || row.boq_text);
+    if (!hasDesc) return 'empty';
+    return calc(row).rate > 0 ? 'ready' : 'pending';
+  };
+  const completeness = useMemo(() => {
+    const considered = rows.filter(r => r.description || r.boq_text);
+    const ready = considered.filter(r => rowStatus(r) === 'ready').length;
+    return { total: considered.length, ready, pending: considered.length - ready,
+      pct: considered.length ? Math.round(ready / considered.length * 100) : 100 };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, accPct, margins]);
+  // Lines the auto-match couldn't confidently map to Item Master (mam #3:
+  // "mention what is not matching"). Surfaced in a panel so they get a manual
+  // price instead of silently slipping through at ₹0.
+  const unmatched = useMemo(() =>
+    rows.map((r, i) => ({ r, i }))
+        .filter(({ r }) => (r.boq_text || r.description) && (r.confidence === 'none' || r.confidence === 'low' || (!r.item_id && !(Number(r.pp) > 0)))),
+    [rows]);
   // Overhead + Documentation = % of project cost (items cost, before margin).
   const overheadAmt = r2((Number(totals.cost) || 0) * (Number(overheadPct) || 0) / 100);
   const docAmt = r2((Number(totals.cost) || 0) * (Number(docPct) || 0) / 100);
@@ -277,7 +344,9 @@ export default function Estimator() {
   // sale price). If the early money doesn't cover the material, the schedule
   // can't fund the purchase (mam: "you can't survive").
   const ppAccCost = useMemo(() => rows.reduce((t, row) => {
-    const c = calc(row); return t + (Number(row.pp) || 0) * (Number(row.qty) || 0) + c.acc;
+    const c = calc(row);
+    if (c.qtyMissing) return t;   // no qty → no funded outflow to schedule
+    return t + c.effPp * (Number(row.qty) || 0) + c.acc;
   }, 0), [rows, accPct, margins]);
   const earlyPct = (Number(payTerms.advance) || 0) + (Number(payTerms.material) || 0);
   const earlyInflow = r2((Number(totals.sp) || 0) * earlyPct / 100);
@@ -344,17 +413,98 @@ export default function Estimator() {
   const loadSavedList = () => api.get('/quotations/estimates').then(r => setSavedList(r.data || [])).catch(() => {});
   useEffect(() => { if (view === 'saved') loadSavedList(); }, [view]);
 
-  const saveEstimate = async () => {
-    if (!rows.some(r => r.description)) { toast.error('Add at least one item'); return; }
+  const buildPayload = () => {
     const _cl = leads.find(l => String(l.id) === String(leadId));
     const clientName = (_cl?.company_name || _cl?.client_name || '');
-    const payload = { title, lead_id: leadId || null, client_name: clientName, acc_pct: accPct, margins, rows, manpower, payment_terms: payTerms, cost: totals.cost, sp: totals.sp };
+    return { title, lead_id: leadId || null, client_name: clientName, acc_pct: accPct, margins, rows, manpower, payment_terms: payTerms, cost: totals.cost, sp: totals.sp };
+  };
+  const saveEstimate = async () => {
+    if (!rows.some(r => r.description)) { toast.error('Add at least one item'); return; }
     try {
+      const payload = buildPayload();
       if (currentId) { await api.put(`/quotations/estimates/${currentId}`, payload); }
       else { const r = await api.post('/quotations/estimates', payload); setCurrentId(r.data.id); }
+      setSaveState('saved'); setSavedAt(new Date());
       toast.success('Quotation saved');
     } catch (e) { toast.error('Save failed'); }
   };
+
+  // ── Auto-save (mam #5) ─────────────────────────────────────────────
+  // Debounced save while editing, Google-Sheets style. To avoid littering the
+  // saved list with empty drafts, the FIRST auto-save only fires once there's a
+  // title (or it's already a saved estimate) AND at least one described item.
+  // A save already in flight is skipped; the trailing debounce retries.
+  const autoSave = useCallback(async () => {
+    if (savingRef.current) return;
+    if (!rows.some(r => r.description)) return;
+    if (!currentId && !(title && title.trim())) return;
+    savingRef.current = true; setSaveState('saving');
+    try {
+      const payload = buildPayload();
+      if (currentId) await api.put(`/quotations/estimates/${currentId}`, payload);
+      else { const r = await api.post('/quotations/estimates', payload); setCurrentId(r.data.id); }
+      setSaveState('saved'); setSavedAt(new Date());
+    } catch { setSaveState('error'); }
+    finally { savingRef.current = false; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, title, margins, accPct, manpower, payTerms, leadId, currentId, totals.cost, totals.sp]);
+
+  useEffect(() => {
+    if (view !== 'build') return;
+    const t = setTimeout(() => { autoSave(); }, 1500);
+    return () => clearTimeout(t);
+  }, [view, autoSave]);
+
+  // ── Undo / redo (mam #7) ───────────────────────────────────────────
+  // Record the PREVIOUS rows snapshot (debounced) whenever the grid changes,
+  // unless the change came from an undo/redo itself.
+  useEffect(() => {
+    if (isUndoRedo.current) { isUndoRedo.current = false; prevRowsRef.current = rows; return; }
+    const t = setTimeout(() => {
+      if (prevRowsRef.current !== rows) {
+        histRef.current.past.push(prevRowsRef.current);
+        if (histRef.current.past.length > 60) histRef.current.past.shift();
+        histRef.current.future = [];
+        prevRowsRef.current = rows;
+        bumpHist(n => n + 1);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [rows]);
+
+  const undo = useCallback(() => {
+    const h = histRef.current;
+    if (!h.past.length) return;
+    const prev = h.past.pop();
+    h.future.unshift(prevRowsRef.current);
+    isUndoRedo.current = true; prevRowsRef.current = prev;
+    setRows(prev); setOpenRow(null); bumpHist(n => n + 1);
+  }, []);
+  const redo = useCallback(() => {
+    const h = histRef.current;
+    if (!h.future.length) return;
+    const next = h.future.shift();
+    h.past.push(prevRowsRef.current);
+    isUndoRedo.current = true; prevRowsRef.current = next;
+    setRows(next); setOpenRow(null); bumpHist(n => n + 1);
+  }, []);
+
+  // Keyboard: Ctrl/Cmd+Z = undo, Ctrl+Y or Ctrl/Cmd+Shift+Z = redo. Ignored
+  // while typing in an input/textarea so it doesn't fight native field undo.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (view !== 'build') return;
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+      else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [view, undo, redo]);
   const editEstimate = async (id) => {
     try {
       const { data } = await api.get(`/quotations/estimates/${id}`);
@@ -377,7 +527,23 @@ export default function Estimator() {
           <h1 className="text-2xl font-bold flex items-center gap-2">🧮 AI Auto-Quotation {currentId && <span className="text-xs font-normal text-amber-600">(editing #{currentId})</span>}</h1>
           <p className="text-sm text-gray-500">Pick items from Item Master — material rate auto-fills, add labour, set margin per category, and the sale price is built automatically.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center flex-wrap">
+          {view === 'build' && (
+            <div className="flex items-center gap-1 mr-1">
+              <button onClick={undo} disabled={!histRef.current.past.length} title="Undo (Ctrl+Z)"
+                className="btn btn-secondary text-sm px-2 disabled:opacity-40"><FiRotateCcw size={14} /></button>
+              <button onClick={redo} disabled={!histRef.current.future.length} title="Redo (Ctrl+Y)"
+                className="btn btn-secondary text-sm px-2 disabled:opacity-40"><FiRotateCw size={14} /></button>
+            </div>
+          )}
+          {view === 'build' && saveState && (
+            <span className="text-[11px] mr-1 whitespace-nowrap">
+              {saveState === 'saving' ? <span className="text-gray-400">Saving…</span>
+                : saveState === 'saved' ? <span className="text-emerald-600">✓ Saved{savedAt ? ` ${savedAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
+                : saveState === 'error' ? <span className="text-red-500">Save failed — retrying</span>
+                : null}
+            </span>
+          )}
           <button onClick={newEstimate} className="btn btn-secondary text-sm flex items-center gap-1"><FiPlus size={14} /> New</button>
           <button onClick={() => setView('build')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${view === 'build' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200'}`}>Build</button>
           <button onClick={() => setView('saved')} className={`px-4 py-2 rounded-full text-sm font-semibold border ${view === 'saved' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200'}`}>Saved (by client)</button>
@@ -429,7 +595,22 @@ export default function Estimator() {
         </div>
         <div>
           <label className="label">Quotation Title</label>
-          <input className="input" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. 250 KVA Servo" />
+          {(() => {
+            const selected = titleTokens(title);
+            // Offer the 6 standard disciplines plus any custom token already on
+            // this estimate, so legacy free-text titles stay visible & editable.
+            const opts = [...QUOTE_DISCIPLINES, ...selected.filter(t => !QUOTE_DISCIPLINES.includes(t))]
+              .map(d => ({ id: d, name: d }));
+            return (
+              <MultiUserSelect
+                options={opts}
+                value={selected}
+                onChange={(next) => setTitle(next.join(', '))}
+                placeholder="Select discipline(s)…"
+                emptyText="No matching discipline"
+              />
+            );
+          })()}
         </div>
         <div>
           <label className="label" title="Accessories = this % of material rate">Accessories % (of material)</label>
@@ -468,6 +649,41 @@ export default function Estimator() {
         </div>
       )}
 
+      {/* Not matching (mam #3) — BOQ lines the auto-match couldn't map. Click
+          one to open its Manual breakup and price it by hand. */}
+      {unmatched.length > 0 && (
+        <div className="card p-3 bg-red-50 border border-red-200">
+          <div className="font-semibold text-sm text-red-700 mb-1.5">⚠ {unmatched.length} line(s) not matched to Item Master — review &amp; price these</div>
+          <div className="flex flex-wrap gap-2">
+            {unmatched.map(({ r, i }) => {
+              const priced = calc(r).rate > 0;
+              return (
+                <button key={i} type="button" onClick={() => setOpenRow(i)}
+                  className="text-[11px] bg-white border border-red-200 rounded px-2 py-1 text-left hover:bg-red-100 max-w-[280px] truncate"
+                  title={r.boq_text || r.description}>
+                  <span className="text-gray-400">#{i + 1}</span> {r.boq_text || r.description || '(no text)'}
+                  <span className={priced ? 'text-emerald-600 font-semibold' : 'text-red-500 font-semibold'}> · {priced ? 'priced' : 'no price'}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Completeness (mam #8) — % of lines that are priced; pending lines are
+          highlighted yellow in the table so nothing ships half-priced. */}
+      {completeness.total > 0 && (
+        <div className={`flex items-center gap-3 text-xs px-1 ${completeness.pending ? 'text-amber-700' : 'text-emerald-700'}`}>
+          <span className="font-semibold whitespace-nowrap">{completeness.pct}% priced</span>
+          <div className="h-1.5 bg-gray-100 rounded overflow-hidden w-full max-w-[240px]">
+            <div className="h-full bg-emerald-400 transition-all" style={{ width: `${completeness.pct}%` }}></div>
+          </div>
+          {completeness.pending > 0
+            ? <span className="whitespace-nowrap">{completeness.pending} line(s) still pending (yellow)</span>
+            : <span className="whitespace-nowrap">All lines priced ✓</span>}
+        </div>
+      )}
+
       {/* Items table — frozen header (sticky) + fits the width (no horizontal
           drag): table is w-full so columns compress to the container. */}
       <div className="card p-0 overflow-auto max-h-[60vh]">
@@ -493,9 +709,17 @@ export default function Estimator() {
           <tbody>
             {rows.map((row, i) => {
               const c = calc(row);
+              const st = rowStatus(row);
+              const rowBg = st === 'pending' ? 'bg-amber-50' : ((row.confidence === 'low' || row.confidence === 'none') ? 'bg-red-50/40' : '');
+              const hasExtras = (Number(row.discountPct) || 0) > 0 || (Number(row.extraCost) || 0) > 0 || (row.accPct !== '' && row.accPct != null);
               return (
-                <tr key={i} className={`border-t border-gray-100 align-top ${(row.confidence === 'low' || row.confidence === 'none') ? 'bg-red-50/40' : ''}`}>
-                  <td className="p-2 text-gray-400 align-top">{i + 1}</td>
+                <Fragment key={i}>
+                <tr className={`border-t border-gray-100 align-top ${rowBg}`}>
+                  <td className="p-2 align-top">
+                    <div className="text-gray-400">{i + 1}</div>
+                    {st === 'pending' && <div className="mt-1 w-2 h-2 rounded-full bg-amber-400" title="Pending — no price yet"></div>}
+                    {st === 'ready' && <div className="mt-1 w-2 h-2 rounded-full bg-emerald-400" title="Priced"></div>}
+                  </td>
                   {/* Column 2 — BOQ item (client's original line). mam 2026-06-22:
                       "table: s.no | BOQ item | match item". */}
                   <td className="p-2 align-top">
@@ -530,6 +754,12 @@ export default function Estimator() {
                       <div className="text-[10px] mt-1 flex items-center gap-1 flex-wrap">
                         {confBadge(row.confidence, row.matchScore)}
                         <span className="text-gray-500">→ {row.matchedName}</span>
+                        {row.ppAgeDays != null && (
+                          <span className={`px-1 rounded ${row.ppAgeStatus === 'red' ? 'bg-red-100 text-red-700' : row.ppAgeStatus === 'yellow' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}
+                            title="Age of the material (PP) rate in Item Master — refresh it if old">
+                            rate {row.ppAgeDays}d old
+                          </span>
+                        )}
                       </div>
                     )}
                     {row.alternatives?.length > 0 && (row.confidence === 'low' || row.confidence === 'medium' || row.confidence === 'none') && (
@@ -596,9 +826,10 @@ export default function Estimator() {
                   </td>
                   <td className="p-1.5">
                     <input className="input w-full text-right py-1 px-1 text-xs" type="number" min="0" value={row.pp || ''}
-                      onChange={e => patchRow(i, { pp: e.target.value })} />
+                      onChange={e => patchRow(i, { pp: e.target.value })} placeholder="0" />
+                    {c.discount > 0 && <div className="text-[9px] text-rose-500 text-right mt-0.5" title="Material price after discount">−{c.discount}% = ₹{fmt(c.effPp)}</div>}
                   </td>
-                  <td className="p-1.5 text-right text-xs text-gray-600">{fmt(c.acc)}</td>
+                  <td className="p-1.5 text-right text-xs text-gray-600">{fmt(c.acc)}{c.extra > 0 && <div className="text-[9px] text-indigo-500" title={row.extraRemark || 'Extra cost'}>+₹{fmt(c.extra)} extra</div>}</td>
                   <td className="p-1.5">
                     <input className="input w-full text-right py-1 px-1 text-xs" type="number" min="0" value={row.lab || ''}
                       onChange={e => patchRow(i, { lab: e.target.value })} placeholder="0" />
@@ -612,15 +843,59 @@ export default function Estimator() {
                       onChange={e => patchRow(i, { margin: e.target.value })}
                       title="Per-line margin % — overrides the category margin. Blank = use the category margin." />
                   </td>
-                  <td className="p-1.5 text-right text-xs font-bold text-emerald-700">{fmt(c.sp)}</td>
-                  <td className="p-1.5 text-right text-xs">{fmt(c.rate)}</td>
-                  <td className="p-1.5 text-center">
-                    <button type="button" className="text-red-400 hover:text-red-600"
-                      onClick={() => setRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs)}>
-                      <FiTrash2 size={14} />
-                    </button>
+                  <td className="p-1.5 text-right text-xs font-bold text-emerald-700">{c.qtyMissing ? <span className="text-gray-300" title="No amount without a qty">—</span> : fmt(c.sp)}</td>
+                  <td className="p-1.5 text-right text-xs">{fmt(c.rate)}{c.qtyMissing && c.rate > 0 && <div className="text-[8px] text-amber-600 font-semibold leading-tight" title="Qty not mentioned — per-unit rate with +20% margin">rate +20%</div>}</td>
+                  <td className="p-1.5 text-center align-top">
+                    <div className="flex flex-col items-center gap-1">
+                      <button type="button" title="Manual breakup — discount, accessories %, extra cost, make"
+                        onClick={() => setOpenRow(openRow === i ? null : i)}
+                        className={`text-xs px-1.5 py-0.5 rounded border leading-none ${openRow === i ? 'bg-indigo-600 text-white border-indigo-600' : hasExtras ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'text-gray-500 border-gray-200 hover:bg-gray-50'}`}>
+                        ⚙{hasExtras ? '•' : ''}
+                      </button>
+                      <button type="button" className="text-red-400 hover:text-red-600"
+                        onClick={() => setRows(rs => rs.length > 1 ? rs.filter((_, idx) => idx !== i) : rs)}>
+                        <FiTrash2 size={14} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
+                {openRow === i && (
+                  <tr className="bg-indigo-50/30 border-t border-indigo-100">
+                    <td></td>
+                    <td colSpan={13} className="p-3">
+                      <div className="text-[11px] font-semibold text-indigo-700 mb-2">
+                        Manual breakup — fill anything the auto-match couldn't (use this to price an item not found in the master).
+                      </div>
+                      <div className="flex flex-wrap items-end gap-4">
+                        <label className="text-[11px] text-gray-600">Discount % (on material)
+                          <input className="input w-24 mt-0.5 text-right py-1 text-xs" type="number" min="0" max="100" step="0.5"
+                            value={row.discountPct ?? ''} placeholder="0" onChange={e => patchRow(i, { discountPct: e.target.value })} />
+                        </label>
+                        <label className="text-[11px] text-gray-600">Accessories % (this line)
+                          <input className="input w-28 mt-0.5 text-right py-1 text-xs" type="number" min="0" step="0.5"
+                            value={row.accPct ?? ''} placeholder={`${accPct || 0} (global)`} onChange={e => patchRow(i, { accPct: e.target.value })} />
+                        </label>
+                        <label className="text-[11px] text-gray-600">Extra cost ₹
+                          <input className="input w-28 mt-0.5 text-right py-1 text-xs" type="number" min="0"
+                            value={row.extraCost ?? ''} placeholder="0" onChange={e => patchRow(i, { extraCost: e.target.value })} />
+                        </label>
+                        <label className="text-[11px] text-gray-600 flex-1 min-w-[180px]">Extra cost remark
+                          <input className="input w-full mt-0.5 py-1 text-xs" value={row.extraRemark ?? ''}
+                            placeholder="reason for the extra cost (crane, special packing…)" onChange={e => patchRow(i, { extraRemark: e.target.value })} />
+                        </label>
+                        <label className="text-[11px] text-gray-600">Make / brand
+                          <input className="input w-40 mt-0.5 py-1 text-xs" value={row.make ?? ''}
+                            placeholder="e.g. Polycab" onChange={e => patchRow(i, { make: e.target.value })} />
+                        </label>
+                        <label className="text-[11px] text-gray-600">Rate source / supplier
+                          <input className="input w-40 mt-0.5 py-1 text-xs" value={row.source ?? ''}
+                            placeholder="e.g. Vijay Sales" onChange={e => patchRow(i, { source: e.target.value })} />
+                        </label>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
           </tbody>

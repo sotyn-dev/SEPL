@@ -153,32 +153,68 @@ export default function Attendance() {
     const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   };
-  // Mirror the backend's accuracy-buffered check so the live "Inside Site"
-  // pill in the Attendance page matches what punch-in / track-location see.
-  const insideSite = location && geofences.length > 0
-    ? geofences.filter(g => g.active !== 0).find(g => {
-        const dist = haversineMeters(location.latitude, location.longitude, g.latitude, g.longitude);
-        const acc = Math.min(Math.max(+location.accuracy || 0, 100), 500); // min 100m GPS tolerance — matches server
-        return dist - acc <= (g.radius_meters || 200);
-      })
-    : null;
+  // Mirror the server's uncertainty-honest rule (server/lib/geofence.js) so the
+  // live status pill matches EXACTLY what Punch In / Out will do. Three states:
+  //   inside  — GPS uncertainty overlaps a site (green; punches normally)
+  //   weak    — fix too coarse to confirm (amber; CAN still punch, gets flagged)
+  //   outside — precise lock, confidently away (red; will be blocked)
+  const geoStatus = (() => {
+    if (!location) return { state: 'locating' };
+    const active = (geofences || []).filter(g => g.active !== 0);
+    if (active.length === 0) return { state: 'no_sites' };
+    const accRaw = +location.accuracy || 0;
+    const acc = Math.min(Math.max(accRaw, 50), 3000);   // floor 50 / ceiling 3000 — matches server
+    let nearest = { d: Infinity, g: null }, matched = null;
+    for (const g of active) {
+      const d = haversineMeters(location.latitude, location.longitude, g.latitude, g.longitude);
+      if (d < nearest.d) nearest = { d, g };
+      if (!matched && d - acc <= (g.radius_meters || 200)) matched = g;
+    }
+    const goodFix = accRaw > 0 && accRaw <= 200;   // a real GPS lock — matches server trust threshold
+    if (matched) return { state: 'inside', site: matched, dist: Math.round(haversineMeters(location.latitude, location.longitude, matched.latitude, matched.longitude)), acc: Math.round(accRaw) };
+    if (!goodFix) return { state: 'weak', site: nearest.g, dist: Math.round(nearest.d), acc: Math.round(accRaw) };
+    return { state: 'outside', site: nearest.g, dist: Math.round(nearest.d), acc: Math.round(accRaw) };
+  })();
 
-  // Get current location
-  const getLocation = () => {
+  // Acquire the BEST GPS fix available within a short window. Phones routinely
+  // return a coarse network fix first (±500–2000m) and only refine to a real
+  // GPS lock (±5–20m) a few seconds later — taking that FIRST fix is exactly
+  // why on-site staff were shown "outside / out of area". We watch for up to
+  // ~9s, keep the most accurate reading, and resolve early once we get a good
+  // (≤40m) lock. Always cleans up the watch + timer so it can't leak.
+  const getBestPosition = ({ maxWaitMs = 9000, goodAccuracy = 40 } = {}) => {
     return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) return reject('GPS not supported');
-      navigator.geolocation.getCurrentPosition(
-        pos => {
-          const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 };
-          setLocation(loc);
-          setAddress(`${loc.latitude.toFixed(6)}, ${loc.longitude.toFixed(6)}`);
-          resolve(loc);
-        },
-        err => reject('Please enable GPS: ' + err.message),
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
+      if (!navigator.geolocation) return reject('GPS not supported on this device');
+      let best = null, watchId = null, settled = false, timer = null;
+      const finish = (err) => {
+        if (settled) return; settled = true;
+        if (watchId != null) { try { navigator.geolocation.clearWatch(watchId); } catch { /* noop */ } }
+        if (timer) clearTimeout(timer);
+        if (best) resolve(best);
+        else reject(err || 'Could not get your location. Please enable precise location and try again.');
+      };
+      const onPos = (pos) => {
+        const f = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 };
+        if (!best || (f.accuracy && f.accuracy < best.accuracy)) best = f;
+        setLocation(best);              // live-update the status pill as accuracy improves
+        if (best.accuracy && best.accuracy <= goodAccuracy) finish(); // good enough — stop early
+      };
+      timer = setTimeout(() => finish(), maxWaitMs);
+      try {
+        watchId = navigator.geolocation.watchPosition(
+          onPos,
+          (e) => { if (!best) finish('Please enable GPS: ' + e.message); }, // only fail if we got NOTHING
+          { enableHighAccuracy: true, timeout: maxWaitMs, maximumAge: 0 }
+        );
+      } catch (e) { finish('GPS error: ' + (e.message || e)); }
     });
   };
+
+  // Back-compat wrapper used by Punch In/Out and "Use My Current Location".
+  const getLocation = () => getBestPosition().then(loc => {
+    setAddress(`${loc.latitude.toFixed(6)}, ${loc.longitude.toFixed(6)}`);
+    return loc;
+  });
 
   // Camera functions
   const openCamera = async () => {
@@ -409,28 +445,39 @@ export default function Attendance() {
             <div className="card p-4 bg-amber-50 text-center"><p className="text-amber-700 font-medium"><FiAlertTriangle className="inline mr-1" /> Not punched in today</p></div>
           )}
 
-          {/* Location status card — shows whether the user is inside a geofence.
-              Used purely as visual confirmation now (auto-punch disabled per
-              mam's request — every punch must be manual + selfie-backed). */}
-          <div className={`card p-4 border-l-4 ${insideSite ? 'border-emerald-500 bg-emerald-50' : 'border-amber-500 bg-amber-50'}`}>
-            <div className="flex items-center gap-2 mb-1">
-              <FiMapPin size={16} className={insideSite ? 'text-emerald-600' : 'text-amber-600'} />
-              <span className={`font-bold text-sm ${insideSite ? 'text-emerald-700' : 'text-amber-700'}`}>
-                {!location ? 'Getting your location…'
-                  : insideSite ? `Inside ${insideSite.site_name || 'geofence'} (${Math.round(haversineMeters(location.latitude, location.longitude, insideSite.latitude, insideSite.longitude))} m)`
-                  : 'Outside all geofences'}
-              </span>
-            </div>
-            {!myToday && insideSite && <p className="text-xs text-emerald-700">You're inside the office — click Punch In below with a selfie to mark attendance.</p>}
-            {!myToday && !insideSite && <p className="text-xs text-amber-700">You're outside all geofences. Move inside an office/site to punch in.</p>}
-            {myToday && !myToday.punch_out_time && (
-              <p className="text-xs text-emerald-700">
-                ✓ Punched in at {fmtT(myToday.punch_in_time)}.
-                {!insideSite && ' Don\'t forget to Punch Out when your day is done.'}
-              </p>
-            )}
-            {myToday?.punch_out_time && <p className="text-xs text-gray-600">Today's attendance completed.</p>}
-          </div>
+          {/* Location status card — mirrors the server's geofence decision so the
+              user sees exactly what Punch In/Out will do. A WEAK fix never blocks
+              an on-site person; only a precise lock that's confidently away does. */}
+          {(() => {
+            const st = geoStatus.state;
+            const tone = st === 'inside' ? 'emerald' : st === 'weak' ? 'amber' : st === 'outside' ? 'red' : 'gray';
+            const border = { emerald: 'border-emerald-500 bg-emerald-50', amber: 'border-amber-500 bg-amber-50', red: 'border-red-500 bg-red-50', gray: 'border-gray-300 bg-gray-50' }[tone];
+            const text = { emerald: 'text-emerald-700', amber: 'text-amber-700', red: 'text-red-700', gray: 'text-gray-600' }[tone];
+            const iconCls = { emerald: 'text-emerald-600', amber: 'text-amber-600', red: 'text-red-600', gray: 'text-gray-400' }[tone];
+            const headline =
+              st === 'inside' ? `Inside ${geoStatus.site?.site_name || 'site'} (${geoStatus.dist} m)`
+              : st === 'weak' ? `Weak GPS signal (±${geoStatus.acc} m)`
+              : st === 'outside' ? `About ${geoStatus.dist} m from ${geoStatus.site?.site_name || 'nearest site'}`
+              : st === 'no_sites' ? 'No site locations configured'
+              : `Getting precise GPS…${location?.accuracy ? ` (±${Math.round(location.accuracy)} m)` : ''}`;
+            return (
+              <div className={`card p-4 border-l-4 ${border}`}>
+                <div className="flex items-center gap-2 mb-1">
+                  <FiMapPin size={16} className={iconCls} />
+                  <span className={`font-bold text-sm ${text}`}>{headline}</span>
+                </div>
+                {!myToday && st === 'inside' && <p className="text-xs text-emerald-700">You're at the site — take a selfie and Punch In below.</p>}
+                {!myToday && st === 'weak' && <p className="text-xs text-amber-700">Your phone can't get a precise GPS fix (common indoors). You can still Punch In — it's recorded and flagged for admin review. For a sharper fix, stand near a window or step outside for a moment.</p>}
+                {!myToday && st === 'outside' && <p className="text-xs text-red-700">GPS places you away from every site. Move to your assigned site to punch in, or ask admin to mark you.</p>}
+                {!myToday && st === 'locating' && <p className="text-xs text-gray-500">Hold on while we lock onto GPS for an accurate location…</p>}
+                {!myToday && st === 'no_sites' && <p className="text-xs text-gray-500">Ask admin to add your office/site under Geofence before punching.</p>}
+                {myToday && !myToday.punch_out_time && (
+                  <p className="text-xs text-emerald-700">✓ Punched in at {fmtT(myToday.punch_in_time)}. Don't forget to Punch Out when your day is done.</p>
+                )}
+                {myToday?.punch_out_time && <p className="text-xs text-gray-600">Today's attendance completed.</p>}
+              </div>
+            );
+          })()}
 
           {/* Camera + Manual Punch */}
           <div className="card p-4 space-y-3">
@@ -603,7 +650,7 @@ export default function Attendance() {
               <thead><tr><th>Name</th><th>Dept</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th><th>Photo</th></tr></thead>
               <tbody>{dashboard.todayRecords?.map(r => (
                 <tr key={r.id}>
-                  <td className="font-medium">{r.user_name}{r.admin_marked ? <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded font-bold" title="Admin marked — hidden from user">ADMIN</span> : null}</td><td className="text-xs">{r.department}</td>
+                  <td className="font-medium">{r.user_name}{r.admin_marked ? <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded font-bold" title="Admin marked — hidden from user">ADMIN</span> : null}{r.punch_in_time && r.location_verified === 0 ? <span className="ml-1 text-[9px] bg-orange-100 text-orange-700 px-1 rounded font-bold" title="GPS could not confirm this location — check the selfie">⚠ GPS?</span> : null}</td><td className="text-xs">{r.department}</td>
                   <td className="text-emerald-600 text-xs">{fmtT(r.punch_in_time)}{r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                   <td className="text-red-600 text-xs">{fmtT(r.punch_out_time)}{r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                   <td className="font-semibold">{r.total_hours || '-'}</td>
@@ -682,7 +729,7 @@ export default function Attendance() {
                 <td className="text-xs">{fmtT(r.punch_in_time)}{r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                 <td className="text-xs">{fmtT(r.punch_out_time)}{r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                 <td className="font-semibold">{r.total_hours || '-'}</td>
-                <td className="text-xs">{r.site_name || '-'}</td>
+                <td className="text-xs">{r.site_name || '-'}{r.punch_in_time && r.location_verified === 0 ? <span className="ml-1 text-[9px] bg-orange-100 text-orange-700 px-1 rounded font-bold" title="GPS could not confirm this location — check the selfie">⚠ GPS?</span> : null}</td>
                 <td><StatusBadge status={r.status} /></td>
                 <td>{r.punch_in_photo && <img src={r.punch_in_photo} alt="" onClick={() => setLightbox({ src: r.punch_in_photo, label: `${r.user_name} — Punch In` })} className="w-10 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" />}</td>
                 <td>{r.punch_out_photo && <img src={r.punch_out_photo} alt="" onClick={() => setLightbox({ src: r.punch_out_photo, label: `${r.user_name} — Punch Out` })} className="w-10 h-8 rounded object-cover cursor-pointer hover:ring-2 hover:ring-blue-400 transition" />}</td>

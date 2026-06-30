@@ -1676,6 +1676,18 @@ function initializeDatabase() {
       assigned_by INTEGER REFERENCES users(id)
     );
 
+    -- Module owners — mam decides the accountable owner + backup per ERP
+    -- module group (2026-06-29). Drives the War Room QQTC "Module Audit" tab:
+    -- a row here overrides the authored recommendation. module_key is the
+    -- slug of the module label (stable authored content).
+    CREATE TABLE IF NOT EXISTS module_owners (
+      module_key TEXT PRIMARY KEY,
+      owner_user_id INTEGER REFERENCES users(id),
+      backup_user_id INTEGER REFERENCES users(id),
+      updated_by INTEGER REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Per-user KPI target override — mam (2026-06-02): "Same target
     -- weekly but per-user (different per engineer)".  When a user is
     -- assigned to a template, mam can override the KPI's
@@ -2849,6 +2861,22 @@ function initializeDatabase() {
     // staff get track_location=0 so they don't show in Admin → Location
     // Tracking. Default 1 so existing field staff keep being tracked.
     ['users', 'track_location INTEGER DEFAULT 1'],
+    // Geofence accuracy audit (mam: "some in office but say out of area").
+    // Store the GPS accuracy reported at each punch + whether the location
+    // could be trusted, so the geofence audit can tell a genuinely far-away
+    // punch from a weak indoor-GPS one. location_verified defaults to 1 so
+    // every historical row reads as verified; only new weak-GPS punches get 0.
+    // See server/lib/geofence.js for the rule.
+    ['attendance', 'punch_in_accuracy REAL'],
+    ['attendance', 'punch_out_accuracy REAL'],
+    ['attendance', 'location_verified INTEGER DEFAULT 1'],
+    // Tunable geofence GPS tolerance (metres) — lets mam adjust strictness
+    // without a code deploy. floor = min slack every fix gets; ceiling = max
+    // benefit of the doubt; trust = accuracy at/under which a fix is precise
+    // enough to BLOCK an off-site punch on.
+    ['payroll_settings', 'geo_accuracy_floor_m INTEGER DEFAULT 50'],
+    ['payroll_settings', 'geo_accuracy_ceiling_m INTEGER DEFAULT 3000'],
+    ['payroll_settings', 'geo_trust_accuracy_m INTEGER DEFAULT 200'],
     // Collection Engine v2 — receivable now keyed by SITE (not free-text
     // client+project), CRM auto-fills from the latest PO of that site,
     // and Aanchal logs next-planned-date + last-discussion alongside.

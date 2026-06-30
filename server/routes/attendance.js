@@ -3,19 +3,15 @@ const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
+// Shared geofence math + the "is this punch on-site?" decision. Single source
+// of truth for punch-in, punch-out, live tracking AND the audit endpoint so
+// they can never drift apart. See server/lib/geofence.js for the rule that
+// stops weak indoor phone-GPS from falsely blocking on-site staff.
+const { haversine, evaluateGeofence, geoSettings } = require('../lib/geofence');
 const atUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
 const atDirector = () => { try { return getEmailConfig().director; } catch { return null; } };
 const router = express.Router();
 router.use(authMiddleware);
-
-// Helper: calculate distance between 2 GPS points (meters)
-function haversine(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
 
 // Late detection — read cutoff from payroll_settings (admin-tunable), fall
 // back to 09:46 IST. Returns true if `whenIso` (ISO string in UTC) lies
@@ -539,48 +535,44 @@ router.post('/punch-in', (req, res) => {
   const existing = db.prepare('SELECT id FROM attendance WHERE user_id=? AND date=?').get(req.user.id, today);
   if (existing) return res.status(400).json({ error: 'Already punched in today' });
 
-  // Check geofence — MANDATORY, must be inside a site area. We accept a
-  // GPS accuracy buffer (clamped to 500m to prevent junk from auto-passing)
-  // so users with normal indoor / cloudy-day GPS noise aren't blocked from
-  // punching in even though they're physically at site.
-  // GPS tolerance: at least 100 m (devices often report a confident-but-wrong
-  // fix, so a small reported accuracy was blocking staff standing AT site —
-  // mam 2026-06-25 "person on exact location but says outside"), capped at 500 m.
-  const acc = Math.min(Math.max(+req.body?.accuracy || 0, 100), 500);
+  // Check geofence — MANDATORY, must be inside a site area. The decision is
+  // delegated to the shared, uncertainty-honest rule in lib/geofence.js:
+  // a weak indoor phone-GPS fix can NEVER block someone who might be on-site;
+  // only a GOOD GPS lock that is confidently outside is rejected. Coarse fixes
+  // are allowed but tagged location_verified=0 for admin audit.
   const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
   if (geofences.length === 0) {
     return res.status(400).json({ error: 'No site locations configured. Contact admin to add geofence areas.' });
   }
-  let insideGeofence = false;
-  let matchedSite = site_name || '';
-  let nearestDist = 999999;
-  let nearestSite = '';
-  for (const gf of geofences) {
-    const dist = haversine(latitude, longitude, gf.latitude, gf.longitude);
-    if (dist < nearestDist) { nearestDist = dist; nearestSite = gf.site_name; }
-    // Apply accuracy tolerance — if the raw distance minus the GPS error
-    // bubble fits inside the radius, count as on-site.
-    if (dist - acc <= gf.radius_meters) {
-      insideGeofence = true;
-      matchedSite = gf.site_name || matchedSite;
-      break;
-    }
+  const accuracy = +req.body?.accuracy || 0;
+  const geo = evaluateGeofence(latitude, longitude, accuracy, geofences, geoSettings(db));
+  if (!geo.allow) {
+    // Only reached on a trustworthy GPS lock that is genuinely off-site, so the
+    // distance we quote is real (no more false "you are 3km away" on weak GPS).
+    return res.status(400).json({
+      error: `You appear to be about ${geo.nearestDist}m from the nearest site (${geo.nearestSite}). Your GPS lock is precise (±${geo.accuracyUsed}m), so this reads as off-site. Go to your assigned site to punch in, or ask your admin to mark you present.`,
+      distance_m: geo.nearestDist, nearest_site: geo.nearestSite,
+    });
   }
-
-  if (!insideGeofence) {
-    const accNote = acc > 50 ? ` (GPS accuracy ±${Math.round(acc)}m — try moving outdoors for a better fix)` : '';
-    return res.status(400).json({ error: `You are ${Math.round(nearestDist)}m away from nearest site (${nearestSite}). Go to your assigned site to punch. Geofence radius: ${geofences[0]?.radius_meters || 200}m.${accNote}` });
-  }
+  const matchedSite = geo.matchedSite || site_name || geo.nearestSite || '';
 
   // Check if late — uses IST timezone + payroll_settings.late_after_time.
   // Fixes the UTC-vs-IST bug where 10:23 IST (04:53 UTC) was treated as
   // not-late because getHours() on UTC-running VPS returned 4.
   const isLate = isPunchLate(db, now);
 
-  const r = db.prepare(`INSERT INTO attendance (user_id, date, punch_in_time, punch_in_lat, punch_in_lng, punch_in_address, punch_in_photo, site_name, status)
-    VALUES (?,?,?,?,?,?,?,?,?)`).run(req.user.id, today, now, latitude, longitude, address, photo, matchedSite, isLate ? 'late' : 'present');
+  const r = db.prepare(`INSERT INTO attendance (user_id, date, punch_in_time, punch_in_lat, punch_in_lng, punch_in_address, punch_in_photo, site_name, status, punch_in_accuracy, location_verified)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(req.user.id, today, now, latitude, longitude, address, photo, matchedSite, isLate ? 'late' : 'present', accuracy || null, geo.verified);
 
-  res.status(201).json({ id: r.lastInsertRowid, message: isLate ? 'Punched In (Late)' : 'Punched In', site: matchedSite, isLate });
+  res.status(201).json({
+    id: r.lastInsertRowid,
+    message: isLate ? 'Punched In (Late)' : 'Punched In',
+    site: matchedSite, isLate,
+    location_verified: !!geo.verified,
+    // When the fix was too weak to confirm, tell the user it was recorded for
+    // review rather than silently passing — keeps it honest both ways.
+    note: geo.verified ? undefined : 'Location could not be precisely verified (weak GPS) — punch recorded and flagged for admin review.',
+  });
 });
 
 // PUNCH OUT
@@ -594,38 +586,26 @@ router.post('/punch-out', (req, res) => {
   if (!record) return res.status(400).json({ error: 'You have not punched in today' });
   if (record.punch_out_time) return res.status(400).json({ error: 'Already punched out today' });
 
-  // PUNCH-OUT GEOFENCE — STRICT (mam, 2026-05-16: "out attendance no
-  // no punch out is also need according to geofencing this is
-  // blunder").  Same rules as punch-in: must be inside the configured
-  // site radius after applying the same GPS-accuracy buffer (capped
-  // at 500m so junk accuracy values can't auto-pass).  No permissive
-  // walk-away allowance — if staff want to step off-site they must
-  // punch out FIRST, then leave.
+  // PUNCH-OUT GEOFENCE (mam, 2026-05-16: "out attendance ... punch out is
+  // also need according to geofencing"). Same uncertainty-honest rule as
+  // punch-in: a weak fix never blocks an on-site person; only a precise lock
+  // that is confidently off-site is rejected. No permissive walk-away
+  // allowance — if staff want to step off-site they punch out FIRST.
   if (latitude == null || longitude == null) {
     return res.status(400).json({ error: 'Location required to punch out.' });
   }
+  const accuracy = +req.body?.accuracy || 0;
   {
     const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
     if (geofences.length === 0) {
       return res.status(400).json({ error: 'No site locations configured. Contact admin.' });
     }
-    // GPS tolerance: at least 100 m (devices often report a confident-but-wrong
-  // fix, so a small reported accuracy was blocking staff standing AT site —
-  // mam 2026-06-25 "person on exact location but says outside"), capped at 500 m.
-  const acc = Math.min(Math.max(+req.body?.accuracy || 0, 100), 500);
-    let inside = false;
-    let nearest = { dist: Infinity, site: '' };
-    for (const gf of geofences) {
-      const d = haversine(+latitude, +longitude, gf.latitude, gf.longitude);
-      if (d < nearest.dist) nearest = { dist: d, site: gf.site_name };
-      if (d - acc <= gf.radius_meters) { inside = true; break; }
-    }
-    if (!inside) {
-      const accNote = acc > 50 ? ` (GPS accuracy ±${Math.round(acc)}m — try moving outdoors for a better fix)` : '';
+    const geo = evaluateGeofence(latitude, longitude, accuracy, geofences, geoSettings(db));
+    if (!geo.allow) {
       return res.status(400).json({
-        error: `Punch-out blocked: you are ${Math.round(nearest.dist)}m from nearest site (${nearest.site}). Go back to site to punch out.${accNote}`,
-        distance_m: Math.round(nearest.dist),
-        nearest_site: nearest.site,
+        error: `Punch-out blocked: GPS shows you about ${geo.nearestDist}m from the nearest site (${geo.nearestSite}) with a precise lock (±${geo.accuracyUsed}m). Go back to site to punch out, or ask your admin.`,
+        distance_m: geo.nearestDist,
+        nearest_site: geo.nearestSite,
       });
     }
   }
@@ -636,8 +616,8 @@ router.post('/punch-out', (req, res) => {
   const totalHours = Math.round((punchOut - punchIn) / (1000 * 60 * 60) * 100) / 100;
   const status = totalHours < 4 ? 'half_day' : record.status;
 
-  db.prepare(`UPDATE attendance SET punch_out_time=?, punch_out_lat=?, punch_out_lng=?, punch_out_address=?, punch_out_photo=?, total_hours=?, status=? WHERE id=?`)
-    .run(now, latitude, longitude, address, photo, totalHours, status, record.id);
+  db.prepare(`UPDATE attendance SET punch_out_time=?, punch_out_lat=?, punch_out_lng=?, punch_out_address=?, punch_out_photo=?, total_hours=?, status=?, punch_out_accuracy=? WHERE id=?`)
+    .run(now, latitude, longitude, address, photo, totalHours, status, accuracy || null, record.id);
 
   res.json({ message: `Punched Out. Total: ${totalHours} hours`, totalHours });
 });
@@ -668,15 +648,13 @@ router.post('/track-location', (req, res) => {
   }
 
   if (!latitude || !longitude) return res.status(400).json({ error: 'Location required' });
-  const acc = Math.min(Math.max(+accuracy || 0, 100), 500); // min 100m GPS tolerance, capped at 500m
   const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
-  let siteName = 'Outside';
-  for (const gf of geofences) {
-    const dist = haversine(latitude, longitude, gf.latitude, gf.longitude);
-    if (dist - acc <= gf.radius_meters) {
-      siteName = gf.site_name; break;
-    }
-  }
+  // Same uncertainty-honest rule as the punch endpoints so the live map and the
+  // punch UI agree. We mark the ping as on-site only when the GPS uncertainty
+  // actually overlaps a site (decision='inside'); a coarse fix that can't be
+  // confirmed shows as 'Outside' on the admin map (honest "unconfirmed").
+  const geo = geofences.length ? evaluateGeofence(latitude, longitude, accuracy, geofences, geoSettings(db)) : null;
+  const siteName = geo && geo.decision === 'inside' ? geo.matchedSite : 'Outside';
   db.prepare('INSERT INTO location_tracking (user_id, date, time, latitude, longitude, address, site_name) VALUES (?,?,?,?,?,?,?)')
     .run(req.user.id, today, now, latitude, longitude, address, siteName);
   res.json({ site: siteName });
@@ -735,6 +713,7 @@ router.get('/audit/geofence-violations', requirePermission('attendance', 'view')
     SELECT a.id, a.user_id, a.date, a.punch_in_time, a.punch_out_time,
            a.punch_in_lat, a.punch_in_lng, a.punch_in_address,
            a.punch_out_lat, a.punch_out_lng, a.punch_out_address,
+           a.punch_in_accuracy, a.punch_out_accuracy, a.location_verified,
            a.site_name, a.status,
            u.name as employee_name
     FROM attendance a
@@ -754,24 +733,34 @@ router.get('/audit/geofence-violations', requirePermission('attendance', 'view')
     return { nearest_site: best.site, distance_m: Math.round(best.dist) };
   };
   const radius = geofences[0]?.radius_meters || 200;
-  const bufferTolerance = radius + 500;  // 500m matches the punch-in accuracy cap
+  const { trust } = geoSettings(db);
+
+  // A row is a REAL off-site violation only when the fix was a precise GPS lock
+  // (accuracy <= trust) AND the distance is beyond the geofence radius. A weak
+  // fix (accuracy > trust, or unknown on historical rows) is NOT a violation —
+  // it's surfaced as "unverified" so admin can eyeball the selfie instead.
+  const isOutside = (distance_m, accuracy) => {
+    if (distance_m == null) return false;
+    if (accuracy != null) return accuracy <= trust && distance_m > radius;
+    return distance_m > radius + 500; // historical rows w/o stored accuracy: old buffer
+  };
 
   const enriched = rows.map(r => {
     const inInfo  = enrich(r.punch_in_lat,  r.punch_in_lng);
     const outInfo = enrich(r.punch_out_lat, r.punch_out_lng);
-    // Both IN and OUT now follow the strict rule (radius + 500m
-    // GPS-accuracy cap), matching the live punch endpoints.
-    const punchInOutside  = inInfo.distance_m  != null && inInfo.distance_m  > bufferTolerance;
-    const punchOutOutside = outInfo.distance_m != null && outInfo.distance_m > bufferTolerance;
+    const punchInOutside  = isOutside(inInfo.distance_m,  r.punch_in_accuracy);
+    const punchOutOutside = isOutside(outInfo.distance_m, r.punch_out_accuracy);
     return {
       id: r.id,
       date: r.date,
       employee: r.employee_name || `user#${r.user_id}`,
       site_assigned: r.site_name,
+      location_verified: r.location_verified == null ? null : !!r.location_verified,
       punch_in: {
         time: r.punch_in_time,
         lat: r.punch_in_lat, lng: r.punch_in_lng,
         address: r.punch_in_address,
+        accuracy_m: r.punch_in_accuracy != null ? Math.round(r.punch_in_accuracy) : null,
         nearest_site: inInfo.nearest_site,
         distance_m: inInfo.distance_m,
         outside_geofence: punchInOutside,
@@ -781,6 +770,7 @@ router.get('/audit/geofence-violations', requirePermission('attendance', 'view')
         time: r.punch_out_time,
         lat: r.punch_out_lat, lng: r.punch_out_lng,
         address: r.punch_out_address,
+        accuracy_m: r.punch_out_accuracy != null ? Math.round(r.punch_out_accuracy) : null,
         nearest_site: outInfo.nearest_site,
         distance_m: outInfo.distance_m,
         outside_geofence: punchOutOutside,
@@ -793,11 +783,13 @@ router.get('/audit/geofence-violations', requirePermission('attendance', 'view')
     r.punch_in.outside_geofence || r.punch_in.beyond_3km ||
     (r.punch_out && (r.punch_out.outside_geofence || r.punch_out.beyond_3km))
   );
+  // Punches allowed despite a weak/unconfirmed GPS fix — review the selfie.
+  const unverified = enriched.filter(r => r.location_verified === false);
 
   res.json({
     from, to,
     geofence_radius_meters: radius,
-    geofence_accuracy_buffer_m: 500,
+    geofence_trust_accuracy_m: trust,
     geofence_count: geofences.length,
     geofences: geofences.map(g => ({ site_name: g.site_name, lat: g.latitude, lng: g.longitude, radius_m: g.radius_meters })),
     totals: {
@@ -806,13 +798,15 @@ router.get('/audit/geofence-violations', requirePermission('attendance', 'view')
       punch_in_beyond_3km:       enriched.filter(r => r.punch_in.beyond_3km).length,
       punch_out_outside_geofence: enriched.filter(r => r.punch_out?.outside_geofence).length,
       punch_out_beyond_3km:       enriched.filter(r => r.punch_out?.beyond_3km).length,
+      location_unverified:        unverified.length,
     },
     enforcement_notes: {
-      punch_in:  `Server rejects outside (radius=${radius}m + up to 500m GPS-accuracy buffer). Theoretical max distance = ${radius + 500}m.`,
-      punch_out: `STRICT (from 2026-05-16). Same rule as punch-in: radius=${radius}m + up to 500m GPS-accuracy buffer. Theoretical max distance = ${radius + 500}m. Server rejects with 400 if outside.`,
-      gps_spoof: 'A user with mock-location apps can fake their coordinates. This audit catches obvious cases (large distance) but cannot detect a well-crafted spoof reporting site lat/lng directly.',
+      rule: `Uncertainty-honest (from 2026-06-29). A punch is INSIDE when distance - GPS_accuracy <= radius (${radius}m). Staff are only BLOCKED when a precise GPS lock (accuracy <= ${trust}m) puts them confidently outside. Weak/coarse fixes are allowed but tagged location_verified=0 for review — they CANNOT falsely block an on-site person.`,
+      punch_out: 'Same uncertainty-honest rule as punch-in (strict-but-fair). Server rejects with 400 only on a precise off-site lock.',
+      gps_spoof: 'A user with mock-location apps can fake their coordinates. This audit catches obvious cases (large distance with a precise lock) but cannot detect a well-crafted spoof reporting site lat/lng directly. The selfie is the backstop.',
     },
     violations,
+    unverified,
   });
 });
 
