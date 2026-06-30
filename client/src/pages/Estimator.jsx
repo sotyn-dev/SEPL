@@ -124,6 +124,39 @@ export default function Estimator() {
   );
   const marginFor = (cat) => Number(margins[cat] ?? 0);
 
+  // Create a brand-new Item Master entry from an UNMATCHED BOQ line (mam
+  // 2026-06-29: "if it can't match, give a create button"). Admin → auto-approved;
+  // the line is then matched to it. Price = whatever PP is on the line.
+  const createItem = async (i) => {
+    const row = rows[i];
+    const name = (row.description || row.boq_text || '').trim();
+    if (!name) return toast.error('Add a description first, then Create');
+    try {
+      const { data } = await api.post('/item-master', {
+        item_name: name,
+        current_price: Number(row.pp) || 0,
+        department: row.category || 'General',
+        uom: row.unit || 'PCS',
+        type: 'PO',
+      });
+      const fresh = await api.get('/item-master/dropdown'); setItemOptions(fresh.data || []);
+      patchRow(i, { item_id: data.id, matchedName: name, confidence: 'created', matchScore: 100, alternatives: [] });
+      toast.success('Created in Item Master & matched');
+    } catch (e) { toast.error(e.response?.data?.error || 'Could not create item'); }
+  };
+
+  // Save the line's current PP back onto the MATCHED item in Item Master, so the
+  // next quotation reuses it (mam 2026-06-29: "add it in price master"). Admin →
+  // saves instantly.
+  const savePriceToMaster = async (i) => {
+    const row = rows[i];
+    if (!row.item_id) return toast.error('Match or create an item first');
+    try {
+      await api.patch(`/item-master/${row.item_id}/price`, { current_price: Number(row.pp) || 0 });
+      toast.success('Price saved to Item Master');
+    } catch (e) { toast.error(e.response?.data?.error || 'Could not save price'); }
+  };
+
   const patchRow = (i, patch) =>
     setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r));
 
@@ -741,6 +774,13 @@ export default function Estimator() {
                     <input className="input mt-1 text-xs" value={row.description}
                       onChange={e => patchRow(i, { description: e.target.value })}
                       placeholder="Description (auto-filled)" />
+                    {!row.item_id && (
+                      <button type="button" onClick={() => createItem(i)}
+                        className="mt-1 inline-block text-[10px] font-semibold text-emerald-700 border border-emerald-300 rounded px-1.5 py-0.5 hover:bg-emerald-50"
+                        title="No match? Create this as a new Item Master entry (with the PP as its price) and match it here.">
+                        ＋ Create in Item Master
+                      </button>
+                    )}
                     {row.suggestion && (row.suggestion.last_for_client || row.suggestion.last_overall) && (
                       <div className="text-[10px] text-indigo-600 mt-1">
                         🤖 last quoted: ₹{fmt(row.suggestion.last_for_client?.rate || row.suggestion.last_overall?.rate)}
@@ -761,6 +801,13 @@ export default function Estimator() {
                           </span>
                         )}
                       </div>
+                    )}
+                    {row.item_id && (
+                      <button type="button" onClick={() => savePriceToMaster(i)}
+                        className="mt-1 inline-block text-[10px] font-semibold text-indigo-700 border border-indigo-300 rounded px-1.5 py-0.5 hover:bg-indigo-50"
+                        title="Save the current PP as this item's price in Item Master, so future quotations reuse it.">
+                        💾 Save price to master
+                      </button>
                     )}
                     {row.alternatives?.length > 0 && (row.confidence === 'low' || row.confidence === 'medium' || row.confidence === 'none') && (
                       <div className="flex flex-wrap gap-1 mt-1 items-center">
