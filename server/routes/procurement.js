@@ -3934,6 +3934,9 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
     }))) : null;
 
     let autoDnId = null, autoDnNumber = null;
+    const { nextSequence } = require('../db/nextSequence');
+    const dnYear = new Date().getFullYear();
+    const dnToday = new Date().toISOString().slice(0, 10);
     if (vendor_po_id) {
       const existingDn = db.prepare(
         'SELECT id, document_number FROM delivery_notes WHERE vendor_po_id = ? LIMIT 1'
@@ -3944,17 +3947,27 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
         // Refresh the received quantities from this bill onto the existing challan.
         if (recvJson) db.prepare('UPDATE delivery_notes SET items_json=? WHERE id=?').run(recvJson, existingDn.id);
       } else {
-        const { nextSequence } = require('../db/nextSequence');
-        const year = new Date().getFullYear();
-        autoDnNumber = nextSequence(db, 'delivery_notes', 'document_number', `DC/${year}/`, { pad: 4 });
-        const today = new Date().toISOString().slice(0, 10);
+        autoDnNumber = nextSequence(db, 'delivery_notes', 'document_number', `DC/${dnYear}/`, { pad: 4 });
         const ins = db.prepare(
           `INSERT INTO delivery_notes
               (vendor_po_id, delivery_date, document_type, document_number, status, notes, items_json)
            VALUES (?, ?, 'challan', ?, 'pending', ?, ?)`
-        ).run(vendor_po_id, today, autoDnNumber, `Auto-created from Purchase Bill ${bill_number || '#' + r.lastInsertRowid}`, recvJson);
+        ).run(vendor_po_id, dnToday, autoDnNumber, `Auto-created from Purchase Bill ${bill_number || '#' + r.lastInsertRowid}`, recvJson);
         autoDnId = ins.lastInsertRowid;
       }
+    } else {
+      // mam 2026-06-30: EVERY purchase bill creates a Delivery Challan — including
+      // direct bills with no Vendor PO. No PO means no line data to pull, so this
+      // is a header challan the user fills/receives manually; the vendor name goes
+      // in the notes so it's identifiable in Dispatch & Receiving.
+      const vName = vendor_id ? (db.prepare('SELECT name FROM vendors WHERE id=?').get(vendor_id)?.name || '') : '';
+      autoDnNumber = nextSequence(db, 'delivery_notes', 'document_number', `DC/${dnYear}/`, { pad: 4 });
+      const ins = db.prepare(
+        `INSERT INTO delivery_notes
+            (vendor_po_id, delivery_date, document_type, document_number, status, notes, items_json)
+         VALUES (NULL, ?, 'challan', ?, 'pending', ?, ?)`
+      ).run(dnToday, autoDnNumber, `Auto-created from Purchase Bill ${bill_number || '#' + r.lastInsertRowid}${vName ? ' · Vendor: ' + vName : ''}`, recvJson);
+      autoDnId = ins.lastInsertRowid;
     }
 
     // Material REJECTED at bill entry (mam 2026-06-04): raise a rejected
