@@ -663,6 +663,25 @@ router.post('/', requirePermission('payment_required', 'create'), (req, res) => 
   res.status(201).json({ id: r.lastInsertRowid, request_no: requestNo });
 });
 
+// Returns the flow step a request must go BACK to before it can be released, or
+// null if it's clear. Enforces L2 (Nitin) + L3 (MD) before Payment Release — old
+// TA/DA requests had jumped from Accountant straight to Release, getting marked
+// "Paid" without Nitin/MD sign-off (mam 2026-06-30: "these records are wrong —
+// fix flow"). Matched by step NAME, because old records used different step
+// NUMBERS for the same role (e.g. old "step 2 = Accountant", new "step 2 = L2").
+function preReleaseGap(db, request) {
+  const flow = WORKFLOW[request.category] || STANDARD_FLOW;
+  const releaseStep = flow[flow.length - 1].step;
+  if (request.current_step !== releaseStep) return null;
+  const names = db.prepare("SELECT step_name FROM payment_approvals WHERE request_id=? AND action='approved'")
+    .all(request.id).map(a => String(a.step_name || '').toLowerCase());
+  const needL2 = flow.find(w => /\bL2\b|nitin/i.test(w.name));
+  const needL3 = flow.find(w => /\bL3\b|ankur/i.test(w.name));
+  if (needL2 && !names.some(n => n.includes('l2') || n.includes('nitin'))) return needL2;
+  if (needL3 && !names.some(n => n.includes('l3') || n.includes('ankur'))) return needL3;
+  return null;
+}
+
 // Helper: advance to next step
 function advanceToNextStep(db, request, approvedBy) {
   const workflow = WORKFLOW[request.category];
@@ -670,6 +689,14 @@ function advanceToNextStep(db, request, approvedBy) {
   const nextStepInfo = workflow[currentStepIdx + 1];
 
   if (!nextStepInfo) {
+    // Don't finalize / mark Paid if L2 (Nitin) or L3 (MD) was skipped — route it
+    // back to the missing step instead (mam 2026-06-30). Backstop for any path
+    // (incl. bulk approve) that reaches finalize with a gap.
+    const gap = preReleaseGap(db, request);
+    if (gap) {
+      db.prepare('UPDATE payment_requests SET current_step=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(gap.step, 'pending', request.id);
+      return 'redirected';
+    }
     // Last step - final approved
     db.prepare('UPDATE payment_requests SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run('final_approved', request.id);
     // Add to cash flow outflow
@@ -723,6 +750,16 @@ router.put('/:id/approve', (req, res) => {
     const workflow = WORKFLOW[request.category];
     const stepInfo = workflow?.find(w => w.step === request.current_step);
     return res.status(403).json({ error: `Not authorized. This step requires: ${stepInfo?.approver_role}` });
+  }
+
+  // Block a release that skipped L2 (Nitin) / L3 (MD) — route it back to the
+  // missing step with a clear message, before recording any approval (mam
+  // 2026-06-30: "these records are wrong — fix flow"). Existing Paid records are
+  // untouched (the final_approved check above returns first).
+  const gap = preReleaseGap(db, request);
+  if (gap) {
+    db.prepare('UPDATE payment_requests SET current_step=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(gap.step, 'pending', request.id);
+    return res.status(409).json({ error: `This ${request.category} skipped ${gap.name}. It can't be released without it — sent back to ${gap.name} for approval first.`, redirected_to: gap.step });
   }
 
   // Resolve the amount this step is approving.
