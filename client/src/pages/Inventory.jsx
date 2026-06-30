@@ -216,6 +216,15 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
       await api.patch(`/inventory/stock/${editRow.id}`, {
         quantity: q, avg_rate: r, notes: editRow.notes || null,
       });
+      // Item name / spec / make edit (mam 2026-06-30: "edit item name also") —
+      // updates the shared item_master via a safe partial PATCH.
+      if (editRow.item_master_id && String(editRow.item_name || '').trim()) {
+        await api.patch(`/item-master/${editRow.item_master_id}/identity`, {
+          item_name: String(editRow.item_name).trim(),
+          specification: editRow.specification || '',
+          make: editRow.make || '',
+        });
+      }
       toast.success('Stock updated');
       setEditRow(null);
       reload();
@@ -611,9 +620,9 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                           {canEdit && (
                             <button
                               type="button"
-                              onClick={() => setEditRow({ id: r.id, item_name: r.item_name, warehouse_name: r.warehouse_name, uom: r.uom, quantity: r.quantity, avg_rate: r.avg_rate || r.effective_rate || 0, notes: '' })}
+                              onClick={() => setEditRow({ id: r.id, item_master_id: r.item_master_id, item_name: r.item_name, specification: r.specification || '', make: r.make || '', warehouse_name: r.warehouse_name, uom: r.uom, quantity: r.quantity, avg_rate: r.avg_rate || r.effective_rate || 0, notes: '' })}
                               className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"
-                              title="Edit qty / rate"
+                              title="Edit item / qty / rate"
                             >
                               <FiEdit2 size={14} />
                             </button>
@@ -644,10 +653,26 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
       {editRow && (
         <Modal isOpen={true} onClose={() => setEditRow(null)} title="Edit Stock Row" maxWidth="max-w-md">
           <div className="space-y-3 text-sm">
-            <div className="bg-gray-50 rounded p-3 text-xs text-gray-600">
-              <div><span className="font-semibold">Item:</span> {editRow.item_name}</div>
-              <div><span className="font-semibold">Warehouse:</span> {editRow.warehouse_name}</div>
+            {/* Item identity — editable (mam 2026-06-30: "edit item name also").
+                Saving updates the shared Item Master, so it changes everywhere. */}
+            <div>
+              <label className="label">Item name</label>
+              <input type="text" className="input" value={editRow.item_name || ''}
+                onChange={e => setEditRow(r => ({ ...r, item_name: e.target.value }))} />
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Specification</label>
+                <input type="text" className="input" value={editRow.specification || ''}
+                  onChange={e => setEditRow(r => ({ ...r, specification: e.target.value }))} />
+              </div>
+              <div>
+                <label className="label">Make</label>
+                <input type="text" className="input" value={editRow.make || ''}
+                  onChange={e => setEditRow(r => ({ ...r, make: e.target.value }))} />
+              </div>
+            </div>
+            <div className="bg-gray-50 rounded px-2 py-1.5 text-[11px] text-gray-500">Warehouse: {editRow.warehouse_name} · editing the name changes this item everywhere it appears.</div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="label">Quantity ({editRow.uom || 'PCS'})</label>
