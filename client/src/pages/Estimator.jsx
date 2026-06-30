@@ -155,11 +155,9 @@ export default function Estimator() {
     return kit ? kitToPatch(kit, fallbackPp) : null;
   };
 
-  // Categories present across the rows → drives the per-category margin inputs.
-  const categories = useMemo(
-    () => [...new Set(rows.map(r => r.category).filter(Boolean))],
-    [rows]
-  );
+  // Category-margin fallback for a line with no explicit per-line margin. The
+  // "Margin % per category" UI was removed (margin is set per line now), but this
+  // fallback stays so older saved quotes with category margins still compute.
   const marginFor = (cat) => Number(margins[cat] ?? 0);
 
   // Create a brand-new Item Master entry from an UNMATCHED BOQ line, then open the
@@ -730,22 +728,10 @@ export default function Estimator() {
       </div>
 
       {/* Per-category margins */}
-      {categories.length > 0 && (
-        <div className="card p-4">
-          <div className="text-sm font-semibold mb-2">Margin % per category</div>
-          <div className="flex flex-wrap gap-3">
-            {categories.map(cat => (
-              <div key={cat} className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded px-2 py-1">
-                <span className="text-xs font-medium text-gray-700">{cat}</span>
-                <input className="input w-20 text-right py-1" type="number" min="0" step="1"
-                  value={margins[cat] ?? ''} placeholder="0"
-                  onChange={e => setMargins(m => ({ ...m, [cat]: e.target.value }))} />
-                <span className="text-xs text-gray-400">%</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* "Margin % per category" block removed (mam 2026-06-30): margin is now set
+          PER LINE (each line's Margin column, auto-suggested from the PO/FOC kit),
+          so the category-level margin was a duplication. The margins state + the
+          marginFor() fallback are kept so older saved quotes still load correctly. */}
 
       {/* Not matching (mam #3) — BOQ lines the auto-match couldn't map. Click
           one to open its Manual breakup and price it by hand. */}
