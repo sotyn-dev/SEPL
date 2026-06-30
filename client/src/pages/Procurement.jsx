@@ -1590,6 +1590,18 @@ export default function Procurement() {
     fd.append('gst_amount', form.gst_amount || 0);
     fd.append('total_amount', form.total_amount || 0);
     fd.append('material_status', form.material_status || 'approved');
+    // Per-line received qty (mam 2026-06-30) → server writes it onto the auto-
+    // created delivery challan so the challan shows RECEIVED, not full ordered qty.
+    if (billItems?.items?.length) {
+      fd.append('received_items', JSON.stringify(billItems.items.map(it => ({
+        vendor_po_item_id: it.vpi_id,
+        description: it.description, unit: it.unit,
+        ordered_qty: +it.ordered_qty || 0,
+        received_qty: (billRecv[it.vpi_id] != null ? +billRecv[it.vpi_id]
+          : (it.received_qty != null ? +it.received_qty : +it.ordered_qty || 0)),
+        rate: +it.rate || 0,
+      }))));
+    }
     if (form.bill_file) fd.append('file', form.bill_file);
     try {
       const r = await api.post('/procurement/purchase-bills', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
@@ -2033,7 +2045,7 @@ export default function Procurement() {
             if (tab === 'indents')    exportCsv('indents',         ['Indent No','Date','Site','Raised By','Status','Items','Budget','Delivery Bill','Delivery %'], indents.map(i => [i.indent_number, i.indent_date, i.site_name, i.raised_by_name, i.status, (i.items||[]).length, Math.round(i.budget_amount||0), Math.round(i.delivery_bill_amount||0), i.delivery_pct||0]));
             if (tab === 'pos')        exportCsv('vendor-pos',      ['PO Number','PO Date','Vendor','Amount','Status'], vendorPos.map(v => [v.po_number, v.po_date, v.vendor_name, v.total_amount, v.status]));
             if (tab === 'bills')      exportCsv('purchase-bills',  ['Bill No','Vendor','Date','Amount','GST','Total','Payment'], purchaseBills.map(b => [b.bill_number, b.vendor_name, b.bill_date, b.amount, b.gst_amount, b.total_amount, b.payment_status]));
-            if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.doc_type, d.doc_number, d.po_number, d.delivery_date, d.received_by_name, d.received_on, d.status]));
+            if (tab === 'dispatch')   exportCsv('dispatch',        ['ID','Type','Doc No','PO','Site','Indent By','Date','Received By','Received On','Status'], deliveryNotes.map(d => [d.id, d.document_type, d.document_number, d.vendor_po_number || (d.source === 'store' ? 'From Store' : ''), d.site_name, d.raised_by_name, d.delivery_date, d.received_by_name, d.received_at ? new Date(d.received_at).toLocaleDateString() : '', d.status]));
             if (tab === 'rates')      exportCsv('vendor-rates',    ['Item','Vendor 1','Rate 1','Vendor 2','Rate 2','Vendor 3','Rate 3','Final'], itemRates.map(r => [r.item_description, r.vendor1_name, r.vendor1_rate, r.vendor2_name, r.vendor2_rate, r.vendor3_name, r.vendor3_rate, r.final_rate]));
           }} className="btn btn-secondary flex items-center gap-2 text-sm"><FiDownload /> Export Excel</button>
         </div>
@@ -4656,7 +4668,7 @@ export default function Procurement() {
           if (dispListFrom && d.received_on && d.received_on.slice(0, 10) < dispListFrom) return false;
           if (dispListTo   && d.received_on && d.received_on.slice(0, 10) > dispListTo) return false;
           if (!dSearch) return true;
-          const hay = `${d.po_number || ''} ${d.document_number || ''} ${d.received_by_name || ''}`.toLowerCase();
+          const hay = `${d.po_number || ''} ${d.vendor_po_number || ''} ${d.document_number || ''} ${d.received_by_name || ''} ${d.raised_by_name || ''}`.toLowerCase();
           return hay.includes(dSearch);
         });
         const dispListPg = usePagination(filteredDispatch, dispListPerPage, dispListPage, setDispListPage);
@@ -5163,7 +5175,7 @@ export default function Procurement() {
                 we ALSO render synthetic "AWAITING" rows below — so
                 mam always sees the data and can still Upload Receiving
                 which creates the DN inline. */}
-            <thead><tr><th>Delivery Note No</th><th>Type</th><th>PO</th><th>Site / Company</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Delivery Note No</th><th>Type</th><th>PO</th><th>Site / Company</th><th>Indent By</th><th>Date</th><th>File</th><th>Received By</th><th>Received On</th><th>Proof</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {/* Receiving (signed receipt) is only against CLIENT delivery
                   notes — NOT vendor POs (mam 2026-06-06: "this vendor wise not
@@ -5209,6 +5221,10 @@ export default function Procurement() {
                   <td className="text-xs">{d.vendor_po_number || (d.source === 'store' ? <span className="text-indigo-600 text-[10px] font-semibold">From Store</span> : <span className="text-gray-300">—</span>)}<div className="text-[10px] text-gray-500">{d.vendor_name || ''}</div></td>
                   {/* Site (mam 2026-06-02) — pulled from indents.site_id via the GET /delivery-notes JOIN */}
                   <td className="text-xs">{d.site_name || <span className="text-gray-300">—</span>}</td>
+                  {/* Indent By (mam 2026-06-29) — who raised the originating indent
+                      (indents.raised_by_name), resolved via the same JOIN. Blank for
+                      dispatches with no linked indent. */}
+                  <td className="text-xs">{d.raised_by_name || <span className="text-gray-300">—</span>}</td>
                   <td>{d.delivery_date}</td>
                   <td>
                     {d.file_path
@@ -5264,10 +5280,10 @@ export default function Procurement() {
                   </td>
                 </tr>
               ))}
-              {deliveryNotes.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
-              {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
+              {deliveryNotes.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches yet</td></tr>}
+              {deliveryNotes.length > 0 && filteredDispatch.length === 0 && <tr><td colSpan="12" className="text-center py-8 text-gray-400">No dispatches match the current filters.</td></tr>}
             </tbody>
-            <tfoot><tr><td colSpan="11" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
+            <tfoot><tr><td colSpan="12" className="border-t border-gray-100"><Pagination pg={dispListPg} setPerPage={setDispListPerPage} /></td></tr></tfoot>
           </table></div>
 
           {/* Mobile cards.  Each card leads with the DN number (mam
@@ -5305,6 +5321,16 @@ export default function Procurement() {
                     <div className="min-w-0">
                       <div className="text-[10px] uppercase text-gray-400">Site</div>
                       <div className="font-medium text-gray-800">{d.site_name}</div>
+                    </div>
+                  </div>
+                )}
+                {/* Indent By (mam 2026-06-29) — who raised the originating indent */}
+                {d.raised_by_name && (
+                  <div className="flex items-start gap-1.5 text-xs">
+                    <FiUser size={12} className="mt-0.5 text-gray-400 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase text-gray-400">Indent By</div>
+                      <div className="font-medium text-gray-800">{d.raised_by_name}</div>
                     </div>
                   </div>
                 )}

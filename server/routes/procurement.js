@@ -3000,6 +3000,26 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
      ORDER BY vpi.id
   `).all(req.params.id);
 
+  // mam 2026-06-30: show the RECEIVED quantity (entered on the purchase bill, saved
+  // onto the auto-created challan's items_json) instead of the full ordered qty.
+  // Matched by vendor_po_item_id (exact). Lines with no received record keep the
+  // ordered qty, so an un-received PO prints as before.
+  const recvByVpi = {};
+  for (const dn of db.prepare("SELECT items_json FROM delivery_notes WHERE vendor_po_id=? AND items_json IS NOT NULL").all(req.params.id)) {
+    try {
+      for (const x of (JSON.parse(dn.items_json) || [])) {
+        if (x && x.vendor_po_item_id != null && x.received_qty != null) {
+          recvByVpi[x.vendor_po_item_id] = (+x.received_qty || 0);
+        }
+      }
+    } catch (_) { /* ignore malformed items_json */ }
+  }
+  if (Object.keys(recvByVpi).length) {
+    for (const it of items) {
+      if (Object.prototype.hasOwnProperty.call(recvByVpi, it.id)) it.quantity = recvByVpi[it.id];
+    }
+  }
+
   // Pre-compute a suggested DN number — mam can override on print
   // but most of the time today's date + PO number is enough.
   const today = new Date();
@@ -3899,6 +3919,20 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
     //     click.
     // Guarded so re-uploading a bill on the same PO doesn't spawn
     // duplicate DN rows.
+    // Per-line received qty from the bill modal (mam 2026-06-30): store it on the
+    // challan's items_json so the Delivery Challan shows RECEIVED, not full ordered
+    // qty. quantity == received_qty so the DN template (which renders it.quantity)
+    // shows the received amount; received_qty also feeds the ordered-vs-received
+    // variance. Matched downstream by vendor_po_item_id (exact).
+    let receivedItems = [];
+    try { receivedItems = JSON.parse(b.received_items || '[]'); } catch (_) { receivedItems = []; }
+    const recvJson = receivedItems.length ? JSON.stringify(receivedItems.map(it => ({
+      vendor_po_item_id: it.vendor_po_item_id,
+      description: it.description || '', unit: it.unit || '', hsn_code: it.hsn_code || '',
+      quantity: +it.received_qty || 0, received_qty: +it.received_qty || 0,
+      ordered_qty: +it.ordered_qty || 0, rate: +it.rate || 0,
+    }))) : null;
+
     let autoDnId = null, autoDnNumber = null;
     if (vendor_po_id) {
       const existingDn = db.prepare(
@@ -3907,6 +3941,8 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
       if (existingDn) {
         autoDnId = existingDn.id;
         autoDnNumber = existingDn.document_number;
+        // Refresh the received quantities from this bill onto the existing challan.
+        if (recvJson) db.prepare('UPDATE delivery_notes SET items_json=? WHERE id=?').run(recvJson, existingDn.id);
       } else {
         const { nextSequence } = require('../db/nextSequence');
         const year = new Date().getFullYear();
@@ -3914,9 +3950,9 @@ router.post('/purchase-bills', needsApprove, vendorPoUpload.single('file'), (req
         const today = new Date().toISOString().slice(0, 10);
         const ins = db.prepare(
           `INSERT INTO delivery_notes
-              (vendor_po_id, delivery_date, document_type, document_number, status, notes)
-           VALUES (?, ?, 'challan', ?, 'pending', ?)`
-        ).run(vendor_po_id, today, autoDnNumber, `Auto-created from Purchase Bill ${bill_number || '#' + r.lastInsertRowid}`);
+              (vendor_po_id, delivery_date, document_type, document_number, status, notes, items_json)
+           VALUES (?, ?, 'challan', ?, 'pending', ?, ?)`
+        ).run(vendor_po_id, today, autoDnNumber, `Auto-created from Purchase Bill ${bill_number || '#' + r.lastInsertRowid}`, recvJson);
         autoDnId = ins.lastInsertRowid;
       }
     }
@@ -4260,6 +4296,7 @@ router.get('/delivery-notes', (req, res) => {
       vp.indent_id as vendor_po_indent_id,
       v.name as vendor_name,
       i.indent_number as indent_number,
+      NULLIF(TRIM(i.raised_by_name), '') as raised_by_name,
       NULLIF(TRIM(i.site_name), '') as site_name
     FROM delivery_notes dn
     LEFT JOIN users u ON dn.received_by = u.id
