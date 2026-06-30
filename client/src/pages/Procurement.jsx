@@ -307,6 +307,7 @@ export default function Procurement() {
   // Editable received qty per line { vpi_id: qty } — defaults to PO qty,
   // mam edits it down for a short; the bill amount follows received×rate.
   const [billRecv, setBillRecv] = useState({});
+  const [editBillId, setEditBillId] = useState(null); // editing received qty of an existing purchase bill
   const loadDebitNotes = () => api.get('/procurement/debit-notes').then(r => setDebitNotes(r.data || [])).catch(() => setDebitNotes([]));
   const loadPipeline = () => api.get('/procurement/po-pipeline').then(r => setPipeline(r.data || [])).catch(() => setPipeline([]));
   useEffect(() => { if (tab === 'debitnotes') loadDebitNotes(); if (tab === 'pipeline') loadPipeline(); /* eslint-disable-next-line */ }, [tab]);
@@ -1574,6 +1575,37 @@ export default function Procurement() {
     if (!reason.trim() || reason.trim().length < 3) return toast.error('A rejection reason is required');
     try { await api.post(`/procurement/vendor-po/${v.id}/po-reject`, { reason: reason.trim() }); toast.success('PO rejected'); load(); }
     catch (err) { toast.error(err.response?.data?.error || 'Reject failed'); }
+  };
+
+  // Edit the received qty of an EXISTING purchase bill (mam 2026-06-30): loads the
+  // PO lines + current received, saves the edited received qty onto the challan so
+  // the Delivery Challan reflects it. Isolated from the create flow.
+  const openEditQty = (b) => {
+    if (!b.vendor_po_id) return toast.error('This bill has no linked Vendor PO to edit quantities against');
+    setEditBillId(b.id);
+    setForm(f => ({ ...f, vendor_po_id: b.vendor_po_id, bill_number: b.bill_number }));
+    setBillItems(null); setBillRecv({}); setModal('editqty');
+    api.get(`/procurement/vendor-po/${b.vendor_po_id}/bill-items`).then(r => {
+      setBillItems(r.data);
+      const recv = {};
+      for (const it of (r.data.items || [])) recv[it.vpi_id] = it.received_qty != null ? it.received_qty : it.ordered_qty;
+      setBillRecv(recv);
+    }).catch(() => setBillItems({ items: [], ordered_total: 0, any_receipt: false }));
+  };
+  const saveEditQty = async () => {
+    if (!form.vendor_po_id || !billItems?.items?.length) return toast.error('No items to update');
+    try {
+      await api.put(`/procurement/vendor-po/${form.vendor_po_id}/received-qty`, {
+        received_items: billItems.items.map(it => ({
+          vendor_po_item_id: it.vpi_id, description: it.description, unit: it.unit,
+          ordered_qty: +it.ordered_qty || 0,
+          received_qty: (billRecv[it.vpi_id] != null ? +billRecv[it.vpi_id] : (it.received_qty != null ? +it.received_qty : +it.ordered_qty || 0)),
+          rate: +it.rate || 0,
+        })),
+      });
+      toast.success('Received qty updated — the challan now shows it');
+      setModal(false); setEditBillId(null); setBillItems(null); setBillRecv({}); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Update failed'); }
   };
 
   const savePurchaseBill = async (e) => {
@@ -4550,11 +4582,14 @@ export default function Procurement() {
                       : <span className="text-gray-300 text-xs">—</span>}
                   </td>
                   <td><StatusBadge status={b.payment_status} /></td>
-                  <td>{canDelete('procurement') && <button onClick={async () => {
+                  <td className="whitespace-nowrap">
+                    {b.vendor_po_id && <button onClick={() => openEditQty(b)} className="p-1 text-gray-400 hover:text-blue-600" title="Edit received qty (updates the challan)"><FiEdit2 size={14} /></button>}
+                    {canDelete('procurement') && <button onClick={async () => {
                     if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
                     try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); load(); }
                     catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                  }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}</td>
+                  }} className="p-1 text-gray-400 hover:text-red-600" title="Delete"><FiTrash2 size={14} /></button>}
+                  </td>
                 </tr>
               ))}
               {purchaseBills.length === 0 && <tr><td colSpan="10" className="text-center py-8 text-gray-400">No bills yet</td></tr>}
@@ -6600,6 +6635,54 @@ export default function Procurement() {
           </div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Save</button></div>
         </form>
+      </Modal>
+
+      {/* Edit received qty of an existing purchase bill (mam 2026-06-30) — updates
+          the Delivery Challan's received quantities. */}
+      <Modal isOpen={modal === 'editqty'} onClose={() => { setModal(false); setEditBillId(null); }} title={`Edit received qty — ${form.bill_number || ''}`}>
+        {!billItems ? (
+          <div className="text-sm text-gray-400 py-6 text-center">Loading PO items…</div>
+        ) : (billItems.items?.length || 0) === 0 ? (
+          <div className="text-sm text-gray-500 py-6 text-center">This PO has no itemised lines linked from the indent — nothing to edit.</div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-[11px] text-gray-500">Edit how much was actually received per line. Saving updates the Delivery Challan’s quantity.</p>
+            <div className="border rounded-lg overflow-hidden">
+              <div className="overflow-x-auto max-h-72">
+                <table className="text-[11px] w-full">
+                  <thead className="bg-gray-50 sticky top-0"><tr>
+                    <th className="px-2 py-1 text-left">Item</th>
+                    <th className="px-2 py-1 text-right">PO Qty</th>
+                    <th className="px-2 py-1 text-right">Received</th>
+                    <th className="px-2 py-1 text-right">Short</th>
+                  </tr></thead>
+                  <tbody>
+                    {billItems.items.map(it => {
+                      const rq = billRecv[it.vpi_id] == null ? it.ordered_qty : +billRecv[it.vpi_id];
+                      const short = Math.max(0, (+it.ordered_qty || 0) - rq);
+                      return (
+                        <tr key={it.vpi_id} className={`border-t ${short > 0 ? 'bg-amber-50' : ''}`}>
+                          <td className="px-2 py-1">{it.description}</td>
+                          <td className="px-2 py-1 text-right tabular-nums">{(+it.ordered_qty || 0).toLocaleString('en-IN')} {it.unit}</td>
+                          <td className="px-2 py-1 text-right">
+                            <NumInput step="any" min="0" value={rq}
+                              onChange={(v) => setBillRecv(prev => ({ ...prev, [it.vpi_id]: v }))}
+                              className="border border-gray-300 rounded px-1 py-0.5 w-16 text-right text-[11px] focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
+                          </td>
+                          <td className={`px-2 py-1 text-right tabular-nums font-semibold ${short > 0 ? 'text-amber-700' : 'text-gray-300'}`}>{short > 0 ? short.toLocaleString('en-IN') : '0'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => { setModal(false); setEditBillId(null); }} className="btn btn-secondary">Cancel</button>
+              <button type="button" onClick={saveEditQty} className="btn btn-primary">Save qty</button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Create Sales Bill / Delivery Note — mam: "like po I want from erp

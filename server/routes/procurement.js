@@ -4314,6 +4314,34 @@ router.get('/delivery-notes', (req, res) => {
 // Create a dispatch entry. Multipart/form-data so we can carry the
 // sales-bill/challan PDF as an optional upload. Document type is required
 // (sales_bill | challan) so the list can show the right label.
+// Edit received qty on an EXISTING purchase bill (mam 2026-06-30): update the
+// auto-created challan's items_json so the Delivery Challan reflects the corrected
+// received quantities. Same shape the purchase-bill POST writes.
+router.put('/vendor-po/:id/received-qty', needsApprove, (req, res) => {
+  const db = getDb();
+  const vendor_po_id = +req.params.id;
+  let receivedItems = [];
+  try { receivedItems = Array.isArray(req.body?.received_items) ? req.body.received_items : JSON.parse(req.body?.received_items || '[]'); } catch (_) { receivedItems = []; }
+  if (!receivedItems.length) return res.status(400).json({ error: 'No received items provided' });
+  const recvJson = JSON.stringify(receivedItems.map(it => ({
+    vendor_po_item_id: it.vendor_po_item_id,
+    description: it.description || '', unit: it.unit || '', hsn_code: it.hsn_code || '',
+    quantity: +it.received_qty || 0, received_qty: +it.received_qty || 0,
+    ordered_qty: +it.ordered_qty || 0, rate: +it.rate || 0,
+  })));
+  const dn = db.prepare('SELECT id FROM delivery_notes WHERE vendor_po_id=? LIMIT 1').get(vendor_po_id);
+  if (dn) {
+    db.prepare('UPDATE delivery_notes SET items_json=? WHERE id=?').run(recvJson, dn.id);
+    return res.json({ ok: true, delivery_note_id: dn.id });
+  }
+  const { nextSequence } = require('../db/nextSequence');
+  const year = new Date().getFullYear();
+  const dnNum = nextSequence(db, 'delivery_notes', 'document_number', `DC/${year}/`, { pad: 4 });
+  const today = new Date().toISOString().slice(0, 10);
+  const ins = db.prepare(`INSERT INTO delivery_notes (vendor_po_id, delivery_date, document_type, document_number, status, notes, items_json) VALUES (?, ?, 'challan', ?, 'pending', 'Received qty edited', ?)`).run(vendor_po_id, today, dnNum, recvJson);
+  res.json({ ok: true, delivery_note_id: ins.lastInsertRowid, document_number: dnNum });
+});
+
 router.post('/delivery-notes', needsApprove, vendorPoUpload.single('file'), (req, res) => {
   const b = req.body || {};
   // File is OPTIONAL on create. Mam's flow: ERP generates the document
