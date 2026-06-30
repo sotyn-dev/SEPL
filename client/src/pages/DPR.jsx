@@ -159,6 +159,7 @@ export default function DPR() {
     }
   };
   const [selectedDpr, setSelectedDpr] = useState(null);
+  const [viewStaff, setViewStaff] = useState(null); // attendance-filtered staff breakdown for the viewed DPR
   const [form, setForm] = useState({});
   // Table A: Installation items from PO
   const [workItems, setWorkItems] = useState([]);
@@ -275,6 +276,21 @@ export default function DPR() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
+  // Auto-pull Staff Cost by NAME, attendance-filtered for the report date (mam
+  // 2026-06-30). Keyed on site + date so it refreshes when either changes — staff
+  // who didn't mark attendance that day are dropped from the cost.
+  useEffect(() => {
+    const siteId = form.site_id; const scDate = form.report_date || filterDate || '';
+    if (!siteId) return;
+    api.get(`/dpr/sites/${siteId}/staff-cost`, { params: scDate ? { date: scDate } : {} }).then(r => {
+      const { per_day_cost = 0, engineer_count = 0, po_engineers = 0, diagnostic = null, staff = [] } = r.data || {};
+      setCosts(prev => prev.map(c => c.type === 'Staff Cost'
+        ? { ...c, rate: per_day_cost, engineer_count, po_engineers, auto: per_day_cost > 0, diagnostic, staff, amount: (c.qty || 0) * per_day_cost }
+        : c));
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.site_id, form.report_date]);
+
   const handleSiteSelect = (siteId) => {
     setForm(f => ({ ...f, site_id: siteId }));
     setWorkItems([]);
@@ -290,15 +306,8 @@ export default function DPR() {
           setPoItemsDiag(r.data?.diagnostic || null);
         }
       }).catch(() => { setPoItemsForSite([]); setPoItemsDiag(null); });
-      // Auto-fill Staff Cost rate from the site's PO engineers (salary/30).
-      // Backend returns only aggregates + an optional diagnostic — no individual salaries.
-      api.get(`/dpr/sites/${siteId}/staff-cost`).then(r => {
-        const { per_day_cost = 0, engineer_count = 0, po_engineers = 0, diagnostic = null } = r.data || {};
-        setCosts(prev => prev.map(c => c.type === 'Staff Cost'
-          // When auto-pull found nothing, unlock the rate so the user can type a value
-          ? { ...c, rate: per_day_cost, engineer_count, po_engineers, auto: per_day_cost > 0, diagnostic, amount: (c.qty || 0) * per_day_cost }
-          : c));
-      }).catch(() => {});
+      // Staff Cost is auto-pulled in a dedicated effect keyed on site + date, so
+      // it refreshes when the report date changes (attendance differs per day).
       // Auto-fill TA/DA from approved payment_requests for this site (mam:
       // 'according to site TA/DA that site show here automatically which we
       // fill in payment category TA/DA only'). Engineer can still edit if
@@ -550,7 +559,17 @@ export default function DPR() {
 
   const createSite = async (e) => { e.preventDefault(); await api.post('/dpr/sites', form); toast.success('Site created'); setSiteModal(false); load(); };
   const approveDpr = async (id, status, billingReady) => { await api.put(`/dpr/${id}/approve`, { approval_status: status, billing_ready: billingReady }); toast.success(`DPR ${status}`); load(); };
-  const viewDpr = async (id) => { const { data } = await api.get(`/dpr/${id}`); setSelectedDpr(data); setDetailModal(true); };
+  const viewDpr = async (id) => {
+    setViewStaff(null);
+    const { data } = await api.get(`/dpr/${id}`);
+    setSelectedDpr(data); setDetailModal(true);
+    // Recompute the staff cost by name, attendance-filtered for this DPR's date,
+    // so old + new DPRs both show who was counted (mam 2026-06-30).
+    if (data?.site_id) {
+      api.get(`/dpr/sites/${data.site_id}/staff-cost`, { params: data.report_date ? { date: data.report_date } : {} })
+        .then(r => setViewStaff(r.data || null)).catch(() => setViewStaff(null));
+    }
+  };
 
   // Mam (2026-05-29): we used to gate the WHOLE page on `summary`
   // here — meaning the toolbar didn't even render until /dpr/summary
@@ -1296,17 +1315,30 @@ export default function DPR() {
                     <div className="text-sm font-bold text-right pr-2">Rs {(c.amount || 0).toLocaleString()}</div>
                   </div>
                   {isStaff && (
-                    <p className={`text-[10px] pl-1 mt-1 ${c.diagnostic ? 'text-amber-700' : 'text-gray-500'}`}>
-                      {!form.site_id
-                        ? 'Select a site first — Staff Cost auto-fills from that PO’s site engineers.'
-                        : c.engineer_count > 0
-                          ? `Auto: ${c.engineer_count} staff × Rs ${c.rate}/day (individual salaries not shown)`
-                          : c.diagnostic
-                            ? c.diagnostic.message
+                    <div className="text-[10px] pl-1 mt-1">
+                      {!form.site_id ? (
+                        <p className="text-gray-500">Select a site first — Staff Cost auto-fills from that PO’s site engineers.</p>
+                      ) : (c.staff && c.staff.length > 0) ? (
+                        <div className="space-y-0.5">
+                          <div className="text-gray-500">Staff cost by name (attendance of {form.report_date || filterDate || 'the date'}):</div>
+                          {c.staff.map(s => (
+                            <div key={s.user_id} className={`flex justify-between ${s.present ? 'text-gray-700' : 'text-gray-400 line-through'}`}
+                              title={s.present ? 'Attendance marked — counted' : 'No attendance / absent — excluded'}>
+                              <span>{s.present ? '✓' : '✗'} {s.name}</span>
+                              <span>Rs {(s.per_day || 0).toLocaleString()}{!s.present && ' · excluded'}</span>
+                            </div>
+                          ))}
+                          {c.diagnostic && <p className="text-amber-700">{c.diagnostic.message}</p>}
+                        </div>
+                      ) : (
+                        <p className={c.diagnostic ? 'text-amber-700' : 'text-gray-500'}>
+                          {c.diagnostic ? c.diagnostic.message
                             : c.po_engineers > 0
                               ? `${c.po_engineers} site engineer${c.po_engineers > 1 ? 's' : ''} are on this PO but none have a matching employee salary record. Type the rate manually, or ask HR to add your salary.`
                               : 'No site engineers / submitter salary found. Type the rate manually below, or ask HR to add your salary.'}
-                    </p>
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
               );
@@ -1443,21 +1475,57 @@ export default function DPR() {
               </div>
             )}
 
-            {selectedDpr.manpower?.length > 0 && (
-              <div className="border-2 border-red-300 rounded-lg p-3">
-                <h5 className="font-bold text-red-800 mb-2">TABLE B: Costs</h5>
-                <table className="text-xs"><thead><tr><th>Type</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead>
-                  <tbody>{selectedDpr.manpower.map(m => (<tr key={m.id}><td>{m.trade}</td><td>{m.required}</td><td>Rs {(m.deployed || 0).toLocaleString()}</td><td className="font-bold text-red-600">Rs {(m.shortage || 0).toLocaleString()}</td></tr>))}</tbody>
-                </table>
-                <div className="text-right font-bold text-red-800 mt-2">Grand Total (B): Rs {selectedDpr.manpower.reduce((s, m) => s + (m.shortage || 0), 0).toLocaleString()}</div>
-              </div>
-            )}
+            {selectedDpr.manpower?.length > 0 && (() => {
+              const nonStaffB = selectedDpr.manpower.filter(m => m.trade !== 'Staff Cost').reduce((s, m) => s + (m.shortage || 0), 0);
+              const storedStaffB = selectedDpr.manpower.filter(m => m.trade === 'Staff Cost').reduce((s, m) => s + (m.shortage || 0), 0);
+              const hasBreakdown = !!(viewStaff && viewStaff.staff && viewStaff.staff.length > 0);
+              const staffB = hasBreakdown ? (viewStaff.per_day_cost || 0) : storedStaffB;
+              const grandB = nonStaffB + staffB;
+              const present = (viewStaff?.staff || []).filter(s => s.present);
+              const excluded = (viewStaff?.staff || []).filter(s => !s.present);
+              return (
+                <div className="border-2 border-red-300 rounded-lg p-3">
+                  <h5 className="font-bold text-red-800 mb-2">TABLE B: Costs</h5>
+                  <table className="text-xs"><thead><tr><th>Type</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead>
+                    <tbody>
+                      {/* Non-staff rows as saved. Staff Cost is replaced by the by-name,
+                          attendance-filtered breakdown when available (mam 2026-06-30). */}
+                      {selectedDpr.manpower.filter(m => m.trade !== 'Staff Cost' || !hasBreakdown).map(m => (
+                        <tr key={m.id}><td>{m.trade}</td><td>{m.required}</td><td>Rs {(m.deployed || 0).toLocaleString()}</td><td className="font-bold text-red-600">Rs {(m.shortage || 0).toLocaleString()}</td></tr>
+                      ))}
+                      {hasBreakdown && present.map(s => (
+                        <tr key={'st' + s.user_id}><td>Staff: {s.name}</td><td>1</td><td>Rs {(s.per_day || 0).toLocaleString()}</td><td className="font-bold text-red-600">Rs {(s.per_day || 0).toLocaleString()}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {hasBreakdown && excluded.length > 0 && (
+                    <div className="text-[11px] text-gray-400 mt-1">Excluded (no attendance / absent on {selectedDpr.report_date}): {excluded.map(s => s.name).join(', ')}</div>
+                  )}
+                  {hasBreakdown && Math.abs(staffB - storedStaffB) > 1 && (
+                    <div className="text-[11px] text-amber-600 mt-0.5">Staff cost recomputed by attendance: Rs {staffB.toLocaleString()} (saved was Rs {storedStaffB.toLocaleString()})</div>
+                  )}
+                  <div className="text-right font-bold text-red-800 mt-2">Grand Total (B): Rs {grandB.toLocaleString()}</div>
+                </div>
+              );
+            })()}
 
-            <div className={`border-2 rounded-lg p-3 text-center ${(selectedDpr.profit_loss || 0) >= 0 ? 'border-emerald-400 bg-emerald-50' : 'border-red-400 bg-red-50'}`}>
-              <span className={`text-xl font-bold ${(selectedDpr.profit_loss || 0) >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                {(selectedDpr.profit_loss || 0) >= 0 ? 'PROFIT' : 'LOSS'}: Rs {Math.abs(selectedDpr.profit_loss || 0).toLocaleString()}
-              </span>
-            </div>
+            {(() => {
+              // Recompute LOSS/PROFIT with the attendance-filtered staff cost so it
+              // matches the by-name Table B above (mam 2026-06-30). Falls back to the
+              // saved profit_loss when the breakdown isn't loaded.
+              const nonStaffB = (selectedDpr.manpower || []).filter(m => m.trade !== 'Staff Cost').reduce((s, m) => s + (m.shortage || 0), 0);
+              const storedStaffB = (selectedDpr.manpower || []).filter(m => m.trade === 'Staff Cost').reduce((s, m) => s + (m.shortage || 0), 0);
+              const hasBreakdown = !!(viewStaff && viewStaff.staff && viewStaff.staff.length > 0);
+              const staffB = hasBreakdown ? (viewStaff.per_day_cost || 0) : storedStaffB;
+              const pl = hasBreakdown ? ((selectedDpr.grand_total_a || 0) - (nonStaffB + staffB)) : (selectedDpr.profit_loss || 0);
+              return (
+                <div className={`border-2 rounded-lg p-3 text-center ${pl >= 0 ? 'border-emerald-400 bg-emerald-50' : 'border-red-400 bg-red-50'}`}>
+                  <span className={`text-xl font-bold ${pl >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                    {pl >= 0 ? 'PROFIT' : 'LOSS'}: Rs {Math.abs(pl).toLocaleString()}
+                  </span>
+                </div>
+              );
+            })()}
 
             {selectedDpr.machinery?.length > 0 && (
               <div><h5 className="font-semibold text-sm mb-2">Machinery/Tools</h5><table className="text-xs"><thead><tr><th>Equipment</th><th>Qty</th><th>Hours</th><th>Condition</th></tr></thead>

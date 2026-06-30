@@ -373,30 +373,52 @@ router.get('/sites/:site_id/staff-cost', (req, res) => {
     return candidates[0]?.emp || null;
   };
 
-  let totalMonthly = 0;
-  let matched = 0;
+  // Collect each matched staff once (per employee), with their per-day salary so
+  // the UI can show Staff Cost BY NAME (mam 2026-06-30: "show with name so I can
+  // correct").
+  const staffList = [];
+  const seenEmpIds = new Set();
   let submitterMatched = false;
   let submitterHasSalary = false;
-  const seenEmpIds = new Set();
   for (const u of engUsers) {
     const emp = findEmp(u);
-    if (emp) {
-      if (u.id === req.user?.id) {
-        submitterMatched = true;
-        if ((emp.salary || 0) > 0) submitterHasSalary = true;
-      }
-      if (!seenEmpIds.has(emp.id) && (emp.salary || 0) > 0) {
-        seenEmpIds.add(emp.id);
-        totalMonthly += emp.salary;
-        matched++;
-      }
+    if (!emp) continue;
+    if (u.id === req.user?.id) {
+      submitterMatched = true;
+      if ((emp.salary || 0) > 0) submitterHasSalary = true;
     }
+    if (seenEmpIds.has(emp.id) || !((emp.salary || 0) > 0)) continue;
+    seenEmpIds.add(emp.id);
+    staffList.push({
+      user_id: u.id, emp_id: emp.id, name: emp.name || u.name || 'Staff',
+      monthly: emp.salary, per_day: Math.round((emp.salary / 30) * 100) / 100,
+    });
   }
 
-  const perDay = Math.round((totalMonthly / 30) * 100) / 100;
-  // Diagnostic so the UI can tell the user exactly why staff cost is 0
+  // Attendance filter (mam 2026-06-30: "if someone attendance not mark don't
+  // include that cost"). With a date, only staff who MARKED attendance that day
+  // (status not 'absent') are counted; not-marked / absent are excluded. Half-day
+  // rule per mam: present = full day, absent/not-marked = 0.
+  const date = String(req.query.date || '').trim();
+  if (date) {
+    const attStmt = db.prepare('SELECT status, punch_in_time, admin_marked FROM attendance WHERE user_id=? AND date=?');
+    for (const s of staffList) {
+      const a = attStmt.get(s.user_id, date);
+      s.present = !!(a && String(a.status || '').toLowerCase() !== 'absent'
+        && (a.punch_in_time || a.admin_marked || a.status));
+    }
+  } else {
+    for (const s of staffList) s.present = true;
+  }
+
+  const counted = staffList.filter(s => s.present);
+  const perDay = Math.round(counted.reduce((t, s) => t + s.per_day, 0) * 100) / 100;
+  const matched = counted.length;
+  // Diagnostic so the UI can explain a 0 / reduced staff cost.
   let diagnostic = null;
-  if (matched === 0) {
+  if (staffList.length > 0 && counted.length === 0 && date) {
+    diagnostic = { reason: 'all_absent', message: 'No staff on this site marked attendance on this date, so Staff Cost is 0. Mark attendance (or check the date) to include it.' };
+  } else if (staffList.length === 0) {
     if (!submitterMatched) {
       diagnostic = { reason: 'no_employee_for_submitter', message: 'You have no employee record in HR → Employees. Add one (with a monthly salary) so Staff Cost can auto-calculate. Until then, enter the rate manually.' };
     } else if (!submitterHasSalary) {
@@ -405,7 +427,7 @@ router.get('/sites/:site_id/staff-cost', (req, res) => {
       diagnostic = { reason: 'no_matching_engineers', message: 'No site engineers with salary records on this PO. Enter rate manually or ask HR to link users → employees.' };
     }
   }
-  res.json({ per_day_cost: perDay, engineer_count: matched, po_engineers: engUsers.length, diagnostic });
+  res.json({ per_day_cost: perDay, engineer_count: matched, po_engineers: engUsers.length, diagnostic, date: date || null, staff: staffList });
 });
 
 // Get PO items for a site - fetches ALL PO items for that company/site name.
