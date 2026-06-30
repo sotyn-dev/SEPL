@@ -2941,8 +2941,15 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
   //   2. business_book where company_name = indent.site_name (or client_name)
   //   3. business_book where project_name = indent.site_name
   // First non-empty match wins.  Only fires when client_company is missing.
-  if (!data.client_company && data.indent_site_name) {
-    const tryNames = [data.indent_site_name, data.indent_client_name].filter(Boolean);
+  // Fill client/site address + GSTIN from business_book. Fires when ANY of
+  // company / GSTIN / address is missing — the primary JOIN can land on an
+  // INCOMPLETE bb (company set but GSTIN/address blank) or fail entirely when
+  // indent.planning_id is null, leaving the DN blank even though a complete bb
+  // exists by name (mam 2026-06-30: "address, GSTIN missing"). Only fills the
+  // gaps and prefers a bb that actually has a GSTIN / address.
+  if ((!data.client_company || !data.client_gstin || !data.client_address) &&
+      (data.indent_site_name || data.indent_client_name || data.client_company)) {
+    const tryNames = [data.client_company, data.indent_site_name, data.indent_client_name].filter(Boolean);
     const findBb = db.prepare(`
       SELECT bb.company_name, bb.client_name, bb.client_contact, bb.client_email,
              bb.billing_address, bb.shipping_address, bb.state, bb.district,
@@ -2955,24 +2962,27 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
          SELECT id FROM business_book
           WHERE company_name = ? OR project_name = ? OR client_name = ?
        )
-       ORDER BY bb.id DESC LIMIT 1
+       ORDER BY (CASE WHEN COALESCE(bb.gstin,'') <> '' THEN 1 ELSE 0 END) DESC,
+                (CASE WHEN COALESCE(bb.billing_address,'') <> '' THEN 1 ELSE 0 END) DESC,
+                bb.id DESC
+       LIMIT 1
     `);
     for (const name of tryNames) {
       const bb = findBb.get(name, name, name, name);
       if (bb && bb.company_name) {
-        data.client_company    = bb.company_name;
-        data.client_person_name = bb.client_name;
-        data.client_phone      = bb.client_contact;
-        data.client_email      = bb.client_email;
-        data.client_address    = bb.billing_address;
-        data.site_address      = bb.shipping_address;
-        data.client_state      = bb.state;
-        data.client_district   = bb.district;
-        data.client_gstin      = bb.gstin;
-        data.client_state_code = bb.state_code;
-        data.bb_project_name   = bb.project_name;
-        data.bb_lead_no        = bb.lead_no;
-        break;
+        data.client_company     = data.client_company     || bb.company_name;
+        data.client_person_name = data.client_person_name || bb.client_name;
+        data.client_phone       = data.client_phone       || bb.client_contact;
+        data.client_email       = data.client_email       || bb.client_email;
+        data.client_address     = data.client_address     || bb.billing_address;
+        data.site_address       = data.site_address       || bb.shipping_address;
+        data.client_state       = data.client_state       || bb.state;
+        data.client_district    = data.client_district    || bb.district;
+        data.client_gstin       = data.client_gstin       || bb.gstin;
+        data.client_state_code  = data.client_state_code  || bb.state_code;
+        data.bb_project_name    = data.bb_project_name    || bb.project_name;
+        data.bb_lead_no         = data.bb_lead_no         || bb.lead_no;
+        if (data.client_gstin && data.client_address) break;
       }
     }
   }
