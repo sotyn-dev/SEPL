@@ -318,13 +318,17 @@ export default function Estimator() {
     const subsCharged = r2((row.subs || []).filter(s => !s.foc)
       .reduce((t, s) => t + (Number(s.rate) || 0) * (Number(s.qty) || 0), 0));
     const accPerUnit = r2(pp * lineAccPct / 100);
-    const acc = r2(subsCharged + accPerUnit * billQty);
-    const tp = r2(pp + lab);                              // per-unit base (material + labour)
-    const tpa = r2(tp * billQty + acc + extra);           // line cost incl accessories + extra
+    // Per-field EXTRA amounts (mam 2026-06-30: "each field wise as an extra
+    // amount, can edit table"). Each adds ON TOP of the calculated value and
+    // cascades down: ACC extra → TPA, TP extra → TPA, the Extra-cost box → TPA,
+    // SP extra → SP/Rate. Blank = no extra.
+    const acc = r2(subsCharged + accPerUnit * billQty + (Number(row.accExtra) || 0));
+    const tp = r2(pp + lab + (Number(row.tpExtra) || 0)); // per-unit base (material + labour) + TP extra
+    const tpa = r2(tp * billQty + acc + extra);           // line cost incl accessories + Extra-cost box
     // Per-line margin overrides the category margin when set. Blank → category.
     const baseMargin = (row.margin === '' || row.margin == null) ? marginFor(row.category) : Number(row.margin) || 0;
     const mPct = baseMargin + (qtyMissing ? 20 : 0);      // +20 pts when qty not mentioned (#9)
-    const spFull = r2(tpa * (1 + mPct / 100));            // when qty missing this IS the per-unit rate
+    const spFull = r2(tpa * (1 + mPct / 100) + (Number(row.spExtra) || 0)); // sale price (+ SP extra); per-unit rate when qty missing
     const rate = qtyMissing ? spFull : (qty ? r2(spFull / qty) : 0);
     return {
       acc, tp, tpa, mPct, rate, subsCharged, discount, extra,
@@ -744,7 +748,7 @@ export default function Estimator() {
               const c = calc(row);
               const st = rowStatus(row);
               const rowBg = st === 'pending' ? 'bg-amber-50' : ((row.confidence === 'low' || row.confidence === 'none') ? 'bg-red-50/40' : '');
-              const hasExtras = (Number(row.discountPct) || 0) > 0 || (Number(row.extraCost) || 0) > 0 || (row.accPct !== '' && row.accPct != null);
+              const hasExtras = (Number(row.discountPct) || 0) > 0 || (Number(row.extraCost) || 0) > 0 || (row.accPct !== '' && row.accPct != null) || (Number(row.accExtra) || 0) > 0 || (Number(row.tpExtra) || 0) > 0 || (Number(row.spExtra) || 0) > 0;
               return (
                 <Fragment key={i}>
                 <tr className={`border-t border-gray-100 align-top ${rowBg}`}>
@@ -876,21 +880,41 @@ export default function Estimator() {
                       onChange={e => patchRow(i, { pp: e.target.value })} placeholder="0" />
                     {c.discount > 0 && <div className="text-[9px] text-rose-500 text-right mt-0.5" title="Material price after discount">−{c.discount}% = ₹{fmt(c.effPp)}</div>}
                   </td>
-                  <td className="p-1.5 text-right text-xs text-gray-600">{fmt(c.acc)}{c.extra > 0 && <div className="text-[9px] text-indigo-500" title={row.extraRemark || 'Extra cost'}>+₹{fmt(c.extra)} extra</div>}</td>
+                  <td className="p-1.5 text-right text-xs text-gray-600">
+                    <div>{fmt(c.acc)}</div>
+                    <input className="input w-16 text-right py-0.5 px-1 text-[10px] mt-0.5 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" type="number" value={row.accExtra ?? ''}
+                      placeholder="+extra" title="Extra amount added to Accessories (ACC)"
+                      onChange={e => patchRow(i, { accExtra: e.target.value })} />
+                  </td>
                   <td className="p-1.5">
                     <input className="input w-full text-right py-1 px-1 text-xs" type="number" min="0" value={row.lab || ''}
                       onChange={e => patchRow(i, { lab: e.target.value })} placeholder="0" />
                     {row.fromKit && <div className="text-[9px] text-indigo-500 mt-0.5 text-right" title="Labour + FOC from the PO/FOC module">🔗</div>}
                   </td>
-                  <td className="p-1.5 text-right text-xs text-gray-700">{fmt(c.tp)}</td>
-                  <td className="p-1.5 text-right text-xs text-gray-700">{fmt(c.tpa)}</td>
+                  <td className="p-1.5 text-right text-xs text-gray-700">
+                    <div>{fmt(c.tp)}</div>
+                    <input className="input w-16 text-right py-0.5 px-1 text-[10px] mt-0.5 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" type="number" value={row.tpExtra ?? ''}
+                      placeholder="+extra" title="Extra amount added to TP (material + labour, per unit)"
+                      onChange={e => patchRow(i, { tpExtra: e.target.value })} />
+                  </td>
+                  <td className="p-1.5 text-right text-xs text-gray-700">
+                    <div>{fmt(c.tpa)}</div>
+                    <input className="input w-16 text-right py-0.5 px-1 text-[10px] mt-0.5 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" type="number" value={row.extraCost ?? ''}
+                      placeholder="+extra" title="Extra cost added to TPA (line cost) — same box as Extra cost in ⚙"
+                      onChange={e => patchRow(i, { extraCost: e.target.value })} />
+                  </td>
                   <td className="p-1.5 text-right text-xs">
                     <input className="input text-right text-xs py-1 w-14" type="number" min="0"
                       value={row.margin ?? ''} placeholder={`${marginFor(row.category)}`}
                       onChange={e => patchRow(i, { margin: e.target.value })}
                       title="Per-line margin % — overrides the category margin. Blank = use the category margin." />
                   </td>
-                  <td className="p-1.5 text-right text-xs font-bold text-emerald-700">{c.qtyMissing ? <span className="text-gray-300" title="No amount without a qty">—</span> : fmt(c.sp)}</td>
+                  <td className="p-1.5 text-right text-xs font-bold text-emerald-700">
+                    <div>{c.qtyMissing ? <span className="text-gray-300" title="No amount without a qty">—</span> : fmt(c.sp)}</div>
+                    <input className="input w-16 text-right py-0.5 px-1 text-[10px] mt-0.5 font-normal [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" type="number" value={row.spExtra ?? ''}
+                      placeholder="+extra" title="Extra amount added to Sale Price (SP). Rate updates too."
+                      onChange={e => patchRow(i, { spExtra: e.target.value })} />
+                  </td>
                   <td className="p-1.5 text-right text-xs">{fmt(c.rate)}{c.qtyMissing && c.rate > 0 && <div className="text-[8px] text-amber-600 font-semibold leading-tight" title="Qty not mentioned — per-unit rate with +20% margin">rate +20%</div>}</td>
                   <td className="p-1.5 text-center align-top">
                     <div className="flex flex-col items-center gap-1">
