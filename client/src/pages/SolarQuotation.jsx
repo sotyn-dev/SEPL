@@ -30,7 +30,13 @@ export default function SolarQuotation() {
 
   useEffect(() => {
     api.get('/solar/rate-book').then((r) => setRb({ ...EMPTY_RB, ...r.data })).catch(() => toast.error('Could not load solar rate book'));
-    api.get('/leads').then((r) => setLeads(r.data || [])).catch(() => {});
+    // Lead dropdown = SOLAR Sales-Funnel deals, so picking one fetches the
+    // deal's client + sizing into the quotation (mam: "lead fetch from solar
+    // sales funnel"). Each option carries a readable label (deal no · client · kW).
+    api.get('/solar/deals').then((r) => setLeads((r.data || []).map((d) => ({
+      ...d,
+      _label: `${d.deal_no ? d.deal_no + ' · ' : ''}${d.client_name || d.company || 'Lead'}${Number(d.capacity_kw) > 0 ? ' · ' + fmt(d.capacity_kw) + ' kW' : ''}`,
+    })))).catch(() => {});
   }, []);
 
   // Prefill when opened from a funnel deal ("Create Quotation") so the saved
@@ -45,6 +51,27 @@ export default function SolarQuotation() {
     if (params.get('state')) u.state = params.get('state');
     if (Object.keys(u).length) setInp((p) => ({ ...p, ...u }));
   }, []); // eslint-disable-line
+
+  // Pick a SOLAR Sales-Funnel deal → fetch the full deal and prefill the
+  // quotation's client + sizing from it (mam: "lead fetch from solar sales
+  // funnel"). Links the saved quote back to the deal so it auto-advances.
+  const pickFunnelDeal = async (o) => {
+    if (!o) { setDealId(null); setLeadId(''); return; }
+    setDealId(o.id);
+    try {
+      const { data: d } = await api.get(`/solar/deals/${o.id}`);
+      setLeadId(d.lead_id || '');
+      setInp((p) => ({
+        ...p,
+        client: d.client_name || d.company || p.client,
+        ...(Number(d.capacity_kw) > 0 ? { kw: String(d.capacity_kw) } : {}),
+        ...(d.project_type ? { conn: d.project_type } : {}),
+        ...(d.state ? { state: d.state } : {}),
+        ...(d.location ? { addr: d.location } : {}),
+      }));
+      toast.success('Loaded from Sales Funnel');
+    } catch { toast.error('Could not load that lead'); }
+  };
 
   // zero-export → net metering not applicable
   useEffect(() => { if (inp.conn === 'zeroexport' && inp.net) set('net', false); }, [inp.conn]); // eslint-disable-line
@@ -126,7 +153,7 @@ export default function SolarQuotation() {
     try {
       const r = await api.get(`/solar/quotations/${id}`);
       setInp({ ...DEFAULTS, ...(r.data.inputs || {}) });
-      setLeadId(r.data.lead_id || ''); setCurrentId(id); setTab('build');
+      setLeadId(r.data.lead_id || ''); setDealId(r.data.deal_id || null); setCurrentId(id); setTab('build');
       toast.success('Loaded');
     } catch (e) { toast.error('Could not open'); }
   };
@@ -218,8 +245,8 @@ export default function SolarQuotation() {
           <div className="card p-4 space-y-3">
             <p className="font-bold text-[11px] uppercase tracking-wide text-gray-700">1 · Site &amp; client</p>
             <label className="block"><span className="label">Lead (Sales Funnel)</span>
-              <SearchableSelect options={leads} value={leadId} displayKey="company_name" valueKey="id"
-                placeholder="Pick a lead…" onChange={(o) => { setLeadId(o?.id || ''); if (o) set('client', o.company_name || o.client_name || ''); }} /></label>
+              <SearchableSelect options={leads} value={dealId} displayKey="_label" valueKey="id"
+                placeholder="Pick a lead…" onChange={pickFunnelDeal} /></label>
             <div className="grid grid-cols-2 gap-2">
               {Tx('client', 'Client name')}
               {Tx('addr', 'Address')}
