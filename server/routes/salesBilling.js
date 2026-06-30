@@ -292,6 +292,23 @@ router.get('/:id/print', requirePermission('installation', 'view'), (req, res) =
       amount: round2((+x.amount || 0) * ratio),
     }));
   }
+  // mam 2026-06-30 ("rate pending"): fill any line whose rate is 0 from the
+  // order's CURRENT BOQ (po_items, matched by description), so pricing the order's
+  // BOQ flows into the invoice without recreating the bill. Only fills 0/blank
+  // rates — never overrides a rate already snapshotted on the bill.
+  if (bill.business_book_id && items.some(it => !(+it.rate > 0))) {
+    const byDesc = new Map();
+    for (const p of db.prepare('SELECT description, rate FROM po_items WHERE business_book_id=?').all(bill.business_book_id)) {
+      if (+p.rate > 0 && p.description) byDesc.set(String(p.description).toLowerCase().trim(), +p.rate);
+    }
+    items = items.map(it => {
+      if (+it.rate > 0) return it;
+      const live = byDesc.get(String(it.description || '').toLowerCase().trim()) || 0;
+      if (!live) return it;
+      const qty = +it.qty_delivered || +it.qty_ordered || 0;
+      return { ...it, rate: live, amount: round2(qty * live) };
+    });
+  }
   const bb = bill.business_book_id ? db.prepare('SELECT * FROM business_book WHERE id=?').get(bill.business_book_id) : null;
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(Buffer.from(installBillHTML({ bill, items, bb }), 'utf8'));
@@ -299,10 +316,14 @@ router.get('/:id/print', requirePermission('installation', 'view'), (req, res) =
 function installBillHTML({ bill, items, bb }) {
   const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const inr = (n) => (+n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const sub = +bill.amount || 0;
-  const igst = +bill.gst_amount || 0;
   const gstPct = +bill.gst_rate || 18;
-  const grand = +bill.total_amount || (sub + igst);
+  // When the bill was created before the order was priced, its stored amount/gst
+  // are 0 — derive them from the (now live-filled) line items so the invoice shows
+  // real figures once the order BOQ is priced (mam 2026-06-30).
+  const itemsSum = items.reduce((s, it) => s + (+it.amount || 0), 0);
+  const sub = (+bill.amount > 0) ? +bill.amount : Math.round(itemsSum * 100) / 100;
+  const igst = (+bill.gst_amount > 0) ? +bill.gst_amount : Math.round(sub * gstPct) / 100;
+  const grand = (+bill.total_amount > 0) ? +bill.total_amount : Math.round((sub + igst) * 100) / 100;
   const roundOff = +(Math.round(grand) - (sub + igst)).toFixed(2);
   const billTo = esc(bill.customer_name || bb?.company_name || bb?.client_name || '');
   const billAddr = esc(bb?.billing_address || '');
