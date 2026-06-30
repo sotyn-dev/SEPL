@@ -43,6 +43,7 @@ export default function Estimator() {
   const [rows, setRows] = useState([blankRow()]);
   const [matching, setMatching] = useState(false);
   const [kitByPoId, setKitByPoId] = useState({}); // po_item_id → PO/FOC kit (labour, focs, po_rate)
+  const pendingKit = useRef(null); // {i,itemId} of a line whose PO/FOC kit is being created in another tab
   // Manpower / additional cost block for the SUMMARY sheet (saizar format).
   // Months default to 1 so the Amount isn't 0 out of the gate (mam 2026-06-22);
   // every row is still editable. Project Start→End dates auto-fill the months.
@@ -85,15 +86,12 @@ export default function Estimator() {
   const [, bumpHist] = useState(0);   // force re-render so undo/redo buttons enable/disable
   const fileRef = useRef();
 
-  useEffect(() => {
-    api.get('/item-master/dropdown').then(r => setItemOptions(r.data)).catch(() => {});
-    // Client dropdown = Sales-Funnel clients at the BOQ + Vendor Costing stage
-    // only (mam 2026-06-22) — those are the ones with a BOQ ready to quote,
-    // not every funnel lead.
-    api.get('/sales-funnel?stage=boq_costing').then(r => setLeads(r.data || [])).catch(() => {});
-    // PO/FOC kits — so picking an item pulls its labour rate + FOC + material
-    // rate from the PO/FOC module. Approved kits win over drafts.
-    api.get('/quotations/po-foc').then(r => {
+  // PO/FOC kits — picking an item pulls its labour rate + FOC + material rate
+  // from the PO/FOC module. Approved kits win over drafts. Returns the map so a
+  // caller (e.g. after a kit is created in another tab) can use it immediately.
+  const loadKits = useCallback(async () => {
+    try {
+      const r = await api.get('/quotations/po-foc');
       const map = {};
       for (const k of (r.data.rows || [])) {
         if (!k.po_item_id) continue;
@@ -102,8 +100,39 @@ export default function Estimator() {
         }
       }
       setKitByPoId(map);
-    }).catch(() => {});
+      return map;
+    } catch { return {}; }
   }, []);
+
+  useEffect(() => {
+    api.get('/item-master/dropdown').then(r => setItemOptions(r.data)).catch(() => {});
+    // Client dropdown = Sales-Funnel clients at the BOQ + Vendor Costing stage
+    // only (mam 2026-06-22) — those are the ones with a BOQ ready to quote,
+    // not every funnel lead.
+    api.get('/sales-funnel?stage=boq_costing').then(r => setLeads(r.data || [])).catch(() => {});
+    loadKits();
+  }, [loadKits]);
+
+  // After creating a PO/FOC kit for a line in another tab (via "+ Create"),
+  // returning here re-pulls kits and auto-applies the new breakup to that line
+  // (mam 2026-06-30: "when save here then automatic in ai quotation").
+  useEffect(() => {
+    const onFocus = async () => {
+      const pend = pendingKit.current;
+      if (!pend) return;
+      const map = await loadKits();
+      const kit = map[pend.itemId];
+      if (!kit) return; // not saved yet — keep waiting for the next return
+      setRows(rs => rs.map((r, idx) => idx === pend.i ? {
+        ...r, fromKit: true, lab: kit.labour || 0, pp: kit.po_rate || 0,
+        subs: (kit.focs || []).map(f => ({ item_id: f.item_id || null, name: f.name || '', qty: f.qty || 1, rate: f.rate || 0, foc: false })),
+      } : r));
+      pendingKit.current = null;
+      toast.success('Price breakup pulled from the new PO/FOC kit');
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [loadKits]);
 
   // Pull labour + FOC + material rate from a PO/FOC kit for an item, if one exists.
   const kitFields = (itemId, fallbackPp) => {
@@ -124,9 +153,11 @@ export default function Estimator() {
   );
   const marginFor = (cat) => Number(margins[cat] ?? 0);
 
-  // Create a brand-new Item Master entry from an UNMATCHED BOQ line (mam
-  // 2026-06-29: "if it can't match, give a create button"). Admin → auto-approved;
-  // the line is then matched to it. Price = whatever PP is on the line.
+  // Create a brand-new Item Master entry from an UNMATCHED BOQ line, then open the
+  // PO/FOC price-breakup creator for it in a NEW TAB (mam 2026-06-30: "create item
+  // mean this open in new tab, and when save here then automatic in ai quotation").
+  // Admin → item auto-approved; the line is matched immediately, and the focus
+  // handler above pulls the kit's PO rate + labour + FOC back when mam returns.
   const createItem = async (i) => {
     const row = rows[i];
     const name = (row.description || row.boq_text || '').trim();
@@ -141,7 +172,9 @@ export default function Estimator() {
       });
       const fresh = await api.get('/item-master/dropdown'); setItemOptions(fresh.data || []);
       patchRow(i, { item_id: data.id, matchedName: name, confidence: 'created', matchScore: 100, alternatives: [] });
-      toast.success('Created in Item Master & matched');
+      pendingKit.current = { i, itemId: data.id };
+      window.open(`/po-foc-stripped?poItem=${data.id}`, '_blank', 'noopener');
+      toast.success('Item created — set its price breakup in the new tab, then come back here');
     } catch (e) { toast.error(e.response?.data?.error || 'Could not create item'); }
   };
 
@@ -781,7 +814,7 @@ export default function Estimator() {
                     {!row.item_id && (
                       <button type="button" onClick={() => createItem(i)}
                         className="mt-1 inline-block text-[10px] font-semibold text-emerald-700 border border-emerald-300 rounded px-1.5 py-0.5 hover:bg-emerald-50"
-                        title="No match? Create this as a new Item Master entry (with the PP as its price) and match it here.">
+                        title="No match? Creates this as a new item and opens its PO/FOC price-breakup form in a new tab. Set the PO rate / labour / FOC there, save, and come back — this line prices automatically.">
                         ＋ Create in Item Master
                       </button>
                     )}

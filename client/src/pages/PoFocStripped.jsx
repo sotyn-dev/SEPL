@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
@@ -201,6 +201,18 @@ export default function PoFocStripped() {
     return entries.filter(e => e.status === k && catOf(e) === catFilter).length;
   };
   const openForPoItem = (p) => { setForm({ ...blankForm(), po_item_id: p.id, po_name: p.display_name || p.item_name, po_rate: p.current_price || 0 }); setModal(true); };
+
+  // Deep-link from the Estimator's "+ Create in Item Master": ?poItem=<id> opens
+  // the New PO/FOC modal prefilled for that freshly-created item, so mam sets its
+  // price breakup right away (mam 2026-06-30). Fires once poItems contains it.
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (autoOpened.current) return;
+    const pid = new URLSearchParams(window.location.search).get('poItem');
+    if (!pid) return;
+    const p = poItems.find(x => String(x.id) === String(pid));
+    if (p) { autoOpened.current = true; openForPoItem(p); }
+  }, [poItems]);
 
   const shown = entries.filter(e => e.status === tab && (!catFilter || catOf(e) === catFilter));
   const dq = draftSearch.toLowerCase().trim();
