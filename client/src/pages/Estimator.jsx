@@ -136,15 +136,20 @@ export default function Estimator() {
   // margin %"). The kit's tpa is its sell price and cost is the raw cost, so
   // (tpa−cost)/cost is the single margin % that reproduces the kit's sell price —
   // the quote's SP then equals the kit's intended sell. Editable afterwards.
+  // The single margin % that reproduces a kit's sell price: (tpa−cost)/cost.
+  const kitMarginPct = (kit) => {
+    const cost = Number(kit?.cost) || 0, tpa = Number(kit?.tpa) || 0;
+    return (cost > 0 && tpa > 0) ? Math.round((tpa - cost) / cost * 1000) / 10 : null;
+  };
   const kitToPatch = (kit, fallbackPp) => {
-    const cost = Number(kit.cost) || 0, tpa = Number(kit.tpa) || 0;
     const patch = {
       fromKit: true,
       lab: kit.labour || 0,
       pp: kit.po_rate || fallbackPp || 0,
       subs: (kit.focs || []).map(f => ({ item_id: f.item_id || null, name: f.name || '', qty: f.qty || 1, rate: f.rate || 0, foc: false })),
     };
-    if (cost > 0 && tpa > 0) patch.margin = Math.round((tpa - cost) / cost * 1000) / 10; // suggested blended margin %
+    const mg = kitMarginPct(kit);
+    if (mg != null) patch.margin = mg; // suggested blended margin %
     return patch;
   };
 
@@ -159,6 +164,25 @@ export default function Estimator() {
   // "Margin % per category" UI was removed (margin is set per line now), but this
   // fallback stays so older saved quotes with category margins still compute.
   const marginFor = (cat) => Number(margins[cat] ?? 0);
+
+  // Backfill the kit's suggested margin into any matched line whose margin is
+  // still BLANK (mam 2026-06-30: "margin not showing automatic from price
+  // breakup"). The live match/pick path already sets it; this covers SAVED quotes
+  // that were matched before the suggestion existed. Idempotent — only fills
+  // blanks, so once filled it stops (no loop, never overwrites a typed value).
+  useEffect(() => {
+    if (!rows.length || !Object.keys(kitByPoId).length) return;
+    let changed = false;
+    const next = rows.map(r => {
+      if (r.item_id && (r.margin == null || r.margin === '')) {
+        const mg = kitMarginPct(kitByPoId[r.item_id]);
+        if (mg != null) { changed = true; return { ...r, margin: mg }; }
+      }
+      return r;
+    });
+    if (changed) setRows(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, kitByPoId]);
 
   // Create a brand-new Item Master entry from an UNMATCHED BOQ line, then open the
   // PO/FOC price-breakup creator for it in a NEW TAB (mam 2026-06-30: "create item
