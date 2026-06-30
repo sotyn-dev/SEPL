@@ -172,8 +172,7 @@ export default function Estimator() {
       });
       const fresh = await api.get('/item-master/dropdown'); setItemOptions(fresh.data || []);
       patchRow(i, { item_id: data.id, matchedName: name, confidence: 'created', matchScore: 100, alternatives: [] });
-      pendingKit.current = { i, itemId: data.id };
-      window.open(`/po-foc-stripped?poItem=${data.id}`, '_blank', 'noopener');
+      openKitTab(i, data.id);
       toast.success('Item created — set its price breakup in the new tab, then come back here');
     } catch (e) { toast.error(e.response?.data?.error || 'Could not create item'); }
   };
@@ -188,6 +187,23 @@ export default function Estimator() {
       await api.patch(`/item-master/${row.item_id}/price`, { current_price: Number(row.pp) || 0 });
       toast.success('Price saved to Item Master');
     } catch (e) { toast.error(e.response?.data?.error || 'Could not save price'); }
+  };
+
+  // Open the PO/FOC price-breakup creator/editor for an item in a NEW TAB and arm
+  // the focus handler so this line auto-prices when mam returns.
+  const openKitTab = (i, itemId) => {
+    pendingKit.current = { i, itemId };
+    window.open(`/po-foc-stripped?poItem=${itemId}`, '_blank', 'noopener');
+  };
+
+  // Edit a MATCHED item's price breakup (mam 2026-06-30: "edit option"). Opens the
+  // PO/FOC creator for the matched item — its existing kit if it has one, else a
+  // fresh one — and auto-prices this line on return.
+  const editKit = (i) => {
+    const row = rows[i];
+    if (!row.item_id) return toast.error('Match or create an item first');
+    openKitTab(i, row.item_id);
+    toast.success('Edit this item’s price breakup in the new tab, then come back here');
   };
 
   const patchRow = (i, patch) =>
@@ -840,11 +856,18 @@ export default function Estimator() {
                       </div>
                     )}
                     {row.item_id && (
-                      <button type="button" onClick={() => savePriceToMaster(i)}
-                        className="mt-1 inline-block text-[10px] font-semibold text-indigo-700 border border-indigo-300 rounded px-1.5 py-0.5 hover:bg-indigo-50"
-                        title="Save the current PP as this item's price in Item Master, so future quotations reuse it.">
-                        💾 Save price to master
-                      </button>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        <button type="button" onClick={() => savePriceToMaster(i)}
+                          className="inline-block text-[10px] font-semibold text-indigo-700 border border-indigo-300 rounded px-1.5 py-0.5 hover:bg-indigo-50"
+                          title="Save the current PP as this item's price in Item Master, so future quotations reuse it.">
+                          💾 Save price to master
+                        </button>
+                        <button type="button" onClick={() => editKit(i)}
+                          className="inline-block text-[10px] font-semibold text-amber-700 border border-amber-300 rounded px-1.5 py-0.5 hover:bg-amber-50"
+                          title="Open this item's PO/FOC price breakup (PO rate + labour + FOC) in a new tab — edits the existing one or creates it. Auto-prices this line when you return.">
+                          ✏ Edit price breakup
+                        </button>
+                      </div>
                     )}
                     {row.alternatives?.length > 0 && (row.confidence === 'low' || row.confidence === 'medium' || row.confidence === 'none') && (
                       <div className="flex flex-wrap gap-1 mt-1 items-center">

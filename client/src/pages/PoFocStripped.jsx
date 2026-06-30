@@ -63,6 +63,7 @@ export default function PoFocStripped() {
   const [tab, setTab] = useState('non_approved');
   const [entries, setEntries] = useState([]);
   const [counts, setCounts] = useState({ non_approved: 0, approved: 0, re_approved: 0 });
+  const [entriesLoaded, setEntriesLoaded] = useState(false);
   const [poItems, setPoItems] = useState([]);
   const [focItems, setFocItems] = useState([]);
   const [labourItems, setLabourItems] = useState([]);
@@ -73,7 +74,7 @@ export default function PoFocStripped() {
   const [catFilter, setCatFilter] = useState('');
 
   const load = useCallback(() => {
-    api.get('/quotations/po-foc').then(r => { setEntries(r.data.rows || []); setCounts(r.data.counts || {}); }).catch(() => {});
+    api.get('/quotations/po-foc').then(r => { setEntries(r.data.rows || []); setCounts(r.data.counts || {}); setEntriesLoaded(true); }).catch(() => setEntriesLoaded(true));
   }, []);
   // Reload the masters so a rate/UOM edit in Item Master is reflected here
   // (mam 2026-06-11). Show item CODE + UOM in the dropdown label (mam 2026-06-10).
@@ -202,17 +203,20 @@ export default function PoFocStripped() {
   };
   const openForPoItem = (p) => { setForm({ ...blankForm(), po_item_id: p.id, po_name: p.display_name || p.item_name, po_rate: p.current_price || 0 }); setModal(true); };
 
-  // Deep-link from the Estimator's "+ Create in Item Master": ?poItem=<id> opens
-  // the New PO/FOC modal prefilled for that freshly-created item, so mam sets its
-  // price breakup right away (mam 2026-06-30). Fires once poItems contains it.
+  // Deep-link from the Estimator's "+ Create" / "✏ Edit price breakup":
+  // ?poItem=<id> opens the PO/FOC modal for that item — its EXISTING kit (edit) if
+  // there is one, else a fresh one prefilled for it (mam 2026-06-30). Waits for the
+  // entries to load so an existing kit is never missed (which would create a dup).
   const autoOpened = useRef(false);
   useEffect(() => {
-    if (autoOpened.current) return;
+    if (autoOpened.current || !entriesLoaded) return;
     const pid = new URLSearchParams(window.location.search).get('poItem');
     if (!pid) return;
+    const existing = entries.find(e => String(e.po_item_id) === String(pid));
+    if (existing) { autoOpened.current = true; openEdit(existing); return; }
     const p = poItems.find(x => String(x.id) === String(pid));
     if (p) { autoOpened.current = true; openForPoItem(p); }
-  }, [poItems]);
+  }, [poItems, entries, entriesLoaded]);
 
   const shown = entries.filter(e => e.status === tab && (!catFilter || catOf(e) === catFilter));
   const dq = draftSearch.toLowerCase().trim();
