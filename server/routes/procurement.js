@@ -4546,6 +4546,29 @@ router.post('/delivery-notes/:id/generate-sales-bill', needsApprove, (req, res) 
   res.json({ id: sb.lastInsertRowid, document_number: invNum, is_draft: isDraft, items: items.length });
 });
 
+// Edit the SELLING rate per line on a generated Sales Bill (mam 2026-06-30: "also
+// with rate"). Updates items_json (rate + amount = qty × rate) and clears the
+// DRAFT flag once every line has a rate, so the Tax Invoice shows real amounts.
+// Writes both qty + quantity so whichever field the print reads is populated.
+router.put('/delivery-notes/:id/rates', needsApprove, (req, res) => {
+  const db = getDb();
+  const dn = db.prepare("SELECT * FROM delivery_notes WHERE id=? AND document_type='sales_bill'").get(req.params.id);
+  if (!dn) return res.status(404).json({ error: 'Sales bill not found' });
+  let items = [];
+  try { items = JSON.parse(dn.items_json || '[]'); } catch (_) { items = []; }
+  if (!items.length) return res.status(400).json({ error: 'No items on this sales bill' });
+  const rates = Array.isArray(req.body?.rates) ? req.body.rates : [];
+  const updated = items.map((it, i) => {
+    const r = (rates[i] != null && rates[i] !== '') ? +rates[i] : (+it.rate || 0);
+    const qty = +it.qty || +it.quantity || 0;
+    return { ...it, qty, quantity: qty, rate: r, amount: Math.round(qty * r * 100) / 100 };
+  });
+  const allRated = updated.every(it => (+it.rate || 0) > 0);
+  db.prepare('UPDATE delivery_notes SET items_json=?, is_draft=? WHERE id=?')
+    .run(JSON.stringify(updated), allRated ? 0 : 1, dn.id);
+  res.json({ ok: true, is_draft: allRated ? 0 : 1, lines: updated.length });
+});
+
 // Mark a dispatch as "Received by <name> on <date>" and attach the stamped +
 // signed receipt photo as proof. Mam flagged this as business-critical: without
 // the signed proof, clients sometimes deny receipt and SEPL eats the loss.

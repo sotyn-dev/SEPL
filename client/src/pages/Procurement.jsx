@@ -308,6 +308,7 @@ export default function Procurement() {
   // mam edits it down for a short; the bill amount follows received×rate.
   const [billRecv, setBillRecv] = useState({});
   const [editBillId, setEditBillId] = useState(null); // editing received qty of an existing purchase bill
+  const [editRate, setEditRate] = useState(null);     // editing selling rate of a generated sales bill
   const loadDebitNotes = () => api.get('/procurement/debit-notes').then(r => setDebitNotes(r.data || [])).catch(() => setDebitNotes([]));
   const loadPipeline = () => api.get('/procurement/po-pipeline').then(r => setPipeline(r.data || [])).catch(() => setPipeline([]));
   useEffect(() => { if (tab === 'debitnotes') loadDebitNotes(); if (tab === 'pipeline') loadPipeline(); /* eslint-disable-next-line */ }, [tab]);
@@ -1606,6 +1607,32 @@ export default function Procurement() {
       toast.success('Received qty updated — the challan now shows it');
       setModal(false); setEditBillId(null); setBillItems(null); setBillRecv({}); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Update failed'); }
+  };
+
+  // Edit the selling RATE per line on a generated Sales Bill (mam 2026-06-30: "also
+  // with rate"). Reads the bill's lines from items_json, lets mam type the rate,
+  // saves it back so the Tax Invoice shows amounts and stops being a draft.
+  const openEditRate = (d) => {
+    let items = [];
+    try { items = JSON.parse(d.items_json || '[]'); } catch (_) { items = []; }
+    setEditRate({
+      dnId: d.id, document_number: d.document_number,
+      items: items.map(it => ({
+        description: it.description || '', qty: +it.qty || +it.quantity || 0,
+        unit: it.unit || '', rate: (+it.rate || 0) || '',
+      })),
+    });
+    setModal('editrate');
+  };
+  const saveEditRate = async () => {
+    if (!editRate?.dnId) return;
+    try {
+      await api.put(`/procurement/delivery-notes/${editRate.dnId}/rates`, {
+        rates: editRate.items.map(it => (it.rate === '' ? 0 : +it.rate || 0)),
+      });
+      toast.success('Rates saved — the Tax Invoice now shows amounts');
+      setModal(false); setEditRate(null); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed to save rates'); }
   };
 
   const savePurchaseBill = async (e) => {
@@ -5296,6 +5323,9 @@ export default function Procurement() {
                       className="btn btn-secondary text-[10px] px-2 py-1 mr-1"
                       title={`Print SEPL ${d.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill'}`}
                     >🖨 Print</button>
+                    {d.document_type === 'sales_bill' && (canApprove('procurement') || isAdmin()) && (
+                      <button onClick={() => openEditRate(d)} className="text-[10px] px-2 py-1 mr-1 rounded bg-indigo-100 text-indigo-800 border border-indigo-300 hover:bg-indigo-200 font-semibold" title="Edit the selling rate per line — fills the invoice amounts">✏️ Edit rate</button>
+                    )}
                     {!d.received_by_name && (
                       <button onClick={() => openMarkReceived(d)} className="btn btn-success text-[10px] px-2 py-1 mr-1">Mark Received</button>
                     )}
@@ -6683,6 +6713,54 @@ export default function Procurement() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Edit selling rate per line on a generated Sales Bill (mam 2026-06-30). */}
+      <Modal isOpen={modal === 'editrate'} onClose={() => { setModal(false); setEditRate(null); }} title={`Edit selling rate — ${editRate?.document_number || ''}`}>
+        {!editRate ? null : (editRate.items.length === 0) ? (
+          <div className="text-sm text-gray-500 py-6 text-center">This sales bill has no line items to rate.</div>
+        ) : (() => {
+          const sub = editRate.items.reduce((s, it) => s + ((+it.qty || 0) * (it.rate === '' ? 0 : +it.rate || 0)), 0);
+          return (
+            <div className="space-y-3">
+              <p className="text-[11px] text-gray-500">Type the selling rate per line. The amount, subtotal and GST on the Tax Invoice fill in, and the bill stops being a draft.</p>
+              <div className="border rounded-lg overflow-hidden">
+                <div className="overflow-x-auto max-h-72">
+                  <table className="text-[11px] w-full">
+                    <thead className="bg-gray-50 sticky top-0"><tr>
+                      <th className="px-2 py-1 text-left">Item</th>
+                      <th className="px-2 py-1 text-right">Qty</th>
+                      <th className="px-2 py-1 text-right">Rate ₹</th>
+                      <th className="px-2 py-1 text-right">Amount ₹</th>
+                    </tr></thead>
+                    <tbody>
+                      {editRate.items.map((it, i) => {
+                        const amt = Math.round((+it.qty || 0) * (it.rate === '' ? 0 : +it.rate || 0) * 100) / 100;
+                        return (
+                          <tr key={i} className="border-t">
+                            <td className="px-2 py-1">{it.description}</td>
+                            <td className="px-2 py-1 text-right tabular-nums">{(+it.qty || 0).toLocaleString('en-IN')} {it.unit}</td>
+                            <td className="px-2 py-1 text-right">
+                              <NumInput step="any" min="0" value={it.rate}
+                                onChange={(v) => setEditRate(er => ({ ...er, items: er.items.map((x, j) => j === i ? { ...x, rate: v } : x) }))}
+                                className="border border-gray-300 rounded px-1 py-0.5 w-20 text-right text-[11px] focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
+                            </td>
+                            <td className="px-2 py-1 text-right tabular-nums">{amt ? `₹${amt.toLocaleString('en-IN')}` : <span className="text-gray-300">—</span>}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot><tr className="border-t bg-gray-50 font-semibold"><td className="px-2 py-1" colSpan="3">Sub Total</td><td className="px-2 py-1 text-right tabular-nums">₹{(Math.round(sub * 100) / 100).toLocaleString('en-IN')}</td></tr></tfoot>
+                  </table>
+                </div>
+              </div>
+              <div className="flex justify-end gap-3">
+                <button type="button" onClick={() => { setModal(false); setEditRate(null); }} className="btn btn-secondary">Cancel</button>
+                <button type="button" onClick={saveEditRate} className="btn btn-primary">Save rates</button>
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
 
       {/* Create Sales Bill / Delivery Note — mam: "like po I want from erp
