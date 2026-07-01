@@ -666,7 +666,12 @@ router.get('/track/:userId/:date', requirePermission('attendance', 'view'), (req
 });
 
 // GET geofence settings
-router.get('/geofence', requirePermission('attendance', 'view'), (req, res) => {
+// Shared READ — EVERY employee's punch screen needs the site list to show the
+// geofence status; gating it behind attendance:view made non-admin staff get a
+// 403 → empty list → the false "No site locations configured" warning even when
+// standing in the office (mam 2026-07-01). Only authenticated; edits (POST/PUT/
+// DELETE below) stay permission-gated.
+router.get('/geofence', (req, res) => {
   res.json(getDb().prepare('SELECT * FROM geofence_settings ORDER BY site_name').all());
 });
 
