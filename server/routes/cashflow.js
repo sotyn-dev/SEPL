@@ -4,6 +4,40 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
+// Recompute opening/closing for `fromDate` and EVERY later day so a back-dated
+// entry (or a delete) cascades forward. opening[fromDate] = closing of the most
+// recent day before it; each later opening = the prior day's closing; closing =
+// opening + inflows − outflows. Fixes "yesterday's closing ≠ today's opening"
+// when entries are added/removed on a past date (mam 2026-07-01).
+function recalcCashFlowFrom(db, fromDate) {
+  const prev = db.prepare('SELECT closing_balance FROM cash_flow_daily WHERE date < ? ORDER BY date DESC LIMIT 1').get(fromDate);
+  let prevClosing = prev ? prev.closing_balance : null;
+  const rows = db.prepare('SELECT id, opening_balance, COALESCE(total_inflows,0) AS inflows, COALESCE(total_outflows,0) AS outflows FROM cash_flow_daily WHERE date >= ? ORDER BY date ASC').all(fromDate);
+  const upd = db.prepare('UPDATE cash_flow_daily SET opening_balance = ?, closing_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+  db.transaction(() => {
+    for (const r of rows) {
+      const opening = prevClosing == null ? (r.opening_balance || 0) : prevClosing;
+      const closing = opening + r.inflows - r.outflows;
+      upd.run(opening, closing, r.id);
+      prevClosing = closing;
+    }
+  })();
+}
+
+// One-time repair (guarded): recompute the whole running-balance chain so days
+// previously mis-cascaded (back-dated entries added before this fix) are
+// corrected on deploy. Idempotent — runs once.
+try {
+  const _db = getDb();
+  _db.exec('CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)');
+  if (!_db.prepare("SELECT value FROM app_settings WHERE key='cashflow_cascade_repair_v1'").get()) {
+    const first = _db.prepare('SELECT MIN(date) AS d FROM cash_flow_daily').get();
+    if (first && first.d) recalcCashFlowFrom(_db, first.d);
+    _db.prepare("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('cashflow_cascade_repair_v1','done')").run();
+    console.log('[cashflow] running-balance chain repaired (cascade fix)');
+  }
+} catch (e) { console.warn('[cashflow] cascade repair skipped:', e.message); }
+
 // ============= PROJECT FINANCIAL TRACKER =============
 
 // GET all projects with financial data.
@@ -387,10 +421,12 @@ router.post('/entry', (req, res) => {
     .run(daily.id, date, type, category, description, amount, payment_mode, party_name, req.user.id);
   const inflows = db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM cash_flow_entries WHERE daily_id = ? AND type = 'inflow'").get(daily.id);
   const outflows = db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM cash_flow_entries WHERE daily_id = ? AND type = 'outflow'").get(daily.id);
-  const opening = db.prepare('SELECT opening_balance FROM cash_flow_daily WHERE id = ?').get(daily.id);
-  const closing = (opening?.opening_balance || 0) + inflows.t - outflows.t;
-  db.prepare('UPDATE cash_flow_daily SET total_inflows = ?, total_outflows = ?, closing_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-    .run(inflows.t, outflows.t, closing, daily.id);
+  db.prepare('UPDATE cash_flow_daily SET total_inflows = ?, total_outflows = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(inflows.t, outflows.t, daily.id);
+  // Cascade the running balance forward so a back-dated entry flows into every
+  // later day's opening/closing (mam 2026-07-01).
+  recalcCashFlowFrom(db, date);
+  const closing = db.prepare('SELECT closing_balance FROM cash_flow_daily WHERE id = ?').get(daily.id)?.closing_balance || 0;
   res.status(201).json({ message: 'Entry added', closing_balance: closing });
 });
 
@@ -405,9 +441,10 @@ router.delete('/entry/:id', (req, res) => {
   db.prepare('DELETE FROM cash_flow_entries WHERE id = ?').run(req.params.id);
   const inflows = db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM cash_flow_entries WHERE daily_id = ? AND type = 'inflow'").get(entry.daily_id);
   const outflows = db.prepare("SELECT COALESCE(SUM(amount),0) as t FROM cash_flow_entries WHERE daily_id = ? AND type = 'outflow'").get(entry.daily_id);
-  const opening = db.prepare('SELECT opening_balance FROM cash_flow_daily WHERE id = ?').get(entry.daily_id);
-  db.prepare('UPDATE cash_flow_daily SET total_inflows = ?, total_outflows = ?, closing_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-    .run(inflows.t, outflows.t, (opening?.opening_balance || 0) + inflows.t - outflows.t, entry.daily_id);
+  db.prepare('UPDATE cash_flow_daily SET total_inflows = ?, total_outflows = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(inflows.t, outflows.t, entry.daily_id);
+  // Cascade forward so deleting a back-dated entry fixes every later day too.
+  recalcCashFlowFrom(db, entry.date);
   res.json({ message: 'Deleted' });
 });
 
