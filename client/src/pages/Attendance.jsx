@@ -119,6 +119,12 @@ export default function Attendance() {
   useEffect(() => {
     if (myToday?.punch_out_time) return; // day is done
     const trackLocation = () => {
+      // Always refresh today's status FIRST, independent of GPS — so a punch made
+      // on ANOTHER device (e.g. laptop) shows on this phone even when its GPS is
+      // off/flaky (mam 2026-07-01: "even she marks from laptop, update here"). The
+      // old code only re-fetched inside the GPS success callback, so a phone that
+      // couldn't get a fix never updated.
+      api.get('/attendance/my-today').then(r => setMyToday(r.data)).catch(() => {});
       // Even if the browser has no geolocation API, still send a
       // heartbeat so admin sees "online but GPS unavailable" instead of
       // mistaking the user for absent / off-network.
@@ -130,8 +136,6 @@ export default function Attendance() {
         const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy || 0 };
         setLocation(loc);
         api.post('/attendance/track-location', { ...loc, address: '' }).catch(() => {});
-        // Re-fetch my-today so auto-punch events reflect in UI quickly
-        api.get('/attendance/my-today').then(r => setMyToday(r.data)).catch(() => {});
       }, (err) => {
         // GPS off / permission denied / timeout — send a "GPS OFF"
         // heartbeat so the admin Location Tracking page can surface
@@ -145,6 +149,16 @@ export default function Attendance() {
     const interval = setInterval(trackLocation, 30 * 1000); // every 30 sec
     return () => clearInterval(interval);
   }, [myToday?.punch_out_time]);
+
+  // Refresh today's punch status whenever the tab is (re)focused — so a punch made
+  // on another device (laptop) appears here immediately, no manual reload needed
+  // (mam 2026-07-01). Independent of GPS and runs even after punch-out.
+  useEffect(() => {
+    const refresh = () => { if (!document.hidden) api.get('/attendance/my-today').then(r => setMyToday(r.data)).catch(() => {}); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, []);
 
   // Client-side geofence detection (haversine) — purely for live status display
   const haversineMeters = (lat1, lon1, lat2, lon2) => {
