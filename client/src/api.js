@@ -3,6 +3,13 @@ import { getToken, setToken, clearToken } from './lib/tokenStore';
 
 const api = axios.create({ baseURL: '/api' });
 
+// Seed the auth header from storage at module load — BEFORE the first render —
+// so any request fired on the very first tick after a fresh page load (e.g. the
+// post-login reload) carries the token even if it somehow races the request
+// interceptor below (mam 2026-07-01: track-location + the CRM-kitting matrix
+// 401'd on a fresh, valid session).
+try { const t0 = getToken(); if (t0) api.defaults.headers.common.Authorization = `Bearer ${t0}`; } catch { /* storage blocked — interceptor still attaches per-request */ }
+
 api.interceptors.request.use(config => {
   // Resilient read: falls back to an in-memory copy when localStorage is
   // blocked/wiped (in-app browsers, private mode) — otherwise the request
@@ -47,6 +54,19 @@ api.interceptors.response.use(
       const used = err.config?.metadata?.tokenAtSend || null;
       const current = getToken();
       const isSessionCheck = url.includes('/auth/me');
+      // Self-heal a spurious 401 from a token race: if this data request went
+      // out with NO token, or with a DIFFERENT token than the one now active
+      // (a first-render race on a fresh load, or a request in flight across a
+      // login/refresh), retry it ONCE with the current token instead of leaving
+      // the page's data broken. mam 2026-07-01: on a valid session (/auth/me was
+      // 200) a couple of calls — track-location and the CRM-kitting matrix —
+      // still 401'd because they beat the token onto the wire. Never retry the
+      // /auth/me check itself, and guard with a flag so it can never loop.
+      if (!isSessionCheck && current && used !== current && err.config && !err.config._retried401) {
+        err.config._retried401 = true;
+        err.config.headers = { ...(err.config.headers || {}), Authorization: `Bearer ${current}` };
+        return api(err.config);
+      }
       if (isSessionCheck && current && used === current) {
         clearToken();
         delete api.defaults.headers.common.Authorization;
