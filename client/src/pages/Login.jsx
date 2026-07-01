@@ -43,9 +43,21 @@ export default function Login() {
       // this page view and they'll be logged out on the next reload. Tell
       // them plainly instead of letting it look like a random logout.
       if (isStorageBlocked()) {
+        // In-app / private browsers keep the token in memory only — a full
+        // reload would wipe it and loop straight back to login. So DON'T reload
+        // here; the soft state transition keeps THIS page-view working.
         toast('Your browser is blocking site data, so you may get logged out. Please open securederp.in in Chrome/Safari directly (not inside another app) and turn off Private/Incognito mode.', { duration: 9000, icon: '⚠️' });
+        toast.success(`Welcome back, ${data.user.name}!`);
+      } else {
+        // Full reload so the ENTIRE app boots fresh on the NEW token. A soft
+        // state transition leaves any page that was already mounted with the
+        // old/expired token still showing its 401'd data — mam 2026-07-01: after
+        // re-login the Sales Funnel + employees stayed empty because those calls
+        // had already gone out on the dead token and never refetched. Reloading
+        // guarantees every request uses the fresh token.
+        toast.success(`Welcome back, ${data.user.name}!`);
+        window.location.replace('/');
       }
-      toast.success(`Welcome back, ${data.user.name}!`);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Something went wrong');
     }
