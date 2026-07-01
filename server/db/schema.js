@@ -4505,6 +4505,43 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[schema] kpi_cards_seed_v2 failed:', e.message); }
 
+  // ─── KPI auto-sources v3 (mam 2026-07-01: "weekwise score auto — plan give,
+  //     you find the actual") ─────────────────────────────────────────────────
+  // Wire the KPIs that HAVE a matching live ERP feed from manual → auto:* so the
+  // weekly ACTUAL is pulled from the ERP automatically every week and the score
+  // updates on its own — mam only sets the PLAN / target. The score engine
+  // recomputes auto:* rows live on every scorecard view (see scoring.js
+  // computeAutoCount), so nothing needs to be entered by hand for these.
+  // Only rows whose source is the one each person actually OWNS are wired
+  // (user-scoped feeds for Rajat/Durgesh/Aanchal, company-wide for the process
+  // owner). Pure ratio/time KPIs with NO ERP feed (time-to-quote, estimation
+  // accuracy %, DSO days, invoice dispute %, attrition, …) stay manual by design
+  // — the ERP doesn't record those numbers, so they need a weekly entry.
+  // Guarded; only flips rows still on 'manual' (never clobbers a hand-set one).
+  try {
+    const k3done = db.prepare("SELECT value FROM app_settings WHERE key='kpi_auto_sources_v3'").get();
+    if (!k3done) {
+      const AUTO = [
+        ['Rajat Sharma — Sales Head',                'New orders booked (₹)',                  'auto:bb_sale_amount'],
+        ['Durgesh Sharma — AI Marketing Head',       'Qualified leads generated',              'auto:leads_qualified'],
+        ['Prabhdeep Singh — HR Head',                'Critical roles filled (time-to-hire)',   'auto:candidates_onboarded'],
+        ['Aanchal — Collections Executive',          'Collection efficiency (collected ÷ due)', 'auto:amount_received_lakh'],
+        ['Aanchal — Collections Executive',          'Overdue > 90 days (₹)',                  'auto:receivables_outstanding_cr'],
+        ['Aanchal — Collections Executive',          'Every overdue account followed up',      'auto:collections_count'],
+        ['Nitin Jain — Operations · Purchase · Store', 'Full kitting before site start',       'auto:items_complete'],
+      ];
+      const upd = db.prepare(
+        `UPDATE score_kpis SET data_source = ?
+          WHERE metric_name = ? AND data_source = 'manual'
+            AND template_id = (SELECT id FROM score_templates WHERE name = ?)`
+      );
+      let wired = 0;
+      for (const [tpl, metric, src] of AUTO) wired += upd.run(src, metric, tpl).changes;
+      db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('kpi_auto_sources_v3', 'done')").run();
+      console.log(`[schema] kpi_auto_sources_v3: ${wired} KPIs wired to live ERP feeds`);
+    }
+  } catch (e) { console.error('[schema] kpi_auto_sources_v3 failed:', e.message); }
+
   // Multiple BOQs per lead (mam 2026-06-12: "after some time again again
   // client send boq ... option + to add boq").  The single boq_* columns on
   // sales_funnel keep the LATEST for existing views; the full history lives
