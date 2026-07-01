@@ -83,6 +83,61 @@ router.get('/live', (req, res) => {
   });
 });
 
+// GET /api/admin/locations/latest
+//   ?stale_minutes=N   a ping newer than this counts as "live" (default 30)
+//   ?horizon_days=N    ignore pings older than this so we don't pin someone to a
+//                      week-old spot forever (default 7)
+//
+// Latest ping PER USER within the horizon — WITHOUT the live staleness cutoff —
+// each tagged live vs "last seen". Powers the Team map: everyone on one map at
+// once, live people at their live spot and everyone else at their last-known
+// position (mam 2026-07-01: "show all team live or last location if not live").
+router.get('/latest', (req, res) => {
+  const db = getDb();
+  const staleMin = Math.max(1, Math.min(1440, parseInt(req.query.stale_minutes, 10) || 30));
+  const horizonDays = Math.max(1, Math.min(90, parseInt(req.query.horizon_days, 10) || 7));
+  const sinceIso = new Date(Date.now() - horizonDays * 24 * 60 * 60 * 1000).toISOString();
+
+  const rows = db.prepare(
+    `SELECT lt.user_id, u.name as user_name, u.department, u.role,
+            lt.latitude, lt.longitude, lt.address, lt.site_name, lt.time
+       FROM location_tracking lt
+       JOIN users u ON u.id = lt.user_id
+       JOIN (
+         SELECT user_id, MAX(time) as max_time
+           FROM location_tracking
+          WHERE time >= ?
+          GROUP BY user_id
+       ) latest ON latest.user_id = lt.user_id AND latest.max_time = lt.time
+      WHERE COALESCE(u.track_location, 1) = 1
+      ORDER BY lt.time DESC`
+  ).all(sinceIso);
+
+  const geofences = db.prepare(
+    `SELECT site_name, latitude, longitude, radius_meters
+       FROM geofence_settings WHERE active = 1`
+  ).all();
+
+  const now = Date.now();
+  const liveMs = staleMin * 60 * 1000;
+  const users = rows.map(r => {
+    const ageMs = now - new Date(r.time).getTime();
+    return {
+      user_id: r.user_id, user_name: r.user_name, department: r.department, role: r.role,
+      latitude: r.latitude, longitude: r.longitude, address: r.address, site_name: r.site_name,
+      time: r.time,
+      minutes_ago: Math.round(ageMs / 60000),
+      live: ageMs <= liveMs,
+    };
+  });
+  res.json({
+    stale_minutes: staleMin, horizon_days: horizonDays, as_of: new Date().toISOString(),
+    geofences,
+    live_count: users.filter(u => u.live).length,
+    users,
+  });
+});
+
 // GET /api/admin/locations/timeline?user_id=N&date=YYYY-MM-DD
 //
 // All pings for that user on that date, ordered by time, with the

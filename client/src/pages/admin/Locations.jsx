@@ -13,6 +13,7 @@ import { useUrlTab } from '../../hooks/useUrlTab';
 import toast from 'react-hot-toast';
 import { FiMapPin, FiRefreshCw, FiUser, FiCalendar, FiClock, FiNavigation, FiExternalLink, FiAlertCircle } from 'react-icons/fi';
 import RouteMap from '../../components/RouteMap';
+import TeamMap from '../../components/TeamMap';
 import { fmtTime as fmtTimeIST } from '../../utils/datetime';
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -72,6 +73,28 @@ export default function Locations() {
   useEffect(() => {
     if (tab !== 'live') return;
     const id = setInterval(loadLive, 60 * 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line
+  }, [tab, staleMin]);
+
+  // ===== Team map tab (everyone on one map: live, else last seen) =====
+  const [team, setTeam] = useState(null);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const loadTeam = async () => {
+    setTeamLoading(true);
+    try {
+      const r = await api.get('/admin/locations/latest', { params: { stale_minutes: staleMin } });
+      setTeam(r.data);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to load team map');
+    }
+    setTeamLoading(false);
+  };
+  useEffect(() => { if (tab === 'team') loadTeam(); /* eslint-disable-next-line */ }, [tab, staleMin]);
+  // Auto-refresh the team map every 60s while open, like Live.
+  useEffect(() => {
+    if (tab !== 'team') return;
+    const id = setInterval(loadTeam, 60 * 1000);
     return () => clearInterval(id);
     // eslint-disable-next-line
   }, [tab, staleMin]);
@@ -140,10 +163,10 @@ export default function Locations() {
       </div>
 
       <div className="flex gap-2 flex-wrap">
-        {['live', 'timeline'].map(t => (
+        {['live', 'team', 'timeline'].map(t => (
           <button key={t} onClick={() => setTab(t)}
             className={`px-4 py-2 rounded-lg text-sm font-medium border ${tab === t ? 'bg-red-600 text-white border-red-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>
-            {t === 'live' ? 'Live (now)' : 'Timeline (by user / date)'}
+            {t === 'live' ? 'Live (now)' : t === 'team' ? 'Team Map (live + last seen)' : 'Timeline (by user / date)'}
           </button>
         ))}
       </div>
@@ -359,6 +382,43 @@ export default function Locations() {
                 );
               })}
             </div>
+          )}
+        </>
+      )}
+
+      {/* ============ TEAM MAP TAB ============ */}
+      {tab === 'team' && (
+        <>
+          <div className="card p-4 flex flex-col sm:flex-row gap-3 sm:items-center justify-between">
+            <div>
+              <div className="text-sm font-semibold text-gray-700">Everyone on one map</div>
+              <div className="text-xs text-gray-500">
+                <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 align-middle mr-1" />live now
+                <span className="inline-block w-2.5 h-2.5 rounded-full bg-gray-400 align-middle mx-1 ml-3" />last seen
+                <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500 align-middle mx-1 ml-3" />GPS off
+                <span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-500/20 border border-blue-500 align-middle mx-1 ml-3" />office
+                {team && <span className="ml-3 font-medium text-gray-600">· {team.live_count}/{team.users.length} live · as of {new Date(team.as_of).toLocaleTimeString()}</span>}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-500 whitespace-nowrap">Live if pinged within</label>
+              <select className="select text-sm" value={staleMin} onChange={e => setStaleMin(+e.target.value)}>
+                <option value={15}>15 min</option>
+                <option value={30}>30 min</option>
+                <option value={60}>1 hour</option>
+                <option value={180}>3 hours</option>
+              </select>
+              <button onClick={loadTeam} className="btn btn-secondary text-sm flex items-center gap-1 whitespace-nowrap">
+                <FiRefreshCw className={teamLoading ? 'animate-spin' : ''} size={14} /> Refresh
+              </button>
+            </div>
+          </div>
+          {team && team.users.length === 0 && !teamLoading ? (
+            <div className="card p-6 text-center text-gray-400 text-sm">
+              No team GPS pings in the last {team.horizon_days} days — no one to place on the map yet.
+            </div>
+          ) : (
+            <TeamMap people={team?.users || []} geofences={team?.geofences || []} height={520} />
           )}
         </>
       )}
