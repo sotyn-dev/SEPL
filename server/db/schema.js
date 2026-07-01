@@ -4326,6 +4326,101 @@ function initializeDatabase() {
   // table — and the admin live-map self-join over it — stays fast.
   try { db.exec(`DELETE FROM location_tracking WHERE date < date('now','-60 days')`); } catch (_) {}
 
+  // ─── KPI scorecards for the 5 team leads (mam 2026-07-01, from kpi.pdf) ───
+  // Each was showing "no template" (0%) on the Scorecard. Build one template per
+  // person holding EXACTLY the KPIs on their one-pager, plus the standard Basic
+  // auto set (so they get a live baseline instead of a flat 0) and the RACI
+  // Responsibility row every template carries. Weights sum to 100; directions
+  // match each metric (faster/lower-backlog = lower_better). Two KPIs map to a
+  // real auto source that already feeds their card — ERP tickets → auto:tickets
+  // (Nitin's card shows "7 tickets, 0 closed"), RA bills → auto:ra_bills. The
+  // rest are weekly manual entries. Guarded (runs once). Safe: skips a template
+  // that already exists, matches the user case-insensitively (exact, else a
+  // UNIQUE first-name match), and ASSIGNS ONLY when the user has no template yet
+  // (DO NOTHING) so an already-scored person — e.g. Aanchal at 32% — is never
+  // reset. Templates are still created even if no user matches, so they can be
+  // assigned from the Scorecard screen.
+  try {
+    const kdone = db.prepare("SELECT value FROM app_settings WHERE key='kpi_cards_seed_v1'").get();
+    if (!kdone) {
+      const BASIC = [
+        { m: 'Checklist',   w: 5, dir: 'higher_better', src: 'auto:checklists' },
+        { m: 'PMS',         w: 5, dir: 'higher_better', src: 'auto:pms' },
+        { m: 'Help Ticket', w: 5, dir: 'higher_better', src: 'auto:tickets' },
+      ];
+      const RACI = { m: 'RACI Steps (All Modules)', w: 0, dir: 'higher_better', src: 'auto:raci_steps_done' };
+      const PEOPLE = [
+        { user: 'Rajat Sharma', tpl: 'Rajat Sharma — Sales Head', desc: 'Owns: turning leads into orders',
+          basic: BASIC, weekly: [
+            { m: 'Lead → quote conversion',              w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Quote → order win rate',               w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Pipeline value live in CRM',           w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Every quote followed up within 48 hrs', w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'New orders booked (₹)',                w: 17, dir: 'higher_better', src: 'manual' },
+          ] },
+        { user: 'Shubham Sharma', tpl: 'Shubham Sharma — Costing / Estimation', desc: 'Owns: accurate quotes, fast',
+          basic: BASIC, weekly: [
+            { m: 'Time-to-quote (enquiry → quote)',      w: 17, dir: 'lower_better',  src: 'manual' },
+            { m: 'Quotes delivered on time',             w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Quote backlog older than 72 hrs',      w: 17, dir: 'lower_better',  src: 'manual' },
+            { m: 'Estimation accuracy (quoted vs actual)', w: 17, dir: 'higher_better', src: 'manual' },
+            { m: 'Win rate on quotes submitted',         w: 17, dir: 'higher_better', src: 'manual' },
+          ] },
+        { user: 'Nitin Jain', tpl: 'Nitin Jain — Operations · Purchase · Store', desc: 'Owns: on-time, on-budget delivery',
+          basic: [BASIC[0], BASIC[1]],   // tickets is a main KPI below — don't double-count
+          weekly: [
+            { m: 'Project milestones delivered on time',   w: 18, dir: 'higher_better', src: 'manual' },
+            { m: 'Material on site — zero stockout delays', w: 18, dir: 'higher_better', src: 'manual' },
+            { m: 'PO cycle time (indent → PO)',            w: 18, dir: 'lower_better',  src: 'manual' },
+            { m: 'Purchase price vs estimate variance',    w: 18, dir: 'lower_better',  src: 'manual' },
+            { m: 'ERP tickets closed (not left open)',     w: 18, dir: 'higher_better', src: 'auto:tickets' },
+          ] },
+        { user: 'Parul Goyal', tpl: 'Parul Goyal — Billing Engineer', desc: 'Owns: turning work into invoices',
+          basic: BASIC, weekly: [
+            { m: 'Billing cycle (work done → invoice)', w: 22, dir: 'lower_better',  src: 'manual' },
+            { m: 'RA bills raised on time',             w: 21, dir: 'higher_better', src: 'auto:ra_bills' },
+            { m: 'Unbilled work-in-progress (₹)',       w: 21, dir: 'lower_better',  src: 'manual' },
+            { m: 'Invoice dispute / rejection rate',    w: 21, dir: 'lower_better',  src: 'manual' },
+          ] },
+        { user: 'Aanchal', tpl: 'Aanchal — Collections Executive', desc: 'Owns: money in the bank',
+          basic: BASIC, weekly: [
+            { m: 'DSO (days to get paid)',                 w: 22, dir: 'lower_better',  src: 'manual' },
+            { m: 'Collection efficiency (collected ÷ due)', w: 21, dir: 'higher_better', src: 'manual' },
+            { m: 'Overdue > 90 days (₹)',                  w: 21, dir: 'lower_better',  src: 'manual' },
+            { m: 'Every overdue account followed up',      w: 21, dir: 'higher_better', src: 'manual' },
+          ] },
+      ];
+      const findTpl  = db.prepare('SELECT id FROM score_templates WHERE name = ?');
+      const insTpl   = db.prepare('INSERT INTO score_templates (name, description, active) VALUES (?, ?, 1)');
+      const insKpi   = db.prepare('INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order, active, default_planned) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)');
+      const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
+      const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
+      const assign   = db.prepare('INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1) ON CONFLICT(user_id) DO NOTHING');
+      let made = 0, assigned = 0;
+      for (const p of PEOPLE) {
+        let t = findTpl.get(p.tpl);
+        let tid;
+        if (t) { tid = t.id; }
+        else {
+          tid = insTpl.run(p.tpl, p.desc).lastInsertRowid;
+          let ord = 0;
+          for (const k of p.basic)  insKpi.run(tid, 'Basic', k.m, k.w, k.dir, k.src, ord++);
+          for (const k of p.weekly) insKpi.run(tid, 'Weekly', k.m, k.w, k.dir, k.src, ord++);
+          insKpi.run(tid, 'Responsibility', RACI.m, RACI.w, RACI.dir, RACI.src, ord++);
+          made++;
+        }
+        let u = findUser.get(p.user);
+        if (!u) {
+          const cands = findLike.all(p.user.split(' ')[0] + '%');
+          if (cands.length === 1) u = cands[0];
+        }
+        if (u) { const r = assign.run(u.id, tid); if (r.changes) assigned++; }
+      }
+      db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('kpi_cards_seed_v1', 'done')").run();
+      console.log(`[schema] kpi_cards_seed_v1: ${made} templates created, ${assigned} users assigned`);
+    }
+  } catch (e) { console.error('[schema] kpi_cards_seed_v1 failed:', e.message); }
+
   // Multiple BOQs per lead (mam 2026-06-12: "after some time again again
   // client send boq ... option + to add boq").  The single boq_* columns on
   // sales_funnel keep the LATEST for existing views; the full history lives
