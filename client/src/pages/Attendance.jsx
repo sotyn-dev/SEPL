@@ -182,7 +182,7 @@ export default function Attendance() {
   // why on-site staff were shown "outside / out of area". We watch for up to
   // ~9s, keep the most accurate reading, and resolve early once we get a good
   // (≤40m) lock. Always cleans up the watch + timer so it can't leak.
-  const getBestPosition = ({ maxWaitMs = 9000, goodAccuracy = 40 } = {}) => {
+  const getBestPosition = ({ maxWaitMs = 15000, goodAccuracy = 40 } = {}) => {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) return reject('GPS not supported on this device');
       let best = null, watchId = null, settled = false, timer = null;

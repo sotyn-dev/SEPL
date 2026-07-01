@@ -99,7 +99,20 @@ function evaluateGeofence(lat, lng, accuracy, geofences, settings = GEO_DEFAULTS
       matchedSite: nearestSite, nearestSite, nearestDist, accuracyUsed: Math.round(acc),
     };
   }
-  // Good GPS lock that is confidently outside every site → block (honest distance).
+  // Good GPS lock that doesn't overlap any site. Only BLOCK when the person is
+  // CLEARLY beyond the nearest site edge by a safety margin — GPS drifts and site
+  // coords/radius are often approximate, so a borderline "outside" precise fix is
+  // ALLOWED + flagged instead of blocked (mam 2026-06-30: on-site staff were being
+  // falsely blocked). Genuinely-far punches (beyond the margin) still block, so
+  // geofencing is preserved.
+  const nearRadius = (nearest.gf?.radius_meters || 200);
+  const blockBuffer = (settings && settings.blockBuffer) || 300;
+  if (nearest.dist - acc <= nearRadius + blockBuffer) {
+    return {
+      allow: true, verified: 0, decision: 'coarse_allow',
+      matchedSite: nearestSite, nearestSite, nearestDist, accuracyUsed: Math.round(acc),
+    };
+  }
   return {
     allow: false, verified: 0, decision: 'outside',
     matchedSite: '', nearestSite, nearestDist, accuracyUsed: Math.round(acc),
