@@ -166,16 +166,18 @@ router.post('/transcribe', audioUpload.single('audio'), (req, res) => {
     });
 });
 
-// Is this user an EA / supervisor? Treated as having the can_approve flag on
-// the delegations module — mam grants this to whoever's her assistant, and
-// they get (a) the "All" tab across every user's tasks and (b) the ability
-// to upload proof on anyone's behalf.
+// Is this user an EA / supervisor / PMS owner (e.g. Sushila, PMS Executive)?
+// Treated as having the can_approve flag on the tasks module. Accepts EITHER
+// 'delegations' OR 'pms_tasks' so it matches the frontend (which gates its
+// buttons on canApprove('pms_tasks')) — grant either and it works end-to-end.
+// Such a user gets (a) the "All" tab across everyone's tasks, (b) upload proof
+// on anyone's behalf, and (c) approve/reject tasks + extensions.
 const isEA = (uid) => {
   const db = getDb();
   const row = db.prepare(
     `SELECT MAX(rp.can_approve) as allowed
      FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
-     WHERE ur.user_id = ? AND rp.module = 'delegations'`
+     WHERE ur.user_id = ? AND rp.module IN ('delegations','pms_tasks')`
   ).get(uid);
   return !!row?.allowed;
 };
@@ -421,7 +423,7 @@ router.post('/:id/request-extension', (req, res) => {
 
 // Admin-only: approve the pending extension — updates due_date, clears request.
 router.post('/:id/approve-extension', (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admin can approve extensions' });
+  if (req.user.role !== 'admin' && !isEA(req.user.id)) return res.status(403).json({ error: 'Only an admin or PMS owner can approve extensions' });
   const db = getDb();
   const d = db.prepare('SELECT * FROM delegations WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Task not found' });
@@ -438,7 +440,7 @@ router.post('/:id/approve-extension', (req, res) => {
 
 // Admin-only: reject the pending extension.
 router.post('/:id/reject-extension', (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admin can reject extensions' });
+  if (req.user.role !== 'admin' && !isEA(req.user.id)) return res.status(403).json({ error: 'Only an admin or PMS owner can reject extensions' });
   const db = getDb();
   const d = db.prepare('SELECT * FROM delegations WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Task not found' });
@@ -470,10 +472,11 @@ router.post('/:id/submit', (req, res) => {
   res.json({ message: 'Proof submitted, awaiting approval' });
 });
 
-// Approve / reject — admin-only. Per mam's flow: anyone can upload proof
-// (assignee or EA), but only admin checks + approves/rejects the task.
+// Approve / reject — admin OR the PMS owner (EA = can_approve on delegations,
+// e.g. Sushila / PMS Executive). Anyone can upload proof (assignee or EA);
+// admin/PMS-owner checks + approves/rejects the task.
 router.post('/:id/approve', (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admin can approve tasks' });
+  if (req.user.role !== 'admin' && !isEA(req.user.id)) return res.status(403).json({ error: 'Only an admin or PMS owner can approve tasks' });
   const db = getDb();
   const d = db.prepare('SELECT * FROM delegations WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Task not found' });
@@ -485,7 +488,7 @@ router.post('/:id/approve', (req, res) => {
 });
 
 router.post('/:id/reject', (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only admin can reject tasks' });
+  if (req.user.role !== 'admin' && !isEA(req.user.id)) return res.status(403).json({ error: 'Only an admin or PMS owner can reject tasks' });
   const { reason } = req.body;
   if (!reason || !reason.trim()) return res.status(400).json({ error: 'Rejection reason is required' });
   const db = getDb();
