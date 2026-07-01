@@ -1317,10 +1317,11 @@ router.post('/indents', (req, res) => {
   for (const i of (items || [])) {
     let desc = i.description || '';
     let unit = i.unit || 'nos';
-    // mam (2026-07-01): if the raiser deliberately set the unit on the form
-    // (e.g. changed MTR→KG), honour it instead of force-overwriting with the
-    // BOQ / Item-Master UOM below. Untouched units still auto-fill from master.
-    const unitLocked = !!i.unit_overridden;
+    // mam (2026-07-01): honour a unit the raiser deliberately changed on the
+    // form. Extra-Non / RGP / Rental rows (no BOQ po_item) pre-fill the unit
+    // from the Item-Master UOM, so a DIFFERENT sent unit = a real override
+    // (e.g. MTR→KG) and is kept. BOQ lines stay master-authoritative as before.
+    let unitWasOverridden = false;
     let itemType = null;
     let make = i.make || '';
     let masterId = i.item_master_id || null;
@@ -1334,7 +1335,7 @@ router.post('/indents', (req, res) => {
       const p = getPoItem.get(poItemId);
       if (p) {
         desc = p.description || desc;
-        if (!unitLocked) unit = p.unit || unit;
+        unit = p.unit || unit;
         if (!masterId && p.item_master_id) masterId = p.item_master_id;
       }
     }
@@ -1347,7 +1348,14 @@ router.post('/indents', (req, res) => {
         // "automatic uom pick from itemwise master as per subitem").
         // Overrides whatever the BOQ row said because the master sheet
         // is the source of truth post-cleanup.
-        if (m.uom && !unitLocked) unit = String(m.uom).toLowerCase();
+        if (m.uom) {
+          const sent = String(i.unit || '').trim().toLowerCase();
+          const masterU = String(m.uom).trim().toLowerCase();
+          // Non-BOQ line (no po_item) whose sent unit differs from the master
+          // UOM → the raiser deliberately changed it on the form → keep it.
+          if (!poItemId && sent && sent !== 'nos' && sent !== masterU) { unit = sent; unitWasOverridden = true; }
+          else unit = masterU;
+        }
         if (m.weight_per_meter > 0) wpm = +m.weight_per_meter;
       }
     }
@@ -1367,7 +1375,7 @@ router.post('/indents', (req, res) => {
     insertItem.run(
       r.lastInsertRowid, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool,
       i.required_date || null,
-      extraSch, extraNon, rentDays, rentRate, wpm, unitLocked ? 1 : 0,
+      extraSch, extraNon, rentDays, rentRate, wpm, unitWasOverridden ? 1 : 0,
     );
   }
   // CRM funnel "requirement" at RAISE time (mam 2026-06-06: "if extra
