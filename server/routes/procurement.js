@@ -780,8 +780,12 @@ router.get('/indents', (req, res) => {
     `SELECT ii.id, ii.indent_id, ii.description, ii.make, ii.quantity, ii.po_item_id,
             -- Show the CURRENT Item Master UOM for linked items so a later
             -- unit change in Item Master reflects here (mam 2026-06-10);
-            -- manual lines keep their own stored unit.
-            COALESCE(NULLIF(im.uom, ''), ii.unit) AS unit, ii.item_type, ii.item_master_id,
+            -- manual lines keep their own stored unit. EXCEPTION: a per-line
+            -- unit override set by the approver (unit_overridden=1, e.g. MTR→KG
+            -- at approval) WINS over the master UOM — otherwise the master UOM
+            -- masks it (mam 2026-07-01: "changed to KG but BoQ still showed MTR").
+            CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
+                   THEN ii.unit ELSE COALESCE(NULLIF(im.uom, ''), ii.unit) END AS unit, ii.item_type, ii.item_master_id,
             ii.is_extra_schedule, ii.is_extra_non_schedule,
             ii.rental_days, ii.rental_rate_per_day,
             -- Source split (mam 2026-06-02): 'store' lines came from
@@ -1307,12 +1311,16 @@ router.post('/indents', (req, res) => {
     `INSERT INTO indent_items
       (indent_id, po_item_id, item_master_id, description, make, quantity, unit, rate, amount,
        item_type, is_foc, is_tool, required_date,
-       is_extra_schedule, is_extra_non_schedule, rental_days, rental_rate_per_day, weight_per_meter)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       is_extra_schedule, is_extra_non_schedule, rental_days, rental_rate_per_day, weight_per_meter, unit_overridden)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   );
   for (const i of (items || [])) {
     let desc = i.description || '';
     let unit = i.unit || 'nos';
+    // mam (2026-07-01): if the raiser deliberately set the unit on the form
+    // (e.g. changed MTR→KG), honour it instead of force-overwriting with the
+    // BOQ / Item-Master UOM below. Untouched units still auto-fill from master.
+    const unitLocked = !!i.unit_overridden;
     let itemType = null;
     let make = i.make || '';
     let masterId = i.item_master_id || null;
@@ -1326,7 +1334,7 @@ router.post('/indents', (req, res) => {
       const p = getPoItem.get(poItemId);
       if (p) {
         desc = p.description || desc;
-        unit = p.unit || unit;
+        if (!unitLocked) unit = p.unit || unit;
         if (!masterId && p.item_master_id) masterId = p.item_master_id;
       }
     }
@@ -1339,7 +1347,7 @@ router.post('/indents', (req, res) => {
         // "automatic uom pick from itemwise master as per subitem").
         // Overrides whatever the BOQ row said because the master sheet
         // is the source of truth post-cleanup.
-        if (m.uom) unit = String(m.uom).toLowerCase();
+        if (m.uom && !unitLocked) unit = String(m.uom).toLowerCase();
         if (m.weight_per_meter > 0) wpm = +m.weight_per_meter;
       }
     }
@@ -1359,7 +1367,7 @@ router.post('/indents', (req, res) => {
     insertItem.run(
       r.lastInsertRowid, poItemId, masterId, desc, make, qty, unit, 0, 0, itemType, foc, tool,
       i.required_date || null,
-      extraSch, extraNon, rentDays, rentRate, wpm,
+      extraSch, extraNon, rentDays, rentRate, wpm, unitLocked ? 1 : 0,
     );
   }
   // CRM funnel "requirement" at RAISE time (mam 2026-06-06: "if extra
@@ -2998,7 +3006,8 @@ router.get('/vendor-po/:id/delivery-note-data', (req, res) => {
            COALESCE(NULLIF(TRIM(im.item_name), ''), ii.description) as description,
            im.specification, im.size,
            COALESCE(im.make, ii.make) as make,
-           COALESCE(im.uom, ii.unit) as uom,
+           CASE WHEN COALESCE(ii.unit_overridden, 0) = 1 AND TRIM(COALESCE(ii.unit, '')) <> ''
+                  THEN ii.unit ELSE COALESCE(im.uom, ii.unit) END as uom,
            im.item_code,
            poi.hsn_code as hsn_code,
            im.gst as gst_text
