@@ -4542,6 +4542,47 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[schema] kpi_auto_sources_v3 failed:', e.message); }
 
+  // ─── Force the 7 KPI-card people onto their NEW templates (mam 2026-07-01:
+  //     "scorecard not changed to my requirement") ─────────────────────────────
+  // v1's assignment used ON CONFLICT DO NOTHING to avoid resetting an already-
+  // scored person — but that ALSO meant anyone who already had an OLD template
+  // (e.g. Aanchal on the old "Finance Executive") was left on it, so their
+  // scorecard still showed the old KPIs. mam wants the new cards live, so
+  // REASSIGN each of the 7 to their kpi.pdf/kpi2.pdf template (DO UPDATE now
+  // overrides the old link). Matches by name (exact, else a UNIQUE first-name);
+  // skips anyone not found. Guarded; runs once.
+  try {
+    const rdone = db.prepare("SELECT value FROM app_settings WHERE key='kpi_cards_reassign_v1'").get();
+    if (!rdone) {
+      const MAP = [
+        ['Rajat Sharma',    'Rajat Sharma — Sales Head'],
+        ['Shubham Sharma',  'Shubham Sharma — Costing / Estimation'],
+        ['Nitin Jain',      'Nitin Jain — Operations · Purchase · Store'],
+        ['Parul Goyal',     'Parul Goyal — Billing Engineer'],
+        ['Aanchal',         'Aanchal — Collections Executive'],
+        ['Durgesh Sharma',  'Durgesh Sharma — AI Marketing Head'],
+        ['Prabhdeep Singh', 'Prabhdeep Singh — HR Head'],
+      ];
+      const findTpl  = db.prepare('SELECT id FROM score_templates WHERE name = ?');
+      const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
+      const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
+      const assign   = db.prepare(
+        `INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1)
+         ON CONFLICT(user_id) DO UPDATE SET template_id=excluded.template_id, assigned_at=CURRENT_TIMESTAMP, assigned_by=excluded.assigned_by`
+      );
+      let n = 0;
+      for (const [nm, tpl] of MAP) {
+        const t = findTpl.get(tpl);
+        if (!t) continue;
+        let u = findUser.get(nm);
+        if (!u) { const c = findLike.all(nm.split(' ')[0] + '%'); if (c.length === 1) u = c[0]; }
+        if (u) { assign.run(u.id, t.id); n++; }
+      }
+      db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('kpi_cards_reassign_v1', 'done')").run();
+      console.log(`[schema] kpi_cards_reassign_v1: reassigned ${n}/7 people to their new KPI templates`);
+    }
+  } catch (e) { console.error('[schema] kpi_cards_reassign_v1 failed:', e.message); }
+
   // Multiple BOQs per lead (mam 2026-06-12: "after some time again again
   // client send boq ... option + to add boq").  The single boq_* columns on
   // sales_funnel keep the LATEST for existing views; the full history lives
