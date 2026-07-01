@@ -41,6 +41,10 @@ export default function Attendance() {
   const [report, setReport] = useState([]);
   const [leaves, setLeaves] = useState([]);
   const [geofences, setGeofences] = useState([]);
+  // True only after a SUCCESSFUL geofence fetch — so a failed fetch (transient
+  // server blip) never gets mistaken for "no sites configured" (mam 2026-07-01:
+  // "No site locations configured" showing in the office).
+  const [geofencesLoaded, setGeofencesLoaded] = useState(false);
   // "By User" tab state
   const [allUsers, setAllUsers] = useState([]);
   const [userSearch, setUserSearch] = useState('');
@@ -81,8 +85,17 @@ export default function Attendance() {
     // Pull current-month detail (per-day in/out + leaves) for the
     // Daily Detail timeline below the punch UI.
     api.get('/attendance/my-month').then(r => setMyMonth(r.data)).catch(() => {});
-    // Everyone needs geofence list to see auto-punch status live
-    api.get('/attendance/geofence').then(r => setGeofences(r.data || [])).catch(() => {});
+    // Everyone needs geofence list to see auto-punch status live. It MUST
+    // survive a transient server blip (the VPS OOM-restarts): a single failed
+    // GET otherwise blanks the list and falsely shows "No site locations
+    // configured" even while standing in the office. Retry a few times, and
+    // only mark it loaded on a real success so the warning can't fire on a
+    // failed fetch (mam 2026-07-01).
+    (function loadGeofences(tries) {
+      api.get('/attendance/geofence')
+        .then(r => { setGeofences(r.data || []); setGeofencesLoaded(true); })
+        .catch(() => { if (tries > 1) setTimeout(() => loadGeofences(tries - 1), 2000); });
+    })(4);
     if (seeAll) {
       api.get('/attendance/dashboard').then(r => setDashboard(r.data)).catch(() => {});
       api.get(`/attendance?date=${filterDate}`).then(r => setRecords(r.data)).catch(() => {});
@@ -175,7 +188,11 @@ export default function Attendance() {
   const geoStatus = (() => {
     if (!location) return { state: 'locating' };
     const active = (geofences || []).filter(g => g.active !== 0);
-    if (active.length === 0) return { state: 'no_sites' };
+    // Only claim "no sites" once we've actually loaded an empty list from the
+    // server. Before that (still loading, or the fetch failed on an OOM blip)
+    // stay in 'locating' so we never falsely tell on-site staff there are no
+    // geofences (mam 2026-07-01).
+    if (active.length === 0) return { state: geofencesLoaded ? 'no_sites' : 'locating' };
     const accRaw = +location.accuracy || 0;
     const acc = Math.min(Math.max(accRaw, 50), 3000);   // floor 50 / ceiling 3000 — matches server
     let nearest = { d: Infinity, g: null }, matched = null;
