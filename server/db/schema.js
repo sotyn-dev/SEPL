@@ -4421,6 +4421,90 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[schema] kpi_cards_seed_v1 failed:', e.message); }
 
+  // ─── KPI scorecards v2 (mam 2026-07-01, from kpi2.pdf: "add more") ────────
+  // Two NEW roles (Durgesh Sharma — AI Marketing Head, Prabhdeep Singh — HR Head)
+  // + extra KPIs appended to the people seeded in v1 (Shubham = "sustain", none).
+  // The score engine normalises by total weight (score = Σ w·pct / Σ w, see
+  // scoring.js), so appended KPIs need NOT re-sum the template to 100. Guarded;
+  // re-safe (skips a template / metric that already exists). Runs AFTER v1 so the
+  // v1 templates exist to append to.
+  try {
+    const k2done = db.prepare("SELECT value FROM app_settings WHERE key='kpi_cards_seed_v2'").get();
+    if (!k2done) {
+      const BASIC = [
+        { m: 'Checklist',   w: 5, dir: 'higher_better', src: 'auto:checklists' },
+        { m: 'PMS',         w: 5, dir: 'higher_better', src: 'auto:pms' },
+        { m: 'Help Ticket', w: 5, dir: 'higher_better', src: 'auto:tickets' },
+      ];
+      const RACI = { m: 'RACI Steps (All Modules)', w: 0, dir: 'higher_better', src: 'auto:raci_steps_done' };
+      // (a) two brand-new people — full templates like v1
+      const NEW_PEOPLE = [
+        { user: 'Durgesh Sharma', tpl: 'Durgesh Sharma — AI Marketing Head', desc: 'Fills the funnel', weekly: [
+          { m: 'Qualified leads generated',             w: 17, dir: 'higher_better', src: 'manual' },
+          { m: 'Cost per qualified lead',               w: 17, dir: 'lower_better',  src: 'manual' },
+          { m: 'Lead response time',                    w: 17, dir: 'lower_better',  src: 'manual' },
+          { m: 'Calculator → enquiry conversion',       w: 17, dir: 'higher_better', src: 'manual' },
+          { m: 'Maintain live sales pipeline (₹45 Cr)', w: 17, dir: 'higher_better', src: 'manual' },
+        ] },
+        { user: 'Prabhdeep Singh', tpl: 'Prabhdeep Singh — HR Head', desc: 'Keeps the engine staffed', weekly: [
+          { m: 'Critical roles filled (time-to-hire)',  w: 17, dir: 'lower_better',  src: 'manual' },
+          { m: 'Site manpower fill vs plan',            w: 17, dir: 'higher_better', src: 'manual' },
+          { m: 'Weekly scorecard reviews done',         w: 17, dir: 'higher_better', src: 'manual' },
+          { m: 'Attrition (site talent)',               w: 17, dir: 'lower_better',  src: 'manual' },
+          { m: 'Daily DPR profit + DPR collection',     w: 17, dir: 'higher_better', src: 'manual' },
+        ] },
+      ];
+      // (b) extra KPIs appended to existing v1 templates
+      const ADD = [
+        { tpl: 'Rajat Sharma — Sales Head', kpis: [
+          { m: 'Throughput margin maintained', w: 15, dir: 'higher_better', src: 'manual' } ] },
+        { tpl: 'Nitin Jain — Operations · Purchase · Store', kpis: [
+          { m: 'Full kitting before site start',    w: 15, dir: 'higher_better', src: 'manual' },
+          { m: 'Weekly planning (bar chart) → DPR', w: 15, dir: 'higher_better', src: 'manual' } ] },
+        { tpl: 'Parul Goyal — Billing Engineer', kpis: [
+          { m: 'DPR → billing on time', w: 15, dir: 'higher_better', src: 'manual' } ] },
+        { tpl: 'Aanchal — Collections Executive', kpis: [
+          { m: 'Expense control + cash-flow sheet', w: 15, dir: 'higher_better', src: 'manual' } ] },
+      ];
+      const findTpl  = db.prepare('SELECT id FROM score_templates WHERE name = ?');
+      const insTpl   = db.prepare('INSERT INTO score_templates (name, description, active) VALUES (?, ?, 1)');
+      const insKpi   = db.prepare('INSERT INTO score_kpis (template_id, group_name, metric_name, weightage, direction, data_source, display_order, active, default_planned) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)');
+      const maxOrd   = db.prepare('SELECT COALESCE(MAX(display_order), -1) AS m FROM score_kpis WHERE template_id = ?');
+      const hasKpi   = db.prepare('SELECT 1 FROM score_kpis WHERE template_id = ? AND metric_name = ?');
+      const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
+      const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
+      const assign   = db.prepare('INSERT INTO score_user_template (user_id, template_id, assigned_by) VALUES (?, ?, 1) ON CONFLICT(user_id) DO NOTHING');
+      let made = 0, appended = 0, assigned = 0;
+      for (const p of NEW_PEOPLE) {
+        let t = findTpl.get(p.tpl); let tid;
+        if (t) { tid = t.id; }
+        else {
+          tid = insTpl.run(p.tpl, p.desc).lastInsertRowid;
+          let ord = 0;
+          for (const k of BASIC)    insKpi.run(tid, 'Basic', k.m, k.w, k.dir, k.src, ord++);
+          for (const k of p.weekly) insKpi.run(tid, 'Weekly', k.m, k.w, k.dir, k.src, ord++);
+          insKpi.run(tid, 'Responsibility', RACI.m, RACI.w, RACI.dir, RACI.src, ord++);
+          made++;
+        }
+        let u = findUser.get(p.user);
+        if (!u) { const c = findLike.all(p.user.split(' ')[0] + '%'); if (c.length === 1) u = c[0]; }
+        if (u) { const r = assign.run(u.id, tid); if (r.changes) assigned++; }
+      }
+      for (const a of ADD) {
+        const t = findTpl.get(a.tpl);
+        if (!t) continue;
+        let ord = maxOrd.get(t.id).m + 1;
+        for (const k of a.kpis) {
+          if (hasKpi.get(t.id, k.m)) continue;
+          insKpi.run(t.id, 'Weekly', k.m, k.w, k.dir, k.src, ord++);
+          appended++;
+        }
+      }
+      db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('kpi_cards_seed_v2', 'done')").run();
+      console.log(`[schema] kpi_cards_seed_v2: ${made} new templates, ${appended} KPIs appended, ${assigned} users assigned`);
+    }
+  } catch (e) { console.error('[schema] kpi_cards_seed_v2 failed:', e.message); }
+
   // Multiple BOQs per lead (mam 2026-06-12: "after some time again again
   // client send boq ... option + to add boq").  The single boq_* columns on
   // sales_funnel keep the LATEST for existing views; the full history lives
