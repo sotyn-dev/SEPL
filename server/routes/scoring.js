@@ -230,6 +230,42 @@ router.put('/assignments/:user_id', adminOnly, (req, res) => {
   res.json({ message: 'Saved' });
 });
 
+// ---------- MODULE OWNERS ----------
+// mam decides the accountable owner + backup per ERP module group, surfaced in
+// the War Room QQTC "Module Audit" tab. A row here overrides the authored
+// recommendation; clearing both removes the row (falls back to the default).
+router.get('/module-owners', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT mo.module_key, mo.owner_user_id, ou.name AS owner_name,
+           mo.backup_user_id, bu.name AS backup_name, mo.updated_at
+    FROM module_owners mo
+    LEFT JOIN users ou ON ou.id = mo.owner_user_id
+    LEFT JOIN users bu ON bu.id = mo.backup_user_id`).all();
+  res.json(rows);
+});
+
+router.put('/module-owners/:key', adminOnly, (req, res) => {
+  const db = getDb();
+  const o = req.body.owner_user_id ? +req.body.owner_user_id : null;
+  const b = req.body.backup_user_id ? +req.body.backup_user_id : null;
+  const key = String(req.params.key || '').slice(0, 60);
+  if (!key) return res.status(400).json({ error: 'module key required' });
+  if (!o && !b) {
+    db.prepare('DELETE FROM module_owners WHERE module_key=?').run(key);
+    return res.json({ message: 'Cleared' });
+  }
+  db.prepare(`INSERT INTO module_owners (module_key, owner_user_id, backup_user_id, updated_by, updated_at)
+              VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+              ON CONFLICT(module_key) DO UPDATE SET
+                owner_user_id=excluded.owner_user_id,
+                backup_user_id=excluded.backup_user_id,
+                updated_by=excluded.updated_by,
+                updated_at=CURRENT_TIMESTAMP`)
+    .run(key, o, b, req.user.id);
+  res.json({ message: 'Saved' });
+});
+
 // ---------- SCORECARD ----------
 // GET full scorecard for a user × week (with auto-fill from delegations/pms/etc.)
 // ---------- SCORECARD CORE (reusable) ----------
@@ -727,6 +763,63 @@ function computeScorecard(db, userId, weekStart) {
       if (source === 'auto:vendors_added') {
         const c = db.prepare(`SELECT COUNT(*) as c FROM vendors WHERE created_at BETWEEN ? AND ?`).get(since, until).c;
         return { given: null, done: c };
+      }
+
+      // ── Real ERP-fetched actuals for the KPI cards (mam 2026-07-01: "you know
+      // where to fetch the number" — compute the ACTUAL live from the data, don't
+      // fill by hand). Each returns {given:null, done:<value>} so the PLAN stays
+      // the person's target and the % is (actual vs target). Caller wraps this in
+      // try/catch, so a metric with no data just reads 0.
+      if (source === 'auto:pipeline_value_cr') {
+        // Open CRM pipeline value in ₹ Cr — live, company-wide (not week-bound).
+        const r = db.prepare(`SELECT COALESCE(SUM(COALESCE(NULLIF(tentative_amount,0), NULLIF(estimated_value,0), NULLIF(quotation_amount,0), NULLIF(boq_amount,0), 0)),0) s
+          FROM sales_funnel WHERE COALESCE(dropped,0)=0 AND (result IS NULL OR TRIM(result)='')`).get();
+        return { given: null, done: Math.round((r.s / 10000000) * 100) / 100 };
+      }
+      if (source === 'auto:throughput_margin') {
+        // Avg actual margin % on THIS user's orders booked this week.
+        const r = db.prepare(`SELECT AVG(actual_margin_pct) a FROM business_book
+          WHERE employee_assigned=? AND actual_margin_pct IS NOT NULL AND created_at BETWEEN ? AND ?`).get(userId, since, until);
+        return { given: null, done: r.a != null ? Math.round(r.a * 10) / 10 : 0 };
+      }
+      if (source === 'auto:po_cycle_days') {
+        // Avg days from indent raised -> vendor PO, for POs raised this week.
+        const r = db.prepare(`SELECT AVG(julianday(vp.created_at) - julianday(i.created_at)) a
+          FROM vendor_pos vp JOIN indents i ON i.id = vp.indent_id
+          WHERE vp.created_at BETWEEN ? AND ? AND i.created_at IS NOT NULL AND COALESCE(vp.cancelled,0)=0`).get(since, until);
+        return { given: null, done: r.a != null ? Math.round(r.a * 10) / 10 : 0 };
+      }
+      if (source === 'auto:dso_days') {
+        // Days sales outstanding — avg ageing across open receivables (live).
+        const r = db.prepare(`SELECT AVG(ageing_days) a FROM receivables WHERE outstanding_amount > 0 AND ageing_days IS NOT NULL`).get();
+        return { given: null, done: r.a != null ? Math.round(r.a) : 0 };
+      }
+      if (source === 'auto:lead_quote_conversion') {
+        // % of this user's leads (created this week) that reached a quotation.
+        const leads = db.prepare(`SELECT COUNT(*) c FROM leads WHERE assigned_to=? AND created_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        const quoted = db.prepare(`SELECT COUNT(DISTINCT q.lead_id) c FROM quotations q JOIN leads l ON l.id = q.lead_id
+          WHERE l.assigned_to=? AND l.created_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        return { given: null, done: leads > 0 ? Math.round((quoted / leads) * 100) : 0 };
+      }
+      if (source === 'auto:lead_response_hours') {
+        // Avg hours from lead created -> first follow-up, for leads created this week.
+        const r = db.prepare(`SELECT AVG((julianday(f.first_at) - julianday(l.created_at)) * 24) a
+          FROM leads l JOIN (SELECT lead_id, MIN(created_at) first_at FROM lead_followups GROUP BY lead_id) f ON f.lead_id = l.id
+          WHERE l.created_at BETWEEN ? AND ?`).get(since, until);
+        return { given: null, done: r.a != null ? Math.round(r.a * 10) / 10 : 0 };
+      }
+      if (source === 'auto:dpr_billed_pct') {
+        // % of billing-ready DPRs this week that have been billed (sales_bill linked).
+        const r = db.prepare(`SELECT COUNT(*) t, SUM(CASE WHEN sales_bill_id IS NOT NULL THEN 1 ELSE 0 END) b
+          FROM dpr WHERE COALESCE(billing_ready,0)=1 AND report_date BETWEEN ? AND ?`).get(sinceDate, untilDate);
+        return { given: null, done: r.t > 0 ? Math.round((r.b / r.t) * 100) : 0 };
+      }
+      if (source === 'auto:time_to_quote_days') {
+        // Avg days from lead created -> quotation, for quotes THIS user made this week.
+        const r = db.prepare(`SELECT AVG(julianday(q.created_at) - julianday(l.created_at)) a
+          FROM quotations q JOIN leads l ON l.id = q.lead_id
+          WHERE q.created_by=? AND q.created_at BETWEEN ? AND ? AND l.created_at IS NOT NULL`).get(userId, since, until);
+        return { given: null, done: r.a != null ? Math.round(r.a * 10) / 10 : 0 };
       }
 
       return { given: null, done: null };

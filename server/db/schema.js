@@ -4672,19 +4672,48 @@ function initializeDatabase() {
         for (const k of kpis) {
           const row = findKpi.get(t.id, k.m); if (!row) continue;
           if (k.plan != null) { setPlan.run(k.plan, row.id); plansSet++; }
-          if (u && k.actual != null && k.plan != null && k.plan > 0) {
-            const pct = row.direction === 'lower_better'
-              ? Math.round(((k.plan - k.actual) / k.plan) * 100)
-              : Math.round(((k.actual - k.plan) / k.plan) * 100);
-            upEntry.run(u.id, row.id, WEEK, k.plan, k.actual, Math.max(-100, pct));
-            entries++;
-          }
+          // NOTE: actuals are NOT filled here — they are FETCHED live from the ERP
+          // by the auto:* data sources (mam 2026-07-01: "you know where to fetch the
+          // number"). Only the target/plan is seeded; the actual comes from data.
         }
       }
       db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('kpi_fill_data_v1', 'done')").run();
-      console.log(`[schema] kpi_fill_data_v1: ${plansSet} targets set, ${entries} sample actuals for week ${WEEK}`);
+      void WEEK; void upEntry; void findUser; void entries;   // retained refs, no longer used to write sample data
+      console.log(`[schema] kpi_fill_data_v1: ${plansSet} targets set (actuals fetched live from ERP)`);
     }
   } catch (e) { console.error('[schema] kpi_fill_data_v1 failed:', e.message); }
+
+  // ─── Wire more KPIs to REAL ERP feeds (mam 2026-07-01: "you know where to
+  //     fetch the number" — don't fill by hand) ────────────────────────────────
+  // New compute sources were added in scoring.js (pipeline value, throughput
+  // margin, PO cycle time, DSO, lead→quote conversion, lead response time,
+  // DPR→billing). Point the matching KPIs at them and set the target in the SAME
+  // UNIT the source returns (Cr, %, days, hours). Guarded; runs once.
+  try {
+    const w6 = db.prepare("SELECT value FROM app_settings WHERE key='kpi_auto_sources_v6'").get();
+    if (!w6) {
+      const MAP = [
+        // [template, metric, source, target-in-source-unit]
+        ['Rajat Sharma — Sales Head', 'Pipeline value live in CRM', 'auto:pipeline_value_cr', 10],
+        ['Rajat Sharma — Sales Head', 'Throughput margin maintained', 'auto:throughput_margin', 20],
+        ['Rajat Sharma — Sales Head', 'Lead → quote conversion', 'auto:lead_quote_conversion', 40],
+        ['Nitin Jain — Operations · Purchase · Store', 'PO cycle time (indent → PO)', 'auto:po_cycle_days', 3],
+        ['Aanchal — Collections Executive', 'DSO (days to get paid)', 'auto:dso_days', 45],
+        ['Durgesh Sharma — AI Marketing Head', 'Lead response time', 'auto:lead_response_hours', 4],
+        ['Durgesh Sharma — AI Marketing Head', 'Maintain live sales pipeline (₹45 Cr)', 'auto:pipeline_value_cr', 45],
+        ['Parul Goyal — Billing Engineer', 'DPR → billing on time', 'auto:dpr_billed_pct', 95],
+        ['Shubham Sharma — Costing / Estimation', 'Time-to-quote (enquiry → quote)', 'auto:time_to_quote_days', 2],
+      ];
+      const upd = db.prepare(
+        `UPDATE score_kpis SET data_source = ?, default_planned = ?
+          WHERE metric_name = ? AND template_id = (SELECT id FROM score_templates WHERE name = ?)`
+      );
+      let n = 0;
+      for (const [tpl, metric, src, tgt] of MAP) n += upd.run(src, tgt, metric, tpl).changes;
+      db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('kpi_auto_sources_v6', 'done')").run();
+      console.log(`[schema] kpi_auto_sources_v6: wired ${n} KPIs to live ERP feeds`);
+    }
+  } catch (e) { console.error('[schema] kpi_auto_sources_v6 failed:', e.message); }
 
   // Multiple BOQs per lead (mam 2026-06-12: "after some time again again
   // client send boq ... option + to add boq").  The single boq_* columns on
