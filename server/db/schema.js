@@ -4715,6 +4715,29 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[schema] kpi_auto_sources_v6 failed:', e.message); }
 
+  // ─── Collections KPIs from AR/AP tracker + cash-flow (mam 2026-07-01): collection
+  //     efficiency = actual weekly cash inflow ÷ AR/AP-planned weekly inflow; overdue
+  //     = uncollected AR past its due date (₹ Cr). ────────────────────────────────
+  try {
+    const w7 = db.prepare("SELECT value FROM app_settings WHERE key='kpi_auto_sources_v7'").get();
+    if (!w7) {
+      const MAP = [
+        // Collection efficiency: plan comes LIVE from AR/AP (given), so default is a
+        // harmless fallback; overdue target = 1.9 Cr ceiling (mam's current figure).
+        ['Aanchal — Collections Executive', 'Collection efficiency (collected ÷ due)', 'auto:collection_efficiency', 0],
+        ['Aanchal — Collections Executive', 'Overdue > 90 days (₹)', 'auto:overdue_ar_cr', 1.9],
+      ];
+      const upd = db.prepare(
+        `UPDATE score_kpis SET data_source = ?, default_planned = ?
+          WHERE metric_name = ? AND template_id = (SELECT id FROM score_templates WHERE name = ?)`
+      );
+      let n = 0;
+      for (const [tpl, metric, src, tgt] of MAP) n += upd.run(src, tgt, metric, tpl).changes;
+      db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('kpi_auto_sources_v7', 'done')").run();
+      console.log(`[schema] kpi_auto_sources_v7: wired ${n} collections KPIs to AR/AP + cash-flow`);
+    }
+  } catch (e) { console.error('[schema] kpi_auto_sources_v7 failed:', e.message); }
+
   // Multiple BOQs per lead (mam 2026-06-12: "after some time again again
   // client send boq ... option + to add boq").  The single boq_* columns on
   // sales_funnel keep the LATEST for existing views; the full history lives

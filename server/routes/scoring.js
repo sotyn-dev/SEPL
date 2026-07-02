@@ -822,6 +822,23 @@ function computeScorecard(db, userId, weekStart) {
         return { given: null, done: r.a != null ? Math.round(r.a * 10) / 10 : 0 };
       }
 
+      // ── AR/AP + cash-flow driven collections KPIs (mam 2026-07-01) ──
+      if (source === 'auto:collection_efficiency') {
+        // Collection efficiency = actual total cash inflow this week ÷ the AR/AP-
+        // planned inflow for the week. AR/AP is stored in LAKHS, cash_flow in ₹, so
+        // normalise both to lakhs. given=planned (from AR/AP), done=actual (cashflow).
+        const planned = db.prepare(`SELECT COALESCE(SUM(planned),0) s FROM arap_entries WHERE kind='AR' AND due_date BETWEEN ? AND ?`).get(sinceDate, untilDate).s;
+        const inflow  = db.prepare(`SELECT COALESCE(SUM(amount),0) s FROM cash_flow_entries WHERE type='inflow' AND date BETWEEN ? AND ?`).get(sinceDate, untilDate).s;
+        return { given: Math.round(planned * 100) / 100, done: Math.round((inflow / 100000) * 100) / 100 };
+      }
+      if (source === 'auto:overdue_ar_cr') {
+        // Overdue AR in ₹ Cr — AR entries past their due date not yet collected
+        // (planned − actual), from the AR/AP tracker. lower_better; plan = target.
+        const r = db.prepare(`SELECT COALESCE(SUM(CASE WHEN COALESCE(actual,0) < planned THEN planned - COALESCE(actual,0) ELSE 0 END),0) s
+          FROM arap_entries WHERE kind='AR' AND due_date < ?`).get(untilDate);
+        return { given: null, done: Math.round((r.s / 100) * 100) / 100 };   // lakhs → Cr
+      }
+
       return { given: null, done: null };
     };
 
