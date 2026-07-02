@@ -460,6 +460,17 @@ router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
       return res.status(400).json({ error: 'Cannot delete the only admin. Promote another user to admin first.' });
     }
   }
+  // Salary safety (mam 2026-07-02: "inactive — attendance & data must not be
+  // deleted, else salary breaks"). A user with ANY attendance history must never
+  // be hard-deleted — deleting or unlinking those rows corrupts payroll. Force
+  // the admin to DEACTIVATE instead, which keeps every record intact and just
+  // moves them to the Inactive list. Blocks normal AND force delete.
+  const attCount = db.prepare('SELECT COUNT(*) AS c FROM attendance WHERE user_id = ?').get(id).c;
+  if (attCount > 0) {
+    return res.status(400).json({
+      error: `"${target.name}" has ${attCount} attendance record${attCount === 1 ? '' : 's'} used for salary — deleting would break payroll. Deactivate this user instead (the Status toggle / Inactive): their attendance and history stay intact, they just move to the Inactive list.`,
+    });
+  }
   if (force) {
     // Discover all FK refs, null them, then delete — atomic in a
     // single transaction so a partial failure doesn't leave dangling
