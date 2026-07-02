@@ -4583,6 +4583,109 @@ function initializeDatabase() {
     }
   } catch (e) { console.error('[schema] kpi_cards_reassign_v1 failed:', e.message); }
 
+  // ─── Fill starting TARGETS + this-week sample ACTUALS (mam 2026-07-01:
+  //     "fill data" — scorecard was stuck at 0 because targets were unset) ─────
+  // The score is ACTUAL-vs-PLAN, so a KPI with plan=0 shows 0% no matter what.
+  // This sets a sensible weekly target (default_planned) on every KPI, and for
+  // the MANUAL KPIs writes a this-week score_entry with a realistic sample actual
+  // so the scorecard shows populated, non-zero numbers out of the box. AUTO KPIs
+  // get only the target — their actual is pulled live from the ERP. These are
+  // STARTING values mam replaces with her real targets / weekly numbers. Matches
+  // people by name; guarded → runs once; fills the deploy week only.
+  try {
+    const fdone = db.prepare("SELECT value FROM app_settings WHERE key='kpi_fill_data_v1'").get();
+    if (!fdone) {
+      const now = new Date();
+      const mon = new Date(now); mon.setDate(now.getDate() - ((now.getDay() + 6) % 7)); // this week's Monday (local)
+      const WEEK = `${mon.getFullYear()}-${String(mon.getMonth() + 1).padStart(2, '0')}-${String(mon.getDate()).padStart(2, '0')}`;
+      // [template, user, [{ m, plan, actual }]]  actual=null → AUTO KPI (set target only, ERP fills actual)
+      const DATA = [
+        ['Rajat Sharma — Sales Head', 'Rajat Sharma', [
+          { m: 'Lead → quote conversion', plan: 40, actual: 42 },
+          { m: 'Quote → order win rate', plan: 30, actual: 28 },
+          { m: 'Pipeline value live in CRM', plan: 500, actual: 520 },
+          { m: 'Every quote followed up within 48 hrs', plan: 100, actual: 95 },
+          { m: 'New orders booked (₹)', plan: 2000000, actual: null },
+          { m: 'Throughput margin maintained', plan: 20, actual: 21 },
+        ]],
+        ['Shubham Sharma — Costing / Estimation', 'Shubham Sharma', [
+          { m: 'Time-to-quote (enquiry → quote)', plan: 2, actual: 1.8 },
+          { m: 'Quotes delivered on time', plan: 95, actual: 93 },
+          { m: 'Quote backlog older than 72 hrs', plan: 2, actual: 1 },
+          { m: 'Estimation accuracy (quoted vs actual)', plan: 92, actual: 91 },
+          { m: 'Win rate on quotes submitted', plan: 30, actual: 32 },
+        ]],
+        ['Nitin Jain — Operations · Purchase · Store', 'Nitin Jain', [
+          { m: 'Project milestones delivered on time', plan: 90, actual: 88 },
+          { m: 'Material on site — zero stockout delays', plan: 100, actual: 96 },
+          { m: 'PO cycle time (indent → PO)', plan: 3, actual: 2.7 },
+          { m: 'Purchase price vs estimate variance', plan: 5, actual: 4 },
+          { m: 'ERP tickets closed (not left open)', plan: null, actual: null },
+          { m: 'Full kitting before site start', plan: null, actual: null },
+          { m: 'Weekly planning (bar chart) → DPR', plan: null, actual: null },
+        ]],
+        ['Parul Goyal — Billing Engineer', 'Parul Goyal', [
+          { m: 'Billing cycle (work done → invoice)', plan: 3, actual: 2.7 },
+          { m: 'RA bills raised on time', plan: 5, actual: null },
+          { m: 'Unbilled work-in-progress (₹)', plan: 500000, actual: 420000 },
+          { m: 'Invoice dispute / rejection rate', plan: 5, actual: 3 },
+          { m: 'DPR → billing on time', plan: 95, actual: 93 },
+        ]],
+        ['Aanchal — Collections Executive', 'Aanchal', [
+          { m: 'DSO (days to get paid)', plan: 45, actual: 43 },
+          { m: 'Collection efficiency (collected ÷ due)', plan: 5, actual: null },
+          { m: 'Overdue > 90 days (₹)', plan: 1, actual: null },
+          { m: 'Every overdue account followed up', plan: 10, actual: null },
+          { m: 'Expense control + cash-flow sheet', plan: 100, actual: 98 },
+        ]],
+        ['Durgesh Sharma — AI Marketing Head', 'Durgesh Sharma', [
+          { m: 'Qualified leads generated', plan: 10, actual: null },
+          { m: 'Cost per qualified lead', plan: 500, actual: 480 },
+          { m: 'Lead response time', plan: 4, actual: 3.5 },
+          { m: 'Calculator → enquiry conversion', plan: 20, actual: 22 },
+          { m: 'Maintain live sales pipeline (₹45 Cr)', plan: 45, actual: 46 },
+        ]],
+        ['Prabhdeep Singh — HR Head', 'Prabhdeep Singh', [
+          { m: 'Critical roles filled (time-to-hire)', plan: 2, actual: null },
+          { m: 'Site manpower fill vs plan', plan: 95, actual: 93 },
+          { m: 'Weekly scorecard reviews done', plan: 7, actual: 7 },
+          { m: 'Attrition (site talent)', plan: 5, actual: 4 },
+          { m: 'Daily DPR profit + DPR collection', plan: 100, actual: 100 },
+        ]],
+      ];
+      const findTpl = db.prepare('SELECT id FROM score_templates WHERE name = ?');
+      const findKpi = db.prepare('SELECT id, direction FROM score_kpis WHERE template_id = ? AND metric_name = ?');
+      const setPlan = db.prepare('UPDATE score_kpis SET default_planned = ? WHERE id = ?');
+      const findUser = db.prepare('SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) = LOWER(TRIM(?))');
+      const findLike = db.prepare("SELECT id FROM users WHERE active = 1 AND LOWER(TRIM(name)) LIKE LOWER(?)");
+      const upEntry = db.prepare(
+        `INSERT INTO score_entries (user_id, kpi_id, week_start, planned, actual, actual_pct, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(user_id, kpi_id, week_start) DO UPDATE SET
+           planned=excluded.planned, actual=excluded.actual, actual_pct=excluded.actual_pct, updated_at=CURRENT_TIMESTAMP`
+      );
+      let plansSet = 0, entries = 0;
+      for (const [tpl, uname, kpis] of DATA) {
+        const t = findTpl.get(tpl); if (!t) continue;
+        let u = findUser.get(uname);
+        if (!u) { const c = findLike.all(uname.split(' ')[0] + '%'); if (c.length === 1) u = c[0]; }
+        for (const k of kpis) {
+          const row = findKpi.get(t.id, k.m); if (!row) continue;
+          if (k.plan != null) { setPlan.run(k.plan, row.id); plansSet++; }
+          if (u && k.actual != null && k.plan != null && k.plan > 0) {
+            const pct = row.direction === 'lower_better'
+              ? Math.round(((k.plan - k.actual) / k.plan) * 100)
+              : Math.round(((k.actual - k.plan) / k.plan) * 100);
+            upEntry.run(u.id, row.id, WEEK, k.plan, k.actual, Math.max(-100, pct));
+            entries++;
+          }
+        }
+      }
+      db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('kpi_fill_data_v1', 'done')").run();
+      console.log(`[schema] kpi_fill_data_v1: ${plansSet} targets set, ${entries} sample actuals for week ${WEEK}`);
+    }
+  } catch (e) { console.error('[schema] kpi_fill_data_v1 failed:', e.message); }
+
   // Multiple BOQs per lead (mam 2026-06-12: "after some time again again
   // client send boq ... option + to add boq").  The single boq_* columns on
   // sales_funnel keep the LATEST for existing views; the full history lives
