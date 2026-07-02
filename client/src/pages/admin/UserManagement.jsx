@@ -3,7 +3,7 @@ import api from '../../api';
 import Modal from '../../components/Modal';
 import StatusBadge from '../../components/StatusBadge';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2 } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw } from 'react-icons/fi';
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
@@ -65,6 +65,16 @@ export default function UserManagement() {
   const toggleActive = async (user) => {
     await api.put(`/auth/users/${user.id}`, { ...user, active: !user.active, role_ids: undefined });
     toast.success(user.active ? 'User deactivated' : 'User activated');
+    load();
+  };
+
+  // Archive (hide from all lists, keep every record) or restore (mam 2026-07-02).
+  const archiveUser = async (user, archived) => {
+    try {
+      const r = await api.patch(`/auth/users/${user.id}/archive`, { archived: archived ? 1 : 0 });
+      toast.success(r.data?.message || (archived ? 'Archived' : 'Restored'));
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   // Hard delete a user. Two-step confirm (so it's hard to fumble) and we
@@ -160,8 +170,11 @@ export default function UserManagement() {
     } catch { toast.error('Copy failed — select and copy manually'); }
   };
 
-  // Status filter for the list (mam 2026-07-02: a tab to see just Inactive users).
-  const matchFilter = (u) => filter === 'active' ? !!u.active
+  // Status filter for the list (mam 2026-07-02). Archived users are hidden from
+  // every tab except the dedicated "Archived" one.
+  const matchFilter = (u) => filter === 'archived' ? !!u.archived
+    : u.archived ? false
+    : filter === 'active' ? !!u.active
     : filter === 'inactive' ? !u.active
     : filter === 'admin' ? u.role === 'admin'
     : true;
@@ -190,12 +203,13 @@ export default function UserManagement() {
 
       {/* Info Cards — click one to filter the list (mam 2026-07-02: a tab to
           see just the Inactive users, which were buried among the Active ones). */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[
-          { key: 'all',      label: 'Total Users', count: users.length,                              color: 'text-red-600' },
-          { key: 'active',   label: 'Active',      count: users.filter(u => u.active).length,         color: 'text-emerald-600' },
-          { key: 'inactive', label: 'Inactive',    count: users.filter(u => !u.active).length,        color: 'text-red-600' },
-          { key: 'admin',    label: 'Admins',      count: users.filter(u => u.role === 'admin').length, color: 'text-purple-600' },
+          { key: 'all',      label: 'Total Users', count: users.filter(u => !u.archived).length,                       color: 'text-red-600' },
+          { key: 'active',   label: 'Active',      count: users.filter(u => u.active && !u.archived).length,           color: 'text-emerald-600' },
+          { key: 'inactive', label: 'Inactive',    count: users.filter(u => !u.active && !u.archived).length,          color: 'text-red-600' },
+          { key: 'admin',    label: 'Admins',      count: users.filter(u => u.role === 'admin' && !u.archived).length, color: 'text-purple-600' },
+          { key: 'archived', label: 'Archived',    count: users.filter(u => u.archived).length,                        color: 'text-gray-500' },
         ].map(c => (
           <button key={c.key} type="button" onClick={() => setFilter(c.key)}
             className={`card text-center transition ${filter === c.key ? 'ring-2 ring-red-500 ring-offset-1' : 'hover:bg-gray-50 opacity-90 hover:opacity-100'}`}>
@@ -251,9 +265,9 @@ export default function UserManagement() {
                     <button onClick={() => { setResetUser(u); setResetInput('123'); }} className="p-1.5 hover:bg-amber-50 rounded text-amber-600" title="Reset password">
                       <FiKey size={15} />
                     </button>
-                    {/* Clear labelled Activate / Deactivate button (mam 2026-07-02:
-                        "where is the deactivate button" — the icon-only one was easy
-                        to miss). Deactivate keeps ALL the user's data. */}
+                    {/* Activate/Deactivate + Track — only for non-archived users
+                        (mam 2026-07-02: the labelled toggle replaced an icon-only one). */}
+                    {!u.archived && (<>
                     <button onClick={() => toggleActive(u)}
                       className={`px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 border whitespace-nowrap ${u.active ? 'text-red-600 border-red-200 hover:bg-red-50' : 'text-green-700 border-green-300 bg-green-50 hover:bg-green-100'}`}
                       title={u.active ? 'Deactivate this user — blocks login, keeps all data' : 'Activate this user'}>
@@ -264,6 +278,15 @@ export default function UserManagement() {
                       className={`p-1.5 rounded ${u.track_location ? 'hover:bg-amber-50 text-amber-600' : 'hover:bg-emerald-50 text-emerald-600'}`}
                       title={u.track_location ? 'Hide from Location Tracking' : 'Show in Location Tracking'}>
                       {u.track_location ? <FiMapPin size={15} /> : <FiEyeOff size={15} />}
+                    </button>
+                    </>)}
+                    {/* Archive (hide from all lists, keep every record) / Restore —
+                        mam 2026-07-02: the safe way to "remove" a user with salary data. */}
+                    <button onClick={() => archiveUser(u, !u.archived)}
+                      className={`px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 border whitespace-nowrap ${u.archived ? 'text-emerald-700 border-emerald-300 bg-emerald-50 hover:bg-emerald-100' : 'text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                      title={u.archived ? 'Restore this user to the Inactive list' : 'Archive — hide from all lists but keep every record (attendance, salary)'}>
+                      {u.archived ? <FiRotateCcw size={13} /> : <FiArchive size={13} />}
+                      {u.archived ? 'Restore' : 'Archive'}
                     </button>
                     {/* Hard delete — admin's escape hatch when a user really
                         needs to be removed (typo, wrong invite, employee left).

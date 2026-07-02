@@ -221,7 +221,7 @@ router.get('/users', authMiddleware, (req, res) => {
   const whereClause = activeOnly ? 'WHERE u.active = 1' : '';
   const users = db.prepare(`
     SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.phone, u.active, u.avatar_url,
-           COALESCE(u.track_location, 1) as track_location, u.created_at, u.approval_role,
+           COALESCE(u.track_location, 1) as track_location, COALESCE(u.archived, 0) as archived, u.created_at, u.approval_role,
     GROUP_CONCAT(r.name) as role_names
     FROM users u
     LEFT JOIN user_roles ur ON u.id = ur.user_id
@@ -239,6 +239,23 @@ router.patch('/users/:id/track-location', authMiddleware, adminOnly, (req, res) 
   const v = req.body?.track_location ? 1 : 0;
   getDb().prepare('UPDATE users SET track_location=? WHERE id=?').run(v, req.params.id);
   res.json({ message: v ? 'Tracking enabled for this user' : 'Tracking disabled for this user', track_location: v });
+});
+
+// Archive / restore a user (admin only). mam 2026-07-02: a safe alternative to
+// Delete for a user who has attendance/salary history — archiving HIDES them from
+// every list and assignment picker and blocks login, but keeps every record (no
+// data is deleted). Archiving also deactivates; restoring clears the archive but
+// leaves them inactive so the admin re-activates deliberately.
+router.patch('/users/:id/archive', authMiddleware, adminOnly, (req, res) => {
+  const db = getDb();
+  const id = +req.params.id;
+  if (id === req.user.id) return res.status(400).json({ error: "You can't archive your own account." });
+  const target = db.prepare('SELECT id, name FROM users WHERE id=?').get(id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  const arch = req.body?.archived ? 1 : 0;
+  if (arch) db.prepare('UPDATE users SET archived=1, active=0 WHERE id=?').run(id);
+  else db.prepare('UPDATE users SET archived=0 WHERE id=?').run(id);
+  res.json({ message: arch ? `"${target.name}" archived — hidden from lists, all data kept` : `"${target.name}" restored to the Inactive list`, archived: arch });
 });
 
 // Update user (admin only)

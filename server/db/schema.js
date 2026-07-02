@@ -2861,6 +2861,11 @@ function initializeDatabase() {
     // staff get track_location=0 so they don't show in Admin → Location
     // Tracking. Default 1 so existing field staff keep being tracked.
     ['users', 'track_location INTEGER DEFAULT 1'],
+    // Archive (mam 2026-07-02): hide a left/ex user from every list WITHOUT
+    // deleting them — attendance, salary and all history stay linked. Archived
+    // users are also inactive (can't log in) and are filtered out of the main
+    // User Management list + assignment pickers; they live in an "Archived" tab.
+    ['users', 'archived INTEGER DEFAULT 0'],
     // Geofence accuracy audit (mam: "some in office but say out of area").
     // Store the GPS accuracy reported at each punch + whether the location
     // could be trusted, so the geofence audit can tell a genuinely far-away
