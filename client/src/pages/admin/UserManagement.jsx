@@ -318,19 +318,10 @@ export default function UserManagement() {
                 <option value="admin">Admin</option>
               </select>
             </div>
-            {/* Indent approval gate (mam 2026-05-28). Only L1-tagged users
-                can approve L1 step; only L2-tagged can approve L2.
-                Admin always passes either gate as a safety net. */}
-            <div>
-              <label className="label">Indent Approval Role</label>
-              <select className="select" value={form.approval_role || ''} onChange={e => setForm({...form, approval_role: e.target.value})}>
-                <option value="">— none —</option>
-                <option value="l1">L1 Approver (first sign-off)</option>
-                <option value="l2">L2 Approver (final sign-off)</option>
-                <option value="hr">HR Approver (RGP single sign-off)</option>
-              </select>
-              <p className="text-[10px] text-gray-400 mt-0.5">Two-level indent approval (L1 → L2). HR signs off RGP indents in a single approval.</p>
-            </div>
+            {/* Indent Approval Role field removed from this form (mam 2026-07-02):
+                it's assigned inside the Indent module, not on user create/edit.
+                approval_role stays in form state so editing a user never wipes it
+                (the PUT /users route doesn't touch that column anyway). */}
           </div>
 
           {/* Role Assignment */}
