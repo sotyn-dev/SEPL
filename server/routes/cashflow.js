@@ -27,23 +27,34 @@ function recalcCashFlowFrom(db, fromDate) {
 // One-time repair (guarded): re-chain the running balance from a FIXED ANCHOR
 // date forward. Idempotent — runs once.
 //
-// Mam (2026-07-02): "correct the calculation from 24 June 2026 records." The
-// 24-Jun opening is the trusted starting point; everything after it must chain
-// automatically (each day's opening = the prior day's closing). So we do NOT
-// touch any day before 24-Jun, and we do NOT re-derive 24-Jun's opening from
-// the 23rd — 24-Jun's own stored opening is the anchor.
+// Mam (2026-07-02): "correct the calculation from 24 June 2026 records."
+// The ledger STARTS at 24-Jun with opening 0 (her formula: 24-Jun closing =
+// inflows − outflows, no carried opening — 14,30,000 − 13,99,507 = 30,493).
+// From there every later day's opening = the prior day's closing. Days before
+// 24-Jun are left untouched. The old prod chain double-counted (26-Jun opening
+// was 24-Jun close + 25-Jun close = 48,081.6 instead of 25-Jun close 17,588.6).
 //
 // Steps, run ONCE on deploy:
-//   1. Re-sum each day's inflows/outflows straight from cash_flow_entries (from
-//      the anchor on) so payments loaded by a direct import — not the Add-Entry
-//      form, the only path that maintains the daily totals — are counted.
-//   2. Cascade forward: 24-Jun closing = its opening + inflows − outflows; then
-//      25-Jun opening = 24-Jun closing, 26-Jun opening = 25-Jun closing … to today.
+//   0. Make sure a daily row exists for every entry-date from the anchor on —
+//      TA/DA and other payments loaded by a direct import can create entries
+//      without the daily row the cascade walks over (e.g. the 25-Jun outflows).
+//   1. Re-sum each day's inflows/outflows straight from cash_flow_entries so the
+//      totals match the actual records (the Add-Entry form is the only path that
+//      otherwise maintains them).
+//   2. Cascade forward from opening 0 on the anchor: 24-Jun close = 0 + in − out;
+//      25-Jun open = 24-Jun close; 26-Jun open = 25-Jun close … through to today.
 try {
   const _db = getDb();
   _db.exec('CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)');
   const ANCHOR = '2026-06-24';
-  if (!_db.prepare("SELECT value FROM app_settings WHERE key='cashflow_cascade_repair_v2'").get()) {
+  if (!_db.prepare("SELECT value FROM app_settings WHERE key='cashflow_cascade_repair_v3'").get()) {
+    // 0. Ensure a daily row exists for every date that has entries from the
+    //    anchor on (imported entries may lack the daily row the cascade needs).
+    _db.prepare(`
+      INSERT INTO cash_flow_daily (date, opening_balance, total_inflows, total_outflows, closing_balance)
+      SELECT DISTINCT e.date, 0, 0, 0, 0 FROM cash_flow_entries e
+      WHERE e.date >= ? AND NOT EXISTS (SELECT 1 FROM cash_flow_daily d WHERE d.date = e.date)
+    `).run(ANCHOR);
     // 1. Re-sum daily totals from the entries themselves (matched by date,
     //    which is UNIQUE in cash_flow_daily) for the anchor day and everything after.
     _db.prepare(`
@@ -52,23 +63,23 @@ try {
         total_outflows = COALESCE((SELECT SUM(amount) FROM cash_flow_entries e WHERE e.date = cash_flow_daily.date AND e.type = 'outflow'), 0)
       WHERE date >= ?
     `).run(ANCHOR);
-    // 2. Cascade forward from the anchor, trusting the anchor day's OWN opening
-    //    (prevClosing starts null → the first row keeps its stored opening_balance).
-    const rows = _db.prepare('SELECT id, opening_balance, COALESCE(total_inflows,0) AS inflows, COALESCE(total_outflows,0) AS outflows FROM cash_flow_daily WHERE date >= ? ORDER BY date ASC').all(ANCHOR);
+    // 2. Cascade forward. The anchor day opens at 0 (prevClosing seeded to 0),
+    //    then each day's opening = the previous day's closing.
+    const rows = _db.prepare('SELECT id, COALESCE(total_inflows,0) AS inflows, COALESCE(total_outflows,0) AS outflows FROM cash_flow_daily WHERE date >= ? ORDER BY date ASC').all(ANCHOR);
     const upd = _db.prepare('UPDATE cash_flow_daily SET opening_balance = ?, closing_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-    let prevClosing = null;
+    let prevClosing = 0;
     _db.transaction(() => {
       for (const r of rows) {
-        const opening = prevClosing == null ? (r.opening_balance || 0) : prevClosing;
+        const opening = prevClosing;
         const closing = opening + r.inflows - r.outflows;
         upd.run(opening, closing, r.id);
         prevClosing = closing;
       }
     })();
-    _db.prepare("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('cashflow_cascade_repair_v2','done')").run();
-    console.log(`[cashflow] running-balance chain repaired from ${ANCHOR} (totals re-summed from entries + cascaded forward)`);
+    _db.prepare("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('cashflow_cascade_repair_v3','done')").run();
+    console.log(`[cashflow] running-balance chain repaired from ${ANCHOR} opening 0 (rows ensured + totals re-summed + cascaded forward)`);
   }
-} catch (e) { console.warn('[cashflow] cascade repair v2 skipped:', e.message); }
+} catch (e) { console.warn('[cashflow] cascade repair v3 skipped:', e.message); }
 
 // ============= PROJECT FINANCIAL TRACKER =============
 
