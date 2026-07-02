@@ -251,8 +251,14 @@ export default function UserManagement() {
                     <button onClick={() => { setResetUser(u); setResetInput('123'); }} className="p-1.5 hover:bg-amber-50 rounded text-amber-600" title="Reset password">
                       <FiKey size={15} />
                     </button>
-                    <button onClick={() => toggleActive(u)} className={`p-1.5 rounded ${u.active ? 'hover:bg-red-50 text-red-600' : 'hover:bg-green-50 text-green-600'}`} title={u.active ? 'Deactivate' : 'Activate'}>
-                      {u.active ? <FiUserX size={15} /> : <FiUserCheck size={15} />}
+                    {/* Clear labelled Activate / Deactivate button (mam 2026-07-02:
+                        "where is the deactivate button" — the icon-only one was easy
+                        to miss). Deactivate keeps ALL the user's data. */}
+                    <button onClick={() => toggleActive(u)}
+                      className={`px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 border whitespace-nowrap ${u.active ? 'text-red-600 border-red-200 hover:bg-red-50' : 'text-green-700 border-green-300 bg-green-50 hover:bg-green-100'}`}
+                      title={u.active ? 'Deactivate this user — blocks login, keeps all data' : 'Activate this user'}>
+                      {u.active ? <FiUserX size={13} /> : <FiUserCheck size={13} />}
+                      {u.active ? 'Deactivate' : 'Activate'}
                     </button>
                     <button onClick={() => toggleTrackLocation(u)}
                       className={`p-1.5 rounded ${u.track_location ? 'hover:bg-amber-50 text-amber-600' : 'hover:bg-emerald-50 text-emerald-600'}`}
