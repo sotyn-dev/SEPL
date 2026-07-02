@@ -7,6 +7,7 @@ import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiM
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
+  const [filter, setFilter] = useState('all');   // all | active | inactive | admin — status filter tabs
   const [roles, setRoles] = useState([]);
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -159,6 +160,12 @@ export default function UserManagement() {
     } catch { toast.error('Copy failed — select and copy manually'); }
   };
 
+  // Status filter for the list (mam 2026-07-02: a tab to see just Inactive users).
+  const matchFilter = (u) => filter === 'active' ? !!u.active
+    : filter === 'inactive' ? !u.active
+    : filter === 'admin' ? u.role === 'admin'
+    : true;
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -181,33 +188,36 @@ export default function UserManagement() {
         </div>
       </div>
 
-      {/* Info Cards */}
+      {/* Info Cards — click one to filter the list (mam 2026-07-02: a tab to
+          see just the Inactive users, which were buried among the Active ones). */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="card text-center">
-          <div className="text-3xl font-bold text-red-600">{users.length}</div>
-          <div className="text-sm text-gray-500">Total Users</div>
-        </div>
-        <div className="card text-center">
-          <div className="text-3xl font-bold text-emerald-600">{users.filter(u => u.active).length}</div>
-          <div className="text-sm text-gray-500">Active</div>
-        </div>
-        <div className="card text-center">
-          <div className="text-3xl font-bold text-red-600">{users.filter(u => !u.active).length}</div>
-          <div className="text-sm text-gray-500">Inactive</div>
-        </div>
-        <div className="card text-center">
-          <div className="text-3xl font-bold text-purple-600">{users.filter(u => u.role === 'admin').length}</div>
-          <div className="text-sm text-gray-500">Admins</div>
-        </div>
+        {[
+          { key: 'all',      label: 'Total Users', count: users.length,                              color: 'text-red-600' },
+          { key: 'active',   label: 'Active',      count: users.filter(u => u.active).length,         color: 'text-emerald-600' },
+          { key: 'inactive', label: 'Inactive',    count: users.filter(u => !u.active).length,        color: 'text-red-600' },
+          { key: 'admin',    label: 'Admins',      count: users.filter(u => u.role === 'admin').length, color: 'text-purple-600' },
+        ].map(c => (
+          <button key={c.key} type="button" onClick={() => setFilter(c.key)}
+            className={`card text-center transition ${filter === c.key ? 'ring-2 ring-red-500 ring-offset-1' : 'hover:bg-gray-50 opacity-90 hover:opacity-100'}`}>
+            <div className={`text-3xl font-bold ${c.color}`}>{c.count}</div>
+            <div className="text-sm text-gray-500">{c.label}</div>
+          </button>
+        ))}
       </div>
 
       <div className="card p-0 overflow-x-auto">
+        {filter !== 'all' && (
+          <div className="px-4 py-2 text-xs text-gray-500 border-b bg-gray-50/60 flex items-center justify-between">
+            <span>Showing <b className="text-gray-700">{users.filter(matchFilter).length}</b> {filter} user{users.filter(matchFilter).length === 1 ? '' : 's'}</span>
+            <button type="button" onClick={() => setFilter('all')} className="text-red-600 hover:underline font-medium">Show all users</button>
+          </div>
+        )}
         <table>
           <thead>
             <tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>System Role</th><th>Assigned Roles</th><th>Department</th><th>Status</th><th>Actions</th></tr>
           </thead>
           <tbody>
-            {users.map(u => (
+            {users.filter(matchFilter).map(u => (
               <tr key={u.id}>
                 <td className="font-medium">
                   <div className="flex items-center gap-2">
