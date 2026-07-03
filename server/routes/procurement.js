@@ -3084,7 +3084,11 @@ router.get('/indents/:id/items-for-po', (req, res) => {
      LEFT JOIN indent_item_rates r ON r.id = (
        SELECT r2.id FROM indent_item_rates r2
         WHERE r2.indent_item_id = ii.id
-        ORDER BY COALESCE(r2.final_rate, 0) DESC, r2.id DESC LIMIT 1
+        -- Prefer the FINALISED rate row (mam 2026-07-02: a finalised item didn't
+        -- flow to Vendor PO because a duplicate rate row with a higher final_rate
+        -- was picked instead of the finalised one). Then highest rate, then latest.
+        ORDER BY CASE WHEN r2.status = 'finalized' THEN 0 ELSE 1 END,
+                 COALESCE(r2.final_rate, 0) DESC, r2.id DESC LIMIT 1
      )
      LEFT JOIN item_master im ON im.id = ii.item_master_id
      WHERE ii.indent_id = ?
@@ -3355,7 +3359,15 @@ router.get('/pending-po-items', (req, res) => {
             r.final_rate, r.final_vendor_name, r.final_terms, r.final_credit_days, r.status as rate_status
      FROM indent_items ii
      JOIN indents i ON ii.indent_id = i.id
-     LEFT JOIN indent_item_rates r ON r.indent_item_id = ii.id
+     -- One rate row per item, FINALISED first (mam 2026-07-02: a finalised item
+     -- must reliably reach the Vendor PO step; a plain join both duplicated the
+     -- line and could surface a non-finalised duplicate rate row).
+     LEFT JOIN indent_item_rates r ON r.id = (
+       SELECT r2.id FROM indent_item_rates r2
+        WHERE r2.indent_item_id = ii.id
+        ORDER BY CASE WHEN r2.status = 'finalized' THEN 0 ELSE 1 END,
+                 COALESCE(r2.final_rate, 0) DESC, r2.id DESC LIMIT 1
+     )
      LEFT JOIN item_master im ON im.id = ii.item_master_id
      WHERE NOT EXISTS (
        SELECT 1 FROM vendor_po_items vpi
