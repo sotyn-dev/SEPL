@@ -321,6 +321,29 @@ export default function Attendance() {
     if (s === 'absent') return { t: 'A', cls: 'bg-red-50 text-red-600' };
     return { t: '·', cls: 'bg-white text-gray-300' };
   };
+  // Export the month's grid to a spreadsheet to share with a hiring manager
+  // (mam 2026-07-02). Same P/A/½/CL/L letters as on screen + per-person totals.
+  const exportGrid = () => {
+    if (!grid || !grid.employees?.length) return;
+    const headers = ['Employee', ...grid.days.map(d => String(d.d)), 'Present', 'Absent', 'Half', 'Leave', 'Late'];
+    const rows = grid.employees.map(emp => {
+      let p = 0, a = 0, h = 0, cl = 0, late = 0;
+      const cells = grid.days.map(day => {
+        if (day.future) return '';
+        const s = (emp.cells[day.date] || {}).status || '';
+        if (s === 'present') p++;
+        else if (s === 'absent') a++;
+        else if (s === 'half_day' || s === 'short_day') h++;
+        else if (s === 'leave') cl++;
+        else if (s === 'late') late++;
+        const t = cellMeta({ status: s }).t;
+        return (t === '·' || t === '–') ? '' : t;
+      });
+      return [emp.name, ...cells, p, a, h, cl, late];
+    });
+    exportCsv(`monthly-attendance-${gridMonth}`, headers, rows);
+    toast.success('Monthly grid exported — open the file in Excel to print or send.');
+  };
   const markCell = async (emp, date, status) => {
     if (!emp.user_id) return;
     setGridBusy(true);
@@ -381,6 +404,9 @@ export default function Attendance() {
           <div className="flex flex-wrap items-center gap-2">
             <input type="month" className="input text-sm" value={gridMonth} onChange={e => setGridMonth(e.target.value)} />
             <button onClick={loadGrid} className="btn btn-secondary text-sm">Refresh</button>
+            <button onClick={exportGrid} disabled={!grid || !grid.employees?.length} className="btn btn-primary text-sm flex items-center gap-1" title="Download this month's grid as a spreadsheet to send / show the hiring manager">
+              <FiDownload size={14} /> Export for Hiring Manager
+            </button>
             <div className="flex items-center gap-2 text-[11px] text-gray-500 ml-auto">
               <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">P present</span>
               <span className="px-1.5 py-0.5 rounded bg-red-50 text-red-600">A absent</span>
