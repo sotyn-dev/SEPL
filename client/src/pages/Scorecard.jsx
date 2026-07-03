@@ -549,7 +549,8 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
     });
   };
 
-  const pctClr = kpi.actual_pct >= 0 ? 'text-emerald-700' : kpi.actual_pct >= -50 ? 'text-amber-700' : 'text-red-700';
+  // actual_pct is now an achievement % (100 = on plan). Colour on that scale.
+  const pctClr = kpi.actual_pct >= 80 ? 'text-emerald-700' : kpi.actual_pct >= 50 ? 'text-amber-700' : 'text-red-700';
   const isAuto = kpi.is_auto;
 
   return (

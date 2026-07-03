@@ -898,19 +898,22 @@ function computeScorecard(db, userId, weekStart) {
         }
       }
 
-      // Calculate Actual %
+      // Calculate Actual % — plain "achievement vs plan" (mam 2026-07-03:
+      // "actual/Planned*100", not the old variance that subtracted 100 and
+      // showed 0-of-3 as −100%).
+      //   higher_better: how much of the target you hit — actual/planned×100
+      //                  (0 of 3 = 0%, 3 of 3 = 100%, beating it climbs above).
+      //   lower_better : at or under the target = 100%, then it eases down as
+      //                  you overshoot (planned/actual×100).
+      // Always floored at 0 — a scorecard % must never read negative.
       let actualPct = 0;
       if (planned > 0) {
         if (k.direction === 'lower_better') {
-          // lower is better: under-budget or fast turnaround
-          actualPct = Math.round(((planned - actual) / planned) * 100);
+          actualPct = actual <= planned ? 100 : Math.round((planned / actual) * 100);
         } else {
-          actualPct = Math.round(((actual - planned) / planned) * 100);
+          actualPct = Math.round((actual / planned) * 100);
         }
-        // Cap on the negative side at -100 (can't lose more than 100%)
-        if (actualPct < -100) actualPct = -100;
-      } else if (actual === 0) {
-        actualPct = 0;
+        if (actualPct < 0) actualPct = 0;
       }
 
       // Weight resolution: per-user weight_override → k.weightage default.
@@ -1019,14 +1022,15 @@ router.put('/scorecard/entry', (req, res) => {
     }
     const db = getDb();
     const k = db.prepare('SELECT direction FROM score_kpis WHERE id=?').get(kpi_id);
+    // Achievement vs plan — same rule as the weekly compute (mam 2026-07-03).
     let actualPct = 0;
     if (planned > 0) {
       if (k?.direction === 'lower_better') {
-        actualPct = Math.round(((planned - actual) / planned) * 100);
+        actualPct = actual <= planned ? 100 : Math.round((planned / actual) * 100);
       } else {
-        actualPct = Math.round(((actual - planned) / planned) * 100);
+        actualPct = Math.round((actual / planned) * 100);
       }
-      if (actualPct < -100) actualPct = -100;
+      if (actualPct < 0) actualPct = 0;
     }
     db.prepare(`
       INSERT INTO score_entries (user_id, kpi_id, week_start, planned, actual, actual_pct, total_uptodate, pending_uptodate, pending_work, pending_pct, commitment, notes, updated_by, updated_at)

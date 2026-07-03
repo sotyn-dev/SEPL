@@ -7,9 +7,10 @@
 // collections, payments, etc.).  That makes an accountant and a site engineer
 // directly comparable: both are expressed as "% of your own plan achieved".
 //
-// The Champions Score for a week = 100 + (that weekly scorecard %), clamped
-// to 0..200.  So hitting exactly your plan = 100, beating it climbs above,
-// missing it falls below.  A month/quarter/year score is the AVERAGE of the
+// The Champions Score for a week = that weekly scorecard %, clamped to 0..200.
+// The scorecard % is "achievement vs plan" (mam 2026-07-03), so hitting exactly
+// your plan = 100, beating it climbs above, missing it falls below — no +100
+// offset needed any more.  A month/quarter/year score is the AVERAGE of the
 // weekly Champions Scores across the weeks the player actually qualified in.
 //
 // Team score = simple AVERAGE of its members' scores (mam's pick) so small or
@@ -159,7 +160,11 @@ function userPeriodScore(db, userId, weeks, minActivity, cache) {
     hasTemplate = true;
     const act = sc.activity || 0;
     if (act < minActivity) continue;          // week doesn't count
-    const cs = Math.max(0, Math.min(200, 100 + (sc.score || 0)));
+    // Weekly scorecard % is now "achievement vs plan" (100 = hit your plan,
+    // above = beat it), so it already IS the Champions Score — no +100 offset.
+    // (mam 2026-07-03: the scorecard % switched from variance to achievement;
+    // for higher-better KPIs this yields the exact same Champions numbers.)
+    const cs = Math.max(0, Math.min(200, (sc.score || 0)));
     sum += cs; n += 1; totalActivity += act;
   }
   if (n === 0) return { qualified: false, hasTemplate, score: null, weeks_counted: 0, activity: totalActivity };
