@@ -4,7 +4,6 @@ import toast from 'react-hot-toast';
 import { FiSun, FiPlus, FiX, FiTrendingUp, FiAlertTriangle, FiFileText, FiTrash2, FiPhoneCall, FiMapPin } from 'react-icons/fi';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
-import SearchableSelect from '../components/SearchableSelect';
 import ResponsibilityTab from '../components/ResponsibilityTab';
 import { num as fmt, inr } from '../lib/solar/format';
 import { PROJECT_TYPES } from '../lib/solar/engine';
@@ -171,12 +170,12 @@ export default function SolarFunnel() {
         </div>
       )}
 
-      {modal && <DealModal deal={modal} stages={stages} leads={leads} user={user} onClose={() => setModal(null)} onSaved={() => { setModal(null); load(); }} nav={nav} />}
+      {modal && <DealModal deal={modal} stages={stages} leads={leads} deals={deals} user={user} onClose={() => setModal(null)} onSaved={() => { setModal(null); load(); }} nav={nav} />}
     </div>
   );
 }
 
-function DealModal({ deal, stages, leads, user, onClose, onSaved, nav }) {
+function DealModal({ deal, stages, leads, deals, user, onClose, onSaved, nav }) {
   const [d, setD] = useState({ ...deal });
   const [showQual, setShowQual] = useState(false);
   const [aForm, setAForm] = useState({});
@@ -185,6 +184,22 @@ function DealModal({ deal, stages, leads, user, onClose, onSaved, nav }) {
   const F = (k, label, props = {}) => (
     <label className="block"><span className="label">{label}</span>
       <input className="input-compact w-full" value={d[k] ?? ''} onChange={(e) => set(k, e.target.value)} {...props} /></label>);
+
+  // "From Lead" combobox source — UNIQUE client names from existing CRM leads
+  // and past solar deals, so mam can pick an old client OR type a brand-new one
+  // (mam: "from lead show old client name unique from suggestion and can enter
+  // new also"). leadByName lets a picked name auto-fill that lead's details.
+  const leadByName = useMemo(() => {
+    const m = new Map();
+    (leads || []).forEach((l) => { const nm = (l.company_name || l.client_name || '').trim(); if (nm) m.set(nm.toLowerCase(), l); });
+    return m;
+  }, [leads]);
+  const clientSuggestions = useMemo(() => {
+    const names = new Map();
+    (leads || []).forEach((l) => { const nm = (l.company_name || l.client_name || '').trim(); if (nm) names.set(nm.toLowerCase(), nm); });
+    (deals || []).forEach((x) => { const nm = (x.client_name || x.company || '').trim(); if (nm && !names.has(nm.toLowerCase())) names.set(nm.toLowerCase(), nm); });
+    return [...names.values()].sort((a, b) => a.localeCompare(b));
+  }, [leads, deals]);
 
   const refresh = async () => { try { const r = await api.get(`/solar/deals/${d.id}`); setD(r.data); } catch { /* */ } };
   const save = async () => {
@@ -249,8 +264,17 @@ function DealModal({ deal, stages, leads, user, onClose, onSaved, nav }) {
         <div className="p-5 space-y-3">
           {isNew && (
             <label className="block"><span className="label">From Lead (optional)</span>
-              <SearchableSelect options={leads} value={d.lead_id || ''} displayKey="company_name" valueKey="id" placeholder="Pick a lead…"
-                onChange={(o) => o && setD((p) => ({ ...p, lead_id: o.id, client_name: o.company_name || o.client_name || p.client_name, company: o.company_name || p.company, phone: o.phone || p.phone, location: o.district || o.location || p.location, state: o.state || p.state, district: o.district || p.district }))} /></label>)}
+              <input className="input-compact w-full" list="solarFromLeadDL" value={d.client_name || ''}
+                placeholder="Pick an old client or type a new name…"
+                onChange={(e) => {
+                  const name = e.target.value;
+                  const l = leadByName.get(name.trim().toLowerCase());
+                  setD((p) => l
+                    ? { ...p, client_name: name, lead_id: l.id, company: l.company_name || p.company, phone: l.phone || p.phone, location: l.district || l.location || p.location, state: l.state || p.state, district: l.district || p.district }
+                    : { ...p, client_name: name, lead_id: null });
+                }} />
+              <datalist id="solarFromLeadDL">{clientSuggestions.map((nm) => <option key={nm} value={nm} />)}</datalist>
+            </label>)}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
             {F('client_name', 'Client name')}{F('company', 'Company')}{F('phone', 'Phone')}
             <label className="block"><span className="label">State</span>

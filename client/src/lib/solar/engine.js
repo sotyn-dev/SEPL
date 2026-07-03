@@ -115,17 +115,22 @@ export function buildBOQ(c, inp, rb) {
   const structMult = surf * trk * windMult;
 
   const lines = [];
-  const add = (desc, unit, make, qty, ppUnit, labUnit = 0) => {
+  // `cat` = the customer-quotation category a line folds under (mam's format).
+  // Panel / inverter / battery lines share a category header with lettered
+  // sub-items; everything else is left as its own standalone numbered row
+  // (cat = null). See groupBOQ() below.
+  const add = (desc, unit, make, qty, ppUnit, labUnit = 0, cat = null) => {
     const pp = ppUnit * qty, a = pp * acc, lab = labUnit * qty, tpa = pp + a + lab, sp = tpa * (1 + margin);
-    lines.push({ desc, unit, make, qty, ppUnit, pp, tpa, sp, rate: qty ? sp / qty : sp });
+    lines.push({ desc, unit, make, qty, ppUnit, pp, tpa, sp, rate: qty ? sp / qty : sp, cat });
   };
-  add(`${c.wp} Wp ${inp.ptype}${isDCR ? ' DCR' : ''} Solar Panel`, 'Nos', inp.panelmake, c.nPanels, c.wp * r.panel, c.wp * r.lab);
-  Object.entries(c.invSel).forEach(([kw, nn]) => add(`${kw} kW ${c.isBatt ? 'Hybrid' : 'String'} Inverter (MPPT${c.isBatt ? ', battery-ready' : ', grid-tie'})`, 'Nos', inp.invmake, Number(nn), kw * 1000 * r.inv * (c.isBatt ? 1.35 : 1)));
+  add(`${c.wp} Wp ${inp.ptype}${isDCR ? ' DCR' : ''} Solar Panel`, 'Nos', inp.panelmake, c.nPanels, c.wp * r.panel, c.wp * r.lab, 'SOLAR PANEL');
+  const invCat = c.isBatt ? 'HYBRID INVERTER (MPPT, BATTERY-READY)' : 'STRING INVERTER (MPPT GRID CONNECTED STRING INVERTER)';
+  Object.entries(c.invSel).forEach(([kw, nn]) => add(`${kw} kW ${c.isBatt ? 'Hybrid' : 'String'} Inverter (MPPT${c.isBatt ? ', battery-ready' : ', grid-tie'})`, 'Nos', inp.invmake, Number(nn), kw * 1000 * r.inv * (c.isBatt ? 1.35 : 1), 0, invCat));
   // Battery bank (off-grid / hybrid)
   if (c.isBatt && c.bankKWh > 0) {
     const battRate = (rb.ui?.battery?.[inp.batterytype]) ?? 22000;
-    add(`Battery Bank — ${inp.batterytype} (${Math.round(c.bankKWh)} kWh usable ${Math.round(c.usableKWh)} kWh)`, 'kWh', inp.batterytype, Math.round(c.bankKWh), battRate);
-    add('Battery rack, BMS & DC cabling', 'Set', 'Standard', 1, Math.round(c.bankKWh * battRate * 0.08));
+    add(`Battery Bank — ${inp.batterytype} (${Math.round(c.bankKWh)} kWh usable ${Math.round(c.usableKWh)} kWh)`, 'kWh', inp.batterytype, Math.round(c.bankKWh), battRate, 0, 'BATTERY BANK');
+    add('Battery rack, BMS & DC cabling', 'Set', 'Standard', 1, Math.round(c.bankKWh * battRate * 0.08), 0, 'BATTERY BANK');
   }
   add(`Module Mounting Structure — ${inp.structmake}${inp.tracker === 'tracker' ? ' (single-axis tracker)' : ''} (${surfLbl}, civil incl.)`, 'kWp', inp.structmake, Math.round(c.realKWp), r.struct * 1000 * structMult);
   const nInv = Object.values(c.invSel).reduce((a, b) => a + b, 0);
@@ -146,6 +151,30 @@ export function buildBOQ(c, inp, rb) {
   const cont = (parseFloat(inp.cont) || 0) / 100;
   if (cont > 0) { const matPP = lines.reduce((a, l) => a + l.pp, 0); add(`Contingency & wastage (${inp.cont}%)`, 'Lot', '—', 1, Math.round(matPP * cont)); }
   return lines;
+}
+
+// Fold the flat BOQ into the numbered-category shape mam's quotation uses:
+//   1.0 SOLAR PANEL            (category header)
+//     a  590 Wp … Solar Panel  (lettered sub-item, carries unit/make/qty)
+//   3.0 Module Mounting …      (standalone line — its own numbered row)
+// Panel / inverter / battery lines (those given a `cat`) group under a header
+// with lettered sub-items; every other line becomes its own single row.
+// Returns [{ no:'1.0', name, grouped:bool, items:[{desc,unit,make,qty}] }].
+export function groupBOQ(lines) {
+  const cats = [];
+  let cur = null;
+  for (const l of (lines || [])) {
+    const item = { desc: l.desc, unit: l.unit, make: l.make, qty: l.qty };
+    if (l.cat) {
+      if (cur && cur.name === l.cat) { cur.items.push(item); continue; }
+      cur = { name: l.cat, grouped: true, items: [item] };
+      cats.push(cur);
+    } else {
+      cats.push({ name: l.desc, grouped: false, items: [item] });
+      cur = null;
+    }
+  }
+  return cats.map((cat, i) => ({ no: `${i + 1}.0`, ...cat }));
 }
 
 export function summarize(lines, c) {

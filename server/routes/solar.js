@@ -128,31 +128,79 @@ router.delete('/quotations/:id', requirePermission('solar_quotation', 'delete'),
   res.json({ message: 'Deleted' });
 });
 
-// Excel export of a solar quote (BOQ sheet + commercial summary).
+// Excel export of a solar quote — mam's customer-facing quotation format
+// (the PDF she shared: Residence-114-1). Two sheets, mirroring the two pages:
+//   Sheet 1 "BOQ"       — S.NO / DESCRIPTION / UNIT / MAKES / QTY only.
+//                         NO purchase price, cost or margin: this file goes to
+//                         the client, so our costing must never appear here.
+//   Sheet 2 "QUOTATION" — client block (Name/Address/Date/Quotation No), the
+//                         lumpsum Base Price without GST + ₹/watt, and Notes.
+// An extra "INTERNAL" costing sheet is appended ONLY when the export was
+// triggered from the Internal view (b.view === 'internal'), so our rates leak
+// to nobody by default while mam keeps the costing sheet for her own records.
 router.post('/quotations/export', requirePermission('solar_quotation', 'view'), (req, res) => {
   try {
     const b = req.body || {};
     const boq = b.boq || [];
+    const kw = Math.round(Number(b.capacity_kw) || 0);
+    const typeLbl = String(b.type_label || b.project_type || 'SOLAR').toUpperCase();
+    const roof = b.roof_label || 'RCC Roof';
+    const sysTitle = `${kw} KW ${typeLbl} SOLAR SYSTEM ON ${roof.toUpperCase()}`;
     const wb = XLSX.utils.book_new();
-    const aoa = [['S.No', 'Description', 'Unit', 'Make', 'Qty', 'Purch ₹/u', 'PP ₹', 'TPA ₹ (cost)', 'Margin %', 'SP ₹', 'Rate ₹']];
-    boq.forEach((l, i) => aoa.push([i + 1, l.desc || '', l.unit || '', l.make || '', l.qty || 0,
-      r2(l.ppUnit), r2(l.pp), r2(l.tpa), l.tpa ? r2((l.sp - l.tpa) / l.tpa * 100) : 0, r2(l.sp), r2(l.rate)]));
-    aoa.push([]);
-    aoa.push(['', 'TOTAL (ex-GST)', '', '', '', '', r2(b.cost), r2(b.cost), r2(b.margin_pct), r2(b.sell), `₹${r2(b.sell_per_w)}/W`]);
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'BOQ');
 
-    const sum = [];
-    sum.push(['Secured Engineers India']);
-    sum.push([`QUOTATION FOR ${b.capacity_kw || ''} KW ${(b.project_type || 'ON GRID').toUpperCase()} SOLAR SYSTEM`]);
-    sum.push(['Client', b.client_name || '', '', 'Date', new Date().toISOString().slice(0, 10)]);
-    sum.push(['Address', b.address || '', '', 'Quote No', b.quote_no || '']);
-    sum.push([]);
-    sum.push(['System (DC)', `${b.capacity_dc_kwp || b.capacity_kw || ''} kWp`]);
-    sum.push(['Base price (ex-GST)', r2(b.sell), `₹${r2(b.sell_per_w)}/watt`]);
-    sum.push(['GST', r2(b.gst_amt)]);
-    sum.push(['Grand total (incl GST)', r2(b.grand_total)]);
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sum), 'SUMMARY');
-    wb.SheetNames.unshift(wb.SheetNames.pop());
+    // ── Sheet 1: BOQ (customer-facing, no prices) ──
+    const boqAoa = [
+      [`Proposal for ${kw} KW ${typeLbl} Solar System on ${roof}`],
+      ['Providing, laying, testing & commissioning of'],
+      ['S.NO.', 'DESCRIPTION', 'UNIT', 'MAKES', 'QTY'],
+    ];
+    // Grouped shape (mam's format: 1.0 SOLAR PANEL → a, b …) when the client
+    // sends it; fall back to a plain numbered list for older callers.
+    const grouped = Array.isArray(b.boq_grouped) ? b.boq_grouped : null;
+    if (grouped) {
+      grouped.forEach((cat) => {
+        if (cat.grouped) {
+          boqAoa.push([cat.no, cat.name, '', '', '']);
+          (cat.items || []).forEach((it, j) => boqAoa.push([String.fromCharCode(97 + j), it.desc || '', it.unit || '', it.make || '', it.qty ?? '']));
+        } else {
+          const it = (cat.items && cat.items[0]) || {};
+          boqAoa.push([cat.no, it.desc || cat.name || '', it.unit || '', it.make || '', it.qty ?? '']);
+        }
+      });
+    } else {
+      boq.forEach((l, i) => boqAoa.push([i + 1, l.desc || '', l.unit || '', l.make || '', l.qty || 0]));
+    }
+    const boqWs = XLSX.utils.aoa_to_sheet(boqAoa);
+    boqWs['!cols'] = [{ wch: 6 }, { wch: 60 }, { wch: 8 }, { wch: 22 }, { wch: 10 }];
+    XLSX.utils.book_append_sheet(wb, boqWs, 'BOQ');
+
+    // ── Sheet 2: QUOTATION (commercial + notes) ──
+    const q = [];
+    q.push(['Secured Engineers India']);
+    q.push([`QUOTATION FOR ${sysTitle}`]);
+    q.push([]);
+    q.push(['NAME', b.client_name || '', '', 'Date', new Date().toISOString().slice(0, 10)]);
+    q.push(['ADDRESS', b.address || '', '', 'Quotation No', b.quote_no || '']);
+    q.push([]);
+    q.push(['S No.', 'Description', 'Amount (In Rupees)']);
+    q.push([1, sysTitle, r2(b.sell)]);
+    q.push(['', 'BASE PRICE WITHOUT GST', `₹${r2(b.sell_per_w)}/watt`]);
+    q.push([]);
+    q.push(['Note:']);
+    (b.notes || []).forEach((nn, i) => q.push([i + 1, nn]));
+    const qWs = XLSX.utils.aoa_to_sheet(q);
+    qWs['!cols'] = [{ wch: 10 }, { wch: 62 }, { wch: 22 }, { wch: 14 }, { wch: 16 }];
+    XLSX.utils.book_append_sheet(wb, qWs, 'QUOTATION');
+
+    // ── Sheet 3 (internal only): full costing ──
+    if (b.view === 'internal') {
+      const inAoa = [['S.No', 'Description', 'Unit', 'Make', 'Qty', 'Purch ₹/u', 'PP ₹', 'TPA ₹ (cost)', 'Margin %', 'SP ₹', 'Rate ₹']];
+      boq.forEach((l, i) => inAoa.push([i + 1, l.desc || '', l.unit || '', l.make || '', l.qty || 0,
+        r2(l.ppUnit), r2(l.pp), r2(l.tpa), l.tpa ? r2((l.sp - l.tpa) / l.tpa * 100) : 0, r2(l.sp), r2(l.rate)]));
+      inAoa.push([]);
+      inAoa.push(['', 'TOTAL (ex-GST)', '', '', '', '', r2(b.cost), r2(b.cost), r2(b.margin_pct), r2(b.sell), `₹${r2(b.sell_per_w)}/W`]);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(inAoa), 'INTERNAL');
+    }
 
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Disposition', `attachment; filename="solar-quote-${String(b.client_name || 'quote').replace(/[^a-z0-9]/gi, '_')}.xlsx"`);

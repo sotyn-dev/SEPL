@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FiSun, FiSave, FiDownload, FiPrinter, FiZap, FiList, FiTrash2 } from 'react-icons/fi';
+import { FiSun, FiSave, FiDownload, FiPrinter, FiZap, FiList, FiTrash2, FiFileText } from 'react-icons/fi';
 import api from '../api';
 import SearchableSelect from '../components/SearchableSelect';
 import { num as fmt, inr } from '../lib/solar/format';
 import {
-  DEFAULTS, compute, buildBOQ, summarize, computeROI,
+  DEFAULTS, compute, buildBOQ, groupBOQ, summarize, computeROI,
   PROJECT_TYPES, MOUNTS, ARRAY_TYPES, typeLabel,
 } from '../lib/solar/engine';
 import { STATES } from '../data/indiaLocations';
 
 const EMPTY_RB = { ui: { panel: {}, inverter: {}, structure: {}, cable: {} }, factors: { mount: {}, array: {}, state: {} }, settings: {}, inverterSizes: [], bos: {}, labour: {} };
+
+// Roof/mount surface label for the quotation title ("… System on RCC Roof").
+const surfLabel = (m) => ({ ground: 'Ground', rcc: 'RCC Roof', tin: 'Tin Shed', carport: 'Carport', floating: 'Floating' }[m] || 'RCC Roof');
 
 export default function SolarQuotation() {
   const [inp, setInp] = useState({ ...DEFAULTS });
@@ -86,6 +89,7 @@ export default function SolarQuotation() {
 
   const c = useMemo(() => compute(inp, rb), [inp, rb]);
   const lines = useMemo(() => buildBOQ(c, inp, rb), [c, inp, rb]);
+  const groupedBoq = useMemo(() => groupBOQ(lines), [lines]);
   const tot = useMemo(() => summarize(lines, c), [lines, c]);
 
   const gstPct = parseFloat(inp.gst) || 0;
@@ -99,20 +103,22 @@ export default function SolarQuotation() {
   const marginOk = tot.marginPct >= floor;
 
   const notes = useMemo(() => {
-    const out = [];
-    if (isZE) out.push('Zero-export system: no power is fed to the grid — export limiter, grid CTs & reverse-power relay included. Net metering not applicable.');
-    else out.push(`Net Meter Charge – ${inr(parseFloat(inp.netchg) || 0)} extra & Govt. fees as per actual.`);
-    out.push(`GST @ ${gstPct}% excluded; any other Govt. taxes at the time of invoicing excluded.`);
-    out.push(`Transportation / Freight charges: ${inp.transport ? 'Included' : 'Extra at actual'} in quotation.`);
-    out.push(`Solar panel cleaning system ${inp.clean ? 'included' : 'not included'} in quotation.`);
-    out.push('Warranty: Solar panels – 15 yrs manufacturing / 30 yrs performance. Inverter – 10 yrs + 5 yrs extended.');
-    out.push(`AMC: Free for first ${parseInt(inp.amcfree) || 0} years; thereafter ${inr(parseFloat(inp.amcfee) || 0)} per annum.`);
-    out.push('Payment terms: 25% Advance · 25% before structure delivery · 25% before panel delivery · 20% after pending items · 5% after handover.');
-    out.push(`This quotation is valid for ${parseInt(inp.valid) || 0} days from the date of issue.`);
-    if (inp.escal) out.push('Solar module & inverter prices are market-linked; rates are subject to revision if the order is not confirmed within the validity period.');
-    if (inp.subsidy) out.push('Govt. subsidy (PM Surya Ghar) applicable for eligible residential connections — passed through at actual after sanction.');
-    return out;
-  }, [inp, gstPct, isZE]);
+    // mam's standard quotation terms — verbatim from the format she shared
+    // (Residence-114-1). Only the validity days flexes to the input; the rest
+    // are her fixed standard terms so every quote reads identically.
+    const validDays = parseInt(inp.valid) || 10;
+    return [
+      'AMC Charges: 10% of the Final project Value without taxes for one year.',
+      'Payment Terms: 30% Advance along with PO, 60% before material dispatch, 10% against testing.',
+      `Quotation is valid for ${validDays} days only.`,
+      'Anything not mentioned here, if asked, would be charged extra.',
+      'Delivery of material: 2-3 Weeks (Approx).',
+      'Net Meter Charge / Liaisoning to be paid separately to local authority by beneficiary if any or as per actual.',
+      'GST Excluded, and if any other government taxes as applicable at the time of invoicing is excluded.',
+      'Transportation / Freight charges: Included in quotation.',
+      "Warranty: Solar Panel & Inverter warranty period may vary as per manufacturer's policy. Solar Panels: 15 years manufacturing warranty for any defect. Solar Inverter: 5 years or as per manufacturer's warranty, whichever is maximum.",
+    ];
+  }, [inp]);
 
   const payload = () => ({
     quote_no: inp.quote_no || `SEPL-SOLAR-${String(Math.round(c.kwAC))}-${(saved.length + 1)}`,
@@ -123,6 +129,9 @@ export default function SolarQuotation() {
     cost: tot.totTPA, margin_pct: tot.marginPct, sell: tot.totSP, sell_per_w: tot.wpRate,
     gst_amt: gstAmt, grand_total: grand,
     capacity_dc_kwp: c.realKWp, deal_id: dealId || null, variant_label: variant || null,
+    // Display fields for the PDF/Excel quotation (mam's format) — ignored on save.
+    type_label: typeLabel(inp.conn), roof_label: surfLabel(inp.mount), notes, view,
+    boq_grouped: groupedBoq,
   });
 
   const save = async () => {
@@ -142,6 +151,73 @@ export default function SolarQuotation() {
       a.href = url; a.download = `solar-quote-${(inp.client || 'quote').replace(/[^a-z0-9]/gi, '_')}.xlsx`;
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
     } catch (e) { toast.error('Export failed'); }
+  };
+
+  // PDF in mam's quotation format (the Residence-114-1 layout she shared):
+  // page 1 = BOQ (S.No/Description/Unit/Makes/Qty, no prices), page 2 =
+  // commercial (client block + lumpsum base price + notes). Built as a
+  // print-ready HTML doc opened in a new tab → Ctrl/⌘+P → Save as PDF, so it
+  // needs no server-side PDF renderer.
+  const printPdf = () => {
+    const p = payload();
+    const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
+    const kw = Math.round(p.capacity_kw || 0);
+    const tl = typeLabel(inp.conn);
+    const roof = surfLabel(inp.mount);
+    const sysTitle = `${kw} KW ${tl} SOLAR SYSTEM ON ${roof.toUpperCase()}`;
+    const letter = (i) => String.fromCharCode(97 + i);
+    const boqRows = (groupedBoq || []).map((cat) => {
+      if (cat.grouped) {
+        const head = `<tr><td class="c">${esc(cat.no)}</td><td><b>${esc(cat.name)}</b></td><td></td><td></td><td></td></tr>`;
+        const subs = cat.items.map((it, j) => `<tr><td class="c">${letter(j)}</td><td>${esc(it.desc)}</td><td class="c">${esc(it.unit)}</td><td>${esc(it.make)}</td><td class="c">${esc(it.qty)}</td></tr>`).join('');
+        return head + subs;
+      }
+      const it = cat.items[0] || {};
+      return `<tr><td class="c">${esc(cat.no)}</td><td>${esc(it.desc)}</td><td class="c">${esc(it.unit)}</td><td>${esc(it.make)}</td><td class="c">${esc(it.qty)}</td></tr>`;
+    }).join('');
+    const noteRows = (notes || []).map((nn) => `<li>${esc(nn)}</li>`).join('');
+    const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(p.quote_no)}</title><style>
+@page { size: A4; margin: 14mm; }
+* { box-sizing: border-box; }
+body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 12px; margin: 0; }
+.page { page-break-after: always; } .page:last-child { page-break-after: auto; }
+.brand { color: #b91c1c; font-weight: 800; letter-spacing: .5px; font-size: 15px; }
+.muted { color: #555; } h1 { font-size: 14px; margin: 4px 0 2px; }
+.title { font-size: 13px; font-weight: 700; margin: 10px 0 2px; }
+table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+th, td { border: 1px solid #999; padding: 5px 7px; vertical-align: top; }
+th { background: #fde8e8; text-align: left; font-size: 11px; text-transform: uppercase; }
+td.c, th.c { text-align: center; }
+.kv { margin-top: 6px; } .kv td { border: none; padding: 2px 6px; }
+ol { margin: 6px 0 0 16px; padding: 0; } ol li { margin: 3px 0; }
+</style></head><body onload="setTimeout(function(){window.print();},200)">
+<div class="page">
+  <div class="brand">SECURED ENGINEERS INDIA</div>
+  <div class="title">Proposal for ${kw} KW ${esc(tl)} Solar System on ${esc(roof)}</div>
+  <div class="muted">Providing, laying, testing &amp; commissioning of</div>
+  <table><thead><tr><th class="c">S.NO.</th><th>DESCRIPTION</th><th class="c">UNIT</th><th>MAKES</th><th class="c">QTY</th></tr></thead>
+  <tbody>${boqRows}</tbody></table>
+</div>
+<div class="page">
+  <div class="brand">SECURED ENGINEERS INDIA</div>
+  <h1>QUOTATION FOR ${esc(sysTitle)}</h1>
+  <table class="kv">
+    <tr><td><b>NAME</b></td><td>${esc(p.client_name)}</td><td><b>Date</b></td><td>${esc(today)}</td></tr>
+    <tr><td><b>ADDRESS</b></td><td>${esc(p.address)}</td><td><b>Quotation No</b></td><td>${esc(p.quote_no)}</td></tr>
+  </table>
+  <table><thead><tr><th class="c">S No.</th><th>Description</th><th class="c">Amount (In Rupees)</th></tr></thead>
+  <tbody>
+    <tr><td class="c">1</td><td>${esc(sysTitle)}</td><td class="c">${inr(p.sell)}</td></tr>
+    <tr><td></td><td><b>BASE PRICE WITHOUT GST</b></td><td class="c">₹${fmt(p.sell_per_w, 2)}/watt</td></tr>
+  </tbody></table>
+  <div class="title">Note:</div>
+  <ol>${noteRows}</ol>
+</div>
+</body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) return toast.error('Allow pop-ups to open the PDF');
+    w.document.write(html); w.document.close();
   };
 
   const loadSaved = async () => {
@@ -326,6 +402,7 @@ export default function SolarQuotation() {
             </div>
             <div className="flex gap-2">
               <button onClick={() => window.print()} className="btn btn-secondary text-sm flex items-center gap-1"><FiPrinter size={14} /> Print</button>
+              <button onClick={printPdf} className="btn btn-secondary text-sm flex items-center gap-1"><FiFileText size={14} /> PDF</button>
               <button onClick={exportXlsx} className="btn btn-secondary text-sm flex items-center gap-1"><FiDownload size={14} /> Excel</button>
               <button onClick={save} disabled={busy} className="btn btn-primary text-sm flex items-center gap-1"><FiSave size={14} /> {currentId ? 'Update' : 'Save'}</button>
             </div>
