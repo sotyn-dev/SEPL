@@ -29,7 +29,7 @@ import {
   // Projects children
   FiBarChart2, FiAlertCircle, FiZap, FiTool,
   // Finance children
-  FiFile, FiCreditCard, FiSend, FiList, FiRefreshCw, FiPieChart,
+  FiFile, FiCreditCard, FiSend, FiList, FiRefreshCw,
   // People children
   FiUserPlus, FiHelpCircle, FiBookOpen, FiCalendar, FiDollarSign, FiAtSign,
   // Inventory children
@@ -131,7 +131,8 @@ const SIDEBAR_GROUPS = [
     { path: '/billing',          label: 'Invoices',    icon: FiList,       module: 'billing' },
     { path: '/cashflow',         label: 'Cash Flow',   icon: FiRefreshCw,  module: 'cashflow' },
     { path: '/ar-ap-tracker',    label: 'AR/AP Tracker', icon: FiTrendingDown, module: 'ar_ap_tracker' },
-    { path: '/expenses',         label: 'Expenses',    icon: FiPieChart,   module: 'expenses' },
+    // Expenses module removed from the menu (mam 2026-07-03). Route + page kept
+    // dormant in App.jsx so it's reversible and existing links don't 404.
   ]},
   // 'People' renamed → 'HRMS' (mam 2026-05-28). Sub-contractor Master
   // moved here from Procurement — labour/manpower belongs with HR, not
