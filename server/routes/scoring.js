@@ -193,7 +193,7 @@ router.put('/users/:user_id/kpi-targets/:kpi_id', adminOnly, (req, res) => {
        weight_override = excluded.weight_override,
        updated_by      = excluded.updated_by,
        updated_at      = CURRENT_TIMESTAMP`
-  ).run(userId, kpiId, planned, enabled, weight, req.user.id);
+  ).run(userId, kpiId, planned == null ? 0 : planned, enabled, weight, req.user.id);
   res.json({
     message: 'Saved',
     user_id: userId, kpi_id: kpiId,
