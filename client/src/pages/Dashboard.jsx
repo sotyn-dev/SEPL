@@ -183,7 +183,7 @@ export default function Dashboard() {
                                 <span className="w-4 text-center flex-shrink-0 text-[11px]">{champ ? medal(mi) : <span className="text-gray-300">{mi + 1}</span>}</span>
                                 <span className={`truncate ${champ ? 'text-gray-800' : 'text-gray-600'}`}>{m.name}</span>
                               </span>
-                              <span className={`flex-shrink-0 ${m.score ? (champ ? 'text-emerald-600' : 'text-gray-700') : 'text-gray-300'}`}>{m.score ? vsPlan(m.score) : '—'}</span>
+                              <span className={`flex-shrink-0 ${m.score != null ? (champ ? 'text-emerald-600' : 'text-gray-700') : 'text-gray-300'}`}>{m.score != null ? vsPlan(m.score) : '—'}</span>
                             </div>
                           );
                         })}
@@ -204,7 +204,7 @@ export default function Dashboard() {
                       <div className="flex-1 min-w-0">
                         <div className="flex justify-between items-baseline gap-2">
                           <span className="font-semibold text-sm text-gray-800 truncate">{u.name}</span>
-                          <span className="text-sm font-bold text-gray-700 flex-shrink-0">{s ? vsPlan(s) : '—'}</span>
+                          <span className="text-sm font-bold text-gray-700 flex-shrink-0">{s != null ? vsPlan(s) : '—'}</span>
                         </div>
                         <div className="h-2 rounded-full bg-gray-100 overflow-hidden mt-1">
                           <div className={`h-full rounded-full bg-gradient-to-r ${bar(s)} transition-all duration-700`} style={{ width: `${s}%` }} />
