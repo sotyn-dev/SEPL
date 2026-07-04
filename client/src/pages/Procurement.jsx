@@ -2144,7 +2144,15 @@ export default function Procurement() {
         };
         const kpiScope = indents.filter(matchesDateAndSearch);
         const filteredIndents = indents.filter(i => {
-          if (indFilterStatus !== 'all' && i.status !== indFilterStatus) return false;
+          // 'submitted' (Pending L1) ALSO matches crm_approved — after the CRM
+          // step an EXTRA-NON indent still awaits L1, so it belongs in the same
+          // bucket (server treats crm_approved like submitted for L1). It was
+          // hidden from the Pending-L1 filter before (mam 2026-07-04).
+          if (indFilterStatus !== 'all') {
+            const inBucket = i.status === indFilterStatus
+              || (indFilterStatus === 'submitted' && i.status === 'crm_approved');
+            if (!inBucket) return false;
+          }
           if (indFilterCategory !== 'all' && (i.indent_category || 'material') !== indFilterCategory) return false;
           if (indFilterFrom) {
             const d = (i.created_at || i.indent_date || '').slice(0, 10);
@@ -2219,7 +2227,11 @@ export default function Procurement() {
           {(() => {
             const sum = (arr) => arr.reduce((s, i) => s + (+i.budget_amount || 0), 0);
             const byStatus = (s) => kpiScope.filter(i => i.status === s);
-            const submitted   = byStatus('submitted');     // Pending L1 (or legacy "Pending Approval")
+            // Pending L1 = 'submitted' + 'crm_approved'. After the CRM step an
+            // EXTRA-NON indent sits in crm_approved but still awaits L1 sign-off
+            // (server treats it exactly like 'submitted' for L1), so it must
+            // count here — it was silently missing before (mam 2026-07-04).
+            const submitted   = kpiScope.filter(i => i.status === 'submitted' || i.status === 'crm_approved');
             const l1Approved  = byStatus('l1_approved');   // Pending L2 (two-level only, mam 2026-05-26)
             const approved    = byStatus('approved');
             const rejected    = byStatus('rejected');
