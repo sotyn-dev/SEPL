@@ -123,6 +123,11 @@ export default function Dashboard() {
         const av = ['bg-indigo-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500', 'bg-sky-500', 'bg-violet-500', 'bg-teal-500', 'bg-orange-500'];
         const scoreByUser = {};
         ranked.forEach(u => { scoreByUser[u.user_id] = Math.max(0, Math.min(100, Math.round(u.score || 0))); });
+        // Display scores as VARIANCE vs plan (achievement − 100): on plan reads 0%,
+        // behind reads negative (mam 2026-07-04: "performance in negative"). Bars,
+        // medals, sort + the Champions engine stay on the raw achievement % — this
+        // only rewrites the number shown, so ranking/gamification are unaffected.
+        const vsPlan = (n) => `${n - 100}%`;
         const teamRows = (teams?.teams || []).map(t => {
           const members = (t.members || [])
             .map(m => ({ user_id: m.user_id, name: m.name, score: scoreByUser[m.user_id] ?? null }))
@@ -147,7 +152,7 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="text-right text-white">
-                <div className="text-3xl font-extrabold leading-none">{headerAvg ? `${headerAvg}%` : '—'}</div>
+                <div className="text-3xl font-extrabold leading-none">{headerAvg ? vsPlan(headerAvg) : '—'}</div>
                 <div className="text-[10px] text-white/80 uppercase tracking-wide">team avg</div>
               </div>
             </div>
@@ -162,7 +167,7 @@ export default function Dashboard() {
                         <div className="flex-1 min-w-0">
                           <div className="flex justify-between items-baseline gap-2">
                             <span className="font-bold text-sm text-gray-800 truncate">{t.name}{t.motto ? <span className="ml-1 text-[11px] font-normal text-gray-400">· {t.motto}</span> : null}</span>
-                            <span className="text-sm font-extrabold text-gray-700 flex-shrink-0">{t.avg ? `${s}%` : '—'}</span>
+                            <span className="text-sm font-extrabold text-gray-700 flex-shrink-0">{t.avg ? vsPlan(t.avg) : '—'}</span>
                           </div>
                           <div className="h-2 rounded-full bg-gray-100 overflow-hidden mt-1">
                             <div className={`h-full rounded-full bg-gradient-to-r ${bar(s)} transition-all duration-700`} style={{ width: `${s}%` }} />
@@ -178,7 +183,7 @@ export default function Dashboard() {
                                 <span className="w-4 text-center flex-shrink-0 text-[11px]">{champ ? medal(mi) : <span className="text-gray-300">{mi + 1}</span>}</span>
                                 <span className={`truncate ${champ ? 'text-gray-800' : 'text-gray-600'}`}>{m.name}</span>
                               </span>
-                              <span className={`flex-shrink-0 ${m.score ? (champ ? 'text-emerald-600' : 'text-gray-700') : 'text-gray-300'}`}>{m.score ? `${m.score}%` : '—'}</span>
+                              <span className={`flex-shrink-0 ${m.score ? (champ ? 'text-emerald-600' : 'text-gray-700') : 'text-gray-300'}`}>{m.score ? vsPlan(m.score) : '—'}</span>
                             </div>
                           );
                         })}
@@ -199,7 +204,7 @@ export default function Dashboard() {
                       <div className="flex-1 min-w-0">
                         <div className="flex justify-between items-baseline gap-2">
                           <span className="font-semibold text-sm text-gray-800 truncate">{u.name}</span>
-                          <span className="text-sm font-bold text-gray-700 flex-shrink-0">{s ? `${s}%` : '—'}</span>
+                          <span className="text-sm font-bold text-gray-700 flex-shrink-0">{s ? vsPlan(s) : '—'}</span>
                         </div>
                         <div className="h-2 rounded-full bg-gray-100 overflow-hidden mt-1">
                           <div className={`h-full rounded-full bg-gradient-to-r ${bar(s)} transition-all duration-700`} style={{ width: `${s}%` }} />

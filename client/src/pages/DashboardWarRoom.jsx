@@ -15,6 +15,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../api';
 import { useUrlTab } from '../hooks/useUrlTab';
 import toast from 'react-hot-toast';
+import QQTCScorecard from './warroom/QQTCScorecard';
 
 // Palette — matches the HTML --vars exactly
 const C = {
@@ -1096,94 +1097,11 @@ export default function DashboardWarRoom() {
         {/* ============== HIERARCHY ============== */}
         {tab === 'hierarchy' && <HierarchyView />}
 
-        {/* ============== PERFORMANCE ============== */}
-        {tab === 'performance' && <PerformanceView />}
+        {/* ============== PERFORMANCE — QQTC Scorecard 2.0 ============== */}
+        {tab === 'performance' && <QQTCScorecard />}
 
       </main>
     </div>
-  );
-}
-
-// Consolidated PERFORMANCE scorecard (mam 2026-06-27, for the Monday management
-// review). One row per person aggregated across ALL RACI modules (CRM/Sales/
-// Solar funnels, Quotation, Indent-to-Dispatch, Cheques, Payables, Hiring),
-// scored on three EQUAL pillars — Quantity (volume of steps done), Time (% on
-// time), Quality (% of owned work completed). Reads /api/raci/performance.
-function PerformanceView() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
-  useEffect(() => {
-    setLoading(true);
-    api.get('/raci/performance')
-      .then(r => setData(r.data))
-      .catch(e => setErr(e.response?.data?.error || 'Failed to load performance'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const scoreColor = (s) => s >= 75 ? C.green : s >= 50 ? C.amber : C.red;
-  const Bar = ({ v, color }) => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <div style={{ flex: 1, height: 6, background: '#eee', borderRadius: 3, overflow: 'hidden', minWidth: 40 }}>
-        <div style={{ width: `${Math.max(0, Math.min(100, v))}%`, height: '100%', background: color }} />
-      </div>
-      <span style={{ fontSize: 11, color: C.ink2, width: 30, textAlign: 'right' }}>{v}</span>
-    </div>
-  );
-
-  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: C.ink2 }}>Loading performance…</div>;
-  if (err) return <div style={{ padding: 24, color: C.red }}>{err}</div>;
-  const people = data?.people || [];
-
-  return (
-    <>
-      <div style={{ ...sectionTitle, marginTop: 0 }}>Team Performance — Quality · Quantity · Time (all modules)</div>
-      <div style={{ ...cardStyle, marginBottom: 16, fontSize: 12, color: C.ink2, lineHeight: 1.6 }}>
-        One scorecard across every workflow (CRM / Sales / Solar funnels, Quotation, Indent-to-Dispatch, Cheques, Payables, Hiring).
-        <b> Score</b> = equal average of <b style={{ color: C.violet }}>Quantity</b> (steps completed, vs the top performer),
-        <b style={{ color: C.blue }}> Time</b> (% of steps finished on or before target), and
-        <b style={{ color: C.green }}> Quality</b> (% of the steps they own that are actually completed).
-        Assign the Responsible person + target time per step inside each module's <b>⚙ Responsible</b> tab; this rolls it all up.
-      </div>
-
-      {people.length === 0 ? (
-        <div style={{ ...cardStyle, textAlign: 'center', color: C.ink2, padding: 30 }}>
-          No performance data yet. Open any module's <b>⚙ Responsible</b> tab, assign people + target time per step, and mark steps done — they'll appear here.
-        </div>
-      ) : (
-        <div style={cardStyle}>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-              <thead>
-                <tr style={{ borderBottom: `2px solid ${C.line}` }}>
-                  {['#', 'Person', 'Score', 'Quantity', 'Time (on-time)', 'Quality', 'Done / Owned', 'Avg time', 'Late', 'Modules'].map((h, i) => (
-                    <th key={h} style={{ textAlign: i >= 3 ? 'left' : 'left', fontSize: 10.5, padding: '8px 8px', color: C.ink2, textTransform: 'uppercase', letterSpacing: '.4px', whiteSpace: 'nowrap' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {people.map((p, i) => (
-                  <tr key={p.name} style={{ borderBottom: `1px solid ${C.line}`, background: i < 3 ? '#FBFAF7' : 'transparent' }}>
-                    <td style={{ padding: '10px 8px', fontWeight: 700, color: i === 0 ? C.amber : C.ink2 }}>{i === 0 ? '🏆' : i + 1}</td>
-                    <td style={{ padding: '10px 8px', fontWeight: 600 }}>{p.name}</td>
-                    <td style={{ padding: '10px 8px' }}>
-                      <span style={{ fontSize: 20, fontWeight: 800, color: scoreColor(p.score) }}>{p.score}</span>
-                    </td>
-                    <td style={{ padding: '10px 8px', minWidth: 110 }}><Bar v={p.quantity_score} color={C.violet} /></td>
-                    <td style={{ padding: '10px 8px', minWidth: 110 }}><Bar v={p.time_score} color={C.blue} /></td>
-                    <td style={{ padding: '10px 8px', minWidth: 110 }}><Bar v={p.quality_score} color={C.green} /></td>
-                    <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}><b>{p.completed}</b> / {p.owned}</td>
-                    <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>{p.avg_hours ? (p.avg_hours < 24 ? `${p.avg_hours}h` : `${Math.round(p.avg_hours / 24)}d`) : '—'}</td>
-                    <td style={{ padding: '10px 8px', color: p.late ? C.red : C.green, fontWeight: 600 }}>{p.late || '0'}</td>
-                    <td style={{ padding: '10px 8px', color: C.ink2 }}>{p.modules}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </>
   );
 }
 

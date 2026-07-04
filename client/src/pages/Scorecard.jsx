@@ -14,6 +14,20 @@ import { useAuth } from '../context/AuthContext';
 import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 
+// ── Scorecard display convention (mam 2026-07-04): show performance as the
+// VARIANCE vs plan — achievement% − 100.  So hitting 100% of plan reads 0%,
+// falling short reads negative (DPR 68% → −32%), beating plan reads positive.
+// The server/engine keep the raw achievement % (higher-better) so the Champions
+// League leaderboard and War Room rankings are unaffected — this transform is
+// display-only, applied uniformly to every % the Scorecard page renders.
+const vsPlan = (pct) => (pct == null ? null : Math.round(pct) - 100);
+const fmtVs = (pct) => { const v = vsPlan(pct); return v == null ? null : `${v > 0 ? '+' : ''}${v}%`; };
+const vsClr = (pct) => {
+  const v = vsPlan(pct);
+  if (v == null) return 'text-gray-300';
+  return v >= 0 ? 'text-emerald-700' : v >= -50 ? 'text-amber-700' : 'text-red-700';
+};
+
 const lastMonday = (offsetWeeks = 0) => {
   const d = new Date();
   const dow = d.getDay();
@@ -282,10 +296,10 @@ export default function Scorecard() {
                       k.group_name || 'Other',
                       k.metric_name || '',
                       k.weightage ?? '',
-                      k.last_week_pct ?? '',
+                      vsPlan(k.last_week_pct) ?? '',
                       k.planned ?? 0,
                       k.actual ?? 0,
-                      k.actual_pct ?? '',
+                      vsPlan(k.actual_pct) ?? '',
                       k.total_uptodate ?? '',
                       k.pending_uptodate ?? k.pending_work ?? '',
                       k.commitment || '',
@@ -296,10 +310,16 @@ export default function Scorecard() {
                 ><FiDownload size={14} /> Export Excel</button>
               )}
               <div className="text-right">
-                <p className="text-xs text-gray-500">Weekly Score</p>
-                <p className={`text-3xl font-bold ${scorecard.score >= 0 ? 'text-emerald-700' : scorecard.score >= -50 ? 'text-amber-700' : 'text-red-700'}`}>
-                  {scorecard.score?.toFixed(2) || '0.00'}%
-                </p>
+                <p className="text-xs text-gray-500">Weekly Score <span className="text-gray-400">vs plan</span></p>
+                {(() => {
+                  // Headline = variance from plan (achievement% − 100), 2 decimals:
+                  // 0% = on plan, negative = behind, positive = ahead (mam 2026-07-04).
+                  // Engine score stays the raw achievement % so the Champions League /
+                  // War Room keep ranking higher-better; this is display-only.
+                  if (!scorecard.template) return <p className="text-3xl font-bold text-gray-300">—</p>;
+                  const headVs = (scorecard.score ?? 0) - 100;
+                  return <p className={`text-3xl font-bold ${vsClr(scorecard.score)}`}>{headVs > 0 ? '+' : ''}{headVs.toFixed(2)}%</p>;
+                })()}
               </div>
             </div>
           </div>
@@ -387,7 +407,7 @@ export default function Scorecard() {
                   <td className="text-center">{u.checklists.done}/{u.checklists.given}</td>
                   <td className="text-center">{u.tickets.done}/{u.tickets.given}</td>
                   <td className="text-right">
-                    <span className={`px-2 py-1 rounded text-xs font-bold ${scorePill(u.score - 100)}`}>{u.score}%</span>
+                    <span className={`px-2 py-1 rounded text-xs font-bold ${scorePill(u.score - 100)}`}>{fmtVs(u.score)}</span>
                   </td>
                   <td>
                     <button onClick={() => { setViewUserId(u.user_id); setTab('view'); }} className="btn btn-secondary text-xs">Open MIS</button>
@@ -551,8 +571,9 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
     });
   };
 
-  // actual_pct is now an achievement % (100 = on plan). Colour on that scale.
-  const pctClr = kpi.actual_pct >= 80 ? 'text-emerald-700' : kpi.actual_pct >= 50 ? 'text-amber-700' : 'text-red-700';
+  // Show the % as variance vs plan (achievement − 100): 0% = on plan, negative =
+  // behind, positive = ahead.  Colour on that scale (see vsPlan note up top).
+  const pctClr = vsClr(kpi.actual_pct);
   const isAuto = kpi.is_auto;
 
   return (
@@ -572,7 +593,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
       </td>
       <td className="text-center p-2">{kpi.weightage}%</td>
       <td className="text-center p-2">
-        {kpi.last_week_pct != null ? <span className={kpi.last_week_pct >= 0 ? 'text-emerald-600' : 'text-red-600'}>{kpi.last_week_pct}%</span> : <span className="text-gray-300">—</span>}
+        {kpi.last_week_pct != null ? <span className={vsClr(kpi.last_week_pct)}>{fmtVs(kpi.last_week_pct)}</span> : <span className="text-gray-300">—</span>}
       </td>
       <td className="text-center p-2">
         {isAuto ? <span className="text-gray-700">{planned}</span> :
@@ -582,7 +603,7 @@ function KpiRow({ kpi, saving, onSave, readOnly, onStepWise, stepWiseOpen }) {
         {isAuto ? <span className="text-gray-700">{actual}</span> :
           <input type="number" className="input text-center text-xs w-20 mx-auto" value={actual} onChange={e => setActual(e.target.value)} onBlur={flush} disabled={readOnly} />}
       </td>
-      <td className={`text-center p-2 font-bold ${pctClr}`}>{kpi.actual_pct}%</td>
+      <td className={`text-center p-2 font-bold ${pctClr}`}>{fmtVs(kpi.actual_pct)}</td>
       <td className="text-center p-2">
         <input type="number" className="input text-center text-xs w-20 mx-auto" value={totalUp} onChange={e => setTotalUp(e.target.value)} onBlur={flush} disabled={readOnly} />
       </td>
