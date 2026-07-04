@@ -16,7 +16,8 @@ import TimePicker from '../components/TimePicker';
 const DEPARTMENTS = ['Sales', 'Accounts', 'Purchase', 'Marketing', 'Finance', 'IT', 'MDO', 'Operations', 'Admin'];
 
 export default function Checklists() {
-  const { user, canDelete, isAdmin } = useAuth();
+  const { user, canDelete, canEdit, isAdmin } = useAuth();
+  const canManage = () => isAdmin() || canEdit('checklists');
   const [checklists, setChecklists] = useState([]);
   const [users, setUsers] = useState([]);
   const [modal, setModal] = useState(false);
@@ -269,7 +270,7 @@ export default function Checklists() {
             ['Description','Frequency','Due Date','Due Time','Assigned To','Status'],
             checklists.map(c => [c.description || c.title, c.frequency, c.due_date, c.due_time, c.assigned_to_name, c.status]))}
             className="btn btn-secondary flex items-center gap-2"><FiDownload /> Export Excel</button>
-          {isAdmin() && (
+          {canManage() && (
             <button onClick={() => {
               // Mam (2026-05-22): "by default end date is 31/12/2026"
               // — hard-pinned to 2026-12-31, NOT current-year (mam:
@@ -288,7 +289,7 @@ export default function Checklists() {
           )}
           {/* Mam (2026-05-22): bulk add — paste many task lines that
               share the same frequency / assignee / dates / proof type. */}
-          {isAdmin() && (
+          {canManage() && (
             <button onClick={() => {
               const today = new Date();
               const todayIso = today.toISOString().slice(0, 10);
@@ -304,7 +305,7 @@ export default function Checklists() {
           )}
         </div>
       </div>
-      {!isAdmin() && (
+      {!canManage() && (
         <p className="text-xs text-gray-500 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
           Only admins can create checklists. Tap <span className="font-semibold text-emerald-700">Upload Proof</span> next to each of your tasks below to submit.
         </p>
@@ -411,12 +412,12 @@ export default function Checklists() {
                 <th>Proof</th>
                 <th>Approval</th>
                 <th>Submitted</th>
-                {isAdmin() && <th>Actions</th>}
+                {canManage() && <th>Actions</th>}
               </tr>
             </thead>
             <tbody>
               {historyRows.length === 0 && !historyLoading && (
-                <tr><td colSpan={isAdmin() ? 9 : 8} className="text-center py-6 text-gray-400">
+                <tr><td colSpan={canManage() ? 9 : 8} className="text-center py-6 text-gray-400">
                   No checklists for this date.
                 </td></tr>
               )}
@@ -473,7 +474,7 @@ export default function Checklists() {
                     <td className="text-xs text-gray-500 font-mono">
                       {r.submitted_at ? new Date(r.submitted_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '—'}
                     </td>
-                    {isAdmin() && (
+                    {canManage() && (
                       <td>
                         {done && apStat === 'pending' ? (
                           <div className="flex gap-1">
@@ -512,7 +513,7 @@ export default function Checklists() {
 
       {/* Admin-only filter by assignee (regular users only see their own anyway).
           Hidden in the by-date / approval view since that has its own date picker. */}
-      {view === 'current' && isAdmin() && (
+      {view === 'current' && canManage() && (
         <div className="flex items-center gap-2 flex-wrap">
           <label className="text-xs text-gray-500 font-semibold uppercase">Person:</label>
           <select className="select text-sm max-w-xs" value={personFilter} onChange={e => setPersonFilter(e.target.value)}>
@@ -623,7 +624,7 @@ export default function Checklists() {
                       const t = row.task;
                       const badge = statusBadge[c.status] || { label: c.status, css: 'bg-gray-100 text-gray-700' };
                       const dateLabel = new Date(c.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-                      const canUpload = t.assigned_to === user?.id || isAdmin();
+                      const canUpload = t.assigned_to === user?.id || canManage();
                       const isPending = c.status === 'missed' || c.status === 'today' || c.status === 'done_rejected';
                       const uploadingThis = uploadingId === `${t.id}-${c.date}`;
                       return (
@@ -810,8 +811,8 @@ export default function Checklists() {
                         );
                       })()
                     )}
-                    {isAdmin() && <button onClick={() => { setEditing(c); setForm(c); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>}
-                    {isAdmin() && canDelete('checklists') && <button onClick={async () => {
+                    {canManage() && <button onClick={() => { setEditing(c); setForm(c); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>}
+                    {canManage() && canDelete('checklists') && <button onClick={async () => {
                       if (!confirm(`Delete this checklist?`)) return;
                       try { await api.delete(`/hr/checklists/${c.id}`); toast.success('Deleted'); load(); }
                       catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }

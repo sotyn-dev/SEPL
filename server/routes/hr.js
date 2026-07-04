@@ -1077,7 +1077,7 @@ function normaliseFortnightDays(v) {
   return [...new Set(arr)].sort((a, b) => a - b).slice(0, 2).join(',');
 }
 
-router.post('/checklists', adminGuard, (req, res) => {
+router.post('/checklists', requirePermission('checklists', 'create'), (req, res) => {
   const { title, description, frequency, due_date, due_time, assigned_to, department,
           recurrence_start_date, recurrence_end_date, proof_type, proof_label,
           fortnight_days } = req.body;
@@ -1112,7 +1112,7 @@ router.post('/checklists', adminGuard, (req, res) => {
 // task lines at once, all sharing the same frequency / assignee /
 // dept / dates / proof_type.  Reduces 30 single-task adds down to
 // one form fill.
-router.post('/checklists/bulk', adminGuard, (req, res) => {
+router.post('/checklists/bulk', requirePermission('checklists', 'create'), (req, res) => {
   const { tasks, frequency, due_date, due_time, assigned_to, assigned_to_ids, department,
           recurrence_start_date, recurrence_end_date, proof_type, proof_label,
           fortnight_days } = req.body || {};
@@ -1243,7 +1243,7 @@ router.post('/checklists/bulk', adminGuard, (req, res) => {
   res.status(201).json({ added, total: rows.length });
 });
 
-router.put('/checklists/:id', adminGuard, (req, res) => {
+router.put('/checklists/:id', requirePermission('checklists', 'edit'), (req, res) => {
   const { status, title, description, frequency, due_date, due_time, assigned_to, department,
           recurrence_start_date, recurrence_end_date, proof_type, proof_label,
           fortnight_days } = req.body;
@@ -1287,7 +1287,7 @@ router.put('/checklists/:id', adminGuard, (req, res) => {
   res.json({ message: 'Updated' });
 });
 
-router.delete('/checklists/:id', adminGuard, (req, res) => {
+router.delete('/checklists/:id', requirePermission('checklists', 'delete'), (req, res) => {
   getDb().prepare('DELETE FROM checklists WHERE id=?').run(req.params.id);
   res.json({ message: 'Deleted' });
 });
@@ -1413,14 +1413,18 @@ router.post('/checklists/:id/complete', (req, res) => {
 router.get('/checklists/by-date', (req, res) => {
   const db = getDb();
   const date = req.query.date || new Date().toISOString().slice(0, 10);
-  const isAdmin = req.user.role === 'admin';
-  const scope = isAdmin ? '' : 'AND c.assigned_to = ?';
+  let canManage = req.user.role === 'admin';
+  if (!canManage) {
+    const _cp = db.prepare("SELECT rp.can_edit FROM role_permissions rp JOIN user_roles ur ON rp.role_id = ur.role_id WHERE ur.user_id = ? AND rp.module = 'checklists'").get(req.user.id);
+    canManage = !!(_cp && _cp.can_edit);
+  }
+  const scope = canManage ? '' : 'AND c.assigned_to = ?';
   // Build args in the exact order placeholders appear in the SQL.
   // Was previously buggy (legacy `params = [date]` was duplicating the
   // first arg → "Too many parameter values were provided").  Mam saw
   // the error after the recurrence-window fields were added.
   const args = [date];                          // for the JOIN ON ... = ?
-  if (!isAdmin) args.push(req.user.id);         // for the scope ... = ?
+  if (!canManage) args.push(req.user.id);         // for the scope ... = ?
   args.push(date, date);                        // start ≤ ? and end ≥ ?
 
   const rows = db.prepare(`
