@@ -80,7 +80,7 @@ export default function EmailSettings() {
             </div>
             <div><label className="label">Username (full email)</label><input className="input" placeholder="dme@securedengineers.com" value={form.user} onChange={e => setForm({ ...form, user: e.target.value })} /></div>
             <div className="sm:col-span-2"><label className="label">Password / App Password {data.pass_set && <span className="text-xs text-gray-400 font-normal">(leave blank to keep current)</span>}</label><input className="input font-mono text-sm" type="password" placeholder="•••••••• (Gmail App Password is 16 chars)" value={form.pass} onChange={e => setForm({ ...form, pass: e.target.value })} autoComplete="off" /></div>
-            <div><label className="label">From address <span className="text-xs text-gray-400 font-normal">(optional)</span></label><input className="input" placeholder="SEPL ERP <dme@securedengineers.com>" value={form.from} onChange={e => setForm({ ...form, from: e.target.value })} /></div>
+            <div><label className="label">From address <span className="text-xs text-gray-400 font-normal">(optional)</span></label><input className="input" placeholder="SOTYN.AI <dme@securedengineers.com>" value={form.from} onChange={e => setForm({ ...form, from: e.target.value })} /></div>
             <div><label className="label">Director email (recipient)</label><input className="input" type="email" placeholder="director@securedengineers.com" value={form.director_to} onChange={e => setForm({ ...form, director_to: e.target.value })} /></div>
           </div>
           <div className="flex justify-end">

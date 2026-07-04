@@ -8,7 +8,7 @@ const COLS = [
   { k: 'rate', l: 'Rate ₹', t: 'number', w: 110 }, { k: 'gst', l: 'GST%', t: 'number', w: 80 },
 ];
 
-// Solar Labour Master — owned by the Solar module (separate from ERP Labour Rate).
+// Solar Labour Master — owned by the Solar module (separate from SOTYN.AI Labour Rate).
 export default function SolarLabourMaster() {
   const [rows, setRows] = useState([]);
   const load = () => api.get('/solar/labour').then((r) => setRows(r.data || [])).catch(() => toast.error('Load failed'));

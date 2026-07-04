@@ -334,7 +334,7 @@ export default function Layout() {
 
   // GLOBAL LOCATION TRACKING — was Attendance-page-only before, but mam's
   // team often closes that tab and just uses Leads / Procurement / etc.
-  // Running it from the Layout means as long as ANY ERP page is open in
+  // Running it from the Layout means as long as ANY SOTYN.AI page is open in
   // the browser (or installed PWA), GPS pings every 30 seconds. Each ping
   // also acts as a heartbeat for backend auto-punch.
   // Limitations: a fully-closed browser cannot ping. For 24/7 tracking
@@ -489,7 +489,7 @@ export default function Layout() {
     }
     const s = SIDEBAR_SETTINGS.items.find(m => m.path === location.pathname);
     if (s) return { group: SIDEBAR_SETTINGS.label, label: s.label };
-    return { group: null, label: 'SEPL ERP' };
+    return { group: null, label: 'SOTYN.AI' };
   })();
 
   // Avatar initials from the user's name (fallback to username), max 2 chars.
@@ -548,7 +548,7 @@ export default function Layout() {
                 <span className="text-blue-700 font-extrabold text-xs" style={{ display: 'none' }}>SE</span>
               </div>
               <div>
-                <h1 className="text-sm font-extrabold tracking-tight">SEPL ERP</h1>
+                <h1 className="text-sm font-extrabold tracking-tight">SOTYN.AI</h1>
                 <p className="text-[9px] text-red-200 -mt-0.5">Secured Engineers</p>
               </div>
             </div>

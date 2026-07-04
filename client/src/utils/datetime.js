@@ -1,4 +1,4 @@
-// Centralised date/time formatting for the whole ERP.
+// Centralised date/time formatting for the whole SOTYN.AI.
 //
 // Every timestamp in the DB is stored in UTC — either as a SQLite
 // CURRENT_TIMESTAMP string ("2026-06-17 07:12:21" — a space, no zone

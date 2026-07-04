@@ -369,7 +369,7 @@ function L1Salary({ projectId, onChange }) {
       <div className="flex gap-2">
         <button onClick={() => setAdding('legacy')} disabled={hasLegacy}
           className="btn btn-secondary text-xs flex items-center gap-1"
-          title={hasLegacy ? 'Legacy already captured' : 'One-off pre-ERP salary spend'}>
+          title={hasLegacy ? 'Legacy already captured' : 'One-off pre-SOTYN.AI salary spend'}>
           <FiPlus size={12} /> {hasLegacy ? '✓ Legacy captured' : 'Add Legacy Salary'}
         </button>
         <button onClick={() => setAdding('monthly')} className="btn btn-primary text-xs flex items-center gap-1">
@@ -437,11 +437,11 @@ function AddSalaryEntry({ kind, projectId, onClose, onSaved }) {
     } catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
   };
   return (
-    <Modal isOpen={true} onClose={onClose} title={kind === 'legacy' ? 'Legacy Salary (pre-ERP carry)' : 'Monthly Salary Entry'}>
+    <Modal isOpen={true} onClose={onClose} title={kind === 'legacy' ? 'Legacy Salary (pre-SOTYN.AI carry)' : 'Monthly Salary Entry'}>
       <form onSubmit={submit} className="space-y-3">
         {kind === 'legacy' && (
           <div className="text-xs bg-amber-50 border-l-2 border-amber-400 p-2 rounded">
-            One-off bulk capture of salary already spent on this project before the ERP went live.  Only one legacy row per project.
+            One-off bulk capture of salary already spent on this project before the SOTYN.AI went live.  Only one legacy row per project.
           </div>
         )}
         <div>
@@ -573,11 +573,11 @@ function AddDailyWage({ kind, projectId, onClose, onSaved }) {
     } catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
   };
   return (
-    <Modal isOpen={true} onClose={onClose} title={kind === 'legacy' ? 'Legacy Daily Wages (pre-ERP)' : 'Daily Wage Entry'}>
+    <Modal isOpen={true} onClose={onClose} title={kind === 'legacy' ? 'Legacy Daily Wages (pre-SOTYN.AI)' : 'Daily Wage Entry'}>
       <form onSubmit={submit} className="space-y-3">
         {kind === 'legacy' && (
           <div className="text-xs bg-amber-50 border-l-2 border-amber-400 p-2 rounded">
-            One-off bulk capture of daily wages paid before the ERP went live.
+            One-off bulk capture of daily wages paid before the SOTYN.AI went live.
           </div>
         )}
         <div>

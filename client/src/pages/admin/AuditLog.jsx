@@ -58,7 +58,7 @@ export default function AuditLog() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
           <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2"><FiShield className="text-red-600" /> Audit Log</h3>
-          <p className="text-sm text-gray-500">Every create / update / delete action across the ERP, with user and timestamp. Admin-only.</p>
+          <p className="text-sm text-gray-500">Every create / update / delete action across the SOTYN.AI, with user and timestamp. Admin-only.</p>
         </div>
         <button onClick={load} disabled={loading} className="btn btn-secondary flex items-center gap-2">
           <FiRefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh

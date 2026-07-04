@@ -340,7 +340,7 @@ export default function Locations() {
                         </div>
                       )}
                       {/* Mam's ask: show the time the user last opened the
-                          ERP. Each GPS ping IS a use of the app (the
+                          SOTYN.AI. Each GPS ping IS a use of the app (the
                           attendance page pings every 30s while open), so
                           the latest ping time = last app activity. Bold
                           + labelled so it can't be confused with the site

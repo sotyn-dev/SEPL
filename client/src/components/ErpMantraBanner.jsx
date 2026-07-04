@@ -1,4 +1,4 @@
-// ERP Mantra Banner — SEPL's permanent rule, shown at the top of the
+// SOTYN.AI Mantra Banner — SEPL's permanent rule, shown at the top of the
 // Dashboard. Mam: 'if it is not in erp, it will not happen' is THE
 // rule, not a rotating quote of the day. Keep it big, keep it bold,
 // keep it always.
@@ -14,7 +14,7 @@ export default function ErpMantraBanner() {
       <div className="flex-1 min-w-0">
         <p className="text-[11px] font-bold uppercase tracking-widest text-orange-700">SEPL Rule</p>
         <p className="text-lg sm:text-xl font-extrabold text-gray-900 mt-0.5 leading-snug uppercase tracking-wide">
-          🚨 &ldquo;IF IT IS NOT IN THE ERP, IT DID NOT HAPPEN.&rdquo; 🚨
+          🚨 &ldquo;IF IT IS NOT IN THE SOTYN.AI, IT DID NOT HAPPEN.&rdquo; 🚨
         </p>
       </div>
     </div>

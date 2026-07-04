@@ -24,7 +24,7 @@ body {
    like `pl-10` properly override the px-3.5 baked into .input. Without
    this layer, .input and .pl-10 had equal specificity and source order
    decided which won — causing icons to overlap placeholder text in
-   every <input className="input pl-10"> across the ERP. */
+   every <input className="input pl-10"> across the SOTYN.AI. */
 @layer components {
   .sidebar-link {
     @apply flex items-center gap-3 px-4 py-2.5 text-sm rounded-lg transition-all duration-200;
@@ -137,7 +137,7 @@ input[type="number"].input-compact::-webkit-inner-spin-button {
   margin: 0;
 }
 
-/* Mobile tap-target enhancements — many action buttons across the ERP
+/* Mobile tap-target enhancements — many action buttons across the SOTYN.AI
    use text-[10px] with very tight padding. On phones (<= 640px) bump
    the min-height to comfortably hit with a fingertip and ensure the
    text is readable. Targets all .btn variants in one place so we don't
@@ -169,7 +169,7 @@ input[type="number"].input-compact::-webkit-inner-spin-button {
      without touching ~50 page files individually.
 
      1. Auto horizontal-scroll any card that wraps a wide table.
-        Many .card containers across the ERP (Business Book, Vendors,
+        Many .card containers across the SOTYN.AI (Business Book, Vendors,
         Cheque FMS, Snags, Orders, Item Master, …) hold tables that
         overflow 375px width. Browser-supported :has() lets us target
         them in one rule. We also kill the card's p-6 padding while

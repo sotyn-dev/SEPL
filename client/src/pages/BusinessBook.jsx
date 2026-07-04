@@ -322,7 +322,7 @@ export default function BusinessBook() {
   // GST rate is stored as text like "18%". GST sales amount = GST-inclusive
   // total = Sale × (1 + rate%) (mam 2026-06-23). Management discount is its
   // own stored amount.
-  // GST sales amount = GST-inclusive total. The ERP already stores this as
+  // GST sales amount = GST-inclusive total. The SOTYN.AI already stores this as
   // po_amount (= Sale × 1.18, per the business_book rule); fall back to that
   // formula if po_amount isn't set. The % is derived for the sub-label.
   const gstInclOf = (e) => Number(e.po_amount) || ((Number(e.sale_amount_without_gst) || 0) * 1.18);

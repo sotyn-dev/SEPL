@@ -1,7 +1,7 @@
 // Shared hook to persist a "current tab" selection in the URL query
 // string so refreshes (and shared links) don't snap the user back to
 // the first tab. Mam reported it on Cheques (2026-05-28) and asked
-// for an ERP-wide audit; this hook is the single source of truth.
+// for an SOTYN.AI-wide audit; this hook is the single source of truth.
 //
 // Usage — strict (recommended when the page knows its tab IDs):
 //   const [tab, setTab] = useUrlTab(['action_due', 'all'], 'action_due');

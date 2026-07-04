@@ -103,7 +103,7 @@ export default function EmploymentAgreementPrint() {
         <h3 className="font-bold mt-5 mb-2">4. Leave</h3>
         <p className="mb-3 text-justify">
           The Employee shall be entitled to leave as per the Company's HR policy in force from time
-          to time. Leave must be applied for and approved in advance through the ERP.
+          to time. Leave must be applied for and approved in advance through the SOTYN.AI.
         </p>
 
         <h3 className="font-bold mt-5 mb-2">5. Probationary Period</h3>

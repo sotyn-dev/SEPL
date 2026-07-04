@@ -1406,7 +1406,7 @@ export default function Procurement() {
   // Open the Upload Vendor PO modal. If an indent is pre-selected (from the
   // Pending section), its items auto-load with finalized rates pre-filled so
   // the uploader can tick which indent lines the Tally PO covers.
-  // Terms + Credit Days live on the uploaded Tally PO itself — not in the ERP.
+  // Terms + Credit Days live on the uploaded Tally PO itself — not in the SOTYN.AI.
   const openCreateVendorPo = (indentId = '') => {
     setForm({
       indent_id: indentId || '',
@@ -1491,7 +1491,7 @@ export default function Procurement() {
     if (!form.vendor_id) return toast.error('Pick a vendor');
     // PO Number is now auto-generated server-side (VPO/YYYY/####) — no
     // manual entry. PO file is also optional; mam's flow is to create
-    // the PO inside the ERP, not upload a Tally PDF.
+    // the PO inside the SOTYN.AI, not upload a Tally PDF.
 
     // Build line items. For pipe lines (weight_per_meter > 0) convert the
     // entered METERS to KG so the PO is in kg (qty kg × ₹/kg). The original
@@ -1686,7 +1686,7 @@ export default function Procurement() {
     if (!form.document_type) return toast.error('Pick Sales Bill or Delivery Note');
     // document_number is now auto-generated server-side when blank — no
     // user-side required check. Mam can still type one to override.
-    // File is OPTIONAL now — the ERP generates the document; the signed
+    // File is OPTIONAL now — the SOTYN.AI generates the document; the signed
     // copy is uploaded later via Mark Received. Mam: "like po I want from
     // erp create sales bill or dispatch which i give you format".
     const fd = new FormData();
@@ -1961,7 +1961,7 @@ export default function Procurement() {
   // Auto-fill the AI market rate for every item missing one (mam 2026-06-19:
   // "don't need to click, automatically rate here"). THROTTLED: one small batch
   // every ~30s (with 429 back-off) so it stays well under the org's 10k input-
-  // tokens/min limit and leaves room for the Ask ERP chat. Persisted → an item
+  // tokens/min limit and leaves room for the Ask SOTYN.AI chat. Persisted → an item
   // already done is never recomputed. Self-paced scheduler, set up once per
   // visit to the Vendor Rates tab; reads fresh data via a ref.
   const aiAutoRef = useRef(new Set());     // ids already requested this session
@@ -4466,7 +4466,7 @@ export default function Procurement() {
                             )}
                           </td>
                           <td className="px-2 py-1.5 text-center">
-                            {/* Always show "View PO" — opens the ERP-generated
+                            {/* Always show "View PO" — opens the SOTYN.AI-generated
                                 print page (PDF-able). If a Tally / signed scan
                                 was also uploaded, show a second link below. */}
                             <a href={`/vendor-po/${po.id}/print`} target="_blank" rel="noopener noreferrer" className="text-red-600 hover:text-red-800 underline text-[11px] font-semibold whitespace-nowrap">📄 View PO</a>
@@ -5356,7 +5356,7 @@ export default function Procurement() {
               upload receiving").  Synthetic AWAITING cards appear at
               the top as a fallback for billed POs that don't yet have
               a delivery_notes row — they still let mam Upload Receiving
-              and ERP will mint the real DN number on submit. */}
+              and SOTYN.AI will mint the real DN number on submit. */}
           <div className="md:hidden space-y-3">
             {/* Vendor-PO "Upload Receiving" cards removed — receiving is only
                 against client delivery notes (mam 2026-06-06). */}
@@ -6315,7 +6315,7 @@ export default function Procurement() {
         </form>
       </Modal>
 
-      {/* Vendor PO Modal — PO is created INSIDE the ERP. PO number is
+      {/* Vendor PO Modal — PO is created INSIDE the SOTYN.AI. PO number is
           auto-generated (VPO/YYYY/####) on save. File upload is optional
           (e.g. if mam later wants to attach a signed scan). */}
       <Modal isOpen={modal === 'vendorpo'} onClose={() => setModal(false)} title="Create Vendor PO" wide>
@@ -7136,7 +7136,7 @@ export default function Procurement() {
           )}
 
           {/* Existing-document attachment is now optional + de-emphasised
-              since the ERP itself generates the SEPL-format document.
+              since the SOTYN.AI itself generates the SEPL-format document.
               Use this only if you already have a paper copy you want to
               attach for reference. The signed copy goes in via Mark
               Received after delivery. */}
@@ -7149,7 +7149,7 @@ export default function Procurement() {
           </details>
           <div><label className="label">Notes <span className="text-gray-400 font-normal">(optional)</span></label><textarea className="input" rows="2" value={form.notes || ''} onChange={e => setForm({...form, notes: e.target.value})} /></div>
           <div className="bg-blue-50 border border-blue-200 rounded px-3 py-2 text-[11px] text-blue-800">
-            On <b>Create</b>, the ERP will generate the SEPL-format <b>{form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill'}</b> from this PO's items and client info, and open it in a new tab ready to print. The signed copy gets uploaded later via Mark Received.
+            On <b>Create</b>, the SOTYN.AI will generate the SEPL-format <b>{form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill'}</b> from this PO's items and client info, and open it in a new tab ready to print. The signed copy gets uploaded later via Mark Received.
           </div>
           <div className="flex justify-end gap-3"><button type="button" onClick={() => setModal(false)} className="btn btn-secondary">Cancel</button><button type="submit" className="btn btn-primary">Create {form.document_type === 'challan' ? 'Delivery Note' : 'Sales Bill'}</button></div>
         </form>

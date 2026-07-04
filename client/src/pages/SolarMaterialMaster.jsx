@@ -4,7 +4,7 @@ import { FiSun, FiPlus, FiSave, FiTrash2 } from 'react-icons/fi';
 import api from '../api';
 
 // Solar Material Master — one rate row per make/grade. Owned by the Solar module
-// (separate from the generic ERP item master). category drives the columns.
+// (separate from the generic SOTYN.AI item master). category drives the columns.
 const CATS = [
   { key: 'panel', label: 'Panels', cols: [
     { k: 'make', l: 'Make' }, { k: 'item_name', l: 'Model / name' },

@@ -55,7 +55,7 @@ const SOURCE_INFO = {
   'auto:pms_all':               { plan: 'ALL PMS tasks assigned this week (company-wide)', actual: 'ALL PMS tasks done this week (company-wide)' },
   'auto:delegations_all':       { plan: 'ALL delegations assigned this week (company-wide)', actual: 'ALL delegations done this week (company-wide)' },
   'auto:tickets_all':           { plan: 'ALL help tickets raised this week (company-wide)', actual: 'ALL tickets resolved this week (company-wide)' },
-  'auto:erp_module_coverage':   { plan: 'ERP modules tracked (the target = all running)', actual: 'Modules with activity this week' },
+  'auto:erp_module_coverage':   { plan: 'SOTYN.AI modules tracked (the target = all running)', actual: 'Modules with activity this week' },
   'auto:raci_steps_done':       { plan: 'RACI steps on the user this week (closed + still open)', actual: 'RACI steps the user closed this week (all modules)' },
   'auto:raci_ontime_pct':       { plan: 'You set (target %, e.g. 90)',        actual: '% of the user\'s closed steps done within SLA' },
   // DPR
@@ -838,7 +838,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
               ))}
             </select>
             <span className="text-[10px] text-gray-500">
-              {previewLoading ? 'loading…' : 'current week, live from ERP data'}
+              {previewLoading ? 'loading…' : 'current week, live from SOTYN.AI data'}
             </span>
           </>
         )}
@@ -1012,7 +1012,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:pms_all">PMS tasks — ALL (company-wide)</option>
                     <option value="auto:delegations_all">Delegations — ALL (company-wide)</option>
                     <option value="auto:tickets_all">Help tickets — ALL (company-wide)</option>
-                    <option value="auto:erp_module_coverage">ERP module coverage (how many ran)</option>
+                    <option value="auto:erp_module_coverage">SOTYN.AI module coverage (how many ran)</option>
                   </optgroup>
                   <optgroup label="Responsibility (RACI / SLA)">
                     <option value="auto:raci_steps_done">RACI steps closed (all modules)</option>

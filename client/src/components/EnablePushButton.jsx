@@ -49,7 +49,7 @@ export default function EnablePushButton() {
 
   const test = async () => {
     try {
-      const r = await api.post('/push/test', { message: 'Test from SEPL ERP — your devices are connected ✓' });
+      const r = await api.post('/push/test', { message: 'Test from SOTYN.AI — your devices are connected ✓' });
       toast.success(`Sent — ${r.data.sent} of ${r.data.total} devices`);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed');
@@ -89,7 +89,7 @@ export default function EnablePushButton() {
             )}
             {state === 'on' && (
               <>
-                <p className="text-xs text-emerald-700 mb-2">✓ Active on this device. You'll get alerts even when the ERP tab is closed.</p>
+                <p className="text-xs text-emerald-700 mb-2">✓ Active on this device. You'll get alerts even when the SOTYN.AI tab is closed.</p>
                 <div className="flex gap-2">
                   <button onClick={test} className="btn btn-secondary flex-1 text-xs">Send Test</button>
                   <button onClick={turnOff} className="btn btn-danger flex-1 text-xs">Disable</button>

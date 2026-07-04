@@ -1,5 +1,5 @@
 // Shared 12-hour scroll-column time picker — mam (2026-06-01): "IN
-// WHOLE ERP THIS TYPE BUT IF UI/UX GOOD AFTER TIME SELECTION BUTTON
+// WHOLE SOTYN.AI THIS TYPE BUT IF UI/UX GOOD AFTER TIME SELECTION BUTTON
 // IS APPLY".  The native <input type="time"> opens a column-style
 // picker that *commits on click*, which made every accidental tap
 // save a wrong time.  This component replaces it with the same

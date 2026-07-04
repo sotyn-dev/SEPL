@@ -1,6 +1,6 @@
 // Admin "Daily Activity / Word Count" dashboard.
 //
-// Pick a date (or range), see how many characters each user typed into the ERP that
+// Pick a date (or range), see how many characters each user typed into the SOTYN.AI that
 // day, broken down by user, by module, and by action. Powered by
 // /api/admin/word-count which walks the audit_log body_summary.
 //
@@ -96,7 +96,7 @@ export default function WordCount() {
       setVerify(null);
     }
   };
-  // Changelog — what new systems/features were created in the ERP
+  // Changelog — what new systems/features were created in the SOTYN.AI
   // on the picked date, sourced from git log on the deployed repo.
   const [changelog, setChangelog] = useState(null);
 
@@ -161,7 +161,7 @@ export default function WordCount() {
             <FiBarChart2 className="text-red-600" /> Daily Activity
           </h3>
           <p className="text-sm text-gray-500">
-            Pick a date to see the total characters typed across the entire ERP that day (e.g. typing "monika" = 6 characters), with breakdowns by user and module.
+            Pick a date to see the total characters typed across the entire SOTYN.AI that day (e.g. typing "monika" = 6 characters), with breakdowns by user and module.
           </p>
         </div>
         <button onClick={load} disabled={loading} className="btn btn-secondary flex items-center gap-2">
@@ -234,7 +234,7 @@ export default function WordCount() {
         </div>
       )}
 
-      {/* What's NEW in the ERP — git log for the same date range. Shows
+      {/* What's NEW in the SOTYN.AI — git log for the same date range. Shows
           MD which new modules / features / fixes shipped each day so he
           can review at a glance. Auto-pulled, no manual upkeep. */}
       {changelog && changelog.commits && changelog.commits.length > 0 && (
@@ -242,7 +242,7 @@ export default function WordCount() {
           <div className="px-4 py-3 border-b bg-gradient-to-r from-emerald-50 to-blue-50 flex items-center justify-between">
             <div>
               <h4 className="font-semibold text-gray-800 flex items-center gap-2">
-                ✨ What's New in ERP
+                ✨ What's New in SOTYN.AI
                 <span className="text-xs font-normal text-gray-500">— ({changelog.total} {changelog.total === 1 ? 'change' : 'changes'} {changelog.since !== changelog.until ? `${changelog.since} → ${changelog.until}` : `on ${changelog.since}`})</span>
               </h4>
               <p className="text-[11px] text-gray-500 mt-0.5">Auto-pulled from the deploy log so MD can review each day's shipped work.</p>
@@ -284,7 +284,7 @@ export default function WordCount() {
       )}
       {changelog && changelog.commits && changelog.commits.length === 0 && (
         <div className="card p-3 bg-gray-50 border-l-4 border-gray-300 text-xs text-gray-600">
-          ✨ No new ERP features shipped on this date. Pick another date or expand the range.
+          ✨ No new SOTYN.AI features shipped on this date. Pick another date or expand the range.
         </div>
       )}
 

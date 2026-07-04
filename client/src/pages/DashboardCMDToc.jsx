@@ -525,7 +525,7 @@ export default function DashboardCMDToc() {
           />
           <TocStep kind="elevate" title="★ Elevate (invest)"
             body={<>
-              <strong>Hire Collections Officer</strong> (~₹40K/mo) &amp; deploy <strong>invoice-on-milestone automation</strong> in ERP (auto-generate RA bill within 24h of milestone — TOC v3 P0 #4, IT build).
+              <strong>Hire Collections Officer</strong> (~₹40K/mo) &amp; deploy <strong>invoice-on-milestone automation</strong> in SOTYN.AI (auto-generate RA bill within 24h of milestone — TOC v3 P0 #4, IT build).
               Negotiate vendor DPO from {pulse.dpo ?? '—'} → 45 days with top 3 vendors.<br />
               <strong style={{ color: C.green }}>Target: CCC {pulse.ccc ?? '—'} → 90 days in 60 days.</strong>
             </>}

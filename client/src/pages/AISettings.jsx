@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import api from '../api';
 import toast from 'react-hot-toast';
 
-// AI Settings (admin only). Pastes the Anthropic API key into the ERP
+// AI Settings (admin only). Pastes the Anthropic API key into the SOTYN.AI
 // itself — no SSH, no .env edit. Stored server-side in app_settings.
 // The key is never sent back to the browser; GET only returns a masked
 // version so the page can show "configured" vs "not configured".
@@ -45,8 +45,8 @@ export default function AISettings() {
       <div className="card p-4 space-y-3">
         <h3 className="font-semibold text-gray-800">AI Agent — API Key</h3>
         <p className="text-sm text-gray-600">
-          Paste your API key here to enable the floating "Ask ERP" chat bubble across the system.
-          The key is stored in the ERP database (not in any file), and never sent back to a browser.
+          Paste your API key here to enable the floating "Ask SOTYN.AI" chat bubble across the system.
+          The key is stored in the SOTYN.AI database (not in any file), and never sent back to a browser.
           {form.provider === 'gemini'
             ? <> Get a <b>free</b> Gemini key at <a className="text-red-600 hover:underline" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">aistudio.google.com</a> → <b>Get API key</b>. (Free tier has rate limits and may use data to improve Google's products — avoid for highly sensitive queries.)</>
             : <> Get a key at <a className="text-red-600 hover:underline" href="https://console.anthropic.com" target="_blank" rel="noreferrer">console.anthropic.com</a> → Settings → API Keys.</>}

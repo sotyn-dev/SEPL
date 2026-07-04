@@ -12,7 +12,8 @@ import { fmtDate } from '../utils/datetime';
 export default function Dashboard() {
   const { isAdmin, user } = useAuth();
   const [stats, setStats] = useState(null);
-  const [perf, setPerf] = useState(null);   // team weekly performance (admin)
+  const [perf, setPerf] = useState(null);
+  const [teams, setTeams] = useState(null);   // team weekly performance (admin)
   const [myTasks, setMyTasks] = useState([]);
   const [todayChecklists, setTodayChecklists] = useState([]);
   const [myTickets, setMyTickets] = useState({ active: 0, recent: [] });
@@ -36,9 +37,12 @@ export default function Dashboard() {
   useEffect(() => {
     api.get('/dashboard').then(r => setStats(r.data));
     loadPersonal();
-    // Team performance this week — auto-scored live from ERP activity. Admin-only
+    // Team performance this week — auto-scored live from SOTYN.AI activity. Admin-only
     // (endpoint is scoring-gated); non-admins just don't see the panel.
-    if (isAdmin()) api.get('/scoring/weekly').then(r => setPerf(r.data)).catch(() => setPerf(null));
+    if (isAdmin()) {
+      api.get('/scoring/weekly').then(r => setPerf(r.data)).catch(() => setPerf(null));
+      api.get('/gamification/teams').then(r => setTeams(r.data)).catch(() => setTeams(null));
+    }
   }, []);
 
   // Shared proof-upload helper: POST /upload then return the URL
@@ -104,20 +108,34 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Daily ERP-culture mantra — rotates by day-of-year so the whole
+      {/* Daily SOTYN.AI-culture mantra — rotates by day-of-year so the whole
           team sees the same quote in their morning standup. */}
       <ErpMantraBanner />
 
-      {/* Team Performance — This Week. Auto-scored live from ERP activity
+      {/* Team Performance — This Week. Auto-scored live from SOTYN.AI activity
           (mam 2026-07-01: "show performance current week also automatic").
           Admin-only, hidden when there's no data. */}
       {isAdmin() && perf?.users?.length > 0 && (() => {
         const ranked = perf.users;
         const top = ranked.slice(0, 8);
-        const avg = Math.round(ranked.reduce((a, u) => a + (u.score || 0), 0) / ranked.length);
         const medal = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`);
         const bar = (s) => (s >= 80 ? 'from-emerald-400 to-emerald-600' : s >= 50 ? 'from-amber-400 to-amber-500' : 'from-rose-400 to-rose-500');
         const av = ['bg-indigo-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500', 'bg-sky-500', 'bg-violet-500', 'bg-teal-500', 'bg-orange-500'];
+        const scoreByUser = {};
+        ranked.forEach(u => { scoreByUser[u.user_id] = Math.max(0, Math.min(100, Math.round(u.score || 0))); });
+        const teamRows = (teams?.teams || []).map(t => {
+          const members = (t.members || [])
+            .map(m => ({ user_id: m.user_id, name: m.name, score: scoreByUser[m.user_id] ?? null }))
+            .sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || String(a.name || '').localeCompare(String(b.name || '')));
+          const scored = members.filter(m => m.score != null);
+          const avg = scored.length ? Math.round(scored.reduce((s, m) => s + m.score, 0) / scored.length) : null;
+          return { id: t.id, name: t.name, motto: t.motto, members, avg };
+        }).sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+        const hasTeams = teamRows.some(t => t.members.length > 0);
+        const teamAvgVals = teamRows.map(t => t.avg).filter(v => v != null);
+        const headerAvg = hasTeams
+          ? (teamAvgVals.length ? Math.round(teamAvgVals.reduce((a, b) => a + b, 0) / teamAvgVals.length) : 0)
+          : Math.round(ranked.reduce((a, u) => a + (u.score || 0), 0) / ranked.length);
         return (
           <div className="rounded-2xl shadow-sm border border-gray-100 overflow-hidden bg-white">
             <div className="bg-gradient-to-r from-indigo-600 via-indigo-500 to-red-500 px-5 py-4 flex items-center justify-between">
@@ -125,38 +143,75 @@ export default function Dashboard() {
                 <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center"><FiTrendingUp size={20} /></div>
                 <div>
                   <h3 className="font-bold text-lg leading-tight">Performance — This Week</h3>
-                  <p className="text-[11px] text-white/80">Auto-scored from ERP · {fmtDate(perf.week_start)} – {fmtDate(perf.week_end)}</p>
+                  <p className="text-[11px] text-white/80">Auto-scored from SOTYN.AI · {fmtDate(perf.week_start)} – {fmtDate(perf.week_end)}{hasTeams ? ` · ${teamRows.length} teams` : ''}</p>
                 </div>
               </div>
               <div className="text-right text-white">
-                <div className="text-3xl font-extrabold leading-none">{avg}%</div>
+                <div className="text-3xl font-extrabold leading-none">{headerAvg ? `${headerAvg}%` : '—'}</div>
                 <div className="text-[10px] text-white/80 uppercase tracking-wide">team avg</div>
               </div>
             </div>
-            <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
-              {top.map((u, i) => {
-                const s = Math.max(0, Math.min(100, Math.round(u.score || 0)));
-                return (
-                  <div key={u.user_id} className="flex items-center gap-3">
-                    <div className="w-6 text-center text-sm font-bold text-gray-400">{medal(i)}</div>
-                    <div className={`w-8 h-8 rounded-full ${av[i % av.length]} text-white flex items-center justify-center text-xs font-bold flex-shrink-0`}>
-                      {(u.name || '?').charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex justify-between items-baseline gap-2">
-                        <span className="font-semibold text-sm text-gray-800 truncate">{u.name}</span>
-                        <span className="text-sm font-bold text-gray-700 flex-shrink-0">{s}%</span>
+            {hasTeams ? (
+              <div className="p-4 space-y-3">
+                {teamRows.map((t, i) => {
+                  const s = t.avg || 0;
+                  return (
+                    <div key={t.id} className="rounded-xl border border-gray-100 p-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-7 text-center text-sm font-bold text-gray-400 flex-shrink-0">{medal(i)}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex justify-between items-baseline gap-2">
+                            <span className="font-bold text-sm text-gray-800 truncate">{t.name}{t.motto ? <span className="ml-1 text-[11px] font-normal text-gray-400">· {t.motto}</span> : null}</span>
+                            <span className="text-sm font-extrabold text-gray-700 flex-shrink-0">{t.avg ? `${s}%` : '—'}</span>
+                          </div>
+                          <div className="h-2 rounded-full bg-gray-100 overflow-hidden mt-1">
+                            <div className={`h-full rounded-full bg-gradient-to-r ${bar(s)} transition-all duration-700`} style={{ width: `${s}%` }} />
+                          </div>
+                        </div>
                       </div>
-                      <div className="h-2 rounded-full bg-gray-100 overflow-hidden mt-1">
-                        <div className={`h-full rounded-full bg-gradient-to-r ${bar(s)} transition-all duration-700`} style={{ width: `${s}%` }} />
+                      <div className="mt-2 pl-10 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+                        {t.members.map((m, mi) => {
+                          const champ = mi < 3 && m.score > 0;
+                          return (
+                            <div key={m.user_id} className={`flex justify-between items-center gap-2 text-xs ${champ ? 'font-semibold' : ''}`}>
+                              <span className="flex items-center gap-1.5 min-w-0">
+                                <span className="w-4 text-center flex-shrink-0 text-[11px]">{champ ? medal(mi) : <span className="text-gray-300">{mi + 1}</span>}</span>
+                                <span className={`truncate ${champ ? 'text-gray-800' : 'text-gray-600'}`}>{m.name}</span>
+                              </span>
+                              <span className={`flex-shrink-0 ${m.score ? (champ ? 'text-emerald-600' : 'text-gray-700') : 'text-gray-300'}`}>{m.score ? `${m.score}%` : '—'}</span>
+                            </div>
+                          );
+                        })}
+                        {t.members.length === 0 && <div className="text-[11px] text-gray-300">No members yet</div>}
                       </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
+                {top.map((u, i) => {
+                  const s = Math.max(0, Math.min(100, Math.round(u.score || 0)));
+                  return (
+                    <div key={u.user_id} className="flex items-center gap-3">
+                      <div className="w-6 text-center text-sm font-bold text-gray-400">{medal(i)}</div>
+                      <div className={`w-8 h-8 rounded-full ${av[i % av.length]} text-white flex items-center justify-center text-xs font-bold flex-shrink-0`}>{(u.name || '?').charAt(0).toUpperCase()}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-baseline gap-2">
+                          <span className="font-semibold text-sm text-gray-800 truncate">{u.name}</span>
+                          <span className="text-sm font-bold text-gray-700 flex-shrink-0">{s ? `${s}%` : '—'}</span>
+                        </div>
+                        <div className="h-2 rounded-full bg-gray-100 overflow-hidden mt-1">
+                          <div className={`h-full rounded-full bg-gradient-to-r ${bar(s)} transition-all duration-700`} style={{ width: `${s}%` }} />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             <div className="px-4 pb-3 pt-1 flex justify-between items-center border-t border-gray-50">
-              <span className="text-[11px] text-gray-400">Updates automatically as work is logged in the ERP — no manual entry.</span>
+              <span className="text-[11px] text-gray-400">Updates automatically as work is logged in the SOTYN.AI — no manual entry.</span>
               <Link to="/scorecard" className="text-xs text-indigo-600 hover:underline font-semibold whitespace-nowrap">Full Scorecard →</Link>
             </div>
           </div>

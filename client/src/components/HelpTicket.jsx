@@ -13,7 +13,7 @@ const GUIDES = [
   { title: 'How to Create a Purchase Order', steps: ['Go to Orders & Planning', 'Click "Add PO"', 'Select Business Book entry', 'Upload PO copy', 'Upload BOQ Excel → items auto-fill', 'Create PO'] },
   { title: 'How to Submit DPR', steps: ['Go to DPR page', 'Click "Submit DPR"', 'Select site', 'Fill Table A (Installation from PO)', 'Fill Table B (Costs)', 'Add safety, hindrances, next day plan', 'Submit'] },
   { title: 'How to Request Payment', steps: ['Go to Payment Required', 'Click "New Request"', 'Select employee name (auto fills dept/phone)', 'Select category', 'Fill required fields based on category', 'Submit - goes to category approver'] },
-  { title: 'How to Punch Attendance', steps: ['Open ERP on mobile', 'Go to Attendance', 'Click "Take Selfie"', 'Allow GPS + Camera', 'Click PUNCH IN (only inside office geofence)', 'After work click PUNCH OUT'] },
+  { title: 'How to Punch Attendance', steps: ['Open SOTYN.AI on mobile', 'Go to Attendance', 'Click "Take Selfie"', 'Allow GPS + Camera', 'Click PUNCH IN (only inside office geofence)', 'After work click PUNCH OUT'] },
   { title: 'How to Add a New User', steps: ['Admin → User Management', 'Click "Add User"', 'Fill name, email, password', 'Assign roles (Site Engineer/HR/etc.)', 'User can now login'] },
   { title: 'How to Approve Payment', steps: ['Go to Payment Required', 'Click Review on pending request', 'Read all details', 'Enter approval reason (min 5 chars)', 'Click Approve or Reject'] },
   { title: 'How Sales Funnel Works', steps: ['New Lead (SC)', 'Mark Qualified or Not (SC)', 'Assign Meeting (SC)', 'Upload MOM (ASM)', 'Upload Drawings (ASM)', 'Create BOQ (Designer)', 'Send Quotation (SC)', 'Final: Won/Lost'] },
@@ -112,7 +112,7 @@ export default function HelpTicket() {
               <FiHelpCircle className="inline mr-1" size={12}/> Tickets {tickets.length > 0 && `(${tickets.filter(t=>t.status!=='closed'&&t.status!=='resolved').length})`}
             </button>
             <button onClick={() => setTab('learner')} className={`flex-1 py-2.5 text-xs font-bold ${tab==='learner' ? 'text-red-600 border-b-2 border-red-600' : 'text-gray-500'}`}>
-              <FiBook className="inline mr-1" size={12}/> ERP Learner
+              <FiBook className="inline mr-1" size={12}/> SOTYN.AI Learner
             </button>
           </div>
 
@@ -145,7 +145,7 @@ export default function HelpTicket() {
 
             {tab === 'learner' && (
               <div className="space-y-2">
-                <p className="text-xs text-gray-500 mb-2">Quick guides to use the ERP</p>
+                <p className="text-xs text-gray-500 mb-2">Quick guides to use the SOTYN.AI</p>
                 {GUIDES.map((g, i) => (
                   <details key={i} className="border rounded-lg p-2">
                     <summary className="font-semibold text-xs text-red-600 cursor-pointer">{g.title}</summary>

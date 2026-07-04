@@ -367,7 +367,7 @@ export default function DashboardWarRoom() {
     <div style={{ background: C.bg, color: C.ink, margin: -8, minHeight: '100vh', fontFamily: 'Inter, -apple-system, sans-serif' }}>
       <header style={headerStyle}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 18, fontWeight: 600, letterSpacing: '.3px' }}>SEPL ERP — Director's War Room</h1>
+          <h1 style={{ margin: 0, fontSize: 18, fontWeight: 600, letterSpacing: '.3px' }}>SOTYN.AI — Director's War Room</h1>
           <div style={{ fontSize: 12, color: '#bdbdbd' }}>Secured Engineers Pvt Ltd · Path to ₹10,000 cr · Read in 30 sec / Decide in 5 min</div>
         </div>
         <div style={{ fontSize: 12, color: '#bdbdbd' }}>

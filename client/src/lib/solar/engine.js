@@ -1,7 +1,7 @@
 // Solar Quotation engine — ported verbatim (logic-wise) from the standalone
 // solar-quotation.html. Pure functions: no DOM, no globals. Takes an `inp`
 // (form inputs) + `rb` (rate book from GET /api/solar/rate-book) and returns
-// engineering sizing + BOQ line items. Throughput model identical to the ERP
+// engineering sizing + BOQ line items. Throughput model identical to the SOTYN.AI
 // estimator: pp → acc → tp → tpa → margin → sp.
 
 export const DEFAULTS = {

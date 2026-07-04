@@ -42,7 +42,7 @@ export default function Delegation() {
   const [extendModal, setExtendModal] = useState(null); // task: assignee requests more time
   const [form, setForm] = useState({});
   const [submitForm, setSubmitForm] = useState({ proof_url: '', uploading: false });
-  // Mam's MD (2026-05-21): "ERP is hang" when raising task with photo.
+  // Mam's MD (2026-05-21): "SOTYN.AI is hang" when raising task with photo.
   // Root cause was a silent 30-60s photo upload with no progress.  Track
   // a saving flag + percentage so the Save button reflects what's
   // actually happening.
@@ -182,7 +182,7 @@ export default function Delegation() {
     setSaving(true); setSavePct(0);
     try {
       // Optional attachment — compress images BEFORE upload (mam's MD,
-      // 2026-05-21: "ERP is hang" when a 10-MB phone photo took 30s+
+      // 2026-05-21: "SOTYN.AI is hang" when a 10-MB phone photo took 30s+
       // on the wire).  compressImage() resizes to 1920px / JPEG 80%
       // and lands at ~700 KB.  PDFs/docs pass through unchanged.
       let attachmentUrl = null;

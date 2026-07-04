@@ -9,7 +9,7 @@ import { FiPlus, FiEdit2, FiTrash2, FiShield, FiCheck, FiX } from 'react-icons/f
 // renaming 'Procurement' to 'Indent to Dispatch' is UI-only.
 // Mam (2026-05-21): "add all module in roles& permission".  Keep this
 // list in sync with server/db/schema.js ALL_MODULES — every module
-// permission-gated in the ERP needs a row here so admin can grant /
+// permission-gated in the SOTYN.AI needs a row here so admin can grant /
 // revoke access.  Grouped by sidebar section for readability; keys
 // (used by backend role_permissions) are unchanged.
 const ALL_MODULES = [
@@ -76,7 +76,7 @@ const ALL_MODULES = [
   { key: 'expenses', label: 'Expenses' },
 
   // — Platform
-  { key: 'ai_agent', label: 'AI Agent (Ask ERP)' },
+  { key: 'ai_agent', label: 'AI Agent (Ask SOTYN.AI)' },
   { key: 'users', label: 'User Management' },
 ];
 

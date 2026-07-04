@@ -83,7 +83,7 @@ export default function Login() {
                 onError={(e) => { if (e.target.src !== SEPL_LOGO_FALLBACK) e.target.src = SEPL_LOGO_FALLBACK; }} alt="SEPL" className="w-full h-full object-contain p-1" />
               </div>
               <div>
-                <p className="text-red-700 font-extrabold text-lg leading-tight tracking-tight">SEPL ERP</p>
+                <p className="text-red-700 font-extrabold text-lg leading-tight tracking-tight">SOTYN.AI</p>
                 <p className="text-[11px] text-zinc-600 tracking-wide">Secured Engineers Pvt Ltd</p>
               </div>
             </div>
@@ -92,7 +92,7 @@ export default function Login() {
             <h1 className="text-3xl sm:text-4xl font-extrabold text-zinc-900 tracking-tight">
               Welcome back <span className="inline-block animate-wave">👋</span>
             </h1>
-            <p className="text-zinc-600 text-sm mt-2 mb-8">Sign in to SEPL ERP</p>
+            <p className="text-zinc-600 text-sm mt-2 mb-8">Sign in to SOTYN.AI</p>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>

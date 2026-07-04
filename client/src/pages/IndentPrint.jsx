@@ -206,7 +206,7 @@ export default function IndentPrint() {
         {/* Footer */}
         <div className="footer">
           <div>
-            Generated from SEPL ERP · {new Date().toLocaleString('en-IN')}
+            Generated from SOTYN.AI · {new Date().toLocaleString('en-IN')}
           </div>
           <div>
             {COMPANY.email} · {COMPANY.website}

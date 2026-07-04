@@ -287,7 +287,7 @@ export default function EmailTriggers() {
                 <div>
                   <label className="label">Body</label>
                   <textarea className="input text-sm font-mono" rows="5" value={form.body_tpl} onChange={e => setForm({ ...form, body_tpl: e.target.value })}
-                    placeholder={`Hello,\n\nIndent {{indent_no}} ({{category}}) at {{site}} for ₹{{amount}} was approved.\n\n— SEPL ERP`} />
+                    placeholder={`Hello,\n\nIndent {{indent_no}} ({{category}}) at {{site}} for ₹{{amount}} was approved.\n\n— SOTYN.AI`} />
                 </div>
               </div>
 

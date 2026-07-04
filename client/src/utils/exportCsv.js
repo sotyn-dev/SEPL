@@ -2,7 +2,7 @@
 //
 // Why CSV (not .xlsx)?  Excel and Google Sheets both open CSV directly;
 // the file's tiny (no zip overhead), the code path has zero external
-// dependencies, and we keep one consistent pattern across the ERP.
+// dependencies, and we keep one consistent pattern across the SOTYN.AI.
 //
 // Critical: the UTF-8 BOM ('﻿') has to lead the file or Excel
 // renders ₹ / non-ASCII as garbage (mam reported this previously on
