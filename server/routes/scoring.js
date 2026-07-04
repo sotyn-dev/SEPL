@@ -386,6 +386,19 @@ function computeScorecard(db, userId, weekStart) {
         return { given, done };
       }
 
+      // Site manpower — company-wide staffing fill: REQUIRED manpower (value slab,
+      // all projects) as Plan vs ACTUAL on site (DPR average) as Actual. Reads the
+      // SAME numbers as the HR → Manpower Plan page (mam 2026-07-04: "site manpower
+      // report pick from the manpower page — plan 232, actual 56"). Not time-scoped
+      // — a current staffing snapshot each week (like items_complete).
+      if (source === 'auto:site_manpower') {
+        try {
+          const { manpowerTotals } = require('../lib/manpowerPlan');
+          const t = manpowerTotals(db);
+          return { given: t.required, done: t.actual };
+        } catch (e) { return { given: null, done: null }; }
+      }
+
       // ── Responsibility (RACI / SLA) — cross-module per-person accountability ──
       // Steps where the user is the EXPLICIT RACI Responsible (per-record, else
       // whole-module default) across every module. Computed once per user, shared.
