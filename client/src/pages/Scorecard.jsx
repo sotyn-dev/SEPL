@@ -97,6 +97,9 @@ const SOURCE_INFO = {
   // HR — Manpower (from the HR → Manpower Plan page)
   'auto:site_manpower':         { plan: 'Σ REQUIRED manpower — value slab, all projects', actual: 'Σ ACTUAL manpower on site (DPR average)' },
   'auto:attrition':             { plan: 'You set (max acceptable leavers)',    actual: 'Count of inactive/terminated staff (all-time)' },
+  // System / Engagement (from the audit trail)
+  'auto:daily_active_users':    { plan: 'Total active (registered) users',     actual: 'Avg daily distinct users active in the system this week' },
+  'auto:data_entry_all':        { plan: 'You set (e.g. 300000)',               actual: 'CREATE/UPDATE/DELETE records entered company-wide this week' },
   'auto:indents_approved':      { plan: 'You set',                            actual: 'Indents approved by user' },
   'auto:vendor_pos_created':    { plan: 'You set',                            actual: 'Vendor POs created by user' },
   'auto:purchase_bills':        { plan: 'You set',                            actual: 'Purchase bills received this week' },
@@ -1114,6 +1117,10 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   <optgroup label="HR — Manpower">
                     <option value="auto:site_manpower">Site manpower — required vs actual (all projects)</option>
                     <option value="auto:attrition">Attrition — staff left count (↓ lower better, you set target)</option>
+                  </optgroup>
+                  <optgroup label="System / Engagement">
+                    <option value="auto:daily_active_users">Daily Active users — avg/day vs total users (all)</option>
+                    <option value="auto:data_entry_all">Data Entry — records entered company-wide (weekly)</option>
                   </optgroup>
                   <optgroup label="Attendance">
                     <option value="auto:attendance_present_days">attendance present days (target 6)</option>

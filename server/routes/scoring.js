@@ -412,6 +412,30 @@ function computeScorecard(db, userId, weekStart) {
         } catch (e) { return { given: null, done: null }; }
       }
 
+      // Daily Active users — system engagement (mam 2026-07-04: "daily active =
+      // average of week, actual user vs active user"). Plan = total registered
+      // (active) users; Actual = AVERAGE across the week's days of the distinct
+      // users who touched the system (audit_log). Company-wide (an owner KPI).
+      if (source === 'auto:daily_active_users') {
+        try {
+          const given = db.prepare(`SELECT COUNT(*) c FROM users WHERE COALESCE(active,1)=1`).get().c;
+          const row = db.prepare(`SELECT AVG(cnt) a FROM (SELECT date(at) d, COUNT(DISTINCT user_id) cnt FROM audit_log WHERE at BETWEEN ? AND ? GROUP BY date(at))`).get(since, until);
+          const done = row && row.a != null ? Math.round(row.a) : 0;
+          return { given, done };
+        } catch (e) { return { given: null, done: null }; }
+      }
+
+      // Data Entry volume — total records entered company-wide this week (mam
+      // 2026-07-04: "data entry ... total words enter", target e.g. 300000).
+      // audit_log stores ACTIONS not word counts, so this counts the CREATE/
+      // UPDATE/DELETE records everyone entered. Plan stays your manual target.
+      if (source === 'auto:data_entry_all') {
+        try {
+          const done = db.prepare(`SELECT COUNT(*) c FROM audit_log WHERE at BETWEEN ? AND ? AND action IN ('CREATE','UPDATE','DELETE') AND COALESCE(status_code,200) < 400`).get(since, until).c;
+          return { given: null, done };
+        } catch (e) { return { given: null, done: null }; }
+      }
+
       // ── Responsibility (RACI / SLA) — cross-module per-person accountability ──
       // Steps where the user is the EXPLICIT RACI Responsible (per-record, else
       // whole-module default) across every module. Computed once per user, shared.
