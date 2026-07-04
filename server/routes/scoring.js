@@ -1235,14 +1235,24 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
 
       const totalGiven = delGiven + pmsGiven + cklGiven + tktGiven;
       const totalDone = delDone + pmsDone + cklDone + tktDone;
-      // Score = RACI Plan-vs-Actual % where the person has RACI steps this week
-      // (planned = closed + still open on them); falls back to the task score
-      // otherwise so the box is never empty during rollout. mam 2026-07-04.
-      const rw = require('../utils/raciModules').raciUserWeek(db, u.id, start, end);
-      const raciPlanned = rw.stepsPlanned || 0, raciActual = rw.stepsClosed || 0;
-      const score = raciPlanned > 0
-        ? Math.round((raciActual / raciPlanned) * 100)
-        : (totalGiven > 0 ? Math.round((totalDone / totalGiven) * 100) : 0);
+      // Score = the user's TEMPLATE scorecard % — the SAME engine as the Scorecard
+      // page and the Champions League — so every surface (this board, the Dashboard
+      // "Performance" widget, Team Overview) shows ONE number per person. mam
+      // 2026-07-04: Aanchal read −82.72% on her scorecard but −10% here, because
+      // this box used a SEPARATE task-activity %. Users with no template fall back
+      // to the task/RACI activity % so their row isn't blank.
+      let score = null;
+      try {
+        const sc = computeScorecard(db, u.id, start);
+        if (sc && sc.template) score = Math.round(sc.score);
+      } catch (_) { /* fall through to the activity score below */ }
+      if (score == null) {
+        const rw = require('../utils/raciModules').raciUserWeek(db, u.id, start, end);
+        const raciPlanned = rw.stepsPlanned || 0, raciActual = rw.stepsClosed || 0;
+        score = raciPlanned > 0
+          ? Math.round((raciActual / raciPlanned) * 100)
+          : (totalGiven > 0 ? Math.round((totalDone / totalGiven) * 100) : 0);
+      }
 
       return {
         user_id: u.id,

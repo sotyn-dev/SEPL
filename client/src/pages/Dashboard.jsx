@@ -122,12 +122,15 @@ export default function Dashboard() {
         const bar = (s) => (s >= 80 ? 'from-emerald-400 to-emerald-600' : s >= 50 ? 'from-amber-400 to-amber-500' : 'from-rose-400 to-rose-500');
         const av = ['bg-indigo-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500', 'bg-sky-500', 'bg-violet-500', 'bg-teal-500', 'bg-orange-500'];
         const scoreByUser = {};
-        ranked.forEach(u => { scoreByUser[u.user_id] = Math.max(0, Math.min(100, Math.round(u.score || 0))); });
+        // Keep the raw achievement % UNCAPPED so beating plan shows a positive
+        // variance (e.g. 132 → +32%), matching the Scorecard page; only the bar
+        // WIDTH is clamped to 100 further down.
+        ranked.forEach(u => { scoreByUser[u.user_id] = Math.max(0, Math.round(u.score || 0)); });
         // Display scores as VARIANCE vs plan (achievement − 100): on plan reads 0%,
-        // behind reads negative (mam 2026-07-04: "performance in negative"). Bars,
-        // medals, sort + the Champions engine stay on the raw achievement % — this
-        // only rewrites the number shown, so ranking/gamification are unaffected.
-        const vsPlan = (n) => `${n - 100}%`;
+        // behind reads negative, ahead reads +ve (mam 2026-07-04: "performance in
+        // negative"). Bars, medals, sort + the Champions engine stay on the raw
+        // achievement % — this only rewrites the number shown.
+        const vsPlan = (n) => { const v = n - 100; return `${v > 0 ? '+' : ''}${v}%`; };
         const teamRows = (teams?.teams || []).map(t => {
           const members = (t.members || [])
             .map(m => ({ user_id: m.user_id, name: m.name, score: scoreByUser[m.user_id] ?? null }))
@@ -170,7 +173,7 @@ export default function Dashboard() {
                             <span className="text-sm font-extrabold text-gray-700 flex-shrink-0">{t.avg ? vsPlan(t.avg) : '—'}</span>
                           </div>
                           <div className="h-2 rounded-full bg-gray-100 overflow-hidden mt-1">
-                            <div className={`h-full rounded-full bg-gradient-to-r ${bar(s)} transition-all duration-700`} style={{ width: `${s}%` }} />
+                            <div className={`h-full rounded-full bg-gradient-to-r ${bar(s)} transition-all duration-700`} style={{ width: `${Math.min(100, s)}%` }} />
                           </div>
                         </div>
                       </div>
@@ -196,7 +199,8 @@ export default function Dashboard() {
             ) : (
               <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
                 {top.map((u, i) => {
-                  const s = Math.max(0, Math.min(100, Math.round(u.score || 0)));
+                  const raw = Math.max(0, Math.round(u.score || 0));
+                  const s = Math.min(100, raw);
                   return (
                     <div key={u.user_id} className="flex items-center gap-3">
                       <div className="w-6 text-center text-sm font-bold text-gray-400">{medal(i)}</div>
@@ -204,10 +208,10 @@ export default function Dashboard() {
                       <div className="flex-1 min-w-0">
                         <div className="flex justify-between items-baseline gap-2">
                           <span className="font-semibold text-sm text-gray-800 truncate">{u.name}</span>
-                          <span className="text-sm font-bold text-gray-700 flex-shrink-0">{s != null ? vsPlan(s) : '—'}</span>
+                          <span className="text-sm font-bold text-gray-700 flex-shrink-0">{vsPlan(raw)}</span>
                         </div>
                         <div className="h-2 rounded-full bg-gray-100 overflow-hidden mt-1">
-                          <div className={`h-full rounded-full bg-gradient-to-r ${bar(s)} transition-all duration-700`} style={{ width: `${s}%` }} />
+                          <div className={`h-full rounded-full bg-gradient-to-r ${bar(s)} transition-all duration-700`} style={{ width: `${Math.min(100, s)}%` }} />
                         </div>
                       </div>
                     </div>
