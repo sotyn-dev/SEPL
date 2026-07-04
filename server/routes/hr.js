@@ -1415,8 +1415,8 @@ router.get('/checklists/by-date', (req, res) => {
   const date = req.query.date || new Date().toISOString().slice(0, 10);
   let canManage = req.user.role === 'admin';
   if (!canManage) {
-    const _cp = db.prepare("SELECT rp.can_edit FROM role_permissions rp JOIN user_roles ur ON rp.role_id = ur.role_id WHERE ur.user_id = ? AND rp.module = 'checklists'").get(req.user.id);
-    canManage = !!(_cp && _cp.can_edit);
+    const _cp = db.prepare("SELECT rp.can_see_all, rp.can_edit, rp.can_create FROM role_permissions rp JOIN user_roles ur ON rp.role_id = ur.role_id WHERE ur.user_id = ? AND rp.module = 'checklists'").get(req.user.id);
+    canManage = !!(_cp && (_cp.can_see_all || _cp.can_edit || _cp.can_create));
   }
   const scope = canManage ? '' : 'AND c.assigned_to = ?';
   // Build args in the exact order placeholders appear in the SQL.
@@ -1488,7 +1488,8 @@ router.get('/checklists/followup', (req, res) => {
   const db = getDb();
   const back = Math.min(30, Math.max(0, parseInt(req.query.back || '7', 10)));
   const forward = Math.min(30, Math.max(0, parseInt(req.query.forward || '7', 10)));
-  const isAdmin = req.user.role === 'admin';
+  let isAdmin = req.user.role === 'admin';
+  if (!isAdmin) { const _cp = db.prepare("SELECT rp.can_see_all, rp.can_edit, rp.can_create FROM role_permissions rp JOIN user_roles ur ON rp.role_id = ur.role_id WHERE ur.user_id = ? AND rp.module = 'checklists'").get(req.user.id); isAdmin = !!(_cp && (_cp.can_see_all || _cp.can_edit || _cp.can_create)); }
 
   // Build the date window (ISO YYYY-MM-DD strings, IST).
   const today = new Date(); today.setHours(0, 0, 0, 0);
