@@ -744,17 +744,16 @@ function advanceToNextStep(db, request, approvedBy) {
 }
 
 // Separation of duties (mam 2026-07-08 bug: an admin who FILLED a payable could
-// clear ALL four steps himself in seconds → instant "Final Approved / Paid",
-// bypassing L1 Accountant → L2 Nitin → L3 MD → Release Aanchal). Two rules,
-// applied to EVERYONE including admin/COO:
-//   1. The person who RAISED the request can't approve it.
-//   2. Nobody can approve two steps of the SAME request.
-// So one person can never clear the whole chain; admin/COO can still stand in
-// for ONE step on someone else's request. Returns a reason string, or null if OK.
+// approve every step himself in seconds → instant "Final Approved / Paid",
+// bypassing L1 Accountant → L2 Nitin → L3 MD → Release Aanchal). Rule, applied to
+// EVERYONE including admin/COO: the person who RAISED the request can't approve
+// it — the whole point of the chain is that someone else signs off. Returns a
+// reason string, or null if OK.
+// NOTE: we deliberately do NOT block a user from approving two DIFFERENT steps of
+// the same request — the COO is meant to stand in for both L2 and L3 (see the
+// payment-approval-flow note). Blocking that would break intentional coverage.
 function sodBlockReason(db, request, userId) {
   if (request.created_by === userId) return 'you raised this request';
-  const prior = db.prepare("SELECT 1 FROM payment_approvals WHERE request_id=? AND action='approved' AND approved_by=? LIMIT 1").get(request.id, userId);
-  if (prior) return 'you already approved an earlier step of it';
   return null;
 }
 
@@ -779,7 +778,7 @@ router.put('/:id/approve', (req, res) => {
     return res.status(403).json({ error: `Not authorized. This step requires: ${stepInfo?.approver_role}` });
   }
 
-  // Separation of duties — one person can't clear the whole approval chain.
+  // Separation of duties — the person who raised the request can't approve it.
   const sod = sodBlockReason(db, request, req.user.id);
   if (sod) return res.status(403).json({ error: `Separation of duties: ${sod}, so a different person must approve this step.` });
 
