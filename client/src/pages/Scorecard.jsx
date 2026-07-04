@@ -51,6 +51,7 @@ const SOURCE_INFO = {
   'auto:pms':                   { plan: 'PMS tasks assigned to user',         actual: 'PMS tasks completed (status=approved)' },
   'auto:checklists':            { plan: 'Active checklists × 6 days',         actual: 'Checklist completions by user' },
   'auto:tickets':               { plan: 'Help tickets assigned to user',      actual: 'Tickets resolved / closed by user' },
+  'auto:activity_log':          { plan: 'You set',                            actual: 'Create/update/delete actions the user logged this week (audit trail)' },
   // Responsibility (RACI / SLA) — cross-module accountability from the "Responsible" tabs
   'auto:pms_all':               { plan: 'ALL PMS tasks assigned this week (company-wide)', actual: 'ALL PMS tasks done this week (company-wide)' },
   'auto:delegations_all':       { plan: 'ALL delegations assigned this week (company-wide)', actual: 'ALL delegations done this week (company-wide)' },
@@ -69,6 +70,7 @@ const SOURCE_INFO = {
   'auto:leads_qualified':       { plan: 'You set',                            actual: 'Leads moved to qualified by user' },
   'auto:quotations_sent':       { plan: 'You set',                            actual: 'Quotations sent by user' },
   'auto:meetings_planned':      { plan: 'You set',                            actual: 'Meetings scheduled this week' },
+  'auto:crm_kitting':           { plan: 'You set',                            actual: 'CRM full-kitting checkpoints the user logged (entries + photos)' },
   // Business Book
   'auto:bb_entries':            { plan: 'You set',                            actual: 'Business Book entries created by user' },
   'auto:bb_po_amount':          { plan: 'You set',                            actual: 'Σ PO amount on user\'s BB entries' },
@@ -1007,6 +1009,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:pms">pms tasks (assigned/done)</option>
                     <option value="auto:checklists">checklists (per day)</option>
                     <option value="auto:tickets">help tickets (assigned/resolved)</option>
+                    <option value="auto:activity_log">activity log — data entries (by user)</option>
                   </optgroup>
                   <optgroup label="Owner / Company-wide (ALL records)">
                     <option value="auto:pms_all">PMS tasks — ALL (company-wide)</option>
@@ -1031,6 +1034,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                     <option value="auto:leads_qualified">leads qualified (by user)</option>
                     <option value="auto:quotations_sent">quotations sent (by user)</option>
                     <option value="auto:meetings_planned">meetings planned (this week)</option>
+                    <option value="auto:crm_kitting">CRM full kitting — checkpoints logged (by user)</option>
                   </optgroup>
                   <optgroup label="Business Book">
                     <option value="auto:bb_entries">BB entries created (by user)</option>

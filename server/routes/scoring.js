@@ -594,6 +594,21 @@ function computeScorecard(db, userId, weekStart) {
         const c = db.prepare(`SELECT COUNT(*) as c FROM meetings WHERE meeting_date BETWEEN ? AND ?`).get(sinceDate, untilDate).c;
         return { given: null, done: c };
       }
+      // CRM Full Kitting — each checkpoint the user logs this week (mam
+      // 2026-07-04). crm_kitting_entry is append-only, so one row per dropdown
+      // change / photo upload = one unit of kitting work done by the user.
+      if (source === 'auto:crm_kitting') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM crm_kitting_entry WHERE uploaded_by=? AND uploaded_at BETWEEN ? AND ?`).get(userId, since, until).c;
+        return { given: null, done: c };
+      }
+      // Activity-log data entry — how many create/update/delete actions this
+      // user recorded this week, from the live audit trail (mam 2026-07-04).
+      // audit_log only records mutations, so it's a clean "data entry" count
+      // (LOGIN rows and failed 4xx/5xx requests excluded).
+      if (source === 'auto:activity_log') {
+        const c = db.prepare(`SELECT COUNT(*) as c FROM audit_log WHERE user_id=? AND at BETWEEN ? AND ? AND action IN ('CREATE','UPDATE','DELETE') AND COALESCE(status_code,200) < 400`).get(userId, since, until).c;
+        return { given: null, done: c };
+      }
 
       // ===== Business Book =====
       if (source === 'auto:bb_entries') {
