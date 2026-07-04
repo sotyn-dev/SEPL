@@ -132,7 +132,7 @@ export default function Dashboard() {
           return { id: t.id, name: t.name, motto: t.motto, members, avg };
         }).sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
         const hasTeams = teamRows.some(t => t.members.length > 0);
-        const teamAvgVals = teamRows.map(t => t.avg).filter(v => v != null);
+        const teamAvgVals = teamRows.flatMap(t => t.members.map(m => m.score || 0)); // TEAM AVG = average of all individual scores, blanks as 0
         const headerAvg = hasTeams
           ? (teamAvgVals.length ? Math.round(teamAvgVals.reduce((a, b) => a + b, 0) / teamAvgVals.length) : 0)
           : Math.round(ranked.reduce((a, u) => a + (u.score || 0), 0) / ranked.length);
