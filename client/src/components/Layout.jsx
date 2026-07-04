@@ -155,6 +155,7 @@ const SIDEBAR_GROUPS = [
     // ranks everyone on their own role targets, picks employee/team of the
     // week / month / quarter / year. See GAMIFICATION.md.
     { path: '/champions',       label: 'Champions League',          icon: FaTrophy,     module: 'gamification' },
+    { path: '/module-owners',   label: 'Module Owners',             icon: FiAward,      module: 'scoring' },
     { path: '/sub-contractors', label: 'Sub-contractor Master Detail', icon: FiHexagon, module: 'sub_contractors' },
   ]},
   { id: 'inventory', label: 'Inventory', icon: FiPackage, items: [
