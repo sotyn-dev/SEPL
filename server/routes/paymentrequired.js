@@ -743,6 +743,21 @@ function advanceToNextStep(db, request, approvedBy) {
   return 'step_advanced';
 }
 
+// Separation of duties (mam 2026-07-08 bug: an admin who FILLED a payable could
+// clear ALL four steps himself in seconds → instant "Final Approved / Paid",
+// bypassing L1 Accountant → L2 Nitin → L3 MD → Release Aanchal). Two rules,
+// applied to EVERYONE including admin/COO:
+//   1. The person who RAISED the request can't approve it.
+//   2. Nobody can approve two steps of the SAME request.
+// So one person can never clear the whole chain; admin/COO can still stand in
+// for ONE step on someone else's request. Returns a reason string, or null if OK.
+function sodBlockReason(db, request, userId) {
+  if (request.created_by === userId) return 'you raised this request';
+  const prior = db.prepare("SELECT 1 FROM payment_approvals WHERE request_id=? AND action='approved' AND approved_by=? LIMIT 1").get(request.id, userId);
+  if (prior) return 'you already approved an earlier step of it';
+  return null;
+}
+
 // PUT approve
 // Authorisation here is the STEP-APPROVER check below (canUserApproveStep:
 // admin / routing override / named approver / matching role / COO), NOT the
@@ -763,6 +778,10 @@ router.put('/:id/approve', (req, res) => {
     const stepInfo = workflow?.find(w => w.step === request.current_step);
     return res.status(403).json({ error: `Not authorized. This step requires: ${stepInfo?.approver_role}` });
   }
+
+  // Separation of duties — one person can't clear the whole approval chain.
+  const sod = sodBlockReason(db, request, req.user.id);
+  if (sod) return res.status(403).json({ error: `Separation of duties: ${sod}, so a different person must approve this step.` });
 
   // Block a release that skipped L2 (Nitin) / L3 (MD) — route it back to the
   // missing step with a clear message, before recording any approval (mam
@@ -832,6 +851,8 @@ router.post('/bulk-approve', (req, res) => {
       if (!request) { skipped.push({ id, reason: 'not found' }); continue; }
       if (request.status === 'final_approved' || request.status === 'rejected') { skipped.push({ id, reason: 'already ' + request.status }); continue; }
       if (!canUserApproveStep(db, req.user.id, request.category, request.current_step)) { skipped.push({ id, reason: 'not your step' }); continue; }
+      const sod = sodBlockReason(db, request, req.user.id);
+      if (sod) { skipped.push({ id, reason: sod }); continue; }
       const workflow = WORKFLOW[request.category];
       const stepInfo = workflow && workflow.find(w => w.step === request.current_step);
       if (!stepInfo) { skipped.push({ id, reason: 'no workflow step' }); continue; }
