@@ -1170,7 +1170,14 @@ router.get('/weekly', requirePermission('scoring', 'view'), (req, res) => {
 
       const totalGiven = delGiven + pmsGiven + cklGiven + tktGiven;
       const totalDone = delDone + pmsDone + cklDone + tktDone;
-      const score = totalGiven > 0 ? Math.round((totalDone / totalGiven) * 100) : 0;
+      // Score = RACI Plan-vs-Actual % where the person has RACI steps this week
+      // (planned = closed + still open on them); falls back to the task score
+      // otherwise so the box is never empty during rollout. mam 2026-07-04.
+      const rw = require('../utils/raciModules').raciUserWeek(db, u.id, start, end);
+      const raciPlanned = rw.stepsPlanned || 0, raciActual = rw.stepsClosed || 0;
+      const score = raciPlanned > 0
+        ? Math.round((raciActual / raciPlanned) * 100)
+        : (totalGiven > 0 ? Math.round((totalDone / totalGiven) * 100) : 0);
 
       return {
         user_id: u.id,
