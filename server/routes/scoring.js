@@ -399,6 +399,19 @@ function computeScorecard(db, userId, weekStart) {
         } catch (e) { return { given: null, done: null }; }
       }
 
+      // Attrition — staff who have LEFT. mam 2026-07-04 chose "just count who left"
+      // (no hire compare): Actual = count of inactive/terminated employees. The
+      // employees table has no exit-date, so this is an ALL-TIME count, not weekly
+      // (flagged to mam; add an exit-date field later for a true weekly number).
+      // Plan stays the manual target (given:null) — set the acceptable max; use a
+      // lower_better KPI so fewer leavers scores higher.
+      if (source === 'auto:attrition') {
+        try {
+          const done = db.prepare(`SELECT COUNT(*) c FROM employees WHERE status IN ('inactive','terminated')`).get().c;
+          return { given: null, done };
+        } catch (e) { return { given: null, done: null }; }
+      }
+
       // ── Responsibility (RACI / SLA) — cross-module per-person accountability ──
       // Steps where the user is the EXPLICIT RACI Responsible (per-record, else
       // whole-module default) across every module. Computed once per user, shared.

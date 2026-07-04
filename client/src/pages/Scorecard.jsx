@@ -96,6 +96,7 @@ const SOURCE_INFO = {
   'auto:items_complete':        { plan: 'All indent line-items (total)',         actual: 'Items with a PO raised (procured) — company-wide' },
   // HR — Manpower (from the HR → Manpower Plan page)
   'auto:site_manpower':         { plan: 'Σ REQUIRED manpower — value slab, all projects', actual: 'Σ ACTUAL manpower on site (DPR average)' },
+  'auto:attrition':             { plan: 'You set (max acceptable leavers)',    actual: 'Count of inactive/terminated staff (all-time)' },
   'auto:indents_approved':      { plan: 'You set',                            actual: 'Indents approved by user' },
   'auto:vendor_pos_created':    { plan: 'You set',                            actual: 'Vendor POs created by user' },
   'auto:purchase_bills':        { plan: 'You set',                            actual: 'Purchase bills received this week' },
@@ -1112,6 +1113,7 @@ function TemplateKpiEditor({ templateId, onChange }) {
                   </optgroup>
                   <optgroup label="HR — Manpower">
                     <option value="auto:site_manpower">Site manpower — required vs actual (all projects)</option>
+                    <option value="auto:attrition">Attrition — staff left count (↓ lower better, you set target)</option>
                   </optgroup>
                   <optgroup label="Attendance">
                     <option value="auto:attendance_present_days">attendance present days (target 6)</option>
