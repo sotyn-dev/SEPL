@@ -8,14 +8,15 @@ import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiCornerUpLeft } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiCornerUpLeft, FiImage } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import { useCall } from '../context/CallContext';
 import { compressImage } from '../lib/imageCompress';
+import { getToken } from '../lib/tokenStore';
 
 const DAY_OPTS = { day: '2-digit', month: 'short', year: 'numeric' };
 const GREEN = '#075e54';                          // WhatsApp header green
-const isImg = (u) => /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(String(u || ''));
+const isImg = (u) => /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif)$/i.test(String(u || ''));
 const isAudio = (u) => /\.(webm|ogg|mp3|m4a|wav|aac|opus)$/i.test(String(u || ''));
 const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 const preview = (m) => (m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : '')) : '');
@@ -30,6 +31,29 @@ function Avatar({ url, name, size = 36, className = '' }) {
   return url
     ? <img src={url} alt={name || ''} className={`rounded-full object-cover flex-shrink-0 ${className}`} style={st} />
     : <span className={`rounded-full bg-emerald-100 text-emerald-700 font-bold flex items-center justify-center flex-shrink-0 ${className}`} style={{ ...st, fontSize: Math.round(size * 0.34) }}>{initials(name)}</span>;
+}
+
+// A chat photo that degrades gracefully. If the browser can't decode the file
+// (a broken/missing upload, or an iPhone HEIC/HEIF that non-Safari browsers
+// can't render inline) the <img> would otherwise show a blank/black box —
+// exactly the "images blank / chats black" mam reported (2026-07-04). On error
+// we swap to a clear tap-to-open link instead. Module-level so it keeps its
+// own error state and never remounts mid-scroll.
+function ChatImage({ url, name }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <a href={url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all">
+        <FiImage size={13} /> {name || 'Photo'} — tap to open
+      </a>
+    );
+  }
+  return (
+    <a href={url} target="_blank" rel="noreferrer">
+      <img src={url} alt={name || ''} loading="lazy" decoding="async" onError={() => setFailed(true)}
+        className="rounded mb-1 max-h-52 max-w-full object-cover bg-gray-100" />
+    </a>
+  );
 }
 
 export default function SiteChat() {
@@ -85,11 +109,22 @@ export default function SiteChat() {
   }, [loadGroups]);
 
   useEffect(() => { loadGroups(); reloadUsers(); }, [loadGroups, reloadUsers]);
+  // Safety-net: refresh the chat list every 12 s even with NO thread open, so
+  // new messages / unread badges still surface when the socket can't connect
+  // (in-app browsers, flaky nginx WebSocket). The open thread has its own 6 s
+  // poll already (mam 2026-07-04).
+  useEffect(() => { const t = setInterval(loadGroups, 12000); return () => clearInterval(t); }, [loadGroups]);
   // Real-time: one Socket.IO connection; the server pushes a 'changed' event
   // to each group's room on any message/read/member change. Polling stays as
   // a fallback if the socket can't connect.
   useEffect(() => {
-    const socket = io({ path: '/socket.io', auth: { token: localStorage.getItem('token') }, transports: ['websocket', 'polling'] });
+    // auth as a FUNCTION so every (re)connect uses the CURRENT token via
+    // getToken() — which falls back to the in-memory copy when localStorage is
+    // blocked (in-app browsers opened from WhatsApp, private mode). Reading
+    // localStorage directly returned null there, so the socket never
+    // authenticated and real-time chat was dead for those users — their
+    // messages only appeared after a manual refresh (mam 2026-07-04).
+    const socket = io({ path: '/socket.io', auth: (cb) => cb({ token: getToken() }), transports: ['websocket', 'polling'] });
     socketRef.current = socket;
     // On (re)connect, re-join the open group's room and catch up on anything
     // missed while disconnected — fixes "always need to refresh" after a drop.
@@ -423,7 +458,7 @@ export default function SiteChat() {
                           })()}
                           {m.attachment_url && (
                             isImg(m.attachment_url)
-                              ? <a href={m.attachment_url} target="_blank" rel="noreferrer"><img src={m.attachment_url} alt={m.attachment_name || ''} loading="lazy" decoding="async" className="rounded mb-1 max-h-52 max-w-full object-cover" /></a>
+                              ? <ChatImage url={m.attachment_url} name={m.attachment_name} />
                               : isAudio(m.attachment_url)
                                 ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
                                 : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}

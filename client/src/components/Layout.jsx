@@ -11,6 +11,7 @@ import { CallProvider } from '../context/CallContext';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
 import api from '../api';
+import { getToken } from '../lib/tokenStore';
 import { useAuth } from '../context/AuthContext';
 import {
   // Navigation + UI controls (kept as-is)
@@ -287,7 +288,10 @@ export default function Layout() {
     if (!user?.id) return;
     if ('Notification' in window && Notification.permission === 'default') { try { Notification.requestPermission(); } catch { /* ignore */ } }
     refreshWa();
-    const socket = io({ path: '/socket.io', auth: { token: localStorage.getItem('token') }, transports: ['websocket', 'polling'] });
+    // getToken() (function form) so the socket authenticates even when
+    // localStorage is blocked (in-app browsers, private mode) — otherwise the
+    // WhatsApp unread badge never updated live on those devices (mam 2026-07-04).
+    const socket = io({ path: '/socket.io', auth: (cb) => cb({ token: getToken() }), transports: ['websocket', 'polling'] });
     socket.on('changed', refreshWa);
     socket.on('group_deleted', refreshWa);
     const poll = setInterval(refreshWa, 25000);             // fallback for groups joined after connect

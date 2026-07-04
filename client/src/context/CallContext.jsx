@@ -7,6 +7,7 @@ import { createContext, useContext, useEffect, useRef, useState, useCallback } f
 import { io } from 'socket.io-client';
 import api from '../api';
 import { useAuth } from './AuthContext';
+import { getToken } from '../lib/tokenStore';
 import { FiPhone, FiPhoneOff, FiVideo, FiVideoOff, FiMic, FiMicOff, FiX } from 'react-icons/fi';
 
 const CallContext = createContext(null);
@@ -158,7 +159,10 @@ export function CallProvider({ children }) {
   useEffect(() => {
     if (!user?.id) return;
     api.get('/site-chat/ice').then(r => { if (Array.isArray(r.data?.iceServers)) iceServersRef.current = r.data.iceServers; }).catch(() => {});
-    const socket = io({ path: '/socket.io', auth: { token: localStorage.getItem('token') }, transports: ['websocket', 'polling'] });
+    // getToken() (function form) so storage-blocked devices — in-app browsers,
+    // private mode — still authenticate the socket; reading localStorage
+    // directly returned null there and calls never connected (mam 2026-07-04).
+    const socket = io({ path: '/socket.io', auth: (cb) => cb({ token: getToken() }), transports: ['websocket', 'polling'] });
     socketRef.current = socket;
 
     socket.on('call:offer', (d) => {
