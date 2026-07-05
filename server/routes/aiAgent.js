@@ -201,7 +201,7 @@ const HEARTBEAT_MS = 12_000;
 // heartbeats so nginx no longer kills the upstream — bump this to 150s
 // so deep Opus questions with multiple web_search iterations have room
 // to complete instead of returning a "took too long" hint.
-const ANTHROPIC_TIMEOUT_MS = 150_000;
+const ANTHROPIC_TIMEOUT_MS = 90_000;
 const ROW_LIMIT = 500;
 
 // Tables Claude is allowed to read. Skipping sensitive auth tables.
@@ -620,6 +620,12 @@ router.post('/ask', requirePermission('ai_agent', 'view'), async (req, res) => {
     res.end(JSON.stringify(payload));
   };
 
+  // Everything from here on runs AFTER the chunked response + heartbeat have
+  // started. If anything throws before we send the JSON body, the stream (and
+  // its 12s heartbeat) would keep the socket open forever and the chat sits on
+  // "…" (mam 2026-07-06 "ai chat is not working"). This outer try guarantees we
+  // always end the response with an answer or a readable error.
+  try {
   const db = getDb();
   const client = new Anthropic.default({ apiKey, timeout: ANTHROPIC_TIMEOUT_MS });
   const model = getSetting('ai_model') || 'claude-opus-4-7';
@@ -778,6 +784,9 @@ Guidance:
   const startMs = Date.now();
   try {
     for (let iter = 0; iter < MAX_TOOL_ITER; iter++) {
+      // Wall-clock cap across iterations so a long agentic run never leaves the
+      // chat hanging — return whatever we have so far instead of spinning.
+      if (Date.now() - startMs > 110_000) break;
       response = await client.messages.create({ ...baseParams, messages });
 
       if (response.stop_reason === 'end_turn' || response.stop_reason === 'refusal') break;
@@ -864,6 +873,13 @@ Guidance:
     stop_reason: response?.stop_reason,
     elapsed_ms: elapsedMs,
   });
+  } catch (fatal) {
+    // Safety net for any error raised OUTSIDE the Anthropic-call try above
+    // (system-prompt build, tool setup, answer extraction). Without this the
+    // heartbeat keeps the stream open and the chat hangs on "…" forever.
+    console.error('[AI Agent /ask] fatal (outside call loop):', fatal?.message);
+    try { if (!res.writableEnded) sendJson(200, { error: `AI request failed: ${fatal?.message || 'unknown error'}` }); } catch (_) {}
+  }
 });
 
 module.exports = router;
