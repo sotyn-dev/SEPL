@@ -194,7 +194,7 @@ const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCr
 // page). Kept modest so opening a long project chat renders fast; older
 // history streams in on scroll-up (perf pass — S2-B).
 const PAGE = 30;
-const MAX_LIVE = 200;   // cap the live in-memory message window (~6 pages); older history re-loads on scroll-up
+const MAX_LIVE = 100;   // live in-memory window when pinned to the bottom (~3 pages, aligned with the server's 100-row page); older history re-loads on scroll-up
 
 export default function SiteChat() {
   const { canCreate, canDelete, isAdmin, user } = useAuth();
@@ -377,8 +377,13 @@ export default function SiteChat() {
   const onMsgScroll = () => {
     const el = scrollRef.current; if (!el) return;
     const nowAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    const returnedToBottom = nowAtBottom && !atBottomRef.current;
     atBottomRef.current = nowAtBottom;
     setShowJumpDown(!nowAtBottom);              // React bails if unchanged → no per-pixel re-render
+    // Landed back at the bottom after scrolling up through history → release the loaded-up
+    // older messages, collapsing to the live window. Safe: the trimmed rows are above the
+    // viewport (the view stays put) and re-load on scroll-up.
+    if (returnedToBottom && msgs.length > MAX_LIVE) { setMsgs(ms => ms.slice(ms.length - MAX_LIVE)); setHasMore(true); }
     // Near the top with older history available → load the previous page (S2-B).
     if (el.scrollTop < 80 && hasMore && !loadingOlderRef.current && sel && msgs.length) {
       loadingOlderRef.current = true; setLoadingOlder(true);
@@ -389,6 +394,8 @@ export default function SiteChat() {
   const jumpToBottom = () => {
     atBottomRef.current = true;
     setShowJumpDown(false);
+    // Tapping "jump to latest" also releases any scrolled-up history from memory.
+    if (msgs.length > MAX_LIVE) { setMsgs(ms => ms.slice(ms.length - MAX_LIVE)); setHasMore(true); }
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   };
   useEffect(() => { if (memOpen && sel) setRenameVal(sel.name || ''); }, [memOpen, sel?.id]);
