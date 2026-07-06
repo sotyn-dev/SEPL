@@ -159,6 +159,7 @@ export default function SiteChat() {
   const [readsAt, setReadsAt] = useState({});      // user_id -> last-read timestamp (for Message Info)
   const [hasMore, setHasMore] = useState(false);   // older messages exist above the loaded window (S2-B)
   const [quotedParents, setQuotedParents] = useState([]); // reply-targets older than the loaded window
+  const [loadingOlder, setLoadingOlder] = useState(false); // drives the in-thread "loading earlier…" spinner
   const [infoMsg, setInfoMsg] = useState(null);    // message whose "info" panel is open
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState(null);   // WhatsApp-style quoted reply
@@ -312,8 +313,8 @@ export default function SiteChat() {
     atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     // Near the top with older history available → load the previous page (S2-B).
     if (el.scrollTop < 80 && hasMore && !loadingOlderRef.current && sel && msgs.length) {
-      loadingOlderRef.current = true;
-      loadThread(sel.id, { before: msgs[0].id }).finally(() => { loadingOlderRef.current = false; });
+      loadingOlderRef.current = true; setLoadingOlder(true);
+      loadThread(sel.id, { before: msgs[0].id }).finally(() => { loadingOlderRef.current = false; setLoadingOlder(false); });
     }
   };
   useEffect(() => { if (memOpen && sel) setRenameVal(sel.name || ''); }, [memOpen, sel?.id]);
@@ -584,7 +585,13 @@ export default function SiteChat() {
                 onDrop={onDrop}>
                 {dragOver && <div className="absolute inset-0 z-10 m-2 rounded-lg border-2 border-dashed border-emerald-500 bg-emerald-500/10 flex items-center justify-center text-emerald-700 font-semibold pointer-events-none">Drop file to send</div>}
                 {msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say hello 👋</div>}
-                {hasMore && <div className="text-center text-[11px] text-gray-400 py-1 select-none">↑ earlier messages</div>}
+                {hasMore && (
+                  <div className="flex items-center justify-center gap-1.5 py-1.5 text-[11px] text-gray-400 select-none">
+                    {loadingOlder
+                      ? <><span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-emerald-600 animate-spin" /> Loading earlier messages…</>
+                      : '↑ earlier messages'}
+                  </div>
+                )}
                 <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} />
 
                 <div ref={endRef} />
