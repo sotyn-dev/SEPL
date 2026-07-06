@@ -25,6 +25,7 @@ export default function Delegation() {
   const [dashboard, setDashboard] = useState([]);
   const [scope, setScope] = useState(isEA ? 'all' : 'mine'); // mine | given | all
   const [statusFilter, setStatusFilter] = useState('');
+  const [healthFilter, setHealthFilter] = useState(''); // '' | green | yellow | red (due-date traffic light)
   const [assigneeFilter, setAssigneeFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -364,6 +365,27 @@ export default function Delegation() {
     return <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${map[s] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>{s}</span>;
   };
 
+  // Due-date traffic light (mam 2026-07-06: "when task date change something like
+  // green yellow … where task stands like red, filter also"). GREEN = done or
+  // comfortably on track; YELLOW = due today / within 2 days; RED = overdue and
+  // not yet approved. Tasks with no due date have no light.
+  const taskHealth = (t) => {
+    if (t.status === 'approved') return 'green';           // closed / done
+    if (!t.due_date) return null;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const due = new Date(t.due_date + 'T00:00:00');
+    if (isNaN(due.getTime())) return null;
+    const days = Math.round((due - today) / 86400000);
+    if (days < 0) return 'red';                            // overdue, still open
+    if (days <= 2) return 'yellow';                        // due soon
+    return 'green';                                        // on track
+  };
+  const healthDot = (h) => {
+    if (!h) return null;
+    const cfg = { green: ['bg-emerald-500', 'On track'], yellow: ['bg-amber-400', 'Due soon'], red: ['bg-red-500', 'Overdue'] }[h];
+    return <span className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${cfg[0]}`} title={cfg[1]} />;
+  };
+
   return (
     <div className="space-y-4">
       {/* Header — only admin creates new tasks. Everyone else is a user who receives them. */}
@@ -482,6 +504,21 @@ export default function Delegation() {
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
         </select>
+        {/* Due-date traffic-light filter (mam 2026-07-06). Composes with the
+            status/assignee/date filters above. */}
+        <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs">
+          {[
+            { id: '', label: 'All', dot: '' },
+            { id: 'green', label: 'On track', dot: 'bg-emerald-500' },
+            { id: 'yellow', label: 'Due soon', dot: 'bg-amber-400' },
+            { id: 'red', label: 'Overdue', dot: 'bg-red-500' },
+          ].map(h => (
+            <button key={h.id || 'all'} type="button" onClick={() => setHealthFilter(h.id)}
+              className={`px-2.5 py-1.5 flex items-center gap-1 border-l first:border-l-0 border-gray-200 ${healthFilter === h.id ? 'bg-blue-800 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+              {h.dot && <span className={`w-2 h-2 rounded-full ${h.dot}`} />}{h.label}
+            </button>
+          ))}
+        </div>
         {/* Free-text search — matches Task ID OR Description (case-insensitive).
             Empty input = no filter. */}
         <div className="relative flex-1 min-w-[200px] max-w-[320px]">
@@ -549,11 +586,12 @@ export default function Delegation() {
           <tbody>
             {(() => {
               const q = search.trim().toLowerCase();
-              const visibleTasks = q
+              let visibleTasks = q
                 ? tasks.filter(t =>
                     (t.task_id || '').toLowerCase().includes(q) ||
                     (t.description || '').toLowerCase().includes(q))
                 : tasks;
+              if (healthFilter) visibleTasks = visibleTasks.filter(t => taskHealth(t) === healthFilter);
               return (<>
                 {visibleTasks.length === 0 && <tr><td colSpan="10" className="text-center text-gray-400 py-8">{q ? `No tasks match "${search}"` : 'No tasks'}</td></tr>}
                 {visibleTasks.map((t, idx) => {
@@ -595,11 +633,14 @@ export default function Delegation() {
                   </td>
                   <td className="whitespace-nowrap">{t.assigned_to_name}</td>
                   <td className="whitespace-nowrap text-xs">
-                    {completedDate
-                      ? <span className="text-emerald-700 font-medium">Done {completedDate}</span>
-                      : t.due_date
-                        ? <span className="text-gray-600">Due {t.due_date}</span>
-                        : <span className="text-gray-400">—</span>}
+                    <span className="inline-flex items-center gap-1.5">
+                      {healthDot(taskHealth(t))}
+                      {completedDate
+                        ? <span className="text-emerald-700 font-medium">Done {completedDate}</span>
+                        : t.due_date
+                          ? <span className="text-gray-600">Due {t.due_date}</span>
+                          : <span className="text-gray-400">—</span>}
+                    </span>
                   </td>
                   <td>{statusBadge(t.status)}</td>
                   <td>
