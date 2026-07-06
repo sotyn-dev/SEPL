@@ -8,7 +8,7 @@ import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiCornerUpLeft, FiImage } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiImage } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import { useCall } from '../context/CallContext';
 import { compressImage } from '../lib/imageCompress';
@@ -160,6 +160,7 @@ export default function SiteChat() {
   const [hasMore, setHasMore] = useState(false);   // older messages exist above the loaded window (S2-B)
   const [quotedParents, setQuotedParents] = useState([]); // reply-targets older than the loaded window
   const [loadingOlder, setLoadingOlder] = useState(false); // drives the in-thread "loading earlier…" spinner
+  const [showJumpDown, setShowJumpDown] = useState(false);  // floating "jump to latest" button when scrolled up
   const [infoMsg, setInfoMsg] = useState(null);    // message whose "info" panel is open
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState(null);   // WhatsApp-style quoted reply
@@ -310,12 +311,20 @@ export default function SiteChat() {
   }, [msgs]);
   const onMsgScroll = () => {
     const el = scrollRef.current; if (!el) return;
-    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    const nowAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    atBottomRef.current = nowAtBottom;
+    setShowJumpDown(!nowAtBottom);              // React bails if unchanged → no per-pixel re-render
     // Near the top with older history available → load the previous page (S2-B).
     if (el.scrollTop < 80 && hasMore && !loadingOlderRef.current && sel && msgs.length) {
       loadingOlderRef.current = true; setLoadingOlder(true);
       loadThread(sel.id, { before: msgs[0].id }).finally(() => { loadingOlderRef.current = false; setLoadingOlder(false); });
     }
+  };
+  // WhatsApp-style "jump to latest": smooth-scroll the thread to the newest message.
+  const jumpToBottom = () => {
+    atBottomRef.current = true;
+    setShowJumpDown(false);
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   };
   useEffect(() => { if (memOpen && sel) setRenameVal(sel.name || ''); }, [memOpen, sel?.id]);
 
@@ -579,22 +588,31 @@ export default function SiteChat() {
                 )}
               </div>
 
-              <div ref={scrollRef} onScroll={onMsgScroll} className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 relative" style={{ background: '#efeae2' }}
-                onDragOver={e => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
-                onDragLeave={e => { if (e.currentTarget === e.target) setDragOver(false); }}
-                onDrop={onDrop}>
-                {dragOver && <div className="absolute inset-0 z-10 m-2 rounded-lg border-2 border-dashed border-emerald-500 bg-emerald-500/10 flex items-center justify-center text-emerald-700 font-semibold pointer-events-none">Drop file to send</div>}
-                {msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say hello 👋</div>}
-                {hasMore && (
-                  <div className="flex items-center justify-center gap-1.5 py-1.5 text-[11px] text-gray-400 select-none">
-                    {loadingOlder
-                      ? <><span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-emerald-600 animate-spin" /> Loading earlier messages…</>
-                      : '↑ earlier messages'}
-                  </div>
-                )}
-                <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} />
+              <div className="relative flex-1 flex flex-col min-h-0">
+                <div ref={scrollRef} onScroll={onMsgScroll} className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 relative" style={{ background: '#efeae2' }}
+                  onDragOver={e => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
+                  onDragLeave={e => { if (e.currentTarget === e.target) setDragOver(false); }}
+                  onDrop={onDrop}>
+                  {dragOver && <div className="absolute inset-0 z-10 m-2 rounded-lg border-2 border-dashed border-emerald-500 bg-emerald-500/10 flex items-center justify-center text-emerald-700 font-semibold pointer-events-none">Drop file to send</div>}
+                  {msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say hello 👋</div>}
+                  {hasMore && (
+                    <div className="flex items-center justify-center gap-1.5 py-1.5 text-[11px] text-gray-400 select-none">
+                      {loadingOlder
+                        ? <><span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-emerald-600 animate-spin" /> Loading earlier messages…</>
+                        : '↑ earlier messages'}
+                    </div>
+                  )}
+                  <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} />
 
-                <div ref={endRef} />
+                  <div ref={endRef} />
+                </div>
+                {/* Floating "jump to latest" — shows only when scrolled up off the bottom (WhatsApp-style). */}
+                {showJumpDown && (
+                  <button onClick={jumpToBottom} title="Jump to latest" aria-label="Jump to latest message"
+                    className="absolute bottom-3 right-3 z-20 w-9 h-9 rounded-full bg-white shadow-lg border border-gray-200 flex items-center justify-center text-gray-500 hover:text-emerald-600 hover:border-emerald-300 transition">
+                    <FiChevronDown size={20} />
+                  </button>
+                )}
               </div>
 
               {/* min-w-0 on the textarea + flex-shrink-0 on the buttons so the
