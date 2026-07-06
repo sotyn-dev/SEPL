@@ -574,6 +574,33 @@ export default function Payroll() {
                     Food: +{fmt(r.food)}
                   </div>
                 ))}
+                {/* Admin overrides + Paid toggle — same actions as the desktop
+                    table (mam 2026-07-06: edit controls must show on mobile too,
+                    not just desktop). Reuses ovInput / savePaid. */}
+                {isAdmin && !r.locked && (
+                  <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100">
+                    <label className="text-[9px] uppercase text-gray-400 font-semibold block">Paid days
+                      {ovInput(r, 'paid_days', r.paid_days, r.paid_days_overridden, { w: 'w-full', step: '0.5', title: 'Paid days — type to override, clear to reset' })}
+                    </label>
+                    <label className="text-[9px] uppercase text-gray-400 font-semibold block">CL
+                      {ovInput(r, 'cl', r.paid_leaves, r.cl_overridden, { w: 'w-full', step: '0.5', title: 'Casual / paid leave days — type to override' })}
+                    </label>
+                    <label className="text-[9px] uppercase text-gray-400 font-semibold block">Late ₹
+                      {ovInput(r, 'late_penalty', r.late_penalty, r.late_penalty_overridden, { w: 'w-full', step: '10', title: 'Late deduction ₹ — type to override, clear to reset' })}
+                    </label>
+                  </div>
+                )}
+                {r.locked && (
+                  <label className={`flex items-center justify-between pt-1 border-t border-gray-100 ${canMarkPaid ? 'cursor-pointer' : 'cursor-default'}`}
+                    title={r.paid ? `Paid${r.paid_at ? ' on ' + fmtDate(r.paid_at) : ''}` : 'Not paid yet'}>
+                    <span className="text-[11px] text-gray-500 font-semibold">Salary disbursed?</span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <input type="checkbox" checked={!!r.paid} disabled={!canMarkPaid}
+                        onChange={e => savePaid(r.employee_id, e.target.checked)} />
+                      <span className={`text-[12px] font-semibold ${r.paid ? 'text-emerald-600' : 'text-rose-500'}`}>{r.paid ? 'Paid' : 'Unpaid'}</span>
+                    </span>
+                  </label>
+                )}
                 <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
                   <button onClick={() => viewSlip(r.employee_id)} className="btn btn-secondary text-xs py-1.5 px-3 flex-1">Detail</button>
                   <a href={`/payroll/slip/${r.employee_id}?month=${month}`} target="_blank" rel="noreferrer"

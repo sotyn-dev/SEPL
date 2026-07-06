@@ -453,6 +453,28 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                     {low && <span className="text-amber-700 font-bold ml-1">· LOW STOCK</span>}
                   </div>
                 )}
+                {/* Edit / Delete — same actions as the desktop table (mam
+                    2026-07-06: "i give him edit option but not showing on
+                    mobile"). The Edit button opens the SAME modal, which handles
+                    name/qty/rate/spec/make comfortably on a phone (unlike the
+                    cramped inline rate/reorder cells, which stay desktop-only). */}
+                {(canEdit || canDelete) && (
+                  <div className="flex justify-end gap-1 pt-2 border-t border-gray-100">
+                    {canEdit && (
+                      <button type="button"
+                        onClick={() => setEditRow({ id: r.id, item_master_id: r.item_master_id, item_name: r.item_name, specification: r.specification || '', make: r.make || '', warehouse_name: r.warehouse_name, uom: r.uom, quantity: r.quantity, avg_rate: r.avg_rate || r.effective_rate || 0, notes: '' })}
+                        className="flex items-center gap-1 text-[11px] font-semibold text-blue-600 px-2.5 py-1 rounded hover:bg-blue-50">
+                        <FiEdit2 size={13} /> Edit
+                      </button>
+                    )}
+                    {canDelete && (
+                      <button type="button" onClick={() => deleteRow(r)}
+                        className="flex items-center gap-1 text-[11px] font-semibold text-red-600 px-2.5 py-1 rounded hover:bg-red-50">
+                        <FiTrash2 size={13} /> Delete
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}

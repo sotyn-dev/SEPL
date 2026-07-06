@@ -4679,15 +4679,23 @@ export default function Procurement() {
                     </a>
                   </div>
                 )}
-                {canDelete('procurement') && (
+                {(b.vendor_po_id || canDelete('procurement')) && (
                   <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-100 text-xs">
-                    <button onClick={async () => {
-                      if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
-                      try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); load(); }
-                      catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                    }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
-                      <FiTrash2 size={11} /> Delete
-                    </button>
+                    {/* Edit received qty — desktop-table action, now on mobile too
+                        (mam 2026-07-06: edit options must show on the phone). */}
+                    {b.vendor_po_id && (
+                      <button onClick={() => openEditQty(b)} title="Edit received qty (updates the challan)"
+                        className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">✏️ Edit qty</button>
+                    )}
+                    {canDelete('procurement') && (
+                      <button onClick={async () => {
+                        if (!confirm(`Delete purchase bill "${b.bill_number}"?`)) return;
+                        try { await api.delete(`/procurement/purchase-bills/${b.id}`); toast.success('Deleted'); load(); }
+                        catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
+                      }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                        <FiTrash2 size={11} /> Delete
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -5455,6 +5463,10 @@ export default function Procurement() {
                   >🖨 Print</button>
                   {d.sales_bill_pending === 1 && !d.sales_bill_number && (canApprove('procurement') || isAdmin()) && (
                     <button onClick={() => generateSalesBill(d)} className="text-amber-700 hover:underline flex items-center gap-1 font-semibold">+ Add Sales Bill</button>
+                  )}
+                  {/* Edit rate — desktop-table action, now on mobile too (mam 2026-07-06). */}
+                  {d.document_type === 'sales_bill' && (canApprove('procurement') || isAdmin()) && (
+                    <button onClick={() => openEditRate(d)} className="text-blue-600 hover:underline flex items-center gap-1 font-semibold">✏️ Edit rate</button>
                   )}
                   {canDelete('procurement') && (
                     <button onClick={async () => {

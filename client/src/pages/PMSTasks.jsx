@@ -510,6 +510,15 @@ export default function PMSTasks() {
         {tasks.map((t, idx) => {
           const isAssignee = t.assigned_to === user?.id;
           const isAssigner = t.assigned_by === user?.id;
+          // Mirror the desktop table so the phone doesn't lock out approvers
+          // (mam 2026-07-06): CRM owner of the project can approve/reject too.
+          const isCrmOwner = (() => {
+            if (!t.crm_name || !user?.name) return false;
+            const c = String(t.crm_name).toLowerCase().trim();
+            const u = String(user.name).toLowerCase().trim();
+            return c === u || c.split(/\s+/)[0] === u.split(/\s+/)[0];
+          })();
+          const canActOnTask = isAssigner || isAdmin() || isCrmOwner || pmsApprover;
           const completedDate = t.reviewed_at ? fmtDate(t.reviewed_at) : null;
           return (
             <div key={t.id} className={`card p-3 ${t.status === 'rejected' ? 'border-l-4 border-red-500' : t.status === 'submitted' ? 'border-l-4 border-blue-500' : ''}`}>
@@ -542,10 +551,18 @@ export default function PMSTasks() {
                     <FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload Proof'}
                   </button>
                 )}
-                {isAssignee && t.status !== 'approved' && t.extension_status !== 'pending' && (
+                {/* Extension Approve/Reject (admin) — was desktop-only (mam 2026-07-06). */}
+                {t.extension_status === 'pending' && t.requested_due_date && isAdmin() && (
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">Ext → {t.requested_due_date}</span>
+                    <button onClick={() => approveExtension(t)} className="btn btn-success text-[11px] px-2 py-1">Approve ext</button>
+                    <button onClick={() => rejectExtension(t)} className="btn btn-danger text-[11px] px-2 py-1">Reject ext</button>
+                  </span>
+                )}
+                {(isAssignee || isAdmin()) && t.status !== 'approved' && t.extension_status !== 'pending' && (
                   <button onClick={() => { setExtendModal(t); setExtendForm({ requested_due_date: t.due_date || '', reason: '' }); }} className="btn btn-secondary text-[11px] px-2 py-1 flex items-center gap-1"><FiCalendar size={11} /> Extension</button>
                 )}
-                {(isAssigner || isAdmin() || pmsApprover) && t.status === 'submitted' && (
+                {canActOnTask && t.status === 'submitted' && (
                   <>
                     <button onClick={() => approve(t)} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiCheck size={11} /> Approve</button>
                     <button onClick={() => { setRejectModal(t); setRejectReason(''); }} className="btn btn-danger text-[11px] px-2 py-1 flex items-center gap-1"><FiX size={11} /> Reject</button>
