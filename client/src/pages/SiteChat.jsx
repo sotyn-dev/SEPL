@@ -159,6 +159,35 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
   );
 });
 
+// Memoised group list (left pane). Extracted so the composer's per-keystroke
+// setText — which re-renders the page — no longer redraws every group row.
+// <MessageList> was already shielded this way; this closes the same gap for the
+// list. Re-renders only when groups / search / selection / avatars change.
+const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCreate, onSelect }) {
+  const shown = groups.filter(g => !q || String(g.name).toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div className="overflow-y-auto flex-1">
+      {shown.length === 0 && <div className="text-center text-gray-400 text-sm py-8">No groups yet.{canCreate ? ' Tap + to create one.' : ''}</div>}
+      {shown.map(g => (
+        <button key={g.id} onClick={() => onSelect({ id: g.id, name: g.name })}
+          className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${selId === g.id ? 'bg-emerald-50' : ''}`}>
+          <Avatar url={g.is_dm ? userAvatars[g.dm_uid] : null} name={g.name} size={36} />
+          <div className="min-w-0 flex-1">
+            <div className="flex justify-between items-baseline gap-2">
+              <span className="font-semibold text-sm text-gray-800 truncate">{g.name}</span>
+              {g.last && <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtTime(g.last.created_at)}</span>}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="text-xs text-gray-500 truncate flex-1">{g.last ? `${g.last.sender_name ? g.last.sender_name.split(' ')[0] + ': ' : ''}${preview(g.last)}` : <span className="italic text-gray-300">{g.members} member{g.members === 1 ? '' : 's'}</span>}</div>
+              {g.unread > 0 && <span className="text-[10px] font-bold text-white bg-[#25d366] rounded-full px-1.5 min-w-[18px] text-center flex-shrink-0">{g.unread}</span>}
+            </div>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+});
+
 // How many messages a thread loads at a time (initial open + each scroll-up
 // page). Kept modest so opening a long project chat renders fast; older
 // history streams in on scroll-up (perf pass — S2-B).
@@ -495,8 +524,6 @@ export default function SiteChat() {
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
-  const shown = groups.filter(g => !q || String(g.name).toLowerCase().includes(q.toLowerCase()));
-
   // Hidden file input for the profile photo — kept at the top level so BOTH the
   // desktop header button and the mobile (chat-list) avatar button can trigger
   // it. `hidden` keeps the element mounted, so the ref stays valid on mobile.
@@ -545,25 +572,7 @@ export default function SiteChat() {
               <input className="input pl-8" placeholder="Search group…" value={q} onChange={e => setQ(e.target.value)} />
             </div>
           </div>
-          <div className="overflow-y-auto flex-1">
-            {shown.length === 0 && <div className="text-center text-gray-400 text-sm py-8">No groups yet.{canCreate('site_chat') ? ' Tap + to create one.' : ''}</div>}
-            {shown.map(g => (
-              <button key={g.id} onClick={() => setSel({ id: g.id, name: g.name })}
-                className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${sel?.id === g.id ? 'bg-emerald-50' : ''}`}>
-                <Avatar url={g.is_dm ? userAvatars[g.dm_uid] : null} name={g.name} size={36} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex justify-between items-baseline gap-2">
-                    <span className="font-semibold text-sm text-gray-800 truncate">{g.name}</span>
-                    {g.last && <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtTime(g.last.created_at)}</span>}
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className="text-xs text-gray-500 truncate flex-1">{g.last ? `${g.last.sender_name ? g.last.sender_name.split(' ')[0] + ': ' : ''}${preview(g.last)}` : <span className="italic text-gray-300">{g.members} member{g.members === 1 ? '' : 's'}</span>}</div>
-                    {g.unread > 0 && <span className="text-[10px] font-bold text-white bg-[#25d366] rounded-full px-1.5 min-w-[18px] text-center flex-shrink-0">{g.unread}</span>}
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
+          <GroupList groups={groups} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')} onSelect={setSel} />
         </div>
 
         {/* ── Thread ────────────────────────────────────── */}
