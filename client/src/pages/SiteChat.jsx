@@ -194,6 +194,7 @@ const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCr
 // page). Kept modest so opening a long project chat renders fast; older
 // history streams in on scroll-up (perf pass — S2-B).
 const PAGE = 30;
+const MAX_LIVE = 200;   // cap the live in-memory message window (~6 pages); older history re-loads on scroll-up
 
 export default function SiteChat() {
   const { canCreate, canDelete, isAdmin, user } = useAuth();
@@ -281,6 +282,22 @@ export default function SiteChat() {
     }).catch(() => {});
   }, []);
 
+  // Cap the live in-memory window so a long session can't grow msgs (and the DOM)
+  // without bound. Both append paths (socket 'message' + own send) go through this:
+  // dedupe by id, and — ONLY when pinned to the bottom — keep the last MAX_LIVE rows.
+  // Older rows stay on the server and re-load via the scroll-up loader; we never trim
+  // while the user has scrolled up to read history (guarded by atBottomRef).
+  const appendMsg = useCallback((row) => {
+    setMsgs(ms => {
+      if (ms.some(x => x.id === row.id)) return ms;                 // dedupe by id
+      const next = [...ms, row];
+      return atBottomRef.current && next.length > MAX_LIVE ? next.slice(next.length - MAX_LIVE) : next;
+    });
+    // If that push exceeded the cap at the bottom, older rows just left memory — flag
+    // that earlier history exists again so the scroll-up loader can re-fetch it.
+    if (atBottomRef.current && msgsLenRef.current >= MAX_LIVE) setHasMore(true);
+  }, []);
+
   useEffect(() => { loadGroups(); reloadUsers(); }, [loadGroups, reloadUsers]);
   // Safety-net: refresh the chat list every 12 s even with NO thread open, so
   // new messages / unread badges still surface when the socket can't connect
@@ -306,7 +323,7 @@ export default function SiteChat() {
     // send/receive shows INSTANTLY without re-fetching the whole thread. The
     // auto-scroll effect keeps the view pinned to the bottom only if the reader
     // is already there (perf pass — S3-client).
-    socket.on('message', (row) => { if (row && row.group_id != null) setSel(s => { if (s && s.id === row.group_id) setMsgs(ms => ms.some(x => x.id === row.id) ? ms : [...ms, row]); return s; }); });
+    socket.on('message', (row) => { if (row && row.group_id != null) setSel(s => { if (s && s.id === row.group_id) appendMsg(row); return s; }); });
     // 'changed' (read receipts, deletes, membership, last-message) still needs a
     // reconcile fetch, but a BURST of them now collapses into a single trailing
     // reload instead of one-reload-per-event — that reload storm was what made
@@ -323,7 +340,7 @@ export default function SiteChat() {
     });
     socket.on('group_deleted', ({ groupId }) => { loadGroups(); setSel(s => (s && s.id === groupId ? null : s)); });
     return () => { socket.disconnect(); socketRef.current = null; clearTimeout(changedTimerRef.current); };
-  }, [loadThread, loadGroups]);
+  }, [loadThread, loadGroups, appendMsg]);
   useEffect(() => {
     if (!sel) return;
     setReplyTo(null);                                  // drop any pending reply when switching threads
@@ -394,7 +411,7 @@ export default function SiteChat() {
       setText(''); setMention(null); setReplyTo(null);
       // Append the server-returned row instead of re-fetching the whole thread
       // (perf pass). Socket 'changed' / fallback poll reconciles if needed.
-      if (r.data && r.data.id) setMsgs(ms => ms.some(x => x.id === r.data.id) ? ms : [...ms, r.data]);
+      if (r.data && r.data.id) appendMsg(r.data);
     }
     catch (err) { toast.error(err.response?.data?.error || 'Failed to send'); }
     finally { sendingRef.current = false; setBusy(false); }
