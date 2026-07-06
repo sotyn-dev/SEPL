@@ -1,7 +1,7 @@
 // "WhatsApp" — internal group chat, WhatsApp-styled (mam 2026-06-18). Create
 // named groups, add the people you want, chat (text + photo/file). Members-
 // gated, read receipts (✓✓ + who-read), unread badges, day separators.
-import { useState, useEffect, useCallback, useMemo, useRef, memo, Fragment } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, Fragment } from 'react';
 import { io } from 'socket.io-client';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -142,6 +142,11 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
   );
 });
 
+// How many messages a thread loads at a time (initial open + each scroll-up
+// page). Kept modest so opening a long project chat renders fast; older
+// history streams in on scroll-up (perf pass — S2-B).
+const PAGE = 30;
+
 export default function SiteChat() {
   const { canCreate, canDelete, isAdmin, user } = useAuth();
   const { startCall } = useCall();
@@ -152,6 +157,8 @@ export default function SiteChat() {
   const [members, setMembers] = useState([]);
   const [reads, setReads] = useState({});
   const [readsAt, setReadsAt] = useState({});      // user_id -> last-read timestamp (for Message Info)
+  const [hasMore, setHasMore] = useState(false);   // older messages exist above the loaded window (S2-B)
+  const [quotedParents, setQuotedParents] = useState([]); // reply-targets older than the loaded window
   const [infoMsg, setInfoMsg] = useState(null);    // message whose "info" panel is open
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState(null);   // WhatsApp-style quoted reply
@@ -182,18 +189,45 @@ export default function SiteChat() {
   const mediaRef = useRef(null);
   const chunksRef = useRef([]);
   const recTimerRef = useRef(null);
+  const changedTimerRef = useRef(null);        // trailing-debounce timer for 'changed' bursts
+  const changedGroupsRef = useRef(new Set());  // group ids that fired 'changed' within the window
+  const loadingOlderRef = useRef(false);       // guard: one scroll-up page load at a time
+  const msgsLenRef = useRef(0);                 // loaded message count (sizes the reconcile window)
+  const pendingRestoreRef = useRef(null);       // {prevH,prevTop}: anchor scroll after prepending older
 
   const loadGroups = useCallback(() => { api.get('/site-chat/groups').then(r => setGroups(r.data || [])).catch(() => {}); }, []);
   const reloadUsers = useCallback(() => api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {}), []);
-  const loadThread = useCallback((id) => {
-    if (!id) return;
-    api.get(`/site-chat/${id}`).then(r => {
-      setMsgs(r.data.messages || []); setMembers(r.data.members || []); setReads(r.data.reads || {}); setReadsAt(r.data.readsAt || {});
-      if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name, is_dm: r.data.group.is_dm } : s));
-      // Opening/polling a thread marks it read — clear its unread badge locally
-      // instead of re-fetching the whole groups list every 6s (perf pass). The
-      // list's own 12s timer + socket 'changed' still refresh names/last-message.
-      setGroups(gs => gs.map(g => (g.id === id ? { ...g, unread: 0 } : g)));
+  // Cursor pagination (perf pass — S2-B). Default: fetch the most-recent PAGE and
+  // REPLACE (thread open / reconnect). { before }: fetch the PAGE older than that
+  // id and PREPEND, anchoring scroll so the view doesn't jump. { reconcile }: a
+  // read-receipt / delete / membership refresh that re-fetches the CURRENTLY
+  // loaded window (not just PAGE) so scrolled-up history isn't yanked away. The
+  // server stays backward-compatible — omitting limit still returns everything.
+  const loadThread = useCallback((id, opts = {}) => {
+    if (!id) return Promise.resolve();
+    const older = opts.before != null;
+    const limit = older ? PAGE : (opts.reconcile ? Math.max(PAGE, msgsLenRef.current || PAGE) : PAGE);
+    const params = older ? { limit, before: opts.before } : { limit };
+    if (older) {                                     // capture the scroll anchor BEFORE the DOM grows upward
+      const el = scrollRef.current;
+      pendingRestoreRef.current = el ? { prevH: el.scrollHeight, prevTop: el.scrollTop } : null;
+    }
+    return api.get(`/site-chat/${id}`, { params }).then(r => {
+      const incoming = r.data.messages || [];
+      const qp = r.data.quotedParents || [];
+      if (older) {
+        setMsgs(ms => { const seen = new Set(ms.map(m => m.id)); return [...incoming.filter(m => !seen.has(m.id)), ...ms]; });
+        setQuotedParents(prev => { const seen = new Set(prev.map(m => m.id)); return [...prev, ...qp.filter(m => !seen.has(m.id))]; });
+        setHasMore(!!r.data.hasMore);
+      } else {
+        setMsgs(incoming); setMembers(r.data.members || []); setReads(r.data.reads || {}); setReadsAt(r.data.readsAt || {});
+        setQuotedParents(qp); setHasMore(!!r.data.hasMore);
+        if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name, is_dm: r.data.group.is_dm } : s));
+        // Opening/polling a thread marks it read — clear its unread badge locally
+        // instead of re-fetching the whole groups list every 6s (perf pass). The
+        // list's own 12s timer + socket 'changed' still refresh names/last-message.
+        setGroups(gs => gs.map(g => (g.id === id ? { ...g, unread: 0 } : g)));
+      }
     }).catch(() => {});
   }, []);
 
@@ -218,17 +252,35 @@ export default function SiteChat() {
     // On (re)connect, re-join the open group's room and catch up on anything
     // missed while disconnected — fixes "always need to refresh" after a drop.
     socket.on('connect', () => { loadGroups(); setSel(s => { if (s) { socket.emit('join', s.id); loadThread(s.id); } return s; }); });
-    socket.on('changed', ({ groupId }) => { setSel(s => { if (s && s.id === groupId) loadThread(s.id); return s; }); loadGroups(); });
+    // New message pushed from the server: append it directly (dedupe by id) so a
+    // send/receive shows INSTANTLY without re-fetching the whole thread. The
+    // auto-scroll effect keeps the view pinned to the bottom only if the reader
+    // is already there (perf pass — S3-client).
+    socket.on('message', (row) => { if (row && row.group_id != null) setSel(s => { if (s && s.id === row.group_id) setMsgs(ms => ms.some(x => x.id === row.id) ? ms : [...ms, row]); return s; }); });
+    // 'changed' (read receipts, deletes, membership, last-message) still needs a
+    // reconcile fetch, but a BURST of them now collapses into a single trailing
+    // reload instead of one-reload-per-event — that reload storm was what made
+    // busy groups sluggish (perf pass — S3-client). New messages no longer wait
+    // on this path; they arrive via 'message' above.
+    socket.on('changed', ({ groupId }) => {
+      if (groupId != null) changedGroupsRef.current.add(groupId);
+      clearTimeout(changedTimerRef.current);
+      changedTimerRef.current = setTimeout(() => {
+        const gids = changedGroupsRef.current; changedGroupsRef.current = new Set();
+        loadGroups();
+        setSel(s => { if (s && gids.has(s.id)) loadThread(s.id, { reconcile: true }); return s; });
+      }, 300);
+    });
     socket.on('group_deleted', ({ groupId }) => { loadGroups(); setSel(s => (s && s.id === groupId ? null : s)); });
-    return () => { socket.disconnect(); socketRef.current = null; };
+    return () => { socket.disconnect(); socketRef.current = null; clearTimeout(changedTimerRef.current); };
   }, [loadThread, loadGroups]);
   useEffect(() => {
     if (!sel) return;
     setReplyTo(null);                                  // drop any pending reply when switching threads
     socketRef.current?.emit('join', sel.id);
     loadThread(sel.id);
-    const t = setInterval(() => { if (!socketRef.current?.connected) loadThread(sel.id); }, 6000);    // fallback poll — only when the socket is down
-    const onFocus = () => loadThread(sel.id);
+    const t = setInterval(() => { if (!socketRef.current?.connected) loadThread(sel.id, { reconcile: true }); }, 6000);    // fallback poll — only when the socket is down
+    const onFocus = () => loadThread(sel.id, { reconcile: true });
     window.addEventListener('focus', onFocus);
     return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
   }, [sel?.id, loadThread]);
@@ -245,14 +297,31 @@ export default function SiteChat() {
     }
     if (atBottomRef.current) endRef.current?.scrollIntoView({ block: 'end' });
   }, [msgs, sel?.id]);
+  // Keep the loaded-count ref current so a reconcile refresh re-fetches the whole
+  // scrolled-in window, not just the newest PAGE (S2-B).
+  useEffect(() => { msgsLenRef.current = msgs.length; }, [msgs.length]);
+  // After a scroll-up page prepends older messages, anchor the scroll so the
+  // messages the user was reading stay in place (runs before paint = no jump).
+  useLayoutEffect(() => {
+    const p = pendingRestoreRef.current; if (!p) return;
+    pendingRestoreRef.current = null;
+    const el = scrollRef.current; if (el) el.scrollTop = p.prevTop + (el.scrollHeight - p.prevH);
+  }, [msgs]);
   const onMsgScroll = () => {
     const el = scrollRef.current; if (!el) return;
     atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    // Near the top with older history available → load the previous page (S2-B).
+    if (el.scrollTop < 80 && hasMore && !loadingOlderRef.current && sel && msgs.length) {
+      loadingOlderRef.current = true;
+      loadThread(sel.id, { before: msgs[0].id }).finally(() => { loadingOlderRef.current = false; });
+    }
   };
   useEffect(() => { if (memOpen && sel) setRenameVal(sel.name || ''); }, [memOpen, sel?.id]);
 
   // Resolve a quoted reply's original message from the loaded thread.
-  const msgById = useMemo(() => { const o = {}; for (const x of msgs) o[x.id] = x; return o; }, [msgs]);
+  // Include quotedParents (reply-targets older than the loaded page) so a reply's
+  // preview still resolves; msgs win over parents on id collisions (S2-B).
+  const msgById = useMemo(() => { const o = {}; for (const x of quotedParents) o[x.id] = x; for (const x of msgs) o[x.id] = x; return o; }, [msgs, quotedParents]);
   // (day-label, quotePreview, and renderBody now live in the memoised MessageList
   // / module scope so composer keystrokes don't recompute them per message.)
 
@@ -515,6 +584,7 @@ export default function SiteChat() {
                 onDrop={onDrop}>
                 {dragOver && <div className="absolute inset-0 z-10 m-2 rounded-lg border-2 border-dashed border-emerald-500 bg-emerald-500/10 flex items-center justify-center text-emerald-700 font-semibold pointer-events-none">Drop file to send</div>}
                 {msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say hello 👋</div>}
+                {hasMore && <div className="text-center text-[11px] text-gray-400 py-1 select-none">↑ earlier messages</div>}
                 <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} />
 
                 <div ref={endRef} />
