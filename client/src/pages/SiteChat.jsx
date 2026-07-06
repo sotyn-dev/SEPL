@@ -1,7 +1,7 @@
 // "WhatsApp" — internal group chat, WhatsApp-styled (mam 2026-06-18). Create
 // named groups, add the people you want, chat (text + photo/file). Members-
 // gated, read receipts (✓✓ + who-read), unread badges, day separators.
-import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo, Fragment } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo } from 'react';
 import { io } from 'socket.io-client';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -93,51 +93,68 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
     if (last < body.length) out.push(body.slice(last));
     return out;
   };
-  let prevDay = null;
+  // Group consecutive messages by calendar day so each day's label can be a
+  // sticky header that CASCADES like WhatsApp: it floats at the top of the thread
+  // while you read that day, then the next day's label pushes it up. Each day is
+  // its own containing block — that's what makes the sticky hand-off clean (a flat
+  // list of sticky siblings would just pile up at the top instead).
+  const dayGroups = useMemo(() => {
+    const groups = []; let cur = null;
+    for (const m of msgs) {
+      const day = fmtDate(m.created_at, DAY_OPTS);
+      if (!cur || cur.day !== day) { cur = { day, ts: m.created_at, items: [] }; groups.push(cur); }
+      cur.items.push(m);
+    }
+    return groups;
+  }, [msgs]);
   return (
     <>
-      {msgs.map(m => {
-        const own = m.sender_id === userId;
-        const day = fmtDate(m.created_at, DAY_OPTS);
-        const sep = day !== prevDay; prevDay = day;
-        const readers = others.filter(o => (reads[o.user_id] || 0) >= m.id);
-        const allRead = others.length > 0 && readers.length === others.length;
-        return (
-          <Fragment key={m.id}>
-            {sep && <div className="flex justify-center my-1.5"><span className="text-[10px] font-medium bg-white/85 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(m.created_at)}</span></div>}
-            <div id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
-              {!own && !isDm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
-              <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
-                {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
-                {m.reply_to_id && (() => {
-                  const q = msgById[m.reply_to_id];
-                  return (
-                    <button type="button" onClick={() => { const el = document.getElementById(`msg-${m.reply_to_id}`); if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('ring-2', 'ring-emerald-400'); setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-400'), 1200); } }}
-                      className="block w-full text-left mb-1 rounded bg-black/[0.06] border-l-4 border-emerald-500 px-2 py-1">
-                      <div className="text-[11px] font-semibold text-emerald-700 truncate">{q ? (q.sender_id === userId ? 'You' : q.sender_name) : 'Message'}</div>
-                      <div className="text-[11px] text-gray-600 truncate">{q ? quotePreview(q) : 'Original message unavailable'}</div>
-                    </button>
-                  );
-                })()}
-                {m.attachment_url && (
-                  isImg(m.attachment_url)
-                    ? <ChatImage url={m.attachment_url} name={m.attachment_name} />
-                    : isAudio(m.attachment_url)
-                      ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
-                      : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
-                {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
-                <div className="flex items-center justify-end gap-1.5 mt-0.5">
-                  <button onClick={() => onReply(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Reply"><FiCornerUpLeft size={11} /></button>
-                  <button onClick={() => onInfo(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Message info"><FiInfo size={11} /></button>
-                  {(own || isAdmin) && <button onClick={() => onDelete(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
-                  <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
-                  {own && <span title={others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet'} className={`text-[11px] leading-none ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>}
+      {dayGroups.map(group => (
+        <div key={group.day} className="space-y-1.5">
+          {/* Sticky, cascading day label. pointer-events-none so it never blocks a
+              message tap as it floats over the conversation. */}
+          <div className="sticky top-1.5 z-[5] flex justify-center pointer-events-none">
+            <span className="text-[10px] font-medium bg-white/90 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(group.ts)}</span>
+          </div>
+          {group.items.map(m => {
+            const own = m.sender_id === userId;
+            const readers = others.filter(o => (reads[o.user_id] || 0) >= m.id);
+            const allRead = others.length > 0 && readers.length === others.length;
+            return (
+              <div key={m.id} id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
+                {!own && !isDm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
+                <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
+                  {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
+                  {m.reply_to_id && (() => {
+                    const q = msgById[m.reply_to_id];
+                    return (
+                      <button type="button" onClick={() => { const el = document.getElementById(`msg-${m.reply_to_id}`); if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('ring-2', 'ring-emerald-400'); setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-400'), 1200); } }}
+                        className="block w-full text-left mb-1 rounded bg-black/[0.06] border-l-4 border-emerald-500 px-2 py-1">
+                        <div className="text-[11px] font-semibold text-emerald-700 truncate">{q ? (q.sender_id === userId ? 'You' : q.sender_name) : 'Message'}</div>
+                        <div className="text-[11px] text-gray-600 truncate">{q ? quotePreview(q) : 'Original message unavailable'}</div>
+                      </button>
+                    );
+                  })()}
+                  {m.attachment_url && (
+                    isImg(m.attachment_url)
+                      ? <ChatImage url={m.attachment_url} name={m.attachment_name} />
+                      : isAudio(m.attachment_url)
+                        ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
+                        : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
+                  {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
+                  <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                    <button onClick={() => onReply(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Reply"><FiCornerUpLeft size={11} /></button>
+                    <button onClick={() => onInfo(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Message info"><FiInfo size={11} /></button>
+                    {(own || isAdmin) && <button onClick={() => onDelete(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
+                    <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
+                    {own && <span title={others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet'} className={`text-[11px] leading-none ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>}
+                  </div>
                 </div>
               </div>
-            </div>
-          </Fragment>
-        );
-      })}
+            );
+          })}
+        </div>
+      ))}
     </>
   );
 });
