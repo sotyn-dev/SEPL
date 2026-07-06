@@ -6,6 +6,7 @@ const express = require('express');
 const { getDb } = require('../db/schema');          // erp.db — only for the user list / names
 const { getChatDb } = require('../db/chatDb');       // separate chat database
 const { emitChat } = require('../lib/chatSocket');   // real-time push
+const { rateLimit } = require('../lib/rateLimit');   // in-memory send backpressure
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
@@ -206,10 +207,19 @@ router.get('/:groupId', (req, res) => {
   res.json({ group, messages, members, reads, readsAt, hasMore, quotedParents });
 });
 
+// Per-user send backpressure (2026-07): caps one user to 40 messages / 10 s → 429,
+// so a runaway/abusive client can't flood the single event loop (each POST = several
+// sync queries + 2 socket broadcasts). In-memory, site-chat only; keyed by user id
+// (authMiddleware has already set req.user). A human never trips this.
+const sendLimiter = rateLimit({
+  windowMs: 10_000, max: 40, keyFn: (req) => req.user?.id,
+  message: 'You are sending messages too fast — take a breath and try again in a moment.',
+});
+
 // Any MEMBER can post — gated by group membership ONLY, not any site_chat
 // module permission, so anyone added to a group can reply by default
 // (mam 2026-06-19: "user add monika she is not able to reply").
-router.post('/:groupId', (req, res) => {
+router.post('/:groupId', sendLimiter, (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
   const { body, attachment_url, attachment_name, reply_to_id } = req.body;
