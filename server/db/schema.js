@@ -3036,6 +3036,9 @@ function initializeDatabase() {
     ['delegations', "extension_status TEXT"],
     ['delegations', 'extension_reviewed_at DATETIME'],
     ['delegations', 'extension_reviewed_by INTEGER REFERENCES users(id)'],
+    // How many times the due date has been pushed (0 = still on the original
+    // date). Drives the Delegation health light: 0 green, 1 yellow, 2+ red.
+    ['delegations', 'extension_count INTEGER DEFAULT 0'],
     // Time-of-day for recurring checklists (daily/weekly/…). Stored as 'HH:MM'.
     ['checklists', 'due_time TEXT'],
     // scoring.js / checklists routes query `WHERE ... COALESCE(active, 1) = 1`.

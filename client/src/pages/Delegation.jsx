@@ -25,7 +25,7 @@ export default function Delegation() {
   const [dashboard, setDashboard] = useState([]);
   const [scope, setScope] = useState(isEA ? 'all' : 'mine'); // mine | given | all
   const [statusFilter, setStatusFilter] = useState('');
-  const [healthFilter, setHealthFilter] = useState(''); // '' | green | yellow | red (due-date traffic light)
+  const [healthFilter, setHealthFilter] = useState(''); // '' | green | yellow | red (deadline-slippage light: times the due date was pushed)
   const [assigneeFilter, setAssigneeFilter] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -365,24 +365,27 @@ export default function Delegation() {
     return <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${map[s] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>{s}</span>;
   };
 
-  // Due-date traffic light (mam 2026-07-06: "when task date change something like
-  // green yellow … where task stands like red, filter also"). GREEN = done or
-  // comfortably on track; YELLOW = due today / within 2 days; RED = overdue and
-  // not yet approved. Tasks with no due date have no light.
+  // Deadline-slippage light (mam 2026-07-06: "green when task enter date, yellow
+  // when user gives a second date but on that date not done, red on the third date").
+  // The colour tracks how many times the due date has been PUSHED, not how close it
+  // is. Each approved extension / manual re-date bumps extension_count on the server.
+  //   GREEN  = done, OR still on the original date (never pushed)
+  //   YELLOW = date pushed once — a 2nd date was given and it's still open
+  //   RED    = date pushed twice or more — a 3rd (or later) date and still open
   const taskHealth = (t) => {
-    if (t.status === 'approved') return 'green';           // closed / done
-    if (!t.due_date) return null;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const due = new Date(t.due_date + 'T00:00:00');
-    if (isNaN(due.getTime())) return null;
-    const days = Math.round((due - today) / 86400000);
-    if (days < 0) return 'red';                            // overdue, still open
-    if (days <= 2) return 'yellow';                        // due soon
-    return 'green';                                        // on track
+    if (t.status === 'approved') return 'green';           // done — closed on whatever date
+    const n = +t.extension_count || 0;                     // times the date was pushed
+    if (n >= 2) return 'red';                              // 3rd date or beyond
+    if (n >= 1) return 'yellow';                           // 2nd date given
+    return 'green';                                        // still on the original date
   };
   const healthDot = (h) => {
     if (!h) return null;
-    const cfg = { green: ['bg-emerald-500', 'On track'], yellow: ['bg-amber-400', 'Due soon'], red: ['bg-red-500', 'Overdue'] }[h];
+    const cfg = {
+      green: ['bg-emerald-500', 'On the original date'],
+      yellow: ['bg-amber-400', 'Date pushed once (2nd date)'],
+      red: ['bg-red-500', 'Date pushed 2+ times (3rd date+)'],
+    }[h];
     return <span className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${cfg[0]}`} title={cfg[1]} />;
   };
 
@@ -504,14 +507,14 @@ export default function Delegation() {
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
         </select>
-        {/* Due-date traffic-light filter (mam 2026-07-06). Composes with the
-            status/assignee/date filters above. */}
+        {/* Deadline-slippage filter (mam 2026-07-06) — by how many times the due
+            date was pushed. Composes with the status/assignee/date filters above. */}
         <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-xs">
           {[
             { id: '', label: 'All', dot: '' },
-            { id: 'green', label: 'On track', dot: 'bg-emerald-500' },
-            { id: 'yellow', label: 'Due soon', dot: 'bg-amber-400' },
-            { id: 'red', label: 'Overdue', dot: 'bg-red-500' },
+            { id: 'green', label: '1st date', dot: 'bg-emerald-500' },
+            { id: 'yellow', label: '2nd date', dot: 'bg-amber-400' },
+            { id: 'red', label: '3rd date+', dot: 'bg-red-500' },
           ].map(h => (
             <button key={h.id || 'all'} type="button" onClick={() => setHealthFilter(h.id)}
               className={`px-2.5 py-1.5 flex items-center gap-1 border-l first:border-l-0 border-gray-200 ${healthFilter === h.id ? 'bg-blue-800 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>

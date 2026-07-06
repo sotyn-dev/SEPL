@@ -343,7 +343,7 @@ router.post('/', (req, res) => {
 // touched here — those go through their own endpoints.
 router.put('/:id', (req, res) => {
   const db = getDb();
-  const d = db.prepare('SELECT assigned_by FROM delegations WHERE id=?').get(req.params.id);
+  const d = db.prepare('SELECT assigned_by, due_date FROM delegations WHERE id=?').get(req.params.id);
   if (!d) return res.status(404).json({ error: 'Task not found' });
   if (d.assigned_by !== req.user.id && req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Only the assigner or an admin can edit this task' });
@@ -361,7 +361,13 @@ router.put('/:id', (req, res) => {
   const sets = []; const params = [];
   if (desc != null) { sets.push('description=?', 'title=?'); params.push(desc, title); }
   if (assignedTo) { sets.push('assigned_to=?'); params.push(assignedTo); }
-  if (dueDate !== undefined) { sets.push('due_date=?'); params.push(dueDate); }
+  if (dueDate !== undefined) {
+    sets.push('due_date=?'); params.push(dueDate);
+    // A manual re-date is "another date given" too, same as an approved extension —
+    // bump the health-light counter, but only on a genuine change to a NEW date
+    // (not clearing the date or re-saving the same day).
+    if (dueDate && d.due_date && dueDate !== d.due_date) sets.push('extension_count = COALESCE(extension_count, 0) + 1');
+  }
   if (project !== undefined) { sets.push('project_name=?'); params.push(project); }
   if (attachment !== undefined) { sets.push('attachment_url=?'); params.push(attachment); }
   if (sets.length === 0) return res.status(400).json({ error: 'No fields to update' });
@@ -432,6 +438,7 @@ router.post('/:id/approve-extension', (req, res) => {
   }
   db.prepare(
     `UPDATE delegations SET due_date = requested_due_date,
+       extension_count = COALESCE(extension_count, 0) + 1,
        extension_status='approved', extension_reviewed_at=CURRENT_TIMESTAMP, extension_reviewed_by=?
      WHERE id=?`
   ).run(req.user.id, req.params.id);
