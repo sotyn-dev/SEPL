@@ -160,7 +160,32 @@ router.get('/:groupId', (req, res) => {
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
   const group = db.prepare('SELECT id, name, is_dm FROM chat_groups WHERE id=?').get(g);
   if (!group) return res.status(404).json({ error: 'Group not found' });
-  const messages = db.prepare('SELECT * FROM chat_messages WHERE group_id=? ORDER BY created_at, id').all(g);
+  // Cursor pagination (backward-compatible): a client that passes ?limit=N gets
+  // the most-recent N (or N older than ?before=<id>) via idx_cmsg_group_id; a
+  // client that passes NOTHING gets the full history exactly as before, so the
+  // current app is unaffected until it opts in (/site-chat perf pass).
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 0, 0), 100);
+  const before = parseInt(req.query.before, 10) || 0;
+  let messages, hasMore = false, quotedParents = [];
+  if (limit > 0) {
+    // Newest-first with a +1 look-ahead to know if older messages remain.
+    const rows = before
+      ? db.prepare('SELECT * FROM chat_messages WHERE group_id=? AND id < ? ORDER BY id DESC LIMIT ?').all(g, before, limit + 1)
+      : db.prepare('SELECT * FROM chat_messages WHERE group_id=? ORDER BY id DESC LIMIT ?').all(g, limit + 1);
+    hasMore = rows.length > limit;
+    if (hasMore) rows.pop();                 // drop the look-ahead row
+    messages = rows.reverse();               // oldest→newest for display
+    // Include quoted-reply parents that fall OUTSIDE this page so replies still
+    // render their preview (client merges these into its lookup map).
+    const oldestId = messages.length ? messages[0].id : 0;
+    const parentIds = [...new Set(messages.map(m => m.reply_to_id).filter(id => id && id < oldestId))];
+    if (parentIds.length) {
+      const ph = parentIds.map(() => '?').join(',');
+      quotedParents = db.prepare(`SELECT * FROM chat_messages WHERE id IN (${ph})`).all(...parentIds);
+    }
+  } else {
+    messages = db.prepare('SELECT * FROM chat_messages WHERE group_id=? ORDER BY created_at, id').all(g);
+  }
   const members = db.prepare('SELECT user_id, user_name AS name FROM chat_group_members WHERE group_id=? ORDER BY user_name').all(g);
   // DM header = the OTHER participant's name (per viewer), not the stored name.
   if (group.is_dm) group.name = members.filter(m => m.user_id !== req.user.id).map(m => m.name).filter(Boolean).join(', ') || group.name;
@@ -174,7 +199,7 @@ router.get('/:groupId', (req, res) => {
   // loop that hammered the server and caused intermittent chat errors
   // (mam 2026-06-19). New messages still emit from POST; read receipts refresh
   // via the other members' poll / next message.
-  res.json({ group, messages, members, reads, readsAt });
+  res.json({ group, messages, members, reads, readsAt, hasMore, quotedParents });
 });
 
 // Any MEMBER can post — gated by group membership ONLY, not any site_chat
@@ -194,8 +219,12 @@ router.post('/:groupId', (req, res) => {
   const info = db.prepare(`INSERT INTO chat_messages (group_id, body, attachment_url, attachment_name, sender_id, sender_name, reply_to_id) VALUES (?,?,?,?,?,?,?)`)
     .run(g, body ? String(body).trim() : null, attachment_url || null, attachment_name || null, req.user.id, req.user.name || '', replyId);
   markRead(db, g, req.user.id);
+  const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(info.lastInsertRowid);
+  // Emit the new row so an updated client can append it directly. Additive: the
+  // current client ignores 'message' and still reloads on 'changed' (perf pass).
+  emitChat(g, 'message', row);
   emitChat(g, 'changed', { groupId: g });
-  res.json(db.prepare('SELECT * FROM chat_messages WHERE id=?').get(info.lastInsertRowid));
+  res.json(row);
 });
 
 router.post('/:groupId/read', (req, res) => {
