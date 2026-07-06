@@ -449,6 +449,35 @@ function findUserFkReferences(db) {
   return refs;
 }
 
+// Every (table,column) with a FK to users that STILL has a row referencing
+// `id`. Unlike findUserFkReferences this scans ALL tables — INCLUDING the
+// `%_new` migration-leftover tables the former deliberately skips — and only
+// returns columns that actually have a live reference. Used by the force-delete
+// fallback to clear whatever the first pass missed (a stale `*_new` table on a
+// long-lived prod DB was the cause of "FOREIGN KEY constraint failed" that the
+// first pass couldn't clear), and to name the exact blocker if one remains.
+function usersStillReferencedBy(db, id) {
+  const hits = [];
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+  for (const { name } of tables) {
+    let fks = [];
+    try { fks = db.prepare(`PRAGMA foreign_key_list("${name}")`).all(); } catch (_) { continue; }
+    const userFks = fks.filter(fk => String(fk.table).toLowerCase() === 'users');
+    if (!userFks.length) continue;
+    const cols = db.prepare(`PRAGMA table_info("${name}")`).all();
+    for (const fk of userFks) {
+      try {
+        const c = db.prepare(`SELECT COUNT(*) c FROM "${name}" WHERE "${fk.from}" = ?`).get(id).c;
+        if (c > 0) {
+          const col = cols.find(cc => cc.name === fk.from);
+          hits.push({ table: name, column: fk.from, notnull: !!(col && col.notnull), count: c });
+        }
+      } catch (_) { /* skip */ }
+    }
+  }
+  return hits;
+}
+
 // Deactivate user (admin only)
 // Hard delete a user. Admin-only. Guarded so admins can't:
 //   - delete themselves (would lock them out of the session)
@@ -485,38 +514,60 @@ router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
   // still identifiable), and payroll history (kept by employee_id) is untouched.
   const attCount = db.prepare('SELECT COUNT(*) AS c FROM attendance WHERE user_id = ?').get(id).c;
   if (force) {
-    // Discover all FK refs, null them, then delete — atomic in a
-    // single transaction so a partial failure doesn't leave dangling
-    // references.
+    // Clear every FK reference to this user, then delete — atomically (a partial
+    // failure leaves nothing changed). Two passes so it can't be defeated by a
+    // reference the first pass doesn't know about:
+    //   pass 1 — the known refs from findUserFkReferences
+    //   pass 2 — if the delete still fails, scan for WHATEVER still references
+    //            the user (incl. `*_new` migration-leftover tables pass 1 skips)
+    //            and clear those too, then retry.
+    // If a reference genuinely can't be cleared, report the exact table(s)
+    // instead of a bare "FOREIGN KEY constraint failed" (mam 2026-07-06).
     try {
       const refs = findUserFkReferences(db);
       const cleared = {};
+      const clearOne = (ref) => {
+        if (ref.table === 'user_roles') return;   // deleted explicitly below
+        try {
+          // A NOT NULL FK column can't be nulled — delete those per-user rows
+          // (push_subscriptions / notifications / KPI targets are transient).
+          // Nullable columns keep their row and just drop the join, preserving
+          // any snapshotted user_name (e.g. attendance).
+          const r = ref.notnull
+            ? db.prepare(`DELETE FROM "${ref.table}" WHERE "${ref.column}" = ?`).run(id)
+            : db.prepare(`UPDATE "${ref.table}" SET "${ref.column}" = NULL WHERE "${ref.column}" = ?`).run(id);
+          const key = `${ref.table}.${ref.column}`;
+          if (r.changes > 0) cleared[key] = (cleared[key] || 0) + r.changes;
+        } catch (e) {
+          console.warn('[user-delete] could not clear', `${ref.table}.${ref.column}`, '-', e.message);
+        }
+      };
       const tx = db.transaction(() => {
         // Preserve attendance FIRST — snapshot the person's name so the rows
-        // stay identifiable AFTER the loop below nulls attendance.user_id. The
-        // attendance rows themselves are never deleted (mam 2026-07-06).
+        // stay identifiable AFTER their user_id is nulled below. The attendance
+        // rows themselves are never deleted (mam 2026-07-06).
         try {
           db.prepare('UPDATE attendance SET user_name_snapshot = COALESCE(user_name_snapshot, ?) WHERE user_id = ?').run(target.name, id);
-        } catch (_) { /* snapshot is best-effort; the null-below still preserves the row */ }
-        for (const ref of refs) {
-          if (ref.table === 'user_roles') continue;  // gets DELETED below
+        } catch (_) { /* best-effort; the null below still preserves the row */ }
+
+        for (const ref of refs) clearOne(ref);                       // pass 1
+        db.prepare('DELETE FROM user_roles WHERE user_id = ?').run(id);
+
+        try {
+          db.prepare('DELETE FROM users WHERE id=?').run(id);
+        } catch (_firstFail) {
+          // A constraint failure does NOT abort the SQLite transaction — clear
+          // whatever STILL points at the user (pass 2), then retry the delete.
+          for (const ref of usersStillReferencedBy(db, id)) clearOne(ref);
           try {
-            // A NOT NULL FK column can't be nulled — delete those per-user rows
-            // (push_subscriptions / notifications / KPI targets etc. are
-            // per-user transient data).  Nullable columns keep their row and
-            // just drop the join, preserving any snapshotted user_name.
-            const r = ref.notnull
-              ? db.prepare(`DELETE FROM "${ref.table}" WHERE "${ref.column}" = ?`).run(id)
-              : db.prepare(`UPDATE "${ref.table}" SET "${ref.column}" = NULL WHERE "${ref.column}" = ?`).run(id);
-            if (r.changes > 0) cleared[`${ref.table}.${ref.column}`] = r.changes;
-          } catch (e) {
-            // Don't kill the whole transaction on a single column —
-            // some FKs may point at views or have other oddities.
-            console.warn('[user-delete] could not clear', ref.table + '.' + ref.column, '-', e.message);
+            db.prepare('DELETE FROM users WHERE id=?').run(id);
+          } catch (secondFail) {
+            const blockers = usersStillReferencedBy(db, id).map(r => `${r.table}.${r.column}`);
+            const err = new Error(blockers.length ? `still linked to ${blockers.join(', ')}` : secondFail.message);
+            err.blockers = blockers;
+            throw err;                                               // rolls back the whole tx
           }
         }
-        db.prepare('DELETE FROM user_roles WHERE user_id = ?').run(id);
-        db.prepare('DELETE FROM users WHERE id=?').run(id);
       });
       tx();
       res.json({
@@ -529,6 +580,12 @@ router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
       });
     } catch (e) {
       console.error('[user-delete force] failed:', e.message);
+      if (e.blockers && e.blockers.length) {
+        return res.status(409).json({
+          error: `Couldn't fully delete "${target.name}" — still linked to: ${e.blockers.join(', ')}. Send these table names to the developer.`,
+          blockers: e.blockers,
+        });
+      }
       res.status(500).json({ error: `Force-delete failed: ${e.message}` });
     }
     return;
