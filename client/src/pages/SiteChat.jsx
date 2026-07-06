@@ -471,7 +471,11 @@ export default function SiteChat() {
         </div>
 
         {/* ── Thread ────────────────────────────────────── */}
-        <div className={`flex-1 flex-col ${sel ? 'flex' : 'hidden sm:flex'}`}>
+        {/* min-w-0: a flex child defaults to min-width:auto, so on mobile the
+            thread refused to shrink below its content and overflowed the pane,
+            clipping the left ~160px of every message. min-w-0 lets it collapse
+            to the container width so message text wraps instead (mobile fix). */}
+        <div className={`flex-1 flex-col min-w-0 ${sel ? 'flex' : 'hidden sm:flex'}`}>
           {!sel ? (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-2" style={{ background: '#f7f5f2' }}>
               <FaWhatsapp size={44} className="text-[#25d366]" /><span className="text-sm">Pick a group to start chatting</span>
