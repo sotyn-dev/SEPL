@@ -32,6 +32,11 @@ function getChatDb() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_cmsg_group ON chat_messages(group_id, created_at);
+    -- /site-chat perf pass: (group_id,id) makes last-message MAX(id), the unread
+    -- range scan (id > last_read), and markRead's MAX(id) index seeks instead of
+    -- full table scans; sender_id serves the unread filter (sender_id <> me).
+    CREATE INDEX IF NOT EXISTS idx_cmsg_group_id ON chat_messages(group_id, id);
+    CREATE INDEX IF NOT EXISTS idx_cmsg_sender ON chat_messages(sender_id);
     CREATE TABLE IF NOT EXISTS chat_reads (
       group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, last_read_id INTEGER DEFAULT 0,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (group_id, user_id)

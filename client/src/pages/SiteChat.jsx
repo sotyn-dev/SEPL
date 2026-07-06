@@ -1,7 +1,7 @@
 // "WhatsApp" — internal group chat, WhatsApp-styled (mam 2026-06-18). Create
 // named groups, add the people you want, chat (text + photo/file). Members-
 // gated, read receipts (✓✓ + who-read), unread badges, day separators.
-import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, memo, Fragment } from 'react';
 import { io } from 'socket.io-client';
 import api from '../api';
 import Modal from '../components/Modal';
@@ -56,6 +56,92 @@ function ChatImage({ url, name }) {
   );
 }
 
+// Quoted-reply preview text — module-level (pure) so it's stable for both the
+// message list and the composer's reply bar.
+const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : (isImg(m.attachment_url) ? '📷 Photo' : '📎 Attachment'))) : 'Original message';
+
+// Memoised message list — the heavy part of the thread. Its own React.memo
+// component with stable props, so composer keystrokes, context refreshes, and
+// Layout re-renders DON'T redraw the whole conversation (perf pass). The @mention
+// regex and the "others" (read-receipt) set are computed ONCE here, not per row.
+const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, onReply, onInfo, onDelete }) {
+  // Current-date labels for the Today/Yesterday separators — an intentional read
+  // of "now" at render time (the one impure call, isolated).
+  // eslint-disable-next-line react-hooks/purity
+  const now = Date.now();
+  const todayLbl = fmtDate(new Date(now), DAY_OPTS);
+  const yestLbl = fmtDate(new Date(now - 864e5), DAY_OPTS);
+  const dayLabel = (ts) => { const l = fmtDate(ts, DAY_OPTS); return l === todayLbl ? 'Today' : l === yestLbl ? 'Yesterday' : l; };
+  const others = useMemo(() => members.filter(m => m.user_id !== userId), [members, userId]);
+  // Memoise the (expensive) mention-match PATTERN once per member list; build a
+  // fresh RegExp per message so there's no shared mutable lastIndex state.
+  const mentionPattern = useMemo(() => {
+    const names = members.map(m => m.name).filter(Boolean).sort((a, b) => b.length - a.length);
+    if (!names.length) return null;
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return `@(${names.map(esc).join('|')})`;
+  }, [members]);
+  const renderBody = (body) => {
+    if (!body || !mentionPattern) return body;
+    const re = new RegExp(mentionPattern, 'g');
+    const out = []; let last = 0; let mm;
+    while ((mm = re.exec(body))) {
+      if (mm.index > last) out.push(body.slice(last, mm.index));
+      out.push(<span key={mm.index} className="text-emerald-700 font-semibold">@{mm[1]}</span>);
+      last = mm.index + mm[0].length;
+    }
+    if (last < body.length) out.push(body.slice(last));
+    return out;
+  };
+  let prevDay = null;
+  return (
+    <>
+      {msgs.map(m => {
+        const own = m.sender_id === userId;
+        const day = fmtDate(m.created_at, DAY_OPTS);
+        const sep = day !== prevDay; prevDay = day;
+        const readers = others.filter(o => (reads[o.user_id] || 0) >= m.id);
+        const allRead = others.length > 0 && readers.length === others.length;
+        return (
+          <Fragment key={m.id}>
+            {sep && <div className="flex justify-center my-1.5"><span className="text-[10px] font-medium bg-white/85 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(m.created_at)}</span></div>}
+            <div id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
+              {!own && !isDm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
+              <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
+                {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
+                {m.reply_to_id && (() => {
+                  const q = msgById[m.reply_to_id];
+                  return (
+                    <button type="button" onClick={() => { const el = document.getElementById(`msg-${m.reply_to_id}`); if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('ring-2', 'ring-emerald-400'); setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-400'), 1200); } }}
+                      className="block w-full text-left mb-1 rounded bg-black/[0.06] border-l-4 border-emerald-500 px-2 py-1">
+                      <div className="text-[11px] font-semibold text-emerald-700 truncate">{q ? (q.sender_id === userId ? 'You' : q.sender_name) : 'Message'}</div>
+                      <div className="text-[11px] text-gray-600 truncate">{q ? quotePreview(q) : 'Original message unavailable'}</div>
+                    </button>
+                  );
+                })()}
+                {m.attachment_url && (
+                  isImg(m.attachment_url)
+                    ? <ChatImage url={m.attachment_url} name={m.attachment_name} />
+                    : isAudio(m.attachment_url)
+                      ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
+                      : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
+                {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
+                <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                  <button onClick={() => onReply(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Reply"><FiCornerUpLeft size={11} /></button>
+                  <button onClick={() => onInfo(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Message info"><FiInfo size={11} /></button>
+                  {(own || isAdmin) && <button onClick={() => onDelete(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
+                  <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
+                  {own && <span title={others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet'} className={`text-[11px] leading-none ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>}
+                </div>
+              </div>
+            </div>
+          </Fragment>
+        );
+      })}
+    </>
+  );
+});
+
 export default function SiteChat() {
   const { canCreate, canDelete, isAdmin, user } = useAuth();
   const { startCall } = useCall();
@@ -104,16 +190,19 @@ export default function SiteChat() {
     api.get(`/site-chat/${id}`).then(r => {
       setMsgs(r.data.messages || []); setMembers(r.data.members || []); setReads(r.data.reads || {}); setReadsAt(r.data.readsAt || {});
       if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name, is_dm: r.data.group.is_dm } : s));
-      loadGroups();
+      // Opening/polling a thread marks it read — clear its unread badge locally
+      // instead of re-fetching the whole groups list every 6s (perf pass). The
+      // list's own 12s timer + socket 'changed' still refresh names/last-message.
+      setGroups(gs => gs.map(g => (g.id === id ? { ...g, unread: 0 } : g)));
     }).catch(() => {});
-  }, [loadGroups]);
+  }, []);
 
   useEffect(() => { loadGroups(); reloadUsers(); }, [loadGroups, reloadUsers]);
   // Safety-net: refresh the chat list every 12 s even with NO thread open, so
   // new messages / unread badges still surface when the socket can't connect
   // (in-app browsers, flaky nginx WebSocket). The open thread has its own 6 s
   // poll already (mam 2026-07-04).
-  useEffect(() => { const t = setInterval(loadGroups, 12000); return () => clearInterval(t); }, [loadGroups]);
+  useEffect(() => { const t = setInterval(() => { if (!socketRef.current?.connected) loadGroups(); }, 12000); return () => clearInterval(t); }, [loadGroups]);
   // Real-time: one Socket.IO connection; the server pushes a 'changed' event
   // to each group's room on any message/read/member change. Polling stays as
   // a fallback if the socket can't connect.
@@ -138,7 +227,7 @@ export default function SiteChat() {
     setReplyTo(null);                                  // drop any pending reply when switching threads
     socketRef.current?.emit('join', sel.id);
     loadThread(sel.id);
-    const t = setInterval(() => loadThread(sel.id), 6000);    // fallback poll (safe: GET no longer self-emits)
+    const t = setInterval(() => { if (!socketRef.current?.connected) loadThread(sel.id); }, 6000);    // fallback poll — only when the socket is down
     const onFocus = () => loadThread(sel.id);
     window.addEventListener('focus', onFocus);
     return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
@@ -162,12 +251,10 @@ export default function SiteChat() {
   };
   useEffect(() => { if (memOpen && sel) setRenameVal(sel.name || ''); }, [memOpen, sel?.id]);
 
-  const todayLbl = fmtDate(new Date(), DAY_OPTS);
-  const yestLbl = fmtDate(new Date(Date.now() - 864e5), DAY_OPTS);
-  const dayLabel = (ts) => { const l = fmtDate(ts, DAY_OPTS); return l === todayLbl ? 'Today' : l === yestLbl ? 'Yesterday' : l; };
   // Resolve a quoted reply's original message from the loaded thread.
   const msgById = useMemo(() => { const o = {}; for (const x of msgs) o[x.id] = x; return o; }, [msgs]);
-  const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : (isImg(m.attachment_url) ? '📷 Photo' : '📎 Attachment'))) : 'Original message';
+  // (day-label, quotePreview, and renderBody now live in the memoised MessageList
+  // / module scope so composer keystrokes don't recompute them per message.)
 
   const send = async (extra = {}) => {
     if (!sel || sendingRef.current) return;          // ref guard = no duplicate sends
@@ -175,7 +262,13 @@ export default function SiteChat() {
     if (!payload.body?.trim() && !payload.attachment_url) return;
     sendingRef.current = true; setBusy(true);
     atBottomRef.current = true;                       // sending my own message always jumps to bottom
-    try { await api.post(`/site-chat/${sel.id}`, payload); setText(''); setMention(null); setReplyTo(null); loadThread(sel.id); }
+    try {
+      const r = await api.post(`/site-chat/${sel.id}`, payload);
+      setText(''); setMention(null); setReplyTo(null);
+      // Append the server-returned row instead of re-fetching the whole thread
+      // (perf pass). Socket 'changed' / fallback poll reconciles if needed.
+      if (r.data && r.data.id) setMsgs(ms => ms.some(x => x.id === r.data.id) ? ms : [...ms, r.data]);
+    }
     catch (err) { toast.error(err.response?.data?.error || 'Failed to send'); }
     finally { sendingRef.current = false; setBusy(false); }
   };
@@ -263,27 +356,13 @@ export default function SiteChat() {
     setText(before + inserted + after); setMention(null);
     requestAnimationFrame(() => { if (ta) { const c = (before + inserted).length; ta.focus(); ta.setSelectionRange(c, c); } });
   };
-  // Highlight @mentions of current members when rendering a message body.
-  const renderBody = (body) => {
-    const names = members.map(m => m.name).filter(Boolean).sort((a, b) => b.length - a.length);
-    if (!body || !names.length) return body;
-    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`@(${names.map(esc).join('|')})`, 'g');
-    const out = []; let last = 0; let mm;
-    while ((mm = re.exec(body))) {
-      if (mm.index > last) out.push(body.slice(last, mm.index));
-      out.push(<span key={mm.index} className="text-emerald-700 font-semibold">@{mm[1]}</span>);
-      last = mm.index + mm[0].length;
-    }
-    if (last < body.length) out.push(body.slice(last));
-    return out;
-  };
+  // (renderBody / @mention highlighting now lives in the memoised MessageList.)
 
-  const delMsg = async (m) => {
+  const delMsg = useCallback(async (m) => {
     if (!confirm('Delete this message?')) return;
     try { await api.delete(`/site-chat/${sel.id}/messages/${m.id}`); loadThread(sel.id); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
+  }, [sel?.id, loadThread]);
   const saveRename = async () => {
     const name = renameVal.trim();
     if (!name) return toast.error('Group name is required');
@@ -432,49 +511,8 @@ export default function SiteChat() {
                 onDrop={onDrop}>
                 {dragOver && <div className="absolute inset-0 z-10 m-2 rounded-lg border-2 border-dashed border-emerald-500 bg-emerald-500/10 flex items-center justify-center text-emerald-700 font-semibold pointer-events-none">Drop file to send</div>}
                 {msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say hello 👋</div>}
-                {(() => { let prevDay = null; return msgs.map(m => {
-                  const own = m.sender_id === user?.id;
-                  const day = fmtDate(m.created_at, DAY_OPTS);
-                  const sep = day !== prevDay; prevDay = day;
-                  const others = members.filter(mm => mm.user_id !== user?.id);
-                  const readers = others.filter(o => (reads[o.user_id] || 0) >= m.id);
-                  const allRead = others.length > 0 && readers.length === others.length;
-                  return (
-                    <Fragment key={m.id}>
-                      {sep && <div className="flex justify-center my-1.5"><span className="text-[10px] font-medium bg-white/85 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(m.created_at)}</span></div>}
-                      <div id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
-                        {!own && !sel.is_dm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
-                        <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
-                          {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
-                          {m.reply_to_id && (() => {
-                            const q = msgById[m.reply_to_id];
-                            return (
-                              <button type="button" onClick={() => { const el = document.getElementById(`msg-${m.reply_to_id}`); if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('ring-2', 'ring-emerald-400'); setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-400'), 1200); } }}
-                                className="block w-full text-left mb-1 rounded bg-black/[0.06] border-l-4 border-emerald-500 px-2 py-1">
-                                <div className="text-[11px] font-semibold text-emerald-700 truncate">{q ? (q.sender_id === user?.id ? 'You' : q.sender_name) : 'Message'}</div>
-                                <div className="text-[11px] text-gray-600 truncate">{q ? quotePreview(q) : 'Original message unavailable'}</div>
-                              </button>
-                            );
-                          })()}
-                          {m.attachment_url && (
-                            isImg(m.attachment_url)
-                              ? <ChatImage url={m.attachment_url} name={m.attachment_name} />
-                              : isAudio(m.attachment_url)
-                                ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
-                                : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
-                          {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
-                          <div className="flex items-center justify-end gap-1.5 mt-0.5">
-                            <button onClick={() => setReplyTo(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Reply"><FiCornerUpLeft size={11} /></button>
-                            <button onClick={() => setInfoMsg(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Message info"><FiInfo size={11} /></button>
-                            {(own || isAdmin()) && <button onClick={() => delMsg(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
-                            <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
-                            {own && <span title={others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet'} className={`text-[11px] leading-none ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>}
-                          </div>
-                        </div>
-                      </div>
-                    </Fragment>
-                  );
-                }); })()}
+                <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} />
+
                 <div ref={endRef} />
               </div>
 

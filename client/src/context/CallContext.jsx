@@ -3,7 +3,7 @@
 // only relays the tiny offer/answer/ICE control messages. A single global
 // provider holds the call + renders the call overlay, so an incoming call
 // rings anywhere in the app.
-import { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import api from '../api';
 import { useAuth } from './AuthContext';
@@ -195,8 +195,13 @@ export function CallProvider({ children }) {
     }
   }, [call?.phase, call?.video]);
 
+  // Stable context value — only changes when startCall (memoised) or the call
+  // state changes, so useCall consumers (e.g. SiteChat) don't re-render on
+  // unrelated CallProvider re-renders, e.g. when Layout re-renders around it.
+  const ctx = useMemo(() => ({ startCall, inCall: !!call }), [startCall, call]);
+
   return (
-    <CallContext.Provider value={{ startCall, inCall: !!call }}>
+    <CallContext.Provider value={ctx}>
       {children}
       {call && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 text-white select-none" style={{ height: '100dvh' }}>

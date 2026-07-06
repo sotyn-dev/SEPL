@@ -73,11 +73,19 @@ router.get('/groups', (req, res) => {
       dmUid[id] = (others[0] || mem[0])?.user_id || null;     // other person's id → their avatar
     }
   }
-  const lastBy = Object.fromEntries(db.prepare(`SELECT group_id,body,attachment_name,sender_name,created_at FROM chat_messages WHERE id IN (SELECT MAX(id) FROM chat_messages GROUP BY group_id)`).all().map(l => [l.group_id, l]));
-  const memBy = Object.fromEntries(db.prepare('SELECT group_id,COUNT(*) c FROM chat_group_members GROUP BY group_id').all().map(c => [c.group_id, c.c]));
-  const unreadBy = Object.fromEntries(db.prepare(`SELECT cm.group_id, COUNT(*) c FROM chat_messages cm
-      WHERE cm.sender_id<>? AND cm.id > COALESCE((SELECT last_read_id FROM chat_reads r WHERE r.group_id=cm.group_id AND r.user_id=?),0)
-      GROUP BY cm.group_id`).all(uid, uid).map(c => [c.group_id, c.c]));
+  // Scope the summary queries to just THIS user's groups (not every group in the
+  // DB) so they hit idx_cmsg_group_id as bounded per-group index seeks instead of
+  // full table scans of chat_messages — /site-chat perf pass.
+  const gids = groups.map(g => g.id);
+  let lastBy = {}, memBy = {}, unreadBy = {};
+  if (gids.length) {
+    const ph = gids.map(() => '?').join(',');
+    lastBy = Object.fromEntries(db.prepare(`SELECT group_id,body,attachment_name,sender_name,created_at FROM chat_messages WHERE id IN (SELECT MAX(id) FROM chat_messages WHERE group_id IN (${ph}) GROUP BY group_id)`).all(...gids).map(l => [l.group_id, l]));
+    memBy = Object.fromEntries(db.prepare(`SELECT group_id,COUNT(*) c FROM chat_group_members WHERE group_id IN (${ph}) GROUP BY group_id`).all(...gids).map(c => [c.group_id, c.c]));
+    unreadBy = Object.fromEntries(db.prepare(`SELECT cm.group_id, COUNT(*) c FROM chat_messages cm
+        WHERE cm.group_id IN (${ph}) AND cm.sender_id<>? AND cm.id > COALESCE((SELECT last_read_id FROM chat_reads r WHERE r.group_id=cm.group_id AND r.user_id=?),0)
+        GROUP BY cm.group_id`).all(...gids, uid, uid).map(c => [c.group_id, c.c]));
+  }
   const out = groups.map(g => ({ ...g, name: g.is_dm ? (dmTitle[g.id] || g.name) : g.name, dm_uid: g.is_dm ? (dmUid[g.id] || null) : null, last: lastBy[g.id] || null, members: memBy[g.id] || 0, unread: unreadBy[g.id] || 0 }));
   out.sort((a, b) => { const ta = a.last?.created_at || '', tb = b.last?.created_at || ''; if (ta && tb) return tb.localeCompare(ta); if (ta) return -1; if (tb) return 1; return String(a.name).localeCompare(String(b.name)); });
   res.json(out);
