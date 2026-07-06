@@ -118,8 +118,10 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
           </div>
           {group.items.map(m => {
             const own = m.sender_id === userId;
-            const readers = others.filter(o => (reads[o.user_id] || 0) >= m.id);
-            const allRead = others.length > 0 && readers.length === others.length;
+            // Read-receipt state (the ✓✓ + "Read by…" tooltip) renders ONLY on your own
+            // messages, so compute it only then — skips an O(members) scan on every other row.
+            const readers = own ? others.filter(o => (reads[o.user_id] || 0) >= m.id) : null;
+            const allRead = own && others.length > 0 && readers.length === others.length;
             return (
               <div key={m.id} id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
                 {!own && !isDm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
