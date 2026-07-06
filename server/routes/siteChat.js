@@ -22,8 +22,12 @@ const canAccess = (db, req, g) => {
   return !!row && !row.is_dm;          // admin sees groups, never private DMs
 };
 const userName = (uid) => { try { return getDb().prepare('SELECT name FROM users WHERE id=?').get(uid)?.name || ''; } catch { return ''; } };
-const markRead = (db, g, uid) => {
-  const max = db.prepare('SELECT MAX(id) m FROM chat_messages WHERE group_id=?').get(g).m || 0;
+const markRead = (db, g, uid, knownMax) => {
+  // On the send path the caller already holds the just-inserted id (info.lastInsertRowid),
+  // which is this group's newest id — so skip the redundant MAX(id) scan. Every other
+  // caller passes nothing and still resolves it here, so behaviour is unchanged.
+  const max = knownMax != null ? knownMax
+    : (db.prepare('SELECT MAX(id) m FROM chat_messages WHERE group_id=?').get(g).m || 0);
   db.prepare(`INSERT INTO chat_reads (group_id,user_id,last_read_id,updated_at) VALUES (?,?,?,CURRENT_TIMESTAMP)
               ON CONFLICT(group_id,user_id) DO UPDATE SET last_read_id=MAX(last_read_id,excluded.last_read_id), updated_at=CURRENT_TIMESTAMP`).run(g, uid, max);
   return max;
@@ -218,7 +222,7 @@ router.post('/:groupId', (req, res) => {
   }
   const info = db.prepare(`INSERT INTO chat_messages (group_id, body, attachment_url, attachment_name, sender_id, sender_name, reply_to_id) VALUES (?,?,?,?,?,?,?)`)
     .run(g, body ? String(body).trim() : null, attachment_url || null, attachment_name || null, req.user.id, req.user.name || '', replyId);
-  markRead(db, g, req.user.id);
+  markRead(db, g, req.user.id, info.lastInsertRowid);   // reuse the just-inserted id — skip the MAX(id) scan
   const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(info.lastInsertRowid);
   // Emit the new row so an updated client can append it directly. Additive: the
   // current client ignores 'message' and still reloads on 'changed' (perf pass).
