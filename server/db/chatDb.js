@@ -15,6 +15,14 @@ function getChatDb() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   chatDb = new Database(CHAT_DB_PATH);
   chatDb.pragma('journal_mode = WAL');
+  // /site-chat perf pass (2026-07): connection-level tuning only — NO schema or data
+  // change. WAL is set above; these cut event-loop time per write and keep hot pages
+  // resident. All are per-connection, so they re-apply on every boot / re-open.
+  chatDb.pragma('synchronous = NORMAL');   // WAL-safe: fsync at checkpoints, not every commit
+  chatDb.pragma('cache_size = -16000');    // ~16 MB page cache (negative = KiB)
+  chatDb.pragma('mmap_size = 268435456');  // up to 256 MB memory-mapped reads (maps at most file size)
+  chatDb.pragma('temp_store = MEMORY');    // temp b-trees in RAM, not on disk
+  chatDb.pragma('busy_timeout = 5000');    // wait up to 5 s on a transient lock instead of throwing
   chatDb.exec(`
     CREATE TABLE IF NOT EXISTS chat_groups (
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
