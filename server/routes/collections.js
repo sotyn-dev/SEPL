@@ -510,7 +510,36 @@ router.post('/:id/follow-up', requirePermission('collections', 'edit'), (req, re
   db.prepare('UPDATE receivables SET follow_up_status=?, follow_up_date=?, follow_up_notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
     .run('contacted', follow_up_date, response, req.params.id);
 
-  res.status(201).json({ message: 'Follow-up added' });
+  // Auto-raise a PMS Task from the remark so every collection follow-up becomes a
+  // tracked action item for the finance executive (mam 2026-07-06: "all remarks
+  // automatically go to PMS task … this follow-up is of finance executive
+  // Aanchal"). Best-effort: a failure here never fails the follow-up itself.
+  let pms_task_id = null;
+  try {
+    const remark = String(response || '').trim();
+    if (remark) {
+      const r = db.prepare('SELECT * FROM receivables WHERE id=?').get(req.params.id) || {};
+      // Assignee = Aanchal (collections/finance executive), resolved by name like
+      // the payment flow does; fall back to whoever logged it so it's never lost.
+      const aanchal = db.prepare("SELECT id FROM users WHERE COALESCE(active,1)=1 AND LOWER(TRIM(name))='aanchal' LIMIT 1").get()
+        || db.prepare("SELECT id FROM users WHERE COALESCE(active,1)=1 AND LOWER(name) LIKE 'aanchal%' ORDER BY id LIMIT 1").get();
+      const assignee = aanchal ? aanchal.id : req.user.id;
+      const client = r.site_name || r.client_name || r.project_name || 'client';
+      // Only link project_id when it maps to a real business_book row (matches the
+      // pms_tasks_count linkage p.project_id = r.site_id), else leave it null.
+      const projectId = (r.site_id && db.prepare('SELECT 1 FROM business_book WHERE id=?').get(r.site_id)) ? r.site_id : null;
+      const title = `Collection follow-up — ${client}`.slice(0, 120);
+      const desc = `${client}: ${remark}` + (promised_date ? `\nPromised: ${promised_date}` : '') + (promised_amount ? ` · ₹${promised_amount}` : '');
+      const info = db.prepare(
+        `INSERT INTO pms_tasks (title, description, project_id, project_name_snapshot, crm_name, assigned_by, assigned_to, due_date)
+           VALUES (?,?,?,?,?,?,?,?)`
+      ).run(title, desc, projectId, r.site_name || r.client_name || null, r.crm_name || null, req.user.id, assignee, promised_date || null);
+      pms_task_id = info.lastInsertRowid;
+      try { require('../lib/push').notify(assignee, { title: '💰 Collection follow-up', body: title + (promised_date ? ` · due ${promised_date}` : ''), url: '/pms-tasks', tag: `pms-${pms_task_id}` }); } catch (_) {}
+    }
+  } catch (e) { console.warn('[collections] follow-up → PMS task failed:', e.message); }
+
+  res.status(201).json({ message: 'Follow-up added', pms_task_id });
 });
 
 // Get follow-ups for a receivable
