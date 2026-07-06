@@ -109,6 +109,7 @@ export default function UserManagement() {
           `(indents created, candidates added, payment approvals, etc.).\n\n` +
           `FORCE DELETE will:\n` +
           `  • Set all those references to NULL (old rows keep working — just lose the "created by" link)\n` +
+          `  • KEEP their attendance records (unlinked, but the name is preserved) — salary history stays intact\n` +
           `  • Then delete the user permanently\n\n` +
           `Audit-trail snapshots (denormalised "user_name" fields) stay intact.\n\n` +
           `Proceed with force delete?`
@@ -116,7 +117,11 @@ export default function UserManagement() {
         if (!ok) return;
         try {
           const r = await api.delete(`/auth/users/${user.id}?force=1`);
-          toast.success(`User "${user.name}" force-deleted (${r.data?.cleared_total || 0} references nulled)`);
+          const att = r.data?.attendance_preserved || 0;
+          toast.success(
+            `User "${user.name}" force-deleted (${r.data?.cleared_total || 0} references nulled` +
+            (att > 0 ? `, ${att} attendance record${att === 1 ? '' : 's'} kept` : '') + ')'
+          );
           load();
         } catch (err2) {
           toast.error(err2.response?.data?.error || 'Force delete failed');

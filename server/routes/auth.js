@@ -477,17 +477,13 @@ router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
       return res.status(400).json({ error: 'Cannot delete the only admin. Promote another user to admin first.' });
     }
   }
-  // Salary safety (mam 2026-07-02: "inactive — attendance & data must not be
-  // deleted, else salary breaks"). A user with ANY attendance history must never
-  // be hard-deleted — deleting or unlinking those rows corrupts payroll. Force
-  // the admin to DEACTIVATE instead, which keeps every record intact and just
-  // moves them to the Inactive list. Blocks normal AND force delete.
+  // Attendance is PRESERVED, never deleted (mam 2026-07-06: "if user delete,
+  // but old attendance data don't delete"). This supersedes the old 2026-07-02
+  // hard block that refused deletion for anyone with attendance. Now the force
+  // path below snapshots the person's name onto their attendance rows and only
+  // NULLs the user_id — so every attendance record is KEPT (just unlinked and
+  // still identifiable), and payroll history (kept by employee_id) is untouched.
   const attCount = db.prepare('SELECT COUNT(*) AS c FROM attendance WHERE user_id = ?').get(id).c;
-  if (attCount > 0) {
-    return res.status(400).json({
-      error: `"${target.name}" has ${attCount} attendance record${attCount === 1 ? '' : 's'} used for salary — deleting would break payroll. Deactivate this user instead (the Status toggle / Inactive): their attendance and history stay intact, they just move to the Inactive list.`,
-    });
-  }
   if (force) {
     // Discover all FK refs, null them, then delete — atomic in a
     // single transaction so a partial failure doesn't leave dangling
@@ -496,6 +492,12 @@ router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
       const refs = findUserFkReferences(db);
       const cleared = {};
       const tx = db.transaction(() => {
+        // Preserve attendance FIRST — snapshot the person's name so the rows
+        // stay identifiable AFTER the loop below nulls attendance.user_id. The
+        // attendance rows themselves are never deleted (mam 2026-07-06).
+        try {
+          db.prepare('UPDATE attendance SET user_name_snapshot = COALESCE(user_name_snapshot, ?) WHERE user_id = ?').run(target.name, id);
+        } catch (_) { /* snapshot is best-effort; the null-below still preserves the row */ }
         for (const ref of refs) {
           if (ref.table === 'user_roles') continue;  // gets DELETED below
           try {
@@ -518,9 +520,12 @@ router.delete('/users/:id', authMiddleware, adminOnly, (req, res) => {
       });
       tx();
       res.json({
-        message: `User "${target.name}" force-deleted`,
+        message: attCount > 0
+          ? `User "${target.name}" force-deleted — ${attCount} attendance record${attCount === 1 ? '' : 's'} kept (unlinked, name preserved)`
+          : `User "${target.name}" force-deleted`,
         cleared,
         cleared_total: Object.values(cleared).reduce((a, b) => a + b, 0),
+        attendance_preserved: attCount,
       });
     } catch (e) {
       console.error('[user-delete force] failed:', e.message);

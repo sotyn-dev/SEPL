@@ -250,7 +250,10 @@ router.get('/my-history', (req, res) => {
 // GET attendance list (admin view) with filters
 router.get('/', requirePermission('attendance', 'view'), (req, res) => {
   const { date, user_id, status, date_from, date_to } = req.query;
-  let sql = `SELECT a.*, u.name as user_name, u.department, u.phone FROM attendance a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1`;
+  // COALESCE to the snapshot so a deleted user's KEPT attendance rows still
+  // show who they belonged to (user_id is nulled on force-delete but the name
+  // snapshot stays) — mam 2026-07-06 "old attendance data don't delete".
+  let sql = `SELECT a.*, COALESCE(u.name, a.user_name_snapshot) as user_name, u.department, u.phone FROM attendance a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1`;
   const params = [];
   if (date) { sql += ' AND a.date=?'; params.push(date); }
   if (user_id) { sql += ' AND a.user_id=?'; params.push(user_id); }

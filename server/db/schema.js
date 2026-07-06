@@ -1725,6 +1725,22 @@ function initializeDatabase() {
       UNIQUE(user_id, kpi_id, week_start)
     );
 
+    -- Weekly COMMITMENT — one number per (user, week) that the employee
+    -- promises for the COMING week (mam 2026-07-06).  Stored in the same
+    -- "variance vs plan" convention the Scorecard renders: 0% = will fully
+    -- hit plan, down to −50% = the worst they'll allow themselves.  Keyed to
+    -- the week the promise is FOR (target week), so committed_pct[W] pairs
+    -- directly with that week's achieved variance for the gap graph.
+    CREATE TABLE IF NOT EXISTS score_commitments (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      week_start DATE NOT NULL,
+      committed_pct REAL NOT NULL,          -- −50 … 0 (variance vs plan)
+      note TEXT,
+      updated_by INTEGER REFERENCES users(id),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, week_start)
+    );
+
     -- Web Push subscriptions — one row per (user × device). Multiple
     -- rows per user is fine (mam wants phone + laptop + desktop).
     -- VAPID keys stored in app_settings as a single row.
@@ -3571,6 +3587,12 @@ function initializeDatabase() {
     // weight_override → behave exactly as before this change.
     ['score_user_kpi_target', 'enabled INTEGER DEFAULT 1'],
     ['score_user_kpi_target', 'weight_override REAL'],
+    // Preserve attendance attribution when a user is hard-deleted (mam
+    // 2026-07-06: "if user delete, but old attendance data don't delete").
+    // On force-delete we snapshot the person's name here, then null
+    // attendance.user_id — the row is KEPT, just unlinked, and still shows
+    // who it belonged to (the admin Attendance list COALESCEs to this).
+    ['attendance', 'user_name_snapshot TEXT'],
     // ─── Indent line source split — store vs procure ────────────────────
     // Mam (2026-06-02): when an indent line needs 20 pcs and 5 are
     // already in office stock, the L1/L2 approver can now split the line

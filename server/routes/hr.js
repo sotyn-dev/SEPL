@@ -783,9 +783,79 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
   res.json({ message: 'Updated' });
 });
 
+// Delete an employee. Robust like the user delete (auth.js): a bare
+// `DELETE FROM employees` used to throw an uncaught FOREIGN KEY error whenever
+// the person had payroll or interview history — the admin just saw "Delete
+// failed" / "FOREIGN KEY constraint failed" with no reason and no way forward
+// (mam 2026-07-06: "not able to delete old employees"). Now:
+//   • Payroll history → BLOCK (400) and tell them to deactivate — nulling or
+//     deleting salary rows corrupts payroll (same rule as users + attendance).
+//   • Interview / hiring links (interviewer, reporting-manager) → these are
+//     nullable soft references; a normal delete surfaces a clear 409, and
+//     ?force=1 unlinks them first, then deletes.
 router.delete('/employees/:id', requirePermission('employees', 'delete'), (req, res) => {
-  getDb().prepare('DELETE FROM employees WHERE id=?').run(req.params.id);
-  res.json({ message: 'Deleted' });
+  const db = getDb();
+  const id = +req.params.id;
+  const force = req.query.force === '1';
+  const emp = db.prepare('SELECT id, name, status FROM employees WHERE id=?').get(id);
+  if (!emp) return res.status(404).json({ error: 'Employee not found' });
+
+  // Salary safety — an employee with ANY payroll history must never be
+  // hard-deleted; deactivate (Status → inactive/terminated) instead so every
+  // salary record stays intact. Blocks normal AND force delete.
+  const payTotal =
+    db.prepare('SELECT COUNT(*) c FROM payroll_runs WHERE employee_id=?').get(id).c +
+    db.prepare('SELECT COUNT(*) c FROM payroll_advances WHERE employee_id=?').get(id).c;
+  if (payTotal > 0) {
+    return res.status(400).json({
+      error: `"${emp.name}" has ${payTotal} salary/payroll record${payTotal === 1 ? '' : 's'} — deleting would break payroll. Set their Status to "inactive" or "terminated" instead (Edit → Status): all salary history stays intact and they drop off the active list.`,
+      payroll_count: payTotal,
+      suggest: 'deactivate',
+    });
+  }
+
+  // Nullable interview/hiring links that FK-block the delete. Safe to unlink on
+  // force (they only record "who interviewed / who was reporting manager").
+  // training_assignments is ON DELETE CASCADE, so it clears itself.
+  const SOFT_REFS = [
+    ['candidates', 'interviewer_id'],
+    ['hiring_requests', 'reporting_manager_id'],
+    ['interview_scorecards', 'interviewer_id'],
+  ];
+
+  if (force) {
+    try {
+      const cleared = {};
+      db.transaction(() => {
+        for (const [t, c] of SOFT_REFS) {
+          try {
+            const r = db.prepare(`UPDATE "${t}" SET "${c}"=NULL WHERE "${c}"=?`).run(id);
+            if (r.changes > 0) cleared[`${t}.${c}`] = r.changes;
+          } catch (e) { console.warn('[emp-delete] could not clear', `${t}.${c}`, '-', e.message); }
+        }
+        db.prepare('DELETE FROM employees WHERE id=?').run(id);
+      })();
+      return res.json({ message: `Employee "${emp.name}" force-deleted`, cleared });
+    } catch (e) {
+      console.error('[emp-delete force] failed:', e.message);
+      return res.status(500).json({ error: `Force-delete failed: ${e.message}` });
+    }
+  }
+
+  try {
+    db.prepare('DELETE FROM employees WHERE id=?').run(id);
+    res.json({ message: 'Deleted' });
+  } catch (e) {
+    let refCount = 0;
+    for (const [t, c] of SOFT_REFS) {
+      try { refCount += db.prepare(`SELECT COUNT(*) c FROM "${t}" WHERE "${c}"=?`).get(id).c; } catch (_) {}
+    }
+    res.status(409).json({
+      error: `Delete blocked: "${emp.name}" is still linked to ${refCount || 'other'} interview/hiring record${refCount === 1 ? '' : 's'}.`,
+      reference_count: refCount,
+      hint: 'Force Delete unlinks those (interviewer / reporting-manager) then deletes. Or set Status to inactive/terminated to keep the record.',
+    });
+  }
 });
 
 // Sub-Contractors

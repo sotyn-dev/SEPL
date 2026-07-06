@@ -11,8 +11,12 @@ import { useUrlTab } from '../hooks/useUrlTab';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload } from 'react-icons/fi';
+import { FiTrendingUp, FiCalendar, FiEdit2, FiSave, FiUsers, FiSettings, FiPlus, FiTrash2, FiUser, FiDownload, FiTarget } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
+import {
+  ResponsiveContainer, ComposedChart, Bar, Line, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine,
+} from 'recharts';
 
 // ── Scorecard display convention (mam 2026-07-04): show performance as the
 // VARIANCE vs plan — achievement% − 100.  So hitting 100% of plan reads 0%,
@@ -26,6 +30,16 @@ const vsClr = (pct) => {
   const v = vsPlan(pct);
   if (v == null) return 'text-gray-300';
   return v >= 0 ? 'text-emerald-700' : v >= -50 ? 'text-amber-700' : 'text-red-700';
+};
+
+// For values ALREADY expressed as variance-vs-plan (the commitment convention:
+// 0 = on plan, negative = behind).  Colour + signed label without the −100 shift.
+const varClr = (v) => v == null ? 'text-gray-400' : v >= 0 ? 'text-emerald-700' : v >= -50 ? 'text-amber-700' : 'text-red-700';
+const fmtVar = (v) => v == null ? '—' : `${v > 0 ? '+' : ''}${v}%`;
+const fmtShort = (start) => {
+  const d = new Date(start + 'T00:00:00');
+  const month = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+  return `${d.getDate()} ${month}`;
 };
 
 const lastMonday = (offsetWeeks = 0) => {
@@ -330,6 +344,11 @@ export default function Scorecard() {
             </div>
           </div>
 
+          {/* Weekly commitment — the employee's promise for the coming week,
+              last week's committed target, and a committed-vs-delivered graph
+              so they SEE the gap (mam 2026-07-06). */}
+          <CommitmentPanel viewUserId={viewUserId} weekStart={weekStart} />
+
           {!scorecard.template && (
             <div className="card p-6 text-center text-gray-400 text-sm">
               No template assigned to this user yet. {isAdmin() && <span>Open the <button className="text-blue-600 underline" onClick={() => setTab('assign')}>Assign Templates</button> tab to set one.</span>}
@@ -439,6 +458,165 @@ export default function Scorecard() {
       <Modal isOpen={!!tplDetail} onClose={() => setTplDetail(null)} title={tplDetail?.name || 'Template'} wide>
         {tplDetail && <TemplateKpiEditor templateId={tplDetail.id} onChange={() => api.get(`/scoring/templates/${tplDetail.id}`).then(r => setTplDetail(r.data))} />}
       </Modal>
+    </div>
+  );
+}
+
+// ---------- Weekly Commitment panel ----------
+// mam (2026-07-06): "separate box for writing the commitment (0 to −50%) for
+// the coming week; always show last week's committed target in its own box;
+// then a committed-vs-actual graph that gives the emotional angle so the
+// employee sees the gap."  All three live here.  The committed % uses the same
+// variance-vs-plan convention the rest of the page shows (0 = on plan).
+function CommitTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  const row = payload[0].payload;
+  const gap = row.gap;
+  return (
+    <div className="bg-white border rounded shadow px-3 py-2 text-xs">
+      <div className="font-semibold mb-1">Week of {label}</div>
+      <div>Committed: <b className={varClr(row.committed)}>{fmtVar(row.committed)}</b></div>
+      <div>Delivered: <b className={varClr(row.actual)}>{fmtVar(row.actual)}</b></div>
+      {gap != null && (
+        <div className={gap >= 0 ? 'text-emerald-700 mt-0.5' : 'text-red-700 mt-0.5'}>
+          {gap >= 0 ? `Met the promise (+${gap}%)` : `Gap of ${gap}% to close`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CommitmentPanel({ viewUserId, weekStart }) {
+  const { user, isAdmin } = useAuth();
+  const readOnly = viewUserId !== user.id && !isAdmin();
+  const [data, setData] = useState(null);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(() => {
+    api.get(`/scoring/commitments?user_id=${viewUserId}&week_start=${weekStart}&weeks=8`)
+      .then(r => { setData(r.data); setDraft(r.data?.next?.committed_pct ?? ''); })
+      .catch(() => setData(null));
+  }, [viewUserId, weekStart]);
+  useEffect(() => { load(); }, [load]);
+
+  const save = async () => {
+    const raw = String(draft).trim();
+    const v = raw === '' ? null : Number(raw);
+    if (v !== null && (!Number.isFinite(v) || v < -50 || v > 0)) {
+      toast.error('Commitment must be between 0% and −50%');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.put('/scoring/commitment', { user_id: viewUserId, week_start: data.next_week_start, committed_pct: v });
+      toast.success(v === null ? 'Commitment cleared' : 'Commitment saved');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Save failed');
+    } finally { setSaving(false); }
+  };
+
+  if (!data) return null;
+  const current = data.current?.committed_pct ?? null;   // promise made for the viewed week
+  const series = data.weeks || [];
+  const actualThisWeek = series.length ? series[series.length - 1].actual_pct : null;
+  const gapThisWeek = (current != null && actualThisWeek != null)
+    ? Math.round((actualThisWeek - current) * 100) / 100 : null;
+
+  const chart = series.map(w => ({
+    label: fmtShort(w.week_start),
+    committed: w.committed_pct,
+    actual: w.actual_pct,
+    gap: (w.committed_pct != null && w.actual_pct != null)
+      ? Math.round((w.actual_pct - w.committed_pct) * 100) / 100 : null,
+  }));
+  const vals = chart.flatMap(r => [r.committed, r.actual]).filter(v => v != null);
+  const lo = Math.floor(Math.min(-55, 0, ...vals) / 5) * 5;
+  const hi = Math.ceil(Math.max(10, 0, ...vals) / 5) * 5;
+  // Green when the bar meets/beats the promise line, red when it falls short.
+  const barColor = (r) => {
+    if (r.actual == null) return '#e5e7eb';
+    if (r.committed != null) return r.actual >= r.committed ? '#10b981' : '#ef4444';
+    return r.actual >= 0 ? '#10b981' : r.actual >= -50 ? '#f59e0b' : '#ef4444';
+  };
+  const hasData = vals.length > 0;
+
+  return (
+    <div className="card p-4 space-y-4">
+      <div className="flex items-center gap-2">
+        <FiTarget className="text-indigo-600" />
+        <h3 className="font-bold text-sm">Weekly Commitment <span className="text-gray-400 font-normal">— your promise vs what you delivered</span></h3>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {/* Box A — last week's committed target for THIS week (read-only) */}
+        <div className="rounded-lg border bg-gradient-to-br from-slate-50 to-white p-4">
+          <p className="text-xs text-gray-500">Committed target — this week</p>
+          <p className="text-[11px] text-gray-400 mb-1">{fmtRange(weekStart)} · set last week</p>
+          {current == null
+            ? <p className="text-2xl font-bold text-gray-300">Not committed</p>
+            : <p className={`text-3xl font-bold ${varClr(current)}`}>{fmtVar(current)}</p>}
+          {gapThisWeek != null && (
+            <p className="text-[11px] mt-1 text-gray-600">
+              Delivered <b className={varClr(actualThisWeek)}>{fmtVar(actualThisWeek)}</b> ·{' '}
+              {gapThisWeek >= 0
+                ? <span className="text-emerald-700 font-semibold">met the promise (+{gapThisWeek}%)</span>
+                : <span className="text-red-700 font-semibold">gap of {gapThisWeek}%</span>}
+            </p>
+          )}
+        </div>
+
+        {/* Box B — commit for the coming week (editable, 0 … −50) */}
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-4">
+          <p className="text-xs text-indigo-800 font-semibold">My commitment for next week</p>
+          <p className="text-[11px] text-gray-500 mb-2">{fmtRange(data.next_week_start)}</p>
+          <div className="flex items-center gap-2">
+            <input
+              type="number" min={-50} max={0} step={5}
+              className="input w-28 text-lg font-bold text-center"
+              placeholder="0 … −50" value={draft}
+              onChange={e => setDraft(e.target.value)} disabled={readOnly || saving}
+            />
+            <span className="text-gray-500 text-sm">%</span>
+            {!readOnly && (
+              <button onClick={save} disabled={saving} className="btn btn-primary text-sm flex items-center gap-1">
+                <FiSave size={14} /> {saving ? 'Saving…' : 'Commit'}
+              </button>
+            )}
+          </div>
+          <p className="text-[10px] text-gray-400 mt-1.5">0% = you'll fully hit plan · −50% = the worst you'll allow. You can't commit below −50%.</p>
+        </div>
+      </div>
+
+      {/* Graph — the emotional angle: bars (delivered) against the dashed
+          promise line, red where they fall short. */}
+      <div>
+        {hasData ? (
+          <ResponsiveContainer width="100%" height={260}>
+            <ComposedChart data={chart} margin={{ top: 10, right: 12, left: -12, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} domain={[lo, hi]} tickFormatter={v => `${v}%`} />
+              <Tooltip content={<CommitTooltip />} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} ifOverflow="extendDomain" />
+              <Bar dataKey="actual" name="Delivered" radius={[3, 3, 0, 0]} maxBarSize={40}>
+                {chart.map((r, i) => <Cell key={i} fill={barColor(r)} />)}
+              </Bar>
+              <Line type="monotone" dataKey="committed" name="Committed" stroke="#4f46e5"
+                strokeWidth={2} strokeDasharray="5 4" dot={{ r: 3, fill: '#4f46e5' }} connectNulls />
+            </ComposedChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className="text-center text-gray-400 text-sm py-10 border border-dashed rounded">
+            No commitments yet. Set one for next week above — the gap graph fills in as the weeks go by.
+          </div>
+        )}
+        <p className="text-[11px] text-gray-500 text-center mt-1">
+          Dashed line = what you <b>committed</b>. Bars = what you <b>delivered</b>. <span className="text-red-600 font-semibold">Red bars fall short of your promise</span> — that's the gap to close.
+        </p>
+      </div>
     </div>
   );
 }

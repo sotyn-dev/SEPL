@@ -29,6 +29,42 @@ export default function Employees() {
   };
   useEffect(() => { load(); }, []);
 
+  // Delete an employee — surfaces WHY it's blocked instead of a bare "Delete
+  // failed" (mam 2026-07-06). Payroll history → server 400 tells her to
+  // deactivate; interview/hiring links → 409 offers Force Delete. Shared by the
+  // desktop row AND the mobile card so both behave the same.
+  const deleteEmployee = async (e) => {
+    if (!confirm(
+      `Delete employee "${e.name}"?\n\n` +
+      'Tip: if they have left, setting Status to "inactive" / "terminated" (Edit) keeps their ' +
+      'salary history and drops them off the active list — that is usually what you want.'
+    )) return;
+    try {
+      await api.delete(`/hr/employees/${e.id}`);
+      toast.success('Deleted');
+      load();
+    } catch (err) {
+      if (err.response?.status === 409) {
+        const refCount = err.response?.data?.reference_count;
+        if (!confirm(
+          `Delete blocked — "${e.name}" is still linked to ${refCount || 'some'} interview/hiring record(s).\n\n` +
+          'FORCE DELETE will unlink those (interviewer / reporting-manager links) and delete the ' +
+          'employee permanently.\n\nProceed with force delete?'
+        )) return;
+        try {
+          await api.delete(`/hr/employees/${e.id}?force=1`);
+          toast.success(`Employee "${e.name}" force-deleted`);
+          load();
+        } catch (err2) {
+          toast.error(err2.response?.data?.error || 'Force delete failed');
+        }
+        return;
+      }
+      // 400 payroll guard (or anything else) → show the server's reason verbatim
+      toast.error(err.response?.data?.error || 'Delete failed');
+    }
+  };
+
   // Auto-link employees to users by matching email — for existing records
   const autoLink = async () => {
     try {
@@ -230,11 +266,7 @@ export default function Employees() {
               <td><StatusBadge status={e.status} /></td>
               <td><div className="flex gap-1">
                 <button onClick={() => { setEditing(e); setForm(e); setModal(true); }} className="p-1.5 hover:bg-red-50 rounded text-red-600"><FiEdit2 size={15} /></button>
-                {canDelete('employees') && <button onClick={async () => {
-                  if (!confirm(`Delete employee "${e.name}"?`)) return;
-                  try { await api.delete(`/hr/employees/${e.id}`); toast.success('Deleted'); load(); }
-                  catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                }} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
+                {canDelete('employees') && <button onClick={() => deleteEmployee(e)} className="p-1 text-gray-400 hover:text-red-600"><FiTrash2 size={14} /></button>}
               </div></td>
             </tr>
           ))}
@@ -295,11 +327,7 @@ export default function Employees() {
                 <FiEdit2 size={11} /> Edit
               </button>
               {canDelete('employees') && (
-                <button onClick={async () => {
-                  if (!confirm(`Delete employee "${e.name}"?`)) return;
-                  try { await api.delete(`/hr/employees/${e.id}`); toast.success('Deleted'); load(); }
-                  catch (err) { toast.error(err.response?.data?.error || 'Delete failed'); }
-                }} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
+                <button onClick={() => deleteEmployee(e)} className="text-red-600 hover:underline flex items-center gap-1 font-semibold">
                   <FiTrash2 size={11} /> Delete
                 </button>
               )}

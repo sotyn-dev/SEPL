@@ -1120,6 +1120,105 @@ router.put('/scorecard/entry', (req, res) => {
   }
 });
 
+// ---------- Weekly Commitment (mam 2026-07-06) ----------
+// A single week-level target the employee COMMITS to for the coming week,
+// in the same "variance vs plan" convention the Scorecard renders: 0% = will
+// fully hit plan, down to −50% = the worst they'll allow themselves.  Each
+// commitment is keyed to the week it is FOR (the target week), so:
+//   • "commit for next week"        → writes committed_pct for weekStart+7
+//   • "this week's committed target" → committed_pct[weekStart] (the promise
+//                                      made earlier, shown read-only)
+//   • the Committed-vs-Actual graph  → pairs committed_pct[w] with the achieved
+//     variance (computeScorecard(w).score − 100) for the same week w.
+const COMMIT_MIN = -50, COMMIT_MAX = 0;
+
+function commitmentRow(db, userId, week) {
+  return db.prepare('SELECT committed_pct, note FROM score_commitments WHERE user_id=? AND week_start=?')
+    .get(userId, week) || null;
+}
+
+// GET the commitment history + achieved variance for the last N weeks, plus
+// the promise already saved for the coming week (for the input to pre-fill).
+router.get('/commitments', (req, res) => {
+  try {
+    const userId = parseInt(req.query.user_id, 10) || req.user.id;
+    const weekStart = req.query.week_start && /^\d{4}-\d{2}-\d{2}$/.test(req.query.week_start)
+      ? req.query.week_start
+      : defaultWeekStart();
+    let weeks = parseInt(req.query.weeks, 10) || 8;
+    weeks = Math.max(4, Math.min(16, weeks));
+    const db = getDb();
+
+    // Oldest → newest; newest = the viewed week (so the graph reads left→right).
+    const series = [];
+    for (let i = weeks - 1; i >= 0; i--) {
+      const w = shiftWeek(weekStart, -7 * i);
+      const commit = commitmentRow(db, userId, w);
+      let actualPct = null;
+      try {
+        const sc = computeScorecard(db, userId, w);
+        // Only weeks with a template have a real score; else leave the bar blank.
+        if (sc && sc.template) actualPct = Math.round((sc.score - 100) * 100) / 100;
+      } catch (_) { /* leave null */ }
+      series.push({
+        week_start: w,
+        committed_pct: commit ? commit.committed_pct : null,
+        actual_pct: actualPct,
+      });
+    }
+
+    res.json({
+      user_id: userId,
+      week_start: weekStart,
+      next_week_start: shiftWeek(weekStart, 7),
+      current: commitmentRow(db, userId, weekStart),            // promise for the viewed week
+      next: commitmentRow(db, userId, shiftWeek(weekStart, 7)), // already-saved promise for the coming week
+      weeks: series,
+    });
+  } catch (err) {
+    console.error('commitments get error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT (upsert) the commitment for one (user, week).  Empty value clears it.
+router.put('/commitment', (req, res) => {
+  try {
+    const { user_id, week_start, committed_pct, note } = req.body;
+    if (!week_start || !/^\d{4}-\d{2}-\d{2}$/.test(week_start)) {
+      return res.status(400).json({ error: 'week_start (yyyy-mm-dd) required' });
+    }
+    const targetUser = parseInt(user_id, 10) || req.user.id;
+    // Only admin or the target user themselves can edit (same rule as entries).
+    if (targetUser !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Cannot edit another user\'s commitment' });
+    }
+    const db = getDb();
+    // Empty / null clears the commitment for that week.
+    if (committed_pct === null || committed_pct === undefined || committed_pct === '') {
+      db.prepare('DELETE FROM score_commitments WHERE user_id=? AND week_start=?').run(targetUser, week_start);
+      return res.json({ message: 'Cleared' });
+    }
+    const v = Number(committed_pct);
+    if (!Number.isFinite(v) || v < COMMIT_MIN || v > COMMIT_MAX) {
+      return res.status(400).json({ error: `Commitment must be between ${COMMIT_MAX}% and ${COMMIT_MIN}%` });
+    }
+    db.prepare(`
+      INSERT INTO score_commitments (user_id, week_start, committed_pct, note, updated_by, updated_at)
+      VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(user_id, week_start) DO UPDATE SET
+        committed_pct=excluded.committed_pct,
+        note=excluded.note,
+        updated_by=excluded.updated_by,
+        updated_at=CURRENT_TIMESTAMP
+    `).run(targetUser, week_start, v, note || null, req.user.id);
+    res.json({ message: 'Saved', committed_pct: v });
+  } catch (err) {
+    console.error('commitment save error', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Helpers for scorecard endpoints (defined here so they can use Date math)
 function defaultWeekStart() {
   const d = new Date(Date.now() + (5.5 * 60 * 60 * 1000));
