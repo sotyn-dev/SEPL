@@ -560,7 +560,7 @@ export default function SiteChat() {
     // no fragile magic-number height. dvh (NOT vh) keeps the composer above the
     // phone browser's bottom toolbar (mam 2026-06-19: "below button not show").
     // Mobile subtracts only the app bar + page padding; desktop also the header.
-    <div className="flex flex-col h-[calc(100dvh-64px)] md:h-[calc(100dvh-104px)]">
+    <div className="flex flex-col h-[calc(100dvh-70px)] -m-2 md:m-0 md:h-[calc(100dvh-104px)]">
       {avatarInput}
       {/* Page header — desktop only. On mobile the chat takes the full screen
           (like real WhatsApp); the profile photo moves into the list header. */}
@@ -579,7 +579,7 @@ export default function SiteChat() {
         </div>
       </div>
 
-      <div className="flex flex-1 min-h-0 border rounded-xl overflow-hidden bg-white">
+      <div className="flex flex-1 min-h-0 border overflow-hidden bg-white md:rounded-xl">
         {/* ── Group list ────────────────────────────────── */}
         <div className={`w-full sm:w-80 border-r flex flex-col ${sel ? 'hidden sm:flex' : 'flex'}`}>
           <div className="flex items-center gap-2 px-3 py-2 text-white" style={{ background: GREEN }}>
