@@ -165,12 +165,18 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
 // setText — which re-renders the page — no longer redraws every group row.
 // <MessageList> was already shielded this way; this closes the same gap for the
 // list. Re-renders only when groups / search / selection / avatars change.
-const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCreate, onSelect }) {
-  const shown = groups.filter(g => !q || String(g.name).toLowerCase().includes(q.toLowerCase()));
+// Search is now server-driven (perf pass — admin-slowness fix): `groups` is
+// already the filtered/paginated page from the server, not the full list, so
+// there's no client-side .filter() left here — just render + scroll-to-load-more.
+const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCreate, hasMore, loadingMore, onLoadMore, onSelect }) {
+  const onScroll = (e) => {
+    const el = e.currentTarget;
+    if (hasMore && !loadingMore && el.scrollHeight - el.scrollTop - el.clientHeight < 120) onLoadMore();
+  };
   return (
-    <div className="overflow-y-auto flex-1">
-      {shown.length === 0 && <div className="text-center text-gray-400 text-sm py-8">No groups yet.{canCreate ? ' Tap + to create one.' : ''}</div>}
-      {shown.map(g => (
+    <div className="overflow-y-auto flex-1" onScroll={onScroll}>
+      {groups.length === 0 && <div className="text-center text-gray-400 text-sm py-8">{q ? 'No groups match your search.' : <>No groups yet.{canCreate ? ' Tap + to create one.' : ''}</>}</div>}
+      {groups.map(g => (
         <button key={g.id} onClick={() => onSelect({ id: g.id, name: g.name })}
           className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${selId === g.id ? 'bg-emerald-50' : ''}`}>
           <Avatar url={g.is_dm ? userAvatars[g.dm_uid] : null} name={g.name} size={36} />
@@ -186,6 +192,11 @@ const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCr
           </div>
         </button>
       ))}
+      {loadingMore && (
+        <div className="flex items-center justify-center gap-1.5 py-2 text-[11px] text-gray-400 select-none">
+          <span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-emerald-600 animate-spin" /> Loading more…
+        </div>
+      )}
     </div>
   );
 });
@@ -195,6 +206,8 @@ const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCr
 // history streams in on scroll-up (perf pass — S2-B).
 const PAGE = 30;
 const MAX_LIVE = 100;   // live in-memory window when pinned to the bottom (~3 pages, aligned with the server's 100-row page); older history re-loads on scroll-up
+const GROUP_PAGE = 30;  // group list page size — an admin overseeing many groups loads/renders a page at a time instead of every group at once (perf pass — admin-slowness fix)
+const GROUP_MAX = 100;  // ceiling for a RESET refetch (mirrors the server's GROUP_MAX) — a scrolled-deep admin's reconcile reloads up to this many rows without truncating, past which the cursor re-extends on scroll
 
 export default function SiteChat() {
   const { canCreate, canDelete, isAdmin, user } = useAuth();
@@ -228,6 +241,8 @@ export default function SiteChat() {
   const [recTime, setRecTime] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [mention, setMention] = useState(null);    // @-tag autocomplete: { query, start } or null
+  const [groupsHasMore, setGroupsHasMore] = useState(false); // more groups exist beyond the loaded page (perf pass)
+  const [loadingGroups, setLoadingGroups] = useState(false); // drives the group-list "loading more…" spinner
   const taRef = useRef(null);
   const fileRef = useRef(null);
   const avatarRef = useRef(null);
@@ -245,8 +260,42 @@ export default function SiteChat() {
   const loadingOlderRef = useRef(false);       // guard: one scroll-up page load at a time
   const msgsLenRef = useRef(0);                 // loaded message count (sizes the reconcile window)
   const pendingRestoreRef = useRef(null);       // {prevH,prevTop}: anchor scroll after prepending older
+  const groupsLoadingRef = useRef(false);       // guard: one group-list page load at a time
+  const groupsLenRef = useRef(0);               // loaded group count (sizes the reset window, same trick as msgsLenRef)
+  const groupsCursorRef = useRef(null);         // server's nextCursor for "load the next page"
+  const qRef = useRef('');                      // current search text, read inside loadGroups without a stale closure
+  const searchTimerRef = useRef(null);          // debounce timer for server-side group search
+  const searchMountedRef = useRef(false);       // skip the debounce effect's own fetch on first mount
 
-  const loadGroups = useCallback(() => { api.get('/site-chat/groups').then(r => setGroups(r.data || [])).catch(() => {}); }, []);
+  // Keyset-paginated group list (perf pass — admin-slowness fix). Default: fetch
+  // a RESET page sized to Math.max(GROUP_PAGE, currently-rendered count) so an
+  // admin scrolled several pages deep isn't truncated back to page 1 on every
+  // poll/socket refresh — same sizing trick loadThread uses for `reconcile`.
+  // { more: true }: fetch the next page (via groupsCursorRef) and APPEND, deduping
+  // by id. Search (`q` state) rides along on every request via qRef so a reset OR
+  // a "more" page both stay scoped to the active search term.
+  const loadGroups = useCallback((opts = {}) => {
+    if (groupsLoadingRef.current) return Promise.resolve();
+    const more = !!opts.more;
+    const requestQ = qRef.current;
+    const params = { limit: more ? GROUP_PAGE : Math.min(GROUP_MAX, Math.max(GROUP_PAGE, groupsLenRef.current || GROUP_PAGE)) };
+    if (requestQ) params.q = requestQ;
+    if (more && groupsCursorRef.current) {
+      params.phase = groupsCursorRef.current.phase;
+      if (groupsCursorRef.current.after_last_id != null) params.after_last_id = groupsCursorRef.current.after_last_id;
+      if (groupsCursorRef.current.after_name != null) params.after_name = groupsCursorRef.current.after_name;
+      if (groupsCursorRef.current.after_id != null) params.after_id = groupsCursorRef.current.after_id;
+    }
+    groupsLoadingRef.current = true; setLoadingGroups(true);
+    return api.get('/site-chat/groups', { params }).then(r => {
+      if (requestQ !== qRef.current) return;   // a newer search superseded this response — drop it
+      const { groups: incoming = [], hasMore: incomingHasMore = false, nextCursor = null } = r.data || {};
+      if (more) setGroups(gs => { const seen = new Set(gs.map(g => g.id)); return [...gs, ...incoming.filter(g => !seen.has(g.id))]; });
+      else setGroups(incoming);
+      setGroupsHasMore(incomingHasMore);
+      groupsCursorRef.current = nextCursor;
+    }).catch(() => {}).finally(() => { groupsLoadingRef.current = false; setLoadingGroups(false); });
+  }, []);
   const reloadUsers = useCallback(() => api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {}), []);
   // Cursor pagination (perf pass — S2-B). Default: fetch the most-recent PAGE and
   // REPLACE (thread open / reconnect). { before }: fetch the PAGE older than that
@@ -367,6 +416,18 @@ export default function SiteChat() {
   // Keep the loaded-count ref current so a reconcile refresh re-fetches the whole
   // scrolled-in window, not just the newest PAGE (S2-B).
   useEffect(() => { msgsLenRef.current = msgs.length; }, [msgs.length]);
+  // Same trick for the group list's reset sizing (perf pass — admin-slowness fix).
+  useEffect(() => { groupsLenRef.current = groups.length; }, [groups.length]);
+  // Server-side group search: debounce keystrokes, then reset to a fresh page
+  // scoped to the new term. Skip the debounce's own fetch on first mount — the
+  // mount effect below already loads groups once with q='' via qRef's initial value.
+  useEffect(() => {
+    qRef.current = q;
+    if (!searchMountedRef.current) { searchMountedRef.current = true; return; }
+    clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => { groupsCursorRef.current = null; loadGroups(); }, 300);
+    return () => clearTimeout(searchTimerRef.current);
+  }, [q, loadGroups]);
   // After a scroll-up page prepends older messages, anchor the scroll so the
   // messages the user was reading stay in place (runs before paint = no jump).
   useLayoutEffect(() => {
@@ -598,7 +659,8 @@ export default function SiteChat() {
               <input className="input pl-8" placeholder="Search group…" value={q} onChange={e => setQ(e.target.value)} />
             </div>
           </div>
-          <GroupList groups={groups} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')} onSelect={setSel} />
+          <GroupList groups={groups} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')}
+            hasMore={groupsHasMore} loadingMore={loadingGroups} onLoadMore={() => loadGroups({ more: true })} onSelect={setSel} />
         </div>
 
         {/* ── Thread ────────────────────────────────────── */}

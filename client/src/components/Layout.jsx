@@ -243,11 +243,19 @@ export default function Layout() {
   const pathRef = useRef(location.pathname);
   pathRef.current = location.pathname;
 
+  // Dedicated lightweight endpoint (perf pass — admin-slowness fix): an admin
+  // can oversee a large number of groups, and this poll runs every 25s from
+  // EVERY page for EVERY signed-in user — reusing the full paginated /groups
+  // list here would recompute last-message/member-count for every accessible
+  // group in the background continuously. /unread-count instead returns one
+  // uncapped total (for the badge number) plus only the small subset of
+  // groups that actually have unread messages (for the toast below) — it
+  // never needs to know about groups with zero unread.
   const refreshWa = useCallback(async () => {
     try {
-      const { data } = await api.get('/site-chat/groups');
-      const groups = data || [];
-      setWaUnread(groups.reduce((s, g) => s + (g.unread || 0), 0));
+      const { data } = await api.get('/site-chat/unread-count');
+      const groups = data?.groups || [];
+      setWaUnread(data?.total || 0);
       const prev = waPrev.current;
       if (prev && pathRef.current !== '/site-chat') {       // don't alert for the page you're on
         for (const g of groups) {
