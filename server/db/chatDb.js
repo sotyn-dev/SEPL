@@ -15,6 +15,14 @@ function getChatDb() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   chatDb = new Database(CHAT_DB_PATH);
   chatDb.pragma('journal_mode = WAL');
+  // /site-chat perf pass (2026-07): connection-level tuning only — NO schema or data
+  // change. WAL is set above; these cut event-loop time per write and keep hot pages
+  // resident. All are per-connection, so they re-apply on every boot / re-open.
+  chatDb.pragma('synchronous = NORMAL');   // WAL-safe: fsync at checkpoints, not every commit
+  chatDb.pragma('cache_size = -16000');    // ~16 MB page cache (negative = KiB)
+  chatDb.pragma('mmap_size = 268435456');  // up to 256 MB memory-mapped reads (maps at most file size)
+  chatDb.pragma('temp_store = MEMORY');    // temp b-trees in RAM, not on disk
+  chatDb.pragma('busy_timeout = 5000');    // wait up to 5 s on a transient lock instead of throwing
   chatDb.exec(`
     CREATE TABLE IF NOT EXISTS chat_groups (
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
@@ -32,6 +40,11 @@ function getChatDb() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_cmsg_group ON chat_messages(group_id, created_at);
+    -- /site-chat perf pass: (group_id,id) makes last-message MAX(id), the unread
+    -- range scan (id > last_read), and markRead's MAX(id) index seeks instead of
+    -- full table scans; sender_id serves the unread filter (sender_id <> me).
+    CREATE INDEX IF NOT EXISTS idx_cmsg_group_id ON chat_messages(group_id, id);
+    CREATE INDEX IF NOT EXISTS idx_cmsg_sender ON chat_messages(sender_id);
     CREATE TABLE IF NOT EXISTS chat_reads (
       group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, last_read_id INTEGER DEFAULT 0,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (group_id, user_id)

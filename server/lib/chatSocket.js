@@ -62,9 +62,32 @@ function initChatSocket(httpServer) {
   return io;
 }
 
-// Push an event to everyone currently in a group's room.
+// A 'changed' broadcast is idempotent ("something in this group changed —
+// reconcile"), so a burst of them (rapid messages / reads in a busy group)
+// safely collapses into ONE trailing broadcast per group instead of one-per-
+// event. That caps the socket fan-out that would otherwise pile onto the single
+// event loop under load (perf pass — S3 server half). Only 'changed' is
+// coalesced; 'message' (which carries the actual new row) and every other event
+// stay instant, so message delivery is never delayed.
+const CHANGED_WINDOW_MS = 300;
+const changedTimers = new Map();     // groupId -> pending timeout (a broadcast already queued)
+
+function scheduleChanged(groupId) {
+  if (!io || changedTimers.has(groupId)) return;
+  const t = setTimeout(() => {
+    changedTimers.delete(groupId);
+    try { io.to(`g:${groupId}`).emit('changed', { groupId }); } catch (_) {}
+  }, CHANGED_WINDOW_MS);
+  if (t.unref) t.unref();             // a pending ping must never keep the process alive
+  changedTimers.set(groupId, t);
+}
+
+// Push an event to everyone currently in a group's room. 'changed' is coalesced
+// per group (see above); all other events fire immediately.
 function emitChat(groupId, event, payload) {
-  if (io) { try { io.to(`g:${groupId}`).emit(event, payload); } catch (_) {} }
+  if (!io) return;
+  if (event === 'changed') return scheduleChanged(groupId);
+  try { io.to(`g:${groupId}`).emit(event, payload); } catch (_) {}
 }
 
 module.exports = { initChatSocket, emitChat, getIO: () => io };

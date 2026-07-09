@@ -1,14 +1,14 @@
 // "WhatsApp" — internal group chat, WhatsApp-styled (mam 2026-06-18). Create
 // named groups, add the people you want, chat (text + photo/file). Members-
 // gated, read receipts (✓✓ + who-read), unread badges, day separators.
-import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, memo } from 'react';
 import { io } from 'socket.io-client';
 import api from '../api';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiCornerUpLeft, FiImage } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiImage } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import { useCall } from '../context/CallContext';
 import { compressImage } from '../lib/imageCompress';
@@ -56,6 +56,159 @@ function ChatImage({ url, name }) {
   );
 }
 
+// Quoted-reply preview text — module-level (pure) so it's stable for both the
+// message list and the composer's reply bar.
+const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : (isImg(m.attachment_url) ? '📷 Photo' : '📎 Attachment'))) : 'Original message';
+
+// Memoised message list — the heavy part of the thread. Its own React.memo
+// component with stable props, so composer keystrokes, context refreshes, and
+// Layout re-renders DON'T redraw the whole conversation (perf pass). The @mention
+// regex and the "others" (read-receipt) set are computed ONCE here, not per row.
+const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, onReply, onInfo, onDelete }) {
+  // Current-date labels for the Today/Yesterday separators — an intentional read
+  // of "now" at render time (the one impure call, isolated).
+  // eslint-disable-next-line react-hooks/purity
+  const now = Date.now();
+  const todayLbl = fmtDate(new Date(now), DAY_OPTS);
+  const yestLbl = fmtDate(new Date(now - 864e5), DAY_OPTS);
+  const dayLabel = (ts) => { const l = fmtDate(ts, DAY_OPTS); return l === todayLbl ? 'Today' : l === yestLbl ? 'Yesterday' : l; };
+  const others = useMemo(() => members.filter(m => m.user_id !== userId), [members, userId]);
+  // Memoise the (expensive) mention-match PATTERN once per member list; build a
+  // fresh RegExp per message so there's no shared mutable lastIndex state.
+  const mentionPattern = useMemo(() => {
+    const names = members.map(m => m.name).filter(Boolean).sort((a, b) => b.length - a.length);
+    if (!names.length) return null;
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return `@(${names.map(esc).join('|')})`;
+  }, [members]);
+  const renderBody = (body) => {
+    if (!body || !mentionPattern) return body;
+    const re = new RegExp(mentionPattern, 'g');
+    const out = []; let last = 0; let mm;
+    while ((mm = re.exec(body))) {
+      if (mm.index > last) out.push(body.slice(last, mm.index));
+      out.push(<span key={mm.index} className="text-emerald-700 font-semibold">@{mm[1]}</span>);
+      last = mm.index + mm[0].length;
+    }
+    if (last < body.length) out.push(body.slice(last));
+    return out;
+  };
+  // Group consecutive messages by calendar day so each day's label can be a
+  // sticky header that CASCADES like WhatsApp: it floats at the top of the thread
+  // while you read that day, then the next day's label pushes it up. Each day is
+  // its own containing block — that's what makes the sticky hand-off clean (a flat
+  // list of sticky siblings would just pile up at the top instead).
+  const dayGroups = useMemo(() => {
+    const groups = []; let cur = null;
+    for (const m of msgs) {
+      const day = fmtDate(m.created_at, DAY_OPTS);
+      if (!cur || cur.day !== day) { cur = { day, ts: m.created_at, items: [] }; groups.push(cur); }
+      cur.items.push(m);
+    }
+    return groups;
+  }, [msgs]);
+  return (
+    <>
+      {dayGroups.map(group => (
+        <div key={group.day} className="space-y-1.5">
+          {/* Sticky, cascading day label. pointer-events-none so it never blocks a
+              message tap as it floats over the conversation. */}
+          <div className="sticky top-1.5 z-[5] flex justify-center pointer-events-none">
+            <span className="text-[10px] font-medium bg-white/90 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(group.ts)}</span>
+          </div>
+          {group.items.map(m => {
+            const own = m.sender_id === userId;
+            // Read-receipt state (the ✓✓ + "Read by…" tooltip) renders ONLY on your own
+            // messages, so compute it only then — skips an O(members) scan on every other row.
+            const readers = own ? others.filter(o => (reads[o.user_id] || 0) >= m.id) : null;
+            const allRead = own && others.length > 0 && readers.length === others.length;
+            return (
+              <div key={m.id} id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
+                {!own && !isDm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
+                <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
+                  {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
+                  {m.reply_to_id && (() => {
+                    const q = msgById[m.reply_to_id];
+                    return (
+                      <button type="button" onClick={() => { const el = document.getElementById(`msg-${m.reply_to_id}`); if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('ring-2', 'ring-emerald-400'); setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-400'), 1200); } }}
+                        className="block w-full text-left mb-1 rounded bg-black/[0.06] border-l-4 border-emerald-500 px-2 py-1">
+                        <div className="text-[11px] font-semibold text-emerald-700 truncate">{q ? (q.sender_id === userId ? 'You' : q.sender_name) : 'Message'}</div>
+                        <div className="text-[11px] text-gray-600 truncate">{q ? quotePreview(q) : 'Original message unavailable'}</div>
+                      </button>
+                    );
+                  })()}
+                  {m.attachment_url && (
+                    isImg(m.attachment_url)
+                      ? <ChatImage url={m.attachment_url} name={m.attachment_name} />
+                      : isAudio(m.attachment_url)
+                        ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
+                        : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
+                  {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
+                  <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                    <button onClick={() => onReply(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Reply"><FiCornerUpLeft size={11} /></button>
+                    <button onClick={() => onInfo(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Message info"><FiInfo size={11} /></button>
+                    {(own || isAdmin) && <button onClick={() => onDelete(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
+                    <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
+                    {own && <span title={others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet'} className={`text-[11px] leading-none ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </>
+  );
+});
+
+// Memoised group list (left pane). Extracted so the composer's per-keystroke
+// setText — which re-renders the page — no longer redraws every group row.
+// <MessageList> was already shielded this way; this closes the same gap for the
+// list. Re-renders only when groups / search / selection / avatars change.
+// Search is now server-driven (perf pass — admin-slowness fix): `groups` is
+// already the filtered/paginated page from the server, not the full list, so
+// there's no client-side .filter() left here — just render + scroll-to-load-more.
+const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCreate, hasMore, loadingMore, onLoadMore, onSelect }) {
+  const onScroll = (e) => {
+    const el = e.currentTarget;
+    if (hasMore && !loadingMore && el.scrollHeight - el.scrollTop - el.clientHeight < 120) onLoadMore();
+  };
+  return (
+    <div className="overflow-y-auto flex-1" onScroll={onScroll}>
+      {groups.length === 0 && <div className="text-center text-gray-400 text-sm py-8">{q ? 'No groups match your search.' : <>No groups yet.{canCreate ? ' Tap + to create one.' : ''}</>}</div>}
+      {groups.map(g => (
+        <button key={g.id} onClick={() => onSelect({ id: g.id, name: g.name })}
+          className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${selId === g.id ? 'bg-emerald-50' : ''}`}>
+          <Avatar url={g.is_dm ? userAvatars[g.dm_uid] : null} name={g.name} size={36} />
+          <div className="min-w-0 flex-1">
+            <div className="flex justify-between items-baseline gap-2">
+              <span className="font-semibold text-sm text-gray-800 truncate">{g.name}</span>
+              {g.last && <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtTime(g.last.created_at)}</span>}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="text-xs text-gray-500 truncate flex-1">{g.last ? `${g.last.sender_name ? g.last.sender_name.split(' ')[0] + ': ' : ''}${preview(g.last)}` : <span className="italic text-gray-300">{g.members} member{g.members === 1 ? '' : 's'}</span>}</div>
+              {g.unread > 0 && <span className="text-[10px] font-bold text-white bg-[#25d366] rounded-full px-1.5 min-w-[18px] text-center flex-shrink-0">{g.unread}</span>}
+            </div>
+          </div>
+        </button>
+      ))}
+      {loadingMore && (
+        <div className="flex items-center justify-center gap-1.5 py-2 text-[11px] text-gray-400 select-none">
+          <span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-emerald-600 animate-spin" /> Loading more…
+        </div>
+      )}
+    </div>
+  );
+});
+
+// How many messages a thread loads at a time (initial open + each scroll-up
+// page). Kept modest so opening a long project chat renders fast; older
+// history streams in on scroll-up (perf pass — S2-B).
+const PAGE = 30;
+const MAX_LIVE = 100;   // live in-memory window when pinned to the bottom (~3 pages, aligned with the server's 100-row page); older history re-loads on scroll-up
+const GROUP_PAGE = 30;  // group list page size — an admin overseeing many groups loads/renders a page at a time instead of every group at once (perf pass — admin-slowness fix)
+const GROUP_MAX = 100;  // ceiling for a RESET refetch (mirrors the server's GROUP_MAX) — a scrolled-deep admin's reconcile reloads up to this many rows without truncating, past which the cursor re-extends on scroll
+
 export default function SiteChat() {
   const { canCreate, canDelete, isAdmin, user } = useAuth();
   const { startCall } = useCall();
@@ -66,6 +219,10 @@ export default function SiteChat() {
   const [members, setMembers] = useState([]);
   const [reads, setReads] = useState({});
   const [readsAt, setReadsAt] = useState({});      // user_id -> last-read timestamp (for Message Info)
+  const [hasMore, setHasMore] = useState(false);   // older messages exist above the loaded window (S2-B)
+  const [quotedParents, setQuotedParents] = useState([]); // reply-targets older than the loaded window
+  const [loadingOlder, setLoadingOlder] = useState(false); // drives the in-thread "loading earlier…" spinner
+  const [showJumpDown, setShowJumpDown] = useState(false);  // floating "jump to latest" button when scrolled up
   const [infoMsg, setInfoMsg] = useState(null);    // message whose "info" panel is open
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState(null);   // WhatsApp-style quoted reply
@@ -84,6 +241,8 @@ export default function SiteChat() {
   const [recTime, setRecTime] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [mention, setMention] = useState(null);    // @-tag autocomplete: { query, start } or null
+  const [groupsHasMore, setGroupsHasMore] = useState(false); // more groups exist beyond the loaded page (perf pass)
+  const [loadingGroups, setLoadingGroups] = useState(false); // drives the group-list "loading more…" spinner
   const taRef = useRef(null);
   const fileRef = useRef(null);
   const avatarRef = useRef(null);
@@ -96,24 +255,104 @@ export default function SiteChat() {
   const mediaRef = useRef(null);
   const chunksRef = useRef([]);
   const recTimerRef = useRef(null);
+  const changedTimerRef = useRef(null);        // trailing-debounce timer for 'changed' bursts
+  const changedGroupsRef = useRef(new Set());  // group ids that fired 'changed' within the window
+  const loadingOlderRef = useRef(false);       // guard: one scroll-up page load at a time
+  const msgsLenRef = useRef(0);                 // loaded message count (sizes the reconcile window)
+  const pendingRestoreRef = useRef(null);       // {prevH,prevTop}: anchor scroll after prepending older
+  const groupsLoadingRef = useRef(false);       // guard: one group-list page load at a time
+  const groupsLenRef = useRef(0);               // loaded group count (sizes the reset window, same trick as msgsLenRef)
+  const groupsCursorRef = useRef(null);         // server's nextCursor for "load the next page"
+  const qRef = useRef('');                      // current search text, read inside loadGroups without a stale closure
+  const searchTimerRef = useRef(null);          // debounce timer for server-side group search
+  const searchMountedRef = useRef(false);       // skip the debounce effect's own fetch on first mount
 
-  const loadGroups = useCallback(() => { api.get('/site-chat/groups').then(r => setGroups(r.data || [])).catch(() => {}); }, []);
+  // Keyset-paginated group list (perf pass — admin-slowness fix). Default: fetch
+  // a RESET page sized to Math.max(GROUP_PAGE, currently-rendered count) so an
+  // admin scrolled several pages deep isn't truncated back to page 1 on every
+  // poll/socket refresh — same sizing trick loadThread uses for `reconcile`.
+  // { more: true }: fetch the next page (via groupsCursorRef) and APPEND, deduping
+  // by id. Search (`q` state) rides along on every request via qRef so a reset OR
+  // a "more" page both stay scoped to the active search term.
+  const loadGroups = useCallback((opts = {}) => {
+    if (groupsLoadingRef.current) return Promise.resolve();
+    const more = !!opts.more;
+    const requestQ = qRef.current;
+    const params = { limit: more ? GROUP_PAGE : Math.min(GROUP_MAX, Math.max(GROUP_PAGE, groupsLenRef.current || GROUP_PAGE)) };
+    if (requestQ) params.q = requestQ;
+    if (more && groupsCursorRef.current) {
+      params.phase = groupsCursorRef.current.phase;
+      if (groupsCursorRef.current.after_last_id != null) params.after_last_id = groupsCursorRef.current.after_last_id;
+      if (groupsCursorRef.current.after_name != null) params.after_name = groupsCursorRef.current.after_name;
+      if (groupsCursorRef.current.after_id != null) params.after_id = groupsCursorRef.current.after_id;
+    }
+    groupsLoadingRef.current = true; setLoadingGroups(true);
+    return api.get('/site-chat/groups', { params }).then(r => {
+      if (requestQ !== qRef.current) return;   // a newer search superseded this response — drop it
+      const { groups: incoming = [], hasMore: incomingHasMore = false, nextCursor = null } = r.data || {};
+      if (more) setGroups(gs => { const seen = new Set(gs.map(g => g.id)); return [...gs, ...incoming.filter(g => !seen.has(g.id))]; });
+      else setGroups(incoming);
+      setGroupsHasMore(incomingHasMore);
+      groupsCursorRef.current = nextCursor;
+    }).catch(() => {}).finally(() => { groupsLoadingRef.current = false; setLoadingGroups(false); });
+  }, []);
   const reloadUsers = useCallback(() => api.get('/auth/users').then(r => setAllUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {}), []);
-  const loadThread = useCallback((id) => {
-    if (!id) return;
-    api.get(`/site-chat/${id}`).then(r => {
-      setMsgs(r.data.messages || []); setMembers(r.data.members || []); setReads(r.data.reads || {}); setReadsAt(r.data.readsAt || {});
-      if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name, is_dm: r.data.group.is_dm } : s));
-      loadGroups();
+  // Cursor pagination (perf pass — S2-B). Default: fetch the most-recent PAGE and
+  // REPLACE (thread open / reconnect). { before }: fetch the PAGE older than that
+  // id and PREPEND, anchoring scroll so the view doesn't jump. { reconcile }: a
+  // read-receipt / delete / membership refresh that re-fetches the CURRENTLY
+  // loaded window (not just PAGE) so scrolled-up history isn't yanked away. The
+  // server stays backward-compatible — omitting limit still returns everything.
+  const loadThread = useCallback((id, opts = {}) => {
+    if (!id) return Promise.resolve();
+    const older = opts.before != null;
+    const limit = older ? PAGE : (opts.reconcile ? Math.max(PAGE, msgsLenRef.current || PAGE) : PAGE);
+    const params = older ? { limit, before: opts.before } : { limit };
+    if (older) {                                     // capture the scroll anchor BEFORE the DOM grows upward
+      const el = scrollRef.current;
+      pendingRestoreRef.current = el ? { prevH: el.scrollHeight, prevTop: el.scrollTop } : null;
+    }
+    return api.get(`/site-chat/${id}`, { params }).then(r => {
+      const incoming = r.data.messages || [];
+      const qp = r.data.quotedParents || [];
+      if (older) {
+        setMsgs(ms => { const seen = new Set(ms.map(m => m.id)); return [...incoming.filter(m => !seen.has(m.id)), ...ms]; });
+        setQuotedParents(prev => { const seen = new Set(prev.map(m => m.id)); return [...prev, ...qp.filter(m => !seen.has(m.id))]; });
+        setHasMore(!!r.data.hasMore);
+      } else {
+        setMsgs(incoming); setMembers(r.data.members || []); setReads(r.data.reads || {}); setReadsAt(r.data.readsAt || {});
+        setQuotedParents(qp); setHasMore(!!r.data.hasMore);
+        if (r.data.group) setSel(s => (s && s.id === id ? { ...s, name: r.data.group.name, is_dm: r.data.group.is_dm } : s));
+        // Opening/polling a thread marks it read — clear its unread badge locally
+        // instead of re-fetching the whole groups list every 6s (perf pass). The
+        // list's own 12s timer + socket 'changed' still refresh names/last-message.
+        setGroups(gs => gs.map(g => (g.id === id ? { ...g, unread: 0 } : g)));
+      }
     }).catch(() => {});
-  }, [loadGroups]);
+  }, []);
+
+  // Cap the live in-memory window so a long session can't grow msgs (and the DOM)
+  // without bound. Both append paths (socket 'message' + own send) go through this:
+  // dedupe by id, and — ONLY when pinned to the bottom — keep the last MAX_LIVE rows.
+  // Older rows stay on the server and re-load via the scroll-up loader; we never trim
+  // while the user has scrolled up to read history (guarded by atBottomRef).
+  const appendMsg = useCallback((row) => {
+    setMsgs(ms => {
+      if (ms.some(x => x.id === row.id)) return ms;                 // dedupe by id
+      const next = [...ms, row];
+      return atBottomRef.current && next.length > MAX_LIVE ? next.slice(next.length - MAX_LIVE) : next;
+    });
+    // If that push exceeded the cap at the bottom, older rows just left memory — flag
+    // that earlier history exists again so the scroll-up loader can re-fetch it.
+    if (atBottomRef.current && msgsLenRef.current >= MAX_LIVE) setHasMore(true);
+  }, []);
 
   useEffect(() => { loadGroups(); reloadUsers(); }, [loadGroups, reloadUsers]);
   // Safety-net: refresh the chat list every 12 s even with NO thread open, so
   // new messages / unread badges still surface when the socket can't connect
   // (in-app browsers, flaky nginx WebSocket). The open thread has its own 6 s
   // poll already (mam 2026-07-04).
-  useEffect(() => { const t = setInterval(loadGroups, 12000); return () => clearInterval(t); }, [loadGroups]);
+  useEffect(() => { const t = setInterval(() => { if (!socketRef.current?.connected) loadGroups(); }, 12000); return () => clearInterval(t); }, [loadGroups]);
   // Real-time: one Socket.IO connection; the server pushes a 'changed' event
   // to each group's room on any message/read/member change. Polling stays as
   // a fallback if the socket can't connect.
@@ -129,17 +368,35 @@ export default function SiteChat() {
     // On (re)connect, re-join the open group's room and catch up on anything
     // missed while disconnected — fixes "always need to refresh" after a drop.
     socket.on('connect', () => { loadGroups(); setSel(s => { if (s) { socket.emit('join', s.id); loadThread(s.id); } return s; }); });
-    socket.on('changed', ({ groupId }) => { setSel(s => { if (s && s.id === groupId) loadThread(s.id); return s; }); loadGroups(); });
+    // New message pushed from the server: append it directly (dedupe by id) so a
+    // send/receive shows INSTANTLY without re-fetching the whole thread. The
+    // auto-scroll effect keeps the view pinned to the bottom only if the reader
+    // is already there (perf pass — S3-client).
+    socket.on('message', (row) => { if (row && row.group_id != null) setSel(s => { if (s && s.id === row.group_id) appendMsg(row); return s; }); });
+    // 'changed' (read receipts, deletes, membership, last-message) still needs a
+    // reconcile fetch, but a BURST of them now collapses into a single trailing
+    // reload instead of one-reload-per-event — that reload storm was what made
+    // busy groups sluggish (perf pass — S3-client). New messages no longer wait
+    // on this path; they arrive via 'message' above.
+    socket.on('changed', ({ groupId }) => {
+      if (groupId != null) changedGroupsRef.current.add(groupId);
+      clearTimeout(changedTimerRef.current);
+      changedTimerRef.current = setTimeout(() => {
+        const gids = changedGroupsRef.current; changedGroupsRef.current = new Set();
+        loadGroups();
+        setSel(s => { if (s && gids.has(s.id)) loadThread(s.id, { reconcile: true }); return s; });
+      }, 300);
+    });
     socket.on('group_deleted', ({ groupId }) => { loadGroups(); setSel(s => (s && s.id === groupId ? null : s)); });
-    return () => { socket.disconnect(); socketRef.current = null; };
-  }, [loadThread, loadGroups]);
+    return () => { socket.disconnect(); socketRef.current = null; clearTimeout(changedTimerRef.current); };
+  }, [loadThread, loadGroups, appendMsg]);
   useEffect(() => {
     if (!sel) return;
     setReplyTo(null);                                  // drop any pending reply when switching threads
     socketRef.current?.emit('join', sel.id);
     loadThread(sel.id);
-    const t = setInterval(() => loadThread(sel.id), 6000);    // fallback poll (safe: GET no longer self-emits)
-    const onFocus = () => loadThread(sel.id);
+    const t = setInterval(() => { if (!socketRef.current?.connected) loadThread(sel.id, { reconcile: true }); }, 6000);    // fallback poll — only when the socket is down
+    const onFocus = () => loadThread(sel.id, { reconcile: true });
     window.addEventListener('focus', onFocus);
     return () => { clearInterval(t); window.removeEventListener('focus', onFocus); };
   }, [sel?.id, loadThread]);
@@ -156,18 +413,60 @@ export default function SiteChat() {
     }
     if (atBottomRef.current) endRef.current?.scrollIntoView({ block: 'end' });
   }, [msgs, sel?.id]);
+  // Keep the loaded-count ref current so a reconcile refresh re-fetches the whole
+  // scrolled-in window, not just the newest PAGE (S2-B).
+  useEffect(() => { msgsLenRef.current = msgs.length; }, [msgs.length]);
+  // Same trick for the group list's reset sizing (perf pass — admin-slowness fix).
+  useEffect(() => { groupsLenRef.current = groups.length; }, [groups.length]);
+  // Server-side group search: debounce keystrokes, then reset to a fresh page
+  // scoped to the new term. Skip the debounce's own fetch on first mount — the
+  // mount effect below already loads groups once with q='' via qRef's initial value.
+  useEffect(() => {
+    qRef.current = q;
+    if (!searchMountedRef.current) { searchMountedRef.current = true; return; }
+    clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => { groupsCursorRef.current = null; loadGroups(); }, 300);
+    return () => clearTimeout(searchTimerRef.current);
+  }, [q, loadGroups]);
+  // After a scroll-up page prepends older messages, anchor the scroll so the
+  // messages the user was reading stay in place (runs before paint = no jump).
+  useLayoutEffect(() => {
+    const p = pendingRestoreRef.current; if (!p) return;
+    pendingRestoreRef.current = null;
+    const el = scrollRef.current; if (el) el.scrollTop = p.prevTop + (el.scrollHeight - p.prevH);
+  }, [msgs]);
   const onMsgScroll = () => {
     const el = scrollRef.current; if (!el) return;
-    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    const nowAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    const returnedToBottom = nowAtBottom && !atBottomRef.current;
+    atBottomRef.current = nowAtBottom;
+    setShowJumpDown(!nowAtBottom);              // React bails if unchanged → no per-pixel re-render
+    // Landed back at the bottom after scrolling up through history → release the loaded-up
+    // older messages, collapsing to the live window. Safe: the trimmed rows are above the
+    // viewport (the view stays put) and re-load on scroll-up.
+    if (returnedToBottom && msgs.length > MAX_LIVE) { setMsgs(ms => ms.slice(ms.length - MAX_LIVE)); setHasMore(true); }
+    // Near the top with older history available → load the previous page (S2-B).
+    if (el.scrollTop < 80 && hasMore && !loadingOlderRef.current && sel && msgs.length) {
+      loadingOlderRef.current = true; setLoadingOlder(true);
+      loadThread(sel.id, { before: msgs[0].id }).finally(() => { loadingOlderRef.current = false; setLoadingOlder(false); });
+    }
+  };
+  // WhatsApp-style "jump to latest": smooth-scroll the thread to the newest message.
+  const jumpToBottom = () => {
+    atBottomRef.current = true;
+    setShowJumpDown(false);
+    // Tapping "jump to latest" also releases any scrolled-up history from memory.
+    if (msgs.length > MAX_LIVE) { setMsgs(ms => ms.slice(ms.length - MAX_LIVE)); setHasMore(true); }
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   };
   useEffect(() => { if (memOpen && sel) setRenameVal(sel.name || ''); }, [memOpen, sel?.id]);
 
-  const todayLbl = fmtDate(new Date(), DAY_OPTS);
-  const yestLbl = fmtDate(new Date(Date.now() - 864e5), DAY_OPTS);
-  const dayLabel = (ts) => { const l = fmtDate(ts, DAY_OPTS); return l === todayLbl ? 'Today' : l === yestLbl ? 'Yesterday' : l; };
   // Resolve a quoted reply's original message from the loaded thread.
-  const msgById = useMemo(() => { const o = {}; for (const x of msgs) o[x.id] = x; return o; }, [msgs]);
-  const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : (isImg(m.attachment_url) ? '📷 Photo' : '📎 Attachment'))) : 'Original message';
+  // Include quotedParents (reply-targets older than the loaded page) so a reply's
+  // preview still resolves; msgs win over parents on id collisions (S2-B).
+  const msgById = useMemo(() => { const o = {}; for (const x of quotedParents) o[x.id] = x; for (const x of msgs) o[x.id] = x; return o; }, [msgs, quotedParents]);
+  // (day-label, quotePreview, and renderBody now live in the memoised MessageList
+  // / module scope so composer keystrokes don't recompute them per message.)
 
   const send = async (extra = {}) => {
     if (!sel || sendingRef.current) return;          // ref guard = no duplicate sends
@@ -175,7 +474,13 @@ export default function SiteChat() {
     if (!payload.body?.trim() && !payload.attachment_url) return;
     sendingRef.current = true; setBusy(true);
     atBottomRef.current = true;                       // sending my own message always jumps to bottom
-    try { await api.post(`/site-chat/${sel.id}`, payload); setText(''); setMention(null); setReplyTo(null); loadThread(sel.id); }
+    try {
+      const r = await api.post(`/site-chat/${sel.id}`, payload);
+      setText(''); setMention(null); setReplyTo(null);
+      // Append the server-returned row instead of re-fetching the whole thread
+      // (perf pass). Socket 'changed' / fallback poll reconciles if needed.
+      if (r.data && r.data.id) appendMsg(r.data);
+    }
     catch (err) { toast.error(err.response?.data?.error || 'Failed to send'); }
     finally { sendingRef.current = false; setBusy(false); }
   };
@@ -263,27 +568,13 @@ export default function SiteChat() {
     setText(before + inserted + after); setMention(null);
     requestAnimationFrame(() => { if (ta) { const c = (before + inserted).length; ta.focus(); ta.setSelectionRange(c, c); } });
   };
-  // Highlight @mentions of current members when rendering a message body.
-  const renderBody = (body) => {
-    const names = members.map(m => m.name).filter(Boolean).sort((a, b) => b.length - a.length);
-    if (!body || !names.length) return body;
-    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`@(${names.map(esc).join('|')})`, 'g');
-    const out = []; let last = 0; let mm;
-    while ((mm = re.exec(body))) {
-      if (mm.index > last) out.push(body.slice(last, mm.index));
-      out.push(<span key={mm.index} className="text-emerald-700 font-semibold">@{mm[1]}</span>);
-      last = mm.index + mm[0].length;
-    }
-    if (last < body.length) out.push(body.slice(last));
-    return out;
-  };
+  // (renderBody / @mention highlighting now lives in the memoised MessageList.)
 
-  const delMsg = async (m) => {
+  const delMsg = useCallback(async (m) => {
     if (!confirm('Delete this message?')) return;
     try { await api.delete(`/site-chat/${sel.id}/messages/${m.id}`); loadThread(sel.id); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
-  };
+  }, [sel?.id, loadThread]);
   const saveRename = async () => {
     const name = renameVal.trim();
     if (!name) return toast.error('Group name is required');
@@ -320,8 +611,6 @@ export default function SiteChat() {
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
-  const shown = groups.filter(g => !q || String(g.name).toLowerCase().includes(q.toLowerCase()));
-
   // Hidden file input for the profile photo — kept at the top level so BOTH the
   // desktop header button and the mobile (chat-list) avatar button can trigger
   // it. `hidden` keeps the element mounted, so the ref stays valid on mobile.
@@ -332,7 +621,7 @@ export default function SiteChat() {
     // no fragile magic-number height. dvh (NOT vh) keeps the composer above the
     // phone browser's bottom toolbar (mam 2026-06-19: "below button not show").
     // Mobile subtracts only the app bar + page padding; desktop also the header.
-    <div className="flex flex-col h-[calc(100dvh-64px)] md:h-[calc(100dvh-104px)]">
+    <div className="schat-wrapper flex flex-col h-[calc(100dvh-69px)] -m-2 md:m-0 md:h-[calc(100dvh-104px)]">
       {avatarInput}
       {/* Page header — desktop only. On mobile the chat takes the full screen
           (like real WhatsApp); the profile photo moves into the list header. */}
@@ -351,10 +640,10 @@ export default function SiteChat() {
         </div>
       </div>
 
-      <div className="flex flex-1 min-h-0 border rounded-xl overflow-hidden bg-white">
+      <div className="flex flex-1 min-h-0 border overflow-hidden bg-white md:rounded-xl">
         {/* ── Group list ────────────────────────────────── */}
         <div className={`w-full sm:w-80 border-r flex flex-col ${sel ? 'hidden sm:flex' : 'flex'}`}>
-          <div className="flex items-center gap-2 px-3 py-2 text-white" style={{ background: GREEN }}>
+          <div className="flex items-center gap-2 px-3 py-1 text-white md:py-2" style={{ background: GREEN }}>
             {/* Profile photo — mobile only (desktop has it in the page header). */}
             <button onClick={() => avatarRef.current?.click()} disabled={busy} className="sm:hidden relative flex-shrink-0" title="Change your photo">
               <Avatar url={userAvatars[user?.id]} name={user?.name} size={28} />
@@ -370,36 +659,23 @@ export default function SiteChat() {
               <input className="input pl-8" placeholder="Search group…" value={q} onChange={e => setQ(e.target.value)} />
             </div>
           </div>
-          <div className="overflow-y-auto flex-1">
-            {shown.length === 0 && <div className="text-center text-gray-400 text-sm py-8">No groups yet.{canCreate('site_chat') ? ' Tap + to create one.' : ''}</div>}
-            {shown.map(g => (
-              <button key={g.id} onClick={() => setSel({ id: g.id, name: g.name })}
-                className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${sel?.id === g.id ? 'bg-emerald-50' : ''}`}>
-                <Avatar url={g.is_dm ? userAvatars[g.dm_uid] : null} name={g.name} size={36} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex justify-between items-baseline gap-2">
-                    <span className="font-semibold text-sm text-gray-800 truncate">{g.name}</span>
-                    {g.last && <span className="text-[10px] text-gray-400 flex-shrink-0">{fmtTime(g.last.created_at)}</span>}
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className="text-xs text-gray-500 truncate flex-1">{g.last ? `${g.last.sender_name ? g.last.sender_name.split(' ')[0] + ': ' : ''}${preview(g.last)}` : <span className="italic text-gray-300">{g.members} member{g.members === 1 ? '' : 's'}</span>}</div>
-                    {g.unread > 0 && <span className="text-[10px] font-bold text-white bg-[#25d366] rounded-full px-1.5 min-w-[18px] text-center flex-shrink-0">{g.unread}</span>}
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
+          <GroupList groups={groups} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')}
+            hasMore={groupsHasMore} loadingMore={loadingGroups} onLoadMore={() => loadGroups({ more: true })} onSelect={setSel} />
         </div>
 
         {/* ── Thread ────────────────────────────────────── */}
-        <div className={`flex-1 flex-col ${sel ? 'flex' : 'hidden sm:flex'}`}>
+        {/* min-w-0: a flex child defaults to min-width:auto, so on mobile the
+            thread refused to shrink below its content and overflowed the pane,
+            clipping the left ~160px of every message. min-w-0 lets it collapse
+            to the container width so message text wraps instead (mobile fix). */}
+        <div className={`flex-1 flex-col min-w-0 ${sel ? 'flex' : 'hidden sm:flex'}`}>
           {!sel ? (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-2" style={{ background: '#f7f5f2' }}>
               <FaWhatsapp size={44} className="text-[#25d366]" /><span className="text-sm">Pick a group to start chatting</span>
             </div>
           ) : (
             <>
-              <div className="px-3 py-2 flex items-center gap-2 text-white" style={{ background: GREEN }}>
+              <div className="px-3 py-1 flex items-center gap-2 text-white md:py-2" style={{ background: GREEN }}>
                 <button onClick={() => setSel(null)} className="sm:hidden -ml-1 p-1 rounded hover:bg-white/15" title="Back" aria-label="Back to chats"><FiArrowLeft size={22} /></button>
                 <Avatar url={sel.is_dm ? userAvatars[members.find(m => m.user_id !== user?.id)?.user_id] : null} name={sel.name} size={36} />
                 {sel.is_dm ? (
@@ -426,56 +702,31 @@ export default function SiteChat() {
                 )}
               </div>
 
-              <div ref={scrollRef} onScroll={onMsgScroll} className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 relative" style={{ background: '#efeae2' }}
-                onDragOver={e => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
-                onDragLeave={e => { if (e.currentTarget === e.target) setDragOver(false); }}
-                onDrop={onDrop}>
-                {dragOver && <div className="absolute inset-0 z-10 m-2 rounded-lg border-2 border-dashed border-emerald-500 bg-emerald-500/10 flex items-center justify-center text-emerald-700 font-semibold pointer-events-none">Drop file to send</div>}
-                {msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say hello 👋</div>}
-                {(() => { let prevDay = null; return msgs.map(m => {
-                  const own = m.sender_id === user?.id;
-                  const day = fmtDate(m.created_at, DAY_OPTS);
-                  const sep = day !== prevDay; prevDay = day;
-                  const others = members.filter(mm => mm.user_id !== user?.id);
-                  const readers = others.filter(o => (reads[o.user_id] || 0) >= m.id);
-                  const allRead = others.length > 0 && readers.length === others.length;
-                  return (
-                    <Fragment key={m.id}>
-                      {sep && <div className="flex justify-center my-1.5"><span className="text-[10px] font-medium bg-white/85 text-gray-500 px-2.5 py-0.5 rounded-full shadow-sm">{dayLabel(m.created_at)}</span></div>}
-                      <div id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
-                        {!own && !sel.is_dm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
-                        <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
-                          {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
-                          {m.reply_to_id && (() => {
-                            const q = msgById[m.reply_to_id];
-                            return (
-                              <button type="button" onClick={() => { const el = document.getElementById(`msg-${m.reply_to_id}`); if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('ring-2', 'ring-emerald-400'); setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-400'), 1200); } }}
-                                className="block w-full text-left mb-1 rounded bg-black/[0.06] border-l-4 border-emerald-500 px-2 py-1">
-                                <div className="text-[11px] font-semibold text-emerald-700 truncate">{q ? (q.sender_id === user?.id ? 'You' : q.sender_name) : 'Message'}</div>
-                                <div className="text-[11px] text-gray-600 truncate">{q ? quotePreview(q) : 'Original message unavailable'}</div>
-                              </button>
-                            );
-                          })()}
-                          {m.attachment_url && (
-                            isImg(m.attachment_url)
-                              ? <ChatImage url={m.attachment_url} name={m.attachment_name} />
-                              : isAudio(m.attachment_url)
-                                ? <audio controls src={m.attachment_url} className="mb-1 h-9 max-w-[230px]" />
-                                : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
-                          {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
-                          <div className="flex items-center justify-end gap-1.5 mt-0.5">
-                            <button onClick={() => setReplyTo(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Reply"><FiCornerUpLeft size={11} /></button>
-                            <button onClick={() => setInfoMsg(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Message info"><FiInfo size={11} /></button>
-                            {(own || isAdmin()) && <button onClick={() => delMsg(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
-                            <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
-                            {own && <span title={others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet'} className={`text-[11px] leading-none ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>}
-                          </div>
-                        </div>
-                      </div>
-                    </Fragment>
-                  );
-                }); })()}
-                <div ref={endRef} />
+              <div className="relative flex-1 flex flex-col min-h-0">
+                <div ref={scrollRef} onScroll={onMsgScroll} className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 relative" style={{ background: '#efeae2' }}
+                  onDragOver={e => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
+                  onDragLeave={e => { if (e.currentTarget === e.target) setDragOver(false); }}
+                  onDrop={onDrop}>
+                  {dragOver && <div className="absolute inset-0 z-10 m-2 rounded-lg border-2 border-dashed border-emerald-500 bg-emerald-500/10 flex items-center justify-center text-emerald-700 font-semibold pointer-events-none">Drop file to send</div>}
+                  {msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say hello 👋</div>}
+                  {hasMore && (
+                    <div className="flex items-center justify-center gap-1.5 py-1.5 text-[11px] text-gray-400 select-none">
+                      {loadingOlder
+                        ? <><span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-emerald-600 animate-spin" /> Loading earlier messages…</>
+                        : '↑ earlier messages'}
+                    </div>
+                  )}
+                  <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} />
+
+                  <div ref={endRef} />
+                </div>
+                {/* Floating "jump to latest" — shows only when scrolled up off the bottom (WhatsApp-style). */}
+                {showJumpDown && (
+                  <button onClick={jumpToBottom} title="Jump to latest" aria-label="Jump to latest message"
+                    className="absolute bottom-3 right-3 z-20 w-9 h-9 rounded-full bg-white shadow-lg border border-gray-200 flex items-center justify-center text-gray-500 hover:text-emerald-600 hover:border-emerald-300 transition">
+                    <FiChevronDown size={20} />
+                  </button>
+                )}
               </div>
 
               {/* min-w-0 on the textarea + flex-shrink-0 on the buttons so the

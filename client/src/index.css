@@ -375,6 +375,13 @@ tbody tr:hover {
 .badge-gray { @apply bg-gray-50 text-gray-600 ring-1 ring-gray-200; }
 .badge-purple { @apply bg-purple-50 text-purple-700 ring-1 ring-purple-200; }
 
+/* sotyn chat page specific css rule */
+@media screen and (max-width: 767px) {
+  .schat-wrapper ~ .p-footer {
+    display: none !important;
+  }
+}
+
 /* Animations */
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 .card { animation: fadeIn 0.3s ease-out; }

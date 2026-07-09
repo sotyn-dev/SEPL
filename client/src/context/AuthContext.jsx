@@ -53,9 +53,15 @@ export function AuthProvider({ children }) {
       if (Date.now() - last < 5000) return;     // debounce double events
       last = Date.now();
       api.get('/auth/me').then(r => {
-        setPermissions(r.data.permissions || {});
-        setUserRoles(r.data.userRoles || []);
-        setUser(u => u ? { ...u, role: r.data.role, department: r.data.department } : u);
+        // Only re-set (and thus re-render every consumer) when the data actually
+        // changed — an unchanged 2-min / on-focus refresh otherwise cascades a
+        // re-render through the whole app for nothing (perf pass). Returning the
+        // SAME reference tells React to bail; a real change still applies.
+        const p = r.data.permissions || {};
+        setPermissions(prev => JSON.stringify(prev) === JSON.stringify(p) ? prev : p);
+        const ur = r.data.userRoles || [];
+        setUserRoles(prev => JSON.stringify(prev) === JSON.stringify(ur) ? prev : ur);
+        setUser(u => (u && u.role === r.data.role && u.department === r.data.department) ? u : (u ? { ...u, role: r.data.role, department: r.data.department } : u));
       }).catch(() => {});
     };
     const onVis = () => { if (document.visibilityState === 'visible') refresh(); };
