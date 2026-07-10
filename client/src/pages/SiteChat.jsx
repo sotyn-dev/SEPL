@@ -214,6 +214,7 @@ export default function SiteChat() {
   const { startCall } = useCall();
   const [groups, setGroups] = useState([]);
   const [q, setQ] = useState('');
+  const [mineOnly, setMineOnly] = useState(false);  // admin-only "Only chats I'm in" filter
   const [sel, setSel] = useState(null);            // selected group {id, name}
   const [msgs, setMsgs] = useState([]);
   const [members, setMembers] = useState([]);
@@ -248,6 +249,7 @@ export default function SiteChat() {
   const fileRef = useRef(null);
   const avatarRef = useRef(null);
   const sendingRef = useRef(false);   // synchronous guard against double-send
+  const justSentRef = useRef({ body: '', at: 0 });  // ignore the trailing mobile-keyboard re-inject of a just-sent message
   const endRef = useRef(null);
   const scrollRef = useRef(null);       // the messages scroll container
   const atBottomRef = useRef(true);     // is the user currently pinned to the bottom?
@@ -267,6 +269,8 @@ export default function SiteChat() {
   const qRef = useRef('');                      // current search text, read inside loadGroups without a stale closure
   const searchTimerRef = useRef(null);          // debounce timer for server-side group search
   const searchMountedRef = useRef(false);       // skip the debounce effect's own fetch on first mount
+  const mineOnlyRef = useRef(false);            // current "only my chats" toggle, read inside loadGroups without a stale closure
+  const mineMountedRef = useRef(false);         // skip the toggle effect's own fetch on first mount
 
   // Keyset-paginated group list (perf pass — admin-slowness fix). Default: fetch
   // a RESET page sized to Math.max(GROUP_PAGE, currently-rendered count) so an
@@ -279,8 +283,10 @@ export default function SiteChat() {
     if (groupsLoadingRef.current) return Promise.resolve();
     const more = !!opts.more;
     const requestQ = qRef.current;
+    const requestMine = mineOnlyRef.current;
     const params = { limit: more ? GROUP_PAGE : Math.min(GROUP_MAX, Math.max(GROUP_PAGE, groupsLenRef.current || GROUP_PAGE)) };
     if (requestQ) params.q = requestQ;
+    if (requestMine) params.mine = 1;
     if (more && groupsCursorRef.current) {
       params.phase = groupsCursorRef.current.phase;
       if (groupsCursorRef.current.after_last_id != null) params.after_last_id = groupsCursorRef.current.after_last_id;
@@ -289,7 +295,7 @@ export default function SiteChat() {
     }
     groupsLoadingRef.current = true; setLoadingGroups(true);
     return api.get('/site-chat/groups', { params }).then(r => {
-      if (requestQ !== qRef.current) return;   // a newer search superseded this response — drop it
+      if (requestQ !== qRef.current || requestMine !== mineOnlyRef.current) return;   // a newer search/toggle superseded this response — drop it
       const { groups: incoming = [], hasMore: incomingHasMore = false, nextCursor = null } = r.data || {};
       if (more) setGroups(gs => { const seen = new Set(gs.map(g => g.id)); return [...gs, ...incoming.filter(g => !seen.has(g.id))]; });
       else setGroups(incoming);
@@ -397,7 +403,8 @@ export default function SiteChat() {
   // after paint — guarantees the loader covers from the very first painted frame.
   useLayoutEffect(() => {
     if (!sel) return;
-    setReplyTo(null);                                  // drop any pending reply when switching threads
+    setText(''); setMention(null); setReplyTo(null);   // drop the composer draft + reply when switching threads
+    justSentRef.current = { body: '', at: 0 };         // disarm the send-guard for the new thread
     setMsgs([]); setThreadLoading(true);               // clear the previous thread + show the loader immediately
   }, [sel?.id]);
   useEffect(() => {
@@ -437,6 +444,13 @@ export default function SiteChat() {
     searchTimerRef.current = setTimeout(() => { groupsCursorRef.current = null; loadGroups(); }, 300);
     return () => clearTimeout(searchTimerRef.current);
   }, [q, loadGroups]);
+  // "Only chats I'm in" toggle (admin): reset to a fresh page in the new scope.
+  // Skips its own mount run so it never double-fetches with the mount loader.
+  useEffect(() => {
+    mineOnlyRef.current = mineOnly;
+    if (!mineMountedRef.current) { mineMountedRef.current = true; return; }
+    groupsCursorRef.current = null; loadGroups();
+  }, [mineOnly, loadGroups]);
   // After a scroll-up page prepends older messages, anchor the scroll so the
   // messages the user was reading stay in place (runs before paint = no jump).
   useLayoutEffect(() => {
@@ -479,18 +493,29 @@ export default function SiteChat() {
 
   const send = async (extra = {}) => {
     if (!sel || sendingRef.current) return;          // ref guard = no duplicate sends
-    const payload = { body: text, ...(replyTo ? { reply_to_id: replyTo.id } : {}), ...extra };
+    const body = text;                                // capture before we clear the box
+    const payload = { body, ...(replyTo ? { reply_to_id: replyTo.id } : {}), ...extra };
     if (!payload.body?.trim() && !payload.attachment_url) return;
     sendingRef.current = true; setBusy(true);
     atBottomRef.current = true;                       // sending my own message always jumps to bottom
+    // Optimistic clear — empty the composer synchronously the instant we send
+    // (WhatsApp-style) instead of after the round-trip. Clearing after the await
+    // let a trailing mobile predictive-keyboard input event land after setText('')
+    // and repopulate the just-sent text, so it stayed in the box (mam 2026-07-10).
+    setText(''); setMention(null); setReplyTo(null);
+    if (taRef.current) taRef.current.value = '';      // belt-and-suspenders vs the IME buffer
+    justSentRef.current = { body, at: Date.now() };   // arm the guard for the trailing IME re-inject
     try {
       const r = await api.post(`/site-chat/${sel.id}`, payload);
-      setText(''); setMention(null); setReplyTo(null);
       // Append the server-returned row instead of re-fetching the whole thread
       // (perf pass). Socket 'changed' / fallback poll reconciles if needed.
       if (r.data && r.data.id) appendMsg(r.data);
     }
-    catch (err) { toast.error(err.response?.data?.error || 'Failed to send'); }
+    catch (err) {
+      justSentRef.current = { body: '', at: 0 };       // disarm so the guard can't blank the restored draft
+      setText(body);                                  // failed send → don't lose the draft
+      toast.error(err.response?.data?.error || 'Failed to send');
+    }
     finally { sendingRef.current = false; setBusy(false); }
   };
   const attach = async (file) => {
@@ -560,7 +585,17 @@ export default function SiteChat() {
   // On each keystroke, look back from the caret for an "@word" token (at the
   // start or after a space) and open a member picker filtered by that word.
   const onTextChange = (e) => {
-    const val = e.target.value; setText(val);
+    const val = e.target.value;
+    const js = justSentRef.current;
+    // Android predictive keyboards fire a trailing composition-commit right after
+    // send that re-injects the just-sent text into the box we cleared. Ignore
+    // exactly that: same text, box currently empty, within a short window.
+    if (val && text === '' && val === js.body && Date.now() - js.at < 1500) {
+      justSentRef.current = { body: '', at: 0 };
+      e.target.value = '';                            // undo the re-inject now (state is already '')
+      return;                                         // do NOT setText(val)
+    }
+    setText(val);
     const pos = e.target.selectionStart ?? val.length;
     const m = val.slice(0, pos).match(/(?:^|\s)@([^\s@]*)$/);
     setMention(m ? { query: m[1], start: pos - m[1].length - 1 } : null);
@@ -667,6 +702,17 @@ export default function SiteChat() {
               <FiSearch className="absolute left-2.5 top-3.5 text-gray-400" size={14} />
               <input className="input pl-8" placeholder="Search group…" value={q} onChange={e => setQ(e.target.value)} />
             </div>
+            {/* Admin-only: narrow the list (which shows ALL groups for admins) to
+                just the chats the admin is actually a member of. */}
+            {isAdmin() && (
+              <label className="flex w-fit ml-auto items-center gap-2 mt-2 px-1 text-xs text-gray-500 cursor-pointer select-none">
+                <span>Only chats I'm in</span>
+                <button type="button" role="switch" aria-checked={mineOnly} onClick={() => setMineOnly(v => !v)}
+                  className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${mineOnly ? 'bg-[#25d366]' : 'bg-gray-300'}`}>
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${mineOnly ? 'translate-x-4' : ''}`} />
+                </button>
+              </label>
+            )}
           </div>
           <GroupList groups={groups} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')}
             hasMore={groupsHasMore} loadingMore={loadingGroups} onLoadMore={() => loadGroups({ more: true })} onSelect={setSel} />
