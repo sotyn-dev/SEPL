@@ -4,10 +4,9 @@
 // provider holds the call + renders the call overlay, so an incoming call
 // rings anywhere in the app.
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { io } from 'socket.io-client';
 import api from '../api';
 import { useAuth } from './AuthContext';
-import { getToken } from '../lib/tokenStore';
+import { useAppSocket } from './SocketProvider';
 import { FiPhone, FiPhoneOff, FiVideo, FiVideoOff, FiMic, FiMicOff, FiX } from 'react-icons/fi';
 
 const CallContext = createContext(null);
@@ -18,12 +17,12 @@ const initials = (s) => String(s || '?').replace(/[^A-Za-z0-9 ]/g, '').trim().sl
 
 export function CallProvider({ children }) {
   const { user } = useAuth();
+  const { subscribe, emit } = useAppSocket();   // shared shell socket (SocketProvider)
   // call: null | { phase:'incoming'|'calling'|'active', peerId, peerName, video, callId }
   const [call, setCall] = useState(null);
   const [muted, setMuted] = useState(false);
   const [camOff, setCamOff] = useState(false);
 
-  const socketRef = useRef(null);
   const pcRef = useRef(null);
   const localRef = useRef(null);            // local MediaStream
   const localVidRef = useRef(null);         // <video> for self
@@ -71,7 +70,7 @@ export function CallProvider({ children }) {
   const newPc = useCallback((peerId, callId) => {
     const pc = new RTCPeerConnection({ iceServers: iceServersRef.current });
     pc.onicecandidate = (e) => {
-      if (e.candidate) socketRef.current?.emit('call:ice', { to: peerId, callId, candidate: e.candidate });
+      if (e.candidate) emit('call:ice', { to: peerId, callId, candidate: e.candidate });
     };
     pc.ontrack = (e) => {
       const [stream] = e.streams;
@@ -85,7 +84,7 @@ export function CallProvider({ children }) {
     };
     pcRef.current = pc;
     return pc;
-  }, [cleanup]);
+  }, [cleanup, emit]);
 
   const drainIce = async () => {
     const pc = pcRef.current; if (!pc) return;
@@ -104,13 +103,13 @@ export function CallProvider({ children }) {
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      socketRef.current?.emit('call:offer', { to: peerId, callId, sdp: offer, video: !!video });
+      emit('call:offer', { to: peerId, callId, sdp: offer, video: !!video });
       setCall({ phase: 'calling', peerId, peerName, video: !!video, callId });
     } catch (e) {
       cleanup();
       alert('Could not start the call — allow microphone' + (video ? ' / camera' : '') + ' access.');
     }
-  }, [newPc, cleanup]);
+  }, [newPc, cleanup, emit]);
 
   // ── accept an incoming call ─────────────────────────────────────────────
   const acceptCall = useCallback(async () => {
@@ -126,25 +125,25 @@ export function CallProvider({ children }) {
       await drainIce();
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      socketRef.current?.emit('call:answer', { to: c.peerId, callId: c.callId, sdp: answer });
+      emit('call:answer', { to: c.peerId, callId: c.callId, sdp: answer });
       setCall({ ...c, phase: 'active' });
     } catch (e) {
-      socketRef.current?.emit('call:reject', { to: c.peerId, callId: c.callId });
+      emit('call:reject', { to: c.peerId, callId: c.callId });
       cleanup();
       alert('Could not join the call — allow microphone' + (c.video ? ' / camera' : '') + ' access.');
     }
-  }, [newPc, cleanup]);
+  }, [newPc, cleanup, emit]);
 
   const rejectCall = useCallback(() => {
-    const c = callRef.current; if (c) socketRef.current?.emit('call:reject', { to: c.peerId, callId: c.callId });
+    const c = callRef.current; if (c) emit('call:reject', { to: c.peerId, callId: c.callId });
     cleanup();
-  }, [cleanup]);
+  }, [cleanup, emit]);
 
   const endCall = useCallback(() => {
     const c = callRef.current;
-    if (c) socketRef.current?.emit(c.phase === 'calling' ? 'call:cancel' : 'call:end', { to: c.peerId, callId: c.callId });
+    if (c) emit(c.phase === 'calling' ? 'call:cancel' : 'call:end', { to: c.peerId, callId: c.callId });
     cleanup();
-  }, [cleanup]);
+  }, [cleanup, emit]);
 
   const toggleMute = () => {
     const s = localRef.current; if (!s) return;
@@ -155,38 +154,36 @@ export function CallProvider({ children }) {
     const on = !camOff; s.getVideoTracks().forEach(t => { t.enabled = !on; }); setCamOff(on);
   };
 
-  // ── socket wiring ───────────────────────────────────────────────────────
+  // ── call signalling (rides the shared shell socket — SocketProvider) ──────
   useEffect(() => {
     if (!user?.id) return;
     api.get('/site-chat/ice').then(r => { if (Array.isArray(r.data?.iceServers)) iceServersRef.current = r.data.iceServers; }).catch(() => {});
-    // getToken() (function form) so storage-blocked devices — in-app browsers,
-    // private mode — still authenticate the socket; reading localStorage
-    // directly returned null there and calls never connected (mam 2026-07-04).
-    const socket = io({ path: '/socket.io', auth: (cb) => cb({ token: getToken() }), transports: ['websocket', 'polling'] });
-    socketRef.current = socket;
-
-    socket.on('call:offer', (d) => {
-      if (callRef.current) { socket.emit('call:reject', { to: d.from, callId: d.callId }); return; } // busy
-      incomingOffer.current = d.sdp;
-      setCall({ phase: 'incoming', peerId: d.from, peerName: d.fromName, video: !!d.video, callId: d.callId });
-      startRing();
-    });
-    socket.on('call:answer', async (d) => {
-      const c = callRef.current; if (!c || c.callId !== d.callId) return;
-      try { await pcRef.current?.setRemoteDescription(new RTCSessionDescription(d.sdp)); await drainIce(); setCall({ ...c, phase: 'active' }); } catch (_) {}
-    });
-    socket.on('call:ice', async (d) => {
-      const c = callRef.current; if (!c || c.callId !== d.callId || !d.candidate) return;
-      if (pcRef.current?.remoteDescription) { try { await pcRef.current.addIceCandidate(new RTCIceCandidate(d.candidate)); } catch (_) {} }
-      else pendingIce.current.push(d.candidate);
-    });
+    // subscribe() attaches now (or when the deferred connect fires) and stays
+    // attached across reconnects, so an incoming call rings on any page. Auth /
+    // transports / storage-blocked handling live once in the shared socket.
     const onBye = (d) => { const c = callRef.current; if (c && c.callId === d.callId) cleanup(); };
-    socket.on('call:end', onBye);
-    socket.on('call:reject', onBye);
-    socket.on('call:cancel', onBye);
-
-    return () => { socket.disconnect(); socketRef.current = null; };
-  }, [user?.id, cleanup]);
+    const offs = [
+      subscribe('call:offer', (d) => {
+        if (callRef.current) { emit('call:reject', { to: d.from, callId: d.callId }); return; } // busy
+        incomingOffer.current = d.sdp;
+        setCall({ phase: 'incoming', peerId: d.from, peerName: d.fromName, video: !!d.video, callId: d.callId });
+        startRing();
+      }),
+      subscribe('call:answer', async (d) => {
+        const c = callRef.current; if (!c || c.callId !== d.callId) return;
+        try { await pcRef.current?.setRemoteDescription(new RTCSessionDescription(d.sdp)); await drainIce(); setCall({ ...c, phase: 'active' }); } catch (_) {}
+      }),
+      subscribe('call:ice', async (d) => {
+        const c = callRef.current; if (!c || c.callId !== d.callId || !d.candidate) return;
+        if (pcRef.current?.remoteDescription) { try { await pcRef.current.addIceCandidate(new RTCIceCandidate(d.candidate)); } catch (_) {} }
+        else pendingIce.current.push(d.candidate);
+      }),
+      subscribe('call:end', onBye),
+      subscribe('call:reject', onBye),
+      subscribe('call:cancel', onBye),
+    ];
+    return () => { offs.forEach(off => off()); };
+  }, [user?.id, cleanup, subscribe, emit]);
 
   // attach local preview stream to the <video> when it mounts / call changes
   useEffect(() => {
