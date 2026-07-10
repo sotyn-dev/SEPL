@@ -9,6 +9,11 @@ import { BrowserRouter } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import { AuthProvider } from './context/AuthContext'
 import { SocketProvider } from './context/SocketProvider'
+import { getToken } from './lib/tokenStore'
+// Self-hosted Inter (weight-axis variable font, one same-origin woff2 covering
+// all weights). Replaces the render-blocking Google Fonts @import — subsets are
+// unicode-range gated so only the Latin file is fetched for the English UI.
+import '@fontsource-variable/inter/wght.css'
 import './index.css'
 import App from './App.jsx'
 
@@ -86,6 +91,17 @@ createRoot(document.getElementById('root')).render(
     </AppErrorBoundary>
   </StrictMode>,
 )
+
+// Warm the lazy Layout shell for LIKELY-authenticated visitors (a token is
+// present) so its chunk downloads in parallel with the /auth/me round-trip
+// instead of serially after the entry evaluates — collapsing the entry → Layout
+// → page waterfall on the logged-in first paint / post-login reload. Logged-out
+// visitors (no token) never fetch it, preserving the lean login-first paint.
+if (getToken()) {
+  const warmShell = () => { import('./components/Layout'); };
+  if (window.requestIdleCallback) window.requestIdleCallback(warmShell, { timeout: 2000 });
+  else setTimeout(warmShell, 0);
+}
 
 // Load + init Sentry after first paint (no-op without VITE_SENTRY_DSN). Deferred
 // off the critical path — same idle pattern as SocketProvider.

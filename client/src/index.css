@@ -1,10 +1,14 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+/* Inter is now self-hosted (perf pass — first-paint). The former Google Fonts
+   @import was a render-blocking 3-hop CDN chain (this CSS → fonts.googleapis.com
+   → fonts.gstatic.com) that also couldn't be precached offline. It's now the
+   @fontsource-variable/inter woff2, bundled same-origin + weight-axis variable
+   (one file, all weights), imported in main.jsx. Family: 'Inter Variable'. */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 body {
-  font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+  font-family: 'Inter Variable', 'Inter', -apple-system, 'Segoe UI', sans-serif;
   background-color: #f0f4f8;
   margin: 0;
   -webkit-font-smoothing: antialiased;
