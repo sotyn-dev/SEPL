@@ -248,6 +248,7 @@ export default function SiteChat() {
   const fileRef = useRef(null);
   const avatarRef = useRef(null);
   const sendingRef = useRef(false);   // synchronous guard against double-send
+  const justSentRef = useRef({ body: '', at: 0 });  // ignore the trailing mobile-keyboard re-inject of a just-sent message
   const endRef = useRef(null);
   const scrollRef = useRef(null);       // the messages scroll container
   const atBottomRef = useRef(true);     // is the user currently pinned to the bottom?
@@ -397,7 +398,8 @@ export default function SiteChat() {
   // after paint — guarantees the loader covers from the very first painted frame.
   useLayoutEffect(() => {
     if (!sel) return;
-    setReplyTo(null);                                  // drop any pending reply when switching threads
+    setText(''); setMention(null); setReplyTo(null);   // drop the composer draft + reply when switching threads
+    justSentRef.current = { body: '', at: 0 };         // disarm the send-guard for the new thread
     setMsgs([]); setThreadLoading(true);               // clear the previous thread + show the loader immediately
   }, [sel?.id]);
   useEffect(() => {
@@ -479,18 +481,29 @@ export default function SiteChat() {
 
   const send = async (extra = {}) => {
     if (!sel || sendingRef.current) return;          // ref guard = no duplicate sends
-    const payload = { body: text, ...(replyTo ? { reply_to_id: replyTo.id } : {}), ...extra };
+    const body = text;                                // capture before we clear the box
+    const payload = { body, ...(replyTo ? { reply_to_id: replyTo.id } : {}), ...extra };
     if (!payload.body?.trim() && !payload.attachment_url) return;
     sendingRef.current = true; setBusy(true);
     atBottomRef.current = true;                       // sending my own message always jumps to bottom
+    // Optimistic clear — empty the composer synchronously the instant we send
+    // (WhatsApp-style) instead of after the round-trip. Clearing after the await
+    // let a trailing mobile predictive-keyboard input event land after setText('')
+    // and repopulate the just-sent text, so it stayed in the box (mam 2026-07-10).
+    setText(''); setMention(null); setReplyTo(null);
+    if (taRef.current) taRef.current.value = '';      // belt-and-suspenders vs the IME buffer
+    justSentRef.current = { body, at: Date.now() };   // arm the guard for the trailing IME re-inject
     try {
       const r = await api.post(`/site-chat/${sel.id}`, payload);
-      setText(''); setMention(null); setReplyTo(null);
       // Append the server-returned row instead of re-fetching the whole thread
       // (perf pass). Socket 'changed' / fallback poll reconciles if needed.
       if (r.data && r.data.id) appendMsg(r.data);
     }
-    catch (err) { toast.error(err.response?.data?.error || 'Failed to send'); }
+    catch (err) {
+      justSentRef.current = { body: '', at: 0 };       // disarm so the guard can't blank the restored draft
+      setText(body);                                  // failed send → don't lose the draft
+      toast.error(err.response?.data?.error || 'Failed to send');
+    }
     finally { sendingRef.current = false; setBusy(false); }
   };
   const attach = async (file) => {
@@ -560,7 +573,17 @@ export default function SiteChat() {
   // On each keystroke, look back from the caret for an "@word" token (at the
   // start or after a space) and open a member picker filtered by that word.
   const onTextChange = (e) => {
-    const val = e.target.value; setText(val);
+    const val = e.target.value;
+    const js = justSentRef.current;
+    // Android predictive keyboards fire a trailing composition-commit right after
+    // send that re-injects the just-sent text into the box we cleared. Ignore
+    // exactly that: same text, box currently empty, within a short window.
+    if (val && text === '' && val === js.body && Date.now() - js.at < 1500) {
+      justSentRef.current = { body: '', at: 0 };
+      e.target.value = '';                            // undo the re-inject now (state is already '')
+      return;                                         // do NOT setText(val)
+    }
+    setText(val);
     const pos = e.target.selectionStart ?? val.length;
     const m = val.slice(0, pos).match(/(?:^|\s)@([^\s@]*)$/);
     setMention(m ? { query: m[1], start: pos - m[1].length - 1 } : null);
