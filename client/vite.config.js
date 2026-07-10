@@ -14,6 +14,32 @@ export default defineConfig({
       new Date().toISOString().replace(/[T:Z]/g, ' ').slice(5, 16).trim()
     ),
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Pin only the always-eager SHELL vendors into stable, long-cached
+        // chunks so an app-code deploy re-hashes just the app entry (react /
+        // router / socket / axios stay cached across deploys). Route pages,
+        // charts (recharts), maps (leaflet) and html5-qrcode are already
+        // React.lazy route-split — left to Rollup's default async chunking.
+        // @sentry is NOT pinned here: it's a lazy dynamic import (see sentry.js)
+        // and must stay its own async chunk, not be pulled into the initial graph.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+          // @sentry stays a LAZY async chunk (dynamic import in sentry.js) — must
+          // be excluded before the react rule below, because its path
+          // (node_modules/@sentry/react/…) would otherwise match it.
+          if (id.includes('@sentry')) return
+          // Keep react + react-dom + router + scheduler TOGETHER (splitting react
+          // from react-dom risks init-order bugs). Anchor on node_modules/<pkg>/
+          // so scoped packages like @sentry/react don't get swept in.
+          if (/node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) return 'react-vendor'
+          if (id.includes('socket.io') || id.includes('engine.io')) return 'socket'
+          if (id.includes('axios')) return 'net'
+        },
+      },
+    },
+  },
   server: {
     port: 3000,
     proxy: {

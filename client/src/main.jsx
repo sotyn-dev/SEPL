@@ -1,5 +1,7 @@
-// Sentry init must run before App so React errors are captured.
-import { Sentry } from './sentry'
+// A tiny local error boundary always wraps the app (renders the fallback
+// immediately); the heavy @sentry/react SDK is lazy-loaded + DSN-gated via
+// initSentry() below, off the first-paint critical path.
+import { AppErrorBoundary, initSentry } from './sentry'
 
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -72,7 +74,7 @@ function ErrorScreen({ error, resetError }) {
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <Sentry.ErrorBoundary fallback={ErrorScreen}>
+    <AppErrorBoundary fallback={ErrorScreen}>
       <BrowserRouter>
         <AuthProvider>
           <SocketProvider>
@@ -81,6 +83,12 @@ createRoot(document.getElementById('root')).render(
           </SocketProvider>
         </AuthProvider>
       </BrowserRouter>
-    </Sentry.ErrorBoundary>
+    </AppErrorBoundary>
   </StrictMode>,
 )
+
+// Load + init Sentry after first paint (no-op without VITE_SENTRY_DSN). Deferred
+// off the critical path — same idle pattern as SocketProvider.
+const startSentry = () => { initSentry(); };
+if (window.requestIdleCallback) window.requestIdleCallback(startSentry, { timeout: 3000 });
+else setTimeout(startSentry, 0);
