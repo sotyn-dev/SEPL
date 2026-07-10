@@ -1,8 +1,12 @@
 import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
-import Layout from './components/Layout';
 import Login from './pages/Login';
+// Layout (the authenticated app shell — sidebar, header, CallProvider/WebRTC,
+// AI chat, bells, ~64 icons) is lazy so it stays OUT of the entry chunk. A
+// logged-out visitor's first paint is just Login; logged-in users fetch this
+// chunk in parallel with their lazy page chunk under the <Suspense> below.
+const Layout = lazy(() => import('./components/Layout'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Leads = lazy(() => import('./pages/Leads'));
 const Quotations = lazy(() => import('./pages/Quotations'));

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom';
-import { io } from 'socket.io-client';
 import AnnouncementBell from './AnnouncementBell';
 // Mam (2026-05-22): standalone NotificationsBell removed — its
 // functionality is now merged into AnnouncementBell as a second tab,
@@ -11,8 +10,8 @@ import { CallProvider } from '../context/CallContext';
 import Modal from './Modal';
 import toast from 'react-hot-toast';
 import api from '../api';
-import { getToken } from '../lib/tokenStore';
 import { useAuth } from '../context/AuthContext';
+import { useAppSocket } from '../context/SocketProvider';
 import {
   // Navigation + UI controls (kept as-is)
   FiHome, FiMenu, FiX, FiLogOut, FiChevronRight, FiChevronDown, FiKey,
@@ -213,6 +212,7 @@ export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout, canView, isAdmin, userRoles } = useAuth();
+  const { subscribe } = useAppSocket();
 
   // Admin bypasses mandatory fields everywhere (mam 2026-06-19: "admin can
   // update anywhere, if a thing is mandatory it's not for him"). We disable
@@ -296,15 +296,16 @@ export default function Layout() {
     if (!user?.id) return;
     if ('Notification' in window && Notification.permission === 'default') { try { Notification.requestPermission(); } catch { /* ignore */ } }
     refreshWa();
-    // getToken() (function form) so the socket authenticates even when
-    // localStorage is blocked (in-app browsers, private mode) — otherwise the
-    // WhatsApp unread badge never updated live on those devices (mam 2026-07-04).
-    const socket = io({ path: '/socket.io', auth: (cb) => cb({ token: getToken() }), transports: ['websocket', 'polling'] });
-    socket.on('changed', refreshWa);
-    socket.on('group_deleted', refreshWa);
+    // Chat notifications now ride the shared shell socket (SocketProvider) —
+    // no own connection. subscribe() survives the socket's deferred connect and
+    // any reconnect, so live badge/toast updates work exactly as before across
+    // in-app / storage-blocked browsers (the shared socket keeps the same
+    // getToken() function-form auth). The 25s poll stays as the offline fallback.
+    const offChanged = subscribe('changed', refreshWa);
+    const offDeleted = subscribe('group_deleted', refreshWa);
     const poll = setInterval(refreshWa, 25000);             // fallback for groups joined after connect
-    return () => { socket.disconnect(); clearInterval(poll); };
-  }, [user?.id, refreshWa]);
+    return () => { offChanged(); offDeleted(); clearInterval(poll); };
+  }, [user?.id, refreshWa, subscribe]);
 
   const changePassword = async (e) => {
     e.preventDefault();
