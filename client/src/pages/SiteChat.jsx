@@ -214,6 +214,7 @@ export default function SiteChat() {
   const { startCall } = useCall();
   const [groups, setGroups] = useState([]);
   const [q, setQ] = useState('');
+  const [mineOnly, setMineOnly] = useState(false);  // admin-only "Only chats I'm in" filter
   const [sel, setSel] = useState(null);            // selected group {id, name}
   const [msgs, setMsgs] = useState([]);
   const [members, setMembers] = useState([]);
@@ -268,6 +269,8 @@ export default function SiteChat() {
   const qRef = useRef('');                      // current search text, read inside loadGroups without a stale closure
   const searchTimerRef = useRef(null);          // debounce timer for server-side group search
   const searchMountedRef = useRef(false);       // skip the debounce effect's own fetch on first mount
+  const mineOnlyRef = useRef(false);            // current "only my chats" toggle, read inside loadGroups without a stale closure
+  const mineMountedRef = useRef(false);         // skip the toggle effect's own fetch on first mount
 
   // Keyset-paginated group list (perf pass — admin-slowness fix). Default: fetch
   // a RESET page sized to Math.max(GROUP_PAGE, currently-rendered count) so an
@@ -280,8 +283,10 @@ export default function SiteChat() {
     if (groupsLoadingRef.current) return Promise.resolve();
     const more = !!opts.more;
     const requestQ = qRef.current;
+    const requestMine = mineOnlyRef.current;
     const params = { limit: more ? GROUP_PAGE : Math.min(GROUP_MAX, Math.max(GROUP_PAGE, groupsLenRef.current || GROUP_PAGE)) };
     if (requestQ) params.q = requestQ;
+    if (requestMine) params.mine = 1;
     if (more && groupsCursorRef.current) {
       params.phase = groupsCursorRef.current.phase;
       if (groupsCursorRef.current.after_last_id != null) params.after_last_id = groupsCursorRef.current.after_last_id;
@@ -290,7 +295,7 @@ export default function SiteChat() {
     }
     groupsLoadingRef.current = true; setLoadingGroups(true);
     return api.get('/site-chat/groups', { params }).then(r => {
-      if (requestQ !== qRef.current) return;   // a newer search superseded this response — drop it
+      if (requestQ !== qRef.current || requestMine !== mineOnlyRef.current) return;   // a newer search/toggle superseded this response — drop it
       const { groups: incoming = [], hasMore: incomingHasMore = false, nextCursor = null } = r.data || {};
       if (more) setGroups(gs => { const seen = new Set(gs.map(g => g.id)); return [...gs, ...incoming.filter(g => !seen.has(g.id))]; });
       else setGroups(incoming);
@@ -439,6 +444,13 @@ export default function SiteChat() {
     searchTimerRef.current = setTimeout(() => { groupsCursorRef.current = null; loadGroups(); }, 300);
     return () => clearTimeout(searchTimerRef.current);
   }, [q, loadGroups]);
+  // "Only chats I'm in" toggle (admin): reset to a fresh page in the new scope.
+  // Skips its own mount run so it never double-fetches with the mount loader.
+  useEffect(() => {
+    mineOnlyRef.current = mineOnly;
+    if (!mineMountedRef.current) { mineMountedRef.current = true; return; }
+    groupsCursorRef.current = null; loadGroups();
+  }, [mineOnly, loadGroups]);
   // After a scroll-up page prepends older messages, anchor the scroll so the
   // messages the user was reading stay in place (runs before paint = no jump).
   useLayoutEffect(() => {
@@ -690,6 +702,17 @@ export default function SiteChat() {
               <FiSearch className="absolute left-2.5 top-3.5 text-gray-400" size={14} />
               <input className="input pl-8" placeholder="Search group…" value={q} onChange={e => setQ(e.target.value)} />
             </div>
+            {/* Admin-only: narrow the list (which shows ALL groups for admins) to
+                just the chats the admin is actually a member of. */}
+            {isAdmin() && (
+              <label className="flex w-fit ml-auto items-center gap-2 mt-2 px-1 text-xs text-gray-500 cursor-pointer select-none">
+                <span>Only chats I'm in</span>
+                <button type="button" role="switch" aria-checked={mineOnly} onClick={() => setMineOnly(v => !v)}
+                  className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${mineOnly ? 'bg-[#25d366]' : 'bg-gray-300'}`}>
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${mineOnly ? 'translate-x-4' : ''}`} />
+                </button>
+              </label>
+            )}
           </div>
           <GroupList groups={groups} q={q} selId={sel?.id} userAvatars={userAvatars} canCreate={canCreate('site_chat')}
             hasMore={groupsHasMore} loadingMore={loadingGroups} onLoadMore={() => loadGroups({ more: true })} onSelect={setSel} />

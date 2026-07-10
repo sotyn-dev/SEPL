@@ -155,7 +155,10 @@ router.get('/ice', (req, res) => {
 });
 
 router.get('/groups', (req, res) => {
-  const db = getChatDb(); const uid = req.user.id; const admin = isAdmin(req);
+  // ?mine=1 → admin sees only the groups they're actually a member of (the
+  // sidebar "Only chats I'm in" toggle). Treating the admin as a non-admin here
+  // reuses the exact member-only predicate; pagination/search/counts all follow.
+  const db = getChatDb(); const uid = req.user.id; const admin = isAdmin(req) && req.query.mine !== '1';
   // No ?limit → legacy full-list behaviour, unchanged (kept for any other
   // caller that still wants everything at once). Admin here IS every non-DM
   // group + own DMs, same rule as before this perf pass; only the paginated
