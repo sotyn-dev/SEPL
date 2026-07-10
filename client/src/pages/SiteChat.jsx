@@ -222,6 +222,7 @@ export default function SiteChat() {
   const [hasMore, setHasMore] = useState(false);   // older messages exist above the loaded window (S2-B)
   const [quotedParents, setQuotedParents] = useState([]); // reply-targets older than the loaded window
   const [loadingOlder, setLoadingOlder] = useState(false); // drives the in-thread "loading earlier…" spinner
+  const [threadLoading, setThreadLoading] = useState(false); // drives the initial message-load skeleton on thread open (mobile feels frozen on slow networks otherwise)
   const [showJumpDown, setShowJumpDown] = useState(false);  // floating "jump to latest" button when scrolled up
   const [infoMsg, setInfoMsg] = useState(null);    // message whose "info" panel is open
   const [text, setText] = useState('');
@@ -390,11 +391,19 @@ export default function SiteChat() {
     socket.on('group_deleted', ({ groupId }) => { loadGroups(); setSel(s => (s && s.id === groupId ? null : s)); });
     return () => { socket.disconnect(); socketRef.current = null; clearTimeout(changedTimerRef.current); };
   }, [loadThread, loadGroups, appendMsg]);
-  useEffect(() => {
+  // Reset SYNCHRONOUSLY before the browser paints (useLayoutEffect), so switching
+  // threads never flashes the previous thread's messages for a frame before the
+  // loader appears. Clearing here — instead of in the async effect below, which runs
+  // after paint — guarantees the loader covers from the very first painted frame.
+  useLayoutEffect(() => {
     if (!sel) return;
     setReplyTo(null);                                  // drop any pending reply when switching threads
+    setMsgs([]); setThreadLoading(true);               // clear the previous thread + show the loader immediately
+  }, [sel?.id]);
+  useEffect(() => {
+    if (!sel) return;
     socketRef.current?.emit('join', sel.id);
-    loadThread(sel.id);
+    loadThread(sel.id).finally(() => setThreadLoading(false));
     const t = setInterval(() => { if (!socketRef.current?.connected) loadThread(sel.id, { reconcile: true }); }, 6000);    // fallback poll — only when the socket is down
     const onFocus = () => loadThread(sel.id, { reconcile: true });
     window.addEventListener('focus', onFocus);
@@ -621,11 +630,11 @@ export default function SiteChat() {
     // no fragile magic-number height. dvh (NOT vh) keeps the composer above the
     // phone browser's bottom toolbar (mam 2026-06-19: "below button not show").
     // Mobile subtracts only the app bar + page padding; desktop also the header.
-    <div className="schat-wrapper flex flex-col h-[calc(100dvh-69px)] -m-2 md:m-0 md:h-[calc(100dvh-104px)]">
+    <div className="schat-wrapper flex flex-col h-[calc(100dvh-69px)] -m-2 md:m-0 sm:h-[calc(100dvh-61px)] md:h-[calc(100dvh-104px)]">
       {avatarInput}
       {/* Page header — desktop only. On mobile the chat takes the full screen
           (like real WhatsApp); the profile photo moves into the list header. */}
-      <div className="hidden sm:flex items-start justify-between gap-3 mb-3 flex-shrink-0">
+      <div className="hidden md:flex items-start justify-between gap-3 mb-3 flex-shrink-0">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><FaWhatsapp className="text-[#25d366]" /> SOTYN Chat</h1>
           <p className="text-sm text-gray-500">Internal group chat · create groups · add your people · text + photos/files</p>
@@ -645,17 +654,17 @@ export default function SiteChat() {
         <div className={`w-full sm:w-80 border-r flex flex-col ${sel ? 'hidden sm:flex' : 'flex'}`}>
           <div className="flex items-center gap-2 px-3 py-1 text-white md:py-2" style={{ background: GREEN }}>
             {/* Profile photo — mobile only (desktop has it in the page header). */}
-            <button onClick={() => avatarRef.current?.click()} disabled={busy} className="sm:hidden relative flex-shrink-0" title="Change your photo">
+            <button onClick={() => avatarRef.current?.click()} disabled={busy} className="md:hidden relative flex-shrink-0" title="Change your photo">
               <Avatar url={userAvatars[user?.id]} name={user?.name} size={28} />
               <span className="absolute -bottom-0.5 -right-0.5 bg-emerald-600 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[8px] ring-2 ring-[#075e54]">✎</span>
             </button>
-            <FaWhatsapp className="hidden sm:block" /> <span className="font-semibold text-sm flex-1">SOTYN Chat</span>
+            <FaWhatsapp className="hidden md:block" /> <span className="font-semibold text-sm flex-1">SOTYN Chat</span>
             <button onClick={() => { setDmSearch(''); setDmOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New direct message"><FiUserPlus size={18} /></button>
             {canCreate('site_chat') && <button onClick={() => { setNewName(''); setNewSel([]); setNewSearch(''); setNewOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New group"><FiPlus size={18} /></button>}
           </div>
           <div className="p-2 border-b">
             <div className="relative">
-              <FiSearch className="absolute left-2.5 top-2.5 text-gray-400" size={14} />
+              <FiSearch className="absolute left-2.5 top-3.5 text-gray-400" size={14} />
               <input className="input pl-8" placeholder="Search group…" value={q} onChange={e => setQ(e.target.value)} />
             </div>
           </div>
@@ -708,7 +717,7 @@ export default function SiteChat() {
                   onDragLeave={e => { if (e.currentTarget === e.target) setDragOver(false); }}
                   onDrop={onDrop}>
                   {dragOver && <div className="absolute inset-0 z-10 m-2 rounded-lg border-2 border-dashed border-emerald-500 bg-emerald-500/10 flex items-center justify-center text-emerald-700 font-semibold pointer-events-none">Drop file to send</div>}
-                  {msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say hello 👋</div>}
+                  {!threadLoading && msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say hello 👋</div>}
                   {hasMore && (
                     <div className="flex items-center justify-center gap-1.5 py-1.5 text-[11px] text-gray-400 select-none">
                       {loadingOlder
@@ -716,9 +725,28 @@ export default function SiteChat() {
                         : '↑ earlier messages'}
                     </div>
                   )}
-                  <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} />
+                  {/* Fade the messages in beneath the loader. Keeps space-y-1.5 so the
+                      day-group spacing MessageList relies on is preserved. Keyed on
+                      threadLoading only (not msgs), so new messages append without re-fading. */}
+                  <div className={`space-y-1.5 transition-opacity duration-300 ${threadLoading ? 'opacity-0' : 'opacity-100 delay-150'}`}>
+                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} />
+                  </div>
 
                   <div ref={endRef} />
+                </div>
+                {/* Centered spinner that cross-fades to the real messages. Sits in the
+                    non-scrolling parent (a sibling of the scroll div) so it always covers
+                    the VISIBLE chat area regardless of scroll position. Always mounted;
+                    only its OPACITY toggles — so when the page arrives it fades out over
+                    300ms, revealing the messages beneath it (and hiding the auto-scroll-
+                    to-bottom snap). No skeleton, no layout jump. */}
+                <div
+                  className={`absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 pointer-events-none ${threadLoading && msgs.length === 0 ? 'opacity-100 transition-none' : 'opacity-0 transition-opacity duration-500 delay-200'}`}
+                  style={{ background: '#efeae2' }}
+                  aria-hidden={!(threadLoading && msgs.length === 0)}
+                >
+                  <span className="w-8 h-8 rounded-full border-[3px] border-gray-300 border-t-emerald-600 animate-spin" />
+                  <span className="text-xs font-medium text-gray-500">Loading messages…</span>
                 </div>
                 {/* Floating "jump to latest" — shows only when scrolled up off the bottom (WhatsApp-style). */}
                 {showJumpDown && (

@@ -770,10 +770,14 @@ export default function Layout() {
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="p-2 hover:bg-gray-100 rounded-lg flex-shrink-0 text-gray-700"
-            title={sidebarOpen ? 'Hide sidebar' : 'Expand sidebar'}
-            aria-label={sidebarOpen ? 'Hide sidebar' : 'Expand sidebar'}
+            title={sidebarOpen ? 'Hide sidebar' : (isMobile ? 'Menu' : 'Expand sidebar')}
+            aria-label={sidebarOpen ? 'Hide sidebar' : (isMobile ? 'Open menu' : 'Expand sidebar')}
           >
-            {sidebarOpen ? <FiMenu size={20} /> : <FiChevronRight size={20} />}
+            {/* On mobile the collapsed state must read as a real hamburger (☰) so
+                users on the full-screen chat recognise it as the way back to the
+                menu / home. Desktop keeps the chevron, which pairs with the
+                floating "Menu" tab shown when the sidebar is collapsed. */}
+            {sidebarOpen ? <FiMenu size={20} /> : (isMobile ? <FiMenu size={20} /> : <FiChevronRight size={20} />)}
           </button>
           {/* Brand mark — only when the sidebar is collapsed on desktop, so
               the header never loses the SEPL logo (mam 2026-06-17). Mirrors
