@@ -3,6 +3,9 @@
 # admin session and prints a pass/fail status for each. Use this whenever
 # someone claims "the ERP is down" — it gives you an objective answer.
 #
+# This is the FUNCTIONAL (HTTP endpoint) check. For the Redis-layer internals
+# (cache / worker / job queue) use:  node server/scripts/redis-smoke.js
+#
 # Usage:
 #   bash /root/erp/health-check.sh
 #   ADMIN_EMAIL=admin@erp.com ADMIN_PASSWORD=YourPassword bash /root/erp/health-check.sh

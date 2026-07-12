@@ -1,6 +1,12 @@
 #!/bin/bash
-# SEPL Business ERP - VPS Deployment Script
-# Run this on your Hostinger VPS as root
+# SEPL Business ERP - FIRST-TIME VPS PROVISIONING (run once on a fresh server, as root)
+#
+# ROLE: bootstraps a brand-new VPS (Node, nginx, PM2, clone, HTTPS). It is LEGACY:
+# it predates ecosystem.config.js (so it starts only the API, not the erp-worker
+# job process) and sets up NO Redis. Do NOT use it for routine deploys.
+#   • Routine deploy (each time):  bash scripts/deploy.sh
+#   • One-time Redis setup:        sudo bash scripts/setup-redis.sh
+# See docs/REDIS_DEPLOY.md for the current, complete deploy runbook.
 
 echo "=========================================="
 echo "  SEPL Business ERP - VPS Setup"

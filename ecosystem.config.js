@@ -4,10 +4,13 @@
 // leaving nginx with nothing on :5000. This config makes the process
 // self-heal so a memory spike or crash is a ~1s blip, not a stuck outage.
 //
-// One-time switch on the VPS:
-//   cd /root/erp && pm2 delete erp; pm2 start ecosystem.config.js && pm2 save
-// After that, every deploy just runs:
-//   cd /root/erp && git fetch origin && git reset --hard origin/main && pm2 reload ecosystem.config.js
+// This file now defines TWO apps: `erp` (the API) and `erp-worker` (the BullMQ
+// background job process). Deploy is scripted — don't run the raw commands by
+// hand:
+//   Routine deploy (each time):  bash scripts/deploy.sh
+//   First-time Redis (once):     sudo bash scripts/setup-redis.sh
+// deploy.sh uses `pm2 startOrReload ecosystem.config.js` (starts erp-worker the
+// first time, reloads both after) + `pm2 save`. Full runbook: docs/REDIS_DEPLOY.md.
 //
 // The DURABLE root fix is still a one-time 2 GB swap file (so the OOM-killer
 // never fires at all) — see project_deployment notes. This config is the

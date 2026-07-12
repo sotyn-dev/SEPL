@@ -149,5 +149,9 @@ both the processor and the fallback.
   ([`db/chatDb.js`](server/db/chatDb.js)) — kept separate on purpose; no cross-DB joins.
 - better-sqlite3 is **synchronous**; the only reason a route becomes `async` is an `await`
   on the cache. Keep the DB calls synchronous inside the loader.
-- Deploy: `git reset --hard origin/main` + `pm2 reload`. No schema migration should be
-  required by a caching/real-time change.
+- Deploy (routine): on the VPS run **`bash scripts/deploy.sh`** — the single source of
+  truth. It pulls, `npm install`s (rebuilds the client), `pm2 startOrReload`s **both**
+  apps (`erp` + the `erp-worker` job process), and runs the smoke test. First-time Redis
+  setup is a one-time `sudo bash scripts/setup-redis.sh`. Full runbook:
+  [`docs/REDIS_DEPLOY.md`](docs/REDIS_DEPLOY.md). No schema migration should be required by
+  a caching/real-time change.

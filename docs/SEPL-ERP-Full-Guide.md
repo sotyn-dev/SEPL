@@ -310,10 +310,11 @@ An internal, WhatsApp-styled team chat (separate `chat.db`, real-time via Socket
 
 **Standard deploy (from the Hostinger browser terminal):**
 ```bash
-cd /root/erp && git pull && npm install && cd client && npm install && npm run build && cd .. && pm2 restart erp
+cd /root/erp && bash scripts/deploy.sh
 ```
-- Backend-only changes can skip the client build.
-- If `git pull` is blocked by the server-side `package-lock.json`, run `git stash` first (or once: `git update-index --assume-unchanged client/package-lock.json package-lock.json`).
+This one script is the single source of truth: it pulls (`git fetch` + hard reset), `npm install`s (which rebuilds the client via `postinstall`), `pm2 startOrReload`s **both** apps — `erp` (API) and `erp-worker` (background jobs) — then runs the smoke test. Full runbook: [`docs/REDIS_DEPLOY.md`](REDIS_DEPLOY.md).
+- One-time only, to enable the Redis speedups: `sudo bash scripts/setup-redis.sh`.
+- If the pull is blocked by the server-side `package-lock.json`, run `git stash` first (or once: `git update-index --assume-unchanged client/package-lock.json package-lock.json`).
 - After deploy, hard-refresh the browser (Ctrl+Shift+R) / reopen the PWA.
 
 **Health & recovery:**
