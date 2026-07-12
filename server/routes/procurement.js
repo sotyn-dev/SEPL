@@ -8,8 +8,22 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { nextSequence } = require('../db/nextSequence');
 const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
+const cache = require('../lib/cache');
+const cacheKeys = require('../lib/cacheKeys');
 const router = express.Router();
 router.use(authMiddleware);
+
+// Bust the cached vendor list after any successful vendor write (create / bulk /
+// edit / delete). Path-scoped to /vendors so PO/indent writes elsewhere on this
+// large router don't needlessly invalidate it. No-op when Redis is down.
+router.use('/vendors', (req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.on('finish', () => {
+      if (res.statusCode < 400) cache.del(cacheKeys.ref('vendors', 'active'));
+    });
+  }
+  next();
+});
 
 // Build the merge context for an indent email event (mam 2026-06-03 email
 // triggers). Resolves the dynamic recipient emails (raiser / CRM owner /
@@ -263,8 +277,12 @@ function normaliseMakes(m) {
   const clean = arr.map(s => String(s || '').trim()).filter(Boolean).slice(0, 10);
   return clean.length ? clean.join(', ') : null;
 }
-router.get('/vendors', (req, res) => {
-  res.json(getDb().prepare('SELECT * FROM vendors WHERE active=1 ORDER BY name').all());
+router.get('/vendors', async (req, res) => {
+  // Active-vendor dropdown source on ~8 pages. Cache 1h; busted on any vendor
+  // write by the hook above. Falls back to a direct read when Redis is down.
+  const vendors = await cache.getOrSet(cacheKeys.ref('vendors', 'active'), 3600,
+    () => getDb().prepare('SELECT * FROM vendors WHERE active=1 ORDER BY name').all());
+  res.json(vendors);
 });
 
 router.post('/vendors', (req, res) => {

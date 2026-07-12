@@ -1,8 +1,23 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const cache = require('../lib/cache');
+const cacheKeys = require('../lib/cacheKeys');
 const router = express.Router();
 router.use(authMiddleware);
+
+// Bust the cached /dropdown variants after ANY successful mutation on this
+// router (create/edit/delete/price/approve/reject/bulk). One hook covers every
+// current and future write endpoint, so a cached dropdown can never go stale
+// past the write. No-op when Redis is down.
+router.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.on('finish', () => {
+      if (res.statusCode < 400) cache.delByPrefix(cacheKeys.ref('item-dropdown'));
+    });
+  }
+  next();
+});
 
 const ALLOWED_SOURCES = ['PO', 'Quote', 'Manual', 'Online'];
 
@@ -217,8 +232,14 @@ router.get('/completion', requirePermission('item_master', 'view'), (req, res) =
 });
 
 // Lightweight dropdown — unchanged shape so callers don't break.
-router.get('/dropdown', (req, res) => {
+// Cached (30 min TTL): the GROUP BY aggregate over ~2,385 item_master rows plus
+// the per-row display/age mapping runs on every call, from 8 pages. Keyed by the
+// normalised `type` variant; busted on any item_master write by the mutation
+// hook above. Falls back to computing directly when Redis is down.
+router.get('/dropdown', async (req, res) => {
   const { type } = req.query;
+  const typesForKey = type ? String(type).split(',').map(s => s.trim()).filter(Boolean).sort().join(',') : 'all';
+  const payload = await cache.getOrSet(cacheKeys.ref('item-dropdown', typesForKey), 1800, () => {
   // Dedupe make-variants (mam 2026-06-09): the same item in 2-3 makes shows
   // as identical rows. Group to ONE row per unique item_name + specification
   // + size — make is irrelevant in pickers. Representative id = lowest; price
@@ -244,13 +265,15 @@ router.get('/dropdown', (req, res) => {
                 ORDER BY department, item_name`;
   const stmt = getDb().prepare(sql);
   const items = types.length ? stmt.all(...types) : stmt.all();
-  res.json(items.map(i => {
+  return items.map(i => {
     const base = [i.item_name, i.specification, i.size].filter(Boolean).join(' / ');
     // Pending items stay selectable but are flagged so pickers can show
     // they're awaiting approval (mam 2026-06-16).
     const pending = i.approval_status === 'pending';
     return { ...i, display_name: pending ? `${base} (Pending approval)` : base, age_status: ageStatus(i.age_days) };
-  }));
+  });
+  });
+  res.json(payload);
 });
 
 // Single item — same shape as list, including age.
