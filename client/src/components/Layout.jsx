@@ -48,7 +48,8 @@ import {
   FiGitBranch,
 } from 'react-icons/fi';
 import { LuIndianRupee, LuBrain } from 'react-icons/lu';
-import { FaWhatsapp, FaTrophy } from 'react-icons/fa';
+import { FaTrophy } from 'react-icons/fa';
+import { BiMessageRoundedCheck } from 'react-icons/bi';
 
 // ─── Sidebar structure (mam 2026-05-27 — SEPL_Sidebar_Restructure spec) ───
 // Dashboard stays standalone at the very top (no group, single URL).
@@ -264,13 +265,13 @@ export default function Layout() {
             const body = last.body || (last.attachment_name ? `📎 ${last.attachment_name}` : 'New message');
             const line = `${last.sender_name ? last.sender_name.split(' ')[0] + ': ' : ''}${body}`;
             const gid = g.id, gname = g.name;
-            // Prominent, clickable green banner pinned to the TOP-CENTER so the
+            // Prominent, clickable blue banner pinned to the TOP-CENTER so the
             // alert is unmistakably "on top" (mam 2026-06-19).
             toast.custom((t) => (
               <div onClick={() => { toast.dismiss(t.id); navigate('/site-chat'); }}
                 className="cursor-pointer flex items-start gap-2 w-[320px] max-w-[88vw] rounded-xl shadow-2xl px-3 py-2.5 text-white"
-                style={{ background: '#075e54' }}>
-                <FaWhatsapp className="mt-0.5 text-[#25d366] flex-shrink-0" size={20} />
+                style={{ background: '#1d4ed8' }}>
+                <BiMessageRoundedCheck className="mt-0.5 text-blue-900 flex-shrink-0" size={20} />
                 <div className="min-w-0 flex-1">
                   <div className="font-semibold text-sm truncate">{gname}</div>
                   <div className="text-xs text-white/90 truncate">{line}</div>
@@ -685,7 +686,7 @@ export default function Layout() {
         <div className="px-3 pt-2 border-t border-white/10">
           <Link to="/site-chat"
             className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
-            <FaWhatsapp size={17} className="text-green-400" />
+            <BiMessageRoundedCheck size={17} className="text-white" />
             <span className="truncate flex-1">SOTYN Chat</span>
             {waUnread > 0 && <span className="text-[10px] font-bold text-white bg-[#25d366] rounded-full px-1.5 min-w-[18px] text-center">{waUnread > 99 ? '99+' : waUnread}</span>}
           </Link>

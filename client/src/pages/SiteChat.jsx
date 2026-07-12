@@ -9,13 +9,13 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
 import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiImage } from 'react-icons/fi';
-import { FaWhatsapp } from 'react-icons/fa';
+import { BiMessageRoundedCheck } from 'react-icons/bi';
 import { useCall } from '../context/CallContext';
 import { compressImage } from '../lib/imageCompress';
 import { getToken } from '../lib/tokenStore';
 
 const DAY_OPTS = { day: '2-digit', month: 'short', year: 'numeric' };
-const GREEN = '#075e54';                          // WhatsApp header green
+const HEADER = '#1e3a8a';                          // header royal blue
 const isImg = (u) => /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif)$/i.test(String(u || ''));
 const isAudio = (u) => /\.(webm|ogg|mp3|m4a|wav|aac|opus)$/i.test(String(u || ''));
 const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -30,7 +30,7 @@ function Avatar({ url, name, size = 36, className = '' }) {
   const st = { width: size, height: size };
   return url
     ? <img src={url} alt={name || ''} className={`rounded-full object-cover flex-shrink-0 ${className}`} style={st} />
-    : <span className={`rounded-full bg-emerald-100 text-emerald-700 font-bold flex items-center justify-center flex-shrink-0 ${className}`} style={{ ...st, fontSize: Math.round(size * 0.34) }}>{initials(name)}</span>;
+    : <span className={`rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center flex-shrink-0 ${className}`} style={{ ...st, fontSize: Math.round(size * 0.34) }}>{initials(name)}</span>;
 }
 
 // A chat photo that degrades gracefully. If the browser can't decode the file
@@ -87,7 +87,7 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
     const out = []; let last = 0; let mm;
     while ((mm = re.exec(body))) {
       if (mm.index > last) out.push(body.slice(last, mm.index));
-      out.push(<span key={mm.index} className="text-emerald-700 font-semibold">@{mm[1]}</span>);
+      out.push(<span key={mm.index} className="text-blue-400 font-semibold">@{mm[1]}</span>);
       last = mm.index + mm[0].length;
     }
     if (last < body.length) out.push(body.slice(last));
@@ -125,14 +125,14 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
             return (
               <div key={m.id} id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
                 {!own && !isDm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
-                <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
-                  {!own && <div className="text-[11px] font-semibold text-emerald-700 mb-0.5">{m.sender_name}</div>}
+                <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#e6ecf7]' : 'bg-white'}`}>
+                  {!own && <div className="text-[11px] font-semibold text-blue-700 mb-0.5">{m.sender_name}</div>}
                   {m.reply_to_id && (() => {
                     const q = msgById[m.reply_to_id];
                     return (
-                      <button type="button" onClick={() => { const el = document.getElementById(`msg-${m.reply_to_id}`); if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('ring-2', 'ring-emerald-400'); setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-400'), 1200); } }}
-                        className="block w-full text-left mb-1 rounded bg-black/[0.06] border-l-4 border-emerald-500 px-2 py-1">
-                        <div className="text-[11px] font-semibold text-emerald-700 truncate">{q ? (q.sender_id === userId ? 'You' : q.sender_name) : 'Message'}</div>
+                      <button type="button" onClick={() => { const el = document.getElementById(`msg-${m.reply_to_id}`); if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('ring-2', 'ring-blue-400'); setTimeout(() => el.classList.remove('ring-2', 'ring-blue-400'), 1200); } }}
+                        className="block w-full text-left mb-1 rounded bg-black/[0.06] border-l-4 border-blue-500 px-2 py-1">
+                        <div className="text-[11px] font-semibold text-blue-700 truncate">{q ? (q.sender_id === userId ? 'You' : q.sender_name) : 'Message'}</div>
                         <div className="text-[11px] text-gray-600 truncate">{q ? quotePreview(q) : 'Original message unavailable'}</div>
                       </button>
                     );
@@ -145,11 +145,11 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
                         : <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mb-1 break-all"><FiFile size={13} /> {m.attachment_name || 'attachment'}</a>)}
                   {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{renderBody(m.body)}</div>}
                   <div className="flex items-center justify-end gap-1.5 mt-0.5">
-                    <button onClick={() => onReply(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Reply"><FiCornerUpLeft size={11} /></button>
-                    <button onClick={() => onInfo(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-emerald-600" title="Message info"><FiInfo size={11} /></button>
+                    <button onClick={() => onReply(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Reply"><FiCornerUpLeft size={11} /></button>
+                    <button onClick={() => onInfo(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Message info"><FiInfo size={11} /></button>
                     {(own || isAdmin) && <button onClick={() => onDelete(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
                     <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
-                    {own && <span title={others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet'} className={`text-[11px] leading-none ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>}
+                    {own && <span title={others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet'} className={`text-[11px] leading-none tracking-tighter ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>}
                   </div>
                 </div>
               </div>
@@ -178,7 +178,7 @@ const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCr
       {groups.length === 0 && <div className="text-center text-gray-400 text-sm py-8">{q ? 'No groups match your search.' : <>No groups yet.{canCreate ? ' Tap + to create one.' : ''}</>}</div>}
       {groups.map(g => (
         <button key={g.id} onClick={() => onSelect({ id: g.id, name: g.name })}
-          className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${selId === g.id ? 'bg-emerald-50' : ''}`}>
+          className={`w-full text-left px-3 py-2.5 border-b flex items-start gap-2 hover:bg-gray-50 ${selId === g.id ? 'bg-blue-50' : ''}`}>
           <Avatar url={g.is_dm ? userAvatars[g.dm_uid] : null} name={g.name} size={36} />
           <div className="min-w-0 flex-1">
             <div className="flex justify-between items-baseline gap-2">
@@ -187,14 +187,14 @@ const GroupList = memo(function GroupList({ groups, q, selId, userAvatars, canCr
             </div>
             <div className="flex items-center gap-1.5">
               <div className="text-xs text-gray-500 truncate flex-1">{g.last ? `${g.last.sender_name ? g.last.sender_name.split(' ')[0] + ': ' : ''}${preview(g.last)}` : <span className="italic text-gray-300">{g.members} member{g.members === 1 ? '' : 's'}</span>}</div>
-              {g.unread > 0 && <span className="text-[10px] font-bold text-white bg-[#25d366] rounded-full px-1.5 min-w-[18px] text-center flex-shrink-0">{g.unread}</span>}
+              {g.unread > 0 && <span className="text-[10px] font-bold text-white bg-[#2563eb] rounded-full px-1.5 min-w-[18px] text-center flex-shrink-0">{g.unread}</span>}
             </div>
           </div>
         </button>
       ))}
       {loadingMore && (
         <div className="flex items-center justify-center gap-1.5 py-2 text-[11px] text-gray-400 select-none">
-          <span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-emerald-600 animate-spin" /> Loading more…
+          <span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-blue-600 animate-spin" /> Loading more…
         </div>
       )}
     </div>
@@ -671,14 +671,14 @@ export default function SiteChat() {
           (like real WhatsApp); the profile photo moves into the list header. */}
       <div className="hidden md:flex items-start justify-between gap-3 mb-3 flex-shrink-0">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><FaWhatsapp className="text-[#25d366]" /> SOTYN Chat</h1>
+          <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2"><BiMessageRoundedCheck className="text-blue-900" /> SOTYN Chat</h1>
           <p className="text-sm text-gray-500">Internal group chat · create groups · add your people · text + photos/files</p>
         </div>
         {/* Your profile photo — tap to upload (mam 2026-06-19). */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <button onClick={() => avatarRef.current?.click()} disabled={busy} className="relative" title="Change your photo">
             <Avatar url={userAvatars[user?.id]} name={user?.name} size={42} />
-            <span className="absolute -bottom-0.5 -right-0.5 bg-emerald-600 text-white rounded-full w-4 h-4 flex items-center justify-center text-[9px] ring-2 ring-white">✎</span>
+            <span className="absolute -bottom-0.5 -right-0.5 bg-blue-600 text-white rounded-full w-4 h-4 flex items-center justify-center text-[9px] ring-2 ring-white">✎</span>
           </button>
           {userAvatars[user?.id] && <button onClick={removeAvatar} className="text-[11px] text-gray-400 hover:text-red-600">Remove</button>}
         </div>
@@ -687,13 +687,13 @@ export default function SiteChat() {
       <div className="flex flex-1 min-h-0 border overflow-hidden bg-white md:rounded-xl">
         {/* ── Group list ────────────────────────────────── */}
         <div className={`w-full sm:w-80 border-r flex flex-col ${sel ? 'hidden sm:flex' : 'flex'}`}>
-          <div className="flex items-center gap-2 px-3 py-1 text-white md:py-2" style={{ background: GREEN }}>
+          <div className="flex items-center gap-2 px-3 py-1 text-white md:py-2" style={{ background: HEADER }}>
             {/* Profile photo — mobile only (desktop has it in the page header). */}
             <button onClick={() => avatarRef.current?.click()} disabled={busy} className="md:hidden relative flex-shrink-0" title="Change your photo">
               <Avatar url={userAvatars[user?.id]} name={user?.name} size={28} />
-              <span className="absolute -bottom-0.5 -right-0.5 bg-emerald-600 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[8px] ring-2 ring-[#075e54]">✎</span>
+              <span className="absolute -bottom-0.5 -right-0.5 bg-blue-600 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[8px] ring-2 ring-[#1d4ed8]">✎</span>
             </button>
-            <FaWhatsapp className="hidden md:block" /> <span className="font-semibold text-sm flex-1">SOTYN Chat</span>
+            <BiMessageRoundedCheck className="hidden md:block" /> <span className="font-semibold text-sm flex-1">SOTYN Chat</span>
             <button onClick={() => { setDmSearch(''); setDmOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New direct message"><FiUserPlus size={18} /></button>
             {canCreate('site_chat') && <button onClick={() => { setNewName(''); setNewSel([]); setNewSearch(''); setNewOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New group"><FiPlus size={18} /></button>}
           </div>
@@ -708,7 +708,7 @@ export default function SiteChat() {
               <label className="flex w-fit ml-auto items-center gap-2 mt-2 px-1 text-xs text-gray-500 cursor-pointer select-none">
                 <span>Only chats I'm in</span>
                 <button type="button" role="switch" aria-checked={mineOnly} onClick={() => setMineOnly(v => !v)}
-                  className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${mineOnly ? 'bg-[#25d366]' : 'bg-gray-300'}`}>
+                  className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${mineOnly ? 'bg-[#2563eb]' : 'bg-gray-300'}`}>
                   <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${mineOnly ? 'translate-x-4' : ''}`} />
                 </button>
               </label>
@@ -725,12 +725,12 @@ export default function SiteChat() {
             to the container width so message text wraps instead (mobile fix). */}
         <div className={`flex-1 flex-col min-w-0 ${sel ? 'flex' : 'hidden sm:flex'}`}>
           {!sel ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-2" style={{ background: '#f7f5f2' }}>
-              <FaWhatsapp size={44} className="text-[#25d366]" /><span className="text-sm">Pick a group to start chatting</span>
+            <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-2" style={{ background: '#f4f5f7' }}>
+              <BiMessageRoundedCheck size={44} className="text-blue-900" /><span className="text-sm">Pick a group to start chatting</span>
             </div>
           ) : (
             <>
-              <div className="px-3 py-1 flex items-center gap-2 text-white md:py-2" style={{ background: GREEN }}>
+              <div className="px-3 py-1 flex items-center gap-2 text-white md:py-2" style={{ background: HEADER }}>
                 <button onClick={() => setSel(null)} className="sm:hidden -ml-1 p-1 rounded hover:bg-white/15" title="Back" aria-label="Back to chats"><FiArrowLeft size={22} /></button>
                 <Avatar url={sel.is_dm ? userAvatars[members.find(m => m.user_id !== user?.id)?.user_id] : null} name={sel.name} size={36} />
                 {sel.is_dm ? (
@@ -758,16 +758,16 @@ export default function SiteChat() {
               </div>
 
               <div className="relative flex-1 flex flex-col min-h-0">
-                <div ref={scrollRef} onScroll={onMsgScroll} className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 relative" style={{ background: '#efeae2' }}
+                <div ref={scrollRef} onScroll={onMsgScroll} className="flex-1 overflow-y-auto px-3 py-3 space-y-1.5 relative" style={{ background: '#f4f5f7' }}
                   onDragOver={e => { e.preventDefault(); if (!dragOver) setDragOver(true); }}
                   onDragLeave={e => { if (e.currentTarget === e.target) setDragOver(false); }}
                   onDrop={onDrop}>
-                  {dragOver && <div className="absolute inset-0 z-10 m-2 rounded-lg border-2 border-dashed border-emerald-500 bg-emerald-500/10 flex items-center justify-center text-emerald-700 font-semibold pointer-events-none">Drop file to send</div>}
+                  {dragOver && <div className="absolute inset-0 z-10 m-2 rounded-lg border-2 border-dashed border-blue-500 bg-blue-500/10 flex items-center justify-center text-blue-700 font-semibold pointer-events-none">Drop file to send</div>}
                   {!threadLoading && msgs.length === 0 && <div className="text-center text-gray-500 text-xs py-8">No messages yet — say hello 👋</div>}
                   {hasMore && (
                     <div className="flex items-center justify-center gap-1.5 py-1.5 text-[11px] text-gray-400 select-none">
                       {loadingOlder
-                        ? <><span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-emerald-600 animate-spin" /> Loading earlier messages…</>
+                        ? <><span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 border-t-blue-600 animate-spin" /> Loading earlier messages…</>
                         : '↑ earlier messages'}
                     </div>
                   )}
@@ -788,16 +788,16 @@ export default function SiteChat() {
                     to-bottom snap). No skeleton, no layout jump. */}
                 <div
                   className={`absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 pointer-events-none ${threadLoading && msgs.length === 0 ? 'opacity-100 transition-none' : 'opacity-0 transition-opacity duration-500 delay-200'}`}
-                  style={{ background: '#efeae2' }}
+                  style={{ background: '#f4f5f7' }}
                   aria-hidden={!(threadLoading && msgs.length === 0)}
                 >
-                  <span className="w-8 h-8 rounded-full border-[3px] border-gray-300 border-t-emerald-600 animate-spin" />
+                  <span className="w-8 h-8 rounded-full border-[3px] border-gray-300 border-t-blue-600 animate-spin" />
                   <span className="text-xs font-medium text-gray-500">Loading messages…</span>
                 </div>
                 {/* Floating "jump to latest" — shows only when scrolled up off the bottom (WhatsApp-style). */}
                 {showJumpDown && (
                   <button onClick={jumpToBottom} title="Jump to latest" aria-label="Jump to latest message"
-                    className="absolute bottom-3 right-3 z-20 w-9 h-9 rounded-full bg-white shadow-lg border border-gray-200 flex items-center justify-center text-gray-500 hover:text-emerald-600 hover:border-emerald-300 transition">
+                    className="absolute bottom-3 right-3 z-20 w-9 h-9 rounded-full bg-white shadow-lg border border-gray-200 flex items-center justify-center text-gray-500 hover:text-blue-600 hover:border-blue-300 transition">
                     <FiChevronDown size={20} />
                   </button>
                 )}
@@ -809,8 +809,8 @@ export default function SiteChat() {
               {/* Reply preview bar — WhatsApp-style quote above the composer */}
               {replyTo && (
                 <div className="border-t bg-gray-100 px-3 py-1.5 flex items-center gap-2">
-                  <div className="flex-1 min-w-0 border-l-4 border-emerald-500 pl-2">
-                    <div className="text-[11px] font-semibold text-emerald-700 truncate">Replying to {replyTo.sender_id === user?.id ? 'yourself' : replyTo.sender_name}</div>
+                  <div className="flex-1 min-w-0 border-l-4 border-blue-500 pl-2">
+                    <div className="text-[11px] font-semibold text-blue-700 truncate">Replying to {replyTo.sender_id === user?.id ? 'yourself' : replyTo.sender_name}</div>
                     <div className="text-[11px] text-gray-600 truncate">{quotePreview(replyTo)}</div>
                   </div>
                   <button onClick={() => setReplyTo(null)} className="flex-shrink-0 p-1 text-gray-400 hover:text-gray-700" title="Cancel reply"><FiX size={16} /></button>
@@ -823,8 +823,8 @@ export default function SiteChat() {
                     <div className="px-3 py-1 text-[10px] text-gray-400 uppercase font-semibold border-b">Tag someone</div>
                     {mentionList.map(mu => (
                       <button key={mu.user_id} type="button" onMouseDown={e => { e.preventDefault(); pickMention(mu.name); }}
-                        className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-emerald-50 text-sm">
-                        <span className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold flex items-center justify-center flex-shrink-0">{initials(mu.name)}</span>
+                        className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-blue-50 text-sm">
+                        <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold flex items-center justify-center flex-shrink-0">{initials(mu.name)}</span>
                         <span className="truncate">{mu.name}</span>
                       </button>
                     ))}
@@ -834,12 +834,12 @@ export default function SiteChat() {
                   <>
                     <button onClick={() => stopRec(false)} className="flex-shrink-0 p-2 text-red-500" title="Cancel"><FiTrash2 size={18} /></button>
                     <div className="flex-1 min-w-0 flex items-center gap-2 text-red-500 text-sm px-2"><span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse flex-shrink-0" /> Recording… {mmss(recTime)}</div>
-                    <button onClick={() => stopRec(true)} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#25d366' }} title="Send voice"><FiSend size={16} /></button>
+                    <button onClick={() => stopRec(true)} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#2563eb' }} title="Send voice"><FiSend size={16} /></button>
                   </>
                 ) : (
                   <>
                     <input ref={fileRef} type="file" className="hidden" onChange={e => attach(e.target.files?.[0])} />
-                    <button onClick={() => fileRef.current?.click()} disabled={busy} className="flex-shrink-0 p-2 text-gray-500 hover:text-emerald-600" title="Attach photo / file"><FiPaperclip size={18} /></button>
+                    <button onClick={() => fileRef.current?.click()} disabled={busy} className="flex-shrink-0 p-2 text-gray-500 hover:text-blue-600" title="Attach photo / file"><FiPaperclip size={18} /></button>
                     {/* Wrap the textarea in a flex-1 min-w-0 div (NOT on the
                         textarea itself) — a textarea's intrinsic width isn't
                         reliably collapsed by min-width:0 on mobile, which pushed
@@ -857,8 +857,8 @@ export default function SiteChat() {
                         }} />
                     </div>
                     {text.trim()
-                      ? <button onClick={() => send()} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#25d366' }}><FiSend size={16} /></button>
-                      : <button onClick={startRec} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#25d366' }} title="Record voice message"><FiMic size={16} /></button>}
+                      ? <button onClick={() => send()} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#2563eb' }}><FiSend size={16} /></button>
+                      : <button onClick={startRec} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#2563eb' }} title="Record voice message"><FiMic size={16} /></button>}
                   </>
                 )}
               </div>
@@ -900,7 +900,7 @@ export default function SiteChat() {
           <input className="input" placeholder="Search people…" value={dmSearch} onChange={e => setDmSearch(e.target.value)} autoFocus />
           <div className="space-y-0.5 max-h-72 overflow-y-auto border rounded p-1">
             {allUsers.filter(u => u.id !== user?.id && (!dmSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(dmSearch.toLowerCase()))).map(u => (
-              <button key={u.id} onClick={() => startDm(u.id, u.name)} className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-emerald-50">
+              <button key={u.id} onClick={() => startDm(u.id, u.name)} className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-blue-50">
                 <Avatar url={userAvatars[u.id]} name={u.name} size={28} />
                 <span className="truncate">{u.name} <span className="text-[11px] text-gray-400">@{u.username}</span></span>
               </button>
@@ -944,7 +944,7 @@ export default function SiteChat() {
                   {allUsers.filter(u => !members.some(m => m.user_id === u.id) && (!memSearch || `${u.name} ${u.username || ''}`.toLowerCase().includes(memSearch.toLowerCase()))).map(u => (
                     <div key={u.id} className="flex items-center justify-between px-2 py-1 border-b">
                       <span>{u.name} <span className="text-[11px] text-gray-400">@{u.username}</span></span>
-                      <button onClick={() => addMember(u.id)} className="text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded px-2 py-0.5">+ Add</button>
+                      <button onClick={() => addMember(u.id)} className="text-xs font-semibold text-blue-700 hover:bg-blue-50 rounded px-2 py-0.5">+ Add</button>
                     </div>
                   ))}
                 </div>
@@ -970,7 +970,7 @@ export default function SiteChat() {
         return (
           <Modal isOpen={!!infoMsg} onClose={() => setInfoMsg(null)} title="Message info">
             <div className="space-y-3 text-sm">
-              <div className="rounded-lg bg-[#d9fdd3] px-3 py-2">
+              <div className="rounded-lg bg-[#e6ecf7] px-3 py-2">
                 {m.attachment_name && <div className="text-xs text-gray-600 mb-0.5">📎 {m.attachment_name}</div>}
                 {m.body && <div className="whitespace-pre-wrap break-words text-gray-800">{m.body}</div>}
                 <div className="text-[10px] text-gray-500 mt-1">{m.sender_name} · {fmtDateTime(m.created_at)}</div>
