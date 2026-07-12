@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const { getSecret } = require('../middleware/auth');
 const { getChatDb } = require('../db/chatDb');
+const { getPub, getSub } = require('./redis');
 
 let io = null;
 
@@ -21,6 +22,27 @@ function roomsFor(uid, admin) {
 
 function initChatSocket(httpServer) {
   io = new Server(httpServer, { path: '/socket.io', cors: { origin: true, credentials: true } });
+
+  // Redis adapter (Workstream 2/4): when Redis is configured, fan chat + call
+  // events out across every app instance via Redis Pub/Sub — the groundwork for
+  // running more than one PM2 process / a second server without chat or call
+  // signalling silently missing a user on another instance. getPub()/getSub()
+  // return null when Redis is disabled or ioredis isn't installed, in which case
+  // we keep the default in-memory adapter (single-instance = today's behavior).
+  // IMPORTANT: the redis-adapter still delivers to LOCAL sockets directly, so
+  // even if Redis is momentarily down, single-instance delivery is unaffected —
+  // only the cross-instance fan-out (which doesn't exist yet) would pause.
+  try {
+    const pub = getPub(), sub = getSub();
+    if (pub && sub) {
+      // eslint-disable-next-line global-require
+      const { createAdapter } = require('@socket.io/redis-adapter');
+      io.adapter(createAdapter(pub, sub));
+      console.log('[chat] Redis adapter enabled — multi-instance chat/call delivery');
+    }
+  } catch (e) {
+    console.warn('[chat] Redis adapter unavailable, using in-memory adapter:', e.message);
+  }
 
   // Authenticate every socket with the JWT (handshake auth or ?token=).
   io.use((socket, next) => {
