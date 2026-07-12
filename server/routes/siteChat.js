@@ -5,7 +5,7 @@
 const express = require('express');
 const { getDb } = require('../db/schema');          // erp.db — only for the user list / names
 const { getChatDb } = require('../db/chatDb');       // separate chat database
-const { emitChat } = require('../lib/chatSocket');   // real-time push
+const { emitChat, isOnline } = require('../lib/chatSocket');   // real-time push + presence
 const { rateLimit } = require('../lib/rateLimit');   // in-memory send backpressure
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { getSetting } = require('../lib/settings');    // cached app_settings reader (TURN/ICE)
@@ -156,6 +156,16 @@ router.get('/ice', async (req, res) => {
     if (url) ice.push({ urls: url, username: u || '', credential: p || '' });
   } catch (_) { /* app_settings may not exist yet */ }
   res.json({ iceServers: ice });
+});
+
+// Presence (Workstream 4) — is a user online right now? Used by the caller to
+// short-circuit ringing someone who's offline. Returns { online: true|false|null }
+// where null means "unknown" (Redis down): the client treats unknown as "go
+// ahead and try" so a missing accelerator never blocks a call.
+router.get('/presence/:userId', async (req, res) => {
+  const uid = parseInt(req.params.userId, 10);
+  if (!uid) return res.status(400).json({ error: 'Bad user id' });
+  res.json({ online: await isOnline(uid) });
 });
 
 router.get('/groups', (req, res) => {

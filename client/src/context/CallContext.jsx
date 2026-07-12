@@ -13,6 +13,11 @@ const CallContext = createContext(null);
 export const useCall = () => useContext(CallContext) || { startCall: () => {} };
 
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:global.stun.twilio.com:3478' }];
+// Ring timeout (Workstream 4): if a dialled call isn't answered within this
+// window, auto-cancel it instead of "Calling…" forever. 30 s matches the server
+// presence TTL, so an offline callee who slipped past the presence check still
+// gives up here.
+const RING_TIMEOUT_MS = 30000;
 const initials = (s) => String(s || '?').replace(/[^A-Za-z0-9 ]/g, '').trim().slice(0, 2).toUpperCase() || '#';
 
 export function CallProvider({ children }) {
@@ -33,6 +38,7 @@ export function CallProvider({ children }) {
   const incomingOffer = useRef(null);       // stored SDP offer for an incoming call
   const callRef = useRef(null);
   const ringOsc = useRef(null);
+  const ringTimer = useRef(null);           // outgoing-call no-answer timeout
   callRef.current = call;
 
   // ── ringtone (Web Audio beep loop — no asset needed) ──────────────────
@@ -58,6 +64,7 @@ export function CallProvider({ children }) {
   // ── cleanup ──────────────────────────────────────────────────────────
   const cleanup = useCallback(() => {
     stopRing();
+    try { clearTimeout(ringTimer.current); } catch (_) {} ringTimer.current = null;
     try { pcRef.current?.close(); } catch (_) {}
     pcRef.current = null;
     try { localRef.current?.getTracks().forEach(t => t.stop()); } catch (_) {}
@@ -95,6 +102,13 @@ export function CallProvider({ children }) {
   // ── start an outgoing call ─────────────────────────────────────────────
   const startCall = useCallback(async (peerId, peerName, video) => {
     if (!peerId || callRef.current) return;
+    // Offline short-circuit (Workstream 4): ask presence before dialing. Only a
+    // definite `online === false` stops us — `null` (Redis down / unknown) or
+    // `true` proceeds, so a missing accelerator never blocks a legitimate call.
+    try {
+      const { data } = await api.get('/site-chat/presence/' + peerId);
+      if (data && data.online === false) { alert((peerName || 'This user') + ' is offline right now.'); return; }
+    } catch (_) { /* presence unknown — proceed, never block a call */ }
     const callId = (window.crypto?.randomUUID?.() || String(peerId) + '-' + performance.now());
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: !!video });
@@ -105,6 +119,17 @@ export function CallProvider({ children }) {
       await pc.setLocalDescription(offer);
       emit('call:offer', { to: peerId, callId, sdp: offer, video: !!video });
       setCall({ phase: 'calling', peerId, peerName, video: !!video, callId });
+      // No-answer timeout: if we're still merely 'calling' after RING_TIMEOUT_MS,
+      // cancel the call (tell the callee), tear down, and tell the caller. Cleared
+      // on answer / reject / cancel / end via cleanup().
+      clearTimeout(ringTimer.current);
+      ringTimer.current = setTimeout(() => {
+        const c = callRef.current;
+        if (!c || c.callId !== callId || c.phase !== 'calling') return;
+        emit('call:cancel', { to: peerId, callId });
+        cleanup();
+        alert('No answer — ' + (peerName || 'the user') + " didn't pick up.");
+      }, RING_TIMEOUT_MS);
     } catch (e) {
       cleanup();
       alert('Could not start the call — allow microphone' + (video ? ' / camera' : '') + ' access.');
@@ -171,6 +196,7 @@ export function CallProvider({ children }) {
       }),
       subscribe('call:answer', async (d) => {
         const c = callRef.current; if (!c || c.callId !== d.callId) return;
+        try { clearTimeout(ringTimer.current); } catch (_) {} ringTimer.current = null;   // answered — cancel the no-answer timeout
         try { await pcRef.current?.setRemoteDescription(new RTCSessionDescription(d.sdp)); await drainIce(); setCall({ ...c, phase: 'active' }); } catch (_) {}
       }),
       subscribe('call:ice', async (d) => {
