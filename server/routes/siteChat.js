@@ -8,6 +8,7 @@ const { getChatDb } = require('../db/chatDb');       // separate chat database
 const { emitChat } = require('../lib/chatSocket');   // real-time push
 const { rateLimit } = require('../lib/rateLimit');   // in-memory send backpressure
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { getSetting } = require('../lib/settings');    // cached app_settings reader (TURN/ICE)
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -140,15 +141,18 @@ function pageOfGroups(db, { uid, admin, limit, q, cursor }) {
 // same-network / simple cases; a TURN server (set turn_url/turn_username/
 // turn_password in app_settings, e.g. self-hosted coturn) is needed for calls
 // across different networks/NATs.
-router.get('/ice', (req, res) => {
+router.get('/ice', async (req, res) => {
   const ice = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:global.stun.twilio.com:3478' },
   ];
   try {
-    const db = getDb();
-    const get = (k) => db.prepare('SELECT value FROM app_settings WHERE key=?').get(k)?.value;
-    const url = get('turn_url'), u = get('turn_username'), p = get('turn_password');
+    // TURN config is slow-moving (set once via SQL, no in-app writer) but this
+    // endpoint is hit on every call setup — cache the three keys (1h TTL, falls
+    // back to a direct read when Redis is down).
+    const [url, u, p] = await Promise.all([
+      getSetting('turn_url'), getSetting('turn_username'), getSetting('turn_password'),
+    ]);
     if (url) ice.push({ urls: url, username: u || '', credential: p || '' });
   } catch (_) { /* app_settings may not exist yet */ }
   res.json({ iceServers: ice });
