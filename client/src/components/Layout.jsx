@@ -270,7 +270,7 @@ export default function Layout() {
             toast.custom((t) => (
               <div onClick={() => { toast.dismiss(t.id); navigate('/site-chat'); }}
                 className="cursor-pointer flex items-start gap-2 w-[320px] max-w-[88vw] rounded-xl shadow-2xl px-3 py-2.5 text-white"
-                style={{ background: '#1d4ed8' }}>
+                style={{ background: '#1e3a8a' }}>
                 <BiMessageRoundedCheck className="mt-0.5 text-blue-900 flex-shrink-0" size={20} />
                 <div className="min-w-0 flex-1">
                   <div className="font-semibold text-sm truncate">{gname}</div>
@@ -688,7 +688,7 @@ export default function Layout() {
             className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
             <BiMessageRoundedCheck size={17} className="text-white" />
             <span className="truncate flex-1">SOTYN Chat</span>
-            {waUnread > 0 && <span className="text-[10px] font-bold text-white bg-[#25d366] rounded-full px-1.5 min-w-[18px] text-center">{waUnread > 99 ? '99+' : waUnread}</span>}
+            {waUnread > 0 && <span className="text-[10px] font-bold text-white bg-[#2563eb] rounded-full px-1.5 min-w-[18px] text-center">{waUnread > 99 ? '99+' : waUnread}</span>}
           </Link>
         </div>
         <div className="p-3 border-t border-white/10">

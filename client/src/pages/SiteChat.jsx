@@ -691,7 +691,7 @@ export default function SiteChat() {
             {/* Profile photo — mobile only (desktop has it in the page header). */}
             <button onClick={() => avatarRef.current?.click()} disabled={busy} className="md:hidden relative flex-shrink-0" title="Change your photo">
               <Avatar url={userAvatars[user?.id]} name={user?.name} size={28} />
-              <span className="absolute -bottom-0.5 -right-0.5 bg-blue-600 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[8px] ring-2 ring-[#1d4ed8]">✎</span>
+              <span className="absolute -bottom-0.5 -right-0.5 bg-blue-600 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[8px] ring-2 ring-[#1e3a8a]">✎</span>
             </button>
             <BiMessageRoundedCheck className="hidden md:block" /> <span className="font-semibold text-sm flex-1">SOTYN Chat</span>
             <button onClick={() => { setDmSearch(''); setDmOpen(true); }} className="p-1.5 rounded hover:bg-white/15" title="New direct message"><FiUserPlus size={18} /></button>
