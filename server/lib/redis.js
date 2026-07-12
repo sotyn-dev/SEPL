@@ -109,7 +109,15 @@ function getPub() {
   if (_pub) return _pub;
   const Redis = loadIoredis();
   if (!Redis) return null;
-  _pub = wire(new Redis(REDIS_URL, baseOptions()), 'pub');
+  // The adapter's pub/sub pair are long-lived SUBSCRIPTION connections, not the
+  // fail-fast command path — they must NOT inherit enableOfflineQueue:false. At
+  // boot @socket.io/redis-adapter fires an initial subscribe before the socket
+  // is 'ready'; with the offline queue off that command can't buffer and rejects
+  // (unhandled, since the adapter issues it internally) — the boot-race. Allowing
+  // the offline queue lets that subscribe (and any emit during a Redis blip) queue
+  // and flush on 'ready' instead. getSub() duplicates this connection, so it
+  // inherits the option too. getRedis()'s fail-fast fallback is left untouched.
+  _pub = wire(new Redis(REDIS_URL, baseOptions({ enableOfflineQueue: true })), 'pub');
   return _pub;
 }
 function getSub() {
