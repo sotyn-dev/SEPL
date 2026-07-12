@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { getDb } = require('../db/schema');
-const { generateToken, authMiddleware, adminOnly, getUserPermissions } = require('../middleware/auth');
+const { generateToken, authMiddleware, adminOnly, getUserPermissions, getUserPermissionsCached, invalidateUserPermissions, invalidateAllPermissions } = require('../middleware/auth');
 const router = express.Router();
 
 router.post('/login', (req, res) => {
@@ -112,13 +112,13 @@ router.post('/register', authMiddleware, adminOnly, (req, res) => {
   }
 });
 
-router.get('/me', authMiddleware, (req, res) => {
+router.get('/me', authMiddleware, async (req, res) => {
   const db = getDb();
   const user = db.prepare('SELECT id, name, email, username, role, department, phone, recovery_code_hash, approval_role, avatar_url FROM users WHERE id = ?').get(req.user.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   const has_recovery_code = !!user.recovery_code_hash;
   delete user.recovery_code_hash;
-  const permissions = getUserPermissions(req.user.id);
+  const permissions = await getUserPermissionsCached(req.user.id);
   const userRoles = db.prepare(`SELECT r.name FROM roles r JOIN user_roles ur ON r.id=ur.role_id WHERE ur.user_id=?`).all(req.user.id);
   res.json({ ...user, has_recovery_code, permissions, userRoles: userRoles.map(r => r.name) });
 });
@@ -316,6 +316,9 @@ router.put('/users/:id', authMiddleware, adminOnly, (req, res) => {
     db.prepare('DELETE FROM user_roles WHERE user_id=?').run(req.params.id);
     const insertUserRole = db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)');
     for (const rid of role_ids) insertUserRole.run(req.params.id, rid);
+    // This user's roles changed — drop their cached permission object so the
+    // next request recomputes from the new assignments.
+    invalidateUserPermissions(req.params.id);
   }
 
   res.json({ message: 'User updated' });
@@ -650,6 +653,9 @@ router.delete('/roles/:id', authMiddleware, adminOnly, (req, res) => {
   const role = getDb().prepare('SELECT * FROM roles WHERE id=?').get(req.params.id);
   if (role?.is_system) return res.status(400).json({ error: 'Cannot delete system role' });
   getDb().prepare('DELETE FROM roles WHERE id=?').run(req.params.id);
+  // A deleted role can revoke access for every user who held it — clear all
+  // cached permission objects so no user keeps stale grants.
+  invalidateAllPermissions();
   res.json({ message: 'Role deleted' });
 });
 
@@ -671,12 +677,15 @@ router.put('/roles/:id/permissions', authMiddleware, adminOnly, (req, res) => {
       p.can_view ? 1 : 0, p.can_create ? 1 : 0, p.can_edit ? 1 : 0,
       p.can_delete ? 1 : 0, p.can_approve ? 1 : 0, p.can_see_all ? 1 : 0);
   }
+  // This role's permission set changed — clear all cached permission objects so
+  // every user holding this role recomputes on their next request.
+  invalidateAllPermissions();
   res.json({ message: 'Permissions updated' });
 });
 
 // Get permissions for current user
-router.get('/my-permissions', authMiddleware, (req, res) => {
-  res.json(getUserPermissions(req.user.id));
+router.get('/my-permissions', authMiddleware, async (req, res) => {
+  res.json(await getUserPermissionsCached(req.user.id));
 });
 
 // Bulk import users

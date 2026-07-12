@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
 const { getDb } = require('../db/schema');
+const cache = require('../lib/cache');
+const cacheKeys = require('../lib/cacheKeys');
 
 // JWT signing/verification secret — resolved ONCE and PERSISTED so it stays
 // identical across every restart and redeploy. It used to be read inline as
@@ -85,38 +87,41 @@ function adminOnly(req, res, next) {
   next();
 }
 
-// Permission check middleware factory
+const ACTION_FIELD = {
+  view: 'can_view',
+  create: 'can_create',
+  edit: 'can_edit',
+  delete: 'can_delete',
+  approve: 'can_approve',
+};
+
+// Permission check middleware factory.
+//
+// Was: a per-request JOIN of role_permissions × user_roles on EVERY permissioned
+// request. Now: reads the user's full permission object from the Redis cache
+// (cacheKeys.perms), which getUserPermissionsCached computes once and reuses for
+// an hour. The object already merges multiple roles taking the highest privilege
+// (getUserPermissions), so this is at least as permissive as the old single-row
+// .get() — and far cheaper per request. When Redis is down, getOrSet just runs
+// the same SQLite computation inline, so behavior is unchanged, only uncached.
 function requirePermission(module, action) {
-  return (req, res, next) => {
-    // Admin role always has full access
+  return async (req, res, next) => {
+    // Admin role always has full access — short-circuit before any lookup.
     if (req.user.role === 'admin') return next();
-
-    const db = getDb();
-    // Get user's role permissions
-    const perms = db.prepare(`
-      SELECT rp.* FROM role_permissions rp
-      JOIN user_roles ur ON rp.role_id = ur.role_id
-      WHERE ur.user_id = ? AND rp.module = ?
-    `).get(req.user.id, module);
-
-    if (!perms) {
-      return res.status(403).json({ error: `No access to ${module}` });
+    try {
+      const perms = await getUserPermissionsCached(req.user.id);
+      const modulePerms = perms[module];
+      if (!modulePerms) return res.status(403).json({ error: `No access to ${module}` });
+      const field = ACTION_FIELD[action];
+      if (!field || !modulePerms[field]) {
+        return res.status(403).json({ error: `No ${action} permission for ${module}` });
+      }
+      next();
+    } catch (e) {
+      // A genuine failure computing permissions (e.g. DB error) — surface it to
+      // the error handler rather than silently allowing the request through.
+      next(e);
     }
-
-    const actionMap = {
-      view: 'can_view',
-      create: 'can_create',
-      edit: 'can_edit',
-      delete: 'can_delete',
-      approve: 'can_approve',
-    };
-
-    const field = actionMap[action];
-    if (!field || !perms[field]) {
-      return res.status(403).json({ error: `No ${action} permission for ${module}` });
-    }
-
-    next();
   };
 }
 
@@ -162,6 +167,28 @@ function getUserPermissions(userId) {
   return perms;
 }
 
+// Cached wrapper around getUserPermissions (Workstream 3). Reads the permission
+// object from Redis (1-hour TTL) and only hits SQLite on a miss. Falls back to
+// the direct computation when Redis is down (cache.getOrSet guarantees this), so
+// it always returns the same object the uncached function would. Async because
+// the cache read is async — callers on request paths await it.
+async function getUserPermissionsCached(userId) {
+  return cache.getOrSet(cacheKeys.perms(userId), 3600, () => getUserPermissions(userId));
+}
+
+// Invalidate one user's cached permissions — call after that user's role
+// assignments change. Best-effort / no-op when Redis is down.
+function invalidateUserPermissions(userId) {
+  return cache.del(cacheKeys.perms(userId));
+}
+
+// Invalidate EVERY user's cached permissions — call after a change that can
+// affect many users at once (a role's permission set is edited, or a role is
+// deleted). Clears all `perms:*` keys under the current tenant scope.
+function invalidateAllPermissions() {
+  return cache.delByPrefix(cacheKeys._prefixForScope('perms'));
+}
+
 function generateToken(user) {
   return jwt.sign(
     { id: user.id, email: user.email, role: user.role, name: user.name },
@@ -173,6 +200,7 @@ function generateToken(user) {
 // `SECRET` getter kept for back-compat (e.g. chatSocket) — always returns the
 // one persisted secret.
 module.exports = {
-  authMiddleware, adminOnly, requirePermission, getUserPermissions, generateToken, getSecret,
+  authMiddleware, adminOnly, requirePermission, getUserPermissions, getUserPermissionsCached,
+  invalidateUserPermissions, invalidateAllPermissions, generateToken, getSecret,
   get SECRET() { return getSecret(); },
 };
