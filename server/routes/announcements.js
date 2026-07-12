@@ -1,8 +1,23 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
+const cache = require('../lib/cache');
+const cacheKeys = require('../lib/cacheKeys');
 const router = express.Router();
 router.use(authMiddleware);
+
+// Bust the cached announcements set after a create/edit/delete (which change the
+// shared set). mark-seen is EXCLUDED — it only updates the current user's read
+// marker (a different table) and fires on every panel open, so invalidating on
+// it would defeat the cache. No-op when Redis is down.
+router.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.path !== '/mark-seen') {
+    res.on('finish', () => {
+      if (res.statusCode < 400) cache.del(cacheKeys.ref('announcements'));
+    });
+  }
+  next();
+});
 
 // All non-expired announcements, pinned first then newest first. Each row
 // carries the author's name, an `is_new` flag so the UI can highlight
@@ -60,17 +75,24 @@ router.get('/:id/readers', (req, res) => {
 
 // Light-weight unread count for the bell icon — used in the header layout
 // so we don't have to fetch all announcement bodies just to know the badge.
-router.get('/unread-count', (req, res) => {
+router.get('/unread-count', async (req, res) => {
   const db = getDb();
   const seen = db.prepare('SELECT last_seen_at FROM announcement_reads WHERE user_id=?').get(req.user.id);
   const lastSeen = seen?.last_seen_at || '1970-01-01';
-  const row = db.prepare(`
-    SELECT COUNT(*) as count
-      FROM announcements a
-     WHERE a.created_at > ?
-       AND (a.expires_at IS NULL OR a.expires_at > CURRENT_TIMESTAMP)
-  `).get(lastSeen);
-  res.json({ count: row?.count || 0 });
+  // Cache the shared announcement set (created_at + expires_at only) for 5 min,
+  // and compute this user's badge in memory instead of a per-poll COUNT. The bell
+  // polls this on every session, so the shared set is read once and reused across
+  // all users. Busted on announcement create/edit/delete by the hook above.
+  // SQLite compares these DATETIME columns as strings, so the JS string
+  // comparisons below reproduce the original WHERE clause exactly (including the
+  // expires_at format edge cases). now formatted as UTC 'YYYY-MM-DD HH:MM:SS' to
+  // match CURRENT_TIMESTAMP.
+  const anns = await cache.getOrSet(cacheKeys.ref('announcements'), 300,
+    () => db.prepare('SELECT created_at, expires_at FROM announcements').all());
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const count = anns.reduce((n, a) =>
+    n + ((a.created_at > lastSeen && (a.expires_at == null || a.expires_at > now)) ? 1 : 0), 0);
+  res.json({ count });
 });
 
 // Mark all current announcements as seen for this user — call on panel open.
