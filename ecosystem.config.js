@@ -49,5 +49,32 @@ module.exports = {
     out_file: '/root/.pm2/logs/erp-out.log',
     error_file: '/root/.pm2/logs/erp-error.log',
     time: true,
+  }, {
+    // Background job worker (Workstream 1 — BullMQ). Separate process so heavy
+    // Excel export/import + push fan-out run off the API event loop on this
+    // 2-core VPS. It's an accelerator: if Redis is down/disabled it idles and
+    // the API runs every job inline, so this app never being up is not an
+    // outage — just no acceleration. Same self-heal settings as the API.
+    name: 'erp-worker',
+    script: 'server/worker.js',
+    cwd: '/root/erp',
+    instances: 1,
+    exec_mode: 'fork',
+    autorestart: true,
+    // Lighter cap than the API — the worker holds no HTTP state; the XLSX jobs
+    // (WS1-B) run in short-lived sandboxed child processes.
+    max_memory_restart: '400M',
+    node_args: '--max-old-space-size=384',
+    exp_backoff_restart_delay: 200,
+    min_uptime: '15s',
+    max_restarts: 50,
+    kill_timeout: 8000,
+    env: {
+      NODE_ENV: 'production',
+    },
+    merge_logs: true,
+    out_file: '/root/.pm2/logs/erp-worker-out.log',
+    error_file: '/root/.pm2/logs/erp-worker-error.log',
+    time: true,
   }],
 };

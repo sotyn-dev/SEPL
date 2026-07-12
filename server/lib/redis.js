@@ -121,14 +121,30 @@ function getSub() {
   return _sub;
 }
 
-// Connection options object for BullMQ (Workstream 1). BullMQ manages its own
-// connections internally but needs maxRetriesPerRequest:null (it uses blocking
-// commands). We hand it the URL + options, not a live client. Returns null in
-// fallback mode so the queue layer knows to run jobs inline instead.
-function getBullConnection() {
+// A LIVE ioredis connection for BullMQ (Workstream 1). BullMQ uses blocking
+// commands, so its connection MUST have maxRetriesPerRequest:null (the general
+// getRedis() connection uses 1 — the two can't be shared). BullMQ also
+// duplicates this connection internally for its blocking workers. We create a
+// dedicated instance here (kept inside redis.js so ioredis is required in ONE
+// place) and hand it to Queue()/Worker(). Returns null in fallback mode
+// (disabled / ioredis absent) so the queue layer runs jobs inline instead.
+//
+// NOTE: unlike the other connections this is NOT memoised — Queue and Worker
+// live in different processes and each wants its own; the caller owns the
+// returned instance's lifecycle (quit on shutdown).
+function createBullConnection() {
   if (DISABLED) return null;
-  if (!loadIoredis()) return null;
-  return { url: REDIS_URL, options: { maxRetriesPerRequest: null, enableReadyCheck: false } };
+  const Redis = loadIoredis();
+  if (!Redis) return null;
+  const conn = new Redis(REDIS_URL, {
+    maxRetriesPerRequest: null,   // required by BullMQ (blocking BRPOPLPUSH etc.)
+    enableReadyCheck: false,
+    retryStrategy: (times) => Math.min(times * 200, 2000),
+  });
+  // Swallow errors so a down Redis doesn't spam uncaught 'error' events; the
+  // queue layer gates on isRedisReady() and falls back to inline anyway.
+  conn.on('error', () => {});
+  return conn;
 }
 
 // The single question every Redis-optional code path asks. True only when a
@@ -154,7 +170,7 @@ module.exports = {
   getRedis,
   getPub,
   getSub,
-  getBullConnection,
+  createBullConnection,
   isRedisReady,
   closeRedis,
   REDIS_URL,

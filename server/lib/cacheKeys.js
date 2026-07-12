@@ -42,6 +42,9 @@ module.exports = {
   presence:   ()           => k('presence'),                      // Set of online user ids
   presenceHb: (userId)     => k('presence', 'hb', userId),        // per-user heartbeat key (TTL = crash-safe expiry)
 
+  // --- Background jobs (Workstream 1) ---
+  workerAlive: ()          => k('jobs', 'worker-alive'),          // TTL heartbeat the worker refreshes; API gates enqueue on it
+
   // exported so callers that need a prefix scan (delByPrefix) can build one,
   // and for tests asserting the tenant seam.
   _prefixForScope: (...parts) => k(...parts),

@@ -99,25 +99,48 @@ async function pushToAll(payload) {
   return { sent, total: subs.length };
 }
 
-// Fire-and-forget wrapper — never throws, never blocks the parent
-// route. Use this from inside POST/PUT handlers so a push failure
-// can't break a user's submit.
-function notify(userId, payload) {
-  setImmediate(() => {
-    pushToUser(userId, payload).catch(err => console.warn('[push] notify failed:', err.message));
+// The actual fan-out work, in ONE place (Workstream 1). Both the inline
+// fallback below AND the BullMQ worker's processor call this, so the per-device
+// send loop is identical whichever path runs it. Shape of `data` matches what
+// the wrappers enqueue: { userIds:[...] , payload } or { all:true, payload }.
+async function runPushFanout(data) {
+  if (!data || !data.payload) return { sent: 0, total: 0 };
+  if (data.all) return pushToAll(data.payload);
+  if (Array.isArray(data.userIds)) return pushToUsers(data.userIds, data.payload);
+  return { sent: 0, total: 0 };
+}
+
+// Enqueue the fan-out to the background worker when Redis + a live worker are
+// present (durable, retried, off the API event loop); otherwise fall back to the
+// original setImmediate inline send — unchanged behavior. require() is done
+// lazily so push.js has no load-time dependency on the queue layer (avoids any
+// require cycle and keeps this usable in the worker process itself).
+function dispatchFanout(data, label) {
+  const inline = () => setImmediate(() => {
+    runPushFanout(data).catch(err => console.warn(`[push] ${label} failed:`, err.message));
   });
+  let queued = false;
+  try {
+    const { enqueue, QUEUES, JOBS } = require('../jobs/queue');
+    queued = enqueue(QUEUES.NOTIFICATIONS, JOBS.PUSH_FANOUT, data, inline);
+  } catch (_) { queued = false; }
+  if (!queued) inline();   // Redis down / no worker / not enqueued ⇒ send inline now
+}
+
+// Fire-and-forget wrappers — never throw, never block the parent route. Use
+// these from inside POST/PUT handlers so a push failure can't break a submit.
+function notify(userId, payload) {
+  if (!userId) return;
+  dispatchFanout({ userIds: [userId], payload }, 'notify');
 }
 
 function notifyMany(userIds, payload) {
-  setImmediate(() => {
-    pushToUsers(userIds, payload).catch(err => console.warn('[push] notifyMany failed:', err.message));
-  });
+  if (!Array.isArray(userIds) || !userIds.length) return;
+  dispatchFanout({ userIds, payload }, 'notifyMany');
 }
 
 function notifyAll(payload) {
-  setImmediate(() => {
-    pushToAll(payload).catch(err => console.warn('[push] notifyAll failed:', err.message));
-  });
+  dispatchFanout({ all: true, payload }, 'notifyAll');
 }
 
 module.exports = {
@@ -126,6 +149,7 @@ module.exports = {
   pushToUser,
   pushToUsers,
   pushToAll,
+  runPushFanout,
   notify,
   notifyMany,
   notifyAll,
