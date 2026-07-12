@@ -2,12 +2,16 @@ import { useState, useEffect } from 'react';
 import api from '../../api';
 import Modal from '../../components/Modal';
 import StatusBadge from '../../components/StatusBadge';
+import Pagination, { usePagination } from '../../components/Pagination';
 import toast from 'react-hot-toast';
-import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiUserX, FiUserCheck, FiKey, FiUpload, FiDownload, FiMapPin, FiEyeOff, FiTrash2, FiArchive, FiRotateCcw, FiSearch, FiX } from 'react-icons/fi';
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
   const [filter, setFilter] = useState('all');   // all | active | inactive | admin — status filter tabs
+  const [search, setSearch]   = useState('');    // search by username or email
+  const [page, setPage]       = useState(1);
+  const [perPage, setPerPage] = useState(15);     // 15 entries per page
   const [roles, setRoles] = useState([]);
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -184,6 +188,14 @@ export default function UserManagement() {
     : filter === 'admin' ? u.role === 'admin'
     : true;
 
+  // Status tab + search (username/email) combined, then paginated (15/page).
+  const q = search.trim().toLowerCase();
+  const filteredUsers = users.filter(u =>
+    matchFilter(u) &&
+    (!q || [u.username, u.email].some(v => String(v || '').toLowerCase().includes(q)))
+  );
+  const pg = usePagination(filteredUsers, perPage, page, setPage);
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -216,7 +228,7 @@ export default function UserManagement() {
           { key: 'admin',    label: 'Admins',      count: users.filter(u => u.role === 'admin' && !u.archived).length, color: 'text-purple-600' },
           { key: 'archived', label: 'Archived',    count: users.filter(u => u.archived).length,                        color: 'text-gray-500' },
         ].map(c => (
-          <button key={c.key} type="button" onClick={() => setFilter(c.key)}
+          <button key={c.key} type="button" onClick={() => { setFilter(c.key); setPage(1); }}
             className={`card text-center transition ${filter === c.key ? 'ring-2 ring-red-500 ring-offset-1' : 'hover:bg-gray-50 opacity-90 hover:opacity-100'}`}>
             <div className={`text-3xl font-bold ${c.color}`}>{c.count}</div>
             <div className="text-sm text-gray-500">{c.label}</div>
@@ -225,10 +237,25 @@ export default function UserManagement() {
       </div>
 
       <div className="card p-0 overflow-x-auto">
+        <div className="px-4 py-3 border-b bg-gray-50/60">
+          <div className="relative w-full max-w-xs">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <input className={`input pl-10 ${search ? 'pr-9' : ''}`} placeholder="Search username or email…"
+              value={search}
+              onChange={e => { setSearch(e.target.value); setPage(1); }} />
+            {search && (
+              <button type="button" onClick={() => { setSearch(''); setPage(1); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                title="Clear search" aria-label="Clear search">
+                <FiX size={16} />
+              </button>
+            )}
+          </div>
+        </div>
         {filter !== 'all' && (
           <div className="px-4 py-2 text-xs text-gray-500 border-b bg-gray-50/60 flex items-center justify-between">
-            <span>Showing <b className="text-gray-700">{users.filter(matchFilter).length}</b> {filter} user{users.filter(matchFilter).length === 1 ? '' : 's'}</span>
-            <button type="button" onClick={() => setFilter('all')} className="text-red-600 hover:underline font-medium">Show all users</button>
+            <span>Showing <b className="text-gray-700">{filteredUsers.length}</b> {filter} user{filteredUsers.length === 1 ? '' : 's'}</span>
+            <button type="button" onClick={() => { setFilter('all'); setPage(1); }} className="text-red-600 hover:underline font-medium">Show all users</button>
           </div>
         )}
         <table>
@@ -236,7 +263,7 @@ export default function UserManagement() {
             <tr><th>Name</th><th>Username</th><th>Email</th><th>Phone</th><th>System Role</th><th>Assigned Roles</th><th>Department</th><th>Status</th><th>Actions</th></tr>
           </thead>
           <tbody>
-            {users.filter(matchFilter).map(u => (
+            {pg.rows.map(u => (
               <tr key={u.id}>
                 <td className="font-medium">
                   <div className="flex items-center gap-2">
@@ -306,6 +333,7 @@ export default function UserManagement() {
             ))}
           </tbody>
         </table>
+        <Pagination pg={pg} setPerPage={setPerPage} className="border-t border-gray-100" />
       </div>
 
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit User' : 'Create New User'} wide>
