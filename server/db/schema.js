@@ -29,6 +29,11 @@ function getDb() {
     db.pragma('mmap_size = 67108864');
     db.pragma('temp_store = MEMORY');
     db.pragma('foreign_keys = ON');
+    // busy_timeout: wait up to 5 s on a transient write lock instead of throwing
+    // SQLITE_BUSY. Needed once the BullMQ worker (server/worker.js, Redis phase 4)
+    // writes erp.db concurrently with the API process; chat.db already sets this.
+    // Harmless before then — a single writer never hits the wait.
+    db.pragma('busy_timeout = 5000');
   }
   return db;
 }
