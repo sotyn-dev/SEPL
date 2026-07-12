@@ -1,0 +1,3 @@
+# Shell scripts must keep LF endings or they break on the Linux VPS
+# (a CRLF in the shebang line ⇒ "bad interpreter: /usr/bin/env bash^M").
+*.sh text eol=lf

@@ -11,6 +11,27 @@ a new PM2 app). After that, deploys are normal.
 
 ---
 
+## TL;DR — the automated way (recommended)
+
+Two scripts do everything below for you. Run them **on the VPS**:
+
+```bash
+# 1) ONE TIME — install + configure Redis (needs sudo):
+sudo bash scripts/setup-redis.sh
+
+# 2) EVERY DEPLOY — pull, install, reload both PM2 apps, smoke-test:
+bash scripts/deploy.sh            # deploys origin/main
+bash scripts/deploy.sh <branch>   # deploys a specific branch (until merged)
+```
+
+`deploy.sh` is safe to re-run, starts the new `erp-worker` app the first time,
+and finishes by running the smoke test — so a green run means everything's live.
+If Redis isn't set up yet it still deploys (fallback mode) and tells you to run
+`setup-redis.sh`. The sections below explain what those scripts do, plus the
+manual verification steps.
+
+---
+
 ## 0. What ships
 
 | Piece | Effect |
