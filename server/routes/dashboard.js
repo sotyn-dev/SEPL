@@ -1,12 +1,20 @@
 const express = require('express');
 const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
+const cache = require('../lib/cache');
+const cacheKeys = require('../lib/cacheKeys');
 const router = express.Router();
 router.use(authMiddleware);
 
-router.get('/', (req, res) => {
+// Landing dashboard — ~23 aggregate counts + 3 "recent" lists, identical for
+// every user (global counts, not user-scoped). It's the index route so it's the
+// highest-volume dashboard call. Cache the whole payload for 45 s (short enough
+// that "recent" lists stay fresh-feeling); TTL-only, no invalidation needed.
+// Falls back to computing directly when Redis is down.
+router.get('/', async (req, res) => {
+  const stats = await cache.getOrSet(cacheKeys.dash('home'), 45, () => {
   const db = getDb();
-  const stats = {
+  return {
     leads: {
       total: db.prepare('SELECT COUNT(*) as c FROM leads').get().c,
       new: db.prepare("SELECT COUNT(*) as c FROM leads WHERE status='new'").get().c,
@@ -41,6 +49,7 @@ router.get('/', (req, res) => {
     recentOrders: db.prepare('SELECT id, po_number, total_amount, status FROM purchase_orders ORDER BY created_at DESC LIMIT 5').all(),
     recentComplaints: db.prepare('SELECT id, complaint_number, description, status, priority FROM complaints ORDER BY created_at DESC LIMIT 5').all(),
   };
+  });
   res.json(stats);
 });
 

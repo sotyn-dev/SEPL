@@ -15,6 +15,8 @@ const { authMiddleware, adminOnly } = require('../middleware/auth');
 const { getDb } = require('../db/schema');
 const { computeKpiPayload } = require('./auditReport');
 const { computeCmdDetail } = require('../utils/cmdDashboard');
+const cache = require('../lib/cache');
+const cacheKeys = require('../lib/cacheKeys');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -136,9 +138,15 @@ router.post('/approve/:key/:id', adminOnly, (req, res) => {
 // Admin-gated until the RBAC rollout (TOC v3 P1 #1) defines the
 // five canonical roles; at that point this loosens to allow any
 // authenticated user, with field-level masking by role.
-router.get('/kpi', adminOnly, (req, res) => {
+router.get('/kpi', adminOnly, async (req, res) => {
   try {
-    res.json(computeKpiPayload(getDb(), req.query.days));
+    // Correlated subqueries + joins; payload is global (not user-scoped) and a
+    // few minutes of staleness is fine for a management KPI view. Cache 180 s,
+    // keyed by the days window. Shared with /audit/kpi via the same dash('kpi')
+    // key. Falls back to a direct compute when Redis is down.
+    const payload = await cache.getOrSet(cacheKeys.dash('kpi', req.query.days), 180,
+      () => computeKpiPayload(getDb(), req.query.days));
+    res.json(payload);
   } catch (e) {
     console.error('[dashboards/kpi] failed:', e.message);
     res.status(500).json({ error: e.message });
@@ -148,9 +156,14 @@ router.get('/kpi', adminOnly, (req, res) => {
 // GET /api/dashboards/cmd-detail?days=N — extended payload for both
 // CMD dashboard pages (Stage 1 Operating Console, Stage 2 TOC View).
 // Single fetch feeds every section so the page loads in one round-trip.
-router.get('/cmd-detail', adminOnly, (req, res) => {
+router.get('/cmd-detail', adminOnly, async (req, res) => {
   try {
-    res.json(computeCmdDetail(getDb(), req.query.days));
+    // The heaviest dashboard — ~80-100 queries + post-processing loops. Global
+    // payload; cache 180 s keyed by the days window (falls back to a direct
+    // compute when Redis is down).
+    const payload = await cache.getOrSet(cacheKeys.dash('cmd-detail', req.query.days), 180,
+      () => computeCmdDetail(getDb(), req.query.days));
+    res.json(payload);
   } catch (e) {
     console.error('[dashboards/cmd-detail] failed:', e.message);
     res.status(500).json({ error: e.message });

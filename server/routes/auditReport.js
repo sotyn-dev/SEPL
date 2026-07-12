@@ -20,6 +20,8 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { getDb } = require('../db/schema');
+const cache = require('../lib/cache');
+const cacheKeys = require('../lib/cacheKeys');
 
 const router = express.Router();
 
@@ -1006,8 +1008,13 @@ function computeKpiPayload(db, daysRaw) {
 }
 
 // Thin route wrapper around the pure compute function.
-router.get('/kpi', (req, res) => {
-  res.json(computeKpiPayload(getDb(), req.query.days));
+router.get('/kpi', async (req, res) => {
+  // Shares the dash('kpi', days) cache key with the in-app /api/dashboards/kpi
+  // route, so the daily automated caller and the dashboards reuse one cached
+  // payload (180 s TTL; direct compute when Redis is down).
+  const payload = await cache.getOrSet(cacheKeys.dash('kpi', req.query.days), 180,
+    () => computeKpiPayload(getDb(), req.query.days));
+  res.json(payload);
 });
 
 module.exports = router;

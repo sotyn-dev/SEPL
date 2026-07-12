@@ -6,6 +6,8 @@ const {
   syncSalesBillPaymentStatus, ensureTodayCashFlowDaily,
   refreshAllAgeing,
 } = require('../lib/cashSync');
+const cache = require('../lib/cache');
+const cacheKeys = require('../lib/cacheKeys');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -116,7 +118,12 @@ router.get('/', (req, res) => {
 //   - oldest_ageing    : ageing days of the oldest unpaid invoice for the
 //                       site (so MD instantly sees the worst offender)
 // Sorted by outstanding DESC so MD's eye lands on biggest unpaid first.
-router.get('/md-dashboard', (req, res) => {
+router.get('/md-dashboard', async (req, res) => {
+  // MD collections view — one big query with ~8 correlated subqueries PER site
+  // row, plus reduce/filter passes. Global payload; cache 180 s (TTL-only, a few
+  // minutes' staleness is fine here). Falls back to a direct compute when Redis
+  // is down.
+  const payload = await cache.getOrSet(cacheKeys.dash('collections-md'), 180, () => {
   const db = getDb();
   const since7 = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const rows = db.prepare(`
@@ -203,7 +210,9 @@ router.get('/md-dashboard', (req, res) => {
     +r.pms_tasks_count === 0 && +r.location_pings_7d === 0
   );
 
-  res.json({ totals, sites: rows, silent_overdue_count: flagged.length });
+  return { totals, sites: rows, silent_overdue_count: flagged.length };
+  });
+  res.json(payload);
 });
 
 // Helper for the Edit/Add modal — UNIQUE PROJECT NAMES from the
