@@ -41,6 +41,19 @@ export default defineConfig({
     },
   },
   server: {
+    // Dev-only (server.* is ignored by `vite build`). Pre-transform the
+    // logged-in first-route graph at server boot so the FIRST load after each
+    // `npm run dev` isn't waiting on cold on-demand transforms of the big
+    // Layout + Dashboard trees. Vite transitively warms each file's static
+    // import tree, so listing the roots covers their children.
+    warmup: {
+      clientFiles: [
+        './src/main.jsx',
+        './src/App.jsx',
+        './src/components/Layout.jsx',
+        './src/pages/Dashboard.jsx',
+      ],
+    },
     port: 3000,
     proxy: {
       // Use 127.0.0.1, NOT "localhost": on Node 17+ "localhost" resolves to IPv6
