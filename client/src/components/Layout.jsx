@@ -582,7 +582,7 @@ export default function Layout() {
               onChange={e => setNavSearch(e.target.value)}
               onKeyDown={e => { if (e.key === 'Escape') setNavSearch(''); }}
               placeholder="Search menu… (e.g. attendance)"
-              className="w-full bg-white/10 hover:bg-white/15 focus:bg-white/15 placeholder-red-200/60 text-white text-xs rounded-md pl-7 pr-7 py-1.5 outline-none focus:ring-1 focus:ring-white/30 transition"
+              className="w-full bg-white/10 hover:bg-white/15 focus:bg-white/15 placeholder-red-200/60 text-white text-xs rounded-md pl-7 pr-4 py-1.5 outline-none focus:ring-1 focus:ring-white/30 transition"
               aria-label="Search sidebar menu"
             />
             {navSearch && (
@@ -683,7 +683,7 @@ export default function Layout() {
             (mam 2026-06-19: "show above where is change password"). Shown to
             EVERY signed-in user (no site_chat permission needed) — access is
             by group membership, so added people can chat by default. */}
-        <div className="px-3 pt-2 border-t border-white/10">
+        <div className="px-3 py-2 border-t border-white/10">
           <Link to="/site-chat"
             className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${location.pathname === '/site-chat' ? 'bg-white/15 text-white font-medium' : 'text-red-100 hover:bg-white/10 hover:text-white'}`}>
             <BiMessageRoundedCheck size={17} className="text-white" />
