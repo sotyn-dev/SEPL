@@ -8,6 +8,16 @@
 #   • One-time Redis setup:        sudo bash scripts/setup-redis.sh
 # See docs/REDIS_DEPLOY.md for the current, complete deploy runbook.
 
+# SAFETY GUARD (added 2026-07-12): this script does `rm -rf /root/erp` and is
+# FIRST-TIME provisioning only. Refuse to run if a live database is present so an
+# accidental run can never wipe production data. Routine deploys: scripts/deploy.sh
+if [ -f /root/erp/data/erp.db ]; then
+  echo "REFUSING TO RUN: /root/erp/data/erp.db exists — this server already has live data."
+  echo "  deploy-vps.sh would DELETE your databases (data/erp.db + data/chat.db) and backups."
+  echo "  For a routine deploy use:  bash scripts/deploy.sh"
+  exit 1
+fi
+
 echo "=========================================="
 echo "  SEPL Business ERP - VPS Setup"
 echo "=========================================="
