@@ -8,6 +8,7 @@ import {
 import api from '../api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
+import { useAppSocket } from '../context/SocketProvider';
 import { fmtDate, fmtTime } from '../utils/datetime';
 
 // HR notification type → icon + colour (used in the Notifications tab)
@@ -34,6 +35,7 @@ const NOTIF_TYPE_COLOR = {
 // Admins also see a small "+ New" button inside the panel to post directly.
 export default function AnnouncementBell() {
   const { isAdmin } = useAuth();
+  const { subscribe } = useAppSocket();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   // Mam (2026-05-22): merged inbox — single bell shows both
@@ -72,12 +74,18 @@ export default function AnnouncementBell() {
   };
 
   // Poll both unread counts every 60s so the bell badge stays current even
-  // when the user keeps the same tab open all day.
+  // when the user keeps the same tab open all day. This ALSO covers HR
+  // notifications (which have no socket event) and is the socket-down fallback.
   useEffect(() => {
     loadCount();
     const t = setInterval(loadCount, 60000);
     return () => clearInterval(t);
   }, []);
+
+  // Instant announcement-badge refresh: the server broadcasts
+  // 'announcement:changed' on any announcement create/edit/delete (Workstream 6),
+  // so the badge updates immediately instead of waiting up to 60s for the poll.
+  useEffect(() => subscribe('announcement:changed', loadCount), [subscribe]);
 
   // Click outside the panel closes it. Loaded once per mount.
   useEffect(() => {

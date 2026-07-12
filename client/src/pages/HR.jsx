@@ -12,6 +12,7 @@ import InductionTab from '../components/InductionTab';
 import TrainingTab from '../components/TrainingTab';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
+import { useAppSocket } from '../context/SocketProvider';
 import {
   FiPlus, FiEdit2, FiTrash2, FiCalendar, FiCheckCircle, FiUser, FiFileText,
   FiAward, FiDownload, FiClock, FiTag, FiPauseCircle, FiPlayCircle, FiBriefcase,
@@ -1521,6 +1522,7 @@ export default function HR() {
 // DPR), so HR can spot shortages and hire / redeploy.
 function ManpowerTab() {
   const { canEdit } = useAuth();
+  const { subscribe } = useAppSocket();
   const editable = canEdit('hr');         // admins + HR-editors can override Required
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1553,6 +1555,10 @@ function ManpowerTab() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Instant refresh when anyone edits a category / required value: the server
+  // broadcasts 'hr-board:changed' (Workstream 6), so the board updates for every
+  // viewer immediately. The 20s poll above remains as the socket-down fallback.
+  useEffect(() => subscribe('hr-board:changed', load), [subscribe]);
   // Each project row has three editable targets — manpower, Site Engineers and
   // Jr. Site Engineers — so the edit key is composite: `${projectKey}|${role}`.
   const ROLES = {

@@ -8,6 +8,7 @@ const { getEmailConfig } = require('../lib/email');
 // they can never drift apart. See server/lib/geofence.js for the rule that
 // stops weak indoor phone-GPS from falsely blocking on-site staff.
 const { haversine, evaluateGeofence, geoSettings } = require('../lib/geofence');
+const { emitTo } = require('../lib/chatSocket');   // real-time live-map push (best-effort)
 const atUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
 const atDirector = () => { try { return getEmailConfig().director; } catch { return null; } };
 const router = express.Router();
@@ -647,6 +648,9 @@ router.post('/track-location', (req, res) => {
   if (gps_off) {
     db.prepare('INSERT INTO location_tracking (user_id, date, time, latitude, longitude, address, site_name) VALUES (?,?,?,NULL,NULL,?,?)')
       .run(req.user.id, today, now, reason || null, 'GPS_OFF');
+    // Live-map push to admins (best-effort; the /admin/locations poll is the
+    // fallback). Never blocks or fails the save.
+    emitTo('role:admin', 'location:ping', { userId: req.user.id, name: req.user.name || '', lat: null, lng: null, site: 'GPS_OFF', at: now });
     return res.json({ site: 'GPS_OFF', recorded: true });
   }
 
@@ -660,6 +664,9 @@ router.post('/track-location', (req, res) => {
   const siteName = geo && geo.decision === 'inside' ? geo.matchedSite : 'Outside';
   db.prepare('INSERT INTO location_tracking (user_id, date, time, latitude, longitude, address, site_name) VALUES (?,?,?,?,?,?,?)')
     .run(req.user.id, today, now, latitude, longitude, address, siteName);
+  // Live-map push to admins (best-effort; the /admin/locations poll is the
+  // fallback). Never blocks or fails the save.
+  emitTo('role:admin', 'location:ping', { userId: req.user.id, name: req.user.name || '', lat: latitude, lng: longitude, site: siteName, at: now });
   res.json({ site: siteName });
 });
 

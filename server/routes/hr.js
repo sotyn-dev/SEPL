@@ -6,6 +6,7 @@ const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { parseResume } = require('../utils/resumeParser');
+const { broadcast } = require('../lib/chatSocket');   // real-time board push (best-effort)
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -230,6 +231,7 @@ router.put('/manpower-plan/required', requirePermission('hr', 'edit'), (req, res
     if (reset) {
       // Clear this override but keep the rest of the row.
       db.prepare(`UPDATE manpower_project_settings SET ${col}=NULL, updated_at=CURRENT_TIMESTAMP WHERE project_key=?`).run(key);
+      broadcast('hr-board:changed');   // live board refresh for other viewers (best-effort)
       return res.json({ ok: true, reset: true });
     }
     const required = Math.round(+raw);
@@ -239,6 +241,7 @@ router.put('/manpower-plan/required', requirePermission('hr', 'edit'), (req, res
        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(project_key) DO UPDATE SET ${col}=excluded.${col}, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`
     ).run(key, required, req.user.id);
+    broadcast('hr-board:changed');   // live board refresh for other viewers (best-effort)
     res.json({ ok: true, required });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -260,6 +263,7 @@ router.put('/manpower-plan/category', requirePermission('hr', 'edit'), (req, res
        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(project_key) DO UPDATE SET category=excluded.category, updated_by=excluded.updated_by, updated_at=CURRENT_TIMESTAMP`
     ).run(key, category, req.user.id);
+    broadcast('hr-board:changed');   // live board refresh for other viewers (best-effort)
     res.json({ ok: true, category });
   } catch (e) {
     res.status(500).json({ error: e.message });

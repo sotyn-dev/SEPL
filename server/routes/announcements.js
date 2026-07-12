@@ -3,17 +3,23 @@ const { getDb } = require('../db/schema');
 const { authMiddleware } = require('../middleware/auth');
 const cache = require('../lib/cache');
 const cacheKeys = require('../lib/cacheKeys');
+const { broadcast } = require('../lib/chatSocket');   // real-time bell push (best-effort)
 const router = express.Router();
 router.use(authMiddleware);
 
-// Bust the cached announcements set after a create/edit/delete (which change the
-// shared set). mark-seen is EXCLUDED — it only updates the current user's read
-// marker (a different table) and fires on every panel open, so invalidating on
-// it would defeat the cache. No-op when Redis is down.
+// After a create/edit/delete (which change the shared set): bust the cached
+// announcements set AND push 'announcement:changed' so every open bell re-fetches
+// its badge instantly. mark-seen is EXCLUDED — it only updates the current user's
+// read marker (a different table) and fires on every panel open, so it neither
+// invalidates the cache nor notifies others. Both are best-effort / no-op when
+// Redis / the socket layer is down.
 router.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.path !== '/mark-seen') {
     res.on('finish', () => {
-      if (res.statusCode < 400) cache.del(cacheKeys.ref('announcements'));
+      if (res.statusCode < 400) {
+        cache.del(cacheKeys.ref('announcements'));
+        broadcast('announcement:changed');
+      }
     });
   }
   next();

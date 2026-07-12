@@ -9,6 +9,7 @@
 
 import { useState, useEffect } from 'react';
 import api from '../../api';
+import { useAppSocket } from '../../context/SocketProvider';
 import { useUrlTab } from '../../hooks/useUrlTab';
 import toast from 'react-hot-toast';
 import { FiMapPin, FiRefreshCw, FiUser, FiCalendar, FiClock, FiNavigation, FiExternalLink, FiAlertCircle } from 'react-icons/fi';
@@ -46,6 +47,7 @@ const PHASE_LABEL = { before: 'before in', during: 'during work', after: 'after 
 
 export default function Locations() {
   const [tab, setTab] = useUrlTab('live');
+  const { subscribe } = useAppSocket();
 
   // ===== Live tab =====
   const [live, setLive] = useState(null);
@@ -98,6 +100,22 @@ export default function Locations() {
     return () => clearInterval(id);
     // eslint-disable-next-line
   }, [tab, staleMin]);
+
+  // Near-live map: every location ping the server pushes 'location:ping' to
+  // admins (Workstream 6). Coalesce a burst (many users pinging) into ONE refresh
+  // of the active tab every ~2s. The 60s polls above remain as the socket-down
+  // fallback. Only bind on the map tabs.
+  useEffect(() => {
+    if (tab !== 'live' && tab !== 'team') return;
+    let timer = null;
+    const onPing = () => {
+      if (timer) return;
+      timer = setTimeout(() => { timer = null; if (tab === 'live') loadLive(); else loadTeam(); }, 2000);
+    };
+    const unsub = subscribe('location:ping', onPing);
+    return () => { unsub(); if (timer) clearTimeout(timer); };
+    // eslint-disable-next-line
+  }, [subscribe, tab, staleMin]);
 
   // ===== Timeline tab =====
   const [users, setUsers] = useState([]);

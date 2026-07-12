@@ -36,6 +36,12 @@ function initChatSocket(httpServer) {
     const uid = socket.user.id, admin = socket.user.role === 'admin';
     try { for (const r of roomsFor(uid, admin)) socket.join(r); } catch (_) {}
     try { socket.join('u:' + uid); } catch (_) {}     // personal room for 1-on-1 call signalling
+    // Scope rooms for real-time feature pushes (Workstream 6): every user joins
+    // 'all' (app-wide broadcasts like announcement:changed); admins also join
+    // 'role:admin' (admin-only pushes like the live location map). These are
+    // tenant-partitionable later via the same key seam as the cache.
+    try { socket.join('all'); } catch (_) {}
+    try { if (admin) socket.join('role:admin'); } catch (_) {}
 
     // WebRTC call signalling (mam 2026-06-19) — relay offer/answer/ICE/end to
     // the target user's personal room. Stateless pass-through; the media goes
@@ -90,4 +96,19 @@ function emitChat(groupId, event, payload) {
   try { io.to(`g:${groupId}`).emit(event, payload); } catch (_) {}
 }
 
-module.exports = { initChatSocket, emitChat, getIO: () => io };
+// Generic real-time push (Workstream 6). emitTo targets one room (e.g.
+// 'role:admin' for the live map); broadcast hits every connected client (e.g.
+// 'announcement:changed'). Both no-op safely when the socket layer isn't up, and
+// — with the Redis adapter (Workstream 4) — fan out across instances. These are
+// best-effort side channels: callers must NEVER depend on delivery (the REST
+// data is always the source of truth; the client keeps a fallback poll).
+function emitTo(room, event, payload) {
+  if (!io) return;
+  try { io.to(room).emit(event, payload); } catch (_) {}
+}
+function broadcast(event, payload) {
+  if (!io) return;
+  try { io.emit(event, payload); } catch (_) {}
+}
+
+module.exports = { initChatSocket, emitChat, emitTo, broadcast, getIO: () => io };
