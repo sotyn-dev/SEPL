@@ -13,11 +13,12 @@
 
 const sentry = require('./lib/sentry');
 require('dotenv').config();
+const fs = require('fs');
 
 const { initializeDatabase } = require('./db/schema');
 const { getRedis, isRedisReady, createBullConnection, closeRedis } = require('./lib/redis');
 const cacheKeys = require('./lib/cacheKeys');
-const { QUEUES, JOBS } = require('./jobs/queue');
+const { QUEUES, JOBS, GENERATED_DIR } = require('./jobs/queue');
 
 process.on('uncaughtException', (err) => { console.error('[worker uncaughtException]', err); sentry.captureException(err); });
 process.on('unhandledRejection', (err) => { console.error('[worker unhandledRejection]', err); sentry.captureException(err); });
@@ -31,13 +32,35 @@ const HEARTBEAT_MS = 10_000;    // refresh well within the TTL
 // concurrent write waits briefly instead of throwing SQLITE_BUSY.
 initializeDatabase();
 
-// One processor per job name. Add WS1-B's excel-* processors here later.
-const processors = {
+// Processors, grouped by the queue they run on. The `notifications` queue is
+// IO-bound (push fan-out); the `files` queue is CPU-bound (Excel build) — kept
+// on a separate Worker with lower concurrency so a big export can't starve
+// notifications and vice-versa.
+const notificationProcessors = {
   [JOBS.PUSH_FANOUT]: require('./jobs/processors/pushFanout'),
 };
+const fileProcessors = {
+  [JOBS.EXCEL_EXPORT_QUOTATION]: require('./jobs/processors/excelExportQuotation'),
+};
 
-let worker = null;
+// Generated-file housekeeping: the API deletes each export right after streaming
+// it, so files only linger if the API crashed mid-download. Ensure the dir
+// exists and sweep anything older than an hour on boot + hourly.
+function ensureGeneratedDir() { try { if (!fs.existsSync(GENERATED_DIR)) fs.mkdirSync(GENERATED_DIR, { recursive: true }); } catch (_) {} }
+function sweepGenerated() {
+  try {
+    if (!fs.existsSync(GENERATED_DIR)) return;
+    const cutoff = Date.now() - 3600_000;
+    for (const f of fs.readdirSync(GENERATED_DIR)) {
+      const p = require('path').join(GENERATED_DIR, f);
+      try { if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p); } catch (_) {}
+    }
+  } catch (_) {}
+}
+
+const workers = [];
 let heartbeatTimer = null;
+let sweepTimer = null;
 let warmupTimer = null;
 let _beatLanded = false;
 
@@ -62,36 +85,45 @@ function startHeartbeat() {
   if (warmupTimer.unref) warmupTimer.unref();
 }
 
-function startWorker() {
-  const { Worker } = require('bullmq');
+// Build a Worker for one queue over its processor map. Each worker gets its OWN
+// Redis connection (BullMQ requirement for blocking workers).
+function makeWorker(Worker, queueName, procMap, concurrency) {
   const connection = createBullConnection();
-  if (!connection) { console.warn('[worker] no Redis connection — idling'); return null; }
-
+  if (!connection) return null;
   const w = new Worker(
-    QUEUES.NOTIFICATIONS,
+    queueName,
     async (job) => {
-      const fn = processors[job.name];
+      const fn = procMap[job.name];
       if (!fn) throw new Error(`No processor registered for job "${job.name}"`);
       return fn(job);
     },
-    { connection, concurrency: 5 },
+    { connection, concurrency },
   );
-
-  w.on('ready', () => console.log(`[worker] listening on "${QUEUES.NOTIFICATIONS}" queue`));
-  w.on('completed', (job, res) => console.log(`[worker] ${job.name}#${job.id} done`, res || ''));
+  w.on('ready', () => console.log(`[worker] listening on "${queueName}" queue`));
+  w.on('completed', (job) => console.log(`[worker] ${job.name}#${job.id} done`));
   w.on('failed', (job, err) => console.warn(`[worker] ${job?.name}#${job?.id} failed:`, err?.message));
   w.on('error', (err) => console.warn('[worker] error:', err?.message));
   return w;
+}
+
+function startWorkers() {
+  const { Worker } = require('bullmq');
+  const n = makeWorker(Worker, QUEUES.NOTIFICATIONS, notificationProcessors, 5);   // IO-bound
+  const f = makeWorker(Worker, QUEUES.FILES, fileProcessors, 2);                    // CPU-bound
+  if (n) workers.push(n);
+  if (f) workers.push(f);
+  return workers.length > 0;
 }
 
 async function shutdown(sig) {
   console.log(`[worker] ${sig} — shutting down`);
   try { clearInterval(heartbeatTimer); } catch (_) {}
   try { clearInterval(warmupTimer); } catch (_) {}
+  try { clearInterval(sweepTimer); } catch (_) {}
   // Drop the heartbeat key now so the API reverts to inline immediately rather
   // than waiting for the TTL to lapse.
   try { const r = getRedis(); if (r) await r.del(cacheKeys.workerAlive()).catch(() => {}); } catch (_) {}
-  try { if (worker) await worker.close(); } catch (_) {}
+  try { await Promise.all(workers.map((w) => w.close().catch(() => {}))); } catch (_) {}
   try { await closeRedis(); } catch (_) {}
   process.exit(0);
 }
@@ -104,7 +136,11 @@ if (DISABLED) {
   console.log('[worker] job queue disabled (ERP_DISABLE_REDIS/ERP_DISABLE_JOB_QUEUE) — idling, API runs jobs inline');
   setInterval(() => {}, 1 << 30);
 } else {
-  worker = startWorker();
-  if (worker) startHeartbeat();
+  ensureGeneratedDir();
+  sweepGenerated();
+  sweepTimer = setInterval(sweepGenerated, 3600_000);
+  if (sweepTimer.unref) sweepTimer.unref();
+  if (startWorkers()) startHeartbeat();
+  else console.warn('[worker] no Redis connection — idling');
   console.log('[worker] started');
 }
