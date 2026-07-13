@@ -9,6 +9,8 @@ const { emitChat, isOnline } = require('../lib/chatSocket');   // real-time push
 const { rateLimit } = require('../lib/rateLimit');   // in-memory send backpressure
 const { authMiddleware, requirePermission } = require('../middleware/auth');
 const { getSetting } = require('../lib/settings');    // cached app_settings reader (TURN/ICE)
+const cache = require('../lib/cache');                 // fallback-safe Redis cache (getOrSet/del)
+const cacheKeys = require('../lib/cacheKeys');
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -33,6 +35,18 @@ const markRead = (db, g, uid, knownMax) => {
   db.prepare(`INSERT INTO chat_reads (group_id,user_id,last_read_id,updated_at) VALUES (?,?,?,CURRENT_TIMESTAMP)
               ON CONFLICT(group_id,user_id) DO UPDATE SET last_read_id=MAX(last_read_id,excluded.last_read_id), updated_at=CURRENT_TIMESTAMP`).run(g, uid, max);
   return max;
+};
+
+// Unread-badge cache invalidation (Workstream 3, applied to chat). The
+// /unread-count payload is cached per user (cacheKeys.chatUnread); these bust it
+// on the writes that change a user's unread total. Best-effort by construction:
+// cache.del no-ops when Redis is down and never throws into the request, so a
+// missed/failed bust degrades to at-most the TTL of staleness — never wrong data.
+const bustUnreadSelf = (uid) => cache.del(cacheKeys.chatUnread(uid));
+const bustUnreadGroup = (db, g) => {          // everyone who can see group g
+  for (const r of db.prepare('SELECT user_id FROM chat_group_members WHERE group_id=?').all(g)) {
+    cache.del(cacheKeys.chatUnread(r.user_id));
+  }
 };
 
 // Same "which groups can this user reach" rule as canAccess(), expressed as a
@@ -198,23 +212,31 @@ router.get('/groups', (req, res) => {
 // large number of groups doesn't pay for every group just to show one number
 // (/site-chat perf pass — admin-slowness fix, "chat count concern").
 const UNREAD_GROUPS_CAP = 30;
-router.get('/unread-count', (req, res) => {
-  const db = getChatDb(); const uid = req.user.id; const admin = isAdmin(req);
-  const accessIdsSql = `SELECT g.id FROM chat_groups g WHERE ${accessWhereFor(admin)}`;
-  const unreadCountSql = `SELECT cm.group_id, COUNT(*) c FROM chat_messages cm
-      WHERE cm.group_id IN (${accessIdsSql}) AND cm.sender_id<>?
-        AND cm.id > COALESCE((SELECT last_read_id FROM chat_reads r WHERE r.group_id=cm.group_id AND r.user_id=?),0)
-      GROUP BY cm.group_id`;
-  const total = db.prepare(`SELECT COALESCE(SUM(c),0) AS total FROM (${unreadCountSql})`).get(uid, uid, uid).total;
-  if (!total) return res.json({ total: 0, groups: [] });
-  const unreadRows = db.prepare(`${unreadCountSql} ORDER BY MAX(cm.id) DESC LIMIT ?`).all(uid, uid, uid, UNREAD_GROUPS_CAP);
-  const ids = unreadRows.map(r => r.group_id);
-  const ph = ids.map(() => '?').join(',');
-  const meta = db.prepare(`SELECT id, name, is_dm FROM chat_groups WHERE id IN (${ph})`).all(...ids);
-  const enriched = enrichGroups(db, uid, meta, { withMembers: false });
-  const byId = Object.fromEntries(enriched.map(g => [g.id, g]));
-  const groups = ids.map(id => byId[id]).filter(Boolean);   // preserve unreadRows' recency order
-  res.json({ total, groups });
+// The most frequent site-chat read: the sidebar badge poll (Layout.jsx, every
+// ~25s from every page, every user). Cache the per-user payload (fallback-safe:
+// Redis down ⇒ getOrSet just runs the loader, i.e. the exact query below). The
+// 120s TTL is only a backstop — the bustUnread* helpers keep it fresh on writes.
+router.get('/unread-count', async (req, res) => {
+  const uid = req.user.id; const admin = isAdmin(req);
+  const payload = await cache.getOrSet(cacheKeys.chatUnread(uid), 120, () => {
+    const db = getChatDb();
+    const accessIdsSql = `SELECT g.id FROM chat_groups g WHERE ${accessWhereFor(admin)}`;
+    const unreadCountSql = `SELECT cm.group_id, COUNT(*) c FROM chat_messages cm
+        WHERE cm.group_id IN (${accessIdsSql}) AND cm.sender_id<>?
+          AND cm.id > COALESCE((SELECT last_read_id FROM chat_reads r WHERE r.group_id=cm.group_id AND r.user_id=?),0)
+        GROUP BY cm.group_id`;
+    const total = db.prepare(`SELECT COALESCE(SUM(c),0) AS total FROM (${unreadCountSql})`).get(uid, uid, uid).total;
+    if (!total) return { total: 0, groups: [] };
+    const unreadRows = db.prepare(`${unreadCountSql} ORDER BY MAX(cm.id) DESC LIMIT ?`).all(uid, uid, uid, UNREAD_GROUPS_CAP);
+    const ids = unreadRows.map(r => r.group_id);
+    const ph = ids.map(() => '?').join(',');
+    const meta = db.prepare(`SELECT id, name, is_dm FROM chat_groups WHERE id IN (${ph})`).all(...ids);
+    const enriched = enrichGroups(db, uid, meta, { withMembers: false });
+    const byId = Object.fromEntries(enriched.map(g => [g.id, g]));
+    const groups = ids.map(id => byId[id]).filter(Boolean);   // preserve unreadRows' recency order
+    return { total, groups };
+  });
+  res.json(payload);
 });
 
 router.post('/groups', requirePermission('site_chat', 'create'), (req, res) => {
@@ -271,12 +293,14 @@ router.delete('/:groupId', requirePermission('site_chat', 'delete'), (req, res) 
   const grp = db.prepare('SELECT * FROM chat_groups WHERE id=?').get(g);
   if (!grp) return res.status(404).json({ error: 'Not found' });
   if (grp.created_by !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'Only the creator or an admin can delete the group' });
+  const memberIds = db.prepare('SELECT user_id FROM chat_group_members WHERE group_id=?').all(g).map(r => r.user_id);
   db.transaction(() => {
     db.prepare('DELETE FROM chat_messages WHERE group_id=?').run(g);
     db.prepare('DELETE FROM chat_group_members WHERE group_id=?').run(g);
     db.prepare('DELETE FROM chat_reads WHERE group_id=?').run(g);
     db.prepare('DELETE FROM chat_groups WHERE id=?').run(g);
   })();
+  for (const uid of memberIds) bustUnreadSelf(uid);   // group gone → their totals changed
   emitChat(g, 'group_deleted', { groupId: g });
   res.json({ ok: true });
 });
@@ -319,6 +343,7 @@ router.get('/:groupId', (req, res) => {
   const reads = Object.fromEntries(readRows.map(r => [r.user_id, r.last_read_id]));
   const readsAt = Object.fromEntries(readRows.map(r => [r.user_id, r.updated_at]));  // for Message Info read-time
   markRead(db, g, req.user.id);
+  bustUnreadSelf(req.user.id);            // this user's unread for g just cleared
   // NOTE: deliberately do NOT emitChat('changed') here. Loading a thread used
   // to broadcast 'changed' to the room, but the client reloads the thread on
   // 'changed' → which re-GETs → which re-emits: an infinite self-reinforcing
@@ -359,6 +384,7 @@ router.post('/:groupId', sendLimiter, (req, res) => {
   // current client ignores 'message' and still reloads on 'changed' (perf pass).
   emitChat(g, 'message', row);
   emitChat(g, 'changed', { groupId: g });
+  bustUnreadGroup(db, g);                 // every recipient's unread badge changed
   res.json(row);
 });
 
@@ -366,6 +392,7 @@ router.post('/:groupId/read', (req, res) => {
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Not a member' });
   const last = markRead(db, g, req.user.id);
+  bustUnreadSelf(req.user.id);
   emitChat(g, 'changed', { groupId: g });
   res.json({ last_read_id: last });
 });
@@ -381,6 +408,7 @@ router.post('/:groupId/members', requirePermission('site_chat', 'create'), (req,
   const ids = Array.isArray(req.body?.user_ids) ? req.body.user_ids : [];
   const ins = db.prepare('INSERT OR IGNORE INTO chat_group_members (group_id, user_id, user_name, added_by) VALUES (?,?,?,?)');
   let added = 0; db.transaction(() => { for (const u of ids) added += ins.run(g, +u, userName(+u), req.user.id).changes; })();
+  bustUnreadGroup(db, g);                 // new members now see g's unread messages
   emitChat(g, 'changed', { groupId: g });
   res.json({ added });
 });
@@ -388,6 +416,7 @@ router.delete('/:groupId/members/:userId', requirePermission('site_chat', 'creat
   const db = getChatDb(); const g = +req.params.groupId;
   if (!canAccess(db, req, g)) return res.status(403).json({ error: 'Only a member or admin can remove members' });
   db.prepare('DELETE FROM chat_group_members WHERE group_id=? AND user_id=?').run(g, +req.params.userId);
+  bustUnreadGroup(db, g); bustUnreadSelf(+req.params.userId);   // remaining members + the removed user
   emitChat(g, 'changed', { groupId: g });
   res.json({ ok: true });
 });
@@ -399,6 +428,7 @@ router.delete('/:groupId/messages/:msgId', (req, res) => {
   if (!msg) return res.status(404).json({ error: 'Not found' });
   if (msg.sender_id !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'You can only delete your own messages' });
   db.prepare('DELETE FROM chat_messages WHERE id=?').run(req.params.msgId);
+  bustUnreadGroup(db, g);                 // deleting an unread message shifts counts
   emitChat(g, 'changed', { groupId: g });
   res.json({ ok: true });
 });

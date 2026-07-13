@@ -113,22 +113,35 @@ is the one intentional exception.)
 
 ---
 
-## Background jobs (Workstream 1 — when added)
+## Background jobs (Workstream 1 — BullMQ)
 
-Heavy/slow work (Excel export/import, notification fan-out) goes to a BullMQ queue processed
-by `server/worker.js`, NOT inline on the request. Enqueue when Redis is ready, else run the
-existing inline path as the fallback. Keep the heavy logic in one shared function called by
-both the processor and the fallback.
+Heavy/slow work (Excel export/import, notification fan-out) goes to a BullMQ queue, NOT inline
+on the request. Enqueue via [`server/jobs/queue.js`](server/jobs/queue.js) when Redis + a live
+worker are present, else run the existing inline path as the fallback. Keep the heavy logic in
+one shared function called by both the processor and the fallback (e.g. `runPushFanout` in
+[`push.js`](server/lib/push.js), `buildQuotationBuffer` in
+[`jobs/lib/quotationExcel.js`](server/jobs/lib/quotationExcel.js)).
+
+**The worker runs EMBEDDED in the API process** ([`server/jobs/workerRuntime.js`](server/jobs/workerRuntime.js),
+started from [`index.js`](server/index.js)) — no separate `erp-worker` PM2 app on this
+single-fork 2-core box. IO-bound jobs (push fan-out) run in-process; the CPU-bound Excel build
+runs as a BullMQ **sandboxed processor** (a child process with its own heap, so it can't OOM
+the API). A **sandboxed processor file must stay Redis-free** — require
+[`jobs/paths.js`](server/jobs/paths.js) for `GENERATED_DIR`, never `jobs/queue.js`, or every
+child fork opens a Redis connection. `server/worker.js` still exists as a **standalone**
+entrypoint for the future PM2 **cluster mode** split (set `ERP_EMBED_WORKER=0` on the API and
+run it as its own app so N API instances share one queue drain). Same fallback ethic applies:
+if Redis/worker is down, `enqueue`/`runFileJob` return false/null and the caller runs inline.
 
 ---
 
 ## Keys, config, testing
 
 - **Key builder:** `cacheKeys.js` — `perms(id)`, `setting(name)`, `dash(name, days)`,
-  `ref(name, ...variant)`, `chatBuffer/chatDirty/chatSeq`, `presence/presenceHb`. Add new key
+  `ref(name, ...variant)`, `chatUnread(id)`, `presence/presenceHb`, `workerAlive`. Add new key
   types here, never inline.
-- **Env** (`.env`): `REDIS_URL`, `REDIS_KEY_PREFIX`, `CHAT_FLUSH_MS`, `PRESENCE_TTL_SEC`, and
-  kill-switches `ERP_DISABLE_REDIS` / `ERP_DISABLE_JOB_QUEUE` / `ERP_DISABLE_CHAT_BUFFER`.
+- **Env** (`.env`): `REDIS_URL`, `REDIS_KEY_PREFIX`, `PRESENCE_TTL_SEC`, and kill-switches
+  `ERP_DISABLE_REDIS` / `ERP_DISABLE_JOB_QUEUE` (plus `ERP_EMBED_WORKER`, default 1).
 - **Local dev:** the app runs fine with NO Redis (fallback mode). To test the cached/real-time
   paths, run a local Redis (WSL2 `apt install redis-server`, or Docker `redis:7`) at
   `localhost:6379`.
@@ -150,8 +163,8 @@ both the processor and the fallback.
 - better-sqlite3 is **synchronous**; the only reason a route becomes `async` is an `await`
   on the cache. Keep the DB calls synchronous inside the loader.
 - Deploy (routine): on the VPS run **`bash scripts/deploy.sh`** — the single source of
-  truth. It pulls, `npm install`s (rebuilds the client), `pm2 startOrReload`s **both**
-  apps (`erp` + the `erp-worker` job process), and runs the smoke test. First-time Redis
-  setup is a one-time `sudo bash scripts/setup-redis.sh`. Full runbook:
+  truth. It pulls, `npm install`s (rebuilds the client), `pm2 startOrReload`s the single
+  **`erp`** app (which embeds the BullMQ worker in-process), and runs the smoke test.
+  First-time Redis setup is a one-time `sudo bash scripts/setup-redis.sh`. Full runbook:
   [`docs/REDIS_DEPLOY.md`](docs/REDIS_DEPLOY.md). No schema migration should be required by
   a caching/real-time change.

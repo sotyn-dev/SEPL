@@ -32,11 +32,7 @@ module.exports = {
   setting:    (name)       => k('setting', name),                 // cached app_settings value
   dash:       (name, days) => (days != null ? k('dash', name, days) : k('dash', name)), // dashboard metrics, keyed by window
   ref:        (name, ...variant) => k('ref', name, ...variant),   // static reference data (vendors, geofence, ...)
-
-  // --- Chat buffering (Workstream 2) ---
-  chatBuffer: (groupId)    => k('chat', 'buf', groupId),          // Redis List of un-flushed messages for a group
-  chatDirty:  ()           => k('chat', 'dirty'),                 // Set of group ids awaiting flush
-  chatSeq:    ()           => k('chat', 'seq'),                   // INCR counter — allocates final message ids
+  chatUnread: (userId)     => k('chat', 'unread', userId),        // per-user site-chat unread badge payload ({total,groups})
 
   // --- Presence (Workstream 4) ---
   presence:   ()           => k('presence'),                      // Set of online user ids

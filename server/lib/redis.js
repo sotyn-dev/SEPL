@@ -165,8 +165,8 @@ function isRedisReady() {
   return _ready;
 }
 
-// Best-effort shutdown (called from index.js SIGINT/SIGTERM alongside the chat
-// flush). Quits each connection so PM2 reload doesn't leave sockets dangling.
+// Best-effort shutdown (called from index.js SIGINT/SIGTERM, after the embedded
+// worker stops). Quits each connection so PM2 reload doesn't leave sockets dangling.
 async function closeRedis() {
   const conns = [_redis, _pub, _sub].filter(Boolean);
   await Promise.all(conns.map((c) => c.quit().catch(() => {})));

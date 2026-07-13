@@ -115,4 +115,27 @@ after (`users=3`, `item_master=2385`, …); the throwaway Redis container was re
   works and stale-after-write is avoided.
 
 **Known gap (confirmed, expected):** Workstream 2 chat write-buffering is inert — no readers
-for the chat-buffer keys, `CHAT_FLUSH_MS`, or `ERP_DISABLE_CHAT_BUFFER`.
+for the chat-buffer keys, `CHAT_FLUSH_MS`, or `ERP_DISABLE_CHAT_BUFFER`. *(Resolved 2026-07-14
+— see addendum below.)*
+
+---
+
+## Addendum — 2026-07-14
+
+Two follow-ups from this retrospective's own recommendations landed:
+
+- **`erp-worker` collapsed into the API.** The separate PM2 worker app was overkill for the
+  single-fork 2-core box. The BullMQ worker now runs **embedded** in the `erp` process
+  (`server/jobs/workerRuntime.js`), with the heavy Excel export as a **sandboxed child process**
+  (own heap, can't OOM the API). `server/worker.js` is kept as a thin standalone shell for the
+  future PM2 cluster-mode split (`ERP_EMBED_WORKER=0` + a separate app). Net −57 lines.
+
+- **Inert chat write-buffering scaffolding removed; chat read-caching added instead.** Per the
+  "either finish it or delete the keys/env vars" note above, the unused `chatBuffer/chatDirty/chatSeq`
+  keys, `CHAT_FLUSH_MS`, and the no-op `ERP_DISABLE_CHAT_BUFFER` kill-switch were deleted. In
+  their place, the **hottest chat read** — the `/unread-count` sidebar badge poll (every ~25 s,
+  every page, every user) — is now cached per user (`cacheKeys.chatUnread`, 120 s TTL) with
+  best-effort invalidation on the writes that change it. This is fallback-safe (Redis down ⇒ the
+  same query runs inline) and avoids the write-behind buffer's data-loss risk. So the layer no
+  longer advertises a chat-write capability it never had; the chat acceleration that shipped is
+  read-caching + delivery/presence, not write-buffering.
