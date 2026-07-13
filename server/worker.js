@@ -1,146 +1,46 @@
-// Background job worker (Workstream 1 — BullMQ). A SEPARATE process from the API
-// (its own PM2 app, `erp-worker`), so heavy/slow work — the push fan-out now,
-// Excel export/import in WS1-B — runs off the API event loop on this 2-core VPS.
+// Standalone BullMQ worker entrypoint.
 //
-// Fallback-first: this process is an ACCELERATOR, never a dependency. If Redis is
-// disabled/down the API does every job inline exactly as before, and this worker
-// simply idles (it never crash-loops PM2). While it IS running it publishes a
-// TTL heartbeat key that the API checks before enqueuing — so if this process
-// dies, the API notices within seconds and reverts to inline sending rather than
-// piling work into a queue nobody drains.
+// By DEFAULT you do NOT run this — the API process (server/index.js) embeds the
+// worker runtime in-process, so the single `erp` PM2 app both serves HTTP and
+// drains the queues. That's the right shape for the current single-fork 2-core
+// VPS (mam 2026-07-14: the old separate `erp-worker` app was overkill).
+//
+// This file exists for the FUTURE: when we go PM2 CLUSTER mode (N API instances
+// for multitenant scale), set ERP_EMBED_WORKER=0 on the API and run THIS as its
+// own PM2 app so the N instances share one queue drain. The actual worker logic
+// lives in ./jobs/workerRuntime — this is just the process shell around it.
 //
 // Run locally with:  node server/worker.js   (alongside `npm run server`).
 
 const sentry = require('./lib/sentry');
 require('dotenv').config();
-const fs = require('fs');
 
 const { initializeDatabase } = require('./db/schema');
-const { getRedis, isRedisReady, createBullConnection, closeRedis } = require('./lib/redis');
-const cacheKeys = require('./lib/cacheKeys');
-const { QUEUES, JOBS, GENERATED_DIR } = require('./jobs/queue');
+const workerRuntime = require('./jobs/workerRuntime');
 
 process.on('uncaughtException', (err) => { console.error('[worker uncaughtException]', err); sentry.captureException(err); });
 process.on('unhandledRejection', (err) => { console.error('[worker unhandledRejection]', err); sentry.captureException(err); });
 
-const DISABLED = process.env.ERP_DISABLE_REDIS === '1' || process.env.ERP_DISABLE_JOB_QUEUE === '1';
-const WORKER_TTL_SEC = 30;      // heartbeat key TTL
-const HEARTBEAT_MS = 10_000;    // refresh well within the TTL
-
-// The worker owns its own DB connection (better-sqlite3 is per-process). The API
-// and this worker both write erp.db; getDb() sets PRAGMA busy_timeout so a
-// concurrent write waits briefly instead of throwing SQLITE_BUSY.
+// The standalone worker owns its own DB connection (better-sqlite3 is
+// per-process); the push fan-out processor queries erp.db. getDb() sets PRAGMA
+// busy_timeout so a concurrent write waits briefly instead of throwing.
 initializeDatabase();
-
-// Processors, grouped by the queue they run on. The `notifications` queue is
-// IO-bound (push fan-out); the `files` queue is CPU-bound (Excel build) — kept
-// on a separate Worker with lower concurrency so a big export can't starve
-// notifications and vice-versa.
-const notificationProcessors = {
-  [JOBS.PUSH_FANOUT]: require('./jobs/processors/pushFanout'),
-};
-const fileProcessors = {
-  [JOBS.EXCEL_EXPORT_QUOTATION]: require('./jobs/processors/excelExportQuotation'),
-};
-
-// Generated-file housekeeping: the API deletes each export right after streaming
-// it, so files only linger if the API crashed mid-download. Ensure the dir
-// exists and sweep anything older than an hour on boot + hourly.
-function ensureGeneratedDir() { try { if (!fs.existsSync(GENERATED_DIR)) fs.mkdirSync(GENERATED_DIR, { recursive: true }); } catch (_) {} }
-function sweepGenerated() {
-  try {
-    if (!fs.existsSync(GENERATED_DIR)) return;
-    const cutoff = Date.now() - 3600_000;
-    for (const f of fs.readdirSync(GENERATED_DIR)) {
-      const p = require('path').join(GENERATED_DIR, f);
-      try { if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p); } catch (_) {}
-    }
-  } catch (_) {}
-}
-
-const workers = [];
-let heartbeatTimer = null;
-let sweepTimer = null;
-let warmupTimer = null;
-let _beatLanded = false;
-
-function beat() {
-  const r = getRedis();
-  if (!r || !isRedisReady()) return;
-  r.set(cacheKeys.workerAlive(), '1', 'EX', WORKER_TTL_SEC)
-    .then(() => { _beatLanded = true; })
-    .catch(() => {});
-}
-
-function startHeartbeat() {
-  beat();                                   // try immediately
-  heartbeatTimer = setInterval(beat, HEARTBEAT_MS);
-  if (heartbeatTimer.unref) heartbeatTimer.unref();
-  // The main Redis connection reaches 'ready' a moment AFTER boot, so the first
-  // beat above usually can't send yet. Retry every 500ms until the heartbeat
-  // actually lands, so the API sees a live worker within ~1s of startup instead
-  // of up to one full HEARTBEAT_MS interval (during which it would fall back to
-  // inline sending unnecessarily).
-  warmupTimer = setInterval(() => { if (_beatLanded) { clearInterval(warmupTimer); return; } beat(); }, 500);
-  if (warmupTimer.unref) warmupTimer.unref();
-}
-
-// Build a Worker for one queue over its processor map. Each worker gets its OWN
-// Redis connection (BullMQ requirement for blocking workers).
-function makeWorker(Worker, queueName, procMap, concurrency) {
-  const connection = createBullConnection();
-  if (!connection) return null;
-  const w = new Worker(
-    queueName,
-    async (job) => {
-      const fn = procMap[job.name];
-      if (!fn) throw new Error(`No processor registered for job "${job.name}"`);
-      return fn(job);
-    },
-    { connection, concurrency },
-  );
-  w.on('ready', () => console.log(`[worker] listening on "${queueName}" queue`));
-  w.on('completed', (job) => console.log(`[worker] ${job.name}#${job.id} done`));
-  w.on('failed', (job, err) => console.warn(`[worker] ${job?.name}#${job?.id} failed:`, err?.message));
-  w.on('error', (err) => console.warn('[worker] error:', err?.message));
-  return w;
-}
-
-function startWorkers() {
-  const { Worker } = require('bullmq');
-  const n = makeWorker(Worker, QUEUES.NOTIFICATIONS, notificationProcessors, 5);   // IO-bound
-  const f = makeWorker(Worker, QUEUES.FILES, fileProcessors, 2);                    // CPU-bound
-  if (n) workers.push(n);
-  if (f) workers.push(f);
-  return workers.length > 0;
-}
 
 async function shutdown(sig) {
   console.log(`[worker] ${sig} — shutting down`);
-  try { clearInterval(heartbeatTimer); } catch (_) {}
-  try { clearInterval(warmupTimer); } catch (_) {}
-  try { clearInterval(sweepTimer); } catch (_) {}
-  // Drop the heartbeat key now so the API reverts to inline immediately rather
-  // than waiting for the TTL to lapse.
-  try { const r = getRedis(); if (r) await r.del(cacheKeys.workerAlive()).catch(() => {}); } catch (_) {}
-  try { await Promise.all(workers.map((w) => w.close().catch(() => {}))); } catch (_) {}
-  try { await closeRedis(); } catch (_) {}
+  try { await workerRuntime.stop(); } catch (_) {}
+  try { await require('./lib/redis').closeRedis(); } catch (_) {}
   process.exit(0);
 }
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-if (DISABLED) {
-  // Job queue turned off — the API runs everything inline. Stay alive and idle
-  // (do NOT exit, or PM2 autorestart would crash-loop this app).
-  console.log('[worker] job queue disabled (ERP_DISABLE_REDIS/ERP_DISABLE_JOB_QUEUE) — idling, API runs jobs inline');
-  setInterval(() => {}, 1 << 30);
-} else {
-  ensureGeneratedDir();
-  sweepGenerated();
-  sweepTimer = setInterval(sweepGenerated, 3600_000);
-  if (sweepTimer.unref) sweepTimer.unref();
-  if (startWorkers()) startHeartbeat();
-  else console.warn('[worker] no Redis connection — idling');
-  console.log('[worker] started');
-}
+// start() no-ops (and this process just idles) when the queue is disabled, so
+// PM2 autorestart never crash-loops it. Otherwise it starts the workers +
+// heartbeat and this process becomes the queue drain.
+workerRuntime.start();
+console.log('[worker] standalone process up');
+
+// Keep the process alive even if start() registered no workers (disabled/no
+// Redis) — exiting would make PM2 autorestart crash-loop this app.
+setInterval(() => {}, 1 << 30);

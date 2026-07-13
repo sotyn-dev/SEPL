@@ -22,13 +22,12 @@ const path = require('path');
 const fs = require('fs');
 const { createBullConnection, isRedisReady, getRedis } = require('../lib/redis');
 const cacheKeys = require('../lib/cacheKeys');
+// GENERATED_DIR lives in its own dependency-free module (./paths) so the
+// sandboxed Excel processor can import it without dragging Redis/BullMQ into the
+// child fork. Re-exported below to keep this module's public API unchanged.
+const { GENERATED_DIR } = require('./paths');
 
 const DISABLED = process.env.ERP_DISABLE_JOB_QUEUE === '1';
-
-// Where the files worker writes generated artifacts (Excel exports). Shared by
-// the worker (writer) and runFileJob (reader). NOT served statically — the
-// route streams it and deletes it. Sits next to data/uploads.
-const GENERATED_DIR = path.join(__dirname, '..', '..', 'data', 'generated');
 
 // Queue names. `notifications` (Workstream 1 push fan-out) is live now; `files`
 // (heavy Excel export/import) is reserved for WS1-B — declared here so both

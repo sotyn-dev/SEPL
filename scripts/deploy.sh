@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# Automated deploy for the SEPL ERP (API `erp` + background worker `erp-worker`).
+# Automated deploy for the SEPL ERP (single `erp` app — it embeds the BullMQ
+# worker in-process, so there's no separate worker app to manage).
 # Run this ON THE VPS from anywhere inside the repo:
 #
 #     bash scripts/deploy.sh            # deploy origin/main   (normal)
@@ -8,8 +9,7 @@
 #
 # It does the whole checklist in one shot and is safe to re-run:
 #   git fetch + hard reset → npm install (rebuilds client via postinstall) →
-#   pm2 startOrReload (starts erp-worker the first time, reloads both after) →
-#   pm2 save → smoke test.
+#   pm2 startOrReload (starts/reloads the erp app) → pm2 save → smoke test.
 #
 # Redis is an ACCELERATOR: if it's down this still deploys fine, the app just
 # runs in fallback mode. The smoke test at the end tells you whether the Redis
@@ -48,7 +48,7 @@ else
   warn "Run 'sudo bash scripts/setup-redis.sh' once to install + enable Redis, then re-deploy."
 fi
 
-log "pm2 startOrReload (starts erp-worker if new, reloads both otherwise)"
+log "pm2 startOrReload (starts/reloads the erp app)"
 pm2 startOrReload ecosystem.config.js
 pm2 save
 pm2 status
@@ -59,6 +59,6 @@ if node server/scripts/redis-smoke.js; then
   log "✅ Deploy complete — smoke test PASSED, Redis acceleration is live."
 else
   warn "Deploy is live, but the smoke test flagged an issue (see above)."
-  warn "The app still works via fallbacks. Usual cause: erp-worker not running or Redis down."
-  warn "Check:  pm2 status   |   pm2 logs erp-worker --lines 30"
+  warn "The app still works via fallbacks. Usual cause: embedded worker not started or Redis down."
+  warn "Check:  pm2 status   |   pm2 logs erp --lines 30   (look for '[worker] listening')"
 fi

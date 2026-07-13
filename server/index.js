@@ -533,4 +533,33 @@ httpServer.listen(serverPort, '0.0.0.0', () => {
   console.log(`  Running on port ${serverPort}`);
   console.log(`  Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`======================================\n`);
+
+  // Embed the BullMQ worker runtime in-process (Workstream 1). The single `erp`
+  // app both serves HTTP and drains the queues — no separate `erp-worker`
+  // process on this 2-core VPS. Best-effort: a failure to start the workers must
+  // NEVER block or crash API boot; the queue layer just falls back to inline.
+  // Set ERP_EMBED_WORKER=0 (and run server/worker.js separately) for the future
+  // PM2 cluster-mode split. start() itself no-ops when the queue is disabled.
+  if (process.env.ERP_EMBED_WORKER !== '0') {
+    try { require('./jobs/workerRuntime').start(); }
+    catch (e) { console.warn('[worker] embedded start failed — jobs will run inline:', e.message); }
+  }
 });
+
+// Graceful shutdown (PM2 reload sends SIGINT). Stop the embedded workers and
+// close the queue/Redis connections so a reload is a clean ~1s reconnect, not a
+// stuck socket. All best-effort; a hard timer guarantees we still exit under the
+// 8s kill_timeout even if a close() hangs.
+let _shuttingDown = false;
+async function gracefulShutdown(sig) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`[erp] ${sig} — shutting down`);
+  setTimeout(() => process.exit(0), 7000).unref();
+  try { await require('./jobs/workerRuntime').stop(); } catch (_) {}
+  try { await require('./jobs/queue').closeQueues(); } catch (_) {}
+  try { await require('./lib/redis').closeRedis(); } catch (_) {}
+  process.exit(0);
+}
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

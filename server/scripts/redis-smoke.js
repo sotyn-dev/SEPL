@@ -1,5 +1,5 @@
-// Redis rollout smoke test (Workstreams 0–1). Run AFTER deploying the Redis
-// branch on the VPS, with Redis + both PM2 apps (erp, erp-worker) up:
+// Redis rollout smoke test (Workstreams 0–1). Run AFTER deploying on the VPS,
+// with Redis up and the `erp` app running (it embeds the worker in-process):
 //
 //     node server/scripts/redis-smoke.js
 //
@@ -11,7 +11,7 @@
 //
 // A FAIL here does not mean the app is broken — every path has an inline
 // fallback — it means Redis acceleration isn't actually engaged (Redis down,
-// deps not installed, or the erp-worker app not running).
+// deps not installed, or the embedded worker didn't start).
 
 require('dotenv').config();
 
@@ -54,10 +54,10 @@ async function waitFor(fn, ms = 6000, step = 200) {
     record('Cache read/cache/invalidate', ok, `loaderRuns=${loaderRuns} (want 1), delEmpty=${rawAfterDel === null}`);
   } catch (e) { record('Cache read/cache/invalidate', false, e.message); }
 
-  // 3) Worker heartbeat — is the erp-worker process alive?
+  // 3) Worker heartbeat — is the embedded worker (in the erp process) alive?
   let workerUp = false;
   try { workerUp = (await r.exists(cacheKeys.workerAlive())) === 1; } catch (_) {}
-  record('Worker process alive (erp-worker)', workerUp, workerUp ? 'heartbeat key present' : 'no heartbeat — is the erp-worker PM2 app running?');
+  record('Worker alive (embedded in erp)', workerUp, workerUp ? 'heartbeat key present' : 'no heartbeat — did the erp app start the worker? (ERP_EMBED_WORKER, ERP_DISABLE_JOB_QUEUE)');
 
   // 4) Files job end-to-end — enqueue an export and let the worker build it.
   if (workerUp) {
