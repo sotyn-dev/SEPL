@@ -22,6 +22,13 @@ const BLUE = '#2563eb';
 // swappable const so options #2–#5 can drop in without hunting.
 const CANVAS_BG = { backgroundColor: '#f4f6fb', backgroundImage: 'radial-gradient(#cdd9f0 1.4px, transparent 1.4px)', backgroundSize: '18px 18px' };
 const LABEL_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
+// One-tap urgency labels seeded with colours (board-wide once added).
+const URGENCY_PRESETS = [
+  { name: 'Urgent', color: '#dc2626' },
+  { name: 'High', color: '#ea580c' },
+  { name: 'Medium', color: '#d97706' },
+  { name: 'Low', color: '#6b7280' },
+];
 
 const initials = (s) => String(s || '?').replace(/[^A-Za-z0-9 ]/g, '').trim().slice(0, 2).toUpperCase() || '#';
 // Distinct per-person avatar colours — a stable [bg, text] pair hashed from the
@@ -111,6 +118,14 @@ function CardModal({ boardId, cardId, board, members, avatars, canManage, user, 
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(null);  // 'members'|'labels'|'due'
+  const [memberQuery, setMemberQuery] = useState('');  // filter for the assignee picker
+  // Staged-then-Apply drafts for the Members / Labels / Dates popovers.
+  const [selMembers, setSelMembers] = useState([]);
+  const [draftLabels, setDraftLabels] = useState([]);
+  const [selLabels, setSelLabels] = useState([]);
+  const [plainName, setPlainName] = useState('');
+  const [draftDue, setDraftDue] = useState('');
+  const [applying, setApplying] = useState(false);
   const fileRef = useRef(null);
   const boardLabels = board?.labels || [];
 
@@ -133,15 +148,48 @@ function CardModal({ boardId, cardId, board, members, avatars, canManage, user, 
   const saveTitle = () => { const t = title.trim(); if (t && t !== card.title) patch({ title: t }); };
   const saveDesc = () => { if ((desc || '') !== (card.description || '')) patch({ description: desc }); };
   const toggleComplete = () => patch({ completed: card.completed ? 0 : 1 });
-  const toggleMember = (userId, on) => {
-    if (on) api.delete(`/sotyn-flow/${boardId}/cards/${cardId}/members/${userId}`).then(() => { load(); onChanged?.(); });
-    else api.post(`/sotyn-flow/${boardId}/cards/${cardId}/members`, { user_ids: [userId] }).then(() => { load(); onChanged?.(); });
+  const closeMenu = () => setMenuOpen(null);
+  // Open handlers seed each popover's draft from the card's current state, so
+  // nothing commits until Apply (click-away / Cancel discards).
+  const openMembers = () => { setSelMembers((card.members || []).map(m => m.user_id)); setMemberQuery(''); setMenuOpen(menuOpen === 'members' ? null : 'members'); };
+  const openLabels = () => { setDraftLabels(boardLabels.map(l => ({ ...l }))); setSelLabels([...(card.label_ids || [])]); setPlainName(''); setMenuOpen(menuOpen === 'labels' ? null : 'labels'); };
+  const openDue = () => { setDraftDue(card.due_date || ''); setMenuOpen(menuOpen === 'due' ? null : 'due'); };
+
+  // Members — commit the add/remove diff, then close.
+  const applyMembers = async () => {
+    const cur = (card.members || []).map(m => m.user_id);
+    const toAdd = selMembers.filter(id => !cur.includes(id));
+    const toRemove = cur.filter(id => !selMembers.includes(id));
+    setApplying(true);
+    try {
+      if (toAdd.length) await api.post(`/sotyn-flow/${boardId}/cards/${cardId}/members`, { user_ids: toAdd });
+      for (const id of toRemove) await api.delete(`/sotyn-flow/${boardId}/cards/${cardId}/members/${id}`);
+      onChanged?.(); load(); closeMenu();
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed'); } finally { setApplying(false); }
   };
-  const toggleLabel = (id, on) => {
-    const cur = card.label_ids || [];
-    patch({ label_ids: on ? cur.filter(x => x !== id) : [...cur, id] });
+
+  // Labels — draft label defs (board-wide, managers only) + this card's selection.
+  const togglePreset = (p) => {
+    const ex = draftLabels.find(l => (l.name || '').toLowerCase() === p.name.toLowerCase());
+    if (ex) setSelLabels(s => s.includes(ex.id) ? s.filter(x => x !== ex.id) : [...s, ex.id]);
+    else { const nl = { id: uid(), name: p.name, color: p.color }; setDraftLabels(d => [...d, nl]); setSelLabels(s => [...s, nl.id]); }
   };
-  const setDue = (v) => patch({ due_date: v || null });
+  const toggleSelLabel = (id) => setSelLabels(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  const removeDraftLabel = (id) => { setDraftLabels(d => d.filter(l => l.id !== id)); setSelLabels(s => s.filter(x => x !== id)); };
+  const addPlain = () => { const n = plainName.trim(); if (!n) return; const nl = { id: uid(), name: n, color: null }; setDraftLabels(d => [...d, nl]); setSelLabels(s => [...s, nl.id]); setPlainName(''); };
+  const applyLabels = async () => {
+    setApplying(true);
+    try {
+      if (canManage && JSON.stringify(draftLabels) !== JSON.stringify(boardLabels))
+        await api.put(`/sotyn-flow/${boardId}`, { labels: draftLabels });
+      const valid = new Set(draftLabels.map(l => l.id));
+      await patch({ label_ids: selLabels.filter(id => valid.has(id)) });
+      closeMenu();
+    } catch (e) { toast.error(e.response?.data?.error || 'Failed'); } finally { setApplying(false); }
+  };
+
+  // Dates — commit the drafted due date, then close.
+  const applyDue = async () => { setApplying(true); try { await patch({ due_date: draftDue || null }); closeMenu(); } finally { setApplying(false); } };
 
   // Checklist (JSON) ----------------------------------------------------------
   const checklist = card?.checklist || [];
@@ -193,45 +241,82 @@ function CardModal({ boardId, cardId, board, members, avatars, canManage, user, 
 
       {/* quick actions */}
       <div className="flex flex-wrap gap-1.5">
-        <ActionBtn icon={FiUsers} label="Members" onClick={() => setMenuOpen(menuOpen === 'members' ? null : 'members')} />
-        <ActionBtn icon={FiTag} label="Labels" onClick={() => setMenuOpen(menuOpen === 'labels' ? null : 'labels')} />
-        <ActionBtn icon={FiCalendar} label="Dates" onClick={() => setMenuOpen(menuOpen === 'due' ? null : 'due')} />
+        <ActionBtn icon={FiUsers} label="Members" onClick={openMembers} />
+        <ActionBtn icon={FiTag} label="Labels" onClick={openLabels} />
+        <ActionBtn icon={FiCalendar} label="Dates" onClick={openDue} />
         <ActionBtn icon={FiPaperclip} label="Attachment" onClick={() => fileRef.current?.click()} />
         <input ref={fileRef} type="file" className="hidden" onChange={onFile} />
       </div>
 
-      {/* popovers */}
-      {menuOpen === 'members' && (
-        <Popover title="Assign members">
-          {members.map(m => { const on = (card.members || []).some(x => x.user_id === m.user_id); return (
-            <label key={m.user_id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-blue-50 cursor-pointer text-sm">
-              <input type="checkbox" checked={on} onChange={() => toggleMember(m.user_id, on)} />
-              <Avatar url={avatars[m.user_id]} name={m.name} size={22} /> {m.name}
-            </label>
-          ); })}
-        </Popover>
-      )}
+      {/* popovers — staged; nothing saves until Apply, which also closes them */}
+      {menuOpen === 'members' && (() => {
+        const q = memberQuery.trim().toLowerCase();
+        const list = members.filter(m => !q || (m.name || '').toLowerCase().includes(q));
+        return (
+          <div className="rounded-lg border bg-white shadow-sm p-2">
+            <div className="text-xs font-semibold text-gray-500 mb-1 px-1">Assign members</div>
+            <input className="input mb-1" placeholder="Search people…" value={memberQuery}
+              onChange={e => setMemberQuery(e.target.value)} autoFocus />
+            <div className="max-h-40 overflow-y-auto">
+              {list.map(m => { const on = selMembers.includes(m.user_id); return (
+                <label key={m.user_id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-blue-50 cursor-pointer text-sm">
+                  <input type="checkbox" checked={on} onChange={() => setSelMembers(s => on ? s.filter(x => x !== m.user_id) : [...s, m.user_id])} />
+                  <Avatar url={avatars[m.user_id]} name={m.name} size={22} /> {m.name}
+                </label>
+              ); })}
+              {list.length === 0 && <div className="text-xs text-gray-400 px-2 py-1">No people match.</div>}
+            </div>
+            <PopoverActions onApply={applyMembers} onCancel={closeMenu} applying={applying} />
+          </div>
+        );
+      })()}
       {menuOpen === 'labels' && (
-        <Popover title="Labels">
-          {boardLabels.length === 0 && <div className="text-xs text-gray-400 px-2 py-1">No labels yet — add them from board ⚙ settings.</div>}
-          {boardLabels.map(l => { const on = (card.label_ids || []).includes(l.id); return (
-            <button key={l.id} onClick={() => toggleLabel(l.id, on)} className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 text-sm">
-              <span className="w-8 h-4 rounded" style={{ background: l.color }} /> <span className="flex-1 text-left">{l.name}</span>{on && <FiCheck size={14} />}
-            </button>
-          ); })}
-        </Popover>
+        <div className="rounded-lg border bg-white shadow-sm p-2">
+          <div className="text-xs font-semibold text-gray-500 mb-1 px-1">Labels</div>
+          {canManage && (
+            <div className="flex flex-wrap gap-1 mb-2">
+              {URGENCY_PRESETS.map(p => (
+                <button key={p.name} onClick={() => togglePreset(p)} className="text-[11px] text-white px-2 py-0.5 rounded" style={{ background: p.color }}>+ {p.name}</button>
+              ))}
+            </div>
+          )}
+          <div className="max-h-36 overflow-y-auto space-y-0.5">
+            {draftLabels.length === 0 && <div className="text-xs text-gray-400 px-1 py-1">No labels yet{canManage ? ' — add an urgency preset or a plain label below.' : '.'}</div>}
+            {draftLabels.map(l => { const on = selLabels.includes(l.id); return (
+              <div key={l.id} className="flex items-center gap-1 text-sm">
+                <button onClick={() => toggleSelLabel(l.id)} className="flex-1 flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 text-left">
+                  {l.color ? <span className="w-8 h-4 rounded" style={{ background: l.color }} /> : <span className="w-8 h-4 rounded bg-gray-100 border border-gray-300" />}
+                  <span className="flex-1">{l.name}</span>
+                  {on && <FiCheck size={14} className="text-blue-600" />}
+                </button>
+                {canManage && <button onClick={() => removeDraftLabel(l.id)} className="text-gray-300 hover:text-red-600 p-1" title="Remove label from board"><FiX size={13} /></button>}
+              </div>
+            ); })}
+          </div>
+          {canManage && (
+            <div className="flex gap-1.5 mt-2">
+              <input value={plainName} onChange={e => setPlainName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addPlain(); } }} placeholder="Plain label…" className="input flex-1 text-sm" />
+              <button onClick={addPlain} className="btn border text-sm">Add</button>
+            </div>
+          )}
+          <PopoverActions onApply={applyLabels} onCancel={closeMenu} applying={applying} />
+        </div>
       )}
       {menuOpen === 'due' && (
-        <Popover title="Due date">
-          <input type="date" value={card.due_date || ''} onChange={e => setDue(e.target.value)} className="input" />
-          {card.due_date && <button onClick={() => setDue('')} className="text-xs text-red-600 mt-1">Clear</button>}
-        </Popover>
+        <div className="rounded-lg border bg-white shadow-sm p-2">
+          <div className="text-xs font-semibold text-gray-500 mb-1 px-1">Due date</div>
+          <input type="date" value={draftDue} onChange={e => setDraftDue(e.target.value)} className="input" />
+          {draftDue && <button onClick={() => setDraftDue('')} className="block text-xs text-red-600 mt-1">Clear date</button>}
+          <PopoverActions onApply={applyDue} onCancel={closeMenu} applying={applying} />
+        </div>
       )}
 
       {/* applied labels + due summary */}
       {((card.label_ids || []).length > 0 || card.due_date) && (
         <div className="flex flex-wrap items-center gap-1.5">
-          {(card.label_ids || []).map(id => { const l = boardLabels.find(x => x.id === id); return l ? <span key={id} className="text-[11px] text-white px-2 py-0.5 rounded" style={{ background: l.color }}>{l.name}</span> : null; })}
+          {(card.label_ids || []).map(id => { const l = boardLabels.find(x => x.id === id); if (!l) return null; return l.color
+            ? <span key={id} className="text-[11px] text-white px-2 py-0.5 rounded" style={{ background: l.color }}>{l.name}</span>
+            : <span key={id} className="text-[11px] text-gray-700 bg-gray-100 border border-gray-300 px-2 py-0.5 rounded">{l.name}</span>; })}
           {card.due_date && (() => { const dm = dueMeta(card.due_date, card.completed); return <span className={`text-[11px] px-2 py-0.5 rounded flex items-center gap-1 ${dm.cls}`}><FiCalendar size={11} /> {dm.label}</span>; })()}
         </div>
       )}
@@ -331,9 +416,11 @@ function CardModal({ boardId, cardId, board, members, avatars, canManage, user, 
 const ActionBtn = ({ icon: Icon, label, onClick }) => (
   <button onClick={onClick} className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-gray-100 hover:bg-gray-200 text-sm text-gray-700"><Icon size={14} /> {label}</button>
 );
-const Popover = ({ title, children }) => (
-  <div className="rounded-lg border bg-white shadow-sm p-2 max-h-56 overflow-y-auto">
-    <div className="text-xs font-semibold text-gray-500 mb-1 px-1">{title}</div>{children}
+// Apply / Cancel footer shared by the staged Members / Labels / Dates popovers.
+const PopoverActions = ({ onApply, onCancel, applying }) => (
+  <div className="flex justify-end gap-2 mt-2 pt-2 border-t">
+    <button onClick={onCancel} className="text-xs px-3 py-1 rounded border text-gray-600 hover:bg-gray-50">Cancel</button>
+    <button onClick={onApply} disabled={applying} className="text-xs px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">{applying ? 'Applying…' : 'Apply'}</button>
   </div>
 );
 
@@ -629,7 +716,7 @@ const CardTile = memo(function CardTile({ card, avatars, boardLabels, columns, o
   return (
     <div draggable onDragStart={() => { window.__flowDragId = card.id; }} onDragOver={e => e.preventDefault()} onDrop={e => { e.stopPropagation(); onDropCard(card); }}
       onClick={() => { if (!menu) onOpen(card); }} className="bg-white rounded-lg shadow-sm hover:shadow-md border border-gray-100 p-2.5 cursor-pointer relative group">
-      {labels.length > 0 && <div className="flex flex-wrap gap-1 mb-1.5">{labels.map(l => <span key={l.id} className="h-1.5 w-8 rounded-full" style={{ background: l.color }} title={l.name} />)}</div>}
+      {labels.length > 0 && <div className="flex flex-wrap gap-1 mb-1.5">{labels.map(l => <span key={l.id} className="h-1.5 w-8 rounded-full border border-gray-200" style={{ background: l.color || '#d1d5db' }} title={l.name} />)}</div>}
       <div className={`text-sm ${card.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>{card.title}</div>
       <div className="flex items-center justify-between mt-2 gap-2">
         <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
