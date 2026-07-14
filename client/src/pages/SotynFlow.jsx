@@ -538,7 +538,7 @@ export default function SotynFlow() {
           {mayCreate && <button onClick={() => setNewOpen(true)} className="flex items-center gap-1.5 bg-white/15 hover:bg-white/25 text-white text-sm font-medium px-3 py-1.5 rounded-lg"><FiPlus size={16} /> <span className="hidden sm:inline">New board</span></button>}
         </SubNav>
 
-        <div className="flex-1 overflow-y-auto p-3 md:p-5">
+        <div className="flex-1 overflow-y-auto p-3 border border-gray-200 md:p-5">
           {shown.length === 0 ? (
             <div className="flex flex-col items-center justify-center text-gray-400 gap-2 py-20">
               <FiTrello size={44} />
@@ -612,10 +612,10 @@ export default function SotynFlow() {
         )}
       </SubNav>
 
-      {board.board.description && <div className="px-4 py-1.5 text-sm text-gray-500 bg-white border-b truncate">{board.board.description}</div>}
+      {board.board.description && <div className="px-4 py-1.5 text-sm text-gray-500 bg-white border-x truncate">{board.board.description}</div>}
 
       {/* columns */}
-      <div className="flex-1 overflow-x-auto overflow-y-hidden" style={CANVAS_BG}>
+      <div className="flex-1 border border-gray-200 overflow-x-auto overflow-y-hidden" style={CANVAS_BG}>
         <div className="flex gap-3 p-3 h-full items-start snap-x">
           {columns.map(col => (
             <Column key={col.id} col={col} cards={cardsByCol(col.id)} avatars={avatars} boardLabels={openBoardLabels}
@@ -642,7 +642,7 @@ export default function SotynFlow() {
 
 /* ── subnav strip ─────────────────────────────────────────────── */
 const SubNav = ({ children }) => (
-  <div className="flex items-center gap-2 px-3 py-2 text-white flex-shrink-0" style={{ background: NAVY, paddingTop: 'max(0.5rem, env(safe-area-inset-top))' }}>{children}</div>
+  <div className="flex items-center gap-2 px-3 py-2 text-white flex-shrink-0 md:rounded-t-lg" style={{ background: NAVY, paddingTop: 'max(0.5rem, env(safe-area-inset-top))' }}>{children}</div>
 );
 
 /* ── column lane ──────────────────────────────────────────────── */
