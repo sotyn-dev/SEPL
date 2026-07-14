@@ -279,7 +279,10 @@ router.post('/enquiries', requirePermission('rental_tools', 'create'), (req, res
 
 // ── POST /api/rental-tools/enquiries/:id/finalise-rate ─────────
 // Stage 1 → Stage 2.  Locks vendor + rate; creates a draft PO.
-router.post('/enquiries/:id/finalise-rate', requirePermission('rental_tools', 'create'), (req, res) => {
+// Gate = canApprove() (designated approver, else can_approve role) —
+// requiring the create/edit bit here 403'd approvers whose role
+// happened to lack that unrelated bit.
+router.post('/enquiries/:id/finalise-rate', requirePermission('rental_tools', 'view'), (req, res) => {
   const db = getDb();
   const id = +req.params.id;
   if (!canApprove(db, req.user.id)) {
@@ -404,8 +407,9 @@ router.post('/enquiries/:id/material-received', requirePermission('rental_tools'
 });
 
 // ── POST /api/rental-tools/enquiries/:id/return ────────────────
-// Stage 3 closure.  Ajmer signs off.
-router.post('/enquiries/:id/return', requirePermission('rental_tools', 'edit'), (req, res) => {
+// Stage 3 closure.  Ajmer signs off.  Same canApprove() gate as
+// finalise-rate — the edit bit is not required to approve.
+router.post('/enquiries/:id/return', requirePermission('rental_tools', 'view'), (req, res) => {
   const db = getDb();
   const id = +req.params.id;
   if (!canApprove(db, req.user.id)) {

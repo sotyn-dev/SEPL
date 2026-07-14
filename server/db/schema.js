@@ -5722,6 +5722,25 @@ in your first week. If a process feels broken, raise a Help Ticket
     ).run(viewer ? viewer.id : -1);
   } catch (e) {}
 
+  // One-time upgrade (mam 2026-07-07: "some users can't raise enquiry"):
+  // raising a rental-tool enquiry mirrors raising an indent — every
+  // non-Viewer role gets view + create. Only Admin had can_create, so
+  // the Raise Enquiry button was hidden for everyone else. Stage 1/3
+  // stay locked to the designated approver; Stage 2 photo upload needs
+  // can_edit, which Site Engineer gets (the spec's Stage 2 actor).
+  try {
+    const viewer = db.prepare("SELECT id FROM roles WHERE name='Viewer'").get();
+    db.prepare(
+      `UPDATE role_permissions SET can_view=1, can_create=1
+       WHERE module='rental_tools' AND (can_view=0 OR can_create=0) AND role_id != ?`
+    ).run(viewer ? viewer.id : -1);
+    db.prepare(
+      `UPDATE role_permissions SET can_edit=1
+       WHERE module='rental_tools' AND can_edit=0
+         AND role_id IN (SELECT id FROM roles WHERE name='Site Engineer')`
+    ).run();
+  } catch (e) {}
+
   // Seed default admin user
   const existing = db.prepare('SELECT id FROM users WHERE email = ?').get('admin@erp.com');
   if (!existing) {
