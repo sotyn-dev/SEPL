@@ -416,6 +416,8 @@ app.use('/api/collections', require('./routes/collections'));
 app.use('/api/ar-ap-tracker', require('./routes/arApTracker'));
 // Site Chat — internal WhatsApp-style message thread per site (mam 2026-06-18)
 app.use('/api/site-chat', require('./routes/siteChat'));
+// SOTYN Flow — Trello-style task boards (own DB sotynflow.db + shared socket)
+app.use('/api/sotyn-flow', require('./routes/sotynFlow'));
 app.use('/api/indent-fms', require('./routes/indentfms'));
 app.use('/api/dpr', require('./routes/dpr'));
 
@@ -525,7 +527,17 @@ const serverPort = process.env.PORT || 5000;
 // it — the chat uses its own DB + this socket, separate from the rest (mam
 // 2026-06-18). Falls back gracefully if the socket layer fails to start.
 const httpServer = require('http').createServer(app);
-try { require('./lib/chatSocket').initChatSocket(httpServer); console.log('[chat] Socket.IO ready'); }
+try {
+  const io = require('./lib/chatSocket').initChatSocket(httpServer);
+  console.log('[chat] Socket.IO ready');
+  // SOTYN Flow reuses the SAME io (board rooms f:<id> + flow:* events) — chat is
+  // untouched. seeAll lets a non-admin super-viewer (can_see_all on sotyn_flow)
+  // join any board room; resolved from erp.db here so the socket file stays clean.
+  const { getDb } = require('./db/schema');
+  const flowSeeAll = (uid) => { try { return !!getDb().prepare("SELECT MAX(rp.can_see_all) a FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id WHERE ur.user_id=? AND rp.module='sotyn_flow'").get(uid)?.a; } catch { return false; } };
+  require('./lib/sotynFlowSocket').registerBoardSocket(io, flowSeeAll);
+  console.log('[flow] Socket.IO ready');
+}
 catch (e) { console.warn('[chat] Socket.IO not started:', e.message); }
 httpServer.listen(serverPort, '0.0.0.0', () => {
   console.log(`\n======================================`);

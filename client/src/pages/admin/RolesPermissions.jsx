@@ -22,6 +22,7 @@ const ALL_MODULES = [
   { key: 'collections', label: 'Collection Engine' },
   { key: 'ar_ap_tracker', label: 'AR/AP Tracker' },
   { key: 'site_chat', label: 'SOTYN Chat — create/manage groups (chatting is open to all)' },
+  { key: 'sotyn_flow', label: "SOTYN Flow — tick 'See All' to view every board (else only boards you're a member of)" },
   { key: 'dpr', label: 'DPR' },
   { key: 'indent_labour_payment', label: 'Indent Labour Payment' },
   { key: 'labour_payment', label: 'Labour Payment Indents' },

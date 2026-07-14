@@ -379,9 +379,11 @@ tbody tr:hover {
 .badge-gray { @apply bg-gray-50 text-gray-600 ring-1 ring-gray-200; }
 .badge-purple { @apply bg-purple-50 text-purple-700 ring-1 ring-purple-200; }
 
-/* sotyn chat page specific css rule */
+/* Full-height app pages (SOTYN Chat, SOTYN Flow) — hide the footer credit on
+   mobile so it can't add scroll below the fixed-height pane. */
 @media screen and (max-width: 767px) {
-  .schat-wrapper ~ .p-footer {
+  .schat-wrapper ~ .p-footer,
+  .flow-wrapper ~ .p-footer {
     display: none !important;
   }
 }
