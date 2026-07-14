@@ -32,10 +32,39 @@
     <!-- Android Chrome fallbacks. -->
     <meta name="application-name" content="SOTYN.AI" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <script type="module" crossorigin src="/assets/index-DSOcpUpO.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-Dp2ogZ-f.css">
+
+    <!-- Instant first-paint splash (perf pass — first-paint). The app root is
+         otherwise empty, so nothing paints until the entry JS + react-vendor
+         (~98 KB gz) download, parse and React mounts — a blank screen on cold
+         load. This inline, self-contained splash paints as soon as the (small,
+         render-blocking) stylesheet lands, well before the JS bundle. React's
+         createRoot().render() clears #root on mount, so it's removed with no
+         cleanup JS. The .2s delay on splashIn means fast loads never flash it. -->
+    <style>
+      #app-splash{position:fixed;inset:0;display:flex;flex-direction:column;
+        align-items:center;justify-content:center;gap:18px;background:#f0f4f8;
+        font-family:'Inter Variable','Inter',-apple-system,'Segoe UI',sans-serif;
+        opacity:0;animation:splashIn .3s ease .2s forwards}
+      #app-splash .ring{width:44px;height:44px;border-radius:50%;
+        border:3px solid #cbd5e1;border-top-color:#1e40af;
+        animation:splashSpin .8s linear infinite}
+      #app-splash .brand{font-weight:800;letter-spacing:-.01em;color:#1e3a8a;font-size:20px}
+      @keyframes splashSpin{to{transform:rotate(360deg)}}
+      @keyframes splashIn{to{opacity:1}}
+      @media (prefers-reduced-motion:reduce){#app-splash .ring{animation:none}}
+    </style>
+    <script type="module" crossorigin src="/assets/index-ByqeOglw.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/react-vendor-j6k_rcxr.js">
+    <link rel="modulepreload" crossorigin href="/assets/net-BOeqtr82.js">
+    <link rel="modulepreload" crossorigin href="/assets/socket-dm1FmSOd.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-Db_MbAJg.css">
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="app-splash">
+        <div class="ring"></div>
+        <div class="brand">SOTYN.AI</div>
+      </div>
+    </div>
   </body>
 </html>
