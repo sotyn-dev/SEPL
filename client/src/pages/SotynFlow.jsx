@@ -445,13 +445,13 @@ export default function SotynFlow() {
           ) : (
             <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {shown.map(b => (
-                <button key={b.id} onClick={() => nav(`/sotyn-flow/${b.id}`)} className="text-left rounded-xl border border-gray-200 bg-white p-4 hover:shadow-md hover:border-blue-300 transition-all">
+                <button key={b.id} onClick={() => nav(`/sotyn-flow/${b.id}`)} className="text-left rounded-xl border border-gray-200 bg-white p-4 hover:shadow-md hover:border-blue-300 transition-all flex flex-col">
                   <div className="flex items-start justify-between gap-2">
-                    <h3 className="font-bold text-gray-800 line-clamp-2">{b.name}</h3>
+                    <h3 className="flex-1 min-w-0 font-bold text-gray-800 truncate">{b.name}</h3>
                     {b.my_role === 'admin' && <span className="text-[9px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded flex-shrink-0">ADMIN</span>}
                   </div>
-                  {b.description && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{b.description}</p>}
-                  <div className="flex items-center justify-between mt-3">
+                  {b.description && <p className="text-xs text-gray-500 mt-1 truncate">{b.description}</p>}
+                  <div className="flex items-center justify-between mt-auto pt-3">
                     <AvatarStack people={b.members} avatars={avatars} size={24} />
                     <div className="text-[11px] text-gray-400 flex gap-2"><span>{b.column_count} lists</span><span>{b.card_count} cards</span></div>
                   </div>
