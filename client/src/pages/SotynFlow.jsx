@@ -13,7 +13,7 @@ import { getToken } from '../lib/tokenStore';
 import {
   FiPlus, FiSearch, FiX, FiTrash2, FiArrowLeft, FiChevronDown, FiUsers,
   FiPaperclip, FiMoreHorizontal, FiCalendar, FiTag, FiCheckSquare, FiFile,
-  FiEdit2, FiSettings, FiTrello, FiCheck, FiMessageSquare,
+  FiEdit2, FiSettings, FiTrello, FiCheck, FiMessageSquare, FiImage,
 } from 'react-icons/fi';
 
 const NAVY = '#1e3a8a';
@@ -71,8 +71,24 @@ const relTime = (ts) => {
     return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
   } catch { return ts; }
 };
-const isImg = (u) => /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(String(u || ''));
+const isImg = (u) => /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif)$/i.test(String(u || ''));
 const uid = () => Math.random().toString(36).slice(2, 9);
+
+// Attachment photo that degrades gracefully (mirrors SiteChat's ChatImage): a
+// broken/missing upload or an iPhone HEIC/HEIF that non-Safari can't decode would
+// otherwise render a blank box — on error we swap to a clear tap-to-open link.
+function CardImage({ url, name }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return (
+    <a href={url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mt-1 break-all"><FiImage size={13} /> {name || 'Photo'} — tap to open</a>
+  );
+  return (
+    <a href={url} target="_blank" rel="noreferrer">
+      <img src={url} alt={name || ''} loading="lazy" decoding="async" onError={() => setFailed(true)}
+        className="mt-1 max-h-52 max-w-full rounded object-cover bg-gray-100" />
+    </a>
+  );
+}
 
 async function uploadFile(file) {
   const fd = new FormData(); fd.append('file', file);
@@ -276,7 +292,7 @@ function CardModal({ boardId, cardId, board, members, avatars, canManage, user, 
               <div className="rounded-lg bg-[#e6ecf7] px-3 py-1.5 mt-0.5 text-sm text-gray-800 whitespace-pre-wrap break-words">
                 {it.body}
                 {it.attachment_url && (isImg(it.attachment_url)
-                  ? <a href={it.attachment_url} target="_blank" rel="noreferrer"><img src={it.attachment_url} alt="" className="mt-1 max-h-40 rounded" /></a>
+                  ? <CardImage url={it.attachment_url} name={it.attachment_name} />
                   : <a href={it.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-blue-700 underline mt-1"><FiFile size={13} /> {it.attachment_name || 'attachment'}</a>)}
               </div>
               {(it.sender_id === user?.id || canManage) && <button onClick={() => delComment(it.id)} className="text-[11px] text-gray-400 hover:text-red-600 mt-0.5">Delete</button>}
