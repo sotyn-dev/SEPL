@@ -195,6 +195,10 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
   // Type filter (PO / FOC / RGP) — mam (2026-06-04): "if i filter rgp show
   // all tools". Purely client-side so it's instant and needs no refetch.
   const [typeFilter, setTypeFilter] = useState('');
+  // Condition filter (Unused / Used / Scrap / Free to use) — client-side like
+  // typeFilter. Lets mam isolate e.g. all "Free to use" spare stock, and with
+  // the warehouse picker, see what's free at a given site (mam 2026-07-15).
+  const [condFilter, setCondFilter] = useState('');
 
   // Item-type badge styling (PO / FOC / RGP), shared by the table + cards.
   const typeBadgeClass = (t) => {
@@ -288,8 +292,11 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
     if (typeFilter) {
       rows = rows.filter(r => String(r.item_type || '').toUpperCase() === typeFilter);
     }
+    if (condFilter) {
+      rows = rows.filter(r => (r.latest_condition || '') === condFilter);
+    }
     return rows;
-  }, [stock, filter.warehouse_id, typeFilter]);
+  }, [stock, filter.warehouse_id, typeFilter, condFilter]);
 
   // Total value across whatever's currently filtered. Used in the
   // summary banner — especially useful when mam picks a single site
@@ -319,13 +326,20 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
 
   return (
     <>
-      <div className="card p-4 grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+      <div className="card p-4 grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
         <div>
           <label className="label">Warehouse</label>
           <select className="select" value={filter.warehouse_id} onChange={e => setFilter(f => ({ ...f, warehouse_id: e.target.value }))}>
             <option value="">All warehouses</option>
             {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}{w.type === 'office' ? ' ★' : ''}</option>)}
           </select>
+        </div>
+        <div className="md:col-span-2">
+          <label className="label">Search Item</label>
+          <div className="relative">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+            <input className="input pl-9" placeholder="name / code / spec" value={filter.search} onChange={e => setFilter(f => ({ ...f, search: e.target.value }))} />
+          </div>
         </div>
         <div>
           <label className="label">Type</label>
@@ -337,16 +351,21 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
           </select>
         </div>
         <div>
-          <label className="label">Search Item</label>
-          <div className="relative">
-            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
-            <input className="input pl-9" placeholder="name / code / spec" value={filter.search} onChange={e => setFilter(f => ({ ...f, search: e.target.value }))} />
-          </div>
+          <label className="label">Condition</label>
+          <select className="select" value={condFilter} onChange={e => setCondFilter(e.target.value)}>
+            <option value="">All conditions</option>
+            <option value="Unused">Unused</option>
+            <option value="Used">Used</option>
+            <option value="Scrap">Scrap</option>
+            <option value="Free to use">Free to use</option>
+          </select>
         </div>
-        <label className="flex items-center gap-2 text-sm text-amber-700">
-          <input type="checkbox" className="w-4 h-4 rounded" checked={filter.low_only} onChange={e => setFilter(f => ({ ...f, low_only: e.target.checked }))} />
-          Show only items below reorder level
-        </label>
+        <div className="flex items-center min-h-9 pb-1">
+          <label className="flex items-center gap-2 text-xs text-amber-700">
+            <input type="checkbox" className="w-4 h-4 rounded" checked={filter.low_only} onChange={e => setFilter(f => ({ ...f, low_only: e.target.checked }))} />
+            Show only items below reorder level
+          </label>
+        </div>
       </div>
 
       {flatStock.length === 0 && (
@@ -390,6 +409,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
             const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
               : cond === 'Used' ? 'bg-amber-50 text-amber-700 border-amber-200'
               : cond === 'Scrap' ? 'bg-red-50 text-red-700 border-red-200'
+              : cond === 'Free to use' ? 'bg-blue-50 text-blue-700 border-blue-200'
               : 'bg-gray-50 text-gray-400 border-gray-200';
             const eff = +r.effective_rate || 0;
             const value = +r.value || (eff * (+r.quantity || 0));
@@ -425,6 +445,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                       <option value="Unused">Unused</option>
                       <option value="Used">Used</option>
                       <option value="Scrap">Scrap</option>
+                      <option value="Free to use">Free to use</option>
                     </select>
                   ) : cond ? (
                     <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${condClass}`}>{cond}</span>
@@ -512,6 +533,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                   const condClass = cond === 'Unused' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                     : cond === 'Used' ? 'bg-amber-50 text-amber-700 border-amber-200'
                     : cond === 'Scrap' ? 'bg-red-50 text-red-700 border-red-200'
+                    : cond === 'Free to use' ? 'bg-blue-50 text-blue-700 border-blue-200'
                     : 'bg-gray-50 text-gray-400 border-gray-200';
                   // effective_rate: server falls back to item_master.current_price
                   // when no movements have set an avg yet. rate_source = 'master'
@@ -579,6 +601,7 @@ function StockTab({ stock, warehouses, filter, setFilter, reload, canEdit, canDe
                             <option value="Unused">Unused</option>
                             <option value="Used">Used</option>
                             <option value="Scrap">Scrap</option>
+                            <option value="Free to use">Free to use</option>
                           </select>
                         ) : cond ? (
                           <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${condClass}`}>{cond}</span>
@@ -772,7 +795,7 @@ function OpeningStockTab({ warehouses, items, reload }) {
 // Unused / Scrap) is a per-row dropdown — required because mam tracks
 // brand-new stock vs already-used vs scrap on the same item line.
 function OpeningRowEntry({ warehouses, items, reload }) {
-  const CONDITIONS = ['Unused', 'Used', 'Scrap'];
+  const CONDITIONS = ['Unused', 'Used', 'Scrap', 'Free to use'];
   const newRow = () => ({ item_master_id: '', quantity: '', condition: '', photo_url: '', uploading: false });
   const [warehouseId, setWarehouseId] = useState(''); // shared across all rows in this session
   const [rows, setRows] = useState([newRow()]);
@@ -973,6 +996,7 @@ function OpeningRowEntry({ warehouses, items, reload }) {
           const condClass = r.condition === 'Unused' ? 'border-emerald-500'
             : r.condition === 'Used' ? 'border-amber-500'
             : r.condition === 'Scrap' ? 'border-red-500'
+            : r.condition === 'Free to use' ? 'border-blue-500'
             : ready ? 'border-emerald-500' : 'border-gray-200';
           return (
             <div key={i} className={`card p-4 border-l-4 ${condClass}`}>
