@@ -172,7 +172,7 @@ function initializeDatabase() {
       description TEXT NOT NULL,
       category TEXT DEFAULT 'bug' CHECK(category IN ('bug','feature_request','how_to','access_issue','data_issue','manpower','material','payment','other')),
       priority TEXT DEFAULT 'medium' CHECK(priority IN ('low','medium','high','urgent')),
-      status TEXT DEFAULT 'open' CHECK(status IN ('open','in_progress','resolved','closed')),
+      status TEXT DEFAULT 'open' CHECK(status IN ('open','in_progress','submitted','resolved','rejected','closed')),
       attachment_link TEXT,
       module TEXT,
       admin_response TEXT,
@@ -3343,6 +3343,16 @@ function initializeDatabase() {
     // Support tickets — who is the ticket assigned to? When set, that user
     // sees the ticket on their dashboard and can respond / work on it.
     ['support_tickets', 'assigned_to INTEGER REFERENCES users(id)'],
+    // Delegation-style proof upload + approval for Help Tickets
+    // (feat/helpticket-upload-proof). The assignee uploads a fix
+    // photo/PDF/Excel, the ticket moves to 'submitted', and the raiser /
+    // admin / follow-up role approves (→ resolved) or rejects (→ in_progress
+    // with a reason). Mirrors delegations.proof_url and snag_list.
+    ['support_tickets', 'proof_url TEXT'],                              // assignee's fix photo / PDF / Excel
+    ['support_tickets', 'proof_notes TEXT'],                            // optional note submitted with the proof
+    ['support_tickets', 'proof_submitted_at DATETIME'],
+    ['support_tickets', 'proof_submitted_by INTEGER REFERENCES users(id)'],
+    ['support_tickets', 'reject_reason TEXT'],                          // why the proof was rejected
     // --- Sales Funnel phase-A columns (mam's spec 2026-04-23) ---
     ['sales_funnel', 'first_call_status TEXT'],          // 'interested' | 'not_interested'
     ['sales_funnel', 'first_call_at DATETIME'],          // when the first call was made
@@ -3716,6 +3726,33 @@ function initializeDatabase() {
       db.exec('ALTER TABLE support_tickets_new RENAME TO support_tickets');
       db.exec('COMMIT');
       console.log('[migration] support_tickets rebuilt — category CHECK relaxed (manpower/material/payment now allowed)');
+    }
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch (e2) {}
+  }
+
+  // Relax the support_tickets STATUS CHECK for the Delegation-style proof
+  // flow (feat/helpticket-upload-proof): older DBs only allow
+  // ('open','in_progress','resolved','closed') and would reject the new
+  // 'submitted' / 'rejected' states. Strip the CHECK (app layer controls
+  // transitions), same rebuild pattern as the category relax above. SQLite
+  // keeps sqlite_master.sql in sync on ADD COLUMN, so copy-by-column-list is
+  // safe even after the assigned_to / proof_* columns were added.
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='support_tickets'").get();
+    if (row && /CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i.test(row.sql)
+            && !/submitted/i.test(row.sql)) {
+      db.exec('BEGIN');
+      const newSql = row.sql
+        .replace(/CREATE TABLE\s+support_tickets\b/i, 'CREATE TABLE support_tickets_new')
+        .replace(/,?\s*CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i, '');
+      db.exec(newSql);
+      const cols = db.prepare("PRAGMA table_info(support_tickets)").all().map(c => c.name).join(',');
+      db.exec(`INSERT INTO support_tickets_new (${cols}) SELECT ${cols} FROM support_tickets`);
+      db.exec('DROP TABLE support_tickets');
+      db.exec('ALTER TABLE support_tickets_new RENAME TO support_tickets');
+      db.exec('COMMIT');
+      console.log('[migration] support_tickets rebuilt — status CHECK relaxed (submitted/rejected now allowed)');
     }
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch (e2) {}

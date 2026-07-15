@@ -4,9 +4,10 @@ import Modal from './Modal';
 import SearchableSelect from './SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiHelpCircle, FiBook, FiX, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle } from 'react-icons/fi';
+import { FiHelpCircle, FiBook, FiX, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle, FiUpload } from 'react-icons/fi';
 import useDraggableFab from '../hooks/useDraggableFab';
 import { fmtDateIST } from '../utils/dateIST';
+import { compressImage } from '../utils/compressImage';
 
 const GUIDES = [
   { title: 'How to Add a Business Book Entry', steps: ['Go to Business Book page', 'Click "New Entry"', 'Fill client, company, project details', 'Select category (FF/Electrical/etc)', 'Save - auto creates Site + Order Planning'] },
@@ -20,7 +21,7 @@ const GUIDES = [
 ];
 
 export default function HelpTicket() {
-  const { user } = useAuth();
+  const { user, canSeeAll } = useAuth();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState('tickets');
   const [tickets, setTickets] = useState([]);
@@ -30,6 +31,8 @@ export default function HelpTicket() {
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [adminResponse, setAdminResponse] = useState('');
   const [reassign, setReassign] = useState('');
+  // Delegation-style proof upload state for the open ticket.
+  const [proof, setProof] = useState({ url: '', notes: '', uploading: false, pct: 0 });
 
   // Draggable FAB — mam's request 2026-05-16.  Position persists in
   // localStorage under 'fab-help' so it stays put across reloads.
@@ -38,6 +41,8 @@ export default function HelpTicket() {
   const helpFab = useDraggableFab('fab-help', { offsetRight: 24, offsetBottom: 24 });
 
   const isAdmin = user?.role === 'admin';
+  // Admin OR the help_tickets follow-up role can approve/reject any proof.
+  const canFollowAll = isAdmin || (typeof canSeeAll === 'function' && canSeeAll('help_tickets'));
 
   const load = () => { api.get('/support').then(r => setTickets(r.data)).catch(() => {}); };
   useEffect(() => {
@@ -79,7 +84,52 @@ export default function HelpTicket() {
     catch { toast.error('Failed'); }
   };
 
-  const statusColors = { open: 'bg-red-100 text-red-700', in_progress: 'bg-amber-100 text-amber-700', resolved: 'bg-emerald-100 text-emerald-700', closed: 'bg-gray-100 text-gray-500' };
+  // ── Proof of fix (Delegation-style) ──────────────────────────────────
+  const uploadProof = async (file) => {
+    if (!file) return;
+    setProof(p => ({ ...p, uploading: true, pct: 0 }));
+    try {
+      const toSend = file.type?.startsWith('image/') ? await compressImage(file) : file;
+      const fd = new FormData();
+      fd.append('file', toSend);
+      const res = await api.post('/upload', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (ev) => { if (ev.total) setProof(p => ({ ...p, pct: Math.round((ev.loaded / ev.total) * 100) })); },
+      });
+      setProof(p => ({ ...p, url: res.data?.url || '', uploading: false, pct: 100 }));
+      toast.success('Proof uploaded — add a note (optional) and submit');
+    } catch (err) {
+      setProof(p => ({ ...p, uploading: false, pct: 0 }));
+      toast.error(`Upload failed: ${err.response?.data?.error || err.message}`);
+    }
+  };
+  const submitProof = async (id) => {
+    if (!proof.url) return toast.error('Please upload a proof file first');
+    try {
+      await api.post(`/support/${id}/submit-proof`, { proof_url: proof.url, proof_notes: proof.notes });
+      toast.success('Proof submitted — awaiting approval');
+      setSelectedTicket(null); setModal(null); setProof({ url: '', notes: '', uploading: false, pct: 0 }); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+  const approveProof = async (id) => {
+    try {
+      await api.post(`/support/${id}/approve`);
+      toast.success('Proof approved — ticket resolved');
+      setSelectedTicket(null); setModal(null); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+  const rejectProof = async (id) => {
+    const reason = prompt('Reason for rejecting this proof (the assignee will see it):');
+    if (reason === null) return;
+    if (!reason.trim()) return toast.error('A reason is required to reject');
+    try {
+      await api.post(`/support/${id}/reject`, { reason });
+      toast.success('Proof rejected — assignee notified');
+      setSelectedTicket(null); setModal(null); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
+  const statusColors = { open: 'bg-red-100 text-red-700', in_progress: 'bg-amber-100 text-amber-700', submitted: 'bg-blue-100 text-blue-700', resolved: 'bg-emerald-100 text-emerald-700', rejected: 'bg-red-100 text-red-700', closed: 'bg-gray-100 text-gray-500' };
   const priorityColors = { low: 'text-gray-500', medium: 'text-red-600', high: 'text-amber-600', urgent: 'text-red-600' };
 
   return (
@@ -122,7 +172,7 @@ export default function HelpTicket() {
                 <button onClick={() => setModal('new')} className="w-full btn btn-primary text-xs py-2 flex items-center justify-center gap-1"><FiPlus size={12}/> Raise New Ticket</button>
                 {tickets.length === 0 && <p className="text-xs text-gray-400 text-center py-6">No tickets yet</p>}
                 {tickets.map(t => (
-                  <div key={t.id} onClick={() => { setSelectedTicket(t); setAdminResponse(t.admin_response || ''); setReassign(t.assigned_to || ''); setModal('view'); }} className="p-2.5 border rounded-lg hover:bg-red-50/40 cursor-pointer text-xs">
+                  <div key={t.id} onClick={() => { setSelectedTicket(t); setAdminResponse(t.admin_response || ''); setReassign(t.assigned_to || ''); setProof({ url: '', notes: '', uploading: false, pct: 0 }); setModal('view'); }} className="p-2.5 border rounded-lg hover:bg-red-50/40 cursor-pointer text-xs">
                     <div className="flex justify-between items-start">
                       <div className="flex-1 min-w-0">
                         <p className="font-bold text-red-600">{t.ticket_no}</p>
@@ -218,6 +268,54 @@ export default function HelpTicket() {
                   📎 View attachment
                 </a>
               </div>
+            )}
+            {/* Submitted proof of fix */}
+            {selectedTicket.proof_url && (
+              <div className="text-xs">
+                <a href={selectedTicket.proof_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-emerald-700 hover:underline font-semibold">
+                  ✅ View submitted proof{selectedTicket.proof_submitted_by_name ? ` — by ${selectedTicket.proof_submitted_by_name}` : ''}
+                </a>
+                {selectedTicket.proof_notes && <p className="text-gray-600 mt-1 whitespace-pre-wrap">{selectedTicket.proof_notes}</p>}
+              </div>
+            )}
+            {selectedTicket.status === 'rejected' && selectedTicket.reject_reason && (
+              <div className="bg-red-50 border-l-4 border-red-500 rounded p-2 text-xs">
+                <p className="font-bold text-red-700 mb-0.5">Proof rejected — please re-upload</p>
+                <p className="text-red-900 whitespace-pre-wrap">{selectedTicket.reject_reason}</p>
+              </div>
+            )}
+            {/* Assignee uploads proof of the fix */}
+            {(selectedTicket.assigned_to === user?.id || canFollowAll) && ['open', 'in_progress', 'rejected'].includes(selectedTicket.status) && (
+              <div className="border-t pt-3 space-y-2">
+                <h5 className="font-bold text-sm">Upload proof of fix <span className="text-gray-400 font-normal text-[10px]">(photo / PDF / Excel)</span></h5>
+                <div className="flex flex-wrap gap-2">
+                  <label className="btn btn-secondary text-[11px] px-2 py-1 cursor-pointer flex items-center gap-1">
+                    <FiUpload size={11} /> Camera
+                    <input type="file" accept="image/*" capture="environment" className="hidden" disabled={proof.uploading}
+                      onChange={e => { const f = e.target.files?.[0]; if (f) uploadProof(f); }} />
+                  </label>
+                  <label className="btn btn-secondary text-[11px] px-2 py-1 cursor-pointer flex items-center gap-1">
+                    <FiUpload size={11} /> File
+                    <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" className="hidden" disabled={proof.uploading}
+                      onChange={e => { const f = e.target.files?.[0]; if (f) uploadProof(f); }} />
+                  </label>
+                  {proof.uploading && <span className="text-[11px] text-gray-500 self-center">Uploading… {proof.pct}%</span>}
+                  {proof.url && !proof.uploading && <span className="text-[11px] text-emerald-600 self-center">✓ File ready</span>}
+                </div>
+                <textarea className="input" rows="2" value={proof.notes} onChange={e => setProof(p => ({ ...p, notes: e.target.value }))} placeholder="Optional note about the fix…" />
+                <button onClick={() => submitProof(selectedTicket.id)} disabled={!proof.url || proof.uploading} className="btn btn-success text-[11px] px-2 py-1 disabled:opacity-50">Submit Proof for Approval</button>
+              </div>
+            )}
+            {/* Raiser / admin reviews the submitted proof */}
+            {selectedTicket.status === 'submitted' && (selectedTicket.user_id === user?.id || canFollowAll) && (
+              <div className="border-t pt-3 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold text-gray-700">Review proof:</span>
+                <button onClick={() => approveProof(selectedTicket.id)} className="btn btn-success text-[11px] px-2 py-1 flex items-center gap-1"><FiCheckCircle size={11} /> Approve &amp; Resolve</button>
+                <button onClick={() => rejectProof(selectedTicket.id)} className="btn btn-danger text-[11px] px-2 py-1">Reject…</button>
+              </div>
+            )}
+            {selectedTicket.status === 'submitted' && !(selectedTicket.user_id === user?.id || canFollowAll) && (
+              <p className="text-[10px] text-gray-500 italic">Proof submitted — awaiting the raiser's approval.</p>
             )}
             {selectedTicket.admin_response && (
               <div className="bg-emerald-50 p-3 rounded border-l-4 border-emerald-500">

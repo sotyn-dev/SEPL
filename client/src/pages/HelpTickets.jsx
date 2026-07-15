@@ -9,14 +9,17 @@ import Modal from '../components/Modal';
 import SearchableSelect from '../components/SearchableSelect';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { FiHelpCircle, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle, FiEdit2, FiTrash2, FiSearch, FiUser, FiTag, FiDownload } from 'react-icons/fi';
+import { FiHelpCircle, FiPlus, FiCheckCircle, FiClock, FiAlertTriangle, FiEdit2, FiTrash2, FiSearch, FiUser, FiTag, FiDownload, FiUpload, FiExternalLink, FiRotateCcw } from 'react-icons/fi';
 import { exportCsv } from '../utils/exportCsv';
 import { fmtDate } from '../utils/datetime';
+import { compressImage } from '../utils/compressImage';
 
 const STATUS_COLORS = {
   open: 'bg-red-100 text-red-700',
   in_progress: 'bg-amber-100 text-amber-700',
+  submitted: 'bg-blue-100 text-blue-700',
   resolved: 'bg-emerald-100 text-emerald-700',
+  rejected: 'bg-red-100 text-red-700',
   closed: 'bg-gray-100 text-gray-500',
 };
 const PRIORITY_COLORS = {
@@ -25,6 +28,42 @@ const PRIORITY_COLORS = {
   high: 'text-amber-700 bg-amber-50',
   urgent: 'text-red-700 bg-red-50 font-bold',
 };
+// Files a browser can render inline (open in a new tab); everything else
+// (Excel, Word, CSV, …) downloads on click via the `download` attribute so a
+// View click never lands on a blank new browser screen.
+const PREVIEWABLE = /\.(png|jpe?g|gif|webp|bmp|svg|pdf)(\?|#|$)/i;
+function FileLink({ url, label, className, iconSize = 13 }) {
+  if (!url) return null;
+  const preview = PREVIEWABLE.test(url);
+  const Icon = preview ? FiExternalLink : FiDownload;
+  if (!preview) {
+    // Excel / Word / CSV etc. → download directly (never a blank new screen).
+    return (
+      <a href={url} download className={className}>
+        <Icon size={iconSize} /> {label}
+      </a>
+    );
+  }
+  // Images / PDFs → open in exactly ONE new tab/window. We can't rely on the
+  // anchor's target="_blank" alone (PWAs/webviews downgrade it to same-window),
+  // so we open explicitly and always suppress the anchor's own navigation —
+  // otherwise BOTH fire and two tabs open. Note: passing 'noopener' to
+  // window.open makes it return null even on success, so we omit it and sever
+  // `opener` manually; fall back to same-tab only if the popup is truly blocked.
+  const openNewTab = (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return; // honour modifier / middle clicks
+    e.preventDefault();
+    const w = window.open(url, '_blank');
+    if (w) { try { w.opener = null; } catch { /* cross-origin, ignore */ } }
+    else { window.location.href = url; } // popup blocked → view in the same tab
+  };
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" onClick={openNewTab} className={className}>
+      <Icon size={iconSize} /> {label}
+    </a>
+  );
+}
+
 const CATEGORIES = ['bug', 'feature_request', 'how_to', 'access_issue', 'data_issue', 'manpower', 'material', 'payment', 'other'];
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 
@@ -44,6 +83,15 @@ export default function HelpTickets() {
   const [form, setForm] = useState({ subject: '', description: '', category: 'bug', priority: 'medium', module: '', assigned_to: '' });
   const [response, setResponse] = useState('');
   const [reassign, setReassign] = useState('');
+  // Delegation-style proof upload state for the currently-open ticket.
+  const [proof, setProof] = useState({ url: '', notes: '', uploading: false, pct: 0 });
+
+  const openView = (t) => {
+    // Start the "Add / Update Response" box EMPTY — the saved response is shown
+    // read-only in "Latest Response", so pre-filling it just duplicated the text.
+    setViewModal(t); setResponse(''); setReassign(t.assigned_to || '');
+    setProof({ url: '', notes: '', uploading: false, pct: 0 });
+  };
 
   const load = () => {
     const params = new URLSearchParams({ scope });
@@ -105,6 +153,53 @@ export default function HelpTickets() {
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
+  // ── Proof of fix (Delegation-style) ──────────────────────────────────
+  // Upload the file first (compress images, PDFs/Excel as-is) → get a URL →
+  // submit it so the ticket moves to 'submitted' awaiting the raiser.
+  const uploadProof = async (file) => {
+    if (!file) return;
+    setProof(p => ({ ...p, uploading: true, pct: 0 }));
+    try {
+      const toSend = file.type?.startsWith('image/') ? await compressImage(file) : file;
+      const fd = new FormData();
+      fd.append('file', toSend);
+      const res = await api.post('/upload', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (ev) => { if (ev.total) setProof(p => ({ ...p, pct: Math.round((ev.loaded / ev.total) * 100) })); },
+      });
+      setProof(p => ({ ...p, url: res.data?.url || '', uploading: false, pct: 100 }));
+      toast.success('Proof uploaded — add a note (optional) and submit');
+    } catch (err) {
+      setProof(p => ({ ...p, uploading: false, pct: 0 }));
+      toast.error(`Upload failed: ${err.response?.data?.error || err.message}`);
+    }
+  };
+  const submitProof = async () => {
+    if (!proof.url) return toast.error('Please upload a proof file first');
+    try {
+      await api.post(`/support/${viewModal.id}/submit-proof`, { proof_url: proof.url, proof_notes: proof.notes });
+      toast.success('Proof submitted — awaiting approval');
+      setViewModal(null); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+  const approveProof = async () => {
+    try {
+      await api.post(`/support/${viewModal.id}/approve`);
+      toast.success('Proof approved — ticket resolved');
+      setViewModal(null); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+  const rejectProof = async () => {
+    const reason = prompt('Reason for rejecting this proof (the assignee will see it):');
+    if (reason === null) return;                       // cancelled
+    if (!reason.trim()) return toast.error('A reason is required to reject');
+    try {
+      await api.post(`/support/${viewModal.id}/reject`, { reason });
+      toast.success('Proof rejected — assignee notified');
+      setViewModal(null); load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
+  };
+
   const filtered = !search ? tickets : tickets.filter(t => {
     const q = search.toLowerCase();
     return (t.ticket_no || '').toLowerCase().includes(q)
@@ -146,7 +241,9 @@ export default function HelpTickets() {
           <option value="">All statuses</option>
           <option value="open">Open</option>
           <option value="in_progress">In Progress</option>
+          <option value="submitted">Submitted (awaiting approval)</option>
           <option value="resolved">Resolved</option>
+          <option value="rejected">Rejected</option>
           <option value="closed">Closed</option>
         </select>
         <div className="relative flex-1 min-w-[200px]">
@@ -166,24 +263,41 @@ export default function HelpTickets() {
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Assigned To</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Priority</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Status</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Proof</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">When</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-gray-400 text-sm">No tickets {scope === 'mine' ? 'assigned to you' : scope === 'given' ? 'raised by you' : ''} yet.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400 text-sm">No tickets {scope === 'mine' ? 'assigned to you' : scope === 'given' ? 'raised by you' : ''} yet.</td></tr>}
             {filtered.map(t => {
               const isRaiser = t.user_id === user?.id;
               const isAssignee = t.assigned_to === user?.id;
               const canClose = canFollowAll || isRaiser;
               return (
-                <tr key={t.id} className="border-t hover:bg-gray-50 cursor-pointer" onClick={() => { setViewModal(t); setResponse(t.admin_response || ''); setReassign(t.assigned_to || ''); }}>
+                <tr key={t.id} className="border-t hover:bg-gray-50 cursor-pointer" onClick={() => openView(t)}>
                   <td className="px-3 py-2 font-mono text-xs text-red-700 font-semibold">{t.ticket_no}</td>
                   <td className="px-3 py-2 text-gray-800 max-w-[260px] truncate" title={t.subject}>{t.subject}</td>
                   <td className="px-3 py-2 text-gray-600">{t.user_name}{isRaiser && <span className="text-[10px] text-red-600 ml-1">(you)</span>}</td>
                   <td className="px-3 py-2 text-gray-600">{t.assigned_to_name || <span className="text-gray-300">—</span>}{isAssignee && <span className="text-[10px] text-red-600 ml-1">(you)</span>}</td>
                   <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-[10px] uppercase ${PRIORITY_COLORS[t.priority] || ''}`}>{t.priority}</span></td>
                   <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded text-[10px] uppercase ${STATUS_COLORS[t.status] || ''}`}>{t.status?.replace('_', ' ')}</span></td>
+                  {/* Proof / uploads — mirrors the Delegations "Upload Proof" column:
+                      View link (image/PDF open in a new tab, xlsx/doc download) +
+                      an Upload/Re-upload affordance for the assignee. */}
+                  <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
+                    <div className="flex flex-col gap-1 items-start">
+                      {t.proof_url && (
+                        <FileLink url={t.proof_url} label="View" iconSize={11} className="text-red-600 text-xs hover:underline inline-flex items-center gap-1" />
+                      )}
+                      {(isAssignee || canFollowAll) && ['open', 'in_progress', 'rejected'].includes(t.status) && (
+                        <button onClick={() => openView(t)} className="text-[11px] text-blue-600 font-semibold hover:underline inline-flex items-center gap-1"><FiUpload size={11} /> {t.status === 'rejected' ? 'Re-upload' : 'Upload'}</button>
+                      )}
+                      {!t.proof_url && !((isAssignee || canFollowAll) && ['open', 'in_progress', 'rejected'].includes(t.status)) && (
+                        <span className="text-gray-300 text-xs">—</span>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-3 py-2 text-[11px] text-gray-500 whitespace-nowrap">{fmtDate(t.created_at, { day: '2-digit', month: 'short' })}</td>
                   <td className="px-3 py-2 text-right" onClick={e => e.stopPropagation()}>
                     {/* Quick close button only for the raiser / admin */}
@@ -282,10 +396,55 @@ export default function HelpTickets() {
               </div>
               {viewModal.attachment_link && (
                 <div>
-                  <a href={viewModal.attachment_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline text-sm font-semibold">
-                    📎 View attachment
-                  </a>
+                  <FileLink url={viewModal.attachment_link} label="View attachment" className="inline-flex items-center gap-1 text-blue-600 hover:underline text-sm font-semibold" />
                 </div>
+              )}
+              {/* Submitted proof of fix */}
+              {viewModal.proof_url && (
+                <div>
+                  <label className="label">Proof of fix{viewModal.proof_submitted_by_name ? ` — by ${viewModal.proof_submitted_by_name}` : ''}</label>
+                  <FileLink url={viewModal.proof_url} label="View submitted proof" className="inline-flex items-center gap-1 text-emerald-700 hover:underline text-sm font-semibold" />
+                  {viewModal.proof_notes && <p className="text-xs text-gray-600 mt-1 whitespace-pre-wrap">{viewModal.proof_notes}</p>}
+                </div>
+              )}
+              {viewModal.status === 'rejected' && viewModal.reject_reason && (
+                <div className="bg-red-50 border-l-4 border-red-500 rounded p-3">
+                  <p className="text-xs font-bold text-red-700 mb-1">Proof rejected — please re-upload</p>
+                  <p className="text-sm text-red-900 whitespace-pre-wrap">{viewModal.reject_reason}</p>
+                </div>
+              )}
+              {/* Assignee uploads proof of the fix → ticket goes to the raiser */}
+              {(isAssignee || canFollowAll) && ['open', 'in_progress', 'rejected'].includes(viewModal.status) && (
+                <div className="border-t pt-3 space-y-2">
+                  <label className="label">Upload proof of fix <span className="text-gray-400 font-normal text-[10px]">(photo / PDF / Excel — sent to the raiser for approval)</span></label>
+                  <div className="flex flex-wrap gap-2">
+                    <label className="btn btn-secondary text-xs cursor-pointer flex items-center gap-1">
+                      <FiUpload size={12} /> Camera
+                      <input type="file" accept="image/*" capture="environment" className="hidden" disabled={proof.uploading}
+                        onChange={e => { const f = e.target.files?.[0]; if (f) uploadProof(f); }} />
+                    </label>
+                    <label className="btn btn-secondary text-xs cursor-pointer flex items-center gap-1">
+                      <FiUpload size={12} /> File
+                      <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" className="hidden" disabled={proof.uploading}
+                        onChange={e => { const f = e.target.files?.[0]; if (f) uploadProof(f); }} />
+                    </label>
+                    {proof.uploading && <span className="text-xs text-gray-500 self-center">Uploading… {proof.pct}%</span>}
+                    {proof.url && !proof.uploading && <span className="text-xs text-emerald-600 self-center">✓ File ready</span>}
+                  </div>
+                  <textarea className="input" rows="2" value={proof.notes} onChange={e => setProof(p => ({ ...p, notes: e.target.value }))} placeholder="Optional note about the fix…" />
+                  <button onClick={submitProof} disabled={!proof.url || proof.uploading} className="btn btn-primary text-xs disabled:opacity-50">Submit Proof for Approval</button>
+                </div>
+              )}
+              {/* Raiser / admin reviews the submitted proof */}
+              {viewModal.status === 'submitted' && (isRaiser || canFollowAll) && (
+                <div className="border-t pt-3 flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold text-gray-700">Review the proof:</span>
+                  <button onClick={approveProof} className="btn btn-success text-xs flex items-center gap-1"><FiCheckCircle size={12} /> Approve &amp; Resolve</button>
+                  <button onClick={rejectProof} className="btn btn-danger text-xs">Reject…</button>
+                </div>
+              )}
+              {viewModal.status === 'submitted' && !(isRaiser || canFollowAll) && (
+                <p className="text-[11px] text-gray-500 italic">Proof submitted — awaiting the raiser's approval.</p>
               )}
               {viewModal.admin_response && (
                 <div>
@@ -314,13 +473,18 @@ export default function HelpTickets() {
               <div className="flex flex-wrap justify-end gap-2 pt-2 border-t">
                 <button onClick={() => setViewModal(null)} className="btn btn-secondary">Close</button>
                 {canRespond && viewModal.status !== 'resolved' && viewModal.status !== 'closed' && (
-                  <button onClick={() => update(viewModal.id, { status: 'in_progress', admin_response: response, ...(canFollowAll && reassign !== viewModal.assigned_to ? { assigned_to: reassign || null } : {}) })} className="btn btn-secondary text-amber-700">Mark In Progress</button>
+                  <button onClick={() => update(viewModal.id, { status: 'in_progress', admin_response: response || viewModal.admin_response, ...(canFollowAll && reassign !== viewModal.assigned_to ? { assigned_to: reassign || null } : {}) })} className="btn btn-secondary text-amber-700">Mark In Progress</button>
                 )}
                 {canRespond && (
-                  <button onClick={() => update(viewModal.id, { admin_response: response, ...(canFollowAll && reassign !== viewModal.assigned_to ? { assigned_to: reassign || null } : {}) })} className="btn btn-primary">Save Response</button>
+                  <button onClick={() => update(viewModal.id, { admin_response: response || viewModal.admin_response, ...(canFollowAll && reassign !== viewModal.assigned_to ? { assigned_to: reassign || null } : {}) })} className="btn btn-primary">Save Response</button>
                 )}
                 {canClose && viewModal.status !== 'resolved' && viewModal.status !== 'closed' && (
                   <button onClick={() => update(viewModal.id, { status: 'resolved', admin_response: response || viewModal.admin_response })} className="btn btn-success flex items-center gap-1"><FiCheckCircle size={12} /> Mark Resolved</button>
+                )}
+                {/* Reopen — resolved/closed isn't a dead end; the raiser/admin can
+                    push it back to in_progress if they're not satisfied. */}
+                {canClose && (viewModal.status === 'resolved' || viewModal.status === 'closed') && (
+                  <button onClick={() => update(viewModal.id, { status: 'in_progress', admin_response: response || viewModal.admin_response })} className="btn btn-secondary text-amber-700 flex items-center gap-1"><FiRotateCcw size={12} /> Reopen</button>
                 )}
                 {!canClose && viewModal.status !== 'resolved' && viewModal.status !== 'closed' && (
                   <span className="text-[11px] text-gray-500 italic self-center">Only the person who raised this ticket can close it.</span>

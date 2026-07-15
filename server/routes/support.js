@@ -5,6 +5,19 @@ const { fireEmailEvent } = require('../lib/emailRules');
 const { getEmailConfig } = require('../lib/email');
 const stUserEmail = (db, id) => { try { return db.prepare('SELECT email FROM users WHERE id=?').get(id)?.email || null; } catch { return null; } };
 const stDirector = () => { try { return getEmailConfig().director; } catch { return null; } };
+// Admin OR the help_tickets follow-up role (can_see_all / can_approve) may
+// triage any ticket — approve/reject proof, submit on behalf of an
+// unassigned ticket. Mirrors the inline canFollowAll checks in GET / PUT.
+const ticketFollowAll = (db, userId) => {
+  const user = db.prepare('SELECT role FROM users WHERE id=?').get(userId);
+  if (user?.role === 'admin') return true;
+  const row = db.prepare(`
+    SELECT MAX(CASE WHEN rp.can_see_all = 1 OR rp.can_approve = 1 THEN 1 ELSE 0 END) as ok
+    FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id
+    WHERE ur.user_id = ? AND rp.module = 'help_tickets'
+  `).get(userId);
+  return !!row?.ok;
+};
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -48,11 +61,13 @@ router.get('/', (req, res) => {
   let sql = `SELECT t.*,
       u.name as user_name,
       r.name as resolved_by_name,
-      a.name as assigned_to_name
+      a.name as assigned_to_name,
+      p.name as proof_submitted_by_name
     FROM support_tickets t
     LEFT JOIN users u ON t.user_id = u.id
     LEFT JOIN users r ON t.resolved_by = r.id
-    LEFT JOIN users a ON t.assigned_to = a.id`;
+    LEFT JOIN users a ON t.assigned_to = a.id
+    LEFT JOIN users p ON t.proof_submitted_by = p.id`;
   if (where.length) sql += ' WHERE ' + where.join(' AND ');
   sql += ' ORDER BY t.created_at DESC';
   res.json(db.prepare(sql).all(...params));
@@ -201,6 +216,107 @@ router.put('/:id', (req, res) => {
     });
   }
   res.json({ message: 'Updated' });
+});
+
+// ── Delegation-style proof flow ───────────────────────────────────────
+// The assignee uploads proof of the fix (photo / PDF / Excel) → ticket goes
+// 'submitted' → the raiser (issue owner) / admin / follow-up role approves
+// (→ resolved) or rejects (→ in_progress with a reason). Admin's direct
+// resolve/close in PUT above still works as an override.
+
+// Submit proof. Assignee, or admin / follow-up role (the latter two can
+// submit on behalf of the assignee, e.g. an unassigned ticket they handle).
+router.post('/:id/submit-proof', (req, res) => {
+  const { proof_url, proof_notes } = req.body;
+  const db = getDb();
+  const ticket = db.prepare('SELECT * FROM support_tickets WHERE id=?').get(req.params.id);
+  if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+  const isAssignee = ticket.assigned_to === req.user.id;
+  if (!isAssignee && !ticketFollowAll(db, req.user.id)) {
+    return res.status(403).json({ error: 'Only the assignee or an admin / follow-up role can submit proof' });
+  }
+  if (!proof_url) return res.status(400).json({ error: 'Proof file is required' });
+  db.prepare(
+    `UPDATE support_tickets SET
+       status = 'submitted', proof_url = ?, proof_notes = ?,
+       proof_submitted_at = CURRENT_TIMESTAMP, proof_submitted_by = ?,
+       reject_reason = NULL, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).run(proof_url, proof_notes || null, req.user.id, req.params.id);
+  // Nudge the raiser that proof is awaiting their approval.
+  try {
+    const { notify } = require('../lib/push');
+    if (ticket.user_id) notify(ticket.user_id, {
+      title: `✅ Proof submitted — ${ticket.ticket_no}`,
+      body: ticket.subject,
+      url: '/help-tickets',
+      tag: `ticket-${ticket.id}`,
+    });
+  } catch {}
+  res.json({ message: 'Proof submitted, awaiting approval' });
+});
+
+// Approve the submitted proof — raiser, admin, or follow-up role. Resolves.
+router.post('/:id/approve', (req, res) => {
+  const db = getDb();
+  const ticket = db.prepare('SELECT * FROM support_tickets WHERE id=?').get(req.params.id);
+  if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+  const isRaiser = ticket.user_id === req.user.id;
+  if (!isRaiser && !ticketFollowAll(db, req.user.id)) {
+    return res.status(403).json({ error: 'Only the person who raised this ticket (or admin / follow-up role) can approve' });
+  }
+  if (ticket.status !== 'submitted') return res.status(400).json({ error: 'Ticket is not awaiting approval' });
+  db.prepare(
+    `UPDATE support_tickets SET status = 'resolved', resolved_by = ?, resolved_at = CURRENT_TIMESTAMP,
+       reject_reason = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).run(req.user.id, req.params.id);
+  fireEmailEvent('ticket.resolved', {
+    ticket_no: ticket.ticket_no,
+    subject: ticket.subject || '',
+    resolved_by: req.user.name || '',
+    date: new Date().toISOString().slice(0, 10),
+    creator_email: stUserEmail(db, ticket.user_id),
+    assignee_email: stUserEmail(db, ticket.assigned_to),
+    director_email: stDirector(),
+  });
+  try {
+    const { notify } = require('../lib/push');
+    if (ticket.assigned_to) notify(ticket.assigned_to, {
+      title: `✔️ Proof approved — ${ticket.ticket_no}`,
+      body: ticket.subject,
+      url: '/help-tickets',
+      tag: `ticket-${ticket.id}`,
+    });
+  } catch {}
+  res.json({ message: 'Proof approved, ticket resolved' });
+});
+
+// Reject the submitted proof (reason required) — raiser, admin, or follow-up
+// role. Moves the ticket to 'rejected' (mirrors delegations) so the assignee
+// sees the reason and re-uploads; the upload block re-appears for 'rejected'.
+router.post('/:id/reject', (req, res) => {
+  const { reason } = req.body;
+  if (!reason || !reason.trim()) return res.status(400).json({ error: 'Rejection reason is required' });
+  const db = getDb();
+  const ticket = db.prepare('SELECT * FROM support_tickets WHERE id=?').get(req.params.id);
+  if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+  const isRaiser = ticket.user_id === req.user.id;
+  if (!isRaiser && !ticketFollowAll(db, req.user.id)) {
+    return res.status(403).json({ error: 'Only the person who raised this ticket (or admin / follow-up role) can reject' });
+  }
+  db.prepare(
+    `UPDATE support_tickets SET status = 'rejected', reject_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  ).run(reason.trim(), req.params.id);
+  try {
+    const { notify } = require('../lib/push');
+    if (ticket.assigned_to) notify(ticket.assigned_to, {
+      title: `❌ Proof rejected — ${ticket.ticket_no}`,
+      body: reason.trim().slice(0, 120),
+      url: '/help-tickets',
+      tag: `ticket-${ticket.id}`,
+    });
+  } catch {}
+  res.json({ message: 'Proof rejected, assignee notified' });
 });
 
 // DELETE (admin only)
