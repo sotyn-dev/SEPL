@@ -85,12 +85,16 @@ export default function HelpTickets() {
   const [reassign, setReassign] = useState('');
   // Delegation-style proof upload state for the currently-open ticket.
   const [proof, setProof] = useState({ url: '', notes: '', uploading: false, pct: 0 });
+  // Inline reject-reason capture (replaces the native prompt()).
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
 
   const openView = (t) => {
     // Start the "Add / Update Response" box EMPTY — the saved response is shown
     // read-only in "Latest Response", so pre-filling it just duplicated the text.
     setViewModal(t); setResponse(''); setReassign(t.assigned_to || '');
     setProof({ url: '', notes: '', uploading: false, pct: 0 });
+    setRejecting(false); setRejectReason('');
   };
 
   const load = () => {
@@ -190,11 +194,9 @@ export default function HelpTickets() {
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
   const rejectProof = async () => {
-    const reason = prompt('Reason for rejecting this proof (the assignee will see it):');
-    if (reason === null) return;                       // cancelled
-    if (!reason.trim()) return toast.error('A reason is required to reject');
+    if (!rejectReason.trim()) return toast.error('A reason is required to reject');
     try {
-      await api.post(`/support/${viewModal.id}/reject`, { reason });
+      await api.post(`/support/${viewModal.id}/reject`, { reason: rejectReason });
       toast.success('Proof rejected — assignee notified');
       setViewModal(null); load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
@@ -263,7 +265,7 @@ export default function HelpTickets() {
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Assigned To</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Priority</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Status</th>
-              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">Proof</th>
+              <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500 min-w-24">Proof</th>
               <th className="text-left px-3 py-2 text-[10px] uppercase font-semibold text-gray-500">When</th>
               <th></th>
             </tr>
@@ -380,6 +382,13 @@ export default function HelpTickets() {
           const isAssignee = viewModal.assigned_to === user?.id;
           const canClose = canFollowAll || isRaiser;
           const canRespond = canFollowAll || isAssignee || isRaiser;
+          // State-aware action model — one consistent footer, one primary per
+          // state, no competing/duplicate resolve buttons.
+          const st = viewModal.status;
+          const canReview = isRaiser || canFollowAll;          // approve/reject a submitted proof
+          const isSubmitted = st === 'submitted';
+          const isClosedState = st === 'resolved' || st === 'closed';
+          const isWorking = !isSubmitted && !isClosedState;    // open / in_progress / rejected
           return (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 text-sm">
@@ -435,15 +444,12 @@ export default function HelpTickets() {
                   <button onClick={submitProof} disabled={!proof.url || proof.uploading} className="btn btn-primary text-xs disabled:opacity-50">Submit Proof for Approval</button>
                 </div>
               )}
-              {/* Raiser / admin reviews the submitted proof */}
-              {viewModal.status === 'submitted' && (isRaiser || canFollowAll) && (
-                <div className="border-t pt-3 flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-gray-700">Review the proof:</span>
-                  <button onClick={approveProof} className="btn btn-success text-xs flex items-center gap-1"><FiCheckCircle size={12} /> Approve &amp; Resolve</button>
-                  <button onClick={rejectProof} className="btn btn-danger text-xs">Reject…</button>
-                </div>
+              {/* Proof review actions now live in the single footer action bar
+                  below — the body only shows proof info + review status. */}
+              {isSubmitted && canReview && (
+                <p className="text-[11px] text-blue-700 font-medium">Proof submitted — review it below (Approve &amp; Resolve or Reject).</p>
               )}
-              {viewModal.status === 'submitted' && !(isRaiser || canFollowAll) && (
+              {isSubmitted && !canReview && (
                 <p className="text-[11px] text-gray-500 italic">Proof submitted — awaiting the raiser's approval.</p>
               )}
               {viewModal.admin_response && (
@@ -456,37 +462,69 @@ export default function HelpTickets() {
                 <div>
                   <label className="label">Add / Update Response</label>
                   <textarea className="input" rows="3" value={response} onChange={e => setResponse(e.target.value)} placeholder="What's the status, plan, or fix..." />
+                  {/* The Save button belongs with the field it acts on (proximity),
+                      not in the workflow footer. Left-aligned + styled to match
+                      "Submit Proof for Approval" for visible consistency; disabled
+                      when empty. */}
+                  <div className="mt-2">
+                    <button onClick={() => update(viewModal.id, { admin_response: response })} disabled={!response.trim()} className="btn btn-primary text-xs disabled:opacity-50">Save Response</button>
+                  </div>
                 </div>
               )}
               {canFollowAll && (
                 <div>
                   <label className="label">Reassign To</label>
-                  <SearchableSelect
-                    options={employees.map(e => ({ ...e, label: e.name + (e.department ? ' (' + e.department + ')' : '') }))}
-                    value={reassign || null}
-                    valueKey="id" displayKey="label"
-                    placeholder="Pick assignee"
-                    onChange={(emp) => setReassign(emp?.id || '')}
-                  />
+                  <div className="flex gap-2 items-start">
+                    <div className="flex-1">
+                      <SearchableSelect
+                        options={employees.map(e => ({ ...e, label: e.name + (e.department ? ' (' + e.department + ')' : '') }))}
+                        value={reassign || null}
+                        valueKey="id" displayKey="label"
+                        placeholder="Pick assignee"
+                        onChange={(emp) => setReassign(emp?.id || '')}
+                      />
+                    </div>
+                    <button onClick={() => update(viewModal.id, { assigned_to: reassign || null })} disabled={String(reassign || '') === String(viewModal.assigned_to || '')} className="btn btn-secondary text-xs whitespace-nowrap disabled:opacity-50">Save Assignee</button>
+                  </div>
                 </div>
               )}
-              <div className="flex flex-wrap justify-end gap-2 pt-2 border-t">
+              {/* Inline reject reason — replaces the native prompt() so the
+                  reason is captured in-context with validation. */}
+              {isSubmitted && canReview && rejecting && (
+                <div className="border-t pt-3 space-y-2">
+                  <label className="label">Reason for rejection <span className="text-gray-400 font-normal text-[10px]">(the assignee will see this)</span></label>
+                  <textarea className="input" rows="2" autoFocus value={rejectReason} onChange={e => setRejectReason(e.target.value)} placeholder="e.g. Screenshot is blurry — please re-capture the fix" />
+                  <div className="flex justify-end gap-2">
+                    <button onClick={() => { setRejecting(false); setRejectReason(''); }} className="btn btn-secondary text-xs">Cancel</button>
+                    <button onClick={rejectProof} disabled={!rejectReason.trim()} className="btn btn-danger text-xs disabled:opacity-50">Confirm reject</button>
+                  </div>
+                </div>
+              )}
+              {/* Single action bar — one primary per state, no duplicate/competing
+                  resolves. Green is reserved for the one positive terminal action. */}
+              <div className="flex flex-wrap justify-end items-center gap-2 pt-2 border-t">
                 <button onClick={() => setViewModal(null)} className="btn btn-secondary">Close</button>
-                {canRespond && viewModal.status !== 'resolved' && viewModal.status !== 'closed' && (
-                  <button onClick={() => update(viewModal.id, { status: 'in_progress', admin_response: response || viewModal.admin_response, ...(canFollowAll && reassign !== viewModal.assigned_to ? { assigned_to: reassign || null } : {}) })} className="btn btn-secondary text-amber-700">Mark In Progress</button>
+                {/* Working states (open / in_progress / rejected) — direct transitions.
+                    Note & assignee have their own Save buttons above; a typed-but-
+                    unsaved note still rides along so it isn't lost. */}
+                {isWorking && canRespond && st !== 'in_progress' && (
+                  <button onClick={() => update(viewModal.id, { status: 'in_progress', admin_response: response || viewModal.admin_response })} className="btn btn-secondary text-amber-700">Mark In Progress</button>
                 )}
-                {canRespond && (
-                  <button onClick={() => update(viewModal.id, { admin_response: response || viewModal.admin_response, ...(canFollowAll && reassign !== viewModal.assigned_to ? { assigned_to: reassign || null } : {}) })} className="btn btn-primary">Save Response</button>
-                )}
-                {canClose && viewModal.status !== 'resolved' && viewModal.status !== 'closed' && (
+                {isWorking && canClose && (
                   <button onClick={() => update(viewModal.id, { status: 'resolved', admin_response: response || viewModal.admin_response })} className="btn btn-success flex items-center gap-1"><FiCheckCircle size={12} /> Mark Resolved</button>
                 )}
-                {/* Reopen — resolved/closed isn't a dead end; the raiser/admin can
-                    push it back to in_progress if they're not satisfied. */}
-                {canClose && (viewModal.status === 'resolved' || viewModal.status === 'closed') && (
+                {/* Submitted — proof review is the ONLY resolve path */}
+                {isSubmitted && canReview && !rejecting && (
+                  <>
+                    <button onClick={() => { setRejecting(true); setRejectReason(''); }} className="btn btn-danger">Reject…</button>
+                    <button onClick={approveProof} className="btn btn-success flex items-center gap-1"><FiCheckCircle size={12} /> Approve &amp; Resolve</button>
+                  </>
+                )}
+                {/* Resolved / closed — reopen so it's never a dead end */}
+                {isClosedState && canClose && (
                   <button onClick={() => update(viewModal.id, { status: 'in_progress', admin_response: response || viewModal.admin_response })} className="btn btn-secondary text-amber-700 flex items-center gap-1"><FiRotateCcw size={12} /> Reopen</button>
                 )}
-                {!canClose && viewModal.status !== 'resolved' && viewModal.status !== 'closed' && (
+                {!canClose && isWorking && (
                   <span className="text-[11px] text-gray-500 italic self-center">Only the person who raised this ticket can close it.</span>
                 )}
               </div>
