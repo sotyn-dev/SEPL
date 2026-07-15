@@ -45,6 +45,72 @@ const colTitle = (db, colId) => db.prepare('SELECT title FROM board_columns WHER
 const logActivity = (db, boardId, cardId, req, type, detail) =>
   db.prepare('INSERT INTO board_card_activity (card_id, board_id, actor_id, actor_name, type, detail) VALUES (?,?,?,?,?,?)')
     .run(cardId, boardId, req.user.id, req.user.name || '', type, detail || null);
+// ── labels: fixed priority set (radio) + board custom labels ──────────────────
+// The 4 priorities are VIRTUAL — never stored on a board, always injected on read
+// (GET) and always accepted on a card's label_ids. That keeps them present on
+// every board (any card editor can set one) with no palette seeding or migration.
+// Only plain, colourless "custom" labels are ever persisted in boards.labels.
+const PRIORITY_LABELS = [
+  { id: 'p:urgent', name: 'Urgent', color: '#dc2626', kind: 'priority' },
+  { id: 'p:high',   name: 'High',   color: '#ea580c', kind: 'priority' },
+  { id: 'p:medium', name: 'Medium', color: '#d97706', kind: 'priority' },
+  { id: 'p:low',    name: 'Low',    color: '#6b7280', kind: 'priority' },
+];
+const PRIORITY_IDS = new Set(PRIORITY_LABELS.map(l => l.id));
+const priIdByName = new Map(PRIORITY_LABELS.map(l => [l.name.toLowerCase(), l.id]));
+const CUSTOM_MAX = 3, CUSTOM_LEN = 16;
+
+// Keep only stored CUSTOM labels (plain, colourless): drop priorities (virtual),
+// drop legacy coloured / priority-named labels, clamp names, cap the count.
+const sanitizeCustoms = (labels) => (Array.isArray(labels) ? labels : [])
+  .filter(l => l && l.color == null && !PRIORITY_IDS.has(l.id) && !priIdByName.has(String(l.name || '').toLowerCase()))
+  .map(l => ({ id: l.id, name: String(l.name || '').slice(0, CUSTOM_LEN), color: null, kind: 'custom' }))
+  .slice(0, CUSTOM_MAX);
+
+// Idempotent per-board normalization, run on board read. Strips legacy coloured
+// labels from the palette, migrates legacy priority-named labels → the fixed p:
+// ids on every card, and enforces ≤1 priority + the custom cap per card. Writes
+// only when something changed, so steady-state loads stay read-only. Returns the
+// clean custom palette.
+function normalizeBoardLabels(db, boardId) {
+  const board = db.prepare('SELECT labels FROM boards WHERE id=?').get(boardId);
+  if (!board) return [];
+  const stored = parseJson(board.labels, []);
+  // Legacy priority-alias ids (matched by old p: id or by name) → canonical p: id.
+  const alias = new Map();
+  for (const l of stored) {
+    if (!l) continue;
+    if (PRIORITY_IDS.has(l.id)) alias.set(l.id, l.id);
+    else { const byName = priIdByName.get(String(l.name || '').toLowerCase()); if (byName) alias.set(l.id, byName); }
+  }
+  const customs = sanitizeCustoms(stored);
+  const customIds = new Set(customs.map(c => c.id));
+
+  const cards = db.prepare('SELECT id, label_ids FROM board_cards WHERE board_id=?').all(boardId);
+  const cardUpdates = [];
+  for (const card of cards) {
+    const ids = parseJson(card.label_ids, []);
+    let pri = null; const kept = [];
+    for (const id of ids) {
+      const canon = alias.get(id) || (PRIORITY_IDS.has(id) ? id : null);
+      if (canon) { if (!pri) pri = canon; }        // first priority wins (radio)
+      else if (customIds.has(id)) kept.push(id);
+    }
+    const next = [...(pri ? [pri] : []), ...kept.slice(0, CUSTOM_MAX)];
+    if (JSON.stringify(next) !== JSON.stringify(ids)) cardUpdates.push([card.id, JSON.stringify(next)]);
+  }
+
+  const paletteChanged = JSON.stringify(customs) !== JSON.stringify(stored);
+  if (paletteChanged || cardUpdates.length) {
+    db.transaction(() => {
+      if (paletteChanged) db.prepare('UPDATE boards SET labels=? WHERE id=?').run(JSON.stringify(customs), boardId);
+      const upd = db.prepare('UPDATE board_cards SET label_ids=? WHERE id=?');
+      for (const [id, json] of cardUpdates) upd.run(json, id);
+    })();
+  }
+  return customs;
+}
+
 // Card enrichment for the board payload.
 const enrichCard = (db, c) => ({
   id: c.id, board_id: c.board_id, column_id: c.column_id, title: c.title, description: c.description,
@@ -103,11 +169,12 @@ router.get('/:id', (req, res) => {
   if (!canAccess(db, req, b)) return res.status(403).json({ error: 'You are not a member of this board' });
   const board = db.prepare('SELECT * FROM boards WHERE id=?').get(b);
   if (!board) return res.status(404).json({ error: 'Board not found' });
+  const customs = normalizeBoardLabels(db, b);   // purge legacy + remap cards BEFORE we read cards
   const columns = db.prepare('SELECT id, title, position FROM board_columns WHERE board_id=? ORDER BY position, id').all(b);
   const cards = db.prepare('SELECT * FROM board_cards WHERE board_id=? ORDER BY position, id').all(b).map(c => enrichCard(db, c));
   const members = db.prepare("SELECT user_id, user_name AS name, role FROM board_members WHERE board_id=? ORDER BY (role='admin') DESC, user_name").all(b);
   res.json({
-    board: { id: board.id, name: board.name, description: board.description, labels: parseJson(board.labels, []), my_role: myRole(db, b, req.user.id) },
+    board: { id: board.id, name: board.name, description: board.description, labels: [...PRIORITY_LABELS, ...customs], my_role: myRole(db, b, req.user.id) },
     columns, cards, members,
   });
 });
@@ -119,7 +186,7 @@ router.put('/:id', (req, res) => {
   const set = [], vals = [];
   if (req.body?.name !== undefined) { const n = String(req.body.name).trim(); if (!n) return res.status(400).json({ error: 'Name required' }); set.push('name=?'); vals.push(n); }
   if (req.body?.description !== undefined) { set.push('description=?'); vals.push(req.body.description != null ? String(req.body.description) : null); }
-  if (req.body?.labels !== undefined) { set.push('labels=?'); vals.push(JSON.stringify(Array.isArray(req.body.labels) ? req.body.labels : [])); }
+  if (req.body?.labels !== undefined) { set.push('labels=?'); vals.push(JSON.stringify(sanitizeCustoms(req.body.labels))); }   // priorities are virtual; only customs persist
   if (set.length) db.prepare(`UPDATE boards SET ${set.join(', ')} WHERE id=?`).run(...vals, b);
   emitBoard(b, 'changed', { boardId: b });
   res.json({ ok: true });
@@ -266,9 +333,14 @@ router.put('/:id/cards/:cardId', (req, res) => {
   if (req.body?.due_date !== undefined) { set.push('due_date=?'); vals.push(req.body.due_date ? String(req.body.due_date) : null); }
   if (req.body?.checklist !== undefined) { set.push('checklist=?'); vals.push(JSON.stringify(Array.isArray(req.body.checklist) ? req.body.checklist : [])); }
   if (req.body?.label_ids !== undefined) {
-    const boardLabels = parseJson(db.prepare('SELECT labels FROM boards WHERE id=?').get(b)?.labels, []);
-    const valid = new Set(boardLabels.map(l => l.id));
-    const ids = (Array.isArray(req.body.label_ids) ? req.body.label_ids : []).filter(x => valid.has(x));
+    const stored = parseJson(db.prepare('SELECT labels FROM boards WHERE id=?').get(b)?.labels, []);
+    const validCustom = new Set(sanitizeCustoms(stored).map(l => l.id));
+    let pri = null; const customs = [];
+    for (const id of (Array.isArray(req.body.label_ids) ? req.body.label_ids : [])) {
+      if (PRIORITY_IDS.has(id)) { if (!pri) pri = id; }   // ≤1 priority (radio); priorities always valid
+      else if (validCustom.has(id)) customs.push(id);
+    }
+    const ids = [...(pri ? [pri] : []), ...customs.slice(0, CUSTOM_MAX)];
     set.push('label_ids=?'); vals.push(JSON.stringify(ids));
   }
   db.transaction(() => {

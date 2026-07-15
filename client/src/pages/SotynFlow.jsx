@@ -22,13 +22,16 @@ const BLUE = '#2563eb';
 // swappable const so options #2–#5 can drop in without hunting.
 const CANVAS_BG = { backgroundColor: '#f4f6fb', backgroundImage: 'radial-gradient(#cdd9f0 1.4px, transparent 1.4px)', backgroundSize: '18px 18px' };
 const LABEL_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
-// One-tap urgency labels seeded with colours (board-wide once added).
-const URGENCY_PRESETS = [
-  { name: 'Urgent', color: '#dc2626' },
-  { name: 'High', color: '#ea580c' },
-  { name: 'Medium', color: '#d97706' },
-  { name: 'Low', color: '#6b7280' },
+// Fixed priority set — one radio choice per card. These 4 ids are VIRTUAL board
+// labels the server injects on read (see sotynFlow.js), so they always resolve.
+const PRIORITY_LABELS = [
+  { id: 'p:urgent', name: 'Urgent', color: '#dc2626' },
+  { id: 'p:high', name: 'High', color: '#ea580c' },
+  { id: 'p:medium', name: 'Medium', color: '#d97706' },
+  { id: 'p:low', name: 'Low', color: '#6b7280' },
 ];
+const isPriorityId = (id) => typeof id === 'string' && id.startsWith('p:');
+const CUSTOM_MAX = 3, CUSTOM_LEN = 16;   // board custom-label palette caps (match server)
 
 const initials = (s) => String(s || '?').replace(/[^A-Za-z0-9 ]/g, '').trim().slice(0, 2).toUpperCase() || '#';
 // Distinct per-person avatar colours — a stable [bg, text] pair hashed from the
@@ -152,7 +155,7 @@ function CardModal({ boardId, cardId, board, members, avatars, canManage, user, 
   // Open handlers seed each popover's draft from the card's current state, so
   // nothing commits until Apply (click-away / Cancel discards).
   const openMembers = () => { setSelMembers((card.members || []).map(m => m.user_id)); setMemberQuery(''); setMenuOpen(menuOpen === 'members' ? null : 'members'); };
-  const openLabels = () => { setDraftLabels(boardLabels.map(l => ({ ...l }))); setSelLabels([...(card.label_ids || [])]); setPlainName(''); setMenuOpen(menuOpen === 'labels' ? null : 'labels'); };
+  const openLabels = () => { setDraftLabels(boardLabels.filter(l => !isPriorityId(l.id)).map(l => ({ ...l }))); setSelLabels([...(card.label_ids || [])]); setPlainName(''); setMenuOpen(menuOpen === 'labels' ? null : 'labels'); };
   const openDue = () => { setDraftDue(card.due_date || ''); setMenuOpen(menuOpen === 'due' ? null : 'due'); };
 
   // Members — commit the add/remove diff, then close.
@@ -168,21 +171,34 @@ function CardModal({ boardId, cardId, board, members, avatars, canManage, user, 
     } catch (e) { toast.error(e.response?.data?.error || 'Failed'); } finally { setApplying(false); }
   };
 
-  // Labels — draft label defs (board-wide, managers only) + this card's selection.
-  const togglePreset = (p) => {
-    const ex = draftLabels.find(l => (l.name || '').toLowerCase() === p.name.toLowerCase());
-    if (ex) setSelLabels(s => s.includes(ex.id) ? s.filter(x => x !== ex.id) : [...s, ex.id]);
-    else { const nl = { id: uid(), name: p.name, color: p.color }; setDraftLabels(d => [...d, nl]); setSelLabels(s => [...s, nl.id]); }
-  };
-  const toggleSelLabel = (id) => setSelLabels(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  // Labels — one priority (radio, always available) + up to CUSTOM_MAX board
+  // custom labels (plain, board-admin manages the palette).
+  const selCustomCount = selLabels.filter(id => !isPriorityId(id)).length;
+  const setPriority = (id) => setSelLabels(s => {
+    const rest = s.filter(x => !isPriorityId(x));
+    return s.includes(id) ? rest : [id, ...rest];   // click the selected one → clear
+  });
+  const toggleSelLabel = (id) => setSelLabels(s => {
+    if (s.includes(id)) return s.filter(x => x !== id);
+    if (s.filter(x => !isPriorityId(x)).length >= CUSTOM_MAX) return s;   // cap customs per card
+    return [...s, id];
+  });
   const removeDraftLabel = (id) => { setDraftLabels(d => d.filter(l => l.id !== id)); setSelLabels(s => s.filter(x => x !== id)); };
-  const addPlain = () => { const n = plainName.trim(); if (!n) return; const nl = { id: uid(), name: n, color: null }; setDraftLabels(d => [...d, nl]); setSelLabels(s => [...s, nl.id]); setPlainName(''); };
+  const addPlain = () => {
+    const n = plainName.trim().slice(0, CUSTOM_LEN); if (!n) return;
+    if (draftLabels.length >= CUSTOM_MAX) return;
+    const nl = { id: uid(), name: n, color: null };
+    setDraftLabels(d => [...d, nl]);
+    setSelLabels(s => (s.filter(x => !isPriorityId(x)).length >= CUSTOM_MAX ? s : [...s, nl.id]));
+    setPlainName('');
+  };
   const applyLabels = async () => {
     setApplying(true);
     try {
-      if (canManage && JSON.stringify(draftLabels) !== JSON.stringify(boardLabels))
+      const prevCustoms = boardLabels.filter(l => !isPriorityId(l.id));
+      if (canManage && JSON.stringify(draftLabels) !== JSON.stringify(prevCustoms))
         await api.put(`/sotyn-flow/${boardId}`, { labels: draftLabels });
-      const valid = new Set(draftLabels.map(l => l.id));
+      const valid = new Set([...PRIORITY_LABELS.map(p => p.id), ...draftLabels.map(l => l.id)]);
       await patch({ label_ids: selLabels.filter(id => valid.has(id)) });
       closeMenu();
     } catch (e) { toast.error(e.response?.data?.error || 'Failed'); } finally { setApplying(false); }
@@ -255,7 +271,7 @@ function CardModal({ boardId, cardId, board, members, avatars, canManage, user, 
         return (
           <div className="rounded-lg border bg-white shadow-sm p-2">
             <div className="text-xs font-semibold text-gray-500 mb-1 px-1">Assign members</div>
-            <input className="input mb-1" placeholder="Search people…" value={memberQuery}
+            <input className="w-full text-xs border rounded px-2 py-1 mb-1" placeholder="Search people…" value={memberQuery}
               onChange={e => setMemberQuery(e.target.value)} autoFocus />
             <div className="max-h-40 overflow-y-auto">
               {list.map(m => { const on = selMembers.includes(m.user_id); return (
@@ -270,42 +286,60 @@ function CardModal({ boardId, cardId, board, members, avatars, canManage, user, 
           </div>
         );
       })()}
-      {menuOpen === 'labels' && (
+      {menuOpen === 'labels' && (() => {
+        const selPriority = selLabels.find(isPriorityId) || '';
+        const full = draftLabels.length >= CUSTOM_MAX;
+        return (
         <div className="rounded-lg border bg-white shadow-sm p-2">
-          <div className="text-xs font-semibold text-gray-500 mb-1 px-1">Labels</div>
-          {canManage && (
-            <div className="flex flex-wrap gap-1 mb-2">
-              {URGENCY_PRESETS.map(p => (
-                <button key={p.name} onClick={() => togglePreset(p)} className="text-[11px] text-white px-2 py-0.5 rounded" style={{ background: p.color }}>+ {p.name}</button>
-              ))}
-            </div>
-          )}
-          <div className="max-h-36 overflow-y-auto space-y-0.5">
-            {draftLabels.length === 0 && <div className="text-xs text-gray-400 px-1 py-1">No labels yet{canManage ? ' — add an urgency preset or a plain label below.' : '.'}</div>}
-            {draftLabels.map(l => { const on = selLabels.includes(l.id); return (
+          {/* Priority — one radio choice per card (available to any card editor). */}
+          <div className="text-xs font-semibold text-gray-500 mb-1 px-1">Priority</div>
+          <div className="flex flex-wrap gap-1 mb-2">
+            {PRIORITY_LABELS.map(p => { const on = selPriority === p.id; return (
+              <button key={p.id} onClick={() => setPriority(p.id)} className="text-[11px] px-2 py-0.5 rounded border"
+                style={on ? { background: p.color, borderColor: p.color, color: '#fff' } : { borderColor: p.color, color: p.color }}>
+                {p.name}
+              </button>
+            ); })}
+            <button onClick={() => selPriority && setPriority(selPriority)}
+              className={`text-[11px] px-2 py-0.5 rounded border border-gray-300 ${selPriority ? 'text-gray-500' : 'bg-gray-100 text-gray-700'}`}>
+              None
+            </button>
+          </div>
+          {/* Custom — small palette of plain labels (board-admin manages it). */}
+          <div className="text-xs font-semibold text-gray-500 mb-1 px-1 flex items-center justify-between">
+            <span>Custom</span><span className="text-gray-300">{selCustomCount}/{CUSTOM_MAX}</span>
+          </div>
+          <div className="max-h-32 overflow-y-auto space-y-0.5">
+            {draftLabels.length === 0 && <div className="text-xs text-gray-400 px-1 py-1">No custom labels{canManage ? ' — add one below.' : '.'}</div>}
+            {draftLabels.map(l => { const on = selLabels.includes(l.id); const capped = !on && selCustomCount >= CUSTOM_MAX; return (
               <div key={l.id} className="flex items-center gap-1 text-sm">
-                <button onClick={() => toggleSelLabel(l.id)} className="flex-1 flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 text-left">
-                  {l.color ? <span className="w-8 h-4 rounded" style={{ background: l.color }} /> : <span className="w-8 h-4 rounded bg-gray-100 border border-gray-300" />}
-                  <span className="flex-1">{l.name}</span>
-                  {on && <FiCheck size={14} className="text-blue-600" />}
+                <button onClick={() => toggleSelLabel(l.id)} disabled={capped}
+                  className={`flex-1 flex items-center gap-2 px-2 py-1 rounded text-left ${capped ? 'opacity-40 cursor-not-allowed' : 'hover:bg-gray-50'}`}>
+                  <span className="text-[11px] text-gray-700 bg-gray-100 border border-gray-300 px-2 py-0.5 rounded">{l.name}</span>
+                  {on && <FiCheck size={14} className="text-blue-600 ml-auto" />}
                 </button>
                 {canManage && <button onClick={() => removeDraftLabel(l.id)} className="text-gray-300 hover:text-red-600 p-1" title="Remove label from board"><FiX size={13} /></button>}
               </div>
             ); })}
           </div>
           {canManage && (
-            <div className="flex gap-1.5 mt-2">
-              <input value={plainName} onChange={e => setPlainName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addPlain(); } }} placeholder="Plain label…" className="input flex-1 text-sm" />
-              <button onClick={addPlain} className="btn border text-sm">Add</button>
+            <div className="flex gap-1 mt-2">
+              <input value={plainName} maxLength={CUSTOM_LEN} disabled={full}
+                onChange={e => setPlainName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addPlain(); } }}
+                placeholder={full ? `Max ${CUSTOM_MAX} custom` : 'Custom label…'}
+                className="flex-1 min-w-0 text-xs border rounded px-2 py-1 disabled:bg-gray-50 disabled:text-gray-400" />
+              <button onClick={addPlain} disabled={full} className="text-xs px-2.5 py-1 rounded border text-gray-600 hover:bg-gray-50 disabled:opacity-50">Add</button>
             </div>
           )}
           <PopoverActions onApply={applyLabels} onCancel={closeMenu} applying={applying} />
         </div>
-      )}
+        );
+      })()}
       {menuOpen === 'due' && (
         <div className="rounded-lg border bg-white shadow-sm p-2">
           <div className="text-xs font-semibold text-gray-500 mb-1 px-1">Due date</div>
-          <input type="date" value={draftDue} onChange={e => setDraftDue(e.target.value)} className="input" />
+          <input type="date" value={draftDue} onChange={e => setDraftDue(e.target.value)} className="w-full text-xs border rounded px-2 py-1" />
           {draftDue && <button onClick={() => setDraftDue('')} className="block text-xs text-red-600 mt-1">Clear date</button>}
           <PopoverActions onApply={applyDue} onCancel={closeMenu} applying={applying} />
         </div>
@@ -709,6 +743,8 @@ const CardTile = memo(function CardTile({ card, avatars, boardLabels, columns, o
   const [menu, setMenu] = useState(false);
   const dm = dueMeta(card.due_date, card.completed);
   const labels = (card.label_ids || []).map(id => boardLabels.find(l => l.id === id)).filter(Boolean);
+  const priority = labels.find(l => isPriorityId(l.id));
+  const customs = labels.filter(l => !isPriorityId(l.id));
   const done = (card.checklist || []).filter(i => i.done).length;
   const total = (card.checklist || []).length;
   const del = async (e) => { e.stopPropagation(); if (!confirm('Delete this card?')) return; try { await api.delete(`/sotyn-flow/${boardId}/cards/${card.id}`); onReload(); } catch { toast.error('Failed'); } };
@@ -716,8 +752,13 @@ const CardTile = memo(function CardTile({ card, avatars, boardLabels, columns, o
   return (
     <div draggable onDragStart={() => { window.__flowDragId = card.id; }} onDragOver={e => e.preventDefault()} onDrop={e => { e.stopPropagation(); onDropCard(card); }}
       onClick={() => { if (!menu) onOpen(card); }} className="bg-white rounded-lg shadow-sm hover:shadow-md border border-gray-100 p-2.5 cursor-pointer relative group">
-      {labels.length > 0 && <div className="flex flex-wrap gap-1 mb-1.5">{labels.map(l => <span key={l.id} className="h-1.5 w-8 rounded-full border border-gray-200" style={{ background: l.color || '#d1d5db' }} title={l.name} />)}</div>}
       <div className={`text-sm ${card.completed ? 'line-through text-gray-400' : 'text-gray-800'}`}>{card.title}</div>
+      {(priority || customs.length > 0) && (
+        <div className="flex flex-wrap gap-1 mt-1.5">
+          {priority && <span className="text-[10px] text-white px-1.5 py-0.5 rounded" style={{ background: priority.color }}>{priority.name}</span>}
+          {customs.map(l => <span key={l.id} className="text-[10px] text-gray-600 bg-gray-50 border border-gray-300 px-1.5 py-0.5 rounded">{l.name}</span>)}
+        </div>
+      )}
       <div className="flex items-center justify-between mt-2 gap-2">
         <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
           {dm && <span className={`px-1.5 py-0.5 rounded flex items-center gap-1 ${dm.cls}`}><FiCalendar size={10} /> {dm.label}</span>}
