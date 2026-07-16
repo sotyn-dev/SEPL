@@ -8,7 +8,7 @@ import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
 import { fmtTime, fmtDate, fmtDateTime } from '../utils/datetime';
-import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiImage } from 'react-icons/fi';
+import { FiSearch, FiSend, FiPaperclip, FiTrash2, FiFile, FiUsers, FiX, FiPlus, FiMic, FiUserPlus, FiInfo, FiPhone, FiVideo, FiArrowLeft, FiChevronDown, FiCornerUpLeft, FiImage, FiEdit2 } from 'react-icons/fi';
 import { BiMessageRoundedCheck } from 'react-icons/bi';
 import { useCall } from '../context/CallContext';
 import { compressImage } from '../lib/imageCompress';
@@ -64,7 +64,7 @@ const quotePreview = (m) => m ? (m.body || (m.attachment_name ? `📎 ${m.attach
 // component with stable props, so composer keystrokes, context refreshes, and
 // Layout re-renders DON'T redraw the whole conversation (perf pass). The @mention
 // regex and the "others" (read-receipt) set are computed ONCE here, not per row.
-const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, onReply, onInfo, onDelete }) {
+const MessageList = memo(function MessageList({ msgs, userId, members, reads, isDm, userAvatars, msgById, isAdmin, editingId, onReply, onInfo, onDelete, onEdit }) {
   // Current-date labels for the Today/Yesterday separators — an intentional read
   // of "now" at render time (the one impure call, isolated).
   // eslint-disable-next-line react-hooks/purity
@@ -122,10 +122,13 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
             // messages, so compute it only then — skips an O(members) scan on every other row.
             const readers = own ? others.filter(o => (reads[o.user_id] || 0) >= m.id) : null;
             const allRead = own && others.length > 0 && readers.length === others.length;
+            // Edit is offered only on your OWN text message, within 15 min of sending
+            // (reuse the single `now` read at the top — no per-row clock read).
+            const canEdit = own && m.body && (now - new Date(m.created_at + 'Z').getTime()) < 15 * 60 * 1000;
             return (
               <div key={m.id} id={`msg-${m.id}`} className={`flex items-end gap-1.5 rounded transition-shadow ${own ? 'justify-end' : 'justify-start'}`}>
                 {!own && !isDm && <Avatar url={userAvatars[m.sender_id]} name={m.sender_name} size={26} />}
-                <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#e6ecf7]' : 'bg-white'}`}>
+                <div className={`group max-w-[78%] rounded-lg px-2.5 py-1.5 shadow-sm text-sm ${own ? 'bg-[#e6ecf7]' : 'bg-white'} ${editingId === m.id ? 'ring-2 ring-amber-400' : ''}`}>
                   {!own && <div className="text-[11px] font-semibold text-blue-700 mb-0.5">{m.sender_name}</div>}
                   {m.reply_to_id && (() => {
                     const q = msgById[m.reply_to_id];
@@ -147,7 +150,9 @@ const MessageList = memo(function MessageList({ msgs, userId, members, reads, is
                   <div className="flex items-center justify-end gap-1.5 mt-0.5">
                     <button onClick={() => onReply(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Reply"><FiCornerUpLeft size={11} /></button>
                     <button onClick={() => onInfo(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Message info"><FiInfo size={11} /></button>
+                    {canEdit && <button onClick={() => onEdit(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-blue-600" title="Edit"><FiEdit2 size={11} /></button>}
                     {(own || isAdmin) && <button onClick={() => onDelete(m)} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-gray-400 hover:text-red-600"><FiTrash2 size={11} /></button>}
+                    {m.edited_at && <span className="text-[10px] text-gray-400 italic" title={`Edited ${fmtDateTime(m.edited_at)}`}>edited</span>}
                     <span className="text-[10px] text-gray-400" title={fmtDateTime(m.created_at)}>{fmtTime(m.created_at)}</span>
                     {own && <span title={others.length === 0 ? 'Sent' : readers.length ? `Read by: ${readers.map(r => r.name).join(', ')}` : 'Delivered · not read yet'} className={`text-[11px] leading-none tracking-tighter ${allRead ? 'text-sky-500' : 'text-gray-400'}`}>{others.length === 0 ? '✓' : '✓✓'}</span>}
                   </div>
@@ -228,6 +233,7 @@ export default function SiteChat() {
   const [infoMsg, setInfoMsg] = useState(null);    // message whose "info" panel is open
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState(null);   // WhatsApp-style quoted reply
+  const [editingId, setEditingId] = useState(null);   // id of the message being edited inline
   const [busy, setBusy] = useState(false);
   const [allUsers, setAllUsers] = useState([]);
   const [memOpen, setMemOpen] = useState(false);
@@ -403,7 +409,7 @@ export default function SiteChat() {
   // after paint — guarantees the loader covers from the very first painted frame.
   useLayoutEffect(() => {
     if (!sel) return;
-    setText(''); setMention(null); setReplyTo(null);   // drop the composer draft + reply when switching threads
+    setText(''); setMention(null); setReplyTo(null); setEditingId(null);   // drop the composer draft + reply + edit when switching threads
     justSentRef.current = { body: '', at: 0 };         // disarm the send-guard for the new thread
     setMsgs([]); setThreadLoading(true);               // clear the previous thread + show the loader immediately
   }, [sel?.id]);
@@ -619,6 +625,24 @@ export default function SiteChat() {
     try { await api.delete(`/site-chat/${sel.id}/messages/${m.id}`); loadThread(sel.id); }
     catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   }, [sel?.id, loadThread]);
+  // Edit reuses the bottom composer (WhatsApp-style): load the text into the field,
+  // show an "Editing message" bar with an ✕ to cancel, and the send button confirms.
+  const startEdit = useCallback((m) => {
+    setReplyTo(null);                 // can't reply and edit at once
+    setEditingId(m.id);
+    setText(m.body || '');
+    requestAnimationFrame(() => { const ta = taRef.current; if (ta) { ta.focus(); const n = (m.body || '').length; ta.setSelectionRange(n, n); } });
+  }, []);
+  const cancelEdit = useCallback(() => { setEditingId(null); setText(''); }, []);
+  const saveEdit = useCallback(async () => {
+    if (!sel || editingId == null) return;
+    const b = text.trim();
+    if (!b) return;                                     // empty → ignore (use ✕ to cancel)
+    const orig = msgs.find(x => x.id === editingId);
+    if (orig && b === (orig.body || '')) { cancelEdit(); return; }   // unchanged → just close
+    try { await api.put(`/site-chat/${sel.id}/messages/${editingId}`, { body: b }); setEditingId(null); setText(''); loadThread(sel.id); }
+    catch (err) { toast.error(err.response?.data?.error || 'Failed to edit'); }
+  }, [sel?.id, editingId, text, msgs, loadThread, cancelEdit]);
   const saveRename = async () => {
     const name = renameVal.trim();
     if (!name) return toast.error('Group name is required');
@@ -775,7 +799,7 @@ export default function SiteChat() {
                       day-group spacing MessageList relies on is preserved. Keyed on
                       threadLoading only (not msgs), so new messages append without re-fading. */}
                   <div className={`space-y-1.5 transition-opacity duration-300 ${threadLoading ? 'opacity-0' : 'opacity-100 delay-150'}`}>
-                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} />
+                    <MessageList msgs={msgs} userId={user?.id} members={members} reads={reads} isDm={sel.is_dm} userAvatars={userAvatars} msgById={msgById} isAdmin={isAdmin()} editingId={editingId} onReply={setReplyTo} onInfo={setInfoMsg} onDelete={delMsg} onEdit={startEdit} />
                   </div>
 
                   <div ref={endRef} />
@@ -816,6 +840,16 @@ export default function SiteChat() {
                   <button onClick={() => setReplyTo(null)} className="flex-shrink-0 p-1 text-gray-400 hover:text-gray-700" title="Cancel reply"><FiX size={16} /></button>
                 </div>
               )}
+              {/* Editing bar — WhatsApp-style banner above the composer; ✕ cancels */}
+              {editingId && (
+                <div className="border-t bg-amber-50 px-3 py-1.5 flex items-center gap-2">
+                  <div className="flex-1 min-w-0 border-l-4 border-amber-500 pl-2">
+                    <div className="text-[11px] font-semibold text-amber-700 flex items-center gap-1"><FiEdit2 size={11} /> Editing message</div>
+                    <div className="text-[11px] text-gray-600 truncate">{msgs.find(x => x.id === editingId)?.body || ''}</div>
+                  </div>
+                  <button onClick={cancelEdit} className="flex-shrink-0 p-1 text-gray-400 hover:text-gray-700" title="Cancel edit"><FiX size={16} /></button>
+                </div>
+              )}
               <div className="border-t p-2 flex items-end gap-2 bg-gray-50 relative">
                 {/* @-mention picker — floats above the composer */}
                 {mention && mentionList.length > 0 && (
@@ -853,12 +887,15 @@ export default function SiteChat() {
                             if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mentionList[0].name); return; }
                             if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
                           }
-                          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+                          if (e.key === 'Escape' && editingId) { e.preventDefault(); cancelEdit(); return; }
+                          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); editingId ? saveEdit() : send(); }
                         }} />
                     </div>
-                    {text.trim()
-                      ? <button onClick={() => send()} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#2563eb' }}><FiSend size={16} /></button>
-                      : <button onClick={startRec} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#2563eb' }} title="Record voice message"><FiMic size={16} /></button>}
+                    {editingId
+                      ? <button onClick={saveEdit} disabled={busy || !text.trim()} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#2563eb' }} title="Save edit"><FiSend size={16} /></button>
+                      : text.trim()
+                        ? <button onClick={() => send()} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white disabled:opacity-40" style={{ background: '#2563eb' }}><FiSend size={16} /></button>
+                        : <button onClick={startRec} disabled={busy} className="flex-shrink-0 p-2.5 rounded-full text-white" style={{ background: '#2563eb' }} title="Record voice message"><FiMic size={16} /></button>}
                   </>
                 )}
               </div>
