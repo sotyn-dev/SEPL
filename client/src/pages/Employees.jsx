@@ -21,11 +21,14 @@ export default function Employees() {
   const [search, setSearch] = useState('');
   const [bulkData, setBulkData] = useState('');
   const [bulkPreview, setBulkPreview] = useState([]);
+  const [rosterAudit, setRosterAudit] = useState({ backlog: [], guests: [] });
+  const [view, setView] = useState('directory'); // 'directory' | 'review'
   const fileRef = useRef(null);
 
   const load = () => {
     api.get('/hr/employees').then(r => setEmployees(r.data));
     api.get('/auth/users').then(r => setUsers((r.data || []).filter(u => u.active !== 0))).catch(() => {});
+    api.get('/hr/roster-audit').then(r => setRosterAudit(r.data || { backlog: [], guests: [] })).catch(() => {});
   };
   useEffect(() => { load(); }, []);
 
@@ -238,6 +241,27 @@ export default function Employees() {
         </div>
       </div>
 
+      {/* Tabs — keep the roster-reconciliation flags off the main directory
+          (in production the flag lists can be long and clutter the table).
+          They live in their own "Roster Review" tab as a listed view. */}
+      <div className="flex gap-2 border-b border-gray-200">
+        <button
+          onClick={() => setView('directory')}
+          className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${view === 'directory' ? 'border-red-600 text-red-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+          Directory
+        </button>
+        <button
+          onClick={() => setView('review')}
+          className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px flex items-center gap-1.5 ${view === 'review' ? 'border-red-600 text-red-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+          Roster Review
+          {(rosterAudit.backlog.length + rosterAudit.guests.length) > 0 && (
+            <span className="text-[10px] font-bold bg-amber-500 text-white rounded-full px-1.5 py-0.5 leading-none">{rosterAudit.backlog.length + rosterAudit.guests.length}</span>
+          )}
+        </button>
+      </div>
+
+      {view === 'directory' && (
+      <>
       {/* Search */}
       <div className="relative">
         <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
@@ -335,6 +359,62 @@ export default function Employees() {
           </div>
         ))}
       </div>
+      </>
+      )}
+
+      {view === 'review' && (
+        <div className="space-y-4">
+          {rosterAudit.backlog.length === 0 && rosterAudit.guests.length === 0 && (
+            <div className="card p-8 text-center text-gray-400 text-sm">Nothing to review — every active login maps to an on-roll employee.</div>
+          )}
+
+          {/* Backlog: past employees whose login is still active — still counted
+              in attendance strength until HR deactivates them. */}
+          {rosterAudit.backlog.length > 0 && (
+            <div className="card p-0 overflow-hidden">
+              <div className="p-3 bg-red-50 border-b border-red-200">
+                <h4 className="font-bold text-red-700 text-sm">Terminated / inactive — login still active ({rosterAudit.backlog.length})</h4>
+                <p className="text-[11px] text-red-700/80 italic mt-0.5">Past employees still counted in attendance. Deactivate their login in User Management to clear them. Nothing here is changed automatically.</p>
+              </div>
+              <table className="text-sm w-full">
+                <thead><tr className="text-left text-gray-500 border-b"><th className="px-3 py-2">Name</th><th className="px-3 py-2">Department</th><th className="px-3 py-2">Role</th><th className="px-3 py-2">Employee status</th></tr></thead>
+                <tbody>
+                  {rosterAudit.backlog.map(u => (
+                    <tr key={u.id} className="border-b border-gray-50">
+                      <td className="px-3 py-2 font-medium">{u.name}</td>
+                      <td className="px-3 py-2 text-gray-600">{u.department || '—'}</td>
+                      <td className="px-3 py-2 text-gray-600">{u.role}</td>
+                      <td className="px-3 py-2"><span className="text-[10px] font-semibold uppercase bg-red-100 text-red-700 px-1.5 py-0.5 rounded">{u.employee_status}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Guests: active logins never onboarded into the employee roster. */}
+          {rosterAudit.guests.length > 0 && (
+            <div className="card p-0 overflow-hidden">
+              <div className="p-3 bg-amber-50 border-b border-amber-200">
+                <h4 className="font-bold text-amber-700 text-sm">Active logins not on the employee roster ({rosterAudit.guests.length})</h4>
+                <p className="text-[11px] text-amber-700/80 italic mt-0.5">Guest / never-onboarded accounts. Onboard them via “Add Employee” if they belong, or leave as-is. Not changed automatically.</p>
+              </div>
+              <table className="text-sm w-full">
+                <thead><tr className="text-left text-gray-500 border-b"><th className="px-3 py-2">Name</th><th className="px-3 py-2">Department</th><th className="px-3 py-2">Role</th></tr></thead>
+                <tbody>
+                  {rosterAudit.guests.map(u => (
+                    <tr key={u.id} className="border-b border-gray-50">
+                      <td className="px-3 py-2 font-medium">{u.name}</td>
+                      <td className="px-3 py-2 text-gray-600">{u.department || '—'}</td>
+                      <td className="px-3 py-2 text-gray-600">{u.role}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Add/Edit Modal */}
       <Modal isOpen={modal} onClose={() => setModal(false)} title={editing ? 'Edit Employee' : 'Add Employee'}>

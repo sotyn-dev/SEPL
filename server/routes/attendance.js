@@ -311,8 +311,38 @@ router.get('/dashboard', requirePermission('attendance', 'view'), (req, res) => 
   // Geofence settings
   const geofences = db.prepare('SELECT * FROM geofence_settings WHERE active=1').all();
 
+  // Classify each active login so the dashboard can show the ACTUAL strength
+  // (on-roll employees) apart from guests and the past-employee backlog, rather
+  // than lumping every login under "Employee" (mgmt: "past employees spamming").
+  //   • on_roster  → linked to an employee with status active/training (real strength)
+  //   • terminated → linked to an inactive/terminated employee, login still active (backlog)
+  //   • guest      → not linked to any employee record (ad-hoc / never onboarded)
+  // A login mapping to several employee rows takes its best status (on-roll wins).
+  const empByUser = new Map();
+  for (const r of db.prepare('SELECT user_id, status FROM employees WHERE user_id IS NOT NULL').all()) {
+    const s = String(r.status || '').toLowerCase();
+    const rank = (s === 'active' || s === 'training') ? 2 : 1; // on-roll beats terminated
+    const prev = empByUser.get(r.user_id);
+    if (!prev || rank > prev) empByUser.set(r.user_id, rank);
+  }
+  const bucketOf = (userId) => {
+    const rank = empByUser.get(userId);
+    if (rank === undefined) return 'guest';
+    return rank === 2 ? 'on_roster' : 'terminated';
+  };
+  const strength = { onRoster: 0, guest: 0, terminated: 0 };
+  for (const u of db.prepare('SELECT id FROM users WHERE active=1').all()) {
+    const b = bucketOf(u.id);
+    if (b === 'on_roster') strength.onRoster++;
+    else if (b === 'guest') strength.guest++;
+    else strength.terminated++;
+  }
+  for (const r of todayRecords) r.bucket = Number.isInteger(r.user_id) ? bucketOf(r.user_id) : 'guest';
+  for (const u of notPunched) u.bucket = bucketOf(u.id);
+
   res.json({
     totalUsers: totalUsers.c, present: presentToday.c, absent: absentToday, late: lateToday.c, onLeave: onLeave.c,
+    strength,
     todayRecords, notPunched, geofences
   });
 });

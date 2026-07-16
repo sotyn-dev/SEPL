@@ -662,6 +662,27 @@ export default function Attendance() {
             <div className="card p-3 border-l-4 border-purple-500"><p className="text-xs text-gray-500">On Leave</p><p className="text-2xl font-bold text-purple-600">{dashboard.onLeave}</p></div>
           </div>
 
+          {/* Strength breakdown — splits the active-login "Total" into the real
+              on-roll employee strength vs guests vs the past-employee backlog,
+              so a guest / not-yet-deactivated leaver isn't silently counted as
+              staff (mgmt: "enter only those who are on-roll"). The Terminated
+              figure shows only when > 0 — it doubles as a consistency monitor. */}
+          {dashboard.strength && (
+            <div className="card p-3 border-l-4 border-blue-500">
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+                <span className="font-semibold text-gray-700">Strength</span>
+                <span className="text-gray-500">On roster: <b className="text-blue-700">{dashboard.strength.onRoster}</b></span>
+                <span className="text-gray-500">Guest / not on roster: <b className="text-amber-600">{dashboard.strength.guest}</b></span>
+                {dashboard.strength.terminated > 0 && (
+                  <span className="text-gray-500">Terminated (login active): <b className="text-red-600">{dashboard.strength.terminated}</b></span>
+                )}
+              </div>
+              {dashboard.strength.terminated > 0 && (
+                <p className="text-[11px] text-red-700 mt-1 italic">Past employees whose login is still active — deactivate them in User Management to clear the count.</p>
+              )}
+            </div>
+          )}
+
           {/* Backfill any user's attendance for a PAST date (phone dead /
               forgot to punch / on-site with no network). Opens a modal that
               hits the same admin-mark endpoint the per-day button uses. */}
@@ -694,6 +715,8 @@ export default function Attendance() {
                   }} className="btn btn-success text-[10px] py-1 px-2 w-full">
                     <FiCheckCircle className="inline mr-0.5" size={11} /> Mark Present
                   </button>
+                  {u.bucket === 'guest' && <div className="text-[10px] font-semibold text-amber-600 mt-1 text-center" title="Active login not on the employee roster">⚠ Guest / not tracked</div>}
+                  {u.bucket === 'terminated' && <div className="text-[10px] font-semibold text-red-600 mt-1 text-center" title="Employee marked inactive/terminated — login still active">⚠ Inactive / Terminated</div>}
                 </div>
               ))}</div>
               <p className="text-[10px] text-red-700 mt-2 italic">Admin-marked rows don't appear in the user's own dashboard or month view — only in admin reports.</p>
@@ -706,8 +729,8 @@ export default function Attendance() {
             <div className="overflow-x-auto hidden md:block"><table className="text-sm">
               <thead><tr><th>Name</th><th>Dept</th><th>In</th><th>Out</th><th>Hours</th><th>Status</th><th>Photo</th></tr></thead>
               <tbody>{dashboard.todayRecords?.map(r => (
-                <tr key={r.id}>
-                  <td className="font-medium">{r.user_name}{r.admin_marked ? <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded font-bold" title="Admin marked — hidden from user">ADMIN</span> : null}{r.punch_in_time && r.location_verified === 0 ? <span className="ml-1 text-[9px] bg-orange-100 text-orange-700 px-1 rounded font-bold" title="GPS could not confirm this location — check the selfie">⚠ GPS?</span> : null}</td><td className="text-xs">{r.department}</td>
+                <tr key={r.id} className={r.bucket === 'terminated' ? 'bg-red-50' : r.bucket === 'guest' ? 'bg-amber-50' : ''}>
+                  <td className="font-medium"><div>{r.user_name}{r.admin_marked ? <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded font-bold" title="Admin marked — hidden from user">ADMIN</span> : null}{r.punch_in_time && r.location_verified === 0 ? <span className="ml-1 text-[9px] bg-orange-100 text-orange-700 px-1 rounded font-bold" title="GPS could not confirm this location — check the selfie">⚠ GPS?</span> : null}</div>{r.bucket === 'guest' ? <div className="text-[9px] font-semibold text-amber-600" title="Active login not on the employee roster">⚠ Guest / not tracked</div> : null}{r.bucket === 'terminated' ? <div className="text-[9px] font-semibold text-red-600" title="Employee marked inactive/terminated — login still active">⚠ Inactive / Terminated</div> : null}</td><td className="text-xs">{r.department}</td>
                   <td className="text-emerald-600 text-xs">{fmtT(r.punch_in_time)}{r.auto_punched_in ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                   <td className="text-red-600 text-xs">{fmtT(r.punch_out_time)}{r.auto_punched_out ? <span className="ml-1 text-[9px] bg-purple-100 text-purple-700 px-1 rounded">AUTO</span> : null}</td>
                   <td className="font-semibold">{r.total_hours || '-'}</td>
@@ -722,7 +745,7 @@ export default function Attendance() {
                 <div className="text-center text-gray-400 text-sm py-4">No punches today yet.</div>
               )}
               {(dashboard.todayRecords || []).map(r => (
-                <div key={r.id} className="border border-gray-200 rounded-lg p-2.5 space-y-1.5 bg-white">
+                <div key={r.id} className={`border rounded-lg p-2.5 space-y-1.5 ${r.bucket === 'terminated' ? 'border-red-200 bg-red-50' : r.bucket === 'guest' ? 'border-amber-200 bg-amber-50' : 'border-gray-200 bg-white'}`}>
                   <div className="flex justify-between items-start gap-2">
                     <div className="flex-1 min-w-0">
                       <div className="text-[10px] uppercase tracking-wide text-gray-500 font-semibold">Employee</div>
@@ -733,6 +756,8 @@ export default function Attendance() {
                         )}
                       </div>
                       {r.department && <div className="text-[11px] text-gray-500">{r.department}</div>}
+                      {r.bucket === 'guest' && <div className="text-[10px] font-semibold text-amber-600">⚠ Guest / not tracked</div>}
+                      {r.bucket === 'terminated' && <div className="text-[10px] font-semibold text-red-600">⚠ Inactive / Terminated</div>}
                     </div>
                     <StatusBadge status={r.status} />
                   </div>

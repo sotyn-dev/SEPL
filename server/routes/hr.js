@@ -5,6 +5,7 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const { getDb } = require('../db/schema');
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const { logAuditEvent } = require('../middleware/audit');
 const { parseResume } = require('../utils/resumeParser');
 const router = express.Router();
 router.use(authMiddleware);
@@ -707,6 +708,40 @@ router.get('/employees', (req, res) => {
   res.json(rows.map(({ salary, ...rest }) => rest));
 });
 
+// Roster audit (read-only) — surfaces the two categories of active logins that
+// muddy the "actual strength" number, for HR to reconcile manually:
+//   • backlog: a live login (active=1) linked to an inactive/terminated
+//     employee — a past employee that slipped through. HR deactivates each.
+//   • guests:  a live login not linked to ANY active employee record — an
+//     ad-hoc / never-onboarded account (e.g. the CMD). HR onboards / keeps /
+//     deactivates as appropriate. NOTHING here is auto-changed.
+router.get('/roster-audit', (req, res) => {
+  const db = getDb();
+  // On-roll = active OR training (a trainee is employed, just not confirmed) —
+  // must match the dashboard's bucketing so the two never disagree.
+  const backlog = db.prepare(
+    `SELECT u.id, u.name, u.department, u.role,
+            MIN(e.status) AS employee_status
+       FROM users u JOIN employees e ON e.user_id = u.id
+      WHERE u.active = 1 AND e.status IN ('inactive','terminated')
+        AND u.id NOT IN (SELECT user_id FROM employees
+                          WHERE user_id IS NOT NULL AND status IN ('active','training'))
+      GROUP BY u.id
+      ORDER BY u.name COLLATE NOCASE`
+  ).all();
+  const guests = db.prepare(
+    `SELECT u.id, u.name, u.department, u.role
+       FROM users u
+      WHERE u.active = 1
+        AND u.id NOT IN (SELECT user_id FROM employees
+                          WHERE user_id IS NOT NULL AND status IN ('active','training'))
+        AND u.id NOT IN (SELECT user_id FROM employees
+                          WHERE user_id IS NOT NULL AND status IN ('inactive','terminated'))
+      ORDER BY u.name COLLATE NOCASE`
+  ).all();
+  res.json({ backlog, guests });
+});
+
 router.post('/employees', requirePermission('employees', 'create'), (req, res) => {
   const { name, phone, email, designation, department, join_date, salary,
           aadhar_file, pan_file, qualification_file } = req.body;
@@ -769,9 +804,10 @@ router.post('/employees/bulk', requirePermission('employees', 'create'), (req, r
 router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) => {
   const { name, phone, email, designation, department, salary, status, user_id,
           aadhar_file, pan_file, qualification_file } = req.body;
+  const db = getDb();
   // COALESCE so passing undefined for a doc field doesn't wipe the existing
   // upload — frontend can edit other fields without re-uploading docs.
-  getDb().prepare(`
+  db.prepare(`
     UPDATE employees
        SET name=?, phone=?, email=?, designation=?, department=?, salary=?, status=?, user_id=?,
            aadhar_file        = COALESCE(?, aadhar_file),
@@ -780,6 +816,37 @@ router.put('/employees/:id', requirePermission('employees', 'edit'), (req, res) 
      WHERE id=?
   `).run(name, phone, email, designation, department, salary, status, user_id || null,
         aadhar_file || null, pan_file || null, qualification_file || null, req.params.id);
+
+  // Sync the linked login's `active` flag to the employee's on-roll status.
+  // Attendance strength counts users.active, but HR only edits employees.status —
+  // the two used to drift, so terminated staff kept inflating the count (mgmt:
+  // "past employees spamming attendance"). This closes that gap. Guarded:
+  //   • acts ONLY on a real stored user_id link (never a fuzzy guess),
+  //   • reversible — status back to active/training re-enables the login,
+  //     but we never un-hide an explicitly ARCHIVED account,
+  //   • only touches the row when it actually needs flipping (idempotent),
+  //   • audit-logged so a mis-linked toggle is visible and undoable,
+  //   • wrapped so a sync failure can never fail the employee save.
+  const linkedUserId = user_id || null;
+  const st = String(status || '').toLowerCase();
+  if (linkedUserId && ['active', 'training', 'inactive', 'terminated'].includes(st)) {
+    try {
+      const want = (st === 'inactive' || st === 'terminated') ? 0 : 1;
+      const target = db.prepare('SELECT id, name, active, archived FROM users WHERE id=?').get(linkedUserId);
+      const needsFlip = target && target.active !== want && !(want === 1 && target.archived === 1);
+      if (needsFlip) {
+        db.prepare('UPDATE users SET active=? WHERE id=?').run(want, linkedUserId);
+        logAuditEvent({
+          user: req.user, action: 'UPDATE', entity_type: 'users',
+          entity_id: linkedUserId, entity_label: target.name,
+          method: 'PUT', path: `/api/hr/employees/${req.params.id}`,
+          before: { active: target.active }, after: { active: want },
+          body: { reason: `employee status → ${st}` },
+        });
+      }
+    } catch (e) { console.error('[hr] login active-sync failed:', e.message); }
+  }
+
   res.json({ message: 'Updated' });
 });
 
