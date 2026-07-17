@@ -72,6 +72,18 @@ async function runBackup({ silent = false } = {}) {
     } catch (e) { if (!silent) console.warn('[backup] chat.db backup failed:', e.message); }
   }
 
+  // And the SEPARATE SOTYN Flow task-boards database (its own file, see
+  // sotynFlowDb.js). Same backup API + 30-file retention, prefixed sotynflow-.
+  const { FLOW_DB_PATH } = require('../db/sotynFlowDb');
+  if (fs.existsSync(FLOW_DB_PATH)) {
+    try {
+      const fsrc = new Database(FLOW_DB_PATH, { readonly: true, fileMustExist: true });
+      try { await fsrc.backup(path.join(BACKUP_DIR, `sotynflow-${tsNow()}.db`)); } finally { fsrc.close(); }
+      const flows = fs.readdirSync(BACKUP_DIR).filter(f => f.startsWith('sotynflow-') && f.endsWith('.db')).sort();
+      for (const f of flows.slice(0, Math.max(0, flows.length - KEEP_COUNT))) { try { fs.unlinkSync(path.join(BACKUP_DIR, f)); } catch (e) {} }
+    } catch (e) { if (!silent) console.warn('[backup] sotynflow.db backup failed:', e.message); }
+  }
+
   if (!silent) console.log(`[backup] Wrote ${outName} (${(size / 1024 / 1024).toFixed(2)} MB) — kept ${Math.min(existing.length, KEEP_COUNT)} total`);
   return { ok: true, filename: outName, size, backup_dir: BACKUP_DIR };
 }
@@ -97,11 +109,12 @@ function scheduleNightly() {
 function listBackups() {
   if (!fs.existsSync(BACKUP_DIR)) return [];
   return fs.readdirSync(BACKUP_DIR)
-    .filter(f => (f.startsWith('erp-') || f.startsWith('chat-')) && f.endsWith('.db'))
+    .filter(f => (f.startsWith('erp-') || f.startsWith('chat-') || f.startsWith('sotynflow-')) && f.endsWith('.db'))
     .map(f => {
       const full = path.join(BACKUP_DIR, f);
       const st = fs.statSync(full);
-      return { filename: f, db: f.startsWith('chat-') ? 'chat' : 'erp', size: st.size, created_at: st.mtime.toISOString() };
+      const db = f.startsWith('sotynflow-') ? 'sotynflow' : f.startsWith('chat-') ? 'chat' : 'erp';
+      return { filename: f, db, size: st.size, created_at: st.mtime.toISOString() };
     })
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }

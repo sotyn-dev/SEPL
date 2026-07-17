@@ -91,14 +91,15 @@ export default function DatabaseBackups() {
     prevT = t;
     groups[groups.length - 1].push(b);
   }
-  // Within each run show ERP first, then Chat (ERP is the primary db) — runs
+  // Within each run order ERP → Chat → SOTYN Flow (ERP is the primary db) — runs
   // themselves stay newest-first. Sort is stable, so any extra same-db files keep
   // their newest-first order. _newGroup flags the first row of each run for the
   // between-runs divider.
+  const DB_ORDER = { erp: 0, chat: 1, sotynflow: 2 };
   const rows = [];
   groups.forEach((g, gi) => {
     [...g]
-      .sort((a, b) => (a.db === 'chat' ? 1 : 0) - (b.db === 'chat' ? 1 : 0))
+      .sort((a, b) => (DB_ORDER[a.db] ?? 0) - (DB_ORDER[b.db] ?? 0))
       .forEach((b, i) => rows.push({ ...b, _group: gi, _newGroup: gi > 0 && i === 0 }));
   });
 
@@ -109,7 +110,7 @@ export default function DatabaseBackups() {
           <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
             <FiDatabase className="text-red-600" /> Database Backups
           </h3>
-          <p className="text-sm text-gray-500">Automatic nightly snapshots at 2:00 AM. Keeps the last 30 per database (ERP + Chat).</p>
+          <p className="text-sm text-gray-500">Automatic nightly snapshots at 2:00 AM. Keeps the last 30 per database (ERP + Chat + SOTYN Flow).</p>
         </div>
         <div className="flex gap-2">
           <button onClick={load} disabled={loading} className="btn btn-secondary flex items-center gap-2">
@@ -173,7 +174,12 @@ export default function DatabaseBackups() {
           <tbody>
             {rows.map((b) => {
               const isLatest = latestByDb[b.db || 'erp'] === b.filename;
-              const isChat = b.db === 'chat';
+              const dbKind = b.db || 'erp';
+              const badge = dbKind === 'sotynflow'
+                ? { label: 'SOTYN Flow', cls: 'bg-emerald-100 text-emerald-800' }
+                : dbKind === 'chat'
+                  ? { label: 'Chat', cls: 'bg-violet-100 text-violet-800' }
+                  : { label: 'ERP', cls: 'bg-blue-100 text-blue-800' };
               const evenGroup = b._group % 2 === 0;
               // Each run reads as one block via a soft shared tint plus a stronger rule
               // between runs. Rows are trimmed to equal top/bottom padding (py-2 instead
@@ -187,8 +193,8 @@ export default function DatabaseBackups() {
                   {isLatest && <span className="ml-2 text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold">LATEST</span>}
                 </td>
                 <td>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${isChat ? 'bg-violet-100 text-violet-800' : 'bg-blue-100 text-blue-800'}`}>
-                    {isChat ? 'Chat' : 'ERP'}
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${badge.cls}`}>
+                    {badge.label}
                   </span>
                 </td>
                 <td className="whitespace-nowrap text-xs">{fmtDateTime(b.created_at)}</td>
