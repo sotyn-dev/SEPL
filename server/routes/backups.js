@@ -32,7 +32,7 @@ router.get('/:file/download', (req, res) => {
   if (!user || user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
 
   const file = req.params.file;
-  if (!/^erp-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.db$/.test(file)) {
+  if (!/^(erp|chat)-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.db$/.test(file)) {
     return res.status(400).json({ error: 'Invalid filename' });
   }
   const full = path.join(BACKUP_DIR, file);
