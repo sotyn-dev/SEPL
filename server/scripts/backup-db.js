@@ -97,11 +97,11 @@ function scheduleNightly() {
 function listBackups() {
   if (!fs.existsSync(BACKUP_DIR)) return [];
   return fs.readdirSync(BACKUP_DIR)
-    .filter(f => f.startsWith('erp-') && f.endsWith('.db'))
+    .filter(f => (f.startsWith('erp-') || f.startsWith('chat-')) && f.endsWith('.db'))
     .map(f => {
       const full = path.join(BACKUP_DIR, f);
       const st = fs.statSync(full);
-      return { filename: f, size: st.size, created_at: st.mtime.toISOString() };
+      return { filename: f, db: f.startsWith('chat-') ? 'chat' : 'erp', size: st.size, created_at: st.mtime.toISOString() };
     })
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
