@@ -11,6 +11,9 @@ const { authMiddleware, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 router.use(authMiddleware);
 
+// A sent message stays editable for 15 minutes, matching WhatsApp (mam 2026-07-15).
+const EDIT_WINDOW_MS = 15 * 60 * 1000;
+
 const isAdmin = (req) => req.user.role === 'admin';
 const isMember = (db, g, u) => !!db.prepare('SELECT 1 FROM chat_group_members WHERE group_id=? AND user_id=?').get(g, u);
 // Access = membership; Admin additionally oversees GROUPS but NOT private DMs.
@@ -376,6 +379,26 @@ router.delete('/:groupId/members/:userId', requirePermission('site_chat', 'creat
   db.prepare('DELETE FROM chat_group_members WHERE group_id=? AND user_id=?').run(g, +req.params.userId);
   emitChat(g, 'changed', { groupId: g });
   res.json({ ok: true });
+});
+
+// Edit your OWN message within the 15-min window (WhatsApp-style). Unlike delete,
+// admins may NOT edit someone else's words — sender only (mam 2026-07-15).
+router.put('/:groupId/messages/:msgId', (req, res) => {
+  const db = getChatDb(); const g = +req.params.groupId;
+  if (!canAccess(db, req, g)) return res.status(403).json({ error: 'You are not a member of this group' });
+  const msg = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(req.params.msgId);
+  if (!msg) return res.status(404).json({ error: 'Not found' });
+  if (msg.sender_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own messages' });
+  const body = req.body?.body;
+  if (!body || !String(body).trim()) return res.status(400).json({ error: 'Message cannot be empty' });
+  // created_at is stored UTC via CURRENT_TIMESTAMP — append 'Z' so the age math is tz-correct.
+  const ageMs = Date.now() - new Date(msg.created_at + 'Z').getTime();
+  if (ageMs > EDIT_WINDOW_MS) return res.status(403).json({ error: 'Edit window has expired' });
+  db.prepare('UPDATE chat_messages SET body=?, edited_at=CURRENT_TIMESTAMP WHERE id=?')
+    .run(String(body).trim(), msg.id);
+  const row = db.prepare('SELECT * FROM chat_messages WHERE id=?').get(msg.id);
+  emitChat(g, 'changed', { groupId: g });   // clients reconcile-refetch → pick up new body + edited_at
+  res.json(row);
 });
 
 router.delete('/:groupId/messages/:msgId', (req, res) => {
