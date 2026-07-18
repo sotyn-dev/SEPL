@@ -58,6 +58,7 @@ app.set('trust proxy', 1);
 const multer = require('multer');
 const fs = require('fs');
 const { UPLOADS_ROOT, SWEEP_FOLDERS, uploadsSub, ensureDir } = require('./lib/paths');
+const quarantine = require('./lib/quarantine');
 const uploadsDir = ensureDir(UPLOADS_ROOT);
 // Uploads for these modules go into their own subfolder (whitelisted, so no path
 // traversal) so the orphan sweep can target only them; everything else stays flat.
@@ -461,6 +462,20 @@ app.post('/api/upload', authMiddleware, upload.single('file'), (req, res) => {
 });
 
 // Serve uploaded files
+// Lazy restore: if a requested upload is missing from disk but sitting in
+// quarantine (e.g. a chat/ticket was deleted, then a DB revert re-referenced its
+// file), pull it back out of quarantine and serve it — automatic recovery, no
+// manual sweep needed. Runs before express.static so the restored file is served.
+app.use('/uploads', (req, res, next) => {
+  try {
+    const key = quarantine.normalizeKey(decodeURIComponent(req.path.replace(/^\/+/, '')));
+    if (key) {
+      const abs = path.join(uploadsDir, ...key.split('/'));
+      if (!fs.existsSync(abs) && quarantine.isQuarantined(key)) quarantine.restoreKey(key);
+    }
+  } catch (e) { /* ignore — fall through to static */ }
+  next();
+});
 app.use('/uploads', express.static(uploadsDir));
 
 // Health check for deployment platforms

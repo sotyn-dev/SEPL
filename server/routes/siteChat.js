@@ -8,6 +8,7 @@ const { getChatDb } = require('../db/chatDb');       // separate chat database
 const { emitChat } = require('../lib/chatSocket');   // real-time push
 const { rateLimit } = require('../lib/rateLimit');   // in-memory send backpressure
 const { authMiddleware, requirePermission } = require('../middleware/auth');
+const quarantine = require('../lib/quarantine');     // reversible cleanup of deleted attachments
 const router = express.Router();
 router.use(authMiddleware);
 
@@ -260,12 +261,16 @@ router.delete('/:groupId', requirePermission('site_chat', 'delete'), (req, res) 
   const grp = db.prepare('SELECT * FROM chat_groups WHERE id=?').get(g);
   if (!grp) return res.status(404).json({ error: 'Not found' });
   if (grp.created_by !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'Only the creator or an admin can delete the group' });
+  // Grab attachment URLs before the rows vanish so we can quarantine the files
+  // (reversible — restored on serve if a DB revert re-references them).
+  const atts = db.prepare('SELECT attachment_url FROM chat_messages WHERE group_id=? AND attachment_url IS NOT NULL').all(g);
   db.transaction(() => {
     db.prepare('DELETE FROM chat_messages WHERE group_id=?').run(g);
     db.prepare('DELETE FROM chat_group_members WHERE group_id=?').run(g);
     db.prepare('DELETE FROM chat_reads WHERE group_id=?').run(g);
     db.prepare('DELETE FROM chat_groups WHERE id=?').run(g);
   })();
+  for (const a of atts) { try { quarantine.quarantineUrl(a.attachment_url); } catch (e) { /* best-effort */ } }
   emitChat(g, 'group_deleted', { groupId: g });
   res.json({ ok: true });
 });
@@ -408,6 +413,7 @@ router.delete('/:groupId/messages/:msgId', (req, res) => {
   if (!msg) return res.status(404).json({ error: 'Not found' });
   if (msg.sender_id !== req.user.id && !isAdmin(req)) return res.status(403).json({ error: 'You can only delete your own messages' });
   db.prepare('DELETE FROM chat_messages WHERE id=?').run(req.params.msgId);
+  if (msg.attachment_url) { try { quarantine.quarantineUrl(msg.attachment_url); } catch (e) { /* best-effort */ } }
   emitChat(g, 'changed', { groupId: g });
   res.json({ ok: true });
 });
