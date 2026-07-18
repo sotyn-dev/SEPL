@@ -57,10 +57,20 @@ app.set('trust proxy', 1);
 // File uploads
 const multer = require('multer');
 const fs = require('fs');
-const uploadsDir = path.join(__dirname, '..', 'data', 'uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+const { UPLOADS_ROOT, SWEEP_FOLDERS, uploadsSub, ensureDir } = require('./lib/paths');
+const uploadsDir = ensureDir(UPLOADS_ROOT);
+// Uploads for these modules go into their own subfolder (whitelisted, so no path
+// traversal) so the orphan sweep can target only them; everything else stays flat.
+const UPLOAD_FOLDER_WHITELIST = new Set(SWEEP_FOLDERS);
+const uploadFolder = (req) => {
+  const f = String((req.query && req.query.folder) || '');
+  return UPLOAD_FOLDER_WHITELIST.has(f) ? f : '';
+};
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
+  destination: (req, file, cb) => {
+    const f = uploadFolder(req);
+    cb(null, f ? ensureDir(uploadsSub(f)) : uploadsDir);
+  },
   filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_')}`)
 });
 const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
@@ -444,7 +454,9 @@ app.use('/audit', require('./routes/auditReport'));
 const { authMiddleware } = require('./middleware/auth');
 app.post('/api/upload', authMiddleware, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  res.json({ url: `/uploads/${req.file.filename}`, filename: req.file.originalname, size: req.file.size });
+  const f = uploadFolder(req);
+  const prefix = f ? `${f}/` : '';
+  res.json({ url: `/uploads/${prefix}${req.file.filename}`, filename: req.file.originalname, size: req.file.size });
 });
 
 // Serve uploaded files

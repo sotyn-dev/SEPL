@@ -532,7 +532,9 @@ export default function SiteChat() {
       // hang the chat (mam 2026-06-25). Keep the original display name.
       const toSend = await compressImage(file);
       const fd = new FormData(); fd.append('file', toSend);
-      const r = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      // ?folder=site-chat routes it into its own uploads subfolder so the orphan
+      // sweep can target chat attachments (avatar upload below stays flat).
+      const r = await api.post('/upload?folder=site-chat', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       await send({ attachment_url: r.data.url, attachment_name: r.data.filename || file.name });
     } catch (err) { toast.error(err.response?.data?.error || 'Upload failed'); }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = ''; }
