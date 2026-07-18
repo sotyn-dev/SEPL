@@ -45,6 +45,12 @@ module.exports = {
       PORT: 5000,
     },
 
+    // Log rotation is handled by the pm2-logrotate MODULE, not here — so the
+    // absence of a max_size below does NOT mean logs are uncapped. Run once per
+    // VPS: `bash /root/erp/setup-log-rotation.sh` (installs pm2-logrotate,
+    // caps each log at 20M, keeps 10 gzipped rotations). Config lives in ~/.pm2
+    // and survives deploys/reboots. Without it these two files grow unbounded
+    // (every request is console-logged) and fill the disk.
     merge_logs: true,
     out_file: '/root/.pm2/logs/erp-out.log',
     error_file: '/root/.pm2/logs/erp-error.log',
