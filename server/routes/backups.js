@@ -32,7 +32,10 @@ router.get('/:file/download', (req, res) => {
   if (!user || user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
 
   const file = req.params.file;
-  if (!/^(erp|chat)-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.db$/.test(file)) {
+  // New unified archive, plus legacy erp-/chat- .db files still on disk.
+  const ok = /^backup-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.zip$/.test(file)
+    || /^(erp|chat)-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.db$/.test(file);
+  if (!ok) {
     return res.status(400).json({ error: 'Invalid filename' });
   }
   const full = path.join(BACKUP_DIR, file);
