@@ -142,6 +142,19 @@ if (!process.env.ERP_DISABLE_BACKUP_SCHEDULER) {
   }
 }
 
+// Nightly DB compaction — runs at 02:15 (right after the 02:00 backup) to
+// checkpoint the WAL into each DB and VACUUM when there's meaningful free space,
+// so erp.db/chat.db actually shrink after deletes instead of only ever growing.
+// Skip in dev via ERP_DISABLE_DB_MAINTENANCE=1.
+if (!process.env.ERP_DISABLE_DB_MAINTENANCE) {
+  try {
+    const { scheduleNightlyMaintenance } = require('./scripts/db-maintenance');
+    scheduleNightlyMaintenance();
+  } catch (e) {
+    console.warn('[db-maint] Scheduler not started:', e.message);
+  }
+}
+
 // Daily 07:30 AM audit JSON snapshot — TOC v3 P0 #5.  Writes the same
 // JSON the /audit endpoints return into data/audit-snapshots/<date>/
 // so the CMD's 09:00 email and the four role dashboards can render
